@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import { identityLogoReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
-import { srcsetReferences } from './srcset.js';
+import { isSrcsetShaped, rewriteMediaReferences, srcsetCandidates, srcsetReferences } from './srcset.js';
 import { URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 export interface PortableDependency {
@@ -53,19 +53,16 @@ export function preparePortableReplacements(
 		.sort( ( a, b ) => b.length - a.length );
 	if ( sources.length === 0 ) return ( content ) => content;
 	const pattern = new RegExp(
-		sources
+		'(?:' + sources
 			.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
-			.join( '|' ) + URL_TERMINATOR_LOOKAHEAD,
+			.join( '|' ) + ')' + URL_TERMINATOR_LOOKAHEAD,
 		'g'
 	);
-	return ( content ) => content.replace( pattern, ( source ) => values.get( source ) ?? source );
-}
-
-// A density or width descriptor means the attribute is a srcset list, not one
-// URL. `new URL` percent-encodes the list into a single address that 404s, and
-// blanking that string also wipes the same list where it is a real srcset.
-export function isSrcsetShaped( value: string ): boolean {
-	return /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
+	return ( content ) => rewriteMediaReferences(
+		content,
+		url => values.get( url ) ?? url,
+		other => other.replace( pattern, source => values.get( source ) ?? source )
+	);
 }
 
 export function elementSrcReferences( tag: string, value: string ): string[] {
@@ -210,12 +207,11 @@ export function localizedSrcsetRendition(
 	const srcset = /\ssrcset\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ];
 	if ( ! srcset ) return undefined;
 	let best: { local: string; size: number } | undefined;
-	for ( const candidate of srcset.split( /,(?=\s)/ ) ) {
-		const [ reference, descriptor = '' ] = candidate.trim().split( /\s+/ );
-		const local = reference ? mediaReplacements.get( reference.replace( /&amp;/g, '&' ) ) : undefined;
+	for ( const candidate of srcsetCandidates( srcset ) ) {
+		const local = mediaReplacements.get( candidate.url.replace( /&amp;/g, '&' ) );
 		if ( ! local || local === TRANSPARENT_IMAGE_DATA_URL || /^(?:[a-z]+:)?\/\//i.test( local ) )
 			continue;
-		const size = Number.parseFloat( descriptor ) || 1;
+		const size = candidate.size;
 		if ( ! best || size > best.size ) best = { local, size };
 	}
 	return best?.local;
@@ -282,14 +278,16 @@ export function removeDanglingMediaSource(
 	const variants = [
 		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
 	].sort( ( a, b ) => b.length - a.length );
-	return withoutSources.replace(
-		new RegExp(
-			`(?:${ variants
-				.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
-				.join( '|' ) })${ URL_TERMINATOR_LOOKAHEAD }`,
-			'g'
-		),
-		TRANSPARENT_IMAGE_DATA_URL
+	const pattern = new RegExp(
+		`(?:${ variants
+			.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
+			.join( '|' ) })${ URL_TERMINATOR_LOOKAHEAD }`,
+		'g'
+	);
+	return rewriteMediaReferences(
+		withoutSources,
+		url => variants.includes( url ) ? TRANSPARENT_IMAGE_DATA_URL : url,
+		other => other.replace( pattern, TRANSPARENT_IMAGE_DATA_URL )
 	);
 }
 

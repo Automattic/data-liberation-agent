@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
+import { rewriteSrcset, srcsetReferences } from './srcset.js';
 
 // An empty data: URL is a *valid, zero-byte resource*: the browser loads it
 // successfully, so a stylesheet that lost its asset still reports a clean load
@@ -125,39 +126,12 @@ export function stripRemoteCssUrls( css: string ): string {
 	);
 }
 
-const PLACEHOLDER_SRCSET_CANDIDATE =
-	/data:image\/gif;base64,\s*[A-Za-z0-9+/=]+\s+\d+[wx]\b/i;
-
-function srcsetCandidates( srcset: string ): string[] {
-	const candidates: string[] = [];
-	const descriptor = /(?:^|,\s*)([\s\S]*?)\s+(\d+(?:\.\d+)?[wx])(?=\s*(?:,|$))/g;
-	for ( const match of srcset.matchAll( descriptor ) ) {
-		const url = match[ 1 ].trim().replace( /\s/g, ( whitespace ) => encodeURIComponent( whitespace ) );
-		if ( url ) candidates.push( `${ url } ${ match[ 2 ] }` );
-	}
-	// A descriptorless <picture><source> can contain a comma in the URL itself
-	// (for example, an image-service rendition `rs=w:1160,h:720`). Splitting on
-	// every comma turns that single resource into two srcset candidates and the
-	// browser requests the truncated, absent `rs=w:1160` path. Candidate-list
-	// separators have following whitespace; preserve commas inside URL tokens.
-	return candidates.length > 0
-		? candidates
-		: srcset.split( /,(?=\s)/ ).map( ( candidate ) => candidate.trim() );
-}
-
 function withoutRemoteSrcset( srcset: string ): string {
-	return srcsetCandidates( srcset )
-		.filter( ( candidate ) => {
-			const url = candidate.split( /\s+/ )[ 0 ] ?? '';
-			return (
-				url &&
-				! PLACEHOLDER_SRCSET_CANDIDATE.test( candidate ) &&
-				url !== TRANSPARENT_IMAGE_PAYLOAD &&
-				! url.startsWith( 'data:' ) &&
-				! isRemoteAssetUrl( url )
-			);
-		} )
-		.join( ', ' );
+	if ( ! srcsetReferences( srcset ).length ) return '';
+	return rewriteSrcset( srcset, url =>
+		url === TRANSPARENT_IMAGE_PAYLOAD || /^data:image\/gif;base64(?:$|,$|,R0lGODlhAQAB)/i.test( url ) || isRemoteAssetUrl( url )
+			? null : url
+	);
 }
 
 export function stripRemoteAssetRequests( html: string ): string {
@@ -207,7 +181,7 @@ export function stripRemoteAssetRequests( html: string ): string {
 		const node = $( element );
 		const src = node.attr( 'src' ) ?? '';
 		if ( ! src.startsWith( 'data:' ) ) return;
-		const fallback = ( node.attr( 'srcset' ) ?? '' ).trim().split( /\s+/ )[ 0 ];
+		const fallback = srcsetReferences( node.attr( 'srcset' ) ?? '' )[ 0 ];
 		if ( fallback && ! fallback.startsWith( 'data:' ) ) node.attr( 'src', fallback );
 	} );
 	$( 'style' ).each( ( _, element ) => {
