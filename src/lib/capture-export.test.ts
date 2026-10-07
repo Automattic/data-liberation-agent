@@ -7028,3 +7028,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		}
 	} );
 } );
+
+describe( 'exportWebsiteCapture entrypoint failures', () => {
+	it( 'reports why the source URL produced no page instead of a missing homepage', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-entrypoint-failure-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/about.html' ), '<html><body><main><h1>About</h1></main></body></html>' );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.test/': { slug: 'homepage' },
+			'https://example.test/about/': { html: 'html/about.html', slug: 'about' },
+		} } ) );
+		const failures = [
+			{ url: 'https://example.test/', viewport: 'desktop', stage: 'goto', error: 'HTTP 403' },
+			{ url: 'https://example.test/', viewport: 'mobile', stage: 'goto', error: 'HTTP 403' },
+		];
+		expect( () => exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures } ) )
+			.toThrow( 'Source homepage https://example.test/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
+	} );
+} );

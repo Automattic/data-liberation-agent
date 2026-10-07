@@ -1275,7 +1275,7 @@ function buildExportCapture(
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
 		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateJsonLd,
-	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases );
+	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases, routeCaptureDiagnostics );
 	for ( const { claimed, jsonLd } of duplicateJsonLd ) {
 		writeFileSync( claimed.htmlPath, appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), jsonLd ) );
 	}
