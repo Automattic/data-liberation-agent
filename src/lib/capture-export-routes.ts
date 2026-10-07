@@ -2,12 +2,13 @@ import { readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { normalizedUrl } from './url/route-key.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
+import type { SourceDataScript } from './source-data.js';
 
 export interface RouteEntry {
 	url: string;
 	htmlPath: string;
 	canonicalUrl?: string;
-	jsonLd: string[];
+	sourceData: SourceDataScript[];
 }
 
 function capturedOriginRoot( urls: string[], origin: string ): boolean {
@@ -117,8 +118,8 @@ export interface RouteStage<T extends RouteEntry> {
 	canonicalRouteAliases: Map< string, string >;
 	portableRedirects: Array< { from: string; to: string } >;
 	missingRedirectTargets: Array< { code: string; url: string; reason: string } >;
-	/** JSON-LD carried by collapsed aliases is applied to the retained document by the orchestrator. */
-	duplicateJsonLd: Array< { claimed: T; jsonLd: string[] } >;
+	/** Inert metadata carried by collapsed aliases is applied to the retained document. */
+	duplicateSourceData: Array< { claimed: T; sourceData: SourceDataScript[] } >;
 }
 
 export function allocateCaptureRoutes<T extends RouteEntry>(
@@ -231,7 +232,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	const retainedEntries: T[] = [];
 	const duplicateRoutes: RouteStage<T>[ 'duplicateRoutes' ] = [];
 	const canonicalRouteAliases = new Map< string, string >();
-	const duplicateJsonLd: RouteStage<T>[ 'duplicateJsonLd' ] = [];
+	const duplicateSourceData: RouteStage<T>[ 'duplicateSourceData' ] = [];
 	const claimedRoutes = new Map< string, T >();
 	for ( const entry of [
 		...capturedEntries.filter( ( { url } ) => url === entrypointUrl ),
@@ -247,7 +248,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		}
 		if ( ! declaresCanonicalRoute( entry, claimed ) && ! declaresCanonicalRoute( claimed, entry ) && contentAliasPartners.get( entry.url ) !== claimed.url )
 			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
-		if ( entry.jsonLd.length > 0 ) duplicateJsonLd.push( { claimed, jsonLd: entry.jsonLd } );
+		if ( entry.sourceData.length > 0 ) duplicateSourceData.push( { claimed, sourceData: entry.sourceData } );
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
 	}
@@ -267,5 +268,5 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		// Path-only static redirect rules cannot distinguish query renditions.
 		if ( ! new URL( url ).search && from && from !== to ) portableRedirects.push( { from, to } );
 	}
-	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateJsonLd };
+	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData };
 }

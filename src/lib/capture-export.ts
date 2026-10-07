@@ -14,6 +14,7 @@ import type { Element } from 'domhandler';
 import { capturedStyleHoistContext, materializeSharedStylesheets, type StyleHoistContext } from './shared-stylesheets.js';
 export { portableInlineStyle } from './shared-stylesheets.js';
 import { allocateCaptureRoutes } from './capture-export-routes.js';
+import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl } from './url/route-key.js';
 import {
@@ -138,7 +139,7 @@ interface CaptureEntry {
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
-	jsonLd: string[];
+	sourceData: SourceDataScript[];
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
 	styleHoistContext: StyleHoistContext;
@@ -763,9 +764,11 @@ function capturedResources( outputDir: string ): CapturedResourceManifest {
 	}
 }
 
-function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set() ): { html: string; jsonLd: string[] } {
+function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set() ): { html: string; sourceData: SourceDataScript[]; diagnostics: Array<{ code: string; reason: string }> } {
 	const $ = cheerio.load( html );
-	const jsonLd: string[] = [];
+	const sourceData: SourceDataScript[] = [];
+	const diagnostics: Array<{ code: string; reason: string }> = [];
+	let sourceEvidenceScriptCount = 0;
 	let jsonLdScriptCount = 0;
 	let jsonLdSourceBytes = 0;
 	// Preserve rendered structure and author CSS, but never ship executable provider runtime.
@@ -784,7 +787,7 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 					const value: unknown = JSON.parse( source );
 					if ( value !== null && typeof value === 'object' ) {
 						// Keep JSON-LD inert even when a source string contains an escaped end tag.
-						jsonLd.push( JSON.stringify( value ).replace( /<\/script(?=[\t\n\f\r />])/gi, '<\\/script' ) );
+						sourceData.push( { type: 'application/ld+json', json: JSON.stringify( value ).replace( /<\/script(?=[\t\n\f\r />])/gi, '<\\/script' ) } );
 					}
 				} catch {
 					// Invalid JSON-LD is discarded with the source script.
@@ -792,12 +795,16 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 			}
 			jsonLdScriptCount++;
 		}
+		if ( element.name === 'script' && /^application\/json(?:\s*;|\s*$)/i.test( node.attr( 'type' ) ?? '' ) && node.attr( 'data-dla-source-evidence' ) !== undefined ) {
+			const evidence = sourceEvidenceScript( node.text(), node.attr( 'data-dla-source-evidence' ) ?? '' );
+			if ( evidence && sourceEvidenceScriptCount < MAX_SOURCE_EVIDENCE_SCRIPTS ) sourceData.push( evidence );
+			else diagnostics.push( { code: 'source_evidence_unproven', reason: 'An inert source evidence script was invalid or exceeded its bounded retention contract.' } );
+			sourceEvidenceScriptCount++;
+		}
 		node.remove();
 	} );
-	if ( jsonLd.length > 0 ) {
-		$( 'head' ).append(
-			jsonLd.map( ( value ) => `<script type="application/ld+json">${ value }</script>` ).join( '' )
-		);
+	if ( sourceData.length > 0 ) {
+		$( 'head' ).append( renderSourceData( sourceData ) );
 	}
 	$( 'iframe' ).each( ( _index, element ) => {
 		const node = $( element );
@@ -877,15 +884,13 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 		)
 			node.remove();
 	} );
-	return { html: normalizedDeclarativeFormEmbeds( $.html() ), jsonLd };
+	return { html: normalizedDeclarativeFormEmbeds( $.html() ), sourceData, diagnostics };
 }
 
-function appendJsonLd( html: string, jsonLd: string[] ): string {
-	if ( jsonLd.length === 0 ) return html;
+function appendSourceData( html: string, sourceData: SourceDataScript[] ): string {
+	if ( sourceData.length === 0 ) return html;
 	const $ = cheerio.load( html );
-	$( 'head' ).append(
-		jsonLd.map( ( value ) => `<script type="application/ld+json">${ value }</script>` ).join( '' )
-	);
+	$( 'head' ).append( renderSourceData( sourceData ) );
 	return $.html();
 }
 
@@ -1253,6 +1258,7 @@ function buildExportCapture(
 		// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
 		const styleHoistContext = capturedStyleHoistContext( capturedHtml );
 		const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
+		routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
 		const html = sanitized.html;
 		const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 		writeFileSync( stagedHtmlPath, html );
@@ -1273,7 +1279,7 @@ function buildExportCapture(
 				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
 				url
 			),
-			jsonLd: sanitized.jsonLd,
+			sourceData: sanitized.sourceData,
 			interactions: entry.interactions,
 			scrollStates: entry.scrollStates,
 			styleHoistContext,
@@ -1292,10 +1298,10 @@ function buildExportCapture(
 
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
-		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateJsonLd,
+		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData,
 	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases, routeCaptureDiagnostics );
-	for ( const { claimed, jsonLd } of duplicateJsonLd ) {
-		writeFileSync( claimed.htmlPath, appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), jsonLd ) );
+	for ( const { claimed, sourceData } of duplicateSourceData ) {
+		writeFileSync( claimed.htmlPath, appendSourceData( readFileSync( claimed.htmlPath, 'utf8' ), sourceData ) );
 	}
 	routeCaptureDiagnostics.push( ...missingRedirectTargets );
 	const desktopSections = httpInput ? new Map() : SectionSpecsStore.load( outputDir );
