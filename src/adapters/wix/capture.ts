@@ -8,6 +8,18 @@ import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
+import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE } from '../../lib/member-login.js';
+
+/**
+ * Wix Members sign-in entry points: the login bar's button, which opens the
+ * members dialog removed by `wix-members-dialog`, and links into the members
+ * area (`/account/...`), which a visitor only reaches through that login.
+ */
+export const WIX_MEMBER_LOGIN = {
+	provider: 'wix',
+	controls: '.wixui-login-social-bar [data-testid="handle-button"]',
+	memberPaths: [ '/account/' ],
+};
 
 /** Wix media ids look like `8e80e7_a1b2…`, stable across crops of one asset. */
 const WIX_MEDIA_ID = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i;
@@ -802,8 +814,12 @@ export const capture: LiberationHooks = {
 	 */
 	beforeSerialize: async ( page ) => {
 		await revealAndCollectWixSlideshows( page );
-		// Revealing a slideshow scrolls, so the chrome is settled last of all.
+		// Revealing a slideshow scrolls, so the chrome is settled after it.
 		await settleScrollReactiveChrome( page );
+		// The members dialog is gone, so the controls that opened it become
+		// marked links (see member-login.ts). Last of all, so a scroll-driven
+		// rerender cannot put the runtime's button back before the freeze.
+		await page.evaluate( markMemberLoginControls, { ...WIX_MEMBER_LOGIN, attribute: MEMBER_LOGIN_ATTRIBUTE } ).catch( () => 0 );
 	},
 
 	/**
