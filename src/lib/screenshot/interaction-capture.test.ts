@@ -799,6 +799,108 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
+		'prevents anchor navigation through popup restoration and removes the guard afterward',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage();
+			page.setDefaultTimeout( 1_000 );
+			const origin = 'https://popup-navigation.test';
+			try {
+				await page.route( `${ origin }/**`, route => route.fulfill( { contentType: 'text/html', body: '<h1>Destination</h1>' } ) );
+				await page.goto( `${ origin }/preferences` );
+				await page.setContent( `<!doctype html><body>
+					<a id="opener" role="button" href="/collections/men" aria-haspopup="dialog" aria-controls="menu-dialog">MEN</a>
+					<input id="choice" type="checkbox"><a id="ordinary" href="/collections/men">Ordinary navigation</a>
+					<button id="later" aria-haspopup="dialog">Search</button>
+					<script>
+						const opener = document.querySelector('#opener');
+						window.originalOpener = opener;
+						window.dialog = null;
+						window.clicks = 0;
+						window.choiceChanges = 0;
+						document.querySelector('#choice').addEventListener('change', () => window.choiceChanges++);
+						opener.addEventListener('click', event => {
+							window.clicks++;
+							document.querySelector('#choice').click();
+							if (window.dialog) { window.dialog.remove(); window.dialog = null; return; }
+							event.preventDefault();
+							window.dialog = document.createElement('div');
+							window.dialog.id = 'menu-dialog';
+							window.dialog.setAttribute('role', 'dialog');
+							window.dialog.textContent = 'Menu contents';
+							document.body.append(window.dialog);
+						} );
+						document.querySelector('#later').addEventListener('click', () => {
+							const panel = document.createElement('div'); panel.id='search-dialog'; panel.setAttribute('role','dialog');
+							panel.innerHTML='<p>Search contents</p><button aria-label="Close">Close</button>';
+							panel.querySelector('button').addEventListener('click', () => panel.remove()); document.body.append(panel);
+						});
+					</script>
+				</body>` );
+				const initialUrl = page.url();
+				const report = await captureTriggeredDialogs( page, initialUrl );
+				expect( report.states ).toMatchObject( [
+					{ status: 'captured', trigger: { label: 'MEN' }, dialog: { html: expect.stringContaining( 'Menu contents' ) } },
+					{ status: 'captured', trigger: { id: 'later' }, dialog: { html: expect.stringContaining( 'Search contents' ) } },
+				] );
+				expect( page.url() ).toBe( initialUrl );
+				expect( await page.locator( '#opener' ).evaluate( element => element === ( window as typeof window & { originalOpener: Element } ).originalOpener ) ).toBe( true );
+				expect( await page.locator( '[role="dialog"]' ).count() ).toBe( 0 );
+				expect( await page.locator( '#opener' ).getAttribute( 'href' ) ).toBe( '/collections/men' );
+				expect( await page.evaluate( () => {
+					const state = window as typeof window & { clicks: number; choiceChanges: number };
+					return { clicks: state.clicks, choiceChanges: state.choiceChanges };
+				} ) ).toEqual( { clicks: 2, choiceChanges: 2 } );
+				await page.locator( '#ordinary' ).click();
+				await page.waitForURL( `${ origin }/collections/men` );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowserTests )(
+		'rejects removed and replaced source triggers without probing their replacements',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage();
+			page.setDefaultTimeout( 1_000 );
+			try {
+				await page.setContent( `<!doctype html><body>
+					<button id="first" aria-haspopup="dialog">First</button>
+					<button id="removed" aria-haspopup="dialog">Removed</button>
+					<button id="replaced" aria-haspopup="dialog">Replaced</button>
+					<button id="last" aria-haspopup="dialog">Last</button>
+					<script>
+						window.replacementClicks = 0;
+						function openPanel(label) {
+							const panel = document.createElement('div'); panel.setAttribute('role','dialog');
+							panel.innerHTML='<p>'+label+'</p><button aria-label="Close">Close</button>';
+							panel.querySelector('button').addEventListener('click',()=>panel.remove()); document.body.append(panel);
+						}
+						document.querySelector('#first').addEventListener('click',()=>{
+							document.querySelector('#removed').remove();
+							const original=document.querySelector('#replaced'), replacement=original.cloneNode(true);
+							replacement.addEventListener('click',()=>window.replacementClicks++); original.replaceWith(replacement);
+							openPanel('First content');
+						});
+						document.querySelector('#last').addEventListener('click',()=>openPanel('Last content'));
+					</script></body>` );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states.map( state => [ state.trigger.id, state.status ] ) ).toEqual( [
+					[ 'first', 'captured' ], [ 'removed', 'click-failed' ], [ 'replaced', 'click-failed' ], [ 'last', 'captured' ],
+				] );
+				for ( const id of [ 'removed', 'replaced' ] ) {
+					expect( report.states.find( state => state.trigger.id === id )?.error ).toContain( 'Source trigger was removed or replaced' );
+				}
+				expect( await page.evaluate( () => ( window as typeof window & { replacementClicks: number } ).replacementClicks ) ).toBe( 0 );
+			} finally { await browser.close(); }
+		},
+		15_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'keeps an anchor-button mobile menu that slides in from off-screen',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
