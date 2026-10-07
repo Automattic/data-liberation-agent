@@ -30,6 +30,7 @@ import { sanitizeFrozenHtml } from './freeze.js';
 import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
+import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
 	captureRouteNavigation,
@@ -362,7 +363,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
-		return await page.evaluate( () => {
+		const html = await page.evaluate( ( { observeControlSource, controlAttribute } ) => {
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -478,27 +479,14 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 			}
 			try {
-				// Freeze native control properties on a detached snapshot. Updating live
-				// attributes would also change defaults (and can change radio peers or
-				// select options), contaminating later probes and source observations.
+				// Keep authored reset defaults in markup and observed properties in a
+				// typed inert contract. Neither fact may be substituted for the other.
+				const observeControl = new Function( 'return (' + observeControlSource + ')' )() as typeof observeNativeControlState;
 				const snapshot = document.documentElement.cloneNode( true ) as HTMLElement;
-				const controls = document.documentElement.querySelectorAll( 'input, textarea, option' );
-				const copies = snapshot.querySelectorAll( 'input, textarea, option' );
+				const controls = document.documentElement.querySelectorAll( 'input, textarea, select' );
+				const copies = snapshot.querySelectorAll( 'input, textarea, select' );
 				controls.forEach( ( control, index ) => {
-					const copy = copies[ index ]!;
-					if ( control instanceof HTMLInputElement ) {
-						if ( control.type === 'checkbox' || control.type === 'radio' ) {
-							copy.toggleAttribute( 'checked', control.checked );
-						} else if ( control.type !== 'file' && control.value !== control.defaultValue ) {
-							copy.setAttribute( 'value', control.value );
-						}
-					} else if ( control instanceof HTMLTextAreaElement ) {
-						// HTML parsing consumes one LF immediately after this start tag.
-						const text = control.value.startsWith( '\n' ) ? '\n' + control.value : control.value;
-						if ( text !== control.textContent ) copy.textContent = text;
-					} else if ( control instanceof HTMLOptionElement ) {
-						copy.toggleAttribute( 'selected', control.selected );
-					}
+					copies[ index ]!.setAttribute( controlAttribute, JSON.stringify( observeControl( control ) ) );
 				} );
 				return `<!DOCTYPE html>${ snapshot.outerHTML }`;
 			} finally {
@@ -513,7 +501,8 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		} );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE } );
+		return wireNativeControlState( html );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
