@@ -44,6 +44,7 @@ import { captureTypedSearchStates } from './typed-search-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
+import { rejectedNavigationReason } from './navigation-rejection.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
@@ -807,7 +808,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					url,
 					viewport: viewport.id,
 					stage: 'goto',
-					error: `HTTP ${ status }`,
+					error: rejectedNavigationReason( status, response?.headers?.() ),
 					timestamp: now(),
 					attempt,
 				} );
