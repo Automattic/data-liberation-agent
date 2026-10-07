@@ -372,7 +372,12 @@ async function learnFluidGeometry(
 			continue;
 		}
 		if ( transformX && ( model.kind !== 'breakpoint' || segmented !== null ) ) {
-			const element = await page.locator( `[${ ID_ATTRIBUTE }="${ id }"]` ).first().getAttribute( 'style' );
+			// Source resize handlers can remove measured nodes; absence is final,
+			// not a reason to auto-wait for the old identity to reappear.
+			const element = await page.evaluate(
+				( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
+				{ attribute: ID_ATTRIBUTE, id }
+			);
 			const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( element ?? '' )?.[ 1 ]?.trim();
 			if ( ! transform || pureXTranslation( transform ) === null ) {
 				// The runtime may have switched this transform after the sweep; do not
@@ -485,7 +490,10 @@ async function learnFluidGeometry(
 	for ( let index = learned.length - 1; index >= 0; index-- ) {
 		const entry = learned[ index ]!;
 		if ( entry.property !== 'transform' ) continue;
-		const style = await page.locator( `[${ ID_ATTRIBUTE }="${ entry.id }"]` ).first().getAttribute( 'style' );
+		const style = await page.evaluate(
+			( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
+			{ attribute: ID_ATTRIBUTE, id: entry.id }
+		);
 		const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style ?? '' )?.[ 1 ]?.trim();
 		if ( transform && pureXTranslation( transform ) !== null ) continue;
 		learned.splice( index, 1 );

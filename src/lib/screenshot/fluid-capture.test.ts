@@ -637,6 +637,44 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await source.close();
 	}, 30_000 );
 
+	it.each( [ 'last sweep width', 'restored capture width' ] )( 'handles a measured wrapper removed at the %s without waiting for it', async ( removalPhase ) => {
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		// Missing nodes must be read immediately, not through locator auto-wait.
+		page.setDefaultTimeout( 500 );
+		try {
+			await page.setContent( `
+				<p><span id="wrapper" style="transform: matrix(1, 0, 0, 1, 39, 0)">Retained text</span></p>
+				<div id="survivor" style="transform: matrix(1, 0, 0, 1, 78, 0)">Surviving translation</div>
+				<script>
+					let swept = false;
+					addEventListener( 'resize', () => {
+						const wrapper = document.querySelector( '#wrapper' );
+						const remove = ${ JSON.stringify( removalPhase ) } === 'last sweep width'
+							? innerWidth === 1920 : innerWidth === 390 && swept;
+						if ( wrapper && remove ) wrapper.replaceWith( ...wrapper.childNodes );
+						else if ( wrapper ) wrapper.style.transform = 'matrix(1, 0, 0, 1, ' + innerWidth * 0.1 + ', 0)';
+						document.querySelector( '#survivor' ).style.transform = 'matrix(1, 0, 0, 1, ' + innerWidth * 0.2 + ', 0)';
+						if ( innerWidth !== 390 ) swept = true;
+					} );
+				</script>
+			` );
+			const result = await learnAndApplyFluidGeometry( page, {
+				widths: [ 600, 1024, 1440, 1920 ], settleMs: 20, document: 'mobile',
+			} );
+			expect( result.applied ).toBe( 1 );
+			expect( result.unmodelled ).toBe( 1 );
+			expect( page.viewportSize()?.width ).toBe( 390 );
+			expect( await page.locator( '#wrapper' ).count() ).toBe( 0 );
+			expect( await page.locator( 'p' ).textContent() ).toBe( 'Retained text' );
+			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '#survivor' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeTruthy();
+			expect( await page.locator( '#survivor' ).evaluate( element => getComputedStyle( element ).transform ) )
+				.toBe( 'matrix(1, 0, 0, 1, 78, 0)' );
+		} finally {
+			await page.close();
+		}
+	}, 15_000 );
+
 	it( 'does not rewrite scaled, rotated, or vertically translated matrices', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		const matrices = [
@@ -671,7 +709,38 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 30_000 );
 
-	it( 'keeps a non-translation matrix written when the sweep restores its viewport', async () => {
+	it( 'rejects surviving transforms that become rotated or scaled at the last sweep width', async () => {
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
+			await page.setContent( `
+				<div id="rotated" style="transform: matrix(1, 0, 0, 1, 39, 0)">Rotated</div>
+				<div id="scaled" style="transform: matrix(1, 0, 0, 1, 39, 0)">Scaled</div>
+				<script>
+					addEventListener( 'resize', () => {
+						if ( innerWidth === 390 ) return;
+						for ( const id of [ 'rotated', 'scaled' ] ) {
+							document.getElementById( id ).style.transform = innerWidth === 1920
+								? id === 'rotated' ? 'matrix(0, 1, -1, 0, 192, 0)' : 'matrix(2, 0, 0, 2, 192, 0)'
+								: 'matrix(1, 0, 0, 1, ' + innerWidth * 0.1 + ', 0)';
+						}
+					} );
+				</script>
+			` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 600, 1024, 1440, 1920 ], settleMs: 20 } );
+			expect( result.applied ).toBe( 0 );
+			expect( result.unmodelled ).toBe( 2 );
+			expect( await page.locator( '#rotated' ).getAttribute( 'style' ) ).toContain( 'matrix(0, 1, -1, 0, 192, 0)' );
+			expect( await page.locator( '#scaled' ).getAttribute( 'style' ) ).toContain( 'matrix(2, 0, 0, 2, 192, 0)' );
+			expect( await page.locator( '[data-dla-fluid-segment]' ).count() ).toBe( 0 );
+		} finally {
+			await page.close();
+		}
+	}, 15_000 );
+
+	it.each( [
+		'matrix(0, 1, -1, 0, 754.776, 24)',
+		'matrix(2, 0, 0, 2, 754.776, 0)',
+	] )( 'keeps a non-translation matrix %s written when the sweep restores its viewport', async ( matrix ) => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<div id="owner" style="width: 231px; height: 228px; transform: matrix(1, 0, 0, 1, 754.776, 0)"></div>
@@ -680,7 +749,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				addEventListener( 'resize', () => {
 					const owner = document.querySelector( '#owner' );
 					if ( innerWidth === 1440 && restored ) {
-						owner.style.transform = 'matrix(0, 1, -1, 0, 754.776, 24)';
+						owner.style.transform = ${ JSON.stringify( matrix ) };
 					} else {
 						owner.style.transform = 'matrix(1, 0, 0, 1, ' + ( innerWidth * 0.52415 ) + ', 0)';
 					}
@@ -690,7 +759,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		` );
 		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
 
-		expect( await page.locator( '#owner' ).getAttribute( 'style' ) ).toContain( 'matrix(0, 1, -1, 0, 754.776, 24)' );
+		expect( await page.locator( '#owner' ).getAttribute( 'style' ) ).toContain( matrix );
 		expect( await page.locator( '#owner' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeNull();
 		await page.close();
 	}, 30_000 );
