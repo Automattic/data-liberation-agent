@@ -10,7 +10,7 @@ describe( 'responsive readiness contract', () => {
 	it( 'observes opt-in relative slide offsets before source preparation and sampling', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
-			await page.setContent( `<div id="slide" style="position:relative;left:144px">Slide text</div>
+			await page.setContent( `<style>body { margin: 0; }</style><div id="slide" style="position:relative;left:144px">Slide text</div>
 				<script>
 				const slide = document.querySelector('#slide');
 				let timer;
@@ -34,7 +34,7 @@ describe( 'responsive readiness contract', () => {
 			} );
 			expect( prepared ).toEqual( [ 390, 768, 1440 ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
-			expect( await page.locator( '#slide' ).evaluate( element => element.getBoundingClientRect().x ) ).toBeCloseTo( 152, 0 );
+			expect( await page.locator( '#slide' ).evaluate( element => element.getBoundingClientRect().x ) ).toBeCloseTo( 144, 0 );
 			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 20_000 );
