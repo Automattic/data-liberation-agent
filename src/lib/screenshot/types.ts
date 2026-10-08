@@ -46,6 +46,8 @@ export interface ScreenshotOpts {
 	force?: boolean;
 	types?: UrlType[];
 	limit?: number;
+	/** Expand rendered same-origin links through the normal capture queue. */
+	linkedPages?: import('./linked-frontier.js').LinkedPageLimits;
 	screenshotTimeoutMs?: number; // default: 30_000
 	/** Capture full-page and scrolled PNGs. Default: false; HTML/CSS and sidecars remain enabled. */
 	captureImages?: boolean;
@@ -121,6 +123,7 @@ export interface ScreenshotResult {
 	manifestPath: string;
 	/** Every URL processed, including redirect targets queued during capture. */
 	urls: string[];
+	linkedPageCoverage?: import('./linked-frontier.js').LinkedPageCoverage;
 	/** Absolute path to site.css when captureDesign=true and at least one page/post was captured. */
 	siteCssPath?: string;
 	/** CSS media URLs discovered across all captured page/post CSS. */

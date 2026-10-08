@@ -548,8 +548,11 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	// started, e.g. a same-origin sitemap leaf) into one reported list — every
 	// route the source advertised is now either in `routes` or named here with
 	// a reason, never just missing.
+	const linkedPageCoveragePath = join( outputDir, 'linked-page-coverage.json' );
+	const linkedPageCoverage = existsSync( linkedPageCoveragePath ) ? JSON.parse( readFileSync( linkedPageCoveragePath, 'utf8' ) ) as import( './screenshot/types.js' ).ScreenshotResult['linkedPageCoverage'] : undefined;
 	const discoveryDiagnostics = [
 		...( options.discoveryDiagnostics ?? [] ),
+		...( linkedPageCoverage?.diagnostics ?? [] ).filter( row => ! options.discoveryDiagnostics?.some( prior => prior.code === row.code && prior.url === row.url && prior.reason === row.reason ) ),
 		...( httpInput?.diagnostics ?? [] ),
 		...routeCaptureDiagnostics,
 	];
@@ -570,6 +573,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	if (cleanup) writeFileSync(join(stageDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
 	const complete =
 		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
+		! discoveryDiagnostics.some( diagnostic => diagnostic.code === 'linked_page_budget_exhausted' || diagnostic.code === 'linked_page_outcome_unproven' ) &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
 	const nativePages = Object.entries( capture.entries ).filter( ([ , entry ]) => entry.nativeViewTimelines ).map( ([ url, entry ]) => ({ url, profiles: entry.nativeViewTimelines }) );
 	const nativeViewTimelines = nativePages.length ? {
@@ -611,6 +615,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				excludedRoutes,
 				sourceOutcomes: Object.values( capture.entries ).filter( entry => entry.externalRedirect ).flatMap( entry => entry.sourceOutcomes ?? [] ),
 				duplicateRoutes,
+				...( linkedPageCoverage ? { linkedPageCoverage } : {} ),
 				discoveryDiagnostics,
 				summary: { ...options.summary, complete },
 			},
@@ -624,6 +629,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			{
 				schema: 'data-liberation/capture-diagnostics/v1',
 				complete,
+				...( linkedPageCoverage ? { linkedPageCoverage } : {} ),
 				failures: options.failures,
 				discoveryDiagnostics,
 				resourceFailures: resourceManifest.failures,

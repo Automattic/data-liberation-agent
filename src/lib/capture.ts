@@ -8,6 +8,7 @@ import { safeFetch } from './media-fetch/safe-fetch.js';
 import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
+import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -29,6 +30,8 @@ export interface CaptureOptions {
 	captureImages?: boolean;
 	/** Learn responsive sizing by sweeping widths instead of freezing one. */
 	learnFluid?: boolean;
+	/** Bounded rendered-link coverage, layered on adapter discovery. */
+	linkedPages?: import('./screenshot/linked-frontier.js').LinkedPageLimits;
 	/**
 	 * Fail closed when the capture is incomplete. Default is false: a partial
 	 * site is still written and returned with `complete: false`. Programmatic
@@ -89,14 +92,6 @@ interface CaptureInventory {
 	diagnostics?: Array< { code: string; url: string; reason: string } >;
 }
 
-function captureRouteKey( url: string ): string {
-	const route = new URL( url );
-	route.hash = '';
-	route.search = '';
-	route.pathname = route.pathname.replace( /\/$/, '' ) || '/';
-	return route.href;
-}
-
 export async function downloadCaptureSectionMedia(
 	outputDir: string,
 	urls: string[]
@@ -104,7 +99,7 @@ export async function downloadCaptureSectionMedia(
 	const pageRoutes = new Set(
 		urls.flatMap( ( url ) => {
 			try {
-				return [ captureRouteKey( url ) ];
+				return [ normalizedUrl( url ) ];
 			} catch {
 				return [];
 			}
@@ -124,7 +119,7 @@ export async function downloadCaptureSectionMedia(
 					const mediaUrl = ( image.sourceUrl || image.url || '' ).trim();
 					if ( ! mediaUrl ) continue;
 					try {
-						if ( pageRoutes.has( captureRouteKey( mediaUrl ) ) ) continue;
+						if ( pageRoutes.has( normalizedUrl( mediaUrl ) ) ) continue;
 					} catch {
 						// Invalid media URLs are dropped by downloadSectionMedia.
 					}
@@ -193,12 +188,12 @@ export async function captureWebsite(
 		resume: options.resume === true,
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
-	const sourceRoute = captureRouteKey( sourceUrl );
+	const sourceRoute = documentRequestUrl( sourceUrl );
 	const urls = [
 		sourceUrl,
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
-			.filter( ( url ) => captureRouteKey( url ) !== sourceRoute ),
+			.filter( ( url ) => documentRequestUrl( url ) !== sourceRoute ),
 	];
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
@@ -218,6 +213,7 @@ export async function captureWebsite(
 	const screenshotResult = await captureScreenshots( {
 		urls,
 		outputDir,
+		linkedPages: options.linkedPages ?? {},
 		primaryUrl: sourceUrl,
 		additionalProfiles: adapter.liberation?.additionalProfiles,
 		referenceWidths: adapter.liberation?.referenceWidths,
@@ -243,7 +239,7 @@ export async function captureWebsite(
 	process.stderr.write(
 		`[timing] browser-capture ${ screenshotResult.durationMs }ms (${ screenshotResult.captured } captured, ${ screenshotResult.failed } failed)\n`
 	);
-	progress( { phase: 'media', current: screenshotResult.captured, total: urls.length } );
+	progress( { phase: 'media', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const mediaStartedAt = Date.now();
 	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls );
 	process.stderr.write(
@@ -251,7 +247,7 @@ export async function captureWebsite(
 	);
 
 	const exportStartedAt = Date.now();
-	progress( { phase: 'finalizing', current: screenshotResult.captured, total: urls.length } );
+	progress( { phase: 'finalizing', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const failuresPath = join( outputDir, 'screenshots', 'failures.json' );
 	const failures = existsSync( failuresPath )
 		? ( JSON.parse( readFileSync( failuresPath, 'utf8' ) ) as Array< {
@@ -260,7 +256,7 @@ export async function captureWebsite(
 		  } > )
 		: [];
 	const summary = {
-		routesDiscovered: urls.length,
+		routesDiscovered: screenshotResult.linkedPageCoverage?.requiredUrls.length ?? screenshotResult.urls.length,
 		routesCaptured: screenshotResult.captured,
 		routesSkipped: screenshotResult.skipped,
 		routesFailed: screenshotResult.failed,
@@ -275,7 +271,7 @@ export async function captureWebsite(
 		title: inventory.siteMeta?.title,
 		summary,
 		failures,
-		discoveryDiagnostics: inventory.diagnostics ?? [],
+		discoveryDiagnostics: [...(inventory.diagnostics ?? []), ...(screenshotResult.linkedPageCoverage?.diagnostics ?? [])],
 	} );
 	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
 	const previewStartedAt = Date.now();
@@ -297,10 +293,12 @@ export async function captureWebsite(
 	// recipe. Discovery remains explicit untranslated evidence until a portable
 	// implementation passes the independent source fidelity gate.
 	await ( await import( './behavior-discovery.js' ) ).discoverCapturedBehavior( outputDir );
+	reference.requireUrls(screenshotResult.linkedPageCoverage?.requiredUrls ?? screenshotResult.urls);
 	reference.finalize( captureReceiptPath );
 	const complete =
 		summary.routesFailed === 0 &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
+		!screenshotResult.linkedPageCoverage?.diagnostics.length &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,
@@ -308,7 +306,7 @@ export async function captureWebsite(
 		summary: { ...summary, complete },
 		complete,
 		failures,
-		discoveryDiagnostics: inventory.diagnostics ?? [],
+		discoveryDiagnostics: [...(inventory.diagnostics ?? []), ...(screenshotResult.linkedPageCoverage?.diagnostics ?? [])],
 		unresolvedAnchors,
 		provenance: { provider: 'data-liberation/browser-capture', platform: detection.platform },
 	};
