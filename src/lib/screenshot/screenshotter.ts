@@ -30,6 +30,7 @@ import { sanitizeFrozenHtml } from './freeze.js';
 import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
+import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
 	captureRouteNavigation,
@@ -363,7 +364,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
-		return await page.evaluate( () => {
+		const html = await page.evaluate( ( { observeControlSource, controlAttribute } ) => {
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -479,7 +480,16 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 			}
 			try {
-				return `<!DOCTYPE html>${ document.documentElement.outerHTML }`;
+				// Keep authored reset defaults in markup and observed properties in a
+				// typed inert contract. Neither fact may be substituted for the other.
+				const observeControl = new Function( 'return (' + observeControlSource + ')' )() as typeof observeNativeControlState;
+				const snapshot = document.documentElement.cloneNode( true ) as HTMLElement;
+				const controls = document.documentElement.querySelectorAll( 'input, textarea, select' );
+				const copies = snapshot.querySelectorAll( 'input, textarea, select' );
+				controls.forEach( ( control, index ) => {
+					copies[ index ]!.setAttribute( controlAttribute, JSON.stringify( observeControl( control ) ) );
+				} );
+				return `<!DOCTYPE html>${ snapshot.outerHTML }`;
 			} finally {
 				for ( const boundary of textBoundaries ) boundary.remove();
 				for ( const { image, previous } of restoredImages.reverse() ) {
@@ -492,7 +502,8 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		} );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE } );
+		return wireNativeControlState( html );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
