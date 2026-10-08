@@ -1,0 +1,56 @@
+import { expect, it } from 'vitest';
+import { createServer } from 'node:http';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { captureScreenshots } from './screenshotter.js';
+
+// Run in a real constrained runtime, not with invented available-memory values:
+// docker run --memory=2g --cpus=4 ... npx vitest run <this file> --maxWorkers=1
+it.skipIf( ! process.env.DLA_MEMORY_ADMISSION_REGRESSION )( 'admits all queued routes with their live reference pages inside the runtime budget', async () => {
+	expect( process.constrainedMemory() ).toBe( 2 * 1024 ** 3 );
+	const server = createServer( ( request, response ) => {
+		response.writeHead( 200, { 'Content-Type': 'text/html' } );
+		response.end( `<!doctype html><html><head><title>Neutral memory fixture</title></head><body>
+			<h1>${ request.url }</h1><img width="32" height="32" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' fill='red'/%3E%3C/svg%3E">
+			<div style="height:2000px">Preserved geometry and text</div>
+			<script>globalThis.retained = new Uint8Array(192 * 1024 * 1024); for(let i=0;i<retained.length;i+=4096)retained[i]=1;</script>
+			</body></html>` );
+	} );
+	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'memory-admission-' ) );
+	const urls = Array.from( { length: 7 }, ( _, index ) => `${ origin }/route-${ index }` );
+	let active = 0;
+	let peak = 0;
+	const references: string[] = [];
+	try {
+		const result = await captureScreenshots( {
+			urls, outputDir, force: true, settleMs: 0, learnFluid: false,
+			viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
+			prepareCapture: async () => { peak = Math.max( peak, ++active ); },
+			observeSource: async ( page, url ) => {
+				const reference = await page.context().newPage();
+				try {
+					await reference.goto( url );
+					await reference.waitForTimeout( 300 );
+					expect( await reference.locator( 'h1' ).textContent() ).toBe( new URL( url ).pathname );
+					expect( await reference.locator( 'img' ).evaluate( ( image: HTMLImageElement ) => image.complete && image.naturalWidth > 0 ) ).toBe( true );
+					expect( await reference.locator( 'div' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( 2000 );
+					references.push( url );
+				} finally { await reference.close(); active--; }
+			},
+		} );
+		console.log( JSON.stringify( { event: 'neutral-memory-regression', result, peakActiveRoutes: peak, references: references.length } ) );
+		expect( result.captured ).toBe( 7 );
+		expect( result.failed ).toBe( 0 );
+		expect( references.sort() ).toEqual( [ ...urls ].sort() );
+		expect( peak ).toBeLessThanOrEqual( 2 );
+		for ( let index = 0; index < urls.length; index++ ) {
+			expect( readFileSync( join( outputDir, 'html', `route-${ index }.html` ), 'utf8' ) ).toContain( 'Preserved geometry and text' );
+		}
+	} finally {
+		await new Promise<void>( resolve => server.close( () => resolve() ) );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 600_000 );

@@ -123,6 +123,35 @@ function makeCrashingBrowser(crashAt: string): MockBrowser {
 }
 
 describe('captureScreenshots', () => {
+	it( 'rejects an exhausted runtime budget at the one-route floor and closes its browser', async () => {
+		const constrained = vi.spyOn( process, 'constrainedMemory' ).mockReturnValue( 2 * 1024 ** 3 );
+		const available = vi.spyOn( process, 'availableMemory' ).mockReturnValue( 0 );
+		const browser = makeMockBrowser();
+		vi.mocked( connectBrowser ).mockResolvedValue( browser as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'memory-exhausted-' ) );
+		try {
+			await expect( captureScreenshots( { urls: [ 'https://example.com/a' ], outputDir, settleMs: 0 } ) ).rejects.toThrow( 'no available memory at the one-route floor' );
+			expect( browser.close ).toHaveBeenCalled();
+		} finally {
+			constrained.mockRestore(); available.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
+	it( 'preserves an explicit caller concurrency even under an exhausted runtime budget', async () => {
+		const constrained = vi.spyOn( process, 'constrainedMemory' ).mockReturnValue( 2 * 1024 ** 3 );
+		const available = vi.spyOn( process, 'availableMemory' ).mockReturnValue( 0 );
+		vi.mocked( connectBrowser ).mockResolvedValue( makeMockBrowser() as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'memory-caller-owned-' ) );
+		try {
+			const result = await captureScreenshots( { urls: [ 'https://example.com/a' ], outputDir, concurrency: 1, settleMs: 0 } );
+			expect( result.captured ).toBe( 1 );
+			expect( constrained ).not.toHaveBeenCalled();
+			expect( available ).not.toHaveBeenCalled();
+		} finally {
+			constrained.mockRestore(); available.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 	it.each( [ 'server', 'client', 'late-control' ] )( 'validates %s protocol navigation against the observed server document', async ( navigation ) => {
 		const requested = 'https://example.com/author';
 		const landed = 'http://example.com/author/';
