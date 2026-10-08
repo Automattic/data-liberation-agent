@@ -26,6 +26,7 @@ existing public entry point and check registry. New options:
 | `states?: string[]` | Required states; default `['baseline']`. Other states are pending/unproven because v1 does not freeze interactions. |
 | `widths?: number[]` | Frozen stages default to `[390, 768, 1440]`. A required width absent from the manifest is pending. Drift retains the unsampled-width baseline. |
 | `routes?: string[]` | Frozen stages default to **all receipt routes plus declared uncaptured source routes**. Explicit routes select a bounded scope, whose counts are reported; unknown routes are pending. Route paths are portable paths, not source-origin paths. |
+| `concurrency?: number` | Frozen cells in flight: integer from 1 to 4, default 3. Use 1 for serial comparison. Drift remains serial. |
 
 Existing `directory`, `candidateUrl`, `settleMs`, `screenshots`, and `log` work in
 both frozen stages. `candidateUrl` is an HTTP(S) base without query, credentials or
@@ -43,6 +44,15 @@ Neither frozen stage navigates to the source. Portable requests are restricted t
 the preview origin; candidate requests to the recorded source origin are blocked.
 Browser imports remain lazy. Missing references return unproven before a browser
 is needed; an old capture requires recapture to obtain frozen evidence.
+
+Frozen cells share one browser and preview server, but each owns a fresh browser
+context with its recorded source profile. Reports retain required-cell order,
+regardless of completion order. Cell failures remain pending while other cells
+finish; contexts close before the shared browser/server. Duplicate selections or
+routes sharing a legacy evidence slug run serially to retain deterministic
+last-writer evidence paths. Registered checks may run concurrently across cells;
+their supplied evidence directory is cell-local. Stateful consumers can select
+`concurrency: 1`.
 
 The stages reuse the browser observer and `runFidelityChecks` registry. Scores and
 registered check contexts carry `stage`, `route`, `viewport`, and `state`. A
