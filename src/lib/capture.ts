@@ -210,6 +210,7 @@ export async function captureWebsite(
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
 	const { createReferenceCollector } = await import( './fidelity/reference.js' );
 	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
+		publicUrlsOnly: true,
 		cleanupPolicy: ( await import( './source-cleanup.js' ) ).cleanupPolicy( adapter.liberation?.cleanupRules ),
 		removeSelectors: adapter.liberation?.removeSelectors,
 		prepareCapture: adapter.liberation?.prepare,

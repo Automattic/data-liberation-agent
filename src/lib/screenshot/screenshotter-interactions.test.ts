@@ -36,6 +36,8 @@ function makeHarvestPage() {
 function makePage() {
 	let currentUrl = '';
 	return {
+		route: vi.fn().mockResolvedValue(undefined),
+		unroute: vi.fn().mockResolvedValue(undefined),
 		once: vi.fn(),
 		goto: vi.fn().mockImplementation( async ( url: string ) => {
 			currentUrl = url;
