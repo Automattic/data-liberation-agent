@@ -62,13 +62,13 @@ it('reports where a capability was observed, and refuses to look decided when th
 }, 45_000);
 
 it('reports a bounded sample through the real inspection path', async () => {
-  // Two routes discovered, one sampled: the bound is doing its job. The band
+  // Three routes discovered, one sampled: the bound is doing its job. The band
   // withholds because the view is partial; confidence stays because the sample
   // that was declared rendered cleanly.
   const url = await source('<main><h1>Shop</h1><p>One page of copy.</p></main><nav><a href="/about">About</a><a href="/contact">Contact</a></nav>');
   const result = await inspectSource(url, { sampleLimit: 1 });
 
-  expect(result.coverage.discovery.routes).toBeGreaterThan(1);
+  expect(result.coverage.discovery.routes).toBe(3);
   expect(result.coverage.sampling.truncated).toBe(true);
   expect(result.rendered.succeeded).toBe(1);
   expect(result.rendered.samples[0].unknowns).toEqual([]);

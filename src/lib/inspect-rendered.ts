@@ -218,7 +218,7 @@ export interface SourceComplexity {
  * than were discovered is the bound working as declared, not the sample failing,
  * so it does not lower confidence. Both quotes are from docs/inspection.md.
  */
-export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean, sampleIncomplete: boolean = incomplete): SourceComplexity {
+export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean, sampleIncomplete: boolean): SourceComplexity {
   const factors: SourceComplexity['factors'] = [];
   const maxElements = Math.max(0, ...samples.map((sample) => sample.elements));
   const capabilityCounts = new Map<SourceCapability, number>();
