@@ -410,6 +410,18 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html ).not.toContain( '<summary' );
 	} );
 
+	it( 'derives aria-modal from the observed presentation', () => {
+		const page = '<html><head></head><body><button class="burger">Open Menu</button></body></html>';
+		const modal = wireCapturedDialogs( page, [ { ...captured, dialog: { ...captured.dialog!, presentation: 'modal' } } ] );
+		expect( modal ).toContain( '<div class="dla-dialog" role="dialog" aria-modal="true" hidden=""' );
+		const unobserved = wireCapturedDialogs( page, [ captured ] );
+		expect( unobserved ).toContain( 'aria-modal="true"' );
+		const dropdown = wireCapturedDialogs( page, [ { ...captured, dialog: { ...captured.dialog!, presentation: 'dropdown' } } ] );
+		expect( dropdown ).toContain( 'data-dla-dialog-panel="dla-dialog-0"' );
+		expect( dropdown ).toMatch( /<div class="dla-dialog( dla-dropdown)?" role="dialog" hidden=""/ );
+		expect( dropdown ).not.toContain( 'aria-modal' );
+	} );
+
 	it( 'wires every copy of the trigger, not just the first', () => {
 		const html = wireCapturedDialogs(
 			'<html><head></head><body><button>Open Menu</button><button>Open Menu</button></body></html>',
