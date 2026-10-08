@@ -372,7 +372,12 @@ export function learnSegmentedFluidModel(
 			: wide[ 0 ]!.viewport;
 		if ( switchWidth <= usable[ split - 1 ]!.viewport || switchWidth > wide[ 0 ]!.viewport ||
 			line.slope * switchWidth + line.intercept <= 0 ) continue;
-		const narrowSegments: FluidModelSegment[] = narrow === null
+		// A narrow stretch with its own regimes is segmented like any other
+		// sweep before falling back to holding each observed value.
+		const nested = narrow === null ? learnSegmentedFluidModel( usable.slice( 0, split ), options )?.segments : undefined;
+		const narrowSegments: FluidModelSegment[] = nested
+			? nested.map( ( segment, index ) => index === nested.length - 1 ? { ...segment, maxWidth: switchWidth - 1 } : segment )
+			: narrow === null
 			? usable.slice( 0, split ).map( ( sample, index ) => ( {
 				model: { kind: 'constant' as const, css: `${ round( sample.value, 0 ) }px`, value: sample.value },
 				minWidth: index === 0 ? null : sample.viewport,
