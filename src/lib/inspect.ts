@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { classifyUrl, isNonDocumentUrl } from './extraction/sitemap.js';
+import { classifyUrl } from './extraction/sitemap.js';
 import { parseSitemapDocument } from './extraction/sitemap.js';
 import { extractNavLinks } from './html-extract/index.js';
 import { BodyTooLargeError, safeFetch } from './media-fetch/safe-fetch.js';
@@ -169,10 +169,6 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
     try {
       const parsed = new URL(rawUrl, finalUrl);
       if (parsed.origin !== origin) return;
-      // A link to an image or an archive is not a route. Inventoried as one it
-      // consumes the sample budget, returns a non-HTML body, and leaves the
-      // complexity band uncertain for a source nothing went wrong with.
-      if (isNonDocumentUrl(parsed.href)) return;
       const key = routeKey(parsed.href);
       if (seen.has(key)) return;
       if (routes.length >= discoveryLimit) { discoveryTruncated = true; return; }
@@ -200,16 +196,21 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   }
   for (const link of extractNavLinks(entryHtml, finalUrl)) addRoute(link.href);
 
+  // Media is inventoried but never sampled: it cannot be an HTML document, so
+  // fetching it spends the budget to learn nothing and returns a body that
+  // cannot render. It stays in `routes` and in `routes.types`, so a consumer can
+  // still see how much of what was linked was media.
+  const documents = routes.filter((route) => route.type !== 'media');
   const selected: Route[] = [];
   const selectedKeys = new Set<string>();
-  for (const route of routes) {
+  for (const route of documents) {
     if (selected.length >= sampleLimit) break;
     if (route.type === 'homepage' || !selected.some((sample) => sample.type === route.type)) {
       selected.push(route);
       selectedKeys.add(route.url);
     }
   }
-  for (const route of routes) {
+  for (const route of documents) {
     if (selected.length >= sampleLimit) break;
     if (!selectedKeys.has(route.url)) selected.push(route);
   }
@@ -266,7 +267,7 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   } finally { await inspector?.close(); }
   const types: Record<string, number> = {};
   for (const route of routes) types[route.type] = (types[route.type] ?? 0) + 1;
-  const samplingTruncated = routes.length > selected.length;
+  const samplingTruncated = documents.length > selected.length;
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION,
     capabilityVocabulary: { schema: SOURCE_CAPABILITY_VOCABULARY, capabilities: SOURCE_CAPABILITIES },

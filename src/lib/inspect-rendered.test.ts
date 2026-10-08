@@ -76,6 +76,32 @@ it('reports a bounded sample through the real inspection path', async () => {
   expect(result.complexity.confidence).toBe('bounded-sample');
 }, 45_000);
 
+it('spends the rendered navigation budget on pages, not on linked media', async () => {
+  // The in-page inventory caps at 100 links. A gallery offers more media links
+  // than that, so filtering after the cap would leave the real menu
+  // undiscovered on exactly the sites this exists to read.
+  const media = Array.from({ length: 120 }, (unused, index) => `<a href="/uploads/${index}.jpg">p${index}</a>`).join('');
+  server = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://fixture').pathname;
+    if (path === '/sitemap.xml') { res.statusCode = 404; res.end('x'); return; }
+    if (path.endsWith('.jpg')) { res.setHeader('content-type', 'image/jpeg'); res.end(Buffer.from([0xff, 0xd8, 0xff])); return; }
+    res.setHeader('content-type', 'text/html');
+    res.end(`<!doctype html><title>Gallery</title><main>${media}</main><footer><nav><a href="/about">About</a><a href="/pricing">Pricing</a><a href="/contact">Contact</a></nav></footer>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+
+  const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 10 });
+
+  for (const page of ['/about', '/pricing', '/contact']) {
+    expect(result.samples.some((sample) => sample.url.endsWith(page)), page).toBe(true);
+  }
+  expect(result.coverage.discovery.truncated).toBe(false);
+  expect(result.coverage.sampling.complete).toBe(true);
+  expect(result.complexity.band).not.toBe('unknown');
+  expect(result.complexity.confidence).toBe('bounded-sample');
+}, 45_000);
+
 it('withholds the band when sampling was bounded, without lowering confidence in the sample that completed', () => {
   // docs/inspection.md: `unknown` covers "truncated discovery/sampling", while
   // `bounded-sample` means "the declared sample completed" and lists unsampled

@@ -40,7 +40,7 @@ export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
 }
 
-export type UrlType = 'homepage' | 'post' | 'product' | 'gallery' | 'event' | 'page';
+export type UrlType = 'homepage' | 'post' | 'product' | 'gallery' | 'event' | 'media' | 'page';
 
 export interface SitemapDiagnostic {
   code: string;
@@ -53,11 +53,16 @@ export interface SitemapFetchResult {
   diagnostics: SitemapDiagnostic[];
 }
 
-// Extensions that cannot be a document, so a URL carrying one is never a route.
+// Extensions that cannot be a document, so a URL carrying one is never a page.
+//
+// `resolvePageLink` below keeps its own narrower list, because it also applies
+// SKIP_PATHS -- which inspection deliberately does not want, since a `/cart`
+// route is commerce evidence worth reporting. Keep the two in step by extension;
+// they differ only in the path filter layered on top.
 // Deliberately a denylist: an unknown or absent extension still gets inspected,
 // because `.php`, `.aspx` and extensionless paths are all ordinary pages. Only
 // file types we are confident about are excluded.
-const NON_DOCUMENT_EXTENSIONS = new Set([
+export const NON_DOCUMENT_EXTENSIONS = new Set([
   // images
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'svg', 'ico', 'bmp', 'tif', 'tiff', 'heic',
   // audio and video
@@ -73,10 +78,14 @@ const NON_DOCUMENT_EXTENSIONS = new Set([
  *
  * Discovery inventories same-origin links, and a page that links straight to its
  * images — a gallery, a WordPress media library — offers plenty of them. Counted
- * as routes they are selected for sampling, come back as `image/jpeg`, and can
+ * as pages they are selected for sampling, come back as `image/jpeg`, and can
  * never render, which leaves the inspection reporting fewer rendered samples
  * than it selected and therefore an uncertain complexity band for a source that
  * measured cleanly.
+ *
+ * These are classified `media` rather than excluded. An excluded URL is invisible
+ * — it leaves no count, no diagnostic, and a discovery that reports itself
+ * complete — and this inspection holds itself to reporting what it subtracts.
  */
 export function isNonDocumentUrl(url: string): boolean {
   let path: string;
@@ -86,7 +95,7 @@ export function isNonDocumentUrl(url: string): boolean {
     path = url.toLowerCase().split(/[?#]/)[0];
   }
   const extension = path.slice(path.lastIndexOf('.') + 1);
-  return path.includes('.') && extension !== path && NON_DOCUMENT_EXTENSIONS.has(extension);
+  return path.includes('.') && NON_DOCUMENT_EXTENSIONS.has(extension);
 }
 
 export function classifyUrl(url: string): UrlType {
@@ -98,6 +107,9 @@ export function classifyUrl(url: string): UrlType {
   }
 
   if (path === '/' || path === '') return 'homepage';
+  // Before every other test: a URL naming a file is not a page of any kind, and
+  // the extension says so more reliably than the path shape does.
+  if (isNonDocumentUrl(url)) return 'media';
   // Match /blog/<slug>, /post/<slug>, /blogs/<handle>/<slug>, etc.
   // Also match Wix patterns like /blog-1/post/<slug> and older Wix /single-post/<slug>.
   // Require a slug segment after the keyword — bare `/blog` is a listing page,

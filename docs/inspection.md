@@ -2,6 +2,16 @@
 
 `data-liberation inspect <url>` returns schema `2.0`: bounded HTTP facts and rendered desktop observations. `--http-only` skips Chromium and returns unknown complexity. The public `inspectSource(url, { rendered: false })` option and MCP `inspect.rendered` use the same contract.
 
+A URL whose extension cannot be an HTML document — an image, a stylesheet, an
+archive, a font — is inventoried with `type: 'media'` and never sampled. Fetching
+one spends a sample to learn nothing and returns a body that cannot render, which
+would otherwise leave the complexity band uncertain for a source that measured
+cleanly. The rendered navigation inventory filters media before its own link cap,
+so a page that links straight to its own files does not spend that budget on them.
+Media stays in `routes` and in `routes.types`, so the exclusion is visible rather
+than silent. The test is the extension alone, so a page whose slug ends in a
+listed token is read as media.
+
 Default limits are 50 inventoried routes, 5 samples, 10 seconds per request/rendered sample, and 30 seconds overall. Each rendered sample permits at most 100 GET requests, 2 MiB per response, and a 10 MiB accepted resource budget. Responses and redirects use the HTTP inspection guard. Service workers and non-GET requests are blocked; controls and transactions are never activated. Blocked or unavailable resources are reported as unknown evidence. A 300ms settle observes an initial state, not all possible future application states.
 
 `source.hosts` records the deployment hosts recognized on the entry response, with the evidence that identified each one. A host is where a site is deployed, not what built it, so host recognition is independent of platform detection and never competes with it: a site can be built on one platform and served by another, and either may be unknown.

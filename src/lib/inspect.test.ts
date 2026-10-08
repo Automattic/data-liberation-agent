@@ -55,10 +55,11 @@ describe('inspectSource', () => {
     expect(result.unknowns).toContain('Rendered layout and responsive reflow were not measured; inspection does not run the full browser capture pipeline.');
   });
 
-  it('does not inventory linked media as routes', async () => {
-    // A gallery links straight to its own image files. Counted as routes they
-    // consume the sample budget, come back as image/jpeg, and leave complexity
-    // uncertain for a source that measured cleanly.
+  it('does not sample linked media, while still inventorying it', async () => {
+    // A gallery links straight to its own image files. Sampled as pages they
+    // spend the budget, come back as image/jpeg, and leave complexity uncertain
+    // for a source that measured cleanly. Classified rather than dropped, so
+    // the exclusion is visible in `routes.types` instead of silent.
     const url = await fixture((request, response) => {
       const path = new URL(request.url ?? '/', 'http://fixture').pathname;
       if (path === '/sitemap.xml') {
@@ -79,13 +80,13 @@ describe('inspectSource', () => {
 
     const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 10 });
 
-    expect(result.routes.types).toEqual({ homepage: 1, page: 1 });
-    expect(result.coverage.discovery.routes).toBe(2);
+    // Media stays in the inventory, so the report still shows what was linked --
+    // it is simply never sampled.
+    expect(result.routes.types).toEqual({ homepage: 1, page: 1, media: 3 });
+    expect(result.coverage.discovery.routes).toBe(5);
+    expect(result.coverage.sampling.attempted).toBe(2);
     expect(result.samples.every((sample) => sample.outcome === 'html')).toBe(true);
     expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
-    // Nothing was truncated and every selected route was a document, so the
-    // measurement stands on its own rather than collapsing to unknown.
-    expect(result.coverage.sampling.complete).toBe(true);
   });
 
   it('validates bounded options', async () => {
