@@ -58,11 +58,11 @@ import {
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
-import { srcsetCandidates, srcsetReferences } from './srcset.js';
+import { isSrcsetShaped, srcsetCandidates, srcsetReferences } from './srcset.js';
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
 import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
-import { isSrcsetShaped, elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
+import { elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
 import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
