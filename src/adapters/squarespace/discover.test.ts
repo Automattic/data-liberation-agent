@@ -78,9 +78,11 @@ describe('Squarespace discovery', () => {
       { url: 'https://walkabout.example.test/services', type: 'page' },
       { url: 'https://walkabout.example.test/privacy', type: 'page' },
       { url: 'https://walkabout.example.test/about', type: 'page' },
+      { url: 'https://walkabout.example.test/cart', type: 'page' },
+      { url: 'https://walkabout.example.test/account', type: 'page' },
       { url: 'https://walkabout.example.test/board', type: 'page' },
     ]);
-    expect(inventory.counts).toEqual({ homepage: 1, page: 6 });
+    expect(inventory.counts).toEqual({ homepage: 1, page: 8 });
   });
 
   it('continues discovery when the public homepage cannot be fetched', async () => {

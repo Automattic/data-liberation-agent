@@ -33,7 +33,7 @@ describe('bounded linked-page fallback', () => {
       '/legal': ['/blog/', '/blog#again'],
       '/post/deep': ['/post/deeper'],
       '/post/deeper': ['/legal'],
-      '/group//entry': [], '/group/entry': [], '/edition?lang=en': [], '/edition?lang=fr': [],
+      '/group//entry': [], '/group/entry': [], '/edition?lang=en': [], '/edition?lang=fr': [], '/cart': [],
     };
     const f = await fixture((req, res) => {
       const links = documents[req.url ?? ''];
@@ -43,11 +43,12 @@ describe('bounded linked-page fallback', () => {
     });
     try {
       const result = await fetchSitemapWithDiagnostics(`${origin}/`);
-      expect(result.urls).toEqual(['/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/legal', '/post/deep', '/', '/post/deeper'].map(path => origin + path));
-      expect(f.requests.slice(3)).toEqual(['/', '/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/legal', '/post/deep', '/post/deeper']);
+      // Platform-looking path names are candidates; responses decide their outcome.
+      expect(result.urls).toEqual(['/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/', '/post/deeper'].map(path => origin + path));
+      expect(f.requests.slice(3)).toEqual(['/', '/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/post/deeper']);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({ code: 'sitemap_absent', reason: expect.stringContaining('HTTP 404') }),
-        expect.objectContaining({ code: 'fallback_link_closure', reason: expect.stringContaining('9/100 HTTP requests') }),
+        expect.objectContaining({ code: 'fallback_link_closure', reason: expect.stringContaining('10/100 HTTP requests') }),
       ]);
     } finally { await f.close(); }
   });
