@@ -220,7 +220,9 @@ export function wireCapturedDialogs(
 			}
 			const panelId = reusePanel && state.dialog?.id ? state.dialog.id : nextDialogId( $ );
 			const sourcePlaced = Boolean( observed );
-			const panel = reusePanel || sourcePlaced ? $( state.dialog!.html ).first() : $( '<div class="dla-dialog" role="dialog" aria-modal="true" hidden></div>' );
+			// Modality follows the observed source presentation: a dropdown leaves
+			// the page interactive, so it does not claim aria-modal.
+			const panel = reusePanel || sourcePlaced ? $( state.dialog!.html ).first() : $( `<div class="dla-dialog" role="dialog"${ dropdown ? '' : ' aria-modal="true"' } hidden></div>` );
 			if ( sourcePlaced ) panel.addClass( 'dla-dialog' );
 			if ( reusePanel || sourcePlaced ) {
 				// Snapshot display overrides the source's closed-state rule, but must
