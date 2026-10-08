@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.5] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+- compare frozen cells with bounded concurrency
+
+### Fixed
+- exclude removed Lovable chrome from behavior evidence
+- preserve native details resting state during hydration
+- preserve source controls through popup probing
+
 ## [0.20.4] - 2026-10-08
 
 ### Changed
