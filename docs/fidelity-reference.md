@@ -1,7 +1,7 @@
 # Reproducible fidelity stages
 
 `captureWebsite` writes `fidelity-reference.json` alongside the receipt. It observes
-the **existing cleaned live capture session**, without reloading the source, before
+independent source navigations in the capture's browser context, before
 fluid geometry rewriting/HTML serialization. Each captured route is observed at
 390 (mobile context), 768 and 1440 CSS pixels, height 900, in `baseline` state.
 Reference PNGs are always recorded, even without optional full-page screenshots.
@@ -68,6 +68,8 @@ Frozen reports include:
   makes `pass` false, even if measured scores pass.
 - `pending[]`: stage/route/viewport/state plus the reason measurement is unproven.
 - `coverage`: required and measured cell counts, plus bounded unknowns.
+- `outcomes[]` and `coverage.observedOutcomes`: independently verified external
+  boundary cells, separate from measured local-document scores.
 - Existing `scores`, `selfConsistency`, counters and route counts. Offline
   self-consistency still checks every portable route, even for a candidate.
 
@@ -127,6 +129,53 @@ Repeated filename/content media requires unique semantic ancestor role/label and
 image-label correspondence. DOM sibling indices and nearest geometry do not
 establish correspondence; lost/duplicate roles become ambiguous/unproven.
 Resume skips are also unproven because no current source session was observed.
+
+### Initial-document external outcomes
+
+Scheduled HTTP, response `Refresh`, and HTML meta-refresh redirects share one
+bounded response classifier before DOM cleanup. Acquisition follows at most four
+same-site responses, using the canonical HTTP(S)/apex-www boundary, with a
+30-second total navigation budget, five seconds per
+request, two MiB per response and an initial refresh delay at most five seconds.
+Credentials and non-HTTP(S) destinations fail; public acquisition applies the
+existing public-URL policy. An external declaration ends acquisition before a
+destination request. Unexplained script/control navigation remains route drift.
+Refresh declarations without a destination reload the same response document.
+Long timers (for example `Refresh: 60`) retain ordinary baseline capture; imminent
+reloads settle through the bounded reload acquisition policy. Repeated immediate
+or delayed reloads exhaust that policy rather than becoming redirect outcomes.
+Same-origin aliases reuse the target queue and portable alias contract; requested
+identity stays separate from rendered URL/base (including trailing slashes).
+Unscheduled inspection uses the exact source-resolved document address, removing
+only its client-side fragment for acquisition. Comparison keys never become
+request URLs. Coverage and source-link rewriting use captured request addresses
+or explicit proven aliases, so an external `/catalog` outcome cannot cover or
+rewrite a different `/catalog/` document. Existing rendered URL/base resolution
+feeds these addresses; it is not replaced by path or query normalization.
+Unscheduled probes remain classification-only evidence in this contract: they
+do not create frozen observations or extend declared required scope. A local HTML
+probe still remains an uncaptured-route finding until separately scheduled.
+
+The receipt's `sourceOutcomes[]` and a frozen entry's `outcome` use
+`data-liberation/source-outcome/v1`, currently `kind: 'external-redirect'`.
+They retain the requested source URL, initial response status, final declaration
+mechanism, viewport/browser profile and a confined SHA-256-bound raw response
+chain. Public target identity is only origin plus a digest of its complete URL;
+`fetched: false` explicitly leaves terminal status/content unobserved. Raw evidence
+under `source-outcomes/` can contain authored destination queries: preserve it
+privately with the run, separately from the portable `website/` tree.
+
+Required source URLs remain in scope. Both capture devices must agree, and each
+390/768/1440 frozen boundary is independently acquired and revalidated from its
+retained source declarations. Missing, corrupt, ambiguous or disagreeing evidence
+is unproven. Frozen stages never revisit the source or foreign destination. They
+also verify that authored source-resolving links retain query/fragment meaning in
+the portable and materialized local documents. Boundary cells have no local
+document/raster score and prove neither destination editability nor visual parity.
+`coverage.measured` counts local-document scores; `observedOutcomes` counts boundary
+cells, and both contribute to accounting for `coverage.required`. HTTP errors and
+non-HTML routes still require further outcome contracts and remain unproven when
+they have no frozen local observation. Other states and widths remain pending.
 
 CLI equivalents (the same four product verbs remain):
 

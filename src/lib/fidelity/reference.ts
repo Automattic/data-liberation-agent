@@ -10,10 +10,13 @@ import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-inte
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
+import { lockMainFrameNavigation } from '../screenshot/screenshotter.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 
 export interface ReferenceCollectorOptions {
+	publicUrlsOnly?: boolean;
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
 	prepareCapture?: ( page: Page, ctx: { url: string; viewport: string } ) => Promise<void>;
@@ -23,6 +26,8 @@ export const REFERENCE_WIDTHS = [ 390, 768, 1440 ];
 export type FidelityStage = 'capture' | 'materialization' | 'drift';
 export interface ReferenceArtifact { path: string; sha256: string }
 export interface ReferenceEntry {
+	/** An observed boundary is not a rendered local-document cell. */
+	outcome?: ExternalBoundary;
 	/** Named source document/profile identity; absent on older width-only evidence. */
 	profile?: string;
 	context?: CaptureProfile['context'];
@@ -91,7 +96,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	};
 	return {
 		declare,
-		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile ): Promise<void> {
+		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile, expectedBoundary?: ExternalBoundary ): Promise<void> {
 			const recipe = profile ?? { id: device, width: page.viewportSize()?.width ?? 1440, height: 900 };
 			declare( url, recipe );
 			for ( const cell of [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device ) ) {
@@ -103,6 +108,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					let referenceContext: import('playwright').BrowserContext | undefined;
 					const runtimeError = ( error: Error ) => entry.readiness.reasons.push( `source runtime error: ${ error.message }` );
 					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
+					let releaseNavigation: (() => Promise<void>) | undefined;
 					let navigationUrl = url;
 					try {
 						const sourceContext = page.context();
@@ -134,6 +140,16 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							}
 							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
+						if (expectedBoundary) {
+							const navigation = await navigateSourceDocument(referencePage, url, {publicUrlsOnly: options.publicUrlsOnly});
+							if (!navigation.boundary || !browserProfile) throw new Error('Reference external boundary or browser profile unproven');
+							entry.outcome = storeExternalBoundary(directory, navigation.boundary, viewport, browserProfile);
+							if (boundaryIdentity(entry.outcome) !== boundaryIdentity(expectedBoundary)) throw new Error('Reference external outcome disagrees with capture');
+							entry.browserProfile = browserProfile;
+							entry.readiness.reasons.push(...errors);
+							entry.readiness.ready = entry.readiness.reasons.length === 0;
+							continue;
+						}
 						referencePage.on( 'pageerror', runtimeError );
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
@@ -142,6 +158,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
 							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
 						}
+						releaseNavigation = await lockMainFrameNavigation(referencePage, () => entry.readiness.reasons.push('source route drift'), true);
 						entry.userAgent = await referencePage.evaluate( () => navigator.userAgent );
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
 						entry.browserProfile = browserProfile;
@@ -174,6 +191,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					} catch ( error ) {
 						entry.readiness.reasons.push( String( error ) );
 					} finally {
+						await releaseNavigation?.();
 						referencePage?.off( 'pageerror', runtimeError );
 						referencePage?.off( 'crash', rendererCrash );
 						if ( referencePage && referencePage !== page ) await referencePage.close().catch( () => {} );

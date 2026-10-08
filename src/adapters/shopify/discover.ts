@@ -1,4 +1,4 @@
-import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { ShopifyAdapterOpts, ShopifyInventory, ShopifyPage, ShopifyBlog, ShopifyArticle } from './types.js';
@@ -127,7 +127,8 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
   }
 
   // 4. Fetch sitemap (Shopify sitemaps are index files with sub-sitemaps)
-  const sitemapUrls = await fetchSitemap(normalized);
+  const sitemap = await fetchSitemapWithDiagnostics(normalized);
+  const sitemapUrls = sitemap.urls;
   for (const u of sitemapUrls) {
     // Skip if already found via JSON API
     if (inventoryUrls.some((inv) => inv.url === u)) continue;
@@ -205,6 +206,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     navigation,
     counts,
     urls: inventoryUrls,
+    diagnostics: sitemap.diagnostics,
     jsonApiAvailable,
   };
 }

@@ -24,4 +24,5 @@ export interface WeeblyInventory {
   navigation: NavLink[];
   counts: Record<string, number>;
   urls: InventoryUrl[];
+  diagnostics?: import('../../lib/extraction/sitemap.js').SitemapDiagnostic[];
 }

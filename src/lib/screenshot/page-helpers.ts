@@ -206,12 +206,21 @@ export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promi
  * Wait for images reached by the lazy-load sweep to decode before measuring.
  * Image load can complete before layout has incorporated the decoded intrinsic
  * size, so waiting for the request alone is not enough for responsive pages.
+ *
+ * Inactive alternatives without layout boxes need not delay this viewport.
+ * Visibility-hidden layout participants still settle; resource localization
+ * remains independent of rendering readiness.
  */
 export async function waitForImages(page: Page, timeoutMs: number = 4_000): Promise<void> {
   try {
     await withEvaluateTimeout(
       page.evaluate(async () => {
-        const images = [ ...document.images ];
+        const active = (image: HTMLImageElement): boolean => {
+          if (image.checkVisibility()) return true;
+          const box = image.getBoundingClientRect();
+          return box.width > 0 && box.height > 0;
+        };
+        const images = [ ...document.images ].filter(active);
         await Promise.all(
           images.map(async (image) => {
             if (!image.complete) {

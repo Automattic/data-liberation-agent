@@ -38,7 +38,7 @@ export interface CaptureEvidenceInput {
 		discoveryDiagnostics?: ReadonlyArray< { code: string; url: string; reason: string } >;
 	};
 	capture: {
-		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'nativeViewTimelines' > > >;
+		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' > > >;
 		absentRoutes: ReadonlySet< string >;
 		interactivity: ReadonlyArray< SourceInteractivityPage >;
 		http?: { acquisition: unknown; diagnostics: ReadonlyArray< { code: string; url: string; reason: string } > };
@@ -609,6 +609,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				...( nativeViewTimelines ? { nativeViewTimelines } : {} ),
 				sourceProfile,
 				excludedRoutes,
+				sourceOutcomes: Object.values( capture.entries ).filter( entry => entry.externalRedirect ).flatMap( entry => entry.sourceOutcomes ?? [] ),
 				duplicateRoutes,
 				discoveryDiagnostics,
 				summary: { ...options.summary, complete },

@@ -1,4 +1,5 @@
 import { withTimeout } from '../concurrency.js';
+import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 
 type PwPage = { close(): Promise<void> };
 
@@ -135,7 +136,10 @@ export interface SourceStorageState {
 
 type SessionCapableBrowser = {
   newContext(opts?: Record<string, unknown>): Promise<{
-    newPage(): Promise<{ goto(url: string, opts?: Record<string, unknown>): Promise<unknown> }>;
+    newPage(): Promise<{
+      goto(url: string, opts?: Record<string, unknown>): Promise<unknown>;
+      route?: import('playwright').Page['route'];
+    }>;
     storageState(): Promise<SourceStorageState>;
     close(): Promise<void>;
   }>;
@@ -165,15 +169,25 @@ function originOf(url: string): string | null {
 function harvestSourceSession(
   browser: SessionCapableBrowser,
   entryUrl: string,
-  origin: string
+  origin: string,
+  publicUrlsOnly: boolean
 ): Promise<SourceStorageState | null> {
   let pending = sourceSessions.get(origin);
   if (!pending) {
     pending = (async () => {
       let context: Awaited<ReturnType<SessionCapableBrowser['newContext']>> | undefined;
       try {
+        if (publicUrlsOnly) assertPublicHttpUrl(entryUrl);
         context = await browser.newContext(await desktopContextOptions(browser));
         const page = await context.newPage();
+        if (publicUrlsOnly) {
+          if (!page.route) throw new Error('Public source harvest requires request routing');
+          await page.route('**/*', async route => {
+            try { assertPublicHttpUrl(route.request().url()); }
+            catch { await route.abort(); return; }
+            await route.continue();
+          });
+        }
         await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: HARVEST_TIMEOUT_MS });
         const state = await context.storageState();
         const hasSession =
@@ -203,15 +217,18 @@ function harvestSourceSession(
  *
  * Spread into every `newContext`/`newPage` that loads the source site,
  * alongside (or in place of) {@link desktopContextOptions}.
+ * Public-source callers pass `publicUrlsOnly` so a new session harvest applies
+ * the same request guard before its first navigation, not only on later pages.
  */
 export async function sourceContextOptions(
   browser: object,
-  entryUrl: string
+  entryUrl: string,
+  options: { publicUrlsOnly?: boolean } = {}
 ): Promise<SourceBrowserIdentity & { storageState?: SourceStorageState }> {
   const origin = originOf(entryUrl);
   const [identity, session] = await Promise.all([
     desktopContextOptions(browser),
-    origin ? harvestSourceSession(browser as SessionCapableBrowser, entryUrl, origin) : null,
+    origin ? harvestSourceSession(browser as SessionCapableBrowser, entryUrl, origin, options.publicUrlsOnly === true) : null,
   ]);
   return session ? { ...identity, storageState: session } : identity;
 }

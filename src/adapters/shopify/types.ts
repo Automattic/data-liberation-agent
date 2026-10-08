@@ -26,6 +26,7 @@ export interface ShopifyInventory {
   navigation: NavLink[];
   counts: Record<string, number>;
   urls: InventoryUrl[];
+  diagnostics?: import('../../lib/extraction/sitemap.js').SitemapDiagnostic[];
   jsonApiAvailable: boolean;
   /**
    * The `*.myshopify.com` hostname, auto-detected from storefront HTML.

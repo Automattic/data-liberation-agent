@@ -230,6 +230,6 @@ describe('Blogger discovery', () => {
 			postsAbsentFromRoutes: 0,
 		});
 		expect(inventory.counts.homepage).toBe(1);
-		expect(inventory.diagnostics?.some((diagnostic) => diagnostic.code === 'sitemap_missing')).toBe(true);
+		expect(inventory.diagnostics?.some((diagnostic) => diagnostic.code === 'sitemap_absent')).toBe(true);
 	});
 });

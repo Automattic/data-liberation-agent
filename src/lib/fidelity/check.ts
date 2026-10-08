@@ -11,6 +11,8 @@ import { mapPool } from '../concurrency.js';
 import * as cheerio from 'cheerio';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
+import { load } from 'cheerio';
+import { boundaryIdentity, validateExternalBoundary, type ExternalBoundary } from '../source-navigation.js';
 import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import {
@@ -154,7 +156,9 @@ export interface FidelityReport {
 	stage?: FidelityStage;
 	status?: 'proven' | 'failed' | 'unproven';
 	pending?: Array<{ stage: FidelityStage; route: string; viewport: number; state: string; profile?: string; reason: string }>;
-	coverage?: { required: number; measured: number; unknowns: string[]; profiles?: Record<string, { required: number; measured: number; pending: number }> };
+	coverage?: { required: number; measured: number; observedOutcomes?: number; unknowns: string[]; profiles?: Record<string, { required: number; measured: number; pending: number }> };
+	/** Boundary proof is distinct from local document geometry/raster scores. */
+	outcomes?: Array<{ sourceUrl: string; viewport: number; state: string; profile?: string; kind: 'external-redirect' }>;
 	/** Authored portable runtime was verified during this comparison, not inferred from source scripts. */
 	portableMotion?: { verified: boolean; routes: string[]; origin: 'authored' | 'learned' };
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
@@ -185,6 +189,7 @@ export interface FidelityReport {
 }
 
 interface CaptureReceipt {
+	sourceOutcomes?: ExternalBoundary[];
 	cleanup?: { policy: CleanupPolicy; complete: boolean; evidencePath?: string };
 	sourceInteractivity?: { schema: string; path: string; unreproduced_route_count: number };
 	source?: { url?: string };
@@ -1391,6 +1396,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	const selfConsistency = checkSelfConsistency( websiteDir, routeFiles( receipt ) );
 	const scores: RouteScore[] = [];
 	const pending: NonNullable<FidelityReport['pending']> = [];
+	const outcomes: NonNullable<FidelityReport['outcomes']> = [];
 	let manifest: FidelityReference | undefined;
 	let invalid: string | undefined;
 	try {
@@ -1438,10 +1444,31 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	for ( const url of options.routes ? [] : manifest?.scope?.sourceUrls ?? [] ) {
 		if ( [ ...sources.values() ].includes( url ) || receiptCoversSourceUrl( receipt, url ) ) continue;
 		const declared = manifest?.scope.cells?.filter( cell => cell.sourceUrl === url && widths.includes( cell.viewport ) && states.includes( cell.state ) && ( ! options.profiles || options.profiles.includes( cell.profile ) ) );
-		if ( declared?.length ) {
-			for ( const cell of declared ) { pending.push( { stage, route: url, viewport: cell.viewport, state: cell.state, profile: cell.profile, reason: 'Declared source route has no portable capture' } ); missingRequired++; }
-		} else for ( const viewport of widths ) for ( const state of states ) for ( const profile of options.profiles ?? [ undefined ] ) {
-			pending.push( { stage, route: url, viewport, state, ...( profile ? { profile } : {} ), reason: 'Declared source route has no portable capture' } ); missingRequired++;
+		const missingCells: Array<{ viewport: number; state: string; profile?: string }> = declared?.length
+			? declared.map( cell => ( { viewport: cell.viewport, state: cell.state, profile: cell.profile } ) )
+			: widths.flatMap( viewport => states.flatMap( state => ( options.profiles ?? [ undefined ] ).map( profile => ( { viewport, state, ...( profile ? { profile } : {} ) } ) ) ) );
+		// One capture profile observes each initial document; legacy width-only
+		// evidence used the desktop and mobile capture devices.
+		const outcomeProfiles = new Set( manifest?.scope.cells?.filter( cell => cell.sourceUrl === url ).map( cell => cell.profile ) );
+		for ( const { viewport, state, profile } of missingCells ) {
+			missingRequired++;
+			try {
+				if (invalid) throw new Error(invalid);
+				const captured = (receipt.sourceOutcomes ?? []).filter(outcome => outcome.requestedUrl === url);
+				if (!captured.length) throw new Error('Declared source route has no portable capture or frozen boundary');
+				if (state !== 'baseline' || !manifest!.scope.states.includes(state) || !manifest!.scope.widths.includes(viewport)) throw new Error('Required outcome viewport/state is outside frozen scope');
+				for (const boundary of captured) validateExternalBoundary(boundary, readReferenceArtifact(directory, boundary.evidence));
+				const deviceCount = outcomeProfiles.size || 2;
+				if (new Set(captured.map(boundaryIdentity)).size !== 1 || captured.length !== deviceCount || new Set(captured.map(boundary => JSON.stringify(boundary.browserProfile))).size !== deviceCount) throw new Error('Captured external boundaries disagree or have incomplete device coverage');
+				const entries = manifest!.entries.filter(entry => entry.sourceUrl === url && entry.viewport === viewport && entry.state === state && (!profile || (entry.profile ?? entry.device) === profile));
+				if (entries.length !== 1 || !entries[0]!.outcome || !entries[0]!.readiness.ready || entries[0]!.readiness.reasons.length) throw new Error('Source boundary observation missing, ambiguous or unready');
+				const entry = entries[0]!;
+				validateExternalBoundary(entry.outcome!, readReferenceArtifact(directory, entry.outcome!.evidence));
+				const deviceBoundary = captured.find(boundary => JSON.stringify(boundary.browserProfile) === JSON.stringify(entry.outcome!.browserProfile));
+				if (entry.outcome!.viewport !== viewport || entry.outcome!.requestedUrl !== url || boundaryIdentity(entry.outcome!) !== boundaryIdentity(captured[0]!) ||
+					!deviceBoundary || JSON.stringify(entry.browserProfile) !== JSON.stringify(entry.outcome!.browserProfile) || entry.route || entry.observation || entry.screenshot || entry.document) throw new Error('Frozen external boundary identity mismatch');
+				outcomes.push({sourceUrl: url, viewport, state, ...(profile ? {profile} : {}), kind: 'external-redirect'});
+			} catch (error) { pending.push({stage, route: url, viewport, state, ...(profile ? {profile} : {}), reason: String(error)}); }
 		}
 	}
 	let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
@@ -1458,7 +1485,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	const evidenceKeys = required.map( cell => JSON.stringify( [ evidenceSlug( cell.route ), cell.profile ? evidenceSlug( cell.profile ) : null, cell.viewport, cell.state ] ) );
 	const poolSize = new Set( evidenceKeys ).size === evidenceKeys.length ? concurrency : 1;
 	try {
-		const outcomes = await mapPool( required, poolSize, async cell => {
+		const cellResults = await mapPool( required, poolSize, async cell => {
 			const { route, viewport, state, profile } = cell;
 			const attribution = { stage, ...cell };
 			let score: RouteScore | undefined;
@@ -1510,6 +1537,20 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), ...( profile ? [ evidenceSlug( profile ) ] : [] ), String( viewport ), state );
 					const candidatePng = options.screenshots ? await captureViewportScreenshot( page ) : undefined;
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
+					// The foreign document is outside scope, but authored links to the
+					// requested source route must retain their query/hash meaning in both stages.
+					const boundaryUrls = new Set((receipt.sourceOutcomes ?? []).map(outcome => normalizedUrl(outcome.requestedUrl)));
+					if (boundaryUrls.size) {
+						const html = readReferenceArtifact(directory, entry.document!).toString();
+						const $ = load(html);
+						const documentUrl = new URL($('base[href]').first().attr('href') ?? entry.sourceUrl, entry.sourceUrl).href;
+						const requiredLinks: string[] = [];
+						$('a[href],area[href]').each((_index, element) => {
+							try { const href = new URL($(element).attr('href')!, documentUrl); if (boundaryUrls.has(normalizedUrl(href.href))) requiredLinks.push(href.href); } catch { /* Non-network authored links have no boundary identity. */ }
+						});
+						const actual = await page.evaluate(() => [...document.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>('a[href],area[href]')].map(link => link.href));
+						for (const href of requiredLinks) { const index = actual.indexOf(href); if (index < 0) checked.failures.push('Authored external-boundary source link meaning was lost'); else actual.splice(index, 1); }
+					}
 					if ( deviceSelected ) {
 						const actualViewport = await readViewport();
 						const directives = ( value: string | undefined ) => value?.split( ',' ).map( directive => directive.trim().toLowerCase() ).sort().join( ',' );
@@ -1530,21 +1571,21 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 		} );
 		// Publication is input-ordered, never completion-ordered. Every cell catches
 		// its own failure, so the pool drains before shared resources are closed.
-		for ( const outcome of outcomes ) {
-			if ( outcome.score ) scores.push( outcome.score );
-			if ( outcome.pending ) pending.push( outcome.pending );
+		for ( const result of cellResults ) {
+			if ( result.score ) scores.push( result.score );
+			if ( result.pending ) pending.push( result.pending );
 		}
 	} finally { try { await browser?.close(); } finally { await server?.close(); } }
 	if ( ! routes.length || ! widths.length || ! states.length ) pending.push( { stage, route: '/', viewport: 0, state: 'baseline', reason: 'Empty required scope' } );
 	const summary = scoreReport( scores );
 	const pass = summary.pass && selfConsistency.pass && pending.length === 0;
-	const profileCoverage = Object.fromEntries( [ ...new Set( [ ...required, ...pending ].flatMap( cell => cell.profile ? [ cell.profile ] : [] ) ) ].map( profile => [ profile, {
-		required: scores.filter( cell => cell.profile === profile ).length + pending.filter( cell => cell.profile === profile ).length,
+	const profileCoverage = Object.fromEntries( [ ...new Set( [ ...required, ...pending, ...outcomes ].flatMap( cell => cell.profile ? [ cell.profile ] : [] ) ) ].map( profile => [ profile, {
+		required: scores.filter( cell => cell.profile === profile ).length + pending.filter( cell => cell.profile === profile ).length + outcomes.filter( cell => cell.profile === profile ).length,
 		measured: scores.filter( cell => cell.profile === profile ).length,
 		pending: pending.filter( cell => cell.profile === profile ).length,
 	} ] ) );
 	const report: FidelityReport = { ...summary, pass, stage, status: pending.length ? 'unproven' : pass ? 'proven' : 'failed', pending,
-		coverage: { required: required.length + missingRequired, measured: scores.length, unknowns, profiles: profileCoverage },
+		coverage: { required: required.length + missingRequired, measured: scores.length, observedOutcomes: outcomes.length, unknowns, profiles: profileCoverage }, outcomes,
 		profiles: [ ...new Set( required.flatMap( cell => cell.profile ? [ cell.profile ] : [] ) ) ],
 		sourceUrl: receipt.source?.url ?? '', websiteDir, widths, routes, routesAvailable: sources.size, routesCleanupUnproven: [], selfConsistency, scores, overlays: [] };
 	mkdirSync( join( directory, 'compare', stage ), { recursive: true } );

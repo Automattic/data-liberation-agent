@@ -1,4 +1,4 @@
-import { fetchSitemap, classifyUrl, extractSameOriginLinks, routeKey } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, routeKey } from '../../lib/extraction/sitemap.js';
 import { extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
@@ -120,7 +120,8 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   const siteLanguage = siteJson?.website?.language || 'en-US';
 
   // 2. Fetch sitemap
-  const sitemapUrls = await fetchSitemap(url);
+  const sitemap = await fetchSitemapWithDiagnostics(url);
+  const sitemapUrls = sitemap.urls;
 
   // 3. Squarespace renders its primary navigation in the public homepage HTML.
   // Admin discovery below supplements this list with published admin-only pages.
@@ -211,6 +212,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     navigation,
     counts,
     urls: inventoryUrls,
+    diagnostics: sitemap.diagnostics,
   };
 
   // Admin discovery via CDP — finds drafts, unlisted pages, password-protected content

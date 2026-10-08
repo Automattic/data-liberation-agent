@@ -250,6 +250,30 @@ describe('triggerLazyLoad', () => {
     await page.close();
   });
 
+  it('does not let a layout-inactive alternative exhaust the image timer', async () => {
+    // Issue #656: display:none removes an img from layout; its pending bytes
+    // are an inactive responsive alternative that cannot affect the captured
+    // state. A never-resolving request (an unfulfilled route) must not consume
+    // the readiness budget — and it must not be pruned from the document
+    // either, since resource capture localizes it independently.
+    const page = await browser.newPage();
+    await page.route('**/stalled.svg', () => undefined);
+    await page.setContent('<img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%2210%22/%3E">');
+    await page.evaluate(() => {
+      const image = document.createElement('img');
+      image.src = 'https://stalled.invalid/stalled.svg';
+      image.style.display = 'none';
+      image.width = 10;
+      image.height = 10;
+      document.body.appendChild(image);
+    });
+    const started = Date.now();
+    await waitForImages(page);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await page.locator('img').count()).toBe(2);
+    await page.close();
+  });
+
   it('stops scroll preparation at the reachable viewport bottom without overscroll waits', async () => {
     const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
     try {

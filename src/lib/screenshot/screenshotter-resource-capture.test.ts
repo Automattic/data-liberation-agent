@@ -26,17 +26,21 @@ vi.mock( './resource-capture.js', () => ( {
 } ) );
 
 function makePage( mobile: boolean, routedRequest?: object ) {
-	let routeHandler: ( route: object ) => Promise< void >;
+	const routeHandlers: Array<(route: object) => Promise<void>> = [];
 	let currentUrl = '';
 	return {
 		once: vi.fn(),
-		unroute: vi.fn().mockResolvedValue( undefined ),
 		route: vi.fn().mockImplementation( async ( _pattern, handler ) => {
-			routeHandler = handler;
+			routeHandlers.push(handler);
 		} ),
-		goto: vi.fn().mockImplementation( async ( url: string ) => {
+		unroute: vi.fn().mockImplementation(async (_pattern, handler) => { routeHandlers.splice(routeHandlers.indexOf(handler), 1); }),
+		goto: vi.fn().mockImplementation( async (url: string) => {
 			currentUrl = url;
-			if ( routedRequest ) await routeHandler( routedRequest );
+			if (routedRequest) {
+				let index = routeHandlers.length - 1;
+				const next = async (): Promise<void> => { await routeHandlers[index--]!({...routedRequest, fallback: next}); };
+				await next();
+			}
 			return { status: () => 200 };
 		} ),
 		url: () => currentUrl,
@@ -161,6 +165,7 @@ describe( 'screenshot resource capture', () => {
 		const continueRequest = vi.fn().mockResolvedValue( undefined );
 		const routedRequest = {
 			request: () => ( {
+				isNavigationRequest: () => false,
 				url: () => 'https://example.com/assets/site.css',
 				method: () => 'GET',
 				headers: () => ( {} ),
@@ -170,6 +175,15 @@ describe( 'screenshot resource capture', () => {
 			continue: continueRequest,
 			fulfill,
 		};
+		const harvestContinue = vi.fn().mockResolvedValue( undefined );
+		const harvestRequest = {
+			...routedRequest,
+			request: () => ( {
+				url: () => 'https://example.com/',
+				method: () => 'GET', headers: () => ( {} ), resourceType: () => 'document',
+			} ),
+			continue: harvestContinue,
+		};
 		mocks.getReplayableResponse.mockReset().mockReturnValue( {
 			path: '/capture/resources/assets/site.css',
 			contentType: 'text/css',
@@ -178,7 +192,8 @@ describe( 'screenshot resource capture', () => {
 		( connectBrowser as ReturnType< typeof vi.fn > ).mockResolvedValue( {
 			newContext: vi.fn().mockImplementation( async ( options: { viewport?: { width: number } } ) => ( {
 				newPage: vi.fn().mockResolvedValue(
-					makePage( options.viewport?.width === 402, routedRequest )
+					// The one-time session document is not a viewport's cached asset.
+					makePage( options.viewport?.width === 402, options.viewport ? routedRequest : harvestRequest )
 				),
 				addInitScript: vi.fn().mockResolvedValue( undefined ),
 				close: vi.fn().mockResolvedValue( undefined ),
@@ -206,6 +221,7 @@ describe( 'screenshot resource capture', () => {
 				headers: { 'access-control-allow-origin': '*' },
 			} );
 			expect( continueRequest ).not.toHaveBeenCalled();
+			expect( harvestContinue ).toHaveBeenCalledTimes( 1 );
 		} finally {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}

@@ -37,7 +37,7 @@ it('keeps distinct query collections in missing-route diagnostics and strips onl
   expect(sameOriginPageAnchors(
     '<a href="/catalog/?tag=red#items">Red</a><a href="/catalog/?tag=blue#items">Blue</a><a href="/catalog/?tag=red#other">Red again</a>',
     'https://example.com/'
-  )).toEqual(['https://example.com/catalog?tag=red', 'https://example.com/catalog?tag=blue']);
+  )).toEqual(['https://example.com/catalog/?tag=red', 'https://example.com/catalog/?tag=blue']);
 });
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium)', () => {

@@ -42,6 +42,7 @@ export type { StaticServer as CapturePreviewServer } from './lib/replicate/local
 export type { FidelityCheckOptions, FidelityReport, RouteScore, ObservePair } from './lib/fidelity/check.js';
 export type { InternalRouteOutcome } from './lib/fidelity/internal-route.js';
 export type { FidelityStage, FidelityReference, ReferenceEntry, ReferenceArtifact } from './lib/fidelity/reference.js';
+export type { ExternalBoundary, RedirectMechanism } from './lib/source-navigation.js';
 export type { MotionContract, MotionEvidence } from './lib/fidelity/candidate-motion.js';
 export { authorPortableMotion } from './lib/portable-motion.js';
 export type { PortableMotionRecipe, PortableMotionReceipt } from './lib/portable-motion.js';

@@ -1,4 +1,4 @@
-import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl, type SitemapDiagnostic } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
@@ -27,6 +27,7 @@ export interface WebflowInventory {
   navigation: NavLink[];
   counts: Record<string, number>;
   urls: InventoryUrl[];
+  diagnostics?: SitemapDiagnostic[];
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,8 @@ export async function discoverWebflow(url: string, _opts: Record<string, unknown
   const siteLanguage = langMatch?.[1] || 'en-US';
 
   // 3. Fetch sitemap
-  const sitemapUrls = await fetchSitemap(url);
+  const sitemap = await fetchSitemapWithDiagnostics(url);
+  const sitemapUrls = sitemap.urls;
 
   // 4. Extract navigation
   const normalized = url.includes('://') ? url : `https://${url}`;
@@ -97,5 +99,6 @@ export async function discoverWebflow(url: string, _opts: Record<string, unknown
     navigation,
     counts,
     urls: inventoryUrls,
+    diagnostics: sitemap.diagnostics,
   };
 }
