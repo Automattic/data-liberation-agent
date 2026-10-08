@@ -377,6 +377,13 @@ export async function observePage(
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
 		await onBaseline?.();
+		// The sweep owes the top pose back. Image and text geometry are
+		// viewport-relative, so a page still parked where an interrupted sweep
+		// left it would be scored as every image having moved.
+		if ( ! skipScrollProbe ) {
+			const pose = await page.evaluate( () => ( { x: Math.round( scrollX ), y: Math.round( scrollY ) } ) );
+			if ( pose.x || pose.y ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y })` );
+		}
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
