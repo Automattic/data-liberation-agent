@@ -57,12 +57,10 @@ export interface SitemapFetchResult {
 // Extensions that cannot be a document, so a URL carrying one is never a page.
 //
 // `resolvePageLink` below keeps its own list and it is a strict subset of this
-// one -- no `webp`, no video or audio, no archives, no feeds, no fonts -- so the
-// two already disagree, and deliberately: that function also applies SKIP_PATHS
-// (`/cart`, `/checkout`, `/search`), which inspection does not want, because a
-// `/cart` route is commerce evidence worth reporting. Capture and the adapters
-// go through it; inspection goes through this. Widening either does not widen
-// the other, so a new extension belongs in both unless the asymmetry is meant.
+// one -- no `webp`, no video or audio, no archives, no feeds, no fonts. Capture
+// and the adapters go through it; inspection goes through this. Widening either
+// does not widen the other, so a new extension belongs in both unless the
+// asymmetry is meant.
 // Deliberately a denylist: an unknown or absent extension still gets inspected,
 // because `.php`, `.aspx` and extensionless paths are all ordinary pages. Only
 // file types we are confident about are excluded.
