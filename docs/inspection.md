@@ -39,6 +39,10 @@ Neither side should learn about the other. A producer that encodes one destinati
 
 `confidence: bounded-sample` means the declared sample completed. Responsive behavior, unsampled routes, delayed states and backend functionality remain explicitly unknown. Consumers apply their own acceptance policy. These thresholds are initial explainable heuristics, not calibrated success probabilities.
 
+Sampling fewer routes than discovery found is the bound working as declared, so it withholds the band without lowering confidence: a result can report `band: unknown` alongside `confidence: bounded-sample`. The two answer different questions — whether a site-wide classification is offered, and whether the sample that was declared completed. A consumer that needs to know how much of the source was covered reads `coverage.discovery` and `coverage.sampling`, where `sampling.complete` is false whenever anything was truncated or failed. A declared sample that did not complete, a sample whose resources were limited, and a sample reporting its own unknowns all still report `incomplete`.
+
+Note that the top-level `unknowns` list is never empty: it always states that rendering covered one viewport, that interactive behavior was not activated, and that discovery was bounded. Those are standing properties of this inspection, not findings about a particular source, so an acceptance policy that requires `unknowns` to be empty can never pass. Key on `confidence`, on `coverage`, and on the capability findings instead.
+
 ## Verification — issue #210
 
 Tracking: https://github.com/Automattic/data-liberation-agent/issues/210
