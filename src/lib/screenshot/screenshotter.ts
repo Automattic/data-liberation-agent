@@ -1706,14 +1706,16 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	for ( const viewport of viewports ) validateCaptureProfile( viewport );
 	if ( new Set( viewports.map( viewport => viewport.id ) ).size !== viewports.length ) throw new Error( 'Duplicate source capture profile' );
 	const rawConcurrency = opts.concurrency ?? 6;
-	const concurrency = Math.max( 1, Math.min( 10, rawConcurrency ) );
+	const concurrency = Math.max( 1, Math.floor( Math.min( 10, rawConcurrency ) ) || 1 );
 	// Node reports the process group's memory constraint, including Chromium's
 	// children. RSS of this Node process alone misses the dominant capture owner.
 	// Explicit concurrency remains caller-owned; unconstrained runtimes retain
 	// the existing pool. Under a constraint, calibrate on one complete route
 	// (including its fresh reference pages) before admitting parallel routes.
 	const memoryLimit = opts.concurrency === undefined ? process.constrainedMemory() : 0;
-	const memoryAdmission = Number.isFinite( memoryLimit ) && memoryLimit > 0 && typeof process.availableMemory === 'function';
+	// Some runtimes report an unlimited uint64 sentinel rather than zero.
+	// Only a representable byte budget is evidence of a usable constraint.
+	const memoryAdmission = Number.isSafeInteger( memoryLimit ) && memoryLimit > 0 && typeof process.availableMemory === 'function';
 	let observedWorkingSet = 0;
 	let calibrated = false;
 	const sampleMemory = (): number => {
