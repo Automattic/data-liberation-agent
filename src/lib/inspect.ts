@@ -270,8 +270,16 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION,
     capabilityVocabulary: { schema: SOURCE_CAPABILITY_VOCABULARY, capabilities: SOURCE_CAPABILITIES },
-    complexity: sourceComplexity(renderedSamples, options.rendered === false || discoveryTruncated || samplingTruncated ||
-      renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html')),
+    // The declared sample completing is independent of how much of the site was
+    // declared: a bound honoured is not a sample that failed. So truncation
+    // withholds the band without lowering confidence.
+    complexity: sourceComplexity(
+      renderedSamples,
+      options.rendered === false || discoveryTruncated || samplingTruncated ||
+        renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html'),
+      options.rendered === false || renderedSamples.length !== selected.length ||
+        samples.some((sample) => sample.outcome !== 'html'),
+    ),
     rendered: { enabled: options.rendered !== false, attempted: renderedAttempts, succeeded: renderedSamples.length, samples: renderedSamples },
     source: { requestedUrl: url, finalUrl, platform: { id: detection.platform, confidence: detection.confidence, evidence: detection.signals }, hosts: hosts.map(({ id, evidence }) => ({ id, evidence })) },
     coverage: {

@@ -204,7 +204,21 @@ export interface SourceComplexity {
   factors: Array<{ code: string; value: number; reason: string }>;
 }
 
-export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean): SourceComplexity {
+/**
+ * `band` and `confidence` answer different questions, so they take different
+ * conditions.
+ *
+ * `band` is `unknown` for "missing rendered samples, truncated
+ * discovery/sampling, or limited/blocked resources" -- a site-wide
+ * classification is not offered from a partial view of the site.
+ *
+ * `confidence: bounded-sample` means "the declared sample completed", and
+ * unsampled routes are listed alongside responsive behavior and backend
+ * functionality as things that remain explicitly unknown. Sampling fewer routes
+ * than were discovered is the bound working as declared, not the sample failing,
+ * so it does not lower confidence. Both quotes are from docs/inspection.md.
+ */
+export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean, sampleIncomplete: boolean = incomplete): SourceComplexity {
   const factors: SourceComplexity['factors'] = [];
   const maxElements = Math.max(0, ...samples.map((sample) => sample.elements));
   const capabilityCounts = new Map<SourceCapability, number>();
@@ -218,7 +232,9 @@ export function sourceComplexity(samples: RenderedInspection[], incomplete: bool
   const app = ['booking', 'commerce', 'membership'].some((key) => capabilityCounts.has(key as SourceCapability));
   const observedBand = !samples.length ? 'unknown' : app || maxElements > 2000 ? 'complex'
     : factors.some((factor) => factor.code !== 'elements') || maxElements > 500 ? 'moderate' : 'simple';
-  const uncertain = incomplete || samples.some((sample) => sample.limited || sample.unknowns.length > 0);
+  const unmeasured = samples.some((sample) => sample.limited || sample.unknowns.length > 0);
+  const uncertain = incomplete || unmeasured;
+  const sampleUncertain = sampleIncomplete || unmeasured;
   return { band: uncertain ? 'unknown' : observedBand, observedBand,
-    confidence: uncertain ? 'incomplete' : 'bounded-sample', factors };
+    confidence: sampleUncertain ? 'incomplete' : 'bounded-sample', factors };
 }
