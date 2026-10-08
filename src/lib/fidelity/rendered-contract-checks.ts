@@ -159,6 +159,7 @@ export function checkMotion(
 	candidate: LayoutObservation
 ): FidelityCheckResult {
 	const sourceAnimations = source.animations ?? [];
+	if ( candidate.entranceLosses?.length ) return { failures: candidate.entranceLosses.map( loss => `viewport animation lifecycle unproven: ${ loss }` ) };
 	const candidateAnimations = candidate.animations ?? [];
 	const matched = matchedAnimationCount( sourceAnimations, candidateAnimations );
 	const coverage = sourceAnimations.length ? matched / sourceAnimations.length : 1;

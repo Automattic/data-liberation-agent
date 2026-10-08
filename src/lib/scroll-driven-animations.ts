@@ -10,6 +10,8 @@
  * HTML artifact while allowing the browser to drive it without script.
  */
 import postcss from 'postcss';
+import selectorParser from 'postcss-selector-parser';
+import { VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 
 /** A paused, script-started animation rule recovered from the source CSS. */
 export interface PausedAnimationRule {
@@ -158,7 +160,13 @@ export function appendScrollDrivenAnimations( css: string, sourceCss: string ): 
 		if ( seen.has( key ) ) continue;
 		seen.add( key );
 		blocks.push(
-			`${ rule.selector }{${ rule.declarations };animation-play-state:running;animation-timeline:view();animation-range:entry 0% cover 40%}`
+			`${ selectorParser( root => root.each( selector => {
+				const gate = selectorParser().astSync( `:not([${ VIEWPORT_ENTRANCE_ATTRIBUTE }]):not([data-dla-viewport-entrance-loss])` ).first.nodes;
+				const pseudoElement = selector.nodes.find( node => node.type === 'pseudo' && node.value.startsWith( '::' ) );
+				for ( const node of gate ) {
+					if ( pseudoElement ) selector.insertBefore( pseudoElement, node.clone() ); else selector.append( node.clone() );
+				}
+			} ) ).processSync( rule.selector ) }{${ rule.declarations };animation-play-state:running;animation-timeline:view();animation-range:entry 0% cover 40%}`
 		);
 	}
 	if ( blocks.length === 0 ) return css;

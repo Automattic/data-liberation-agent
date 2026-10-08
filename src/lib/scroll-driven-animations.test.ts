@@ -93,7 +93,7 @@ describe( 'appendScrollDrivenAnimations', () => {
 		expect( out ).toContain( '@supports (animation-timeline: view())' );
 		expect( out ).toContain( 'animation-timeline:view()' );
 		expect( out ).toContain( 'animation-play-state:running' );
-		expect( out ).toContain( '#main :where(.comp-a){' );
+		expect( out ).toContain( '#main :where(.comp-a):not([data-dla-viewport-entrance]):not([data-dla-viewport-entrance-loss]){' );
 	} );
 
 	it( 'returns the sheet unchanged when nothing is gated', () => {
@@ -106,7 +106,7 @@ describe( 'appendScrollDrivenAnimations', () => {
 	// would leave it matching nothing and the entrance would never run.
 	it( 'targets the element identity rather than the completion gate', () => {
 		const out = appendScrollDrivenAnimations( '', gatedEntrance );
-		expect( out ).toContain( '#main :where(.comp-a){' );
+		expect( out ).toContain( '#main :where(.comp-a):not([data-dla-viewport-entrance]):not([data-dla-viewport-entrance-loss]){' );
 		expect( out ).not.toContain(
 			'#main :where(.comp-a):not([data-motion-enter="done"]){'
 		);
