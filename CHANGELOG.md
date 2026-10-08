@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.7] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+- consolidate responsive geometry readiness
+
+### Fixed
+- derive wired panel aria-modal from observed presentation
+
 ## [0.20.6] - 2026-10-08
 
 ### Changed
