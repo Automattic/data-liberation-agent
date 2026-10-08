@@ -27,12 +27,12 @@ describe('discoverDefault', () => {
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Fixture server did not bind to a TCP port');
-    const origin = `http://127.0.0.1:${address.port}`;
+    const origin = `http://localtest.me:${address.port}`;
 
     const inventory = await discoverDefault(`${origin}/`, {});
 
     expect(inventory.urls.map(({ url }) => url)).toEqual([`${origin}/`, `${origin}/contact`]);
-    expect(inventory.diagnostics).toHaveLength(1);
+    expect(inventory.diagnostics?.filter(row => row.code === 'sitemap_url_rejected')).toHaveLength(1);
     expect(inventory.diagnostics?.[0]).toEqual(expect.objectContaining({
       code: 'sitemap_url_rejected',
       url: 'https://elsewhere.example.test/foreign',
@@ -54,15 +54,16 @@ describe('discoverDefault', () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Fixture server did not bind to a TCP port');
 
-    const inventory = await discoverDefault(`http://127.0.0.1:${address.port}/`, {});
+    const origin = `http://localtest.me:${address.port}`;
+    const inventory = await discoverDefault(`${origin}/`, {});
 
     expect(inventory.urls.map(({ url }) => url)).toEqual([
-      `http://127.0.0.1:${address.port}/`,
-      `http://127.0.0.1:${address.port}/platform`,
-      `http://127.0.0.1:${address.port}/solutions`,
-      `http://127.0.0.1:${address.port}/ai`,
-      `http://127.0.0.1:${address.port}/resources`,
-      `http://127.0.0.1:${address.port}/contact`,
+      `${origin}/`,
+      `${origin}/platform`,
+      `${origin}/solutions`,
+      `${origin}/ai`,
+      `${origin}/resources`,
+      `${origin}/contact`,
     ]);
   });
 

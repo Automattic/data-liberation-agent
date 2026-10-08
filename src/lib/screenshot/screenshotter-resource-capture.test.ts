@@ -170,6 +170,15 @@ describe( 'screenshot resource capture', () => {
 			continue: continueRequest,
 			fulfill,
 		};
+		const harvestContinue = vi.fn().mockResolvedValue( undefined );
+		const harvestRequest = {
+			...routedRequest,
+			request: () => ( {
+				url: () => 'https://example.com/',
+				method: () => 'GET', headers: () => ( {} ), resourceType: () => 'document',
+			} ),
+			continue: harvestContinue,
+		};
 		mocks.getReplayableResponse.mockReset().mockReturnValue( {
 			path: '/capture/resources/assets/site.css',
 			contentType: 'text/css',
@@ -178,7 +187,8 @@ describe( 'screenshot resource capture', () => {
 		( connectBrowser as ReturnType< typeof vi.fn > ).mockResolvedValue( {
 			newContext: vi.fn().mockImplementation( async ( options: { viewport?: { width: number } } ) => ( {
 				newPage: vi.fn().mockResolvedValue(
-					makePage( options.viewport?.width === 402, routedRequest )
+					// The one-time session document is not a viewport's cached asset.
+					makePage( options.viewport?.width === 402, options.viewport ? routedRequest : harvestRequest )
 				),
 				addInitScript: vi.fn().mockResolvedValue( undefined ),
 				close: vi.fn().mockResolvedValue( undefined ),
@@ -206,6 +216,7 @@ describe( 'screenshot resource capture', () => {
 				headers: { 'access-control-allow-origin': '*' },
 			} );
 			expect( continueRequest ).not.toHaveBeenCalled();
+			expect( harvestContinue ).toHaveBeenCalledTimes( 1 );
 		} finally {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}

@@ -1944,7 +1944,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					// some sources gate every route/asset behind a session only the
 					// tokenized ENTRY url establishes. Keyed by origin, so this navigates
 					// once per run — every worker and viewport for every route reuses it.
-					const sessionContext = await sourceContextOptions( attemptBrowser, entryUrl );
+					const sessionContext = await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
 					const device = viewport.device ? devices[ viewport.device ] : undefined;
 					if ( viewport.device && ! device ) throw new Error( `Unknown source device profile: ${ viewport.device }` );
 					const { defaultBrowserType: _deviceType, ...deviceContext } = device ?? {};
@@ -2211,7 +2211,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( candidates.size ) {
 			let context: BrowserContext | undefined;
 			try {
-				context = await browser.newContext( await sourceContextOptions( browser, entryUrl ) );
+				context = await browser.newContext( await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
 				for ( const url of [ ...candidates ].slice( 0, 32 ) ) {
 					try {
 						// A plain rerun must not trust a prior probe when the source changed.

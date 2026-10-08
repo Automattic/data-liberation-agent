@@ -1,4 +1,4 @@
-import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { HostingerInventory } from './types.js';
@@ -38,7 +38,8 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
   const siteLanguage = langMatch?.[1] || 'en-US';
 
   // 3. Fetch sitemap
-  const sitemapUrls = await fetchSitemap(url);
+  const sitemap = await fetchSitemapWithDiagnostics(url);
+  const sitemapUrls = sitemap.urls;
 
   // 4. Extract navigation from homepage
   const normalized = url.includes('://') ? url : `https://${url}`;
@@ -75,5 +76,6 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     navigation,
     counts,
     urls: inventoryUrls,
+    diagnostics: sitemap.diagnostics,
   };
 }
