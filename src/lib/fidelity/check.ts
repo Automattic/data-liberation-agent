@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { Page } from 'playwright';
+import { mapPool } from '../concurrency.js';
 import * as cheerio from 'cheerio';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
@@ -115,6 +116,8 @@ export interface FidelityCheckOptions {
 	/** Portable pathnames to check. Frozen default: all declared routes; drift default: spread sample. */
 	routes?: string[];
 	settleMs?: number;
+	/** Frozen comparison cells in flight. Default: 3; integer from 1 to 4. Drift remains serial. */
+	concurrency?: number;
 	/** How many routes to compare against the live source. */
 	sampleSize?: number;
 	/** Write source/liberated/diff PNGs. Never used as pass/fail. */
@@ -1368,6 +1371,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 
 /** Frozen stages share the live observer and registered scoring path; no source browser is created. */
 async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'capture' | 'materialization' ): Promise<FidelityReport> {
+	const concurrency = options.concurrency ?? 3;
+	if ( ! Number.isInteger( concurrency ) || concurrency < 1 || concurrency > 4 ) throw new Error( 'Frozen comparison concurrency must be an integer from 1 to 4' );
 	if ( options.observe || options.motionContract ) throw new Error( 'Frozen comparison requires real browser baseline evidence; observe/motionContract are drift-only' );
 	if ( options.sampleSize !== undefined ) throw new Error( 'sampleSize is drift-only; select explicit routes for bounded frozen comparison' );
 	if ( stage === 'materialization' && ! options.candidateUrl ) throw new Error( 'Materialization stage requires candidateUrl' );
@@ -1437,12 +1442,24 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	}
 	let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 	let browser: Awaited<ReturnType<typeof import('playwright')['chromium']['launch']>> | undefined;
+	// Cache the promise before yielding: parallel cells must not launch competing
+	// servers/browsers. Keep startup lazy so wholly unproven scope needs neither.
+	let resources: Promise<void> | undefined;
+	const startResources = () => resources ??= ( async () => {
+		server = await startStaticServer( websiteDir );
+		browser = await ( await import( 'playwright' ) ).chromium.launch();
+	} )();
+	// Keep legacy evidence paths, including their last-writer semantics. Duplicate
+	// caller selections or slug aliases are not independent evidence writers.
+	const evidenceKeys = required.map( cell => JSON.stringify( [ evidenceSlug( cell.route ), cell.profile ? evidenceSlug( cell.profile ) : null, cell.viewport, cell.state ] ) );
+	const poolSize = new Set( evidenceKeys ).size === evidenceKeys.length ? concurrency : 1;
 	try {
-		for ( const cell of required ) {
+		const outcomes = await mapPool( required, poolSize, async cell => {
 			const { route, viewport, state, profile } = cell;
-			options.log?.( `[compare] ${ stage } ${ route } ${ profile ?? '' } @ ${ viewport }px ${ state }` );
 			const attribution = { stage, ...cell };
+			let score: RouteScore | undefined;
 			try {
+				options.log?.( `[compare] ${ stage } ${ route } ${ profile ?? '' } @ ${ viewport }px ${ state }` );
 				if ( invalid ) throw new Error( invalid );
 				if ( ! manifest || ! sources.has( route ) ) throw new Error( 'Required route was not captured' );
 				if ( state !== 'baseline' || ! manifest.scope.states.includes( state ) || ! manifest.scope.widths.includes( viewport ) ) throw new Error( 'Required viewport/state is outside frozen scope' );
@@ -1450,11 +1467,10 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 				if ( entries.length !== 1 ) throw new Error( 'Source observation missing or ambiguous' );
 				const frozen = readFrozenObservation( directory, entries[0]! );
 				// Validate all source evidence even for materialization: stale evidence cannot certify a chain.
-				server ??= await startStaticServer( websiteDir );
-				browser ??= await ( await import( 'playwright' ) ).chromium.launch();
+				await startResources();
 				const entry = entries[ 0 ]!;
 				if ( typeof entry.browserProfile?.isMobile !== 'boolean' || typeof entry.browserProfile?.hasTouch !== 'boolean' ) throw new Error( 'Source browser profile unproven' );
-				const page = await browser.newPage( {
+				const page = await browser!.newPage( {
 					...replayBrowserIdentity( entry.context ?? {} ),
 					viewport: { width: viewport, height: entry.viewportHeight },
 					deviceScaleFactor: entry.deviceScaleFactor ?? 1,
@@ -1463,10 +1479,10 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					hasTouch: entry.browserProfile.hasTouch,
 					serviceWorkers: 'block',
 				} );
-				await page.addInitScript( observeViewportEntrances );
 				try {
+					await page.addInitScript( observeViewportEntrances );
 					// Portable replay cannot reach the origin, including redirects and media requests.
-					const local = `${ server.url }${ route }`;
+					const local = `${ server!.url }${ route }`;
 					const candidate = stage === 'materialization' ? `${ candidateBase( options.candidateUrl! ) }${ route }` : local;
 					await page.context().route( '**/*', async request => {
 						const origin = new URL( request.request().url() ).origin;
@@ -1503,11 +1519,18 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						const pixels = writePixelEvidence( evidenceDir, sourcePng, candidatePng );
 						checked.notes.push( 'score' in pixels ? `pixel evidence → ${ pixels.diffPath }` : pixels.error );
 					}
-					scores.push( { ...attribution, source, liberated, pass: ! checked.failures.length, failures: checked.failures, notes: checked.notes } );
+					score = { ...attribution, source, liberated, pass: ! checked.failures.length, failures: checked.failures, notes: checked.notes };
+					return { score };
 				} finally { await page.context().close(); }
-			} catch ( error ) { pending.push( { ...attribution, reason: String( error ) } ); }
+			} catch ( error ) { return { score, pending: { ...attribution, reason: String( error ) } }; }
+		} );
+		// Publication is input-ordered, never completion-ordered. Every cell catches
+		// its own failure, so the pool drains before shared resources are closed.
+		for ( const outcome of outcomes ) {
+			if ( outcome.score ) scores.push( outcome.score );
+			if ( outcome.pending ) pending.push( outcome.pending );
 		}
-	} finally { await browser?.close(); await server?.close(); }
+	} finally { try { await browser?.close(); } finally { await server?.close(); } }
 	if ( ! routes.length || ! widths.length || ! states.length ) pending.push( { stage, route: '/', viewport: 0, state: 'baseline', reason: 'Empty required scope' } );
 	const summary = scoreReport( scores );
 	const pass = summary.pass && selfConsistency.pass && pending.length === 0;
