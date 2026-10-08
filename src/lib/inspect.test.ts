@@ -55,10 +55,11 @@ describe('inspectSource', () => {
     expect(result.unknowns).toContain('Rendered layout and responsive reflow were not measured; inspection does not run the full browser capture pipeline.');
   });
 
-  it('does not inventory linked media as routes', async () => {
-    // A gallery links straight to its own image files. Counted as routes they
-    // consume the sample budget, come back as image/jpeg, and leave complexity
-    // uncertain for a source that measured cleanly.
+  it('does not sample linked media, while still counting it', async () => {
+    // A gallery links straight to its own image files. Sampled as pages they
+    // spend the budget, come back as image/jpeg, and leave complexity uncertain
+    // for a source that measured cleanly. Counted rather than dropped, so the
+    // exclusion is visible in `coverage.media` instead of silent.
     const url = await fixture((request, response) => {
       const path = new URL(request.url ?? '/', 'http://fixture').pathname;
       if (path === '/sitemap.xml') {
@@ -79,13 +80,92 @@ describe('inspectSource', () => {
 
     const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 10 });
 
+    // Media is counted beside the route inventory, so the report still shows
+    // what was linked -- it is simply never a route and never sampled.
     expect(result.routes.types).toEqual({ homepage: 1, page: 1 });
     expect(result.coverage.discovery.routes).toBe(2);
+    expect(result.coverage.media).toEqual({ discovered: 3, limit: 1000, truncated: false, renderedLinks: 0 });
+    expect(result.coverage.sampling.attempted).toBe(2);
     expect(result.samples.every((sample) => sample.outcome === 'html')).toBe(true);
     expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
-    // Nothing was truncated and every selected route was a document, so the
-    // measurement stands on its own rather than collapsing to unknown.
-    expect(result.coverage.sampling.complete).toBe(true);
+  });
+
+  it('samples a page whose slug ends in a media extension, and never samples real media', async () => {
+    // Two things the helper-level test could not show, because it checks the
+    // predicate rather than the pipeline. routeKey() preserves a trailing
+    // slash, so `/tag/node.js/` stays a page; and a media URL the sitemap
+    // declared must not be selected even when budget is left over.
+    const url = await fixture((request, response) => {
+      const path = new URL(request.url ?? '/', 'http://fixture').pathname;
+      const port = (server!.address() as { port: number }).port;
+      if (path === '/sitemap.xml') {
+        response.setHeader('content-type', 'application/xml');
+        response.end(`<urlset><url><loc>http://localtest.me:${port}/tag/node.js/</loc></url><url><loc>http://localtest.me:${port}/brochure.pdf</loc></url></urlset>`);
+        return;
+      }
+      if (path.endsWith('.pdf')) {
+        response.setHeader('content-type', 'application/pdf');
+        response.end('%PDF-1.4');
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end('<!doctype html><title>Tagged</title><main><p>Body.</p></main>');
+    });
+
+    const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 10 });
+
+    expect(result.samples.some((sample) => sample.url.endsWith('/tag/node.js/'))).toBe(true);
+    expect(result.routes.types).toEqual({ homepage: 1, page: 1 });
+    expect(result.coverage.media.discovered).toBe(1);
+    expect(result.coverage.sampling.attempted).toBe(2);
+    expect(result.samples.some((sample) => sample.url.endsWith('.pdf'))).toBe(false);
+    expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
+  });
+
+  it('keeps the menu discoverable when the sitemap declares more media than the discovery limit', async () => {
+    // Sitemap entries are added before navigation links, so media that spent the
+    // discovery limit would hide the whole menu. Media is counted on its own
+    // bound instead.
+    const url = await fixture((request, response) => {
+      const path = new URL(request.url ?? '/', 'http://fixture').pathname;
+      const port = (server!.address() as { port: number }).port;
+      if (path === '/sitemap.xml') {
+        const locs = Array.from({ length: 60 }, (unused, index) => `<url><loc>http://localtest.me:${port}/uploads/${index}.jpg</loc></url>`).join('');
+        response.setHeader('content-type', 'application/xml');
+        response.end(`<urlset>${locs}</urlset>`);
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end('<!doctype html><title>Gallery</title><nav><a href="/about">About</a><a href="/contact">Contact</a></nav>');
+    });
+
+    const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 5 });
+
+    expect(result.samples.some((sample) => sample.url.endsWith('/about'))).toBe(true);
+    expect(result.samples.some((sample) => sample.url.endsWith('/contact'))).toBe(true);
+    expect(result.coverage.discovery).toEqual({ routes: 3, limit: 50, truncated: false });
+    expect(result.routes.types).toEqual({ homepage: 1, page: 2 });
+    expect(result.coverage.media).toEqual({ discovered: 60, limit: 1000, truncated: false, renderedLinks: 0 });
+  });
+
+  it('bounds the media count and says when it saturated', async () => {
+    const url = await fixture((request, response) => {
+      const path = new URL(request.url ?? '/', 'http://fixture').pathname;
+      const port = (server!.address() as { port: number }).port;
+      if (path === '/sitemap.xml') {
+        const locs = Array.from({ length: 1005 }, (unused, index) => `<url><loc>http://localtest.me:${port}/uploads/${index}.png</loc></url>`).join('');
+        response.setHeader('content-type', 'application/xml');
+        response.end(`<urlset>${locs}</urlset>`);
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end('<!doctype html><title>Gallery</title><nav><a href="/about">About</a></nav>');
+    });
+
+    const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 5 });
+
+    expect(result.coverage.media).toMatchObject({ discovered: 1000, limit: 1000, truncated: true });
+    expect(result.coverage.discovery).toEqual({ routes: 2, limit: 50, truncated: false });
   });
 
   it('validates bounded options', async () => {
