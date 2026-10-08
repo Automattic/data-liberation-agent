@@ -1,10 +1,12 @@
 import * as cheerio from 'cheerio';
-import { normalizedUrl } from '../url/route-key.js';
+import { documentRequestUrl } from '../url/route-key.js';
 
 const SKIP_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
 const ASSET_PATH = /\.(css|js|mjs|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|pdf|docx?|zip|xml|json|mp3|mp4|mov|webm|wav|ogg)$/i;
 
-/** The same page-link selection is used for source inspection and export diagnostics. */
+/** Actual resolved document addresses for inspection and diagnostics, not comparison keys.
+ * References already resolved against the rendered URL/base retain that identity.
+ */
 export function sameOriginPageAnchors( html: string, sourceUrl: string ): string[] {
 	let source: URL;
 	try {
@@ -21,7 +23,7 @@ export function sameOriginPageAnchors( html: string, sourceUrl: string ): string
 			const url = new URL( href, sourceUrl );
 			if ( url.origin !== source.origin || ! [ 'http:', 'https:' ].includes( url.protocol ) ||
 				ASSET_PATH.test( url.pathname ) || SKIP_PATHS.test( url.pathname ) ) return;
-			links.add( normalizedUrl( url.href ) );
+			links.add( documentRequestUrl( url.href ) );
 		} catch {
 			// Ignore malformed authored hrefs.
 		}

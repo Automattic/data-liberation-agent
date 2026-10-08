@@ -17,7 +17,7 @@ export { portableInlineStyle } from './shared-stylesheets.js';
 import { allocateCaptureRoutes } from './capture-export-routes.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
-import { normalizedUrl } from './url/route-key.js';
+import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
 import {
 	indexPortableMediaReferences,
 	mediaReferenceMatched,
@@ -93,6 +93,7 @@ interface CaptureManifestEntry {
 	redirectedTo?: string;
 	/** Bounded source inspection of a linked route absent from the capture schedule. */
 	externalRedirect?: boolean;
+	sourceOutcomes?: import('./source-navigation.js').ExternalBoundary[];
 	sourceAbsentStatus?: 404 | 410;
 	sections?: string;
 	interactions?: InteractionStatesReport;
@@ -244,6 +245,7 @@ function rewriteCapturedRouteLinks(
 	portable?: PortableLinkContext
 ): string {
 	const $ = cheerio.load( html );
+	const comparisonRoutes = new Set([...routes.keys()].map(normalizedUrl));
 	// Document relations share navigation's route/source resolution. Resource
 	// relations keep their asset localization, including alternate stylesheets.
 	$( 'a[href],area[href],link[href]' ).each( ( _index, element ) => {
@@ -265,9 +267,15 @@ function rewriteCapturedRouteLinks(
 		} catch {
 			return;
 		}
-		const route = routes.get( normalizedUrl( resolved.href ) );
+		const route = routes.get( documentRequestUrl( resolved.href ) );
 		if ( route ) {
-			link.attr( 'href', `${ route }${ resolved.hash }` );
+			link.attr( 'href', route.includes('#') ? route : `${ route }${ resolved.hash }` );
+			return;
+		}
+		// A comparison-key match is not evidence that a different network
+		// address names this captured document (for example /catalog vs /catalog/).
+		if (comparisonRoutes.has(normalizedUrl(resolved.href))) {
+			link.attr('href', resolved.href);
 			return;
 		}
 		// A captured pathname does not prove an uncaptured query rendition.
@@ -1167,7 +1175,7 @@ function buildExportCapture(
 			// The source sends this link off-origin. Retain only the fact of the
 			// redirect; neither its destination nor its query belongs in the copy.
 			excludedRoutes.push( url );
-			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source HTTP redirect to an external origin (destination omitted)' } );
+			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source initial-document redirect to an external origin (destination not fetched)' } );
 			continue;
 		}
 		if ( entry.sourceAbsentStatus ) {
@@ -1490,6 +1498,19 @@ function buildExportCapture(
 		const routePath = routePathOf( url );
 		portableRouteLinks.set( canonicalKey, `/${ routePath }` );
 	}
+	// Comparison keys still serve route/tab matching. Source-link coverage and
+	// rewriting require actual captured addresses or explicit proven aliases.
+	const sourceRouteLinks = new Map<string, string>();
+	for (const entry of retainedEntries) {
+		sourceRouteLinks.set(documentRequestUrl(entry.url), `/${routePathOf(entry.url)}`);
+	}
+	for (const entry of retainedEntries) {
+		if (entry.canonicalUrl && !sourceRouteLinks.has(documentRequestUrl(entry.canonicalUrl))) sourceRouteLinks.set(documentRequestUrl(entry.canonicalUrl), `/${routePathOf(entry.url)}`);
+	}
+	for (const alias of duplicateRoutes) {
+		const destination = portableRouteLinks.get(normalizedUrl(alias.url));
+		if (destination) sourceRouteLinks.set(documentRequestUrl(alias.url), destination);
+	}
 
 	const portableServedPaths = new Set< string >();
 	for ( const path of [
@@ -1518,14 +1539,14 @@ function buildExportCapture(
 		targetCount?: number;
 		url?: string;
 	} > = [];
-	const capturedRouteKeys = new Set( portableRouteLinks.keys() );
+	const capturedRouteKeys = new Set( sourceRouteLinks.keys() );
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
-		if ( entry.externalRedirect ) capturedRouteKeys.add( normalizedUrl( url ) );
+		if ( entry.externalRedirect ) capturedRouteKeys.add( documentRequestUrl( url ) );
 	}
 	const absentRoutes = new Set( routeCaptureDiagnostics
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
 		.map( ( diagnostic ) => diagnostic.url ) );
-	const absentRouteKeys = new Set( [ ...absentRoutes ].map( normalizedUrl ) );
+	const absentRouteKeys = new Set( [ ...absentRoutes ].map( documentRequestUrl ) );
 	// A tab for the current route cannot demonstrate a URL change on that page.
 	// Reuse only an unambiguous observation of the same navigation group on
 	// another captured route (for example Home observed from Services).
@@ -1606,7 +1627,7 @@ function buildExportCapture(
 					verifiedRouteObservations
 				),
 				url,
-				portableRouteLinks,
+				sourceRouteLinks,
 				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
 			),
 			`/${ routePath }`, responsiveIdentities

@@ -5758,7 +5758,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		] );
 		expect( receipt.summary.complete ).toBe( false );
 		expect( receipt.discoveryDiagnostics ).toEqual( [
-			{ code: 'route_external_redirect', url: 'https://example.com/unscheduled', reason: 'source HTTP redirect to an external origin (destination omitted)' },
+			{ code: 'route_external_redirect', url: 'https://example.com/unscheduled', reason: 'source initial-document redirect to an external origin (destination not fetched)' },
 			{ code: 'route_not_found', url: 'https://example.com/absent', reason: 'HTTP 404' },
 		] );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );

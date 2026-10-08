@@ -62,8 +62,9 @@ export interface ManifestEntry {
    * alias of that route and has no artifacts of its own.
    */
   redirectedTo?: string;
-  /** Proven off-origin HTTP redirect from an unscheduled same-origin page link. No destination is stored. */
+  /** Proven off-origin initial-document redirect. Destination path/query are not stored. */
   externalRedirect?: boolean;
+  sourceOutcomes?: import('../source-navigation.js').ExternalBoundary[];
   /** Proven absent response for an unscheduled same-origin page link. */
   sourceAbsentStatus?: 404 | 410;
   /** Populated by site-analysis; may be absent */

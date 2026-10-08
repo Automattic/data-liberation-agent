@@ -261,10 +261,11 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			continue;
 		}
 		const routePath = routePathOf( targetEntry.url );
+		const destination = `${routePath}${new URL(target).hash}`;
 		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
-		canonicalRouteAliases.set( normalizedUrl( url ), routePath );
+		canonicalRouteAliases.set( normalizedUrl( url ), destination );
 		const from = publicPathname( url );
-		const to = `/${ routePath }`;
+		const to = `/${ destination }`;
 		// Path-only static redirect rules cannot distinguish query renditions.
 		if ( ! new URL( url ).search && from && from !== to ) portableRedirects.push( { from, to } );
 	}

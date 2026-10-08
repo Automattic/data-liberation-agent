@@ -109,7 +109,7 @@ export interface ScreenshotOpts {
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
 	/** Product-owned evidence observer, after source cleanup and before geometry rewriting. */
-	observeSource?: ( page: import('playwright').Page, url: string, device: string, errors: readonly string[], browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }>, profile?: import('./capture-profiles.js').CaptureProfile ) => Promise<void>;
+	observeSource?: ( page: import('playwright').Page, url: string, device: string, errors: readonly string[], browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }>, profile?: import('./capture-profiles.js').CaptureProfile, boundary?: import('../source-navigation.js').ExternalBoundary ) => Promise<void>;
 }
 
 export interface ScreenshotResult {

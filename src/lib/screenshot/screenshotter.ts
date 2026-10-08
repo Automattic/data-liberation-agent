@@ -4,6 +4,7 @@ import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
+import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -21,7 +22,6 @@ import {
 	isRouteDrift,
 	isStackingArtifact,
 	navigationDocumentUrl,
-	routeIdentity,
 	serverRedirectTarget,
 } from './document-integrity.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
@@ -51,10 +51,10 @@ import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } f
 import { rejectedNavigationReason } from './navigation-rejection.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
-import { enforceSameOrigin, sameHttpSite } from './same-origin.js';
+import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
-import { normalizedUrl } from '../url/route-key.js';
+import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
@@ -795,13 +795,20 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let navigationUrl = url;
 	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
 		try {
-			const response = await page.goto( url, { waitUntil: 'load', timeout: 30_000 } );
-			// Only an observed server redirect can establish a different initial
-			// document origin. Later control-driven navigation is still drift.
-			navigationUrl = navigationDocumentUrl( url, response?.url?.() ?? url, Boolean( response?.request?.().redirectedFrom() ) );
-			redirectedTo = response?.request?.().redirectedFrom()
+			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly});
+			if (navigation.boundary) {
+				const boundary = storeExternalBoundary(outputDir, navigation.boundary, viewport.width, args.browserProfile ?? {isMobile: false, hasTouch: false});
+				entry.sourceOutcomes = [...(entry.sourceOutcomes ?? []), boundary];
+				await args.observeSource?.(page, url, viewport.id, sourceErrors, args.browserProfile, viewport, boundary);
+				return;
+			}
+			const response = navigation.response;
+			// Manual acquisition retains the same-site redirect provenance even
+			// though the fulfilled browser response has no redirectedFrom chain.
+			navigationUrl = navigation.navigationUrl ?? navigationDocumentUrl( url, response?.url?.() ?? url, Boolean( response?.request?.().redirectedFrom() ) );
+			redirectedTo = navigation.redirectedTo ?? (response?.request?.().redirectedFrom()
 				? serverRedirectTarget( url, response.url() )
-				: undefined;
+				: undefined);
 			const status = response ? response.status() : 0;
 			if ( status >= 400 ) {
 				if ( RETRYABLE_STATUS.has( status ) && attempt < MAX_NAV_ATTEMPTS ) {
@@ -833,7 +840,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			navigated = true;
 			break;
 		} catch ( err ) {
-			if ( attempt < MAX_NAV_ATTEMPTS ) {
+			if ( attempt < MAX_NAV_ATTEMPTS && !(err instanceof SourceNavigationError) ) {
 				await navSleep( navBackoffMs( attempt ) );
 				continue;
 			}
@@ -866,6 +873,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			return;
 		}
 	}
+	// Initial declarations have been classified. Any later main-document
+	// request during baseline preparation is drift, even if aborting leaves the
+	// old DOM intact. Keep the network boundary without hiding the failure.
+	const baselineDrift = () => {
+		failures.push({url, viewport: viewport.id, stage: 'content', error: 'route drift: unexplained navigation during source baseline capture', timestamp: now(), attempt: 1});
+	};
+	let releaseBaselineNavigation = await lockMainFrameNavigation(page, baselineDrift, true);
 	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	await applySourceCleanup(page, sourcePolicy);
 
@@ -881,7 +895,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	const gate = gateRemoval && ! ( await routeKeptContent( page ) ) ? gateRemoval : undefined;
 	if ( gate ) {
 		const gateTitle = ( await page.title().catch( () => '' ) ).trim();
-		const shell = await openAccessGateShell( page, url );
+		// Loading the public shell is this capture's own explained navigation.
+		await releaseBaselineNavigation();
+		let shell: string | undefined;
+		try {
+			shell = await openAccessGateShell( page, url );
+		} finally {
+			releaseBaselineNavigation = await lockMainFrameNavigation( page, baselineDrift, true );
+		}
 		if ( shell ) {
 			await applySourceCleanup( page, sourcePolicy );
 			await waitForStable( page, settleMs );
@@ -1416,6 +1437,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// a mobile-only trigger. Merge their bounded successful evidence rather than
 	// replacing a desktop-only dialog with a mobile-only menu.
 	if ( args.rendererCrashed() ) return;
+	await releaseBaselineNavigation();
 	const releaseNavigationLock = await lockMainFrameNavigation( page );
 	try {
 		await probeInteractions();
@@ -1856,7 +1878,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let completed = 0;
 	// A redirect alias's target joins the queue unless its route is already in
 	// it, so each route is captured once however many URLs redirect to it.
-	const queuedRoutes = new Set( urls.map( routeIdentity ) );
+	const queuedRoutes = new Set( urls.map( normalizedUrl ) );
 	const allFailures: FailureEntry[] = [];
 
 	const capturedAt = () => new Date().toISOString();
@@ -1909,12 +1931,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined,
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
 
 		for ( const viewport of routeProfiles ) {
-			if ( entry.redirectedTo ) break;
 			const vpPlan = profilePlan( viewport );
 			if ( ! vpPlan.needsLoad ) continue;
 			const additional = ! [ 'desktop', 'mobile' ].includes( viewport.id );
@@ -1927,6 +1948,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const failuresBefore = urlFailures.length;
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
+				let aliasDisagreement = false;
 				try {
 					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
 					// screenshot while keeping the rendered layout identical to a
@@ -2018,6 +2040,15 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						const previousCleanup = entry.cleanup;
 						const previousDocuments = entry.documents;
 						const previousNativeViewTimelines = entry.nativeViewTimelines;
+						// Every profile classifies the same initial document. A redirect
+						// alias, local document and external boundary cannot coexist.
+						const previousRedirect = entry.redirectedTo;
+						const previousOutcomes = entry.sourceOutcomes ?? [];
+						const previousLocal = Boolean( entry.html || entry.mobileHtml );
+						const profileLocal = Boolean( profileEntry.html || profileEntry.mobileHtml );
+						aliasDisagreement = profileEntry.redirectedTo
+							? Boolean( ( previousRedirect && previousRedirect !== profileEntry.redirectedTo ) || previousLocal || previousOutcomes.length )
+							: Boolean( previousRedirect && ( profileLocal || profileEntry.sourceOutcomes?.length ) );
 						if ( viewport.id === 'desktop' ) {
 							Object.assign( entry, profileEntry );
 						}
@@ -2028,6 +2059,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							if ( profileEntry.redirectedTo ) entry.redirectedTo = profileEntry.redirectedTo;
 							if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
 						}
+						if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
 						entry.documents = { ...previousDocuments, ...profileEntry.documents };
 						if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
 						if ( ! additional ) {
@@ -2051,6 +2083,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
 						};
 					}
+					if ( aliasDisagreement ) throw new Error( 'Source redirect aliases disagree across viewports' );
 					if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 				} catch ( err ) {
 					urlFailures.push( {
@@ -2106,15 +2139,31 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 		}
 
+		if (entry.sourceOutcomes?.length) {
+			if (urlFailures.length || entry.html || entry.mobileHtml || entry.redirectedTo || entry.sourceOutcomes.length !== routeProfiles.length ||
+				new Set(entry.sourceOutcomes.map(boundaryIdentity)).size !== 1) {
+				urlFailures.push({url, viewport: 'all', stage: 'goto', error: 'External source outcomes are incomplete or disagree across viewports', timestamp: capturedAt(), attempt: 1});
+			} else {
+				entry.externalRedirect = true;
+				// A fresh external observation cannot retain an earlier local document.
+				entry.html = undefined; entry.mobileHtml = undefined; entry.desktop = undefined; entry.mobile = undefined; entry.cleanup = undefined;
+			}
+		}
 		for ( const f of urlFailures ) {
 			await manifest.recordFailure( f );
 		}
 		await manifest.updateEntry( url, entry );
 
-		if ( entry.redirectedTo ) {
+		if (entry.externalRedirect) {
+			skipped++;
+			sendLog(server, `[external] ${url} (observed initial-document boundary; destination not fetched)`);
+			completed++; opts.onProgress?.(completed, urls.length, url);
+			return;
+		}
+		if ( entry.redirectedTo && !urlFailures.length ) {
 			const target = entry.redirectedTo;
-			if ( ! queuedRoutes.has( routeIdentity( target ) ) ) {
-				queuedRoutes.add( routeIdentity( target ) );
+			if ( ! queuedRoutes.has( normalizedUrl( target ) ) ) {
+				queuedRoutes.add( normalizedUrl( target ) );
 				urls.push( target );
 			}
 			skipped++;
@@ -2197,7 +2246,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// Discovery can omit links authored on a captured page. Inspect only a
 		// bounded set of those links, using the source session and manual redirects:
 		// never request an off-origin Location or persist its (possibly tokenized) URL.
-		const scheduled = new Set( urls.map( normalizedUrl ) );
+		const scheduled = new Set( urls.map( documentRequestUrl ) );
 		const candidates = new Set< string >();
 		for ( const url of urls ) {
 			const entry = manifest.getEntry( url );
@@ -2205,7 +2254,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			if ( ! htmlPath || ! existsSync( join( opts.outputDir, htmlPath ) ) ) continue;
 			const html = resolveDocumentReferences( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), entry?.documents?.desktop?.url ?? url, entry?.documents?.desktop?.baseUrl );
 			for ( const link of sameOriginPageAnchors( html, url ) ) {
-				if ( ! scheduled.has( normalizedUrl( link ) ) ) candidates.add( link );
+				if ( ! scheduled.has( documentRequestUrl( link ) ) ) candidates.add( link );
 			}
 		}
 		if ( candidates.size ) {
@@ -2217,24 +2266,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						// A plain rerun must not trust a prior probe when the source changed.
 						const prior = manifest.getEntry( url );
 						if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
-						let current = url;
-						for ( let hop = 0; hop < 4; hop++ ) {
-							const response = await context.request.get( current, { maxRedirects: 0, timeout: 5_000 } );
-							const status = response.status();
-							if ( status === 404 || status === 410 ) {
-								await manifest.updateEntry( url, { slug: prior?.slug ?? await manifest.claimSlug( slugify( url ) ), capturedAt: capturedAt(), sourceAbsentStatus: status } );
-								break;
-							}
-							if ( ! [ 301, 302, 303, 307, 308 ].includes( status ) ) break;
-							const location = response.headers()[ 'location' ];
-							if ( ! location ) break;
-							const next = new URL( location, current );
-							if ( ! sameHttpSite( url, next.href ) ) {
-								await manifest.updateEntry( url, { slug: prior?.slug ?? await manifest.claimSlug( slugify( url ) ), capturedAt: capturedAt(), externalRedirect: true } );
-								break;
-							}
-							current = next.href;
-						}
+						const inspected = await inspectSourceDocument(url, async (current, timeout) => {
+							const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout});
+							try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
+							finally { await response.dispose(); }
+						}, opts.publicUrlsOnly);
+						if (inspected.status === 404 || inspected.status === 410) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), sourceAbsentStatus: inspected.status});
+						else if (inspected.boundary) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), externalRedirect: true});
 					} catch {
 						// Unknown outcomes remain blocking uncaptured links at export.
 					}
@@ -2390,11 +2428,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
  * document requests leaves the current document in place; every other request
  * falls through to the capture's existing routing.
  */
-export async function lockMainFrameNavigation( page: Page ): Promise< () => Promise< void > > {
+export async function lockMainFrameNavigation( page: Page, onAttempt?: () => void, allowReload = false ): Promise< () => Promise< void > > {
 	if ( ! page.route ) return async () => {};
+	let reloads = 0;
+	const deadline = Date.now() + SOURCE_NAVIGATION_LIMITS.timeoutMs;
 	const guard = async ( route: Route ) => {
 		const request = route.request();
 		if ( request.isNavigationRequest() && request.frame() === page.mainFrame() ) {
+			if (allowReload && request.method() === 'GET' && reloads < SOURCE_NAVIGATION_LIMITS.hops && Date.now() < deadline) {
+				const current = new URL(page.url()); current.hash = '';
+				if (request.url() === current.href) {
+					reloads++;
+					try { await replaySourceReload(route, current.href, deadline - Date.now()); return; }
+					catch { /* A reload changing identity/outcome remains unexplained drift. */ }
+				}
+			}
+			onAttempt?.();
 			await route.abort( 'aborted' );
 			return;
 		}

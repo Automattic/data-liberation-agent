@@ -26,17 +26,21 @@ vi.mock( './resource-capture.js', () => ( {
 } ) );
 
 function makePage( mobile: boolean, routedRequest?: object ) {
-	let routeHandler: ( route: object ) => Promise< void >;
+	const routeHandlers: Array<(route: object) => Promise<void>> = [];
 	let currentUrl = '';
 	return {
 		once: vi.fn(),
-		unroute: vi.fn().mockResolvedValue( undefined ),
 		route: vi.fn().mockImplementation( async ( _pattern, handler ) => {
-			routeHandler = handler;
+			routeHandlers.push(handler);
 		} ),
-		goto: vi.fn().mockImplementation( async ( url: string ) => {
+		unroute: vi.fn().mockImplementation(async (_pattern, handler) => { routeHandlers.splice(routeHandlers.indexOf(handler), 1); }),
+		goto: vi.fn().mockImplementation( async (url: string) => {
 			currentUrl = url;
-			if ( routedRequest ) await routeHandler( routedRequest );
+			if (routedRequest) {
+				let index = routeHandlers.length - 1;
+				const next = async (): Promise<void> => { await routeHandlers[index--]!({...routedRequest, fallback: next}); };
+				await next();
+			}
 			return { status: () => 200 };
 		} ),
 		url: () => currentUrl,
@@ -161,6 +165,7 @@ describe( 'screenshot resource capture', () => {
 		const continueRequest = vi.fn().mockResolvedValue( undefined );
 		const routedRequest = {
 			request: () => ( {
+				isNavigationRequest: () => false,
 				url: () => 'https://example.com/assets/site.css',
 				method: () => 'GET',
 				headers: () => ( {} ),
