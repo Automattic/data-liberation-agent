@@ -15,6 +15,28 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.12] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- expand bounded rendered linked-page frontier
+
+## [0.20.11] - 2026-10-08
+
+### Changed
+- give the browser test job headroom past 20 minutes
+
+## [0.20.10] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+- avoid image readiness waits for inactive alternatives
+
+### Fixed
+- freeze bounded external redirect outcomes
+
 ## [0.20.9] - 2026-10-08
 
 ### Changed

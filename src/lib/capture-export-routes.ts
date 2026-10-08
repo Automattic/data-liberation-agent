@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { normalizedUrl } from './url/route-key.js';
+import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import type { SourceDataScript } from './source-data.js';
 
@@ -65,9 +65,9 @@ function publicPathname( url: string ): string {
 function declaresCanonicalRoute( entry: RouteEntry, claimed: RouteEntry ): boolean {
 	if ( ! entry.canonicalUrl ) return false;
 	const claimedCanonical = claimed.canonicalUrl
-		? normalizedUrl( claimed.canonicalUrl )
-		: normalizedUrl( claimed.url );
-	return normalizedUrl( entry.canonicalUrl ) === claimedCanonical;
+		? documentRequestUrl( claimed.canonicalUrl )
+		: documentRequestUrl( claimed.url );
+	return documentRequestUrl( entry.canonicalUrl ) === claimedCanonical;
 }
 
 export interface RouteDiagnostic {
@@ -129,7 +129,10 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	routeDiagnostics: ReadonlyArray< RouteDiagnostic > = []
 ): RouteStage<T> {
 	const normalizedSourceUrl = normalizedUrl( sourceUrl );
-	const exactEntrypointCandidates = capturedEntries.filter( ( { url } ) => normalizedUrl( url ) === normalizedSourceUrl );
+	const requestedEntrypointCandidates = capturedEntries.filter( ( { url } ) => documentRequestUrl( url ) === documentRequestUrl( sourceUrl ) );
+	const exactEntrypointCandidates = requestedEntrypointCandidates.length > 0
+		? requestedEntrypointCandidates
+		: capturedEntries.filter( ( { url } ) => normalizedUrl( url ) === normalizedSourceUrl );
 	const entrypointCandidates = exactEntrypointCandidates.length > 0
 		? exactEntrypointCandidates
 		: capturedEntries.filter( ( { canonicalUrl } ) => canonicalUrl !== undefined && normalizedUrl( canonicalUrl ) === normalizedSourceUrl );
@@ -151,8 +154,28 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	const naturalRoutePath = ( url: string ) => routeOutputPath( url, sourceUrl, entrypointUrl, originRootCaptured ).replace( /\\/g, '/' );
 	const allocatedPaths = new Map< string, string >();
 	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
-	// Fragments share a document; query strings can identify distinct content.
-	const entriesByNormalizedUrl = new Map( capturedEntries.map( ( entry ) => [ normalizedUrl( entry.url ), entry ] ) );
+	const entryForAddress = ( url: string ): T | undefined => {
+		const exact = capturedEntries.find( entry => documentRequestUrl( entry.url ) === documentRequestUrl( url ) );
+		if (exact) return exact;
+		const candidates = capturedEntries.filter( entry => normalizedUrl( entry.url ) === normalizedUrl( url ) );
+		return candidates.length === 1 ? candidates[ 0 ] : undefined;
+	};
+	// Reserve authored paths first. Every independently captured document gets a
+	// confined, deterministic path; comparison-key equality is not alias proof.
+	const allocateCollisionPath = ( path: string, query: boolean ): string => {
+		if ( [ ...reservedPaths ].some( reserved => path.startsWith( `${ reserved }/` ) ) )
+			throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
+		const extension = extname( path );
+		const stem = extension ? path.slice( 0, -extension.length ) : path;
+		let suffix = query ? 1 : 2;
+		let allocated: string;
+		do {
+			allocated = `${ stem }-${ query ? 'query-' : '' }${ suffix++ }${ extension }`;
+		} while ( [ ...reservedPaths ].some( reserved => reserved === allocated ||
+			reserved.startsWith( `${ allocated }/` ) || allocated.startsWith( `${ reserved }/` ) ) );
+		reservedPaths.add( allocated );
+		return allocated;
+	};
 	const contentAliasPartners = new Map< string, string >();
 	// A directory and default document may be distinct; reserve natural paths before suffixing.
 	for ( const entry of capturedEntries ) {
@@ -164,7 +187,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			address.search = '';
 			return normalizedUrl( address.href ) === normalizedUrl( directoryUrl );
 		} );
-		const directory = entriesByNormalizedUrl.get( normalizedUrl( directoryUrl ) )
+		const directory = entryForAddress( directoryUrl )
 			?? ( directoryCandidates.length === 1 ? directoryCandidates[ 0 ] : undefined );
 		const path = naturalRoutePath( entry.url );
 		if ( ! directory || naturalRoutePath( directoryUrl ) !== path ) continue;
@@ -174,16 +197,6 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			contentAliasPartners.set( directory.url, entry.url );
 			continue;
 		}
-		const displaced = entry.url === entrypointUrl ? directory : entry;
-		if ( [ ...reservedPaths ].some( ( reserved ) => path.startsWith( `${ reserved }/` ) ) )
-			throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
-		let suffix = 2;
-		let allocated: string;
-		do {
-			allocated = `${ path.slice( 0, -'.html'.length ) }-${ suffix++ }.html`;
-		} while ( [ ...reservedPaths ].some( ( reserved ) => reserved === allocated || reserved.startsWith( `${ allocated }/` ) ) );
-		reservedPaths.add( allocated );
-		allocatedPaths.set( displaced.url, allocated );
 	}
 	const routePathOf = ( url: string ) => allocatedPaths.get( url ) ?? naturalRoutePath( url );
 	const pathGroups = new Map< string, T[] >();
@@ -212,20 +225,11 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			?? cluster.find( entry => cluster.some( alias => alias.canonicalUrl && normalizedUrl( alias.canonicalUrl ) === normalizedUrl( entry.url ) ) )
 			?? cluster[ 0 ] );
 		const preferred = representatives.find( entry => entry.url === entrypointUrl )
+			?? representatives.find( entry => ! new URL( entry.url ).search && !new URL(entry.url).pathname.endsWith('/index.html') )
 			?? representatives.find( entry => ! new URL( entry.url ).search ) ?? representatives[ 0 ];
-		let suffix = 1;
 		for ( const [ index, entry ] of representatives.entries() ) {
-			if ( entry === preferred || ( ! new URL( entry.url ).search && ! new URL( preferred.url ).search ) ) continue;
-			if ( [ ...reservedPaths ].some( reserved => path.startsWith( `${ reserved }/` ) ) )
-				throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
-			const extension = extname( path );
-			const stem = extension ? path.slice( 0, -extension.length ) : path;
-			let allocated: string;
-			do {
-				allocated = `${ stem }-query-${ suffix++ }${ extension }`;
-			} while ( [ ...reservedPaths ].some( reserved => reserved === allocated ||
-				reserved.startsWith( `${ allocated }/` ) || allocated.startsWith( `${ reserved }/` ) ) );
-			reservedPaths.add( allocated );
+			if ( entry === preferred ) continue;
+			const allocated = allocateCollisionPath( path, !!new URL(entry.url).search );
 			for ( const alias of clusters[ index ] ) allocatedPaths.set( alias.url, allocated );
 		}
 	}
@@ -250,12 +254,12 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
 		if ( entry.sourceData.length > 0 ) duplicateSourceData.push( { claimed, sourceData: entry.sourceData } );
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
-		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
+		canonicalRouteAliases.set( documentRequestUrl( entry.url ), routePath );
 	}
 	const portableRedirects: RouteStage<T>[ 'portableRedirects' ] = [];
 	const missingRedirectTargets: RouteStage<T>[ 'missingRedirectTargets' ] = [];
 	for ( const { url, target } of redirectAliases ) {
-		const targetEntry = entriesByNormalizedUrl.get( normalizedUrl( target ) );
+		const targetEntry = entryForAddress( target );
 		if ( ! targetEntry ) {
 			missingRedirectTargets.push( { code: 'route_capture_failed', url, reason: `redirects to ${ target }, which was not captured` } );
 			continue;
@@ -263,7 +267,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		const routePath = routePathOf( targetEntry.url );
 		const destination = `${routePath}${new URL(target).hash}`;
 		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
-		canonicalRouteAliases.set( normalizedUrl( url ), destination );
+		canonicalRouteAliases.set( documentRequestUrl( url ), destination );
 		const from = publicPathname( url );
 		const to = `/${ destination }`;
 		// Path-only static redirect rules cannot distinguish query renditions.

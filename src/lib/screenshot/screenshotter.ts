@@ -30,6 +30,7 @@ import { sanitizeFrozenHtml } from './freeze.js';
 import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
+import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
 	captureRouteNavigation,
@@ -54,6 +55,7 @@ import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
+import { LinkedFrontier } from './linked-frontier.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
@@ -362,7 +364,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
-		return await page.evaluate( () => {
+		const html = await page.evaluate( ( { observeControlSource, controlAttribute } ) => {
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -478,7 +480,16 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 			}
 			try {
-				return `<!DOCTYPE html>${ document.documentElement.outerHTML }`;
+				// Keep authored reset defaults in markup and observed properties in a
+				// typed inert contract. Neither fact may be substituted for the other.
+				const observeControl = new Function( 'return (' + observeControlSource + ')' )() as typeof observeNativeControlState;
+				const snapshot = document.documentElement.cloneNode( true ) as HTMLElement;
+				const controls = document.documentElement.querySelectorAll( 'input, textarea, select' );
+				const copies = snapshot.querySelectorAll( 'input, textarea, select' );
+				controls.forEach( ( control, index ) => {
+					copies[ index ]!.setAttribute( controlAttribute, JSON.stringify( observeControl( control ) ) );
+				} );
+				return `<!DOCTYPE html>${ snapshot.outerHTML }`;
 			} finally {
 				for ( const boundary of textBoundaries ) boundary.remove();
 				for ( const { image, previous } of restoredImages.reverse() ) {
@@ -491,7 +502,8 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		} );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE } );
+		return wireNativeControlState( html );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
@@ -1744,6 +1756,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	if ( typeof opts.limit === 'number' && opts.limit >= 0 ) {
 		urls = sampleUrlsByType( urls, opts.limit );
 	}
+	const frontier = opts.linkedPages ? new LinkedFrontier( {
+		...opts.linkedPages,
+		...(opts.limit !== undefined && opts.limit > 0
+			? { maxPages: Math.min(opts.limit, opts.linkedPages.maxPages ?? 256) }
+			: {}),
+	}, startTime ) : undefined;
+	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0));
 	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
 
 	// --- same-origin ---------------------------------------------------------
@@ -1878,12 +1897,26 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let completed = 0;
 	// A redirect alias's target joins the queue unless its route is already in
 	// it, so each route is captured once however many URLs redirect to it.
-	const queuedRoutes = new Set( urls.map( normalizedUrl ) );
+	const queuedRoutes = new Set( urls.map( documentRequestUrl ) );
+	const enqueue = (target: string, depth: number): void => {
+		const key = documentRequestUrl(target);
+		if (queuedRoutes.has(key)) return;
+		if (frontier && !frontier.admit(key, depth)) return;
+		queuedRoutes.add(key);
+		if (frontier) target = key;
+		urls.push(target);
+	};
 	const allFailures: FailureEntry[] = [];
 
 	const capturedAt = () => new Date().toISOString();
 
 	const processUrl = async ( url: string ): Promise< void > => {
+		if (frontier?.expired()) {
+			frontier.recordTimeout(url);
+			skipped++; completed++;
+			opts.onProgress?.(completed, urls.length, url);
+			return;
+		}
 		const routeStartedAt = Date.now();
 		const base = slugify( url );
 		// On resume the URL may already have an entry — reuse its slug so the
@@ -2162,10 +2195,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( entry.redirectedTo && !urlFailures.length ) {
 			const target = entry.redirectedTo;
-			if ( ! queuedRoutes.has( normalizedUrl( target ) ) ) {
-				queuedRoutes.add( normalizedUrl( target ) );
-				urls.push( target );
-			}
+			enqueue(target, frontier?.depths.get(url) ?? 0);
 			skipped++;
 			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
 			completed++;
@@ -2193,6 +2223,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			captured++;
 			sendLog( server, `[ok] ${ url }` );
 		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
+			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});
 			skipped++;
 			sendLog( server, `[skip] ${ url } (${ absentFailures[ 0 ].error })` );
 		} else {
@@ -2212,80 +2243,86 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// URL in every group of `concurrency` before starting the next group). The
 		// browser is restarted only between segments to bound memory, preserving the
 		// restart-every-N invariant while keeping each worker on a stable browser.
-		const segSize = browserRestartEvery > 0 ? browserRestartEvery : urls.length;
-		for ( let segStart = 0; segStart < urls.length; segStart += segSize ) {
-			// The segment's end is read on every claim: a redirect alias appends
-			// its target to `urls`, and the worker that appended it is still
-			// running to pick it up.
-			const segEnd = () => Math.min( segStart + segSize, urls.length );
-			let cursor = segStart;
-			const worker = async (): Promise< void > => {
-				// `cursor++` is atomic on JS's single-threaded loop: each worker claims a
-				// distinct index synchronously before awaiting, so no URL runs twice.
-				while ( cursor < segEnd() ) {
-					await processUrl( urls[ cursor++ ] );
+		let segStart = 0;
+		while (segStart < urls.length) {
+			const waveEnd = urls.length;
+			while ( segStart < waveEnd ) {
+				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
+					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
+					await browser.close().catch( () => {} );
+					browser = ( await connectBrowser( { cdpPort: opts.cdpPort } ) ) as unknown as Browser;
+					browserRestarts++;
+					urlsSinceRestart = 0;
 				}
-			};
-			const poolSize = Math.max( 1, Math.min( concurrency, segEnd() - segStart ) );
-			await Promise.all( Array.from( { length: poolSize }, () => worker() ) );
-			urlsSinceRestart += segEnd() - segStart;
-
-			const moreWork = segStart + segSize < urls.length;
-			if ( moreWork ) {
-				sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
-				try {
-					await browser.close();
-				} catch {
-					/* best-effort */
-				}
-				browser = ( await connectBrowser( { cdpPort: opts.cdpPort } ) ) as unknown as Browser;
-				browserRestarts++;
-				urlsSinceRestart = 0;
+				// Appended aliases and linked documents belong to the next wave.
+				const segEnd = browserRestartEvery > 0
+					? Math.min( waveEnd, segStart + browserRestartEvery - urlsSinceRestart )
+					: waveEnd;
+				let cursor = segStart;
+				const worker = async (): Promise< void > => {
+					// Each worker claims a distinct index before awaiting.
+					while ( cursor < segEnd ) await processUrl( urls[ cursor++ ] );
+				};
+				const poolSize = Math.min( concurrency, segEnd - segStart );
+				await Promise.all( Array.from( { length: poolSize }, () => worker() ) );
+				urlsSinceRestart += segEnd - segStart;
+				segStart = segEnd;
 			}
-		}
-		// Discovery can omit links authored on a captured page. Inspect only a
-		// bounded set of those links, using the source session and manual redirects:
-		// never request an off-origin Location or persist its (possibly tokenized) URL.
-		const scheduled = new Set( urls.map( documentRequestUrl ) );
-		const candidates = new Set< string >();
-		for ( const url of urls ) {
-			const entry = manifest.getEntry( url );
-			const htmlPath = entry?.html;
-			if ( ! htmlPath || ! existsSync( join( opts.outputDir, htmlPath ) ) ) continue;
-			const html = resolveDocumentReferences( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), entry?.documents?.desktop?.url ?? url, entry?.documents?.desktop?.baseUrl );
-			for ( const link of sameOriginPageAnchors( html, url ) ) {
-				if ( ! scheduled.has( documentRequestUrl( link ) ) ) candidates.add( link );
-			}
-		}
-		if ( candidates.size ) {
-			let context: BrowserContext | undefined;
-			try {
-				context = await browser.newContext( await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
-				for ( const url of [ ...candidates ].slice( 0, 32 ) ) {
-					try {
-						// A plain rerun must not trust a prior probe when the source changed.
-						const prior = manifest.getEntry( url );
-						if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
-						const inspected = await inspectSourceDocument(url, async (current, timeout) => {
-							const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout});
-							try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
-							finally { await response.dispose(); }
-						}, opts.publicUrlsOnly);
-						if (inspected.status === 404 || inspected.status === 410) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), sourceAbsentStatus: inspected.status});
-						else if (inspected.boundary) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), externalRedirect: true});
-					} catch {
-						// Unknown outcomes remain blocking uncaptured links at export.
+			// Expand a breadth-first wave from actual rendered artifacts. The normal
+			// navigation/capture contract proves local documents and external boundaries;
+			// successful HTML is never reduced to a classification-only probe.
+			const scheduled = new Set( urls.map( documentRequestUrl ) );
+			const candidates = new Set< string >();
+			const candidateDepths = new Map<string, number>();
+			for ( const url of urls ) {
+				const entry = manifest.getEntry( url );
+				if ( ! entry?.html ) continue;
+				const documents: Array<{ path: string; document?: { url?: string; baseUrl?: string } }> = [ { path: join( opts.outputDir, entry.html ), document: entry.documents?.desktop } ];
+				if ( frontier ) documents.push( { path: join( opts.outputDir, entry.mobileHtml ?? join( 'html-mobile', `${ entry.slug }.html` ) ), document: entry.documents?.mobile } );
+				for ( const { path: htmlPath, document } of documents ) {
+					if ( ! existsSync( htmlPath ) ) continue;
+					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
+					for ( const link of sameOriginPageAnchors( html, url ) ) {
+						if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
+							candidates.add(link);
+							candidateDepths.set(link, Math.min(candidateDepths.get(link) ?? Infinity, 1 + (frontier?.depths.get(url) ?? 0)));
+						}
 					}
 				}
-			} catch {
-				// Inspection is evidence-only; a browser/session failure leaves links unresolved.
-			} finally {
-				await context?.close().catch( () => {} );
+			}
+			if (frontier) {
+				for (const url of candidates) enqueue(url, candidateDepths.get(url)!);
+			} else if ( candidates.size ) {
+				let context: BrowserContext | undefined;
+				try {
+					context = await browser.newContext( await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
+					for ( const url of [ ...candidates ].slice(0, 32) ) {
+						try {
+							// A plain rerun must not trust a prior probe when the source changed.
+							const prior = manifest.getEntry( url );
+							if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
+							const inspected = await inspectSourceDocument(url, async (current, timeout) => {
+								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout});
+								try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
+								finally { await response.dispose(); }
+							}, opts.publicUrlsOnly);
+							if (inspected.status === 404 || inspected.status === 410) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), sourceAbsentStatus: inspected.status});
+							else if (inspected.boundary) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), externalRedirect: true});
+						} catch {
+							// Unknown outcomes remain blocking uncaptured links at export.
+						}
+					}
+				} catch {
+					// Inspection is evidence-only; a browser/session failure leaves links unresolved.
+				} finally {
+					await context?.close().catch( () => {} );
+				}
 			}
 		}
 	} finally {
 		await resourceStore.flush();
 		await manifest.flush();
+		if (frontier) writeFileSync(join(opts.outputDir, 'linked-page-coverage.json'), JSON.stringify(frontier.coverage(), null, 2));
 		// Persist the accumulated responsive-image map (mobile variants) for the
 		// alt reconstruct. Best-effort; merge-on-resume already loaded any prior map.
 		if ( Object.keys( responsiveImages ).length > 0 ) {
@@ -2409,6 +2446,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		durationMs: Date.now() - startTime,
 		manifestPath,
 		urls,
+		...(frontier ? {linkedPageCoverage: frontier.coverage()} : {}),
 		siteCssPath,
 		cssMediaUrls: designCtx ? [ ...designCtx.cssMediaUrls ] : undefined,
 		headLinks: designCtx ? [ ...designCtx.headLinks ] : undefined,

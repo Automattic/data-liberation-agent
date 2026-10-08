@@ -625,6 +625,7 @@ describe('extractSameOriginLinks', () => {
       'https://example.test/privacidad',
       'https://example.test/cookies',
       'https://example.test/aviso-legal',
+      'https://example.test/cart',
     ]);
   });
 
@@ -702,10 +703,11 @@ describe('fetchSitemap route identity', () => {
       expect(documents).toEqual(paths.map(path => `<h1>Source document ${path}</h1>`));
       expect(resolvePageLink(`${origin}//page`, `${origin}/`, origin)).toBe(`${origin}//page`);
       expect(resolvePageLink('/group//entry', `${origin}/`, origin)).toBe(`${origin}/group//entry`);
-      // A filesystem collision is explicit until source canonical/redirect
-      // evidence proves an alias; discovery cannot substitute another page.
-      expect(() => allocateCaptureRoutes(urls.map(url => ({ url, htmlPath: '', sourceData: [] })), `${origin}/`, []))
-        .toThrow('Captured routes resolve to the same website path');
+      // Without source canonical/redirect evidence, colliding documents keep
+      // distinct portable paths; discovery never substitutes another page.
+      const routes = allocateCaptureRoutes(urls.map(url => ({ url, htmlPath: '', sourceData: [] })), `${origin}/`, []);
+      expect(new Set(urls.map(routes.routePathOf)).size).toBe(urls.length);
+      expect(routes.duplicateRoutes).toEqual([]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
