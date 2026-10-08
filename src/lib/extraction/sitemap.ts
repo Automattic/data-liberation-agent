@@ -53,6 +53,42 @@ export interface SitemapFetchResult {
   diagnostics: SitemapDiagnostic[];
 }
 
+// Extensions that cannot be a document, so a URL carrying one is never a route.
+// Deliberately a denylist: an unknown or absent extension still gets inspected,
+// because `.php`, `.aspx` and extensionless paths are all ordinary pages. Only
+// file types we are confident about are excluded.
+const NON_DOCUMENT_EXTENSIONS = new Set([
+  // images
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'svg', 'ico', 'bmp', 'tif', 'tiff', 'heic',
+  // audio and video
+  'mp4', 'webm', 'mov', 'avi', 'mkv', 'mp3', 'wav', 'ogg', 'oga', 'ogv', 'm4a', 'm4v', 'flac', 'aac',
+  // documents and archives
+  'pdf', 'zip', 'gz', 'tgz', 'bz2', 'tar', 'rar', '7z', 'dmg', 'exe', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  // code, data and fonts
+  'css', 'js', 'mjs', 'map', 'json', 'xml', 'rss', 'atom', 'txt', 'csv', 'woff', 'woff2', 'ttf', 'otf', 'eot',
+]);
+
+/**
+ * Whether a URL names something that cannot be an HTML document.
+ *
+ * Discovery inventories same-origin links, and a page that links straight to its
+ * images — a gallery, a WordPress media library — offers plenty of them. Counted
+ * as routes they are selected for sampling, come back as `image/jpeg`, and can
+ * never render, which leaves the inspection reporting fewer rendered samples
+ * than it selected and therefore an uncertain complexity band for a source that
+ * measured cleanly.
+ */
+export function isNonDocumentUrl(url: string): boolean {
+  let path: string;
+  try {
+    path = new URL(url).pathname.toLowerCase();
+  } catch {
+    path = url.toLowerCase().split(/[?#]/)[0];
+  }
+  const extension = path.slice(path.lastIndexOf('.') + 1);
+  return path.includes('.') && extension !== path && NON_DOCUMENT_EXTENSIONS.has(extension);
+}
+
 export function classifyUrl(url: string): UrlType {
   let path: string;
   try {
