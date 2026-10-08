@@ -5476,7 +5476,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 	} );
 
-	it( 'ignores malformed and unsupported canonical metadata without weakening route collision safety', () => {
+	it( 'ignores malformed and unsupported canonical metadata while retaining different documents', () => {
 		for ( const canonicalUrl of [ '', 'mailto:hello@example.com', 'https://[invalid' ] ) {
 			const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 			dirs.push( outputDir );
@@ -5500,15 +5500,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				} )
 			);
 
-			expect( () =>
-				exportWebsiteCapture( {
+			const receiptPath = exportWebsiteCapture( {
 					outputDir,
 					sourceUrl: 'https://example.com/',
 					platform: 'fake',
 					summary: {},
 					failures: [],
-				} )
-			).toThrow( 'Captured routes resolve to the same website path: about/index.html' );
+				} );
+			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+			expect(receipt.routes).toEqual([
+				{url: 'https://example.com/', path: 'website/index.html'},
+				{url: 'https://example.com/about', path: 'website/about/index.html'},
+				{url: 'https://example.com/about/', path: 'website/about/index-2.html'},
+			]);
+			expect(receipt.duplicateRoutes).toEqual([]);
+			expect(readFileSync(join(outputDir, 'website/about/index.html'), 'utf8')).toContain('<h1>About</h1>');
+			expect(readFileSync(join(outputDir, 'website/about/index-2.html'), 'utf8')).toContain('<h1>About us</h1>');
 		}
 	} );
 
@@ -5998,7 +6005,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		}
 	} );
 
-	it( 'fails when routes claim the same website path without declaring a canonical route', () => {
+	it( 'retains independent slash documents without inferring a canonical alias', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -6018,15 +6025,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			} )
 		);
 
-		expect( () =>
-			exportWebsiteCapture( {
+		const receiptPath = exportWebsiteCapture( {
 				outputDir,
 				sourceUrl: 'https://example.com',
 				platform: 'fake',
 				summary: {},
 				failures: [],
-			} )
-		).toThrow( 'Captured routes resolve to the same website path: about/index.html' );
+			} );
+		const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+		expect(receipt.routes).toEqual([
+			{url: 'https://example.com/', path: 'website/index.html'},
+			{url: 'https://example.com/about', path: 'website/about/index.html'},
+			{url: 'https://example.com/about/', path: 'website/about/index-2.html'},
+		]);
+		expect(receipt.duplicateRoutes).toEqual([]);
+		expect(readFileSync(join(outputDir, 'website/about/index.html'), 'utf8')).toContain('<h1>About</h1>');
+		expect(readFileSync(join(outputDir, 'website/about/index-2.html'), 'utf8')).toContain('<h1>About us</h1>');
 	} );
 
 	it( 'localizes external lazy, responsive, preload, icon, and recursive CSS render dependencies', () => {

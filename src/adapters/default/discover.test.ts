@@ -95,7 +95,9 @@ describe('discoverDefault', () => {
       `${origin}/three`,
       `${origin}/four`,
       `${origin}/five`,
+      `${origin}/two`,
       `${origin}/aviso-legal`,
+      `${origin}/three?ref=footer`,
     ]);
     expect(inventory.navigation).toContainEqual({ text: 'Resume', href: `${origin}/resume.pdf` });
   });

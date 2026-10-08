@@ -26,11 +26,15 @@ const nestedDocHtml = (title: string) =>
   `<script>for(var i=0;i<10;i++){var b=document.createElement('body');b.textContent='copy'+i;document.body.appendChild(b);}</script>` +
   '</body></html>';
 
-it('does not probe linked document and image assets as missing HTML routes', () => {
+it('retains linked filenames as candidates for response-based document classification', () => {
   expect(sameOriginPageAnchors(
     '<a href="/meeting">Join</a><a href="/_files/flyer.docx?dn=Flyer.docx">Flyer</a><a href="/photos/hero.avif">Hero</a>',
     'https://example.com/'
-  )).toEqual(['https://example.com/meeting']);
+  )).toEqual([
+    'https://example.com/meeting',
+    'https://example.com/_files/flyer.docx?dn=Flyer.docx',
+    'https://example.com/photos/hero.avif',
+  ]);
 });
 
 it('keeps distinct query collections in missing-route diagnostics and strips only fragments', () => {

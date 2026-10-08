@@ -12,6 +12,7 @@ import * as cheerio from 'cheerio';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { load } from 'cheerio';
+import { documentRequestUrl } from '../url/route-key.js';
 import { srcsetReferences } from '../srcset.js';
 import { boundaryIdentity, validateExternalBoundary, type ExternalBoundary } from '../source-navigation.js';
 import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.js';
@@ -1527,14 +1528,14 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
 					// The foreign document is outside scope, but authored links to the
 					// requested source route must retain their query/hash meaning in both stages.
-					const boundaryUrls = new Set((receipt.sourceOutcomes ?? []).map(outcome => normalizedUrl(outcome.requestedUrl)));
+					const boundaryUrls = new Set((receipt.sourceOutcomes ?? []).map(outcome => documentRequestUrl(outcome.requestedUrl)));
 					if (boundaryUrls.size) {
 						const html = readReferenceArtifact(directory, entry.document!).toString();
 						const $ = load(html);
 						const documentUrl = new URL($('base[href]').first().attr('href') ?? entry.sourceUrl, entry.sourceUrl).href;
 						const requiredLinks: string[] = [];
 						$('a[href],area[href]').each((_index, element) => {
-							try { const href = new URL($(element).attr('href')!, documentUrl); if (boundaryUrls.has(normalizedUrl(href.href))) requiredLinks.push(href.href); } catch { /* Non-network authored links have no boundary identity. */ }
+							try { const href = new URL($(element).attr('href')!, documentUrl); if (boundaryUrls.has(documentRequestUrl(href.href))) requiredLinks.push(href.href); } catch { /* Non-network authored links have no boundary identity. */ }
 						});
 						const actual = await page.evaluate(() => [...document.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>('a[href],area[href]')].map(link => link.href));
 						for (const href of requiredLinks) { const index = actual.indexOf(href); if (index < 0) checked.failures.push('Authored external-boundary source link meaning was lost'); else actual.splice(index, 1); }

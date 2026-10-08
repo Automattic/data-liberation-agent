@@ -152,9 +152,41 @@ request URLs. Coverage and source-link rewriting use captured request addresses
 or explicit proven aliases, so an external `/catalog` outcome cannot cover or
 rewrite a different `/catalog/` document. Existing rendered URL/base resolution
 feeds these addresses; it is not replaced by path or query normalization.
-Unscheduled probes remain classification-only evidence in this contract: they
-do not create frozen observations or extend declared required scope. A local HTML
-probe still remains an uncaptured-route finding until separately scheduled.
+`captureWebsite` expands adapter discovery through a bounded rendered-link
+frontier. Desktop and phone HTML feed the existing capture queue in breadth-first
+waves, including second-hop links. Fragment-only request identity retains distinct
+slash and query renditions; only source-proven redirects reuse aliases. Newly
+scheduled local HTML gets ordinary capture-session reference observations, and
+external declarations use the same frozen boundary contract below.
+
+Rendered same-origin HTTP(S) anchors are candidates regardless of path names or
+filename suffixes. The existing response/document classifier establishes HTML,
+absent/non-HTML inputs and navigation boundaries. Unsupported outcomes stay in
+required scope with explicit diagnostics; names such as `administration`,
+`accounting`, `apiary` or `search` do not imply an exclusion policy.
+
+Distinct captured request addresses that claim the same natural portable path
+are allocated deterministic numeric suffixes after reserving authored filenames
+and directories. Entrypoint selection prefers the exact requested document;
+source-declared canonical and established default-document content aliases
+retain their existing alias contract. Slash variants are independent until that
+proof exists. Query renditions keep their query allocation convention. Source
+links and redirect aliases bind exact addresses to the allocated document paths.
+
+`CaptureOptions.linkedPages` configures `maxPages` (256 by default), `maxDepth`
+(8 linked hops), and `timeoutMs` (1,800,000 ms). The time budget bounds admission
+and starting queued work; an already active capture completes under its ordinary
+navigation/capture deadlines. Seeds consume the page budget at depth zero. Every
+observed eligible link remains required even when a page, depth or time budget
+prevents its capture. `linked-page-coverage.json`, the receipt and capture
+diagnostics retain exact required URLs, limits, scheduled count and concrete
+omission reasons. Budget omissions and source-error/non-HTML observations keep
+completion false and frozen acceptance pending.
+
+Low-level `captureScreenshots` callers opt in with `linkedPages: {}`. Without
+that option, unscheduled probes remain classification-only: they do not create
+frozen observations or extend declared required scope. A successful HTML probe
+remains an uncaptured-route finding until scheduled.
 
 The receipt's `sourceOutcomes[]` and a frozen entry's `outcome` use
 `data-liberation/source-outcome/v1`, currently `kind: 'external-redirect'`.
