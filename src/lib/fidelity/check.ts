@@ -329,6 +329,11 @@ export function externalRequestHost( href: string, localOrigin: string | null ):
 	}
 }
 
+/** Whether a finite animation target from the last observation has since left the document. */
+export async function observedMotionDetached( page: Page ): Promise< boolean > {
+	return page.evaluate( () => ( window as typeof window & { __dlaObservedMotionTargets?: Element[] } ).__dlaObservedMotionTargets?.some( target => ! target.isConnected ) ?? false );
+}
+
 export async function observePage(
 	page: Page,
 	url: string,
@@ -619,9 +624,16 @@ export async function observePage(
 						name,
 						time: animation.currentTime?.toString() ?? 'null',
 						state: animation.playState,
+						clock: animation.timeline === document.timeline,
 					};
 				} )
 				.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
+			// Frozen evidence must describe the same document: retain the observed
+			// targets so the collector can prove they survived until its freeze.
+			( window as typeof window & { __dlaObservedMotionTargets?: Element[] } ).__dlaObservedMotionTargets = document.getAnimations()
+				.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity &&
+					! [ undefined, '', 'none' ].includes( ( animation as Animation & { animationName?: string } ).animationName ) )
+				.flatMap( ( animation ) => { const target = ( animation.effect as KeyframeEffect | null )?.target; return target ? [ target ] : []; } );
 			const animationStateBefore = new Map(
 				animationsBefore.map( ( animation ) => [ animation.key, animation ] )
 			);
@@ -645,13 +657,21 @@ export async function observePage(
 							name,
 							time: animation.currentTime?.toString() ?? 'null',
 							state: animation.playState,
+							clock: animation.timeline === document.timeline,
 						};
 					} )
 					.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
 				responsiveAnimations = animationsAfter
 					.filter( ( animation ) => {
 						const before = animationStateBefore.get( animation.key );
-						return ! before || before.time !== animation.time || before.state !== animation.state;
+						if ( ! before ) return true;
+						// A document-timeline effect already in flight advances with the
+						// clock, not the scroll: its progress or completion during the
+						// probe is not a response. Starts, pauses, seeks and
+						// scroll-timeline progress remain responses.
+						if ( animation.clock && before.state === 'running' && ( animation.state === 'running' || animation.state === 'finished' ) &&
+							Number( animation.time ) >= Number( before.time ) ) return false;
+						return before.time !== animation.time || before.state !== animation.state;
 					} )
 					.map( ( animation ) => animation.name )
 					.sort();

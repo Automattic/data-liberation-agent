@@ -258,20 +258,34 @@ export async function waitForImages(page: Page, timeoutMs: number = 4_000): Prom
  * awaiting their `.finished` settles the transition. Infinite animations
  * (spinners, looping marquees) never finish and are excluded; the whole wait is
  * timeout-bounded so a long/stuck animation can't hang the capture.
+ *
+ * Only in-flight effects are awaited. A paused entrance waiting for its
+ * viewport trigger cannot finish by waiting, so it must not consume the budget
+ * that an effect started while settling (a deferred observer play) needs. The
+ * set is re-read after each round: a play scheduled by an earlier effect's
+ * completion is still in flight, not settled.
  */
 export async function waitForAnimations(page: Page, timeoutMs: number = 2_000): Promise<void> {
   try {
     await withEvaluateTimeout(
-      page.evaluate(() =>
-        Promise.all(
-          document
-            .getAnimations()
-            .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
-            // `.finished` rejects if the animation is cancelled mid-flight; swallow
-            // so one cancelled reveal doesn't reject the whole settle.
-            .map((a) => a.finished.catch(() => undefined)),
-        ).then(() => true),
-      ),
+      page.evaluate(async (timeoutMs) => {
+        const deadline = performance.now() + timeoutMs;
+        // Scroll/view timelines advance with position, not time; waiting cannot settle them.
+        const inFlight = () => document
+          .getAnimations()
+          .filter((a) => a.playState === 'running' && a.timeline === document.timeline && a.effect?.getComputedTiming().iterations !== Infinity);
+        for (let pending = inFlight(); pending.length && performance.now() < deadline; pending = inFlight()) {
+          // `.finished` rejects if the animation is cancelled mid-flight; swallow
+          // so one cancelled reveal doesn't reject the whole settle.
+          await Promise.race([
+            Promise.all(pending.map((a) => a.finished.catch(() => undefined))),
+            new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - performance.now()))),
+          ]);
+          // Let completion handlers start any chained effect before re-reading.
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        }
+        return true;
+      }, timeoutMs),
       timeoutMs,
     );
   } catch {
@@ -408,7 +422,10 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
           // revealing nothing, again on every image-settling round.
           let bottom = Math.max(0, total - window.innerHeight);
           while (y < bottom && Date.now() - started < maxMs) {
-            y = Math.min(y + step, bottom);
+            // A step taller than the layout viewport (a phone document scaled
+            // into a wide window) jumps over content that never intersects, so
+            // its viewport-gated loads and entrances never run.
+            y = Math.min(y + Math.max(1, Math.min(step, window.innerHeight)), bottom);
             window.scrollTo({ top: y, left: 0, behavior: 'instant' });
             await new Promise((r) => setTimeout(r, pauseMs));
             total = document.documentElement.scrollHeight;

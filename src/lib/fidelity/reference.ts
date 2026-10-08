@@ -3,13 +3,14 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Page } from 'playwright';
 import { PNG } from 'pngjs';
-import { observePage, routeSourceMap } from './check.js';
+import { observePage, observedMotionDetached, routeSourceMap } from './check.js';
 import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
 import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { waitForAnimations, waitForDomQuiescence } from '../screenshot/page-helpers.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
 import { lockMainFrameNavigation } from '../screenshot/screenshotter.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
@@ -163,28 +164,43 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
 						entry.browserProfile = browserProfile;
 						if ( ! browserProfile ) entry.readiness.reasons.push( 'source browser profile unproven' );
-						const observation = await observePage( referencePage, url, viewport, 800, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
-							await applyCaptureRemovals( referencePage!, { removeSelectors: options.removeSelectors, prepare: options.prepareCapture, ctx: { url, viewport: device } } );
-						}, true, referencePage === page );
-						const cleanup = await readSourceCleanup( referencePage );
-						entry.readiness.cleanup = cleanup;
-						if ( cleanup.failures.length || cleanup.residual ) entry.readiness.reasons.push( 'source cleanup incomplete' );
-						// Freeze the same route identity capture accepts: query/hash
-						// renditions do not become different origin/path documents.
-						if ( isRouteDrift( referencePage.url(), navigationUrl ) ) entry.readiness.reasons.push( 'source route drift' );
-						const mediaReady = await referencePage.evaluate( () => [ ...document.images ].every( image => {
-							const rect = image.getBoundingClientRect();
-							return rect.width <= 50 || rect.height <= 50 || ( image.complete && image.naturalWidth > 0 );
-						} ) );
-						if ( ! mediaReady ) entry.readiness.reasons.push( 'source images pending or failed' );
-						entry.readiness.mediaReady = mediaReady;
-						entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
-						if ( ! entry.readiness.fontsReady ) entry.readiness.reasons.push( 'source fonts pending or failed' );
-						const stem = `${ digest( url ).slice( 0, 24 ) }-${ digest( device ).slice( 0, 12 ) }-${ viewport }`;
-						entry.viewportMeta = await referencePage.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
-						entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
-						entry.document = store( `${ stem }.html`, await referencePage.content() );
-						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
+						// A source still dismantling startup (e.g. a splash outro) can be
+						// observed and frozen moments before the animated target leaves the
+						// document. When observed motion does not survive the source settling,
+						// re-observe the settled page once so the frozen evidence describes it.
+						let attemptReasons: string[] = [];
+						for ( let attempt = 0; ; attempt++ ) {
+							attemptReasons = [];
+							const observation = await observePage( referencePage, url, viewport, 800, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
+								await applyCaptureRemovals( referencePage!, { removeSelectors: options.removeSelectors, prepare: options.prepareCapture, ctx: { url, viewport: device } } );
+							}, true, referencePage === page );
+							const cleanup = await readSourceCleanup( referencePage );
+							entry.readiness.cleanup = cleanup;
+							if ( cleanup.failures.length || cleanup.residual ) attemptReasons.push( 'source cleanup incomplete' );
+							// Freeze the same route identity capture accepts: query/hash
+							// renditions do not become different origin/path documents.
+							if ( isRouteDrift( referencePage.url(), navigationUrl ) ) attemptReasons.push( 'source route drift' );
+							const mediaReady = await referencePage.evaluate( () => [ ...document.images ].every( image => {
+								const rect = image.getBoundingClientRect();
+								return rect.width <= 50 || rect.height <= 50 || ( image.complete && image.naturalWidth > 0 );
+							} ) );
+							if ( ! mediaReady ) attemptReasons.push( 'source images pending or failed' );
+							entry.readiness.mediaReady = mediaReady;
+							entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
+							if ( ! entry.readiness.fontsReady ) attemptReasons.push( 'source fonts pending or failed' );
+							const stem = `${ digest( url ).slice( 0, 24 ) }-${ digest( device ).slice( 0, 12 ) }-${ viewport }`;
+							entry.viewportMeta = await referencePage.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
+							entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
+							entry.document = store( `${ stem }.html`, await referencePage.content() );
+							entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
+							if ( attempt >= 1 || ! observation.animations?.length ) break;
+							// Let in-flight effects and the DOM they drive settle before asking
+							// whether the observed motion still exists in the source.
+							await waitForAnimations( referencePage );
+							await waitForDomQuiescence( referencePage );
+							if ( ! await observedMotionDetached( referencePage ) ) break;
+						}
+						entry.readiness.reasons.push( ...attemptReasons );
 						await collectViewportEntranceStartup( referencePage, page );
 						entry.readiness.reasons.push( ...errors );
 						entry.readiness.ready = entry.readiness.reasons.length === 0;
