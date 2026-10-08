@@ -2,7 +2,7 @@
 //
 // freezePage
 // ==========
-// Produces a self-contained, JS-stripped HTML snapshot of a page for the
+// Produces a self-contained, source-JS-stripped HTML snapshot of a page for the
 // pixel-parity ceiling spike (eng-review decisions 1B + 2A + 7A).
 //
 //   Playwright page ──▶ [single-file-cli bundle injected] singlefile.getPageData(removeScripts)
@@ -27,16 +27,17 @@
 //
 import type { Page } from 'playwright';
 import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
+import { wireNativeControlState } from '../native-control-state.js';
 
 // A real page's sanitized HTML+CSS is many KB. Anything below this is almost
 // certainly a blank/shell capture (page didn't render) — fail loudly rather
 // than report a falsely-low parity ceiling.
 const MIN_FREEZE_BYTES = 2048;
 
-/** Reuse the project's sanitizer: strips script/iframe/object/embed/on*=/javascript:,
- *  preserves <style>, inline style=, and payload-free text-node boundaries. */
+/** Strip source code with the shared sanitizer, then reconstruct the fixed native
+ *  control interpreter from inert facts. Preserve CSS and text-node boundaries. */
 export function sanitizeFrozenHtml(html: string): string {
-  return sanitizeSourceHtml(html, { preserveEmptyComments: true });
+  return wireNativeControlState(sanitizeSourceHtml(html, { preserveEmptyComments: true }));
 }
 
 export interface FreezeResult { html: string; bytes: number; via: 'single-file-cli' | 'fallback'; }

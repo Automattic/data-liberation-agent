@@ -206,7 +206,8 @@ describe('captureScreenshots', () => {
 		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.currentSrc || source.src');
 		expect(String(page.evaluate.mock.calls[0][0])).toContain('frame.getBoundingClientRect()');
 		expect(String(page.evaluate.mock.calls[1][0])).toContain('adoptedStyleSheets');
-		expect(String(page.evaluate.mock.calls[2][0])).toContain('document.documentElement.outerHTML');
+		expect(String(page.evaluate.mock.calls[2][0])).toContain('document.documentElement.cloneNode');
+		expect(String(page.evaluate.mock.calls[2][0])).toContain('snapshot.outerHTML');
 		expect(String(page.evaluate.mock.calls[3][0])).toContain('frame.removeAttribute(attribute)');
 	});
 
