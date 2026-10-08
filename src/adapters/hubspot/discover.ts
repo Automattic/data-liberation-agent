@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { HubSpotInventory } from './types.js';
@@ -44,7 +44,8 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
   const siteTagline = ogDescription || extractMeta(homepageHtml, 'description') || '';
   const siteLanguage = $('html').attr('lang') || 'en-US';
 
-  const sitemapUrls = await fetchSitemap(url);
+  const sitemap = await fetchSitemapWithDiagnostics(url);
+  const sitemapUrls = sitemap.urls;
   const navigation = extractNavLinks(homepageHtml, normalized);
 
   const counts: Record<string, number> = {};
@@ -75,5 +76,6 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     navigation,
     counts,
     urls: inventoryUrls,
+    diagnostics: sitemap.diagnostics,
   };
 }

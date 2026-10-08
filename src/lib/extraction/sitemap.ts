@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
+import { assertPublicHttpUrl, safeFetch } from '../media-fetch/safe-fetch.js';
 
 function decodeXml(value: string): string {
   return value.replace(/&(?:amp|lt|gt|quot|apos);|&#(?:x[\da-f]+|\d+);/gi, (entity) => {
@@ -149,6 +150,9 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
  * document that parses as a sitemap wins; a `sitemapindex`'s children are
  * followed by document kind whatever their filename, while a urlset entry
  * recurses only when its path ends in `.xml`.
+ * Thin inventories traverse same-origin HTML with at most 100 raw requests,
+ * 60 seconds, 2 MiB per document and 1000 retained routes. Diagnostics describe
+ * linked-frontier closure, not unlinked pages or arbitrary runtime navigation.
  */
 export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<SitemapFetchResult> {
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
@@ -315,30 +319,19 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
     diagnostics.push(...fallbackMisses);
   }
 
-  // Supplement with the homepage's links if sitemap was thin
+  // A normal sitemap keeps its inexpensive path; thin inventories close a
+  // bounded frontier of linked HTML instead of stopping at the entry document.
   if (allUrls.length < 5) {
-    const navUrls = await crawlHomepageLinks(normalizedBase, baseOrigin);
-    const seen = new Set(allUrls.map(normalizedUrl));
-    for (const u of navUrls) {
-      if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
-        allUrls.push(u);
-        seen.add(normalizedUrl(u));
+    const fallback = await crawlLinkedPages(normalizedBase, baseOrigin, allUrls);
+    allUrls.splice(0, allUrls.length, ...fallback.urls);
+    if (fallback.closed) {
+      for (let i = diagnostics.length - 1; i >= 0; i--) {
+        if (diagnostics[i].code === 'sitemap_missing') {
+          diagnostics[i] = { ...diagnostics[i], code: 'sitemap_absent', reason: `No sitemap found; linked-page fallback closed. ${fallbackMisses.map(miss => `${miss.url}: ${miss.reason}`).join('; ')}` };
+        } else if (fallbackMisses.includes(diagnostics[i])) diagnostics.splice(i, 1);
       }
     }
-
-    // Client-rendered sites can ship an empty application root, so raw HTML
-    // cannot expose their navigation. Render only when the raw crawl found no
-    // routes to retain the inexpensive fetch path for ordinary sites.
-    if (navUrls.length === 0) {
-      const renderedNavUrls = await crawlRenderedNavLinks(normalizedBase, baseOrigin);
-      const seen = new Set(allUrls.map(normalizedUrl));
-      for (const u of renderedNavUrls) {
-        if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
-          allUrls.push(u);
-          seen.add(normalizedUrl(u));
-        }
-      }
-    }
+    diagnostics.push(...fallback.diagnostics);
   }
 
   return { urls: allUrls, diagnostics };
@@ -347,15 +340,110 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
 // Paths that are platform UI, not user content
 const SKIP_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
 
-async function crawlHomepageLinks(baseUrl: string, baseOrigin: string): Promise<string[]> {
-  try {
-    const response = await fetch(baseUrl, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok) return [];
-    return extractSameOriginLinks(await response.text(), baseUrl, baseOrigin);
-  } catch {
-    // Homepage fetch failed
-    return [];
+const LINKED_PAGE_REQUEST_LIMIT = 100;
+const LINKED_PAGE_TIME_LIMIT_MS = 60_000;
+const LINKED_PAGE_BODY_LIMIT = 2 * 1024 * 1024;
+const LINKED_PAGE_ROUTE_LIMIT = 1000;
+
+/** Sequential breadth-first traversal keeps request and frontier order stable. */
+async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: string[]): Promise<SitemapFetchResult & { closed: boolean }> {
+  const urls = [...seeds];
+  const routes = new Set(urls.map(normalizedUrl));
+  const queue: string[] = [];
+  const queued = new Set<string>();
+  for (const url of [new URL(baseUrl).href, ...seeds]) {
+    const key = normalizedUrl(url);
+    if (!queued.has(key)) { queued.add(key); queue.push(url); }
   }
+  const requested = new Set<string>();
+  const parsedRequests = new Set<string>();
+  const alreadyParsed = new Error('Linked document already parsed');
+  const diagnostics: SitemapDiagnostic[] = [];
+  const deadline = AbortSignal.timeout(LINKED_PAGE_TIME_LIMIT_MS);
+  let requests = 0;
+  let parsed = 0;
+  let position = 0;
+  let dropped = 0;
+  let firstDropped = '';
+  let entryLinks = 0;
+  let entryParsed = false;
+  let rendered = false;
+
+  function retain(links: string[]): void {
+    for (const url of links) {
+      const key = normalizedUrl(url);
+      if (!routes.has(key)) {
+        if (urls.length >= LINKED_PAGE_ROUTE_LIMIT) {
+          dropped++;
+          firstDropped ||= url;
+          continue;
+        }
+        routes.add(key);
+        urls.push(url);
+      }
+      if (!queued.has(key)) {
+        queued.add(key);
+        queue.push(url);
+      }
+    }
+  }
+
+  const boundedFetch: typeof fetch = async (input, init) => {
+    const request = new URL(String(input));
+    request.hash = '';
+    const url = request.href;
+    if (request.origin !== baseOrigin) throw new Error('redirect leaves the entry origin');
+    if (parsedRequests.has(url)) throw alreadyParsed;
+    if (requested.has(url)) throw new Error('redirect revisits a requested URL');
+    if (requests >= LINKED_PAGE_REQUEST_LIMIT) throw new Error(`request budget exhausted (${LINKED_PAGE_REQUEST_LIMIT})`);
+    deadline.throwIfAborted();
+    requests++;
+    requested.add(url);
+    return fetch(url, init);
+  };
+
+  for (; position < queue.length; position++) {
+    const url = queue[position];
+    if (requested.has(url)) continue;
+    if (requests >= LINKED_PAGE_REQUEST_LIMIT || deadline.aborted) break;
+    try {
+      const response = await safeFetch(url, {
+        fetchImpl: boundedFetch, signal: deadline, timeoutMs: 15_000,
+        maxBytes: LINKED_PAGE_BODY_LIMIT,
+      });
+      if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
+      const contentType = response.headers.get('content-type');
+      if (contentType && !/^(?:text\/html|application\/xhtml\+xml)(?:;|$)/i.test(contentType)) throw new Error(`non-HTML response (${contentType})`);
+      const links = extractSameOriginLinks(response.body.toString('utf8'), response.finalUrl, baseOrigin);
+      const finalRequest = new URL(response.finalUrl);
+      finalRequest.hash = '';
+      parsedRequests.add(finalRequest.href);
+      parsedRequests.add(url);
+      parsed++;
+      if (position === 0) { entryLinks = links.length; entryParsed = true; }
+      retain(links);
+    } catch (error) {
+      if (error !== alreadyParsed) diagnostics.push({ code: 'fallback_fetch_omitted', url, reason: error instanceof Error ? error.message : 'Linked-page fetch failed' });
+    }
+    // Rendering supplements a successfully fetched HTML shell, never a rejected
+    // request, oversized body or non-document response.
+    if (position === 0 && entryParsed && entryLinks === 0 && !deadline.aborted) {
+      rendered = true;
+      const result = await crawlRenderedNavLinks(baseUrl, baseOrigin, deadline);
+      retain(result.urls);
+      if (result.reason) diagnostics.push({ code: 'fallback_render_omitted', url: baseUrl, reason: result.reason });
+    }
+  }
+  const pending = queue.slice(position).filter(url => !requested.has(url));
+  const budget = deadline.aborted ? `time budget exhausted (${LINKED_PAGE_TIME_LIMIT_MS} ms)` : `request budget exhausted (${LINKED_PAGE_REQUEST_LIMIT})`;
+  for (const url of pending) diagnostics.push({ code: 'fallback_budget_omitted', url, reason: budget });
+  if (dropped) diagnostics.push({ code: 'fallback_route_budget_omitted', url: firstDropped, reason: `${dropped} link occurrences not retained; route limit ${LINKED_PAGE_ROUTE_LIMIT}` });
+  const closed = diagnostics.length === 0;
+  diagnostics.push({
+    code: closed ? 'fallback_link_closure' : 'fallback_link_coverage', url: baseUrl,
+    reason: `${requests}/${LINKED_PAGE_REQUEST_LIMIT} HTTP requests (including redirects); ${parsed} HTML documents parsed; ${urls.length} routes retained; ${pending.length} queued documents unvisited; ${dropped} over-limit link occurrences; entry rendering attempted: ${rendered}. Limits: ${LINKED_PAGE_TIME_LIMIT_MS} ms, ${LINKED_PAGE_BODY_LIMIT} bytes/document, ${LINKED_PAGE_ROUTE_LIMIT} routes. Scope: same-origin page links, not unlinked routes or linked-page runtime navigation.`,
+  });
+  return { urls, diagnostics, closed };
 }
 
 /**
@@ -365,7 +453,7 @@ async function crawlHomepageLinks(baseUrl: string, baseOrigin: string): Promise<
  * `<nav>…</nav>` match stops at the first nested `</nav>` (Webflow dropdowns),
  * and site chrome routinely lives outside `<nav>`/`<footer>` — a header CTA, a
  * GDPR bar, or a builder footer that is a plain `div` (Duda). The scope stays
- * one document, so no crawl depth is added; the same filter as the rendered
+ * one document; the same filter as the rendered
  * fallback below drops assets and platform UI paths.
  */
 export function extractSameOriginLinks(html: string, baseUrl: string, baseOrigin = new URL(baseUrl).origin): string[] {
@@ -396,29 +484,40 @@ export function routeKey(url: string): string {
   return route.href;
 }
 
-async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promise<string[]> {
-  let browser;
+async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string, signal?: AbortSignal): Promise<{ urls: string[]; reason?: string }> {
+  let browser: import('playwright').Browser | undefined;
+  const abort = () => { void browser?.close().catch(() => {}); };
   try {
+    signal?.throwIfAborted();
     const { chromium } = await import('playwright');
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage(await sourceContextOptions(browser, baseUrl));
+    signal?.addEventListener('abort', abort, { once: true });
+    signal?.throwIfAborted();
+    const page = await browser.newPage(await sourceContextOptions(browser, baseUrl, { publicUrlsOnly: true }));
+    await page.route('**/*', async route => {
+      try { assertPublicHttpUrl(route.request().url()); }
+      catch { await route.abort(); return; }
+      await route.continue();
+    });
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    if (new URL(page.url()).origin !== baseOrigin) throw new Error('rendered navigation leaves the entry origin');
 
     const hrefs = await page.locator('a[href]').evaluateAll((links) =>
       links.map((link) => (link as HTMLAnchorElement).href),
     );
     const seen = new Set<string>();
-    return hrefs.flatMap((href) => {
+    const urls = hrefs.flatMap((href) => {
       const resolved = resolvePageLink(href, baseUrl, baseOrigin);
       if (!resolved || seen.has(resolved)) return [];
       seen.add(resolved);
       return [resolved];
     });
-  } catch {
-    // Rendering is a best-effort fallback; sitemap and raw navigation remain usable.
-    return [];
+    return { urls };
+  } catch (error) {
+    return { urls: [], reason: error instanceof Error ? error.message : 'Entry rendering failed' };
   } finally {
+    signal?.removeEventListener('abort', abort);
     await browser?.close();
   }
 }

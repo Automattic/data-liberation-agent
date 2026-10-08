@@ -1,4 +1,4 @@
-import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import { extractWeeblyNavLinks } from './media.js';
@@ -39,7 +39,8 @@ export async function discoverWeebly(url: string, _opts: Record<string, unknown>
   const siteLanguage = langMatch?.[1] || 'en-US';
 
   // 3. Fetch sitemap
-  const sitemapUrls = await fetchSitemap(url);
+  const sitemap = await fetchSitemapWithDiagnostics(url);
+  const sitemapUrls = sitemap.urls;
 
   // 4. Extract navigation from Weebly menu structure
   const normalized = url.includes('://') ? url : `https://${url}`;
@@ -76,5 +77,6 @@ export async function discoverWeebly(url: string, _opts: Record<string, unknown>
     navigation,
     counts,
     urls: inventoryUrls,
+    diagnostics: sitemap.diagnostics,
   };
 }

@@ -103,7 +103,7 @@ describe('fetchSitemap', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Test server did not start');
-    const origin = `http://127.0.0.1:${address.port}`;
+    const origin = `http://localtest.me:${address.port}`;
 
     try {
       const { urls, diagnostics } = await fetchSitemapWithDiagnostics(origin);
@@ -113,7 +113,7 @@ describe('fetchSitemap', () => {
         `${origin}/other-scheme`,
         `${origin}/contact`,
       ]);
-      expect(diagnostics.map(({ url }) => url)).toEqual([
+      expect(diagnostics.filter(row => row.code === 'sitemap_url_rejected').map(({ url }) => url)).toEqual([
         'http://127.0.0.1:9/wrong-port',
         'https://elsewhere.example.test/foreign',
         'not-a-url',
@@ -454,7 +454,7 @@ describe('fetchSitemap', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const href = String(url);
       if (href === 'https://example.test/' || href === 'https://example.test') {
-        return new Response('<nav><a href="/a">A</a></nav>', { status: 200 });
+        return new Response('<nav><a href="/a">A</a></nav>', { status: 200, headers: { 'content-type': 'text/html' } });
       }
       return new Response('', { status: 404 });
     }));
@@ -474,7 +474,7 @@ describe('fetchSitemap', () => {
   it('probes robots.txt and well-known sitemap paths against the origin, not the entry URL, when the entry URL carries a query string', async () => {
     const entryUrl = 'https://example.test/?token=abc';
     const fetchMock = vi.fn(async (url: string) => {
-      if (String(url) === entryUrl) return new Response('<nav><a href="/a">A</a></nav>', { status: 200 });
+      if (String(url) === entryUrl) return new Response('<nav><a href="/a">A</a></nav>', { status: 200, headers: { 'content-type': 'text/html' } });
       return new Response('', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -488,6 +488,7 @@ describe('fetchSitemap', () => {
         'https://example.test/sitemap-index.xml',
         'https://example.test/sitemap.xml',
         entryUrl,
+        'https://example.test/a',
       ]);
       expect(diagnostics).toContainEqual({
         code: 'sitemap_missing',
@@ -502,7 +503,7 @@ describe('fetchSitemap', () => {
   it('probes robots.txt and well-known sitemap paths against the origin, not the entry URL, when the entry URL is a deep subpath', async () => {
     const entryUrl = 'https://example.test/en/store/checkout';
     const fetchMock = vi.fn(async (url: string) => {
-      if (String(url) === entryUrl) return new Response('<nav><a href="/a">A</a></nav>', { status: 200 });
+      if (String(url) === entryUrl) return new Response('<nav><a href="/a">A</a></nav>', { status: 200, headers: { 'content-type': 'text/html' } });
       return new Response('', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -516,6 +517,7 @@ describe('fetchSitemap', () => {
         'https://example.test/sitemap-index.xml',
         'https://example.test/sitemap.xml',
         entryUrl,
+        'https://example.test/a',
       ]);
       expect(diagnostics).toContainEqual({
         code: 'sitemap_missing',
@@ -532,7 +534,7 @@ describe('fetchSitemap', () => {
       const href = String(url);
       if (href.endsWith('/robots.txt')) return new Response('', { status: 404 });
       if (href === 'https://example.test/' || href === 'https://example.test') {
-        return new Response('<nav><a href="/a">A</a></nav>', { status: 200 });
+        return new Response('<nav><a href="/a">A</a></nav>', { status: 200, headers: { 'content-type': 'text/html' } });
       }
       throw new Error('network down');
     }));
@@ -562,7 +564,7 @@ describe('fetchSitemap', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Test server did not start');
-    const origin = `http://127.0.0.1:${address.port}`;
+    const origin = `http://localtest.me:${address.port}`;
 
     try {
       await expect(fetchSitemap(origin)).resolves.toEqual([
@@ -628,7 +630,7 @@ describe('extractSameOriginLinks', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Test server did not start');
-    const origin = `http://127.0.0.1:${address.port}`;
+    const origin = `http://localtest.me:${address.port}`;
 
     try {
       await expect(fetchSitemap(origin)).resolves.toEqual([

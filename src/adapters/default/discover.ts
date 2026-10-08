@@ -8,9 +8,8 @@ const UA = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
 
 /**
  * Discovery for the platform-agnostic fallback adapter. Mirrors the webflow
- * adapter: homepage metadata + sitemap + nav crawl, with a homepage-only
- * fallback when the site exposes no sitemap. Fetch-based (no browser) — the
- * sitemap is the primary URL source and doesn't require rendering.
+ * adapter: homepage metadata + sitemap + bounded linked-page fallback when
+ * the sitemap is absent/thin. An empty raw HTML entry can render navigation.
  */
 export async function discoverDefault(url: string, _opts: Record<string, unknown>): Promise<DefaultInventory> {
   const normalized = url.includes('://') ? url : `https://${url}`;

@@ -81,7 +81,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
 	const inventory = await discoverDefault(url, opts);
 	const normalized = url.includes('://') ? url : `https://${url}`;
 	const origin = new URL(normalized).origin;
-	const sitemapMissing = inventory.diagnostics?.some((diagnostic) => diagnostic.code === 'sitemap_missing') ?? false;
+	const sitemapMissing = inventory.diagnostics?.some((diagnostic) => diagnostic.code === 'sitemap_missing' || diagnostic.code === 'sitemap_absent') ?? false;
 	const homepageHtml = await fetchHomepage(normalized);
 	let urls = addRoutes(inventory.urls, bloggerListingLinks(homepageHtml, normalized));
 	const diagnostics = [ ...(inventory.diagnostics ?? []) ];

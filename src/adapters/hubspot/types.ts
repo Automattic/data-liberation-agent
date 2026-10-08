@@ -25,6 +25,7 @@ export interface HubSpotInventory {
   navigation: NavLink[];
   counts: Record<string, number>;
   urls: InventoryUrl[];
+  diagnostics?: import('../../lib/extraction/sitemap.js').SitemapDiagnostic[];
 }
 
 export type CheerioRoot = ReturnType<typeof cheerio.load>;
