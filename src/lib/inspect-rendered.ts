@@ -1,3 +1,4 @@
+import { isNonDocumentUrl } from './extraction/sitemap.js';
 import type { Browser, Page } from 'playwright';
 import { desktopContextOptions, sourceSessionCookieHeader } from './browser-kit/browser-kit.js';
 import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
@@ -17,6 +18,10 @@ export const SOURCE_CAPABILITIES = ['booking', 'commerce', 'dialogs', 'embeds', 
  * sits above observed documents and below the 25 MB process-wide download cap.
  */
 export const INSPECT_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
+/** Document links kept from one rendered sample's navigation inventory. */
+const NAVIGATION_LIMIT = 100;
+/** Same-origin links read from one rendered page before media is filtered out. */
+const LINK_LIMIT = 1000;
 /** Per-asset ceiling inside a rendered inspect sample. */
 export const INSPECT_ASSET_MAX_BYTES = 2 * 1024 * 1024;
 export type SourceCapability = (typeof SOURCE_CAPABILITIES)[number];
@@ -50,6 +55,12 @@ export interface RenderedInspection {
   /** Host-injected surfaces, reported rather than silently dropped. */
   excluded: ExcludedSurface[];
   navigation: string[];
+  /**
+   * Same-origin links on this page that name media rather than a document.
+   * They are left out of `navigation` and counted here, so the exclusion is
+   * auditable rather than invisible.
+   */
+  mediaLinks: number;
   requests: number;
   bytes: number;
   limited: boolean;
@@ -145,7 +156,7 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
         const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: requestTimeoutMs });
         if (!response?.ok()) throw new Error(`Rendered entry returned HTTP ${response?.status() ?? 'unknown'}`);
         await page.waitForTimeout(300);
-        const observed = await page.evaluate(({ rules, residue }) => {
+        const observed = await page.evaluate(({ rules, residue, linkLimit }) => {
           // Surfaces the deployment host injected are facts about the host.
           // They are subtracted from what the source is said to contain, and
           // reported, so an exclusion is auditable rather than invisible.
@@ -176,18 +187,28 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
             });
             return matches.length ? [{ capability: rule.capability, count: matches.length, evidence: rule.evidence, selector: rule.selector, locators }] : [];
           });
-          const navigation = authored.filter((element) => element.matches('a[href]'))
+          // Same-origin links leave the page on a wide bound, so the media
+          // predicate is applied once, in Node, before the navigation cap below.
+          const links = [...new Set(authored.filter((element) => element.matches('a[href]'))
             .map((a) => (a as HTMLAnchorElement).href).filter((href) => {
               try { return new URL(href).origin === location.origin; } catch { return false; }
-            });
+            }))];
           return { url: location.href, elements: authored.length,
             textCharacters: (document.body?.innerText ?? '').trim().length, counts, capabilities,
             excluded: excluded.filter((rule) => rule.matched > 0),
-            navigation: [...new Set(navigation)].slice(0, 100), navigationLimited: navigation.length > 100 };
-        }, { rules: [...GENERIC_RULES, ...rules].slice(0, 64), residue: residue.slice(0, 64) });
+            links: links.slice(0, linkLimit), linksLimited: links.length > linkLimit };
+        }, { rules: [...GENERIC_RULES, ...rules].slice(0, 64), residue: residue.slice(0, 64), linkLimit: LINK_LIMIT });
         sampleSignal.throwIfAborted();
-        if (observed.navigationLimited) unknowns.add('Rendered navigation inventory reached 100 links');
-        return { ...observed, requests, bytes, limited: limited || observed.navigationLimited, unknowns: [...unknowns] };
+        // Media is filtered before the navigation cap, not after. A gallery links
+        // straight to its own files, and those links would otherwise spend the
+        // whole budget and leave the real menu undiscovered.
+        const { links, linksLimited, ...facts } = observed;
+        const documents = links.filter((href) => !isNonDocumentUrl(href));
+        const navigationLimited = linksLimited || documents.length > NAVIGATION_LIMIT;
+        if (linksLimited) unknowns.add(`Rendered link inventory reached ${LINK_LIMIT} same-origin links`);
+        if (documents.length > NAVIGATION_LIMIT) unknowns.add(`Rendered navigation inventory reached ${NAVIGATION_LIMIT} links`);
+        return { ...facts, navigation: documents.slice(0, NAVIGATION_LIMIT), mediaLinks: links.length - documents.length,
+          requests, bytes, limited: limited || navigationLimited, unknowns: [...unknowns] };
       } finally {
         sampleSignal.removeEventListener('abort', abortSample);
         await context.close();
@@ -204,7 +225,21 @@ export interface SourceComplexity {
   factors: Array<{ code: string; value: number; reason: string }>;
 }
 
-export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean): SourceComplexity {
+/**
+ * `band` and `confidence` answer different questions, so they take different
+ * conditions.
+ *
+ * `band` is `unknown` for "missing rendered samples, truncated
+ * discovery/sampling, or limited/blocked resources" -- a site-wide
+ * classification is not offered from a partial view of the site.
+ *
+ * `confidence: bounded-sample` means "the declared sample completed", and
+ * unsampled routes are listed alongside responsive behavior and backend
+ * functionality as things that remain explicitly unknown. Sampling fewer routes
+ * than were discovered is the bound working as declared, not the sample failing,
+ * so it does not lower confidence. Both quotes are from docs/inspection.md.
+ */
+export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean, sampleIncomplete: boolean): SourceComplexity {
   const factors: SourceComplexity['factors'] = [];
   const maxElements = Math.max(0, ...samples.map((sample) => sample.elements));
   const capabilityCounts = new Map<SourceCapability, number>();
@@ -218,7 +253,9 @@ export function sourceComplexity(samples: RenderedInspection[], incomplete: bool
   const app = ['booking', 'commerce', 'membership'].some((key) => capabilityCounts.has(key as SourceCapability));
   const observedBand = !samples.length ? 'unknown' : app || maxElements > 2000 ? 'complex'
     : factors.some((factor) => factor.code !== 'elements') || maxElements > 500 ? 'moderate' : 'simple';
-  const uncertain = incomplete || samples.some((sample) => sample.limited || sample.unknowns.length > 0);
+  const unmeasured = samples.some((sample) => sample.limited || sample.unknowns.length > 0);
+  const uncertain = incomplete || unmeasured;
+  const sampleUncertain = sampleIncomplete || unmeasured;
   return { band: uncertain ? 'unknown' : observedBand, observedBand,
-    confidence: uncertain ? 'incomplete' : 'bounded-sample', factors };
+    confidence: sampleUncertain ? 'incomplete' : 'bounded-sample', factors };
 }

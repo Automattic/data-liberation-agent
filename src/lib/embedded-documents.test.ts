@@ -84,6 +84,39 @@ async function fixture(border = '0', width = 768, partial = false, projection?: 
 }
 
 describe('observed embedded document export', () => {
+	it.each([undefined, 'color:rgb(9,8,7)'])('projects runtime child state while retaining authored root geometry across fresh visitors and a stale resize (%s)', async authoredStyle => {
+		const outputDir = mkdtempSync(join(tempRoot, 'runtime-authored-geometry-'));
+		dirs.push(outputDir);
+		const raw = `<html><head><style>body{margin:0}#host{width:calc(100vw - 40px);aspect-ratio:1;position:relative}.label{position:absolute}</style></head><body><div id="host"${authoredStyle ? ` style="${authoredStyle}"` : ''}><img alt="Owned image"></div><script>const host=document.querySelector("#host");host.style.height=Math.round(host.getBoundingClientRect().width)+"px";host.querySelector("img").src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ZkAAAAASUVORK5CYII=";host.insertAdjacentHTML("beforeend","<span class=label>Mounted label</span>")</script></body></html>`;
+		const requirements = [{ selector: '#host', reason: 'Runtime children with authored layout', projection: 'subtree' as const, retainSourceAttributes: ['style'] }];
+		const fetch = async (url: string) => ({ finalUrl: url, status: 200, headers: new Headers({ 'content-type': 'text/html' }), body: Buffer.from(raw) });
+		await acquireHttpDocuments({ url: sourceUrl, urls: [sourceUrl], outputDir, collectAssets: true,
+			profile: { id: 'neutral', variants: [{ id: 'desktop' }], prepare: html => ({ html: html.replace(/<script>[\s\S]*?<\/script>/g, ''), browserRegions: requirements }) } }, { fetch });
+		const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+		try {
+			await source.route('**/*', route => route.fulfill({ body: raw, contentType: 'text/html' }));
+			await source.goto(sourceUrl, { waitUntil: 'load' });
+			await source.setViewportSize({ width: 768, height: 900 });
+			expect((await source.locator('#host').boundingBox())!.height).toBe(1400);
+			const observation = await observeRuntimeRegions(source, sourceUrl, requirements);
+			await stageRuntimeRegions({ outputDir, attachments: [{ variant: 'desktop', observation }] }, { fetch });
+			materializeHttpDocuments({ outputDir, sourceUrl, platform: 'neutral', desktopVariant: 'desktop', embeddedDocuments: true });
+			const server = await serveCapture(outputDir), copy = await browser.newPage();
+			try {
+				await copy.route('**/*', route => new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort());
+				for (const width of [390, 601, 768, 1024, 1440]) {
+					await source.setViewportSize({ width, height: 900 });
+					await source.goto(sourceUrl, { waitUntil: 'load' });
+					await copy.setViewportSize({ width, height: 900 });
+					await copy.goto(server.url, { waitUntil: 'load' });
+					expect(await copy.locator('#host').boundingBox()).toEqual(await source.locator('#host').boundingBox());
+					expect(await copy.locator('.label').innerText()).toBe('Mounted label');
+					expect(await copy.locator('img').evaluate(node => node instanceof HTMLImageElement && node.complete && node.naturalWidth > 0)).toBe(true);
+					expect(await copy.locator('#host').getAttribute('style')).toBe(authoredStyle ?? null);
+				}
+			} finally { await copy.close(); await server.close(); }
+		} finally { await source.close(); }
+	});
 	it('preserves print and narrow linked media through two-variant runtime staging and offline assembly', async () => {
 		const outputDir = mkdtempSync(join(tempRoot, 'runtime-dual-media-'));
 		dirs.push(outputDir);

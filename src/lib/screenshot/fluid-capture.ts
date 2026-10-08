@@ -18,6 +18,7 @@ import {
 } from './fluid-model.js';
 import type { Page } from 'playwright';
 import { captureFluidBaseline } from './fluid-baseline.js';
+import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments } from './fluid-runtime-sheets.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
@@ -51,7 +52,7 @@ function pureXTranslation( transform: string ): number | null {
 	return translate ? Number( translate[ 1 ] ) : null;
 }
 
-export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
+export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'left';
 
 export interface FluidSweepOptions {
 	/** Distinguishes rule identities when responsive documents share a stylesheet. */
@@ -60,6 +61,10 @@ export interface FluidSweepOptions {
 	widths?: number[];
 	/** Minimum observation window after resize, overlapping lazy work and rest. */
 	settleMs?: number;
+	/** Source-owned motion/readiness before each geometry sample, after rest settling. */
+	prepareViewport?: ( page: Page ) => Promise< void >;
+	/** Opt in when the source positions relative slides with width-derived left offsets. */
+	learnRelativeOffsets?: boolean;
 	onProgress?: ( ( width: number, elements: number ) => void ) | undefined;
 }
 
@@ -113,7 +118,7 @@ export async function learnAndApplyFluidGeometry(
 					await baseline.evaluate( state => state.restore() );
 					if ( original ) await page.setViewportSize( original );
 					await waitForRestGeometry( page, ID_ATTRIBUTE );
-					await baseline.evaluate( state => state.reconcile() );
+					await baseline.evaluate( state => state.restore() );
 				}
 				await baseline.evaluate( state => state.cleanup() );
 			} )(), 8000 );
@@ -131,6 +136,7 @@ async function learnFluidGeometry(
 	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
+	const properties = options.learnRelativeOffsets ? [ ...LEARNABLE_PROPERTIES, 'left' ] : [ ...LEARNABLE_PROPERTIES ];
 
 	const tagged = await page.evaluate(
 		( { attribute, properties, prefix } ) => {
@@ -156,6 +162,7 @@ async function learnFluidGeometry(
 					// have no text/glyph to size. Retain that native CSS unchanged; explicit
 					// spacer dimensions, real text and generated glyphs still qualify.
 					!( property === 'font-size' && blankParagraph ) &&
+					( property !== 'left' || getComputedStyle( element ).position === 'relative' ) &&
 					/^-?\d+(?:\.\d+)?px$/.test( element.style.getPropertyValue( property ).trim() )
 				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
@@ -169,21 +176,28 @@ async function learnFluidGeometry(
 			}
 			return index;
 		},
-		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES, prefix: options.document ? `${ options.document }-` : '' }
+		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
 	if ( tagged === 0 ) {
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
 	await baseline.evaluate( state => state.bind() );
+	await bindRuntimeSheets( page );
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
+	const nonRelative = new Set( options.learnRelativeOffsets ? await page.evaluate( attribute =>
+		[ ...document.querySelectorAll( `[${ attribute }]` ) ]
+			.filter( element => getComputedStyle( element ).position !== 'relative' )
+			.map( element => element.getAttribute( attribute )! ), ID_ATTRIBUTE ) : [] );
 
 	for ( const width of widths ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, true );
+		await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, true, properties );
+		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
+		await observeRuntimeSheets( page );
 
 		const measured = await page.evaluate(
 			( { attribute, properties } ) =>
@@ -194,6 +208,7 @@ async function learnFluidGeometry(
 					const customProperties = [ ...style.matchAll( /(?:^|;)\s*(--[-a-zA-Z0-9_]+)\s*:\s*[^;]+/g ) ].map( ( match ) => match[ 1 ]! );
 					const elementProperties = [ ...new Set( [ ...properties, ...customProperties ] ) ];
 					const parent = element.parentElement;
+					const relative = getComputedStyle( element ).position === 'relative';
 					for ( const property of elementProperties ) {
 						if ( property === 'inset-top' || property === 'inset-left' ) {
 							const inset = /(?:^|;)\s*inset\s*:\s*(-?\d+(?:\.\d+)?)px\s+auto\s+auto\s+(-?\d+(?:\.\d+)?)px\s*(?:;|$)/.exec( style );
@@ -228,13 +243,17 @@ async function learnFluidGeometry(
 							property !== 'font-size' &&
 							property !== 'padding-top' &&
 							property !== 'transform-x'
-								? property === 'width'
+								? property === 'width' || property === 'left'
 									? parent.clientWidth
 									: parent.clientHeight
 								: null;
 					}
 					for ( const property of elementProperties ) {
 						if ( property === 'transform-x' || property === 'inset-top' || property === 'inset-left' ) continue;
+						if ( property === 'left' && ! relative ) {
+							values[ property ] = null;
+							continue;
+						}
 						const match = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*(-?\\d+(?:\\.\\d+)?)px` ).exec( style );
 						values[ property ] = match ? Number( match[ 1 ] ) : null;
 						if ( property.startsWith( '--' ) && ! match ) {
@@ -242,11 +261,12 @@ async function learnFluidGeometry(
 							if ( computed ) values[ property ] = null;
 						}
 					}
-					return { id: element.getAttribute( attribute )!, values, containers };
+					return { id: element.getAttribute( attribute )!, values, containers, relative };
 				} ),
-			{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES as unknown as string[] }
+			{ attribute: ID_ATTRIBUTE, properties }
 		);
 		for ( const entry of measured ) {
+			if ( ! entry.relative ) nonRelative.add( entry.id );
 			for ( const property of Object.keys( entry.values ) as LearnableProperty[] ) {
 				const value = entry.values[ property ];
 				const key = `${ entry.id }:${ property }`;
@@ -286,6 +306,9 @@ async function learnFluidGeometry(
 
 	for ( const [ key, samples ] of observations ) {
 		const [ id, property ] = key.split( ':' ) as [ string, LearnableProperty ];
+		// Any non-relative sample invalidates the entire offset relationship.
+		// Fitting the remaining relative samples would erase authored positioning.
+		if ( property === 'left' && nonRelative.has( id ) ) continue;
 		const transformX = property === 'transform-x';
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );
@@ -296,20 +319,9 @@ async function learnFluidGeometry(
 		if ( wholeRangeModel.kind === 'breakpoint' ) {
 			for ( const width of breakpointsFrom( wholeRangeModel.samples ) ) breakpoints.add( width );
 		}
-		// A single relationship may fit no single stretch of the sampled range
-		// yet still be recoverable piecewise: sources routinely obey one rule
-		// above their mobile breakpoint and another below it. Where every
-		// segment fits a viewport-expressible model, ship media-scoped rules
-		// instead of freezing.
-		const segmented =
-			wholeRangeModel.kind === 'breakpoint'
-				? learnSegmentedFluidModel( modelSamples, customProperty || insetAxis
-					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
-					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
-				: null;
+		// Absolute insets share one offset owner with runtime-written sheet offsets.
 		if ( insetAxis ) {
-			const segments = segmented?.segments ?? ( wholeRangeModel.kind !== 'breakpoint' && wholeRangeModel.kind !== 'constant' && wholeRangeModel.kind !== 'container'
-				? [ { model: wholeRangeModel, minWidth: null, maxWidth: null } ] : null );
+			const segments = offsetSegments( modelSamples );
 			if ( segments === null ) continue;
 			learned.push( {
 				id,
@@ -322,6 +334,18 @@ async function learnFluidGeometry(
 			} );
 			continue;
 		}
+		// A single relationship may fit no single stretch of the sampled range
+		// yet still be recoverable piecewise: sources routinely obey one rule
+		// above their mobile breakpoint and another below it. Where every
+		// segment fits a viewport-expressible model, ship media-scoped rules
+		// instead of freezing.
+		const segmented =
+			wholeRangeModel.kind === 'breakpoint'
+				? learnSegmentedFluidModel( property === 'left'
+					? modelSamples.map( ( { viewport, value } ) => ( { viewport, value } ) ) : modelSamples, customProperty
+					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
+					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
+				: null;
 		if ( customProperty && model.kind !== 'breakpoint' && modelSamples.length >= 3 ) {
 			const customModel =
 				model.kind === 'container'
@@ -461,13 +485,25 @@ async function learnFluidGeometry(
 	// The source then owns the final clone state. Learned CSS follows that resize.
 	await baseline.evaluate( state => state.restore() );
 	if ( original ) await page.setViewportSize( original );
-	await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs );
+	await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, false, properties );
 	await baseline.evaluate( state => state.reconcile() );
+	// A final resize may write geometry onto roles that never qualified for
+	// learning. Restore those roles without replacing the sampled role state.
+	await baseline.evaluate( state => state.restore( true ) );
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
 	// transform; otherwise translateX would discard its new components.
 	for ( let index = learned.length - 1; index >= 0; index-- ) {
 		const entry = learned[ index ]!;
+		if ( entry.property === 'left' && options.learnRelativeOffsets &&
+			! await page.evaluate( ( { attribute, id } ) => {
+				const element = document.querySelector( `[${ attribute }="${ id }"]` );
+				return element !== null && getComputedStyle( element ).position === 'relative';
+			}, { attribute: ID_ATTRIBUTE, id: entry.id } ) ) {
+			learned.splice( index, 1 );
+			unmodelled++;
+			continue;
+		}
 		if ( entry.property !== 'transform' ) continue;
 		const style = await page.evaluate(
 			( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
@@ -503,7 +539,7 @@ async function learnFluidGeometry(
 					element.style.removeProperty( entry.property );
 					continue;
 				}
-				const axis = entry.property === 'height' ? 'height' : 'width';
+				const axis = entry.property === 'left' ? 'x' : entry.property === 'height' ? 'height' : 'width';
 				const before = element.getBoundingClientRect()[ axis ];
 				const runtimeValue = element.style.getPropertyValue( entry.property );
 				const runtimePriority = element.style.getPropertyPriority( entry.property );
@@ -591,6 +627,10 @@ async function learnFluidGeometry(
 		segmentAttribute: SEGMENT_ATTRIBUTE,
 		width: original?.width,
 	} );
+	// The runtime has rewritten its own sheets for the capture width by now;
+	// learned rules are validated against exactly that geometry.
+	const runtimeSheets = await applyRuntimeSheetRules( page, widths );
+	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
 
 	if ( reverted > 0 ) {
 		byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - reverted );
@@ -607,8 +647,8 @@ async function learnFluidGeometry(
 	}
 
 	return {
-		applied: learned.length - frozen - frozenWidths.length,
-		unmodelled: unmodelled + frozen + frozenWidths.length,
+		applied: learned.length - frozen - frozenWidths.length + runtimeSheets.applied,
+		unmodelled: unmodelled + frozen + frozenWidths.length + runtimeSheets.unmodelled,
 		breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ),
 		canvasFloor,
 		byKind,
@@ -627,7 +667,7 @@ async function learnFluidGeometry(
  * overlaps that observation rather than preceding it. The bound keeps a
  * perpetually animating page from stalling the sweep.
  */
-async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0, lazy = false ): Promise< void > {
+async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
 	const { withEvaluateTimeout } = await import( './page-helpers.js' );
 	await withEvaluateTimeout( page.evaluate( async ( { attribute, properties, settleMs, lazy } ) => {
 		const started = Date.now();
@@ -692,7 +732,7 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 );
 			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
 		}
-	}, { attribute, properties: LEARNABLE_PROPERTIES as unknown as string[], settleMs, lazy } ), 25_000 + settleMs );
+	}, { attribute, properties: [ ...properties ], settleMs, lazy } ), 25_000 + settleMs );
 }
 
 /** The last contiguous stretch of numeric pixel custom-property observations. */

@@ -141,6 +141,10 @@ export async function stageRuntimeRegions(
 				continue;
 			}
 			if (declared.projection !== region.projection) throw new Error('Undeclared runtime projection');
+			const retainedAttributes = declared.retainSourceAttributes ?? [];
+			if (retainedAttributes.length && (declared.projection !== 'subtree' ||
+				retainedAttributes.some(name => !/^[a-z][\w:-]*$/i.test(name) || /^on/i.test(name))))
+				throw new Error('Source attribute retention requires a subtree and inert attribute names');
 			const coverage = {
 				url: document.url,
 				variant,
@@ -180,6 +184,11 @@ export async function stageRuntimeRegions(
 					original.attr('id') !== root.attr('id')
 				)
 					throw new Error('Runtime projection source-owned identity mismatch');
+				for (const attribute of retainedAttributes) {
+					const value = original.attr(attribute);
+					if (value === undefined) root.removeAttr(attribute);
+					else root.attr(attribute, value);
+				}
 				const frames = $('iframe');
 				const expectedChildren = Math.max(frames.length, node.frames.length);
 				const accountedChildren = new Set<number>();

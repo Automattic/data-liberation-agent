@@ -77,6 +77,26 @@ afterEach(() => {
 });
 
 describe('orchestrated HTTP review capture', () => {
+	it('records source readiness before export-only projection and retains its learning provenance', async () => {
+		state.runtime = true;
+		const outputDir = directory(), platform = adapter(), order: string[] = [];
+		platform.acquisition!.prepareRuntimeRegions = async page => {
+			expect(await page.locator('#host').textContent()).toBe('Mounted ready');
+			expect(await page.locator('#host').getAttribute('style')).toBeNull();
+			order.push('source-evidence');
+		};
+		platform.acquisition!.projectRuntimeRegions = async page => {
+			order.push('export-projection');
+			await page.locator('#host').evaluate(node => { (node as HTMLElement).style.width = '100%'; });
+			return { primitive: 'neutral-geometry', sampling: 'source-runtime-resize' };
+		};
+		const result = await captureWebsite({ url, outputDir, acquisition: 'http', http: { routeLimit: 1, runtimeRouteLimit: 1 } }, { findAdapter: () => platform });
+		expect(order).toEqual(['source-evidence', 'export-projection']);
+		const runtime = JSON.parse(readFileSync(join(outputDir, 'runtime-observations.json'), 'utf8'));
+		expect(runtime.attachments[0].observation.projection).toEqual({ primitive: 'neutral-geometry', sampling: 'source-runtime-resize' });
+		expect(runtime.attachments[0].observation.regions[0].nodes[0].html).toContain('width: 100%');
+		expect(result.complete).toBe(false);
+	});
 	it('retains unobserved node accounting when only the bounded first sixteen of twenty declared nodes are projected', async () => {
 		state.runtime = true;
 		state.multiple = true;

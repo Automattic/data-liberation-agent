@@ -7,6 +7,38 @@ describe( 'responsive readiness contract', () => {
 	beforeAll( async () => { browser = await chromium.launch( { headless: true } ); } );
 	afterAll( async () => { await browser.close(); } );
 
+	it( 'observes opt-in relative slide offsets before source preparation and sampling', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<div id="slide" style="position:relative;left:144px">Slide text</div>
+				<script>
+				const slide = document.querySelector('#slide');
+				let timer;
+				addEventListener('resize', () => {
+					clearInterval(timer);
+					let tick = 0;
+					timer = setInterval(() => {
+						slide.style.left = ++tick < 8 ? tick + 'px' : innerWidth / 10 + 'px';
+						if (tick === 8) clearInterval(timer);
+					}, 150);
+				});
+				</script>` );
+			const prepared: number[] = [];
+			await learnAndApplyFluidGeometry( page, {
+				widths: [ 390, 768, 1440 ], settleMs: 0, learnRelativeOffsets: true,
+				prepareViewport: async source => {
+					const width = source.viewportSize()!.width;
+					expect( await source.locator( '#slide' ).evaluate( element => Number.parseFloat( ( element as HTMLElement ).style.left ) ) ).toBe( width / 10 );
+					prepared.push( width );
+				},
+			} );
+			expect( prepared ).toEqual( [ 390, 768, 1440 ] );
+			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
+			expect( await page.locator( '#slide' ).evaluate( element => element.getBoundingClientRect().x ) ).toBeCloseTo( 152, 0 );
+			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+		} finally { await page.close(); }
+	}, 20_000 );
+
 	it( 'ignores perpetual paint-only writes without spending the rest deadline', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {

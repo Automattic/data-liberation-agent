@@ -151,11 +151,19 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
   beforeAll(async () => { browser = await chromium.launch(); });
   afterAll(async () => { await browser?.close(); });
 
-  it('expandCollapsedContent opens <details>', async () => {
+  it('preserves native disclosure state while loading its lazy content', async () => {
     const page = await browser.newPage();
-    await page.setContent('<details><summary>Q</summary><p>A</p></details>');
+    await page.setContent(`<details id="closed"><summary>Question</summary><p>Hidden answer</p><img loading="lazy" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='2' height='2'%3E%3Crect width='2' height='2' fill='blue'/%3E%3C/svg%3E"></details><details id="open" open><summary>Open question</summary><p>Visible answer</p></details>`);
     await expandCollapsedContent(page);
-    expect(await page.evaluate(() => document.querySelector('details')?.open)).toBe(true);
+    expect(await page.evaluate(() => [...document.querySelectorAll('details')].map(el => el.open))).toEqual([false, true]);
+    expect(await page.locator('img').evaluate((image: HTMLImageElement) => ({ width: image.naturalWidth, loading: image.getAttribute('loading') }))).toEqual({ width: 2, loading: 'lazy' });
+    const exported = await page.content();
+    await page.setContent(exported);
+    expect(await page.locator('#closed').innerText()).not.toContain('Hidden answer');
+    await page.locator('#closed summary').click();
+    expect(await page.locator('#closed').innerText()).toContain('Hidden answer');
+    await page.locator('#closed summary').click();
+    expect(await page.evaluate(() => [...document.querySelectorAll('details')].map(el => el.open))).toEqual([false, true]);
     await page.close();
   });
 
@@ -174,7 +182,7 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     `);
     await expandCollapsedContent(page);
     expect(await page.evaluate(() => document.querySelector<HTMLDetailsElement>('details.dla-disclosure')?.open)).toBe(false);
-    expect(await page.evaluate(() => document.querySelector<HTMLDetailsElement>('details:not(.dla-disclosure)')?.open)).toBe(true);
+    expect(await page.evaluate(() => document.querySelector<HTMLDetailsElement>('details:not(.dla-disclosure)')?.open)).toBe(false);
     // The probe toggle still works: the summary opens and closes its panel.
     expect(
       await page.evaluate(() => {

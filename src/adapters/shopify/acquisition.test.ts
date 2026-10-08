@@ -6,7 +6,7 @@ import { shopifyAdapter } from './index.js';
 import { acquireHttpDocuments } from '../../lib/http-acquisition.js';
 import { materializeHttpDocuments } from '../../lib/http-materialization.js';
 import { chromium } from 'playwright';
-import { preserveShopifyWalletPresentation } from './acquisition.js';
+import { preserveShopifyWalletPresentation, pauseShopifySlides } from './acquisition.js';
 
 const source = 'https://shop.example/';
 const pageUrl = `${source}pages/story`;
@@ -21,6 +21,55 @@ afterEach(() => {
 });
 
 describe('Shopify declarative page HTTP profile', () => {
+	it('learns a nonzero observed slide phase without freezing slide width or relative offsets at intermediate viewports', async () => {
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage({ viewport: { width: 1440, height: 900 } }), copy = await browser.newPage();
+			await source.setContent(`<style>body{margin:0}.hero-slideshow{overflow:hidden}.slick-track{height:100px}.slick-slide{float:left;position:relative;height:100px;opacity:0}.slick-active{opacity:1}.small-caption{display:none}@media(max-width:768px){.wide-caption{display:none}.small-caption{display:block}}</style><body class="template-index"><div class="hero-slideshow slick-initialized"><div class="slick-track">${[0,1,2].map(index => `<div class="slick-slide ${index === 2 ? 'slick-active' : ''}"><span class="wide-caption">Phase ${index} wide</span><span class="small-caption">Phase ${index} narrow</span></div>`).join('')}</div></div><script>
+		const hero=document.querySelector('.hero-slideshow');hero.slick={currentSlide:2,paused:false};window.jQuery=()=>({slickPause:()=>{hero.slick.paused=true}});
+		const size=()=>{document.querySelector('.slick-track').style.width=(innerWidth*3)+'px';document.querySelectorAll('.slick-slide').forEach((node,index)=>{node.style.width=innerWidth+'px';node.style.left=(-index*innerWidth)+'px'})};size();addEventListener('resize',size);
+		</script></body>`);
+			const learning = await shopifyAdapter.acquisition!.projectRuntimeRegions!(source, { url: pageUrl, finalUrl: pageUrl, variant: 'desktop' });
+			expect(learning).toMatchObject({ primitive: 'fluid-capture' });
+			const $ = cheerio.load(await source.content()); $('script').remove();
+			await copy.setContent($.html());
+			for (const width of [390, 601, 768, 1024, 1440]) {
+				await source.setViewportSize({ width, height: 900 });
+				await source.waitForTimeout(30);
+				await copy.setViewportSize({ width, height: 900 });
+				expect(await source.locator('.hero-slideshow').evaluate(node => (node as HTMLElement & { slick: { currentSlide: number } }).slick.currentSlide)).toBe(2);
+				expect(await copy.locator('.slick-active').boundingBox(), `observed slide at ${width}px`).toEqual(await source.locator('.slick-active').boundingBox());
+				expect(await copy.locator('.slick-active').innerText()).toBe(width <= 768 ? 'Phase 2 narrow' : 'Phase 2 wide');
+			}
+		} finally { await browser.close(); }
+	});
+	it('pauses Brooklyn slides through its native API without selecting a different caption phase', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.setContent('<style>.phone-caption{display:none}@media(max-width:767px){.desktop-caption{display:none}.phone-caption{display:block}}</style><div class="hero-slideshow slick-initialized" data-slide-index="2"><p class="desktop-caption">Observed caption phase</p><p class="phone-caption">Observed phone caption phase</p></div>');
+			await page.evaluate(() => {
+				const slider = document.querySelector('.hero-slideshow')! as HTMLElement & { slick: { paused: boolean; currentSlide: number; timer: ReturnType<typeof setInterval> } };
+				slider.slick = { paused: false, currentSlide: 2, timer: setInterval(() => { slider.slick.currentSlide++; slider.querySelector('p')!.textContent = 'Unpaused caption'; }, 50) };
+				(window as unknown as { jQuery: unknown }).jQuery = () => ({
+					slick: () => undefined,
+					slickPause: () => { slider.slick.paused = true; clearInterval(slider.slick.timer); },
+				});
+			});
+			await pauseShopifySlides(page);
+			await page.waitForTimeout(120);
+			expect(await page.locator('.hero-slideshow').evaluate(node => (node as HTMLElement & { slick: { paused: boolean; currentSlide: number } }).slick)).toMatchObject({ paused: true, currentSlide: 2 });
+			const copy = await browser.newPage();
+			await copy.setContent(await page.content());
+			for (const width of [390, 768, 1440]) {
+				await page.setViewportSize({ width, height: 900 });
+				await copy.setViewportSize({ width, height: 900 });
+				const expected = width < 768 ? 'Observed phone caption phase' : 'Observed caption phase';
+				expect(await page.locator('.hero-slideshow').innerText()).toBe(expected);
+				expect(await copy.locator('.hero-slideshow').innerText()).toBe(expected);
+			}
+		} finally { await browser.close(); }
+	});
 	it('preserves the source wallet box after its closed shadow slot is removed from a projected subtree', async () => {
 		const browser = await chromium.launch();
 		try {

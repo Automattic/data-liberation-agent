@@ -15,6 +15,45 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.6] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- activate device styles from the single selection runtime
+- learn runtime-written stylesheet offsets across the width sweep
+- make the media exclusion auditable, and filter it before the link cap
+- replay source-observed finite CSS lifecycle
+
+## [0.20.5] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+- compare frozen cells with bounded concurrency
+
+### Fixed
+- exclude removed Lovable chrome from behavior evidence
+- preserve native details resting state during hydration
+- preserve source controls through popup probing
+
+## [0.20.4] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- show the default device document where the selection runtime never runs
+- do not inventory linked media as routes
+
+## [0.20.3] - 2026-10-07
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep HTTP runtime projection responsive
+
 ## [0.20.2] - 2026-10-07
 
 ### Changed

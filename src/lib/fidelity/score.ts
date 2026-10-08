@@ -82,6 +82,8 @@ export interface LayoutObservation {
 	responsiveAnimations?: string[];
 	/** Source-observed viewport entrances: target text, property, timing and keyframes. */
 	entranceTransitions?: string[];
+	/** Visible portable lifecycle bindings whose source/replay proof is unavailable. */
+	entranceLosses?: string[];
 	/** documentElement.scrollWidth. */
 	docWidth: number;
 	/** True when the document is wider than the viewport. */

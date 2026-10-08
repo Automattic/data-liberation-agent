@@ -86,6 +86,8 @@ Three things the gate has been wrong about before, all worth remembering:
 
 A copy is only faithful at the width it was captured at, because platform runtimes write inline pixel geometry that survives serialization while the runtime that computed it does not. Rather than freezing one width, capture sweeps widths with the source's runtime alive, fits a model per element (constant, proportional, floored, or a genuine breakpoint), and emits the result as ordinary CSS that needs no runtime.
 
+Some runtimes regenerate their own `<style>` element instead of writing inline pixels. A top-level rule whose pixel offset changes across the sweep is runtime-owned by that observation; its learned media rules ship in a `data-dla-fluid-sheet-rules` sibling of the owning sheet, so device-document scoping and cascade order follow the source sheet. Each rule must reproduce the capture-width geometry before it is kept.
+
 Elements that fit badly fall back to frozen values rather than adopting a confident wrong formula. `source-profile.json` records what was measured: one document or per-device, declarative or runtime-written geometry, the detected switch width, and how many elements were learned versus frozen.
 
 ## Resume state
