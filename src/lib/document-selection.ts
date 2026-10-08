@@ -111,7 +111,13 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		}
 	}
 	// Kept inline by the export's existing data-dla-* style handling.
+	// The selection runtime is what sets data-dla-selected-document, and it only
+	// runs where scripts do. A consumer that renders this markup without it — the
+	// block editor canvas is the one that matters — would otherwise keep every
+	// device document at display:none and show nothing at all, so the default
+	// document stands in until the runtime names one.
 	const visibility = '[data-dla-device-document]{display:none!important}[data-dla-device-unavailable]{display:none}' +
+		`html:not([data-dla-selected-document]) [data-dla-device-document="${ selection.defaultDocument }"]{display:contents!important}` +
 		Object.keys( viewports ).map( key => `html[data-dla-selected-document="${ key }"] [data-dla-device-document="${ key }"]{display:contents!important}` ).join( '' ) +
 		'html[data-dla-document-unavailable] [data-dla-device-unavailable]{display:block!important}';
 	$( 'head' ).prepend( $( '<style data-dla-device-visibility>' ).text( visibility ) );
