@@ -121,11 +121,7 @@ scaled into a wide window brings every region into view. Settling awaits in-flig
 finite document-timeline effects, including effects they chain, while paused
 viewport-pending entrances remain pending. The controlled-scroll motion proof counts
 starts, pauses, seeks and scroll-timeline progress; clock progress or completion of
-an effect already running before the probe is not a scroll response. If a finite
-animation target observed by the source leaves the document once its in-flight
-effects and DOM settle after freezing (for example a dismantled startup splash), the
-settled page is observed and frozen once more, so the evidence describes the settled
-source rather than its transient startup chrome.
+an effect already running before the probe is not a scroll response.
 Viewport evidence uses Chromium's complete compositor frame and verifies its exact
 requested dimensions before readiness. This preserves fixed-width mobile viewport
 scaling without clipping a fractional bottom row or resizing the resulting raster.

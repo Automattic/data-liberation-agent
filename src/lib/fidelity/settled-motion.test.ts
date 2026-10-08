@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
-import { observePage, observedMotionDetached } from './check.js';
+import { observePage } from './check.js';
 import { createReferenceCollector } from './reference.js';
 import { triggerLazyLoad, waitForAnimations } from '../screenshot/page-helpers.js';
 
@@ -57,27 +57,17 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { await browser.close(); }
 	}, 60_000 );
 
-	it( 'reports observed motion targets that leave the document after observation', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
-			const html = '<style>@keyframes intro{from{opacity:0}to{opacity:1}}#splash{animation:intro 10ms both}</style><div id="splash">Loading</div><p>Content</p>';
-			await observePage( page, `data:text/html,${ encodeURIComponent( html ) }`, 800, 0, null, undefined, undefined, false, true );
-			expect( await observedMotionDetached( page ) ).toBe( false );
-			await page.evaluate( () => document.getElementById( 'splash' )!.remove() );
-			expect( await observedMotionDetached( page ) ).toBe( true );
-		} finally { await browser.close(); }
-	}, 30_000 );
-
-	it( 'freezes a source observation coherent with the document after startup chrome is dismantled', async () => {
+	it( 'freezes a source observation coherent with the document after its startup splash is dismantled', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'settled-startup-' ) );
-		// Once the visitor scrolls (here: the observation's own controlled scroll)
-		// the source plays its splash outro and removes the splash afterwards,
-		// after the first observation has already been frozen.
+		// A builder welcome screen: a fixed, textless, viewport-spanning cover with
+		// its own intro motion, which fades out and removes itself well after the
+		// DOM first goes quiet. Frozen early, its motion would be scored as page content.
 		const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Startup</title>
-			<style>body{margin:0;height:2400px}@keyframes intro{from{opacity:0}to{opacity:1}}#splash{position:fixed;inset:0 0 auto 0;height:40px;animation:intro 10ms both}#splash.outro{animation:intro 10ms both,outro 1200ms both}@keyframes outro{to{opacity:0}}</style>
-			<div id="splash">Loading</div><h1>Settled content</h1>`;
+			<style>body{margin:0;height:2400px}@keyframes intro{from{opacity:0}to{opacity:1}}@keyframes outro{to{opacity:0}}
+			#splash{position:fixed;inset:0;background:#fff;animation:intro 10ms both}#splash.outro{animation:intro 10ms both,outro 600ms both}</style>
+			<div id="splash"></div><h1>Settled content</h1>
+			<script>addEventListener('load',()=>setTimeout(()=>{const splash=document.getElementById('splash');splash.classList.add('outro');splash.addEventListener('animationend',event=>{if(event.animationName==='outro')splash.remove();});},3500));</script>`;
 		const source = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( html ); } );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
@@ -85,16 +75,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		try {
 			// Capture's own context: the collector observes from a fresh sibling page.
 			const page = await ( await browser.newContext() ).newPage();
-			const collector = createReferenceCollector( directory, url, [ url ], {
-				prepareCapture: async target => {
-					await target.evaluate( () => addEventListener( 'scroll', () => {
-						const splash = document.getElementById( 'splash' );
-						if ( scrollY === 0 || ! splash || splash.classList.contains( 'outro' ) ) return;
-						splash.classList.add( 'outro' );
-						splash.addEventListener( 'animationend', () => setTimeout( () => splash.remove(), 300 ) );
-					} ) );
-				},
-			} );
+			const collector = createReferenceCollector( directory, url, [ url ] );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
 			const receipt = join( directory, 'capture-receipt.json' );
 			writeFileSync( receipt, JSON.stringify( { source: { url }, websiteRoot: 'website', routes: [] } ) );

@@ -331,11 +331,6 @@ export function externalRequestHost( href: string, localOrigin: string | null ):
 	}
 }
 
-/** Whether a finite animation target from the last observation has since left the document. */
-export async function observedMotionDetached( page: Page ): Promise< boolean > {
-	return page.evaluate( () => ( window as typeof window & { __dlaObservedMotionTargets?: Element[] } ).__dlaObservedMotionTargets?.some( target => ! target.isConnected ) ?? false );
-}
-
 export async function observePage(
 	page: Page,
 	url: string,
@@ -623,12 +618,6 @@ export async function observePage(
 					};
 				} )
 				.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
-			// Frozen evidence must describe the same document: retain the observed
-			// targets so the collector can prove they survived until its freeze.
-			( window as typeof window & { __dlaObservedMotionTargets?: Element[] } ).__dlaObservedMotionTargets = document.getAnimations()
-				.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity &&
-					! [ undefined, '', 'none' ].includes( ( animation as Animation & { animationName?: string } ).animationName ) )
-				.flatMap( ( animation ) => { const target = ( animation.effect as KeyframeEffect | null )?.target; return target ? [ target ] : []; } );
 			const animationStateBefore = new Map(
 				animationsBefore.map( ( animation ) => [ animation.key, animation ] )
 			);
