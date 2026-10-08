@@ -668,9 +668,11 @@ async function learnFluidGeometry(
  * perpetually animating page from stalling the sweep.
  */
 async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
-	const { withEvaluateTimeout } = await import( './page-helpers.js' );
-	await withEvaluateTimeout( page.evaluate( async ( { attribute, properties, settleMs, lazy } ) => {
+	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
+	const reachabilityKey = await installImageReachability( page );
+	await withEvaluateTimeout( page.evaluate( async ( { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
 		const started = Date.now();
+		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		const snapshot = () => JSON.stringify(
 			[ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ].map( element => {
 				const style = element.style;
@@ -729,10 +731,12 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 			// A display:none device variant cannot be reached by scrolling. Its
 			// pending native lazy images do not describe this width's geometry;
 			// visibility is re-read above, so a later reveal invalidates the sweep.
-			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 );
+			// Native-lazy images clipped out of view by an overflow ancestor are
+			// equally unreachable by this vertical sweep.
+			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
 			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
 		}
-	}, { attribute, properties: [ ...properties ], settleMs, lazy } ), 25_000 + settleMs );
+	}, { attribute, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
 }
 
 /** The last contiguous stretch of numeric pixel custom-property observations. */
