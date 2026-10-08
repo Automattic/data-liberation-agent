@@ -18,6 +18,7 @@ import {
 } from './fluid-model.js';
 import type { Page } from 'playwright';
 import { captureFluidBaseline } from './fluid-baseline.js';
+import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments } from './fluid-runtime-sheets.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
@@ -182,6 +183,7 @@ async function learnFluidGeometry(
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
 	await baseline.evaluate( state => state.bind() );
+	await bindRuntimeSheets( page );
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
@@ -215,6 +217,7 @@ async function learnFluidGeometry(
 		await waitForRestGeometry( page, ID_ATTRIBUTE );
 		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
+		await observeRuntimeSheets( page );
 
 		const measured = await page.evaluate(
 			( { attribute, properties } ) =>
@@ -336,21 +339,9 @@ async function learnFluidGeometry(
 		if ( wholeRangeModel.kind === 'breakpoint' ) {
 			for ( const width of breakpointsFrom( wholeRangeModel.samples ) ) breakpoints.add( width );
 		}
-		// A single relationship may fit no single stretch of the sampled range
-		// yet still be recoverable piecewise: sources routinely obey one rule
-		// above their mobile breakpoint and another below it. Where every
-		// segment fits a viewport-expressible model, ship media-scoped rules
-		// instead of freezing.
-		const segmented =
-			wholeRangeModel.kind === 'breakpoint'
-				? learnSegmentedFluidModel( property === 'left'
-					? modelSamples.map( ( { viewport, value } ) => ( { viewport, value } ) ) : modelSamples, customProperty || insetAxis
-					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
-					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
-				: null;
+		// Absolute insets share one offset owner with runtime-written sheet offsets.
 		if ( insetAxis ) {
-			const segments = segmented?.segments ?? ( wholeRangeModel.kind !== 'breakpoint' && wholeRangeModel.kind !== 'constant' && wholeRangeModel.kind !== 'container'
-				? [ { model: wholeRangeModel, minWidth: null, maxWidth: null } ] : null );
+			const segments = offsetSegments( modelSamples );
 			if ( segments === null ) continue;
 			learned.push( {
 				id,
@@ -363,6 +354,18 @@ async function learnFluidGeometry(
 			} );
 			continue;
 		}
+		// A single relationship may fit no single stretch of the sampled range
+		// yet still be recoverable piecewise: sources routinely obey one rule
+		// above their mobile breakpoint and another below it. Where every
+		// segment fits a viewport-expressible model, ship media-scoped rules
+		// instead of freezing.
+		const segmented =
+			wholeRangeModel.kind === 'breakpoint'
+				? learnSegmentedFluidModel( property === 'left'
+					? modelSamples.map( ( { viewport, value } ) => ( { viewport, value } ) ) : modelSamples, customProperty
+					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
+					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
+				: null;
 		if ( customProperty && model.kind !== 'breakpoint' && modelSamples.length >= 3 ) {
 			const customModel =
 				model.kind === 'container'
@@ -645,6 +648,10 @@ async function learnFluidGeometry(
 		segmentAttribute: SEGMENT_ATTRIBUTE,
 		width: original?.width,
 	} );
+	// The runtime has rewritten its own sheets for the capture width by now;
+	// learned rules are validated against exactly that geometry.
+	const runtimeSheets = await applyRuntimeSheetRules( page, widths );
+	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
 
 	if ( reverted > 0 ) {
 		byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - reverted );
@@ -661,8 +668,8 @@ async function learnFluidGeometry(
 	}
 
 	return {
-		applied: learned.length - frozen - frozenWidths.length,
-		unmodelled: unmodelled + frozen + frozenWidths.length,
+		applied: learned.length - frozen - frozenWidths.length + runtimeSheets.applied,
+		unmodelled: unmodelled + frozen + frozenWidths.length + runtimeSheets.unmodelled,
 		breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ),
 		canvasFloor,
 		byKind,

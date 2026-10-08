@@ -337,6 +337,28 @@ describe( 'learnSegmentedFluidModel', () => {
 			expect( Math.abs( desktop.model.slope * width + desktop.model.intercept - expected ) ).toBeLessThanOrEqual( 2 );
 		}
 	} );
+	it( 'segments a narrow stretch with its own canvas regime instead of holding each sample', () => {
+		// Canvas offset 47px until a 980px floor, then centred (vw/2 - 443),
+		// then a wider layout regime with a different gutter from 1536px.
+		const samples = at( [
+			[ 390, 47 ], [ 600, 47 ], [ 768, 47 ], [ 801, 47 ], [ 1024, 69 ], [ 1280, 197 ], [ 1440, 277 ],
+			[ 1536, 73.5 ], [ 1840, 225.5 ], [ 1920, 265.5 ],
+		] );
+		const segments = learnSegmentedFluidModel( samples, { holdUnfitted: true, holdNarrowForBoundedAffine: true } )!.segments;
+		const predict = ( viewport: number ) => {
+			const segment = segments.find( candidate => ( candidate.minWidth === null || viewport >= candidate.minWidth ) && ( candidate.maxWidth === null || viewport <= candidate.maxWidth ) )!;
+			const { model } = segment;
+			if ( model.kind === 'constant' ) return model.value;
+			if ( model.kind === 'affine' ) return model.slope * viewport + model.intercept;
+			throw new Error( `unexpected ${ model.kind }` );
+		};
+		for ( const sample of samples ) expect( Math.abs( predict( sample.viewport ) - sample.value ) ).toBeLessThanOrEqual( 2 );
+		// Unsampled widths follow the canvas regimes rather than a held sample.
+		expect( predict( 979 ) ).toBe( 47 );
+		expect( Math.abs( predict( 1100 ) - 107 ) ).toBeLessThanOrEqual( 2 );
+		expect( Math.abs( predict( 1500 ) - 307 ) ).toBeLessThanOrEqual( 2 );
+		for ( let index = 1; index < segments.length; index++ ) expect( segments[ index ]!.minWidth ).toBe( segments[ index - 1 ]!.maxWidth! + 1 );
+	} );
 	it( 'keeps an offset grid fluid only above its observed positive-width breakpoint', () => {
 		const samples = at( [
 			[ 390, 253 ], [ 600, 253 ], [ 768, 253 ], [ 1024, 268 ],
