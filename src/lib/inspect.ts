@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { classifyUrl } from './extraction/sitemap.js';
+import { classifyUrl, isNonDocumentUrl } from './extraction/sitemap.js';
 import { parseSitemapDocument } from './extraction/sitemap.js';
 import { extractNavLinks } from './html-extract/index.js';
 import { BodyTooLargeError, safeFetch } from './media-fetch/safe-fetch.js';
@@ -14,6 +14,8 @@ const DEFAULT_DISCOVERY_LIMIT = 50;
 const DEFAULT_SAMPLE_LIMIT = 5;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_OVERALL_TIMEOUT_MS = 30_000;
+/** Distinct media URLs counted during discovery, on a bound of their own. */
+const MEDIA_COUNT_LIMIT = 1000;
 
 export interface InspectOptions {
   /** Render sampled routes by default; false retains the lightweight HTTP lane. */
@@ -51,6 +53,13 @@ export interface SourceInspection {
   coverage: {
     discovery: { routes: number; limit: number; truncated: boolean };
     sampling: { routes: number; attempted: number; succeeded: number; failed: number; limit: number; truncated: boolean; complete: boolean };
+    /**
+     * Same-origin URLs that name media rather than a document. They are never
+     * routes and never sampled, and they do not consume the discovery limit.
+     * `discovered` counts distinct URLs from the sitemap and navigation up to
+     * `limit`; `renderedLinks` sums each rendered sample's `mediaLinks`.
+     */
+    media: { discovered: number; limit: number; truncated: boolean; renderedLinks: number };
   };
   routes: { types: Record<string, number> };
   samples: Array<{
@@ -164,6 +173,8 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   const routes: Route[] = [{ url: finalUrl, type: 'homepage' }];
   const seen = new Set([routeKey(finalUrl)]);
   let discoveryTruncated = false;
+  const media = new Set<string>();
+  let mediaTruncated = false;
 
   const addRoute = (rawUrl: string) => {
     try {
@@ -171,6 +182,16 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
       if (parsed.origin !== origin) return;
       const key = routeKey(parsed.href);
       if (seen.has(key)) return;
+      // A link to an image or an archive is not a route: sampled, it returns a
+      // body that cannot render. It is counted on its own bound rather than the
+      // discovery limit, because sitemap entries are added before navigation
+      // and a media-heavy sitemap would otherwise hide the whole menu.
+      if (isNonDocumentUrl(key)) {
+        if (media.has(key)) return;
+        if (media.size >= MEDIA_COUNT_LIMIT) { mediaTruncated = true; return; }
+        media.add(key);
+        return;
+      }
       if (routes.length >= discoveryLimit) { discoveryTruncated = true; return; }
       seen.add(key);
       routes.push({ url: key, type: classifyUrl(key) });
@@ -266,13 +287,22 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION,
     capabilityVocabulary: { schema: SOURCE_CAPABILITY_VOCABULARY, capabilities: SOURCE_CAPABILITIES },
-    complexity: sourceComplexity(renderedSamples, options.rendered === false || discoveryTruncated || samplingTruncated ||
-      renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html')),
+    // The declared sample completing is independent of how much of the site was
+    // declared: a bound honoured is not a sample that failed. So truncation
+    // withholds the band without lowering confidence.
+    complexity: sourceComplexity(
+      renderedSamples,
+      options.rendered === false || discoveryTruncated || samplingTruncated ||
+        renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html'),
+      options.rendered === false || renderedSamples.length !== selected.length ||
+        samples.some((sample) => sample.outcome !== 'html'),
+    ),
     rendered: { enabled: options.rendered !== false, attempted: renderedAttempts, succeeded: renderedSamples.length, samples: renderedSamples },
     source: { requestedUrl: url, finalUrl, platform: { id: detection.platform, confidence: detection.confidence, evidence: detection.signals }, hosts: hosts.map(({ id, evidence }) => ({ id, evidence })) },
     coverage: {
       discovery: { routes: routes.length, limit: discoveryLimit, truncated: discoveryTruncated },
       sampling: { routes: samples.length, attempted: selected.length, succeeded: samples.length, failed: failedSamples, limit: sampleLimit, truncated: samplingTruncated, complete: !samplingTruncated && failedSamples === 0 },
+      media: { discovered: media.size, limit: MEDIA_COUNT_LIMIT, truncated: mediaTruncated, renderedLinks: renderedSamples.reduce((total, sample) => total + sample.mediaLinks, 0) },
     },
     routes: { types },
     samples,

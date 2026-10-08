@@ -272,10 +272,13 @@ export async function captureTriggeredDialogs(
 			}
 			return `body > ${ parts.join( ' > ' ) }`;
 		};
+		const probeTriggers = new Map< string, Element >();
+		( globalThis as typeof globalThis & { __dlaProbeTriggers?: Map< string, Element > } ).__dlaProbeTriggers = probeTriggers;
 		const probeSelector = ( element: Element, index: number ): string => {
-			if ( element.id ) return `#${ cssEscape( element.id ) }`;
-			element.setAttribute( 'data-lib-interaction-trigger', String( index ) );
-			return `[data-lib-interaction-trigger="${ index }"]`;
+			if ( ! element.id ) element.setAttribute( 'data-lib-interaction-trigger', String( index ) );
+			const selector = element.id ? `#${ cssEscape( element.id ) }` : `[data-lib-interaction-trigger="${ index }"]`;
+			probeTriggers.set( selector, element );
+			return selector;
 		};
 		const isPlainActionButton = ( element: Element ): boolean => {
 			if ( element.tagName !== 'BUTTON' && element.getAttribute( 'role' ) !== 'button' ) return false;
@@ -392,88 +395,120 @@ export async function captureTriggeredDialogs(
 	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES } ) ) as TriggerDescriptor[];
 
 	const states: CapturedDialogInteraction[] = [];
-	for ( const trigger of triggers ) {
-		// Probe an opening transition even when the source rests expanded. Restore
-		// that resting state afterwards; closing a tall in-flow menu reveals body
-		// content by displacement, which is not popup evidence.
-		const initiallyExpanded = await page.locator( trigger.probeSelector ).first().getAttribute( 'aria-expanded' ).catch( () => null ) === 'true';
-		if ( initiallyExpanded ) {
-			await activateTrigger( page, trigger.probeSelector ).catch( () => undefined );
-			await page.waitForTimeout( 100 );
-			if ( await page.locator( trigger.probeSelector ).first().getAttribute( 'aria-expanded' ).catch( () => null ) === 'true' ) {
-				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
+	// Keep navigation defaults suppressed for the complete popup probe transaction,
+	// including Escape/close-trigger restoration clicks. Source click handlers
+	// still run; ordinary navigation probes happen outside this scope.
+	await page.evaluate( () => {
+		const preventNavigation = ( event: Event ) => {
+			if ( event.composedPath().some( target => target instanceof Element && target.matches( 'a[href]' ) ) ) {
+				event.preventDefault();
+			}
+		};
+		document.addEventListener( 'click', preventNavigation, true );
+		( document as Document & { __dlaPreventPopupNavigation?: EventListener } ).__dlaPreventPopupNavigation = preventNavigation;
+	} );
+	try {
+		for ( const trigger of triggers ) {
+			// Earlier source handlers can remove or replace a later control. A matching
+			// selector alone cannot prove it is still the source node we observed.
+			const sameTrigger = await page.evaluate( selector => {
+				const original = ( globalThis as typeof globalThis & { __dlaProbeTriggers?: Map< string, Element > } ).__dlaProbeTriggers?.get( selector );
+				return original?.isConnected === true && document.querySelector( selector ) === original;
+			}, trigger.probeSelector );
+			if ( ! sameTrigger ) {
+				states.push( { status: 'click-failed', trigger: triggerRecord( trigger ), error: 'Source trigger was removed or replaced by an earlier interaction.' } );
 				continue;
 			}
-		}
-		let before: string[] = [];
-		try {
-			await activateTrigger( page, trigger.probeSelector, async () => {
-				before = await visibleDialogSelectors( page );
-				await markVisibleBeforeActivation( page );
-				await rememberDropdownAncestors( page, trigger.probeSelector );
-			} );
-		} catch ( error ) {
-			const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
+			// Probe an opening transition even when the source rests expanded. Restore
+			// that resting state afterwards; closing a tall in-flow menu reveals body
+			// content by displacement, which is not popup evidence.
+			const initiallyExpanded = await page.locator( trigger.probeSelector ).first().getAttribute( 'aria-expanded', { timeout: DIALOG_WAIT_MS } ).catch( () => null ) === 'true';
+			if ( initiallyExpanded ) {
+				await activateTrigger( page, trigger.probeSelector ).catch( () => undefined );
+				await page.waitForTimeout( 100 );
+				if ( await page.locator( trigger.probeSelector ).first().getAttribute( 'aria-expanded', { timeout: DIALOG_WAIT_MS } ).catch( () => null ) === 'true' ) {
+					states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
+					continue;
+				}
+			}
+			let before: string[] = [];
+			try {
+				await activateTrigger( page, trigger.probeSelector, async () => {
+					before = await visibleDialogSelectors( page );
+					await markVisibleBeforeActivation( page );
+					await rememberDropdownAncestors( page, trigger.probeSelector );
+				} );
+			} catch ( error ) {
+				const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
+				states.push( {
+					status: 'click-failed',
+					trigger: triggerRecord( trigger ),
+					error: formatClickFailure( error, intercepting ),
+				} );
+				if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
+				continue;
+			}
+
+			let dialog: DialogDescriptor | undefined;
+			const deadline = Date.now() + DIALOG_WAIT_MS;
+			do {
+				// Source cleanup removes provider dialogs as they open, but its
+				// observer has a budget a busy page can spend before the probes run.
+				// Sweep explicitly so a policy-removed dialog is never recorded.
+				await sweepSourceCleanup( page ).catch( () => undefined );
+				dialog = await firstNewVisibleDialog( page, before, trigger.probeSelector );
+				if ( dialog ) break;
+				await page.waitForTimeout( 100 );
+			} while ( Date.now() < deadline );
+
+			if ( ! dialog ) {
+				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
+				await page.keyboard.press( 'Escape' ).catch( () => undefined );
+				if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
+				continue;
+			}
+			await waitForDialogContentStable( page, dialog.selector );
+			const presentation = dialog.presentation;
+			const baselineSelector = await page.locator( dialog.selector ).first().evaluate( element =>
+				( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors?.get( element )
+			);
+			dialog = ( await snapshotDialog( page, dialog.selector ) ) ?? dialog;
+			if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
+
+			const bounded = boundHtml( dialog.html );
+			const addedCss = await rulesAddedSinceActivation( page );
+			const ancestorState = dialog.presentation === 'dropdown' ? await observeDropdownAncestors( page, dialog.selector ) : undefined;
+			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
+			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			states.push( {
-				status: 'click-failed',
+				status: 'captured',
 				trigger: triggerRecord( trigger ),
-				error: formatClickFailure( error, intercepting ),
+				dialog: {
+					selector: baselineSelector ?? dialog.selector,
+					tag: dialog.tag,
+					...( dialog.id ? { id: dialog.id } : {} ),
+					...( dialog.role ? { role: dialog.role } : {} ),
+					ariaModal: dialog.ariaModal,
+					...( dialog.ariaLabel ? { ariaLabel: dialog.ariaLabel } : {} ),
+					...( dialog.presentation ? { presentation: dialog.presentation } : {} ),
+					html: bounded.html,
+					htmlBytes: bounded.bytes,
+					htmlTruncated: bounded.truncated,
+					...( addedCss ? { css: addedCss } : {} ),
+					...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
+				},
 			} );
 			if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
-			continue;
 		}
-
-		let dialog: DialogDescriptor | undefined;
-		const deadline = Date.now() + DIALOG_WAIT_MS;
-		do {
-			// Source cleanup removes provider dialogs as they open, but its
-			// observer has a budget a busy page can spend before the probes run.
-			// Sweep explicitly so a policy-removed dialog is never recorded.
-			await sweepSourceCleanup( page ).catch( () => undefined );
-			dialog = await firstNewVisibleDialog( page, before, trigger.probeSelector );
-			if ( dialog ) break;
-			await page.waitForTimeout( 100 );
-		} while ( Date.now() < deadline );
-
-		if ( ! dialog ) {
-			states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
-			await page.keyboard.press( 'Escape' ).catch( () => undefined );
-			if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
-			continue;
-		}
-		await waitForDialogContentStable( page, dialog.selector );
-		const presentation = dialog.presentation;
-		const baselineSelector = await page.locator( dialog.selector ).first().evaluate( element =>
-			( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors?.get( element )
-		);
-		dialog = ( await snapshotDialog( page, dialog.selector ) ) ?? dialog;
-		if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
-
-		const bounded = boundHtml( dialog.html );
-		const addedCss = await rulesAddedSinceActivation( page );
-		const ancestorState = dialog.presentation === 'dropdown' ? await observeDropdownAncestors( page, dialog.selector ) : undefined;
-		await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
-		const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
-		states.push( {
-			status: 'captured',
-			trigger: triggerRecord( trigger ),
-			dialog: {
-				selector: baselineSelector ?? dialog.selector,
-				tag: dialog.tag,
-				...( dialog.id ? { id: dialog.id } : {} ),
-				...( dialog.role ? { role: dialog.role } : {} ),
-				ariaModal: dialog.ariaModal,
-				...( dialog.ariaLabel ? { ariaLabel: dialog.ariaLabel } : {} ),
-				...( dialog.presentation ? { presentation: dialog.presentation } : {} ),
-				html: bounded.html,
-				htmlBytes: bounded.bytes,
-				htmlTruncated: bounded.truncated,
-				...( addedCss ? { css: addedCss } : {} ),
-				...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
-			},
+	} finally {
+		await page.evaluate( () => {
+			const documentWithListener = document as Document & { __dlaPreventPopupNavigation?: EventListener };
+			if ( documentWithListener.__dlaPreventPopupNavigation ) {
+				document.removeEventListener( 'click', documentWithListener.__dlaPreventPopupNavigation, true );
+				delete documentWithListener.__dlaPreventPopupNavigation;
+			}
+			delete ( globalThis as typeof globalThis & { __dlaProbeTriggers?: Map< string, Element > } ).__dlaProbeTriggers;
 		} );
-
-		if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 	}
 
 	await page.evaluate( () => {
@@ -1070,7 +1105,7 @@ async function describeInterceptingElement(
 				className ? `class="${ className.slice( 0, 80 ) }"` : '',
 			].filter( Boolean );
 			return `<${ hit.tagName.toLowerCase() }${ parts.length ? ` ${ parts.join( ' ' ) }` : '' }>`;
-		} )
+		}, undefined, { timeout: DIALOG_WAIT_MS } )
 		.catch( () => undefined );
 }
 
@@ -1088,14 +1123,14 @@ export async function activateTrigger( page: Page, probeSelector: string, baseli
 	try {
 		if ( ! ( await describeInterceptingElement( page, probeSelector ) ) ) {
 			try {
-				if (await page.evaluate(() => navigator.maxTouchPoints > 0)) await locator.tap({timeout:DIALOG_WAIT_MS});
+				if ( await page.evaluate( () => navigator.maxTouchPoints > 0 ) ) await locator.tap( { timeout: DIALOG_WAIT_MS } );
 				else await locator.click( { timeout: DIALOG_WAIT_MS } );
 				return;
 			} catch {
 				/* Coordinate click failed; fall through to a node-targeted click. */
 			}
 		}
-		await locator.evaluate( ( element ) => ( element as HTMLElement ).click() );
+		await locator.evaluate( ( element ) => ( element as HTMLElement ).click(), undefined, { timeout: DIALOG_WAIT_MS } );
 	} finally {
 		await page.evaluate( () => {
 			const documentWithListener = document as Document & { __dlaPreventSubmit?: EventListener };

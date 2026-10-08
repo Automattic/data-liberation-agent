@@ -2,6 +2,22 @@
 
 `data-liberation inspect <url>` returns schema `2.0`: bounded HTTP facts and rendered desktop observations. `--http-only` skips Chromium and returns unknown complexity. The public `inspectSource(url, { rendered: false })` option and MCP `inspect.rendered` use the same contract.
 
+A URL whose extension cannot be an HTML document — an image, a stylesheet, an
+archive, a font — is never a route and never sampled. Fetching one spends a
+sample to learn nothing and returns a body that cannot render, which would
+otherwise leave the complexity band uncertain for a source that measured
+cleanly. Media does not consume `discoveryLimit`: it is counted on its own bound
+in `coverage.media` (`discovered` distinct URLs from the sitemap and entry
+navigation, up to `limit`, with `truncated` set once that bound is reached), so a
+media-heavy sitemap cannot crowd the menu out of the route inventory. The
+rendered navigation inventory filters media before its 100-link cap; each
+rendered sample reports the media links it left out as `mediaLinks`, and
+`coverage.media.renderedLinks` sums them per sample, so the same file linked from
+several sampled pages counts once per page. `routes.types` stays the shared
+page classification and never contains media. The test is the extension alone,
+so a path whose last segment ends in a listed token without a trailing slash —
+`/tag/node.js` — is read as media.
+
 Default limits are 50 inventoried routes, 5 samples, 10 seconds per request/rendered sample, and 30 seconds overall. Each rendered sample permits at most 100 GET requests, 2 MiB per response, and a 10 MiB accepted resource budget. Responses and redirects use the HTTP inspection guard. Service workers and non-GET requests are blocked; controls and transactions are never activated. Blocked or unavailable resources are reported as unknown evidence. A 300ms settle observes an initial state, not all possible future application states.
 
 `source.hosts` records the deployment hosts recognized on the entry response, with the evidence that identified each one. A host is where a site is deployed, not what built it, so host recognition is independent of platform detection and never competes with it: a site can be built on one platform and served by another, and either may be unknown.
@@ -22,9 +38,9 @@ Each finding carries the route it was observed on, the selector that matched, an
 
 The two halves are deliberately separate. This side reports what a site contains. A destination reports what it can materialize, keyed on this vocabulary and on the portable website artifact contract. The join is the **caller's** responsibility:
 
-> A source is predicted to land cleanly when every observed capability has declared native or present-provider coverage in the destination, **and** `confidence` is `bounded-sample`, **and** `unknowns` is empty, **and** the destination's own pre-write budget is satisfiable.
+> A source is predicted to land cleanly when every observed capability has declared native or present-provider coverage in the destination, **and** `confidence` is `bounded-sample`, **and** every `rendered.samples[].unknowns` is empty, **and** the destination's own pre-write budget is satisfiable.
 
-The middle two conditions are not optional. `confidence: incomplete` or a non-empty `unknowns` means the sample did not establish what the source contains, so no downstream claim about it is admissible — a `simple` band on an incomplete sample is a measurement that stopped early, not a promise.
+The middle two conditions are not optional. `confidence: incomplete` or a non-empty per-sample `unknowns` means the sample did not establish what the source contains, so no downstream claim about it is admissible — a `simple` band on an incomplete sample is a measurement that stopped early, not a promise. (`bounded-sample` already implies empty per-sample `unknowns`; the condition is spelled out so a policy reading samples directly applies the same test.) The top-level `unknowns` list is a different field and is never empty; see below.
 
 Neither side should learn about the other. A producer that encodes one destination's capabilities stops being a general producer; a destination that encodes one producer's platform knowledge stops accepting artifacts from any other. Accumulating outcomes across many sites — the work of turning an explainable band into a calibrated probability — belongs to the orchestration layer that runs both, and to neither codebase.
 
@@ -38,6 +54,10 @@ Neither side should learn about the other. A producer that encodes one destinati
 - **unknown:** missing rendered samples, truncated discovery/sampling, or limited/blocked resources. `observedBand` retains the measured lower-bound classification and `factors` explains it.
 
 `confidence: bounded-sample` means the declared sample completed. Responsive behavior, unsampled routes, delayed states and backend functionality remain explicitly unknown. Consumers apply their own acceptance policy. These thresholds are initial explainable heuristics, not calibrated success probabilities.
+
+Sampling fewer routes than discovery found is the bound working as declared, so it withholds the band without lowering confidence: a result can report `band: unknown` alongside `confidence: bounded-sample`. The two answer different questions — whether a site-wide classification is offered, and whether the sample that was declared completed. A consumer that needs to know how much of the source was covered reads `coverage.discovery` and `coverage.sampling`. Read both: `sampling.complete` is false whenever sampling was truncated or a sample failed, but discovery truncation is reported only by `coverage.discovery.truncated`, so a tightened `discoveryLimit` can cap the inventory while sampling still reports complete. A declared sample that did not complete, a sample whose resources were limited, and a sample reporting its own unknowns all still report `incomplete`.
+
+Note that the top-level `unknowns` list is never empty: it always states that rendering covered one viewport, that interactive behavior was not activated, and that discovery was bounded. Those are standing properties of this inspection, not findings about a particular source, so an acceptance policy that requires the top-level `unknowns` to be empty can never pass. Key on `confidence`, on per-sample `unknowns`, on `coverage`, and on the capability findings instead.
 
 ## Verification — issue #210
 

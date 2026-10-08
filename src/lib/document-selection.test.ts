@@ -89,6 +89,35 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 		} finally { await browser.close(); await site.close(); }
 	}, 60_000 );
 
+	it( 'renders the default document where the selection runtime never runs', async () => {
+		const dir = directory(); const html = exported( dir );
+		const visibility = cheerio.load( html )( 'style[data-dla-device-visibility]' ).text();
+		expect( visibility ).toContain( `html:not([data-dla-selected-document]) [data-dla-device-document="${ selection.defaultDocument }"]{display:contents!important}` );
+		const site = await startStaticServer( join( dir, 'website' ) );
+		const browser = await chromium.launch();
+		try {
+			// The block editor canvas renders this markup without the selection
+			// runtime, so nothing ever sets data-dla-selected-document. Disabling
+			// scripts reproduces that consumer without depending on WordPress.
+			const context = await browser.newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
+			const page = await context.newPage();
+			await page.goto( site.url );
+			const seen = await page.evaluate( () => ( {
+				selected: document.documentElement.getAttribute( 'data-dla-selected-document' ),
+				displays: Object.fromEntries( [ ...document.querySelectorAll<HTMLElement>( '[data-dla-device-document]' ) ]
+					.map( node => [ node.getAttribute( 'data-dla-device-document' ), getComputedStyle( node ).display ] ) ),
+				canvas: [ ...document.querySelectorAll<HTMLElement>( '.canvas' ) ].find( node => node.getClientRects().length )?.dataset.fixtureDocument,
+				painted: document.body.scrollHeight,
+			} ) );
+			expect( seen.selected ).toBeNull();
+			expect( seen.displays ).toEqual( Object.fromEntries( selection.documents.map( key =>
+				[ key, key === selection.defaultDocument ? 'contents' : 'none' ] ) ) );
+			expect( seen.canvas ).toBe( selection.defaultDocument );
+			expect( seen.painted ).toBeGreaterThan( 0 );
+			await context.close();
+		} finally { await browser.close(); await site.close(); }
+	}, 60_000 );
+
 	it( 'selects three request identities on static hosting before paint and keeps identity through resize', async () => {
 		const dir = directory(); const html = exported( dir );
 		const serialized = cheerio.load( html );
@@ -212,9 +241,11 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 					expect( state.html.exclusive ).toEqual( keys.map( key => key === item.key ? item.key : '' ) );
 					expect( state.body.exclusive ).toEqual( keys.map( key => key === item.key ? item.key : '' ) );
 					expect( state.viewport ).toBe( item.key === 'mobile' ? 'width=320,user-scalable=yes' : item.key === 'tablet' ? 'width=980,user-scalable=yes' : 'width=device-width,initial-scale=1' );
-					expect( state.letterSpacing ).toBe( item.key === 'mobile' ? '4px' : '3px' );
 					if ( item.key === 'mobile' ) expect( state.innerWidth ).toBe( 320 );
 				}
+				// The selected linked sheet blocks rendering, not later parser-time
+				// scripts: every painted frame carries its typography.
+				for ( const state of proof.frames ) expect( state.letterSpacing ).toBe( item.key === 'mobile' ? '4px' : '3px' );
 				const activeMedia = await page.locator( 'link[data-dla-source-media]:not([data-dla-device-style])' ).evaluateAll( nodes => nodes.map( node => ( { media: node.getAttribute( 'media' ), source: node.getAttribute( 'data-dla-source-media' ) } ) ) );
 				expect( activeMedia ).toEqual( [ { media: 'screen and (min-width: 0px), print', source: 'screen and (min-width: 0px), print' } ] );
 				expect( await page.locator( '[data-dla-document-scope]' ).count() ).toBe( 3 );
@@ -269,6 +300,113 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 			expect( await page.locator( 'meta[name="viewport"]' ).getAttribute( 'content' ) ).toBeNull();
 		} finally { await browser.close(); await site.close(); }
 	} );
+
+	it( 'activates every route\'s ordered device styles from one document runtime before paint', async () => {
+		// Neutral multi-route, multi-style source: equal-specificity inline rules and
+		// linked sheets only resolve correctly in document order, and media-scoped
+		// styles keep their authored conditions.
+		const keys = [ 'desktop', 'mobile', 'tablet' ];
+		const routes = [ { url: 'https://fixture.test/', file: 'home', path: '' }, { url: 'https://fixture.test/menu/', file: 'menu', path: 'menu/' } ];
+		const sheets: Record<string, string> = { '/base.css': '.card{margin:5px}h1{font-size:30px}', '/wide.css': '.card{margin:9px;background-color:rgb(1,2,3)}h1{letter-spacing:2px}' };
+		const source = ( key: string, route: string ) => {
+			const index = keys.indexOf( key ); const width = key === 'mobile' ? 320 : key === 'tablet' ? 980 : undefined;
+			return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="${ width ? `width=${ width }` : 'width=device-width,initial-scale=1' }"><title>${ route }</title>` +
+				`<style>h1{color:rgb(200,0,0);margin:0}</style><link rel="stylesheet" href="/base.css"><style>h1{color:rgb(${ index * 40 },${ route === 'menu' ? 90 : 60 },0)}</style>` +
+				`<link rel="stylesheet" href="/wide.css" media="(min-width: 700px)"><style media="(max-width: 699px)">.card{padding:${ 3 + index }px}</style>` +
+				`<style>.card{border:${ index + 1 }px solid rgb(0,0,${ route === 'menu' ? 150 : 100 })}</style></head>` +
+				`<body class="${ key }"><main class="canvas" data-fixture-document="${ key }"><h1>${ key } ${ route }</h1><p class="card">${ route }</p></main></body></html>`;
+		};
+		const dir = directory();
+		mkdirSync( join( dir, 'resources' ) );
+		for ( const [ path, css ] of Object.entries( sheets ) ) writeFileSync( join( dir, `resources${ path }` ), css );
+		writeFileSync( join( dir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: Object.fromEntries( Object.keys( sheets ).map( path => [ `https://fixture.test${ path }`, { path: `resources${ path }`, contentType: 'text/css' } ] ) ) } ) );
+		const entries: Record<string, unknown> = {};
+		for ( const route of routes ) {
+			writeFileSync( join( dir, `html/${ route.file }.html` ), source( 'desktop', route.file ) );
+			writeFileSync( join( dir, `html-mobile/${ route.file }.html` ), source( 'mobile', route.file ) );
+			writeFileSync( join( dir, `html-tablet/${ route.file }.html` ), source( 'tablet', route.file ) );
+			entries[ route.url ] = { html: `html/${ route.file }.html`, profiles: { tablet: { html: `html-tablet/${ route.file }.html` } } };
+		}
+		writeFileSync( join( dir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		exportWebsiteCapture( { outputDir: dir, sourceUrl: 'https://fixture.test/', platform: 'neutral', summary: {}, failures: [], resolveDocumentSelection: () => selection } );
+
+		const counts = routes.map( route => {
+			const $ = cheerio.load( readFileSync( join( dir, 'website', route.path, 'index.html' ), 'utf8' ) );
+			return { route: route.file, deviceStyles: $( '[data-dla-device-style]' ).length, runtimes: $( 'script[data-dla-device-selection]' ).length,
+				activators: $( 'script[data-dla-device-styles]' ).length, documentWrites: $( 'script' ).toArray().filter( node => /document\.write/.test( $( node ).text() ) ).length };
+		} );
+		writeFileSync( join( dir, 'device-style-counts.json' ), JSON.stringify( counts, null, 2 ) );
+		expect( counts ).toEqual( routes.map( route => ( { route: route.file, deviceStyles: keys.length * 6, runtimes: 1, activators: 0, documentWrites: 0 } ) ) );
+
+		const origin = createServer( ( request, response ) => {
+			const [ path ] = ( request.url ?? '/' ).split( '?' );
+			if ( sheets[ path ] ) { response.setHeader( 'content-type', 'text/css' ); response.end( sheets[ path ] ); return; }
+			const userAgent = request.headers[ 'user-agent' ] ?? '';
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( source( /iPad/.test( userAgent ) ? 'tablet' : /iPhone/.test( userAgent ) ? 'mobile' : 'desktop', path.startsWith( '/menu' ) ? 'menu' : 'home' ) );
+		} );
+		await new Promise<void>( resolve => origin.listen( 0, '127.0.0.1', resolve ) );
+		const originUrl = `http://127.0.0.1:${ ( origin.address() as { port: number } ).port }/`;
+		const site = await startStaticServer( join( dir, 'website' ) ); const siteUrl = site.url.replace( /\/?$/, '/' );
+		const browser = await chromium.launch();
+		const { defaultBrowserType: _phoneType, ...phone } = devices['iPhone 17'];
+		const { defaultBrowserType: _tabletType, ...tablet } = devices['iPad (gen 7)'];
+		const profiles = [ { key: 'desktop', options: { userAgent: 'NeutralDesktop' }, widths: [ 390, 1440 ] }, { key: 'mobile', options: phone, widths: [ 390 ] }, { key: 'tablet', options: tablet, widths: [ 768 ] } ];
+		const rows = [];
+		try {
+			for ( const profile of profiles ) for ( const width of profile.widths ) for ( const route of routes ) {
+				const context = await browser.newContext( { ...profile.options, viewport: { width, height: 900 } } );
+				// Slow stylesheets prove the selected sheets block first paint.
+				await context.route( '**/*', async request => {
+					if ( request.request().resourceType() === 'stylesheet' ) await new Promise( resolve => setTimeout( resolve, 300 ) );
+					await request.continue();
+				} );
+				await context.addInitScript( () => {
+					const read = () => {
+						const canvas = [ ...document.querySelectorAll<HTMLElement>( '.canvas' ) ].find( node => node.getClientRects().length );
+						if ( ! canvas ) return undefined;
+						const title = getComputedStyle( canvas.querySelector( 'h1' )! ), card = getComputedStyle( canvas.querySelector( '.card' )! );
+						return { selected: canvas.dataset.fixtureDocument, innerWidth, color: title.color, fontSize: title.fontSize, letterSpacing: title.letterSpacing,
+							margin: card.margin, padding: card.padding, border: card.borderTop, background: card.backgroundColor };
+					};
+					const frames: unknown[] = []; Object.assign( window, { readDeviceStyles: read, deviceStyleFrames: frames } );
+					const frame = () => { const state = read(); if ( state ) frames.push( state ); if ( frames.length < 3 ) requestAnimationFrame( frame ); };
+					requestAnimationFrame( frame );
+				} );
+				const page = await context.newPage();
+				const settled = () => page.evaluate( () => ( window as unknown as { readDeviceStyles: () => unknown } ).readDeviceStyles() );
+				await page.goto( originUrl + route.path, { waitUntil: 'load' } ); const expected = await settled();
+				await page.goto( siteUrl + route.path, { waitUntil: 'load' } );
+				await page.waitForFunction( () => ( window as unknown as { deviceStyleFrames: unknown[] } ).deviceStyleFrames.length >= 3 );
+				const actual = await settled();
+				const frames = await page.evaluate( () => ( window as unknown as { deviceStyleFrames: unknown[] } ).deviceStyleFrames );
+				const media = await page.evaluate( () => [ ...document.querySelectorAll( '[data-dla-source-media]' ) ].map( node => ( {
+					device: node.getAttribute( 'data-dla-device-style' ), media: node.getAttribute( 'media' ), source: node.getAttribute( 'data-dla-source-media' ) } ) ) );
+				expect( actual ).toEqual( expected );
+				expect( ( actual as { selected: string } ).selected ).toBe( profile.key );
+				for ( const state of frames ) expect( state ).toEqual( actual );
+				// Each selected style is active once, directly after its inert declaration; all others stay inert.
+				const declared = media.filter( node => node.device );
+				expect( declared.every( node => node.media === 'not all' ) ).toBe( true );
+				const active = media.filter( node => ! node.device );
+				expect( active ).toEqual( declared.filter( node => node.device === profile.key ).map( node => ( { device: null, media: node.source, source: node.source } ) ) );
+				rows.push( { profile: profile.key, width, route: route.file, actual } );
+				await context.close();
+			}
+			const context = await browser.newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
+			const page = await context.newPage();
+			for ( const route of routes ) {
+				await page.goto( siteUrl + route.path );
+				expect( await page.evaluate( () => ( {
+					inert: [ ...document.querySelectorAll( '[data-dla-device-style]' ) ].every( node => node.getAttribute( 'media' ) === 'not all' ),
+					activated: document.querySelectorAll( '[data-dla-source-media]:not([data-dla-device-style])' ).length,
+					color: getComputedStyle( document.querySelector( '[data-dla-device-document="desktop"] h1' )! ).color,
+				} ) ) ).toEqual( { inert: true, activated: 0, color: 'rgb(0, 0, 0)' } );
+			}
+			await context.close();
+			writeFileSync( join( dir, 'device-style-proof.json' ), JSON.stringify( rows, null, 2 ) );
+		} finally { await browser.close(); await site.close(); await new Promise<void>( resolve => origin.close( () => resolve() ) ); }
+	}, 120_000 );
 
 	it( 'retains a source-declared width transition at 800 despite a 980 geometry floor', async () => {
 		const dir = directory();

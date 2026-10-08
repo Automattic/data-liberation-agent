@@ -17,7 +17,7 @@ const runtime = json(join(root, 'runtime-observations.json'));
 const staged = json(join(root, 'embedded-documents.json'));
 const resources = json(join(root, 'resources/manifest.json'));
 const checks = json(join(checkRoot, 'checks.json'));
-const beforePath = '.tmp-test/shopify-http-projected-4/projection-report.json';
+const beforePath = process.env.PROOF_BEFORE ?? '.tmp-test/shopify-http-projected-4/projection-report.json';
 const before = existsSync(beforePath) ? json(beforePath) : undefined;
 const localizationPath = '.tmp-test/shopify-http-slideshow-localization/structures.json';
 
@@ -50,7 +50,7 @@ function compare(source, copy, label) {
 	};
 }
 
-const comparisons = rows.filter(row => row.mode === 'portable').map(copy => {
+const comparisons = rows.filter(row => row.mode === 'portable' && rows.some(source => source.mode === 'source' && source.path === row.path && source.width === row.width)).map(copy => {
 	const source = rows.find(row => row.mode === 'source' && row.path === copy.path && row.width === copy.width);
 	if (!source) throw new Error(`Missing source observation: ${copy.path} ${copy.width}`);
 	const old = before?.comparisons.find(row => row.path === copy.path && row.width === copy.width);
@@ -61,31 +61,57 @@ const freshTablet = rows.filter(row => row.mode === 'source-fresh-tablet').map(s
 	const selected = rows.find(row => row.mode === 'source' && row.path === source.path && row.width === 768);
 	return { ...compare(source, copy, 'fresh-tablet'), selectedSessionHeightDelta: selected.snapshot.height - source.snapshot.height, selectedSessionTextEqual: selected.snapshot.text === source.snapshot.text };
 });
+function cardSummary(cards = []) {
+	const visible = cards.filter(card => card.width > 0 && card.height > 0 && card.display !== 'none');
+	return {
+		count: visible.length,
+		widths: [...new Set(visible.map(card => card.width))],
+		heights: [...new Set(visible.map(card => card.height))],
+		styles: [...new Set(visible.map(card => card.style))],
+	};
+}
+const freshVisitors = rows.filter(row => row.mode.startsWith('source-fresh')).map(source => {
+	const copy = rows.find(row => row.mode === 'portable' && row.path === source.path && row.width === source.width);
+	const selected = rows.find(row => row.mode === 'source' && row.path === source.path && row.width === source.width);
+	return { ...compare(source, copy, 'fresh-visitor'),
+		...(selected ? { selectedSessionHeightDelta: selected.snapshot.height - source.snapshot.height, selectedSessionTextEqual: selected.snapshot.text === source.snapshot.text } : {}),
+		sourceCards: cardSummary(source.snapshot.cards), portableCards: cardSummary(copy.snapshot.cards),
+		sourceSlides: source.snapshot.slides, portableSlides: copy.snapshot.slides,
+	};
+});
 const report = {
-	schema: 'data-liberation/shopify-http-proof/v3',
+	schema: 'data-liberation/shopify-http-proof/v4',
 	revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
 	generatedAt: new Date().toISOString(), root,
 	verdict: 'projection_measured_incomplete', accepted: false, complete: receipt.summary.complete,
 	verification: { rendering: 'measured_not_equivalent', interactions: 'unverified', wordpress: 'not_run' },
 	coverage: acquisition.coverage, exportedRoutes: receipt.routes.length,
 	captureMs: json(join(root, 'capture-result.json')).captureMs,
+	execution: json(join(root, 'capture-result.json')).execution,
+	retainedAcquisitionSha256: json(join(root, 'capture-result.json')).retainedAcquisitionSha256,
+	captureSource: json(join(root, 'proof-source.json')),
 	runtimeObservations: runtime.attachments.length, projectedRegions: staged.regions.length,
+	projectionLearning: runtime.attachments.filter(attachment => attachment.observation.projection).map(attachment => ({
+		variant: attachment.variant, ...attachment.observation.projection,
+	})),
 	partialParents: staged.regions.filter(region => region.childCoverage?.unresolved > 0).map(region => ({ variant: region.variant, selector: region.selector, index: region.index, childCoverage: region.childCoverage })),
 	resources: { acquired: acquisition.resources, final: { captured: Object.keys(resources.resources).length, failures: resources.failures.length } },
-	evidence: ['http-acquisition.json','capture-receipt.json','runtime-observations.json','embedded-documents.json','rendering.json','resources/manifest.json'].map(path => artifact(join(root, path))),
+	evidence: ['http-acquisition.json','capture-receipt.json','runtime-observations.json','embedded-documents.json','rendering.json','resources/manifest.json','proof-source.json'].map(path => artifact(join(root, path))),
 	...(before ? { before: artifact(beforePath) } : {}),
 	...(existsSync(localizationPath) ? { localization: artifact(localizationPath) } : {}),
-	source: ['src/platform/acquisition.ts','src/lib/runtime-regions.ts','src/lib/embedded-documents.ts','src/lib/capture-export.ts','src/lib/responsive-assembly.ts','src/lib/self-contain.ts','src/adapters/shopify/acquisition.ts','src/lib/embedded-documents.test.ts','src/lib/capture-http.test.ts','src/lib/responsive-assembly.test.ts','scripts/shopify-runtime-proof.ts'].map(artifact),
+	source: ['src/platform/acquisition.ts','src/lib/runtime-regions.ts','src/lib/http-runtime-observation.ts','src/lib/embedded-documents.ts','src/lib/capture-export.ts','src/lib/responsive-assembly.ts','src/lib/self-contain.ts','src/lib/screenshot/fluid-capture.ts','src/lib/screenshot/fluid-baseline.ts','src/lib/screenshot/fluid-baseline.test.ts','src/adapters/shopify/acquisition.ts','src/adapters/shopify/acquisition.test.ts','src/lib/embedded-documents.test.ts','src/lib/capture-http.test.ts','src/lib/responsive-assembly.test.ts','scripts/shopify-runtime-proof.ts','scripts/proof-animation-pose.ts','scripts/proof-animation-pose.test.ts'].map(artifact),
 	checks, checkEvidence: [artifact(join(checkRoot, 'checks.json')), ...checks.map(check => artifact(check.log))],
 	observations: rows.map(row => ({ path: row.path, width: row.width, mode: row.mode, pose: row.pose, ua: row.snapshot.ua, dpr: row.snapshot.dpr, height: row.snapshot.height,
 		screenshot: artifact(join(root, row.screenshot)), dom: artifact(join(root, row.dom)), mainTextSha256: hash(row.snapshot.text) })),
-	comparisons, freshTablet,
+	comparisons, freshTablet, freshVisitors,
 	limitations: [
-		'Selected tablet observations are session resizes; the four independent fresh tablet contexts are reported separately.',
+		'Selected tablet observations are session resizes. Independent 390/768/1440 visitors cover all four routes; 601/1024 visitors cover only home and collection.',
+		'Collection acquired root geometry replaces transient equal-height state; integer runtime rounding remains unresolved at fractional card widths.',
 		'Normal inline state is not promoted over authored important CSS: the existing dual-document assembler retains native cascade.',
 		'Valid outer subtrees survive failed children; unresolved and unaddressable children remain diagnosed and are not certified complete.',
 		'Backend forms/commerce, gallery/header interaction reconstruction, intermediate-width runtime geometry and volatile app content remain unverified.',
 		'Video frame differences and the failed source poster remain evidence, not preserved artwork.',
+		'Visibility and screenshots share the finite-animation end pose; infinite motion is not certified.',
 		'No frozen fidelity reference or full-site/WordPress acceptance was synthesized.',
 	],
 };
@@ -93,4 +119,5 @@ const path = process.argv.includes('--publish-report') ? 'artifacts/shopify-http
 writeFileSync(path, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({ report: path, captureMs: report.captureMs, projectedRegions: report.projectedRegions, partialParents: report.partialParents,
 	comparisons: comparisons.map(row => ({ path: row.path, width: row.width, text: row.mainTextEqual, delta: row.heightDelta, pixels: row.pixels.ratio, before: row.before })),
+	freshVisitors: freshVisitors.map(row => ({ path: row.path, width: row.width, delta: row.heightDelta, pixels: row.pixels.ratio, text: row.mainTextEqual })),
 	freshTablet: freshTablet.map(row => ({ path: row.path, delta: row.heightDelta, pixels: row.pixels.ratio, text: row.mainTextEqual, resizeDrift: row.selectedSessionHeightDelta })) }, null, 2));

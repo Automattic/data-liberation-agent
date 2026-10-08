@@ -1,8 +1,8 @@
 {
-  "schema": "data-liberation/shopify-http-proof/v3",
-  "revision": "53b52d46d2b2475623de9630f8519c206a7c5a84",
-  "generatedAt": "2026-10-07T14:50:29.156Z",
-  "root": ".tmp-test/shopify-http-reviewed-projected",
+  "schema": "data-liberation/shopify-http-proof/v4",
+  "revision": "fbda520f0b9d99d70dc83b7657363e65c2834b5f",
+  "generatedAt": "2026-10-07T18:40:27.806Z",
+  "root": ".tmp-test/shopify-responsive-current-reviewed",
   "verdict": "projection_measured_incomplete",
   "accepted": false,
   "complete": false,
@@ -19,9 +19,80 @@
     "failed": 0
   },
   "exportedRoutes": 4,
-  "captureMs": 127677.099333,
+  "captureMs": 151036.457,
+  "execution": "retained-acquisition-reprojection",
+  "retainedAcquisitionSha256": "debbfcb1655cdf60ea70255d4100ed2344084b256ceb10b9c21ef959e67bd96b",
+  "captureSource": {
+    "revision": "fbda520f0b9d99d70dc83b7657363e65c2834b5f",
+    "source": [
+      {
+        "path": "src/platform/acquisition.ts",
+        "sha256": "987e0ecff62e2b492374b61f0b8baa8675a661c701303157664ad6a21782165d"
+      },
+      {
+        "path": "src/lib/http-runtime-observation.ts",
+        "sha256": "7b5ee407576021b86ab20ec4f5e8fd51de0eb1f341bf0533156a256d7abb49b9"
+      },
+      {
+        "path": "src/lib/embedded-documents.ts",
+        "sha256": "0f256d420c56cfe083c0e166df80eda9b6d536a043f3c05f11fe07c41e041be2"
+      },
+      {
+        "path": "src/lib/screenshot/fluid-capture.ts",
+        "sha256": "44ca84ee98d86d05e5d55216bbb2fda018058c6e41c3f865d13d1519ef281c21"
+      },
+      {
+        "path": "src/lib/screenshot/fluid-baseline.ts",
+        "sha256": "677bc4621e72e36950e3fcd22f68f0fc29e0b69461151d0020aa14db0474e2fc"
+      },
+      {
+        "path": "src/adapters/shopify/acquisition.ts",
+        "sha256": "03616758dd41872ffcbe77693a5bbfe86c9498fc5e443d6cc195fd69383a8217"
+      },
+      {
+        "path": "scripts/shopify-runtime-proof.ts",
+        "sha256": "614f04f8866caf66e6409d076cf0894a41b71f43b0f2f0aca454d316b72c8450"
+      },
+      {
+        "path": "scripts/proof-animation-pose.ts",
+        "sha256": "f25ee86a927570b0402b3116ff9b4e964cc7caf1a2afef63932ab184e04d8a29"
+      }
+    ]
+  },
   "runtimeObservations": 8,
-  "projectedRegions": 68,
+  "projectedRegions": 92,
+  "projectionLearning": [
+    {
+      "variant": "desktop",
+      "primitive": "fluid-capture",
+      "sampling": "source-runtime-resize",
+      "learning": {
+        "applied": 20,
+        "unmodelled": 0,
+        "breakpoints": [],
+        "canvasFloor": null,
+        "byKind": {
+          "container": 14,
+          "constant": 6
+        }
+      }
+    },
+    {
+      "variant": "mobile",
+      "primitive": "fluid-capture",
+      "sampling": "source-runtime-resize",
+      "learning": {
+        "applied": 20,
+        "unmodelled": 0,
+        "breakpoints": [],
+        "canvasFloor": null,
+        "byKind": {
+          "container": 14,
+          "constant": 6
+        }
+      }
+    }
+  ],
   "partialParents": [
     {
       "variant": "desktop",
@@ -51,80 +122,96 @@
       "failures": 14
     },
     "final": {
-      "captured": 375,
-      "failures": 26
+      "captured": 385,
+      "failures": 50
     }
   },
   "evidence": [
     {
-      "path": ".tmp-test/shopify-http-reviewed-projected/http-acquisition.json",
-      "sha256": "33ed0c82cde8466179fb5c899474bc82633943964a04d035feaa6f77f1190ffc"
+      "path": ".tmp-test/shopify-responsive-current-reviewed/http-acquisition.json",
+      "sha256": "debbfcb1655cdf60ea70255d4100ed2344084b256ceb10b9c21ef959e67bd96b"
     },
     {
-      "path": ".tmp-test/shopify-http-reviewed-projected/capture-receipt.json",
-      "sha256": "c791ab2b6fb318b5a4adebec87971b02ef374f9aefa6e8e0ddb170d37a5fa848"
+      "path": ".tmp-test/shopify-responsive-current-reviewed/capture-receipt.json",
+      "sha256": "1ecc8351cf613bba79de983e5cf499c5c46015b8c00b87dd3678cae0b89fb752"
     },
     {
-      "path": ".tmp-test/shopify-http-reviewed-projected/runtime-observations.json",
-      "sha256": "d0eb4de9ae684f03b3e579445e6e8d62334135f2cfb21b55719a47f2d974392b"
+      "path": ".tmp-test/shopify-responsive-current-reviewed/runtime-observations.json",
+      "sha256": "e7b40451563b0e376f53517960d3f222cad6beddb0a5903ccd9dfd63d4ad6e68"
     },
     {
-      "path": ".tmp-test/shopify-http-reviewed-projected/embedded-documents.json",
-      "sha256": "6f01f3124c1255b5739a21c9b33d0187c6aae948a9e906d969da4d6441ee06ef"
+      "path": ".tmp-test/shopify-responsive-current-reviewed/embedded-documents.json",
+      "sha256": "7a29db599ed572afd02ce6e6e176519b1b9c523f358c97686ec589a68a24beda"
     },
     {
-      "path": ".tmp-test/shopify-http-reviewed-projected/rendering.json",
-      "sha256": "f53b90ce22b960964574dd07a8a91502a5b195b2d6b1e18854616b41fc10203c"
+      "path": ".tmp-test/shopify-responsive-current-reviewed/rendering.json",
+      "sha256": "79d9b49afc347eb66b8e80b30f2191c2bec31a3d6bbc9b4d5cc92d79e228432c"
     },
     {
-      "path": ".tmp-test/shopify-http-reviewed-projected/resources/manifest.json",
-      "sha256": "29fc1e91e5c38dab1de499cce926b043585b2f471555ff055833486344785858"
+      "path": ".tmp-test/shopify-responsive-current-reviewed/resources/manifest.json",
+      "sha256": "8fe741d50452bd4521c8a6d24ade3eba26bee944e7b801a93cde3223521d3404"
+    },
+    {
+      "path": ".tmp-test/shopify-responsive-current-reviewed/proof-source.json",
+      "sha256": "235b9275a0361ee6205038d7e5488dd3e84f3fb2585affbdad679510c8cda9ca"
     }
   ],
-  "before": {
-    "path": ".tmp-test/shopify-http-projected-4/projection-report.json",
-    "sha256": "9410ef550889d8febc3c19ac5e245a31fc1c4765d79207226a53439e3e1adcbd"
-  },
-  "localization": {
-    "path": ".tmp-test/shopify-http-slideshow-localization/structures.json",
-    "sha256": "0e8624852d55316893c6ae3e16dba5558f3706c7b7b19963b3bec4eec229f482"
-  },
   "source": [
     {
       "path": "src/platform/acquisition.ts",
-      "sha256": "8ac226eaf5bb36f71632fd72387774004cf23409e6223b3f8d529be654c3bef1"
+      "sha256": "987e0ecff62e2b492374b61f0b8baa8675a661c701303157664ad6a21782165d"
     },
     {
       "path": "src/lib/runtime-regions.ts",
-      "sha256": "1387e407ff4bbdf9fb339ceb3252e942859d1925ff28ac73847d225a10a5b108"
+      "sha256": "dc83aa0dde584a3a4b36e0986d5df2c9dcb6f4f2a6ac9085fcd9e11bcf017510"
+    },
+    {
+      "path": "src/lib/http-runtime-observation.ts",
+      "sha256": "7b5ee407576021b86ab20ec4f5e8fd51de0eb1f341bf0533156a256d7abb49b9"
     },
     {
       "path": "src/lib/embedded-documents.ts",
-      "sha256": "d54af7d9a49d4c28509b11308a3fbcfd81d0585e31176dd438b774ff8ec192c5"
+      "sha256": "0f256d420c56cfe083c0e166df80eda9b6d536a043f3c05f11fe07c41e041be2"
     },
     {
       "path": "src/lib/capture-export.ts",
-      "sha256": "6bc0bd1e19be254bc3e9a186ef9eb8248ae2d55dc1eb3d90d1731fcb9a6e046a"
+      "sha256": "7958e2adc2e1d1ad0eec3420f171d35cf1e48047d0687066cb6b5a5533fadcf0"
     },
     {
       "path": "src/lib/responsive-assembly.ts",
-      "sha256": "fea1ad38b34ab66b7af3d13b9b06253bd694b4e4f4894422f23299179cc7705f"
+      "sha256": "3cce73162318de67a013f08aa9e6d1dc299cac6c22cffdba8c99a79529fb97d5"
     },
     {
       "path": "src/lib/self-contain.ts",
       "sha256": "04c000dc186527838562e68b1a88c51e1a99eb073df5ec5dc386888c1915e78a"
     },
     {
+      "path": "src/lib/screenshot/fluid-capture.ts",
+      "sha256": "44ca84ee98d86d05e5d55216bbb2fda018058c6e41c3f865d13d1519ef281c21"
+    },
+    {
+      "path": "src/lib/screenshot/fluid-baseline.ts",
+      "sha256": "677bc4621e72e36950e3fcd22f68f0fc29e0b69461151d0020aa14db0474e2fc"
+    },
+    {
+      "path": "src/lib/screenshot/fluid-baseline.test.ts",
+      "sha256": "d965c6ac56f14f601ce22b075e8c86e9c1000739f1f1833f55f2001154c196a6"
+    },
+    {
       "path": "src/adapters/shopify/acquisition.ts",
-      "sha256": "9e54a3e4594aeac4e555ad9e3a716dcaa4c8244a6aec4f3b3ff99d998bf94223"
+      "sha256": "03616758dd41872ffcbe77693a5bbfe86c9498fc5e443d6cc195fd69383a8217"
+    },
+    {
+      "path": "src/adapters/shopify/acquisition.test.ts",
+      "sha256": "dcbc69d7665e19fc9955cb345b406885ee1af86e2671be9ccce405f04b3ab7e6"
     },
     {
       "path": "src/lib/embedded-documents.test.ts",
-      "sha256": "5ac605b285842bd62509c60857c3497354040012b9a15f325f915e37c5cab223"
+      "sha256": "8f538127eca053f7cee33c861acea9abe9548bbe21d339824f5309c2f089fb93"
     },
     {
       "path": "src/lib/capture-http.test.ts",
-      "sha256": "06bc6fb267d349fcde8848ee2d5a26cb95b950f8d559ade253f7d158eb65554a"
+      "sha256": "b77d5e1eec25ea293e6b4ced706ed1db0c336d6b287872c93aadebac29c8abb1"
     },
     {
       "path": "src/lib/responsive-assembly.test.ts",
@@ -132,7 +219,15 @@
     },
     {
       "path": "scripts/shopify-runtime-proof.ts",
-      "sha256": "4ff0ca7cc36067c31bfb8e316cbf49d0cb95e17b056840e23679bd6c9b142b5c"
+      "sha256": "614f04f8866caf66e6409d076cf0894a41b71f43b0f2f0aca454d316b72c8450"
+    },
+    {
+      "path": "scripts/proof-animation-pose.ts",
+      "sha256": "f25ee86a927570b0402b3116ff9b4e964cc7caf1a2afef63932ab184e04d8a29"
+    },
+    {
+      "path": "scripts/proof-animation-pose.test.ts",
+      "sha256": "d50822966e4b761e53e1a100e3350b71a163936c631d803078c556487d520133"
     }
   ],
   "checks": [
@@ -140,72 +235,83 @@
       "label": "types",
       "command": "npx tsc --noEmit",
       "status": 0,
-      "durationMs": 1124.706709,
-      "log": ".tmp-test/shopify-http-verified-checks/types.log"
+      "durationMs": 5653.072209,
+      "log": ".tmp-test/shopify-responsive-upstream-checks/types.log"
     },
     {
       "label": "targeted",
-      "command": "npx vitest run src/adapters/shopify/acquisition.test.ts src/lib/capture-http.test.ts src/lib/embedded-documents.test.ts src/lib/runtime-regions.test.ts src/lib/http-materialization.test.ts src/lib/http-acquisition.test.ts src/lib/self-contain.test.ts src/lib/responsive-assembly.test.ts --maxWorkers 1",
+      "command": "npx vitest run scripts/proof-animation-pose.test.ts src/adapters/shopify/acquisition.test.ts src/lib/capture-http.test.ts src/lib/embedded-documents.test.ts src/lib/runtime-regions.test.ts src/lib/http-materialization.test.ts src/lib/http-acquisition.test.ts src/lib/self-contain.test.ts src/lib/responsive-assembly.test.ts src/lib/screenshot/fluid-model.test.ts src/lib/screenshot/fluid-baseline.test.ts --maxWorkers 1",
       "status": 0,
-      "durationMs": 24155.019292,
-      "log": ".tmp-test/shopify-http-verified-checks/targeted.log"
+      "durationMs": 71754.058958,
+      "log": ".tmp-test/shopify-responsive-upstream-checks/targeted.log"
+    },
+    {
+      "label": "fluid-targeted",
+      "command": "npx vitest run src/lib/screenshot/fluid-capture.test.ts --maxWorkers 1 -t relative.*left|relative-offset|ordered preparation callbacks|inactive responsive slide|absolute inset coordinates|non-translation matrix|translated positioned image|clone|removed|remov",
+      "status": 0,
+      "durationMs": 182119.35375,
+      "log": ".tmp-test/shopify-responsive-upstream-checks/fluid-targeted.log"
     },
     {
       "label": "build",
       "command": "npm run build",
       "status": 0,
-      "durationMs": 2955.9964169999985,
-      "log": ".tmp-test/shopify-http-verified-checks/build.log"
+      "durationMs": 4397.726750000002,
+      "log": ".tmp-test/shopify-responsive-upstream-checks/build.log"
     },
     {
       "label": "package",
       "command": "npm run test:package",
       "status": 0,
-      "durationMs": 61335.656,
-      "log": ".tmp-test/shopify-http-verified-checks/package.log"
+      "durationMs": 64036.19112500001,
+      "log": ".tmp-test/shopify-responsive-upstream-checks/package.log"
     },
     {
       "label": "restore-dist",
       "command": "git restore --source=HEAD --staged --worktree -- dist",
       "status": 0,
-      "durationMs": 65.12437499999942,
-      "log": ".tmp-test/shopify-http-verified-checks/restore-dist.log"
+      "durationMs": 36.82783299998846,
+      "log": ".tmp-test/shopify-responsive-upstream-checks/restore-dist.log"
     },
     {
       "label": "whitespace",
       "command": "git diff --check",
       "status": 0,
-      "durationMs": 52.76533300000301,
-      "log": ".tmp-test/shopify-http-verified-checks/whitespace.log"
+      "durationMs": 49.37270800000988,
+      "log": ".tmp-test/shopify-responsive-upstream-checks/whitespace.log"
     }
   ],
   "checkEvidence": [
     {
-      "path": ".tmp-test/shopify-http-verified-checks/checks.json",
-      "sha256": "dca6767ea0b0e7cc8aef567780e94a309f76d8a3e73402b354e688567e078a1d"
+      "path": ".tmp-test/shopify-responsive-upstream-checks/checks.json",
+      "sha256": "395adc67112dbe71ef1a4a6abeaae577203da06a1e4b669e6506360cfb5ab7d5"
     },
     {
-      "path": ".tmp-test/shopify-http-verified-checks/types.log",
+      "path": ".tmp-test/shopify-responsive-upstream-checks/types.log",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "path": ".tmp-test/shopify-http-verified-checks/targeted.log",
-      "sha256": "f879a08c4e4e4a49fb0aa3503ac1eb3b99cdf451f90da3aa6b9f09baa7c3149f"
+      "path": ".tmp-test/shopify-responsive-upstream-checks/targeted.log",
+      "sha256": "60bf46b2f821f6d3b4ea9793464fc73f66740eb4037878484e34e962aae58981"
     },
     {
-      "path": ".tmp-test/shopify-http-verified-checks/build.log",
-      "sha256": "4c7adf85fb6271452bc3802563c9f0d1c51e3874f7ded817b37e726081da98c7"
+      "path": ".tmp-test/shopify-responsive-upstream-checks/fluid-targeted.log",
+      "sha256": "d701b4b7a36c4c833dcd10e57b1c61fe318cf00c395ce955b9b4e9016463bd29"
     },
     {
-      "path": ".tmp-test/shopify-http-verified-checks/package.log",
-      "sha256": "da95649defb39ec7354e2fb5ef1468335fa0a5d9119969acaac16910ad6226cd"
+      "path": ".tmp-test/shopify-responsive-upstream-checks/build.log",
+      "sha256": "e9ef05d5622f1ce5a697bdb9f3bbb4be549220fc0403007131759d5dfea01163"
     },
     {
-      "path": ".tmp-test/shopify-http-verified-checks/restore-dist.log",
+      "path": ".tmp-test/shopify-responsive-upstream-checks/package.log",
+      "sha256": "98dd27213e866426024735449576268ceadf9e4d560e3d71491c37d0b0880265"
+    },
+    {
+      "path": ".tmp-test/shopify-responsive-upstream-checks/restore-dist.log",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "path": ".tmp-test/shopify-http-verified-checks/whitespace.log",
+      "path": ".tmp-test/shopify-responsive-upstream-checks/whitespace.log",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
@@ -219,14 +325,14 @@
       "dpr": 1,
       "height": 8478,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-768-source.png",
-        "sha256": "0fbe3d01cdff64a8307d7caaca97d15a34978de77fd8dd52376eed20c48b8c00"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-768-source.png",
+        "sha256": "48eaadf311fa4ac0a0724509cc0158cb9ded0c6dd5527551f77a4d1467da57f2"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-768-source.html",
-        "sha256": "48bd16003573133d70bf3e78056089760478add67e6f43a2208dd58d87f6b833"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-768-source.html",
+        "sha256": "17f30580d5f69800a0be38b9aef51e6942627cbd09d531072acc0828db9c4122"
       },
-      "mainTextSha256": "f486c062d3c6216350b38e20334d1ff0fe091ad1dc775c0800cf682abe003085"
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
     },
     {
       "path": "/",
@@ -237,14 +343,14 @@
       "dpr": 1,
       "height": 6973,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-1440-source.png",
-        "sha256": "2d4f038dbff7406cdb10c92d534e3af3ec70b721c2d14157d64c43d0987374d0"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1440-source.png",
+        "sha256": "f214b790df99ffa3837b1a26399c6bb92588f1a9642dea269a3a6d85c9b1a8c4"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-1440-source.html",
-        "sha256": "ad59d5053f08b01e6164e35f6482081f4f6aa390ccb9423b43383acd53766405"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1440-source.html",
+        "sha256": "8c5404de741984045ac7d3c25580dc85357dac99a2e068708d87d3fd5bcbea4c"
       },
-      "mainTextSha256": "24d98472acea439e3972b671b03a71e46784b5650058fe3446c01cb557b1a788"
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
     },
     {
       "path": "/",
@@ -255,12 +361,12 @@
       "dpr": 1,
       "height": 9071,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-390-source.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-390-source.png",
         "sha256": "8dac92845218b30ec1ea924528e5b74c95afd62e563c023fee8746da419264b7"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-390-source.html",
-        "sha256": "e9e0fd74887bbb3eca0f425fea520525d8cb48aff5eb81af961c9b72be848c05"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-390-source.html",
+        "sha256": "4e6ae4cf6cc3e28290dce5fad917b54fd343d8140a6ef7cc6bb96bcf2927955b"
       },
       "mainTextSha256": "72591227280024419a148221a3e0042d26ddb98da6f4c9d953211d25005dd24b"
     },
@@ -273,12 +379,12 @@
       "dpr": 1,
       "height": 3940,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-768-source.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-768-source.png",
         "sha256": "213071ed2affe4eb0947b56d82299085b3493cf671cc3d3b459ed03f60480f31"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-768-source.html",
-        "sha256": "9580c29c019664c9a485b3b1c158a4bfac70c4c60dd503f28a10897383a5ea21"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-768-source.html",
+        "sha256": "02f9900faf5dcfc68f0eb20acbabbcd7155fe77e9ef964005724b11f67c394f3"
       },
       "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
     },
@@ -291,12 +397,12 @@
       "dpr": 1,
       "height": 2883,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-1440-source.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1440-source.png",
         "sha256": "178687ef8efed305847633a8b318e0ee51d6a1162386b9d6a305280c7849dfe8"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-1440-source.html",
-        "sha256": "ef8403eb991e488153aff7f86f57313e6907647a9cdcc9b48829c31b57fdec01"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1440-source.html",
+        "sha256": "369faf81c4ed9fa6de9ae2bcf541084bcdfeae07ea5ef54e8f269df9305b7c19"
       },
       "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
     },
@@ -309,12 +415,12 @@
       "dpr": 1,
       "height": 6403,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-390-source.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-390-source.png",
         "sha256": "b451d08d9bf69823a1e3d03ff769a55a2012ed6a2d63ef83a48f334e68df66e9"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-390-source.html",
-        "sha256": "fd4c1cd2f37e14a2b98c93772f6278795083b512d69f7d3e9d15d34364f58934"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-390-source.html",
+        "sha256": "93cd2f3093ffff6aedcba583bd3e605cd625721137dcf4aa1f87d19b1142831a"
       },
       "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
     },
@@ -327,12 +433,12 @@
       "dpr": 1,
       "height": 5080,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-768-source.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-768-source.png",
         "sha256": "d749e32eb490bd833a85152e90bab4adaafc1f041c6773c2d2ec79042381f19b"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-768-source.html",
-        "sha256": "4d7c2ac99f1afb33f4585e0a6fbc1e15c5ff19b03222062680ce4c6506e3b358"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-768-source.html",
+        "sha256": "533524dd193c616a12b1b2437cb2a29b1d8d111e6fb5af1bb9f021acc57de739"
       },
       "mainTextSha256": "338ae4cd33da6d4e5cbfbb84de91d3d767c48a6e583aaad7a53420c5666aa1a1"
     },
@@ -345,12 +451,12 @@
       "dpr": 1,
       "height": 3735,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-1440-source.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-1440-source.png",
         "sha256": "b8de0a8afc652a28a8dfdf8cf58650e3c7f07de801b7aea166f83c7085b6a618"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-1440-source.html",
-        "sha256": "3a68bf5d41d4db2a230a92fdb573d06791688285e2f944f2ebb96663b3f66c58"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-1440-source.html",
+        "sha256": "80580423bbb0bd67cdfd384b6f203672b97fac1fa182c17da2438fefd7cb5086"
       },
       "mainTextSha256": "338ae4cd33da6d4e5cbfbb84de91d3d767c48a6e583aaad7a53420c5666aa1a1"
     },
@@ -363,12 +469,12 @@
       "dpr": 1,
       "height": 5090,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-390-source.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-390-source.png",
         "sha256": "d6a54f72d4d7e47f4620fa3e2dd56aa5d655ad1862ba488debe6d1d93c68856b"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-390-source.html",
-        "sha256": "2a04e2f76e101d1813061bc190a9c6c9a8ddbdde1a1a3f0c0d5d4e7ab8ecabd3"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-390-source.html",
+        "sha256": "2ad2d57872c2153008cba2e301742ed672553de6f5e1317608ba6aac32aa2310"
       },
       "mainTextSha256": "1d66a42b366dcb994537fabb07cbe765094f74cdb39916cc255c7b1c74668ac2"
     },
@@ -381,12 +487,12 @@
       "dpr": 1,
       "height": 9231,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-768-source.png",
-        "sha256": "63213bfa50d41a58e9d45d44f1772c243fd2e23668ccea82c701c363c3932c11"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-768-source.png",
+        "sha256": "21b29d310be3fb1f4cd75e262de5efa5ff1ec39c246d1291316848eb55f63027"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-768-source.html",
-        "sha256": "e0f1f2d4aaee5972ca8338a9b2cf6a3d2023af8d1196edb8dfc9dabfa2014b59"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-768-source.html",
+        "sha256": "59f29b1c2db9f3f4cc25c83c9657fe238ed890da135ff5d3c3a9916f3e6f1fb8"
       },
       "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     },
@@ -399,12 +505,12 @@
       "dpr": 1,
       "height": 5988,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-1440-source.png",
-        "sha256": "43585610e7cc99d3ce36a58549a2bababa1d427bddf059be8292dea40f096cd8"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-1440-source.png",
+        "sha256": "1572dc58e0d38556517e6535203e02ff76ce86f05dfd13605b1a611f1d590fde"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-1440-source.html",
-        "sha256": "a2d4fe39db5296f3337bad2c935b3fccb32d0ae53b6746b46561f5f4d16b5426"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-1440-source.html",
+        "sha256": "4d92c1637c18a2207e2e5c3de6cd19281a9019930fd266fbdfe7b59dcd326397"
       },
       "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     },
@@ -417,12 +523,12 @@
       "dpr": 1,
       "height": 9197,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-390-source.png",
-        "sha256": "af4e8bfe4c22c379d672ddc6af85b2a90207377d4a26364b54b4f450fcbab6b3"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-390-source.png",
+        "sha256": "b837696b9e955b03e0d73510acac61a9dc531b303f127a22acc6e2f75bc53441"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-390-source.html",
-        "sha256": "b56c39f68f672d708c0fd442b4756800161db1e71d9def0ccb8d40292b030b2d"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-390-source.html",
+        "sha256": "8f00455875d1d496c5f4db2a7aba83bb385b42253704de041fe248336cfc4407"
       },
       "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     },
@@ -435,14 +541,32 @@
       "dpr": 1,
       "height": 9071,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-390-portable.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-390-portable.png",
         "sha256": "57ec681d699936db63e7ebace380bc624b1a4b38ac10026e816cb2f3786ce462"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-390-portable.html",
-        "sha256": "56d759b520738bc6b532c49316b0d8eb6f5ec2e4907b4a4e7319d59dca0196e9"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-390-portable.html",
+        "sha256": "67023b422cd5b24f07601e7554ebbb4d828fe96a6bc78cc130a3f0a6d9a2e060"
       },
       "mainTextSha256": "72591227280024419a148221a3e0042d26ddb98da6f4c9d953211d25005dd24b"
+    },
+    {
+      "path": "/",
+      "width": 601,
+      "mode": "portable",
+      "pose": "Fresh offline context; native videos paused at their observed frame, not certified motion parity.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 8428,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-601-portable.png",
+        "sha256": "1186a32dbf1ca37fd9b76fa1b6ef6115213512bbcbacf4c466a4daddc66b952a"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-601-portable.html",
+        "sha256": "67023b422cd5b24f07601e7554ebbb4d828fe96a6bc78cc130a3f0a6d9a2e060"
+      },
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
     },
     {
       "path": "/",
@@ -453,14 +577,32 @@
       "dpr": 1,
       "height": 8478,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-768-portable.png",
-        "sha256": "f05feda2e1e6e5e49a85d4a4c17259c286703cd9236e51d0fd864e88ed8928ea"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-768-portable.png",
+        "sha256": "f91da606e6d3c3171177dffb9f8fa6ca0bea8f2a51be946bbbbe5787a89fdb04"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-768-portable.html",
-        "sha256": "56d759b520738bc6b532c49316b0d8eb6f5ec2e4907b4a4e7319d59dca0196e9"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-768-portable.html",
+        "sha256": "67023b422cd5b24f07601e7554ebbb4d828fe96a6bc78cc130a3f0a6d9a2e060"
       },
-      "mainTextSha256": "24d98472acea439e3972b671b03a71e46784b5650058fe3446c01cb557b1a788"
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
+    },
+    {
+      "path": "/",
+      "width": 1024,
+      "mode": "portable",
+      "pose": "Fresh offline context; native videos paused at their observed frame, not certified motion parity.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 6689,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1024-portable.png",
+        "sha256": "9058caa6922bfdb40932d6a198fe934b691ee376cdd69daeaee1ecc26ff2bbc2"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1024-portable.html",
+        "sha256": "67023b422cd5b24f07601e7554ebbb4d828fe96a6bc78cc130a3f0a6d9a2e060"
+      },
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
     },
     {
       "path": "/",
@@ -471,14 +613,14 @@
       "dpr": 1,
       "height": 6973,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-1440-portable.png",
-        "sha256": "feb11d82ce0453470817fddd6834b1cc5c7046dc1433d8d725c41827a83e2c8a"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1440-portable.png",
+        "sha256": "ba9fd22c5a21db7d0eedf1df2014463abe96669d5634b7caae7e6b81fc9e1534"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-1440-portable.html",
-        "sha256": "56d759b520738bc6b532c49316b0d8eb6f5ec2e4907b4a4e7319d59dca0196e9"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1440-portable.html",
+        "sha256": "67023b422cd5b24f07601e7554ebbb4d828fe96a6bc78cc130a3f0a6d9a2e060"
       },
-      "mainTextSha256": "24d98472acea439e3972b671b03a71e46784b5650058fe3446c01cb557b1a788"
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
     },
     {
       "path": "/collections/all",
@@ -489,12 +631,30 @@
       "dpr": 1,
       "height": 6403,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-390-portable.png",
-        "sha256": "0c45a9cab591e1f96dbc02df923532f7e1102a20247c03bdbd6bbbfa575c6bc1"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-390-portable.png",
+        "sha256": "aa858965fc8e110f625efbf0a3ac36e524b1e4f02bd67799a5b1d3607ce5d30d"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-390-portable.html",
-        "sha256": "c2d5c72a913863488e2a29c9cd2007a22bce2216592c54317b95f02d63a83032"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-390-portable.html",
+        "sha256": "fca70886164dc6cde42058b35f5a3ddad5ca5d5b76d5bddc2b01279ad6500262"
+      },
+      "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
+    },
+    {
+      "path": "/collections/all",
+      "width": 601,
+      "mode": "portable",
+      "pose": "Fresh offline context; native videos paused at their observed frame, not certified motion parity.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 3288,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-601-portable.png",
+        "sha256": "0288165ed6f5fa3f3278fdf3877e367c0582c786006429621aaef85bd92646f9"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-601-portable.html",
+        "sha256": "fca70886164dc6cde42058b35f5a3ddad5ca5d5b76d5bddc2b01279ad6500262"
       },
       "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
     },
@@ -505,14 +665,32 @@
       "pose": "Fresh offline context; native videos paused at their observed frame, not certified motion parity.",
       "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       "dpr": 1,
-      "height": 3940,
+      "height": 3712,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-768-portable.png",
-        "sha256": "e2af2d2834d5fb8410e8d6ba5930475a9584274f2ade923576cd0d84f816a70f"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-768-portable.png",
+        "sha256": "4ac1cebd7ce513446ef243bd28b3c743cfbbd8ec364ab72b652ec10fceba57e9"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-768-portable.html",
-        "sha256": "c2d5c72a913863488e2a29c9cd2007a22bce2216592c54317b95f02d63a83032"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-768-portable.html",
+        "sha256": "fca70886164dc6cde42058b35f5a3ddad5ca5d5b76d5bddc2b01279ad6500262"
+      },
+      "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
+    },
+    {
+      "path": "/collections/all",
+      "width": 1024,
+      "mode": "portable",
+      "pose": "Fresh offline context; native videos paused at their observed frame, not certified motion parity.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 2584,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1024-portable.png",
+        "sha256": "d4e7a03d3dd73381d3330a6dd2427e963800026b22b7d9336396c87b836c8789"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1024-portable.html",
+        "sha256": "fca70886164dc6cde42058b35f5a3ddad5ca5d5b76d5bddc2b01279ad6500262"
       },
       "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
     },
@@ -523,14 +701,14 @@
       "pose": "Fresh offline context; native videos paused at their observed frame, not certified motion parity.",
       "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       "dpr": 1,
-      "height": 2883,
+      "height": 2882,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-1440-portable.png",
-        "sha256": "dd88824572b24f09dcb46e3769aa6d8a3c0bf5e05268ef89dcc4ede4d1725e02"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1440-portable.png",
+        "sha256": "ebc4f24c0b5c9dc0717ecb33214273e4d179c04bacf35d958297d0c2310970d5"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-1440-portable.html",
-        "sha256": "c2d5c72a913863488e2a29c9cd2007a22bce2216592c54317b95f02d63a83032"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1440-portable.html",
+        "sha256": "fca70886164dc6cde42058b35f5a3ddad5ca5d5b76d5bddc2b01279ad6500262"
       },
       "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
     },
@@ -543,12 +721,12 @@
       "dpr": 1,
       "height": 5090,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-390-portable.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-390-portable.png",
         "sha256": "413e4d24adbb275cbd02a3ee3c5b5a2341655d4ee777ca6f70559f8e89f6d3c1"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-390-portable.html",
-        "sha256": "107f39a73f25fecadf4f4b22737b264f2bf9fc0d72d6fbe0a20a26a15b101829"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-390-portable.html",
+        "sha256": "7f59436c35effa166ced3280e6671ada24b2f1e0a08dafba8e896931c05ad421"
       },
       "mainTextSha256": "1d66a42b366dcb994537fabb07cbe765094f74cdb39916cc255c7b1c74668ac2"
     },
@@ -561,12 +739,12 @@
       "dpr": 1,
       "height": 5080,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-768-portable.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-768-portable.png",
         "sha256": "b6033102ca90a8a53b02d3aeddc5168764751d7cd42eb16d37b3aef07a8cecac"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-768-portable.html",
-        "sha256": "107f39a73f25fecadf4f4b22737b264f2bf9fc0d72d6fbe0a20a26a15b101829"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-768-portable.html",
+        "sha256": "7f59436c35effa166ced3280e6671ada24b2f1e0a08dafba8e896931c05ad421"
       },
       "mainTextSha256": "338ae4cd33da6d4e5cbfbb84de91d3d767c48a6e583aaad7a53420c5666aa1a1"
     },
@@ -579,12 +757,12 @@
       "dpr": 1,
       "height": 3735,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-1440-portable.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-1440-portable.png",
         "sha256": "fee1ae7e4e58214263200fd9352923598dd6c3561ca558283436077dc649477c"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-1440-portable.html",
-        "sha256": "107f39a73f25fecadf4f4b22737b264f2bf9fc0d72d6fbe0a20a26a15b101829"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-1440-portable.html",
+        "sha256": "7f59436c35effa166ced3280e6671ada24b2f1e0a08dafba8e896931c05ad421"
       },
       "mainTextSha256": "338ae4cd33da6d4e5cbfbb84de91d3d767c48a6e583aaad7a53420c5666aa1a1"
     },
@@ -597,12 +775,12 @@
       "dpr": 1,
       "height": 9199,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-390-portable.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-390-portable.png",
         "sha256": "359bf3cfecc3cee26f83e080a3872270d33980d2ab607860a0498edd1bf6862e"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-390-portable.html",
-        "sha256": "179d0118494a0145bf5203ca0a4810a06a276b4bdb58048c7f716565cb7a3e6b"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-390-portable.html",
+        "sha256": "71c9b1c73591b0bc14baac5eb8e9aad5ce6443a6e6fdb140462c868ae0b4c0c1"
       },
       "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     },
@@ -615,12 +793,12 @@
       "dpr": 1,
       "height": 9233,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-768-portable.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-768-portable.png",
         "sha256": "176aab7801063798f3fc3073dff5ce3666aca14c065c986004bb0a64ccd94fd0"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-768-portable.html",
-        "sha256": "179d0118494a0145bf5203ca0a4810a06a276b4bdb58048c7f716565cb7a3e6b"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-768-portable.html",
+        "sha256": "71c9b1c73591b0bc14baac5eb8e9aad5ce6443a6e6fdb140462c868ae0b4c0c1"
       },
       "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     },
@@ -633,84 +811,300 @@
       "dpr": 1,
       "height": 5990,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-1440-portable.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-1440-portable.png",
         "sha256": "19c0ac6f1043767d3f18336f3ee9e3892ede01ed8e02dded633aba8ec9baafb8"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-1440-portable.html",
-        "sha256": "179d0118494a0145bf5203ca0a4810a06a276b4bdb58048c7f716565cb7a3e6b"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-1440-portable.html",
+        "sha256": "71c9b1c73591b0bc14baac5eb8e9aad5ce6443a6e6fdb140462c868ae0b4c0c1"
       },
       "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     },
     {
       "path": "/",
+      "width": 390,
+      "mode": "source-fresh-phone",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      "dpr": 1,
+      "height": 9071,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-390-source-fresh-phone.png",
+        "sha256": "8dac92845218b30ec1ea924528e5b74c95afd62e563c023fee8746da419264b7"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-390-source-fresh-phone.html",
+        "sha256": "4e6ae4cf6cc3e28290dce5fad917b54fd343d8140a6ef7cc6bb96bcf2927955b"
+      },
+      "mainTextSha256": "72591227280024419a148221a3e0042d26ddb98da6f4c9d953211d25005dd24b"
+    },
+    {
+      "path": "/",
+      "width": 601,
+      "mode": "source-fresh-intermediate",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 8428,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-601-source-fresh-intermediate.png",
+        "sha256": "55a9999905055fddf5c11a2b7f0730973952d16e95c0734fc0b860dbd0dabb7f"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-601-source-fresh-intermediate.html",
+        "sha256": "7de3083f1087a7a2b6403568b265e76b3da871f1809c107d30307879f331fcb8"
+      },
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
+    },
+    {
+      "path": "/",
       "width": 768,
       "mode": "source-fresh-tablet",
-      "pose": "Independent fresh tablet context replaying the exact acquired response; app-content drift from the selected session is reported separately.",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
       "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       "dpr": 1,
       "height": 8478,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-768-source-fresh-tablet.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-768-source-fresh-tablet.png",
         "sha256": "1841fa2cea5d816e5102b348a4bb2d11bb99a5a97da14912d315f2327f11fcf9"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/0-768-source-fresh-tablet.html",
-        "sha256": "6679b419ea01d69dd37c2519399ad52377a29882bef97398696763e8a0f2802e"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-768-source-fresh-tablet.html",
+        "sha256": "9ad86a31cf3f16211cd2a073ff80d4f073ee739f8f4d6f6522d6e85f13c56c91"
+      },
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
+    },
+    {
+      "path": "/",
+      "width": 1024,
+      "mode": "source-fresh-intermediate",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 6689,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1024-source-fresh-intermediate.png",
+        "sha256": "bfb7e923e93a95638ee8035efad73c889c53c8a62c4a09ec195c694dcb624a89"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1024-source-fresh-intermediate.html",
+        "sha256": "5546980f451d4d1bc05510e368b424170101992a9a7903e19b29d432109e737b"
+      },
+      "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
+    },
+    {
+      "path": "/",
+      "width": 1440,
+      "mode": "source-fresh-desktop",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 6973,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1440-source-fresh-desktop.png",
+        "sha256": "f214b790df99ffa3837b1a26399c6bb92588f1a9642dea269a3a6d85c9b1a8c4"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/0-1440-source-fresh-desktop.html",
+        "sha256": "f78d0f073b28b8b98b052968db02df81730d677f9bfa3f4a4352e9763e158af9"
       },
       "mainTextSha256": "790278310f5d791108d0d602d493f370de642ce2889ae60c5fdffc002927b814"
     },
     {
       "path": "/collections/all",
+      "width": 390,
+      "mode": "source-fresh-phone",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      "dpr": 1,
+      "height": 6403,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-390-source-fresh-phone.png",
+        "sha256": "b451d08d9bf69823a1e3d03ff769a55a2012ed6a2d63ef83a48f334e68df66e9"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-390-source-fresh-phone.html",
+        "sha256": "f0862b2236c3ae3c3bc969f326b9635b45cf46e11114b1261ade4ad0456f68e6"
+      },
+      "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
+    },
+    {
+      "path": "/collections/all",
+      "width": 601,
+      "mode": "source-fresh-intermediate",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 3291,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-601-source-fresh-intermediate.png",
+        "sha256": "eead8fafc87002f24057decf466c83748dc6cb9a260d4000421a774f1f7e307f"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-601-source-fresh-intermediate.html",
+        "sha256": "e447cc5310a2de3406307e7ebd34954ee69314a8f31e4f910e1e509f29b458ce"
+      },
+      "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
+    },
+    {
+      "path": "/collections/all",
       "width": 768,
       "mode": "source-fresh-tablet",
-      "pose": "Independent fresh tablet context replaying the exact acquired response; app-content drift from the selected session is reported separately.",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
       "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       "dpr": 1,
       "height": 3712,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-768-source-fresh-tablet.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-768-source-fresh-tablet.png",
         "sha256": "dcbbb2cfa9c7074e9bfe7571ee98f5f41777f827127d1ee2f6bf8e5eca8ba1be"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/1-768-source-fresh-tablet.html",
-        "sha256": "2c0860a12f852f6a741b4a4b1508ec2f70801025b33eee63b337a1ede0ff8e95"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-768-source-fresh-tablet.html",
+        "sha256": "5ce3da2b6337416f9d36cb4ffe5d32dcfb736fd5fdd1d5e35412464953776560"
+      },
+      "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
+    },
+    {
+      "path": "/collections/all",
+      "width": 1024,
+      "mode": "source-fresh-intermediate",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 2584,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1024-source-fresh-intermediate.png",
+        "sha256": "25f08d49536f96a79d04b335a9bf5178e891b6ec4aed5f2fbf25a57dd243cb5c"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1024-source-fresh-intermediate.html",
+        "sha256": "c24d4bcff44117e63a6ea0195e755797d4c1ee590ee97b2e9e1e67f70abb20ac"
+      },
+      "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
+    },
+    {
+      "path": "/collections/all",
+      "width": 1440,
+      "mode": "source-fresh-desktop",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 2883,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1440-source-fresh-desktop.png",
+        "sha256": "178687ef8efed305847633a8b318e0ee51d6a1162386b9d6a305280c7849dfe8"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/1-1440-source-fresh-desktop.html",
+        "sha256": "41b240e20bbf6f5be796af679e2874098eea8518fc5f853a87fc83bae0f889e9"
       },
       "mainTextSha256": "9d93ce43197a05bd9a4b3cc90dafa833508030ab59de6e746e1e3dd653123564"
     },
     {
       "path": "/products/pom-pom-blanket-white",
+      "width": 390,
+      "mode": "source-fresh-phone",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      "dpr": 1,
+      "height": 5090,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-390-source-fresh-phone.png",
+        "sha256": "d6a54f72d4d7e47f4620fa3e2dd56aa5d655ad1862ba488debe6d1d93c68856b"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-390-source-fresh-phone.html",
+        "sha256": "22ef00426f2fe343b222c15b512cd5f7217e150b60ef1d93c73c24895b7fdc06"
+      },
+      "mainTextSha256": "1d66a42b366dcb994537fabb07cbe765094f74cdb39916cc255c7b1c74668ac2"
+    },
+    {
+      "path": "/products/pom-pom-blanket-white",
       "width": 768,
       "mode": "source-fresh-tablet",
-      "pose": "Independent fresh tablet context replaying the exact acquired response; app-content drift from the selected session is reported separately.",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
       "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       "dpr": 1,
       "height": 5080,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-768-source-fresh-tablet.png",
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-768-source-fresh-tablet.png",
         "sha256": "ab6d6e0ce44a488deb1cdbc4253acd76c2b897cef37e6d4becf38d6165a87def"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/2-768-source-fresh-tablet.html",
-        "sha256": "e700d1e1d0f440a27a685c05f85f014f69c51961b7b091eee85095f812ae2897"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-768-source-fresh-tablet.html",
+        "sha256": "d0b0e9ae6291c406e6adb05a558495ea270a70112712bcfcfcea212a01ce8a86"
       },
-      "mainTextSha256": "0c844ca8b77606cdc8c2df5ba9b75f3395bc24d81c1806cc692706beab758c07"
+      "mainTextSha256": "338ae4cd33da6d4e5cbfbb84de91d3d767c48a6e583aaad7a53420c5666aa1a1"
+    },
+    {
+      "path": "/products/pom-pom-blanket-white",
+      "width": 1440,
+      "mode": "source-fresh-desktop",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 3735,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-1440-source-fresh-desktop.png",
+        "sha256": "b8de0a8afc652a28a8dfdf8cf58650e3c7f07de801b7aea166f83c7085b6a618"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/2-1440-source-fresh-desktop.html",
+        "sha256": "16b5b6acba2b6ed0f79c444d0c20da74fc7a1a3674c777efb9c571c5d96ff9af"
+      },
+      "mainTextSha256": "338ae4cd33da6d4e5cbfbb84de91d3d767c48a6e583aaad7a53420c5666aa1a1"
+    },
+    {
+      "path": "/pages/about-us",
+      "width": 390,
+      "mode": "source-fresh-phone",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      "dpr": 1,
+      "height": 9197,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-390-source-fresh-phone.png",
+        "sha256": "6df0c71d6fbb5d29f01e5da84ea1cf8d3f73468be9cc075a6a73d903882e25df"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-390-source-fresh-phone.html",
+        "sha256": "8f00455875d1d496c5f4db2a7aba83bb385b42253704de041fe248336cfc4407"
+      },
+      "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     },
     {
       "path": "/pages/about-us",
       "width": 768,
       "mode": "source-fresh-tablet",
-      "pose": "Independent fresh tablet context replaying the exact acquired response; app-content drift from the selected session is reported separately.",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
       "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       "dpr": 1,
       "height": 9231,
       "screenshot": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-768-source-fresh-tablet.png",
-        "sha256": "0c8c75693b11c852993a0c0f78f1f346c850c964ac17a0fe5cfc8c7af9096267"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-768-source-fresh-tablet.png",
+        "sha256": "086ac38baa3c733561418f3e5583f3d86c3ac78f56e3571e878d3a47fdc166c8"
       },
       "dom": {
-        "path": ".tmp-test/shopify-http-reviewed-projected/3-768-source-fresh-tablet.html",
-        "sha256": "3a552aeb70f325c621386a58a075b6b7a3f3413d7f39ede0ac6cefadd101d903"
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-768-source-fresh-tablet.html",
+        "sha256": "96b372ec3d4e9c77906b6634d8f0a3a4a2a269431f278806bdecdc8e9951e983"
+      },
+      "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
+    },
+    {
+      "path": "/pages/about-us",
+      "width": 1440,
+      "mode": "source-fresh-desktop",
+      "pose": "Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "dpr": 1,
+      "height": 5988,
+      "screenshot": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-1440-source-fresh-desktop.png",
+        "sha256": "fcc38396afb0b7b6962a1c7c05a1c50a6a1735663b56b58c6bf9f0bdad87f9e8"
+      },
+      "dom": {
+        "path": ".tmp-test/shopify-responsive-current-reviewed/3-1440-source-fresh-desktop.html",
+        "sha256": "a517f72519d25cbe2a0e9e8e7bab5ac78d8fb1b9f71f21fa168825836f1dbe4d"
       },
       "mainTextSha256": "740eeb2b5764f223040e9c242770fe45ff1e819fe012f526d8da59e596ce8af8"
     }
@@ -726,21 +1120,17 @@
       "mainTextEqual": true,
       "normalizedMainTextEqual": true,
       "sourcePaintedImages": 6,
-      "paintedImages": 4,
+      "paintedImages": 6,
       "sourceDecodedPaintedImages": 6,
-      "decodedPaintedImages": 4,
+      "decodedPaintedImages": 6,
       "pixels": {
         "changed": 3574,
         "total": 3537690,
         "ratio": 0.0010102637596849922,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/12-selected-source.diff.png",
+          "path": ".tmp-test/shopify-responsive-current-reviewed/12-selected-source.diff.png",
           "sha256": "23ff0a562db3858ef98efbcc4f2595183c54e5c17da0f5a3f9857f8c8a411a25"
         }
-      },
-      "before": {
-        "heightDelta": 0,
-        "pixelRatio": 0.027179882917949285
       }
     },
     {
@@ -750,24 +1140,20 @@
       "sourceHeight": 8478,
       "height": 8478,
       "heightDelta": 0,
-      "mainTextEqual": false,
-      "normalizedMainTextEqual": false,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
       "sourcePaintedImages": 6,
-      "paintedImages": 4,
+      "paintedImages": 6,
       "sourceDecodedPaintedImages": 6,
-      "decodedPaintedImages": 4,
+      "decodedPaintedImages": 6,
       "pixels": {
-        "changed": 540401,
+        "changed": 76,
         "total": 6511104,
-        "ratio": 0.08299683125933789,
+        "ratio": 0.000011672367696783832,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/13-selected-source.diff.png",
-          "sha256": "4f4aab9fed2732664ae0a5a9bb539f362e2327c5435e362fec10bf0ba80bd4d2"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/14-selected-source.diff.png",
+          "sha256": "de57aca88a4fc6da5a5252b48366ebba3dae2dfadcd6d5372bc82a5977039a5e"
         }
-      },
-      "before": {
-        "heightDelta": 0,
-        "pixelRatio": 0.08299683125933789
       }
     },
     {
@@ -780,21 +1166,17 @@
       "mainTextEqual": true,
       "normalizedMainTextEqual": true,
       "sourcePaintedImages": 6,
-      "paintedImages": 4,
+      "paintedImages": 6,
       "sourceDecodedPaintedImages": 6,
-      "decodedPaintedImages": 4,
+      "decodedPaintedImages": 6,
       "pixels": {
-        "changed": 2003,
+        "changed": 1696,
         "total": 10041120,
-        "ratio": 0.00019947973931194927,
+        "ratio": 0.00016890546074541487,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/14-selected-source.diff.png",
-          "sha256": "9010d94d4c7fa43aa3722ef8cb680d43481b2268829278720c0790640ac61b18"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/16-selected-source.diff.png",
+          "sha256": "67c88cbddddffac29eabadbf60f3b1a60a66151a555cb978c9083ee04b7241f3"
         }
-      },
-      "before": {
-        "heightDelta": 471,
-        "pixelRatio": 0.46045668771269926
       }
     },
     {
@@ -813,17 +1195,13 @@
       "sourceSort": "title-ascending",
       "sort": "title-ascending",
       "pixels": {
-        "changed": 1421,
+        "changed": 61,
         "total": 2497170,
-        "ratio": 0.000569044157986841,
+        "ratio": 0.000024427652102179667,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/15-selected-source.diff.png",
-          "sha256": "15a971a1b61b6dd13cdd931e4512e233127ae399dc7f057400d5df030ed72dab"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/17-selected-source.diff.png",
+          "sha256": "d23d1b3d8b9b88e06e0fb82b108215e9dea2cba499fcce6d3269866314a1bef1"
         }
-      },
-      "before": {
-        "heightDelta": 0,
-        "pixelRatio": 0.000569044157986841
       }
     },
     {
@@ -831,8 +1209,8 @@
       "width": 768,
       "sourceMode": "source",
       "sourceHeight": 3940,
-      "height": 3940,
-      "heightDelta": 0,
+      "height": 3712,
+      "heightDelta": -228,
       "mainTextEqual": true,
       "normalizedMainTextEqual": true,
       "sourcePaintedImages": 13,
@@ -842,17 +1220,13 @@
       "sourceSort": "title-ascending",
       "sort": "title-ascending",
       "pixels": {
-        "changed": 57,
+        "changed": 1649646,
         "total": 3025920,
-        "ratio": 0.000018837246192893403,
+        "ratio": 0.5451717163705584,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/16-selected-source.diff.png",
-          "sha256": "151f37d6b3197462165b35e8f394ca202626af20ce024d75e10bea0f323ee998"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/19-selected-source.diff.png",
+          "sha256": "453682c1a1927b573e520ee185c0def4d7ce4a129baf20ca7d39a517262daf88"
         }
-      },
-      "before": {
-        "heightDelta": 0,
-        "pixelRatio": 0.000018837246192893403
       }
     },
     {
@@ -860,8 +1234,8 @@
       "width": 1440,
       "sourceMode": "source",
       "sourceHeight": 2883,
-      "height": 2883,
-      "heightDelta": 0,
+      "height": 2882,
+      "heightDelta": -1,
       "mainTextEqual": true,
       "normalizedMainTextEqual": true,
       "sourcePaintedImages": 13,
@@ -871,17 +1245,13 @@
       "sourceSort": "title-ascending",
       "sort": "title-ascending",
       "pixels": {
-        "changed": 55,
+        "changed": 117473,
         "total": 4151520,
-        "ratio": 0.000013248159710178441,
+        "ratio": 0.028296383011523492,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/17-selected-source.diff.png",
-          "sha256": "b430f0c2bf2e931ec77a348a3b9876e7494589141edf2407a705ee77c6e1fba5"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/21-selected-source.diff.png",
+          "sha256": "69145e06af9b8690d8de11ddf673fbbbfea561c30484e95aa4b21209bdd70b2d"
         }
-      },
-      "before": {
-        "heightDelta": 0,
-        "pixelRatio": 0.000013248159710178441
       }
     },
     {
@@ -902,13 +1272,9 @@
         "total": 1985100,
         "ratio": 0.00028512417510452874,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/18-selected-source.diff.png",
+          "path": ".tmp-test/shopify-responsive-current-reviewed/22-selected-source.diff.png",
           "sha256": "77c99cae43b01ec2a43b37eeab070416776c3ebdcef81e8c83fd35835dbe0363"
         }
-      },
-      "before": {
-        "heightDelta": -120,
-        "pixelRatio": 0.1831081557604151
       }
     },
     {
@@ -929,13 +1295,9 @@
         "total": 3901440,
         "ratio": 0.0025608493274278214,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/19-selected-source.diff.png",
+          "path": ".tmp-test/shopify-responsive-current-reviewed/23-selected-source.diff.png",
           "sha256": "d65df3c1b7401fb0f9b1e4c509eb910be44e81ae878191701de11572fcd90f82"
         }
-      },
-      "before": {
-        "heightDelta": -135,
-        "pixelRatio": 0.20224173638451443
       }
     },
     {
@@ -956,13 +1318,9 @@
         "total": 5378400,
         "ratio": 0.00280101889037632,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/20-selected-source.diff.png",
+          "path": ".tmp-test/shopify-responsive-current-reviewed/24-selected-source.diff.png",
           "sha256": "6d881e6f8e1fe5b9a89d9e7430d08ff8d67487898c10a6e00067772a4db59421"
         }
-      },
-      "before": {
-        "heightDelta": -78,
-        "pixelRatio": 0.11893574297188755
       }
     },
     {
@@ -979,17 +1337,13 @@
       "sourceDecodedPaintedImages": 10,
       "decodedPaintedImages": 10,
       "pixels": {
-        "changed": 29259,
+        "changed": 32666,
         "total": 3587610,
-        "ratio": 0.008155568749111525,
+        "ratio": 0.009105226041849587,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/21-selected-source.diff.png",
-          "sha256": "24d6b06960259cc2cee9de3f1c345004ba5d7dfa04876c0d901e3c13f2e6b46b"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/25-selected-source.diff.png",
+          "sha256": "d61e470e56cc9c34b2156bd03042f7a453ee29e8cbc1baab1dbe7abbb039e3a7"
         }
-      },
-      "before": {
-        "heightDelta": 2,
-        "pixelRatio": 0.00838246074684818
       }
     },
     {
@@ -1006,17 +1360,13 @@
       "sourceDecodedPaintedImages": 10,
       "decodedPaintedImages": 10,
       "pixels": {
-        "changed": 110385,
+        "changed": 111455,
         "total": 7090944,
-        "ratio": 0.01556703874688617,
+        "ratio": 0.015717935439907578,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/22-selected-source.diff.png",
-          "sha256": "9fc5e2dc1902281332cee3394fd18150b000891179b7e984876e099d7855db07"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/26-selected-source.diff.png",
+          "sha256": "9be79e116411f521dd4e4dd28078b017e3e4ac8852545337525b29a55bc4f8c5"
         }
-      },
-      "before": {
-        "heightDelta": 2,
-        "pixelRatio": 0.016791276309614064
       }
     },
     {
@@ -1033,17 +1383,13 @@
       "sourceDecodedPaintedImages": 10,
       "decodedPaintedImages": 10,
       "pixels": {
-        "changed": 296581,
+        "changed": 299454,
         "total": 8625600,
-        "ratio": 0.03438381098126507,
+        "ratio": 0.03471688925987757,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/23-selected-source.diff.png",
-          "sha256": "8c83a887e48efcb4b15de2f27d74058ea9950a1cc32d4771609384b1306205d0"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/27-selected-source.diff.png",
+          "sha256": "c86c18060471a1b1e9f9a703234bcb6a88e7237889edf5d31e21a874b08609c4"
         }
-      },
-      "before": {
-        "heightDelta": 2,
-        "pixelRatio": 0.03730952049712484
       }
     }
   ],
@@ -1055,31 +1401,31 @@
       "sourceHeight": 8478,
       "height": 8478,
       "heightDelta": 0,
-      "mainTextEqual": false,
-      "normalizedMainTextEqual": false,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
       "sourcePaintedImages": 6,
-      "paintedImages": 4,
+      "paintedImages": 6,
       "sourceDecodedPaintedImages": 6,
-      "decodedPaintedImages": 4,
+      "decodedPaintedImages": 6,
       "pixels": {
-        "changed": 544399,
+        "changed": 10153,
         "total": 6511104,
-        "ratio": 0.08361085923370291,
+        "ratio": 0.0015593361740190296,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/13-fresh-tablet.diff.png",
-          "sha256": "8966ade87149d3b1e4c28ff587fcb7b2a61938dd9db4524bd0eb3524f9ad4f6d"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/14-fresh-tablet.diff.png",
+          "sha256": "60079cebb331f36775baaab6d75a4b0efab67317c8fb97b7a2e1e774b6ac7838"
         }
       },
       "selectedSessionHeightDelta": 0,
-      "selectedSessionTextEqual": false
+      "selectedSessionTextEqual": true
     },
     {
       "path": "/collections/all",
       "width": 768,
       "sourceMode": "source-fresh-tablet",
       "sourceHeight": 3712,
-      "height": 3940,
-      "heightDelta": 228,
+      "height": 3712,
+      "heightDelta": 0,
       "mainTextEqual": true,
       "normalizedMainTextEqual": true,
       "sourcePaintedImages": 13,
@@ -1089,12 +1435,12 @@
       "sourceSort": "title-ascending",
       "sort": "title-ascending",
       "pixels": {
-        "changed": 1647102,
-        "total": 3025920,
-        "ratio": 0.5443309803299492,
+        "changed": 9378,
+        "total": 2850816,
+        "ratio": 0.0032895844558189654,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/16-fresh-tablet.diff.png",
-          "sha256": "b3caefa0a3a06458b08a73bbd1135fde1548e908fab1cb5749bd84344514a11a"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/19-fresh-tablet.diff.png",
+          "sha256": "8ac49c1c74d27f70e765317744441ebabe10cb5b9bdd2b30d60459afe9790201"
         }
       },
       "selectedSessionHeightDelta": 228,
@@ -1107,7 +1453,7 @@
       "sourceHeight": 5080,
       "height": 5080,
       "heightDelta": 0,
-      "mainTextEqual": false,
+      "mainTextEqual": true,
       "normalizedMainTextEqual": true,
       "sourcePaintedImages": 8,
       "paintedImages": 8,
@@ -1118,12 +1464,12 @@
         "total": 3901440,
         "ratio": 0.0025626435367454067,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/19-fresh-tablet.diff.png",
+          "path": ".tmp-test/shopify-responsive-current-reviewed/23-fresh-tablet.diff.png",
           "sha256": "dc6ebb4efbe8446803185126b29d9bd1d750bf54e9ce1bdf6ac177c09f5c6429"
         }
       },
       "selectedSessionHeightDelta": 0,
-      "selectedSessionTextEqual": false
+      "selectedSessionTextEqual": true
     },
     {
       "path": "/pages/about-us",
@@ -1139,24 +1485,830 @@
       "sourceDecodedPaintedImages": 10,
       "decodedPaintedImages": 10,
       "pixels": {
-        "changed": 97031,
+        "changed": 96392,
         "total": 7090944,
-        "ratio": 0.013683791608000288,
+        "ratio": 0.01359367666702769,
         "diff": {
-          "path": ".tmp-test/shopify-http-reviewed-projected/22-fresh-tablet.diff.png",
-          "sha256": "57d4bcbaca281a79a6779bd481c52c804f74096c6147c6b6e39a3b30b917fe51"
+          "path": ".tmp-test/shopify-responsive-current-reviewed/26-fresh-tablet.diff.png",
+          "sha256": "9c4ce89efbb2b5d77d05bf68312bde57692d59ce30c1b48782f16a07edc7d26a"
         }
       },
       "selectedSessionHeightDelta": 0,
       "selectedSessionTextEqual": true
     }
   ],
+  "freshVisitors": [
+    {
+      "path": "/",
+      "width": 390,
+      "sourceMode": "source-fresh-phone",
+      "sourceHeight": 9071,
+      "height": 9071,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 6,
+      "paintedImages": 6,
+      "sourceDecodedPaintedImages": 6,
+      "decodedPaintedImages": 6,
+      "pixels": {
+        "changed": 3574,
+        "total": 3537690,
+        "ratio": 0.0010102637596849922,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/12-fresh-visitor.diff.png",
+          "sha256": "23ff0a562db3858ef98efbcc4f2595183c54e5c17da0f5a3f9857f8c8a411a25"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [
+        {
+          "id": "Hero-slideshow",
+          "phase": 0,
+          "paused": true,
+          "declaredPhase": "0"
+        }
+      ],
+      "portableSlides": [
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        },
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        }
+      ]
+    },
+    {
+      "path": "/",
+      "width": 601,
+      "sourceMode": "source-fresh-intermediate",
+      "sourceHeight": 8428,
+      "height": 8428,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 6,
+      "paintedImages": 6,
+      "sourceDecodedPaintedImages": 6,
+      "decodedPaintedImages": 6,
+      "pixels": {
+        "changed": 3295,
+        "total": 5065228,
+        "ratio": 0.0006505136590100189,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/13-fresh-visitor.diff.png",
+          "sha256": "f2932c525590cb1f60a4f900caf5cb8ba6cb6e7048b37efc415d707d706d51c8"
+        }
+      },
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [
+        {
+          "id": "Hero-slideshow",
+          "phase": 0,
+          "paused": true,
+          "declaredPhase": "0"
+        }
+      ],
+      "portableSlides": [
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        },
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        }
+      ]
+    },
+    {
+      "path": "/",
+      "width": 768,
+      "sourceMode": "source-fresh-tablet",
+      "sourceHeight": 8478,
+      "height": 8478,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 6,
+      "paintedImages": 6,
+      "sourceDecodedPaintedImages": 6,
+      "decodedPaintedImages": 6,
+      "pixels": {
+        "changed": 10153,
+        "total": 6511104,
+        "ratio": 0.0015593361740190296,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/14-fresh-visitor.diff.png",
+          "sha256": "60079cebb331f36775baaab6d75a4b0efab67317c8fb97b7a2e1e774b6ac7838"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [
+        {
+          "id": "Hero-slideshow",
+          "phase": 0,
+          "paused": true,
+          "declaredPhase": "0"
+        }
+      ],
+      "portableSlides": [
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        },
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        }
+      ]
+    },
+    {
+      "path": "/",
+      "width": 1024,
+      "sourceMode": "source-fresh-intermediate",
+      "sourceHeight": 6689,
+      "height": 6689,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 6,
+      "paintedImages": 6,
+      "sourceDecodedPaintedImages": 6,
+      "decodedPaintedImages": 6,
+      "pixels": {
+        "changed": 10649,
+        "total": 6849536,
+        "ratio": 0.0015547038514725669,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/15-fresh-visitor.diff.png",
+          "sha256": "1b012416ef75574fbd4be836a3589ca1d36cf52bd2f73269a0906c993be7942a"
+        }
+      },
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [
+        {
+          "id": "Hero-slideshow",
+          "phase": 0,
+          "paused": true,
+          "declaredPhase": "0"
+        }
+      ],
+      "portableSlides": [
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        },
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        }
+      ]
+    },
+    {
+      "path": "/",
+      "width": 1440,
+      "sourceMode": "source-fresh-desktop",
+      "sourceHeight": 6973,
+      "height": 6973,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 6,
+      "paintedImages": 6,
+      "sourceDecodedPaintedImages": 6,
+      "decodedPaintedImages": 6,
+      "pixels": {
+        "changed": 1696,
+        "total": 10041120,
+        "ratio": 0.00016890546074541487,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/16-fresh-visitor.diff.png",
+          "sha256": "67c88cbddddffac29eabadbf60f3b1a60a66151a555cb978c9083ee04b7241f3"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [
+        {
+          "id": "Hero-slideshow",
+          "phase": 0,
+          "paused": true,
+          "declaredPhase": "0"
+        }
+      ],
+      "portableSlides": [
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        },
+        {
+          "id": "Hero-slideshow",
+          "declaredPhase": "0"
+        }
+      ]
+    },
+    {
+      "path": "/collections/all",
+      "width": 390,
+      "sourceMode": "source-fresh-phone",
+      "sourceHeight": 6403,
+      "height": 6403,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 13,
+      "paintedImages": 13,
+      "sourceDecodedPaintedImages": 13,
+      "decodedPaintedImages": 13,
+      "sourceSort": "title-ascending",
+      "sort": "title-ascending",
+      "pixels": {
+        "changed": 61,
+        "total": 2497170,
+        "ratio": 0.000024427652102179667,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/17-fresh-visitor.diff.png",
+          "sha256": "d23d1b3d8b9b88e06e0fb82b108215e9dea2cba499fcce6d3269866314a1bef1"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 12,
+        "widths": [
+          360
+        ],
+        "heights": [
+          335
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "portableCards": {
+        "count": 12,
+        "widths": [
+          360
+        ],
+        "heights": [
+          335
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/collections/all",
+      "width": 601,
+      "sourceMode": "source-fresh-intermediate",
+      "sourceHeight": 3291,
+      "height": 3288,
+      "heightDelta": -3,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 13,
+      "paintedImages": 13,
+      "sourceDecodedPaintedImages": 13,
+      "decodedPaintedImages": 13,
+      "sourceSort": "title-ascending",
+      "sort": "title-ascending",
+      "pixels": {
+        "changed": 102820,
+        "total": 1977891,
+        "ratio": 0.051984664473421434,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/18-fresh-visitor.diff.png",
+          "sha256": "6f6514d604e4e84bf2a82019309ed2c8926624e77cbe4d5bd471feb4b6981372"
+        }
+      },
+      "sourceCards": {
+        "count": 12,
+        "widths": [
+          255.5
+        ],
+        "heights": [
+          256
+        ],
+        "styles": [
+          "height: 256px;"
+        ]
+      },
+      "portableCards": {
+        "count": 12,
+        "widths": [
+          255.5
+        ],
+        "heights": [
+          255.5
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/collections/all",
+      "width": 768,
+      "sourceMode": "source-fresh-tablet",
+      "sourceHeight": 3712,
+      "height": 3712,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 13,
+      "paintedImages": 13,
+      "sourceDecodedPaintedImages": 13,
+      "decodedPaintedImages": 13,
+      "sourceSort": "title-ascending",
+      "sort": "title-ascending",
+      "pixels": {
+        "changed": 9378,
+        "total": 2850816,
+        "ratio": 0.0032895844558189654,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/19-fresh-visitor.diff.png",
+          "sha256": "8ac49c1c74d27f70e765317744441ebabe10cb5b9bdd2b30d60459afe9790201"
+        }
+      },
+      "selectedSessionHeightDelta": 228,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 12,
+        "widths": [
+          339
+        ],
+        "heights": [
+          339
+        ],
+        "styles": [
+          "height: 339px;"
+        ]
+      },
+      "portableCards": {
+        "count": 12,
+        "widths": [
+          339
+        ],
+        "heights": [
+          339
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/collections/all",
+      "width": 1024,
+      "sourceMode": "source-fresh-intermediate",
+      "sourceHeight": 2584,
+      "height": 2584,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 13,
+      "paintedImages": 13,
+      "sourceDecodedPaintedImages": 13,
+      "decodedPaintedImages": 13,
+      "sourceSort": "title-ascending",
+      "sort": "title-ascending",
+      "pixels": {
+        "changed": 7254,
+        "total": 2646016,
+        "ratio": 0.00274148002128483,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/20-fresh-visitor.diff.png",
+          "sha256": "23b24960056d443bb7767853aee9495714e53760ec586fbc85372d95febcd710"
+        }
+      },
+      "sourceCards": {
+        "count": 12,
+        "widths": [
+          301.328125
+        ],
+        "heights": [
+          301.328125
+        ],
+        "styles": [
+          "height: 301px;"
+        ]
+      },
+      "portableCards": {
+        "count": 12,
+        "widths": [
+          301.328125
+        ],
+        "heights": [
+          301.328125
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/collections/all",
+      "width": 1440,
+      "sourceMode": "source-fresh-desktop",
+      "sourceHeight": 2883,
+      "height": 2882,
+      "heightDelta": -1,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 13,
+      "paintedImages": 13,
+      "sourceDecodedPaintedImages": 13,
+      "decodedPaintedImages": 13,
+      "sourceSort": "title-ascending",
+      "sort": "title-ascending",
+      "pixels": {
+        "changed": 117473,
+        "total": 4151520,
+        "ratio": 0.028296383011523492,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/21-fresh-visitor.diff.png",
+          "sha256": "69145e06af9b8690d8de11ddf673fbbbfea561c30484e95aa4b21209bdd70b2d"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 12,
+        "widths": [
+          376.65625
+        ],
+        "heights": [
+          377
+        ],
+        "styles": [
+          "height: 377px;"
+        ]
+      },
+      "portableCards": {
+        "count": 12,
+        "widths": [
+          376.65625
+        ],
+        "heights": [
+          376.65625
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/products/pom-pom-blanket-white",
+      "width": 390,
+      "sourceMode": "source-fresh-phone",
+      "sourceHeight": 5090,
+      "height": 5090,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 9,
+      "paintedImages": 9,
+      "sourceDecodedPaintedImages": 9,
+      "decodedPaintedImages": 9,
+      "pixels": {
+        "changed": 566,
+        "total": 1985100,
+        "ratio": 0.00028512417510452874,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/22-fresh-visitor.diff.png",
+          "sha256": "77c99cae43b01ec2a43b37eeab070416776c3ebdcef81e8c83fd35835dbe0363"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 4,
+        "widths": [
+          172.5
+        ],
+        "heights": [
+          212.5
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "portableCards": {
+        "count": 4,
+        "widths": [
+          172.5
+        ],
+        "heights": [
+          212.5
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/products/pom-pom-blanket-white",
+      "width": 768,
+      "sourceMode": "source-fresh-tablet",
+      "sourceHeight": 5080,
+      "height": 5080,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 8,
+      "paintedImages": 8,
+      "sourceDecodedPaintedImages": 8,
+      "decodedPaintedImages": 8,
+      "pixels": {
+        "changed": 9998,
+        "total": 3901440,
+        "ratio": 0.0025626435367454067,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/23-fresh-visitor.diff.png",
+          "sha256": "dc6ebb4efbe8446803185126b29d9bd1d750bf54e9ce1bdf6ac177c09f5c6429"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 4,
+        "widths": [
+          339
+        ],
+        "heights": [
+          339
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "portableCards": {
+        "count": 4,
+        "widths": [
+          339
+        ],
+        "heights": [
+          339
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/products/pom-pom-blanket-white",
+      "width": 1440,
+      "sourceMode": "source-fresh-desktop",
+      "sourceHeight": 3735,
+      "height": 3735,
+      "heightDelta": 0,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 8,
+      "paintedImages": 8,
+      "sourceDecodedPaintedImages": 8,
+      "decodedPaintedImages": 8,
+      "pixels": {
+        "changed": 15065,
+        "total": 5378400,
+        "ratio": 0.00280101889037632,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/24-fresh-visitor.diff.png",
+          "sha256": "6d881e6f8e1fe5b9a89d9e7430d08ff8d67487898c10a6e00067772a4db59421"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 4,
+        "widths": [
+          275
+        ],
+        "heights": [
+          275
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "portableCards": {
+        "count": 4,
+        "widths": [
+          275
+        ],
+        "heights": [
+          275
+        ],
+        "styles": [
+          null
+        ]
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/pages/about-us",
+      "width": 390,
+      "sourceMode": "source-fresh-phone",
+      "sourceHeight": 9197,
+      "height": 9199,
+      "heightDelta": 2,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 10,
+      "paintedImages": 10,
+      "sourceDecodedPaintedImages": 10,
+      "decodedPaintedImages": 10,
+      "pixels": {
+        "changed": 28556,
+        "total": 3587610,
+        "ratio": 0.00795961656924805,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/25-fresh-visitor.diff.png",
+          "sha256": "c013ec8b662e7e2b2fa5842c5960c514d02c8a29d2038433c17c35915b5d864d"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/pages/about-us",
+      "width": 768,
+      "sourceMode": "source-fresh-tablet",
+      "sourceHeight": 9231,
+      "height": 9233,
+      "heightDelta": 2,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 10,
+      "paintedImages": 10,
+      "sourceDecodedPaintedImages": 10,
+      "decodedPaintedImages": 10,
+      "pixels": {
+        "changed": 96392,
+        "total": 7090944,
+        "ratio": 0.01359367666702769,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/26-fresh-visitor.diff.png",
+          "sha256": "9c4ce89efbb2b5d77d05bf68312bde57692d59ce30c1b48782f16a07edc7d26a"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    },
+    {
+      "path": "/pages/about-us",
+      "width": 1440,
+      "sourceMode": "source-fresh-desktop",
+      "sourceHeight": 5988,
+      "height": 5990,
+      "heightDelta": 2,
+      "mainTextEqual": true,
+      "normalizedMainTextEqual": true,
+      "sourcePaintedImages": 10,
+      "paintedImages": 10,
+      "sourceDecodedPaintedImages": 10,
+      "decodedPaintedImages": 10,
+      "pixels": {
+        "changed": 286520,
+        "total": 8625600,
+        "ratio": 0.03321739936931924,
+        "diff": {
+          "path": ".tmp-test/shopify-responsive-current-reviewed/27-fresh-visitor.diff.png",
+          "sha256": "cb1618d2844fd4788920f61bc3c20b22b7e8db5f56c30f1883d23a9a5ac124ee"
+        }
+      },
+      "selectedSessionHeightDelta": 0,
+      "selectedSessionTextEqual": true,
+      "sourceCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "portableCards": {
+        "count": 0,
+        "widths": [],
+        "heights": [],
+        "styles": []
+      },
+      "sourceSlides": [],
+      "portableSlides": []
+    }
+  ],
   "limitations": [
-    "Selected tablet observations are session resizes; the four independent fresh tablet contexts are reported separately.",
+    "Selected tablet observations are session resizes. Independent 390/768/1440 visitors cover all four routes; 601/1024 visitors cover only home and collection.",
+    "Collection acquired root geometry replaces transient equal-height state; integer runtime rounding remains unresolved at fractional card widths.",
     "Normal inline state is not promoted over authored important CSS: the existing dual-document assembler retains native cascade.",
     "Valid outer subtrees survive failed children; unresolved and unaddressable children remain diagnosed and are not certified complete.",
     "Backend forms/commerce, gallery/header interaction reconstruction, intermediate-width runtime geometry and volatile app content remain unverified.",
     "Video frame differences and the failed source poster remain evidence, not preserved artwork.",
+    "Visibility and screenshots share the finite-animation end pose; infinite motion is not certified.",
     "No frozen fidelity reference or full-site/WordPress acceptance was synthesized."
   ]
 }

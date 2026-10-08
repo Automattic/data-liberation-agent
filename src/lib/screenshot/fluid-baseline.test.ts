@@ -3,6 +3,29 @@ import { expect, it, vi } from 'vitest';
 import { captureFluidBaseline } from './fluid-baseline.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
+it( 'restores unlearned replacement roles without replacing the returned learned geometry', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		await page.setContent( '<div id="learned" style="width:80px">Learned</div><div id="unlearned">Authored</div>' );
+		const baseline = await captureFluidBaseline( page, 'data-dla-fluid-id' );
+		await page.locator( '#learned' ).evaluate( node => node.setAttribute( 'data-dla-fluid-id', 'desktop-0' ) );
+		await baseline.evaluate( state => state.bind() );
+		await page.evaluate( () => {
+			( document.querySelector( '#learned' ) as HTMLElement ).style.width = '320px';
+			const original = document.querySelector( '#unlearned' )!;
+			const replacement = original.cloneNode( true ) as HTMLElement;
+			replacement.style.height = '480px';
+			original.replaceWith( replacement );
+		} );
+		await baseline.evaluate( state => state.restore( true ) );
+		expect( await page.locator( '#learned' ).evaluate( node => ( node as HTMLElement ).style.width ) ).toBe( '320px' );
+		expect( await page.locator( '#unlearned' ).getAttribute( 'style' ) ).toBeNull();
+		await baseline.evaluate( state => state.cleanup() );
+		await baseline.dispose();
+	} finally { await browser.close(); }
+} );
+
 it.each( [
 	[ 'copy', 'Array.prototype.entries = function () { return this.slice(); };' ],
 	[ 'deleted', 'delete Array.prototype.entries;' ],

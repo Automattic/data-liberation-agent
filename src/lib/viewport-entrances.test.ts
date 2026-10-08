@@ -14,7 +14,7 @@ import { createReferenceCollector } from './fidelity/reference.js';
 const fixture = ( repeat: boolean ) => `<!doctype html><html><head><style>
 body{margin:0} .spacer{height:1800px} .entrance{height:120px;opacity:0;transform:translateY(26px);transition:opacity .9s cubic-bezier(.22,1,.36,1),transform .9s cubic-bezier(.22,1,.36,1);transition-delay:180ms}
 .entrance[data-active="true"]{opacity:1;transform:none} button{transition:background-color .2s} button:hover{background-color:red}
-.ambient{animation:drift 2s infinite}@keyframes drift{to{transform:translateX(3px)}}
+.ambient{width:100px;animation:drift 2s infinite}@keyframes drift{to{transform:translateX(3px)}}
 @media(prefers-reduced-motion:reduce){.entrance{opacity:1;transform:none;transition:none}}
 </style></head><body><button>Hover</button><div class="ambient">Ambient</div><div class="spacer"></div>
 <section class="entrance" data-active="false">Viewport entrance</section><div class="spacer"></div><script>

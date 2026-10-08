@@ -143,9 +143,26 @@ checks the retained observations and honest incomplete coverage.
 
 ## Observed subtree and attribute projection
 
+Subtree requirements may declare `retainSourceAttributes: ['style']` to preserve
+an acquired root attribute, including its absence, while observing runtime child
+state. This keeps authored responsive card geometry separate from a transient
+equal-height ancestor. Staging uses the hash-verified acquired document for these
+attributes; executable event attributes are rejected. Retention does not certify
+runtime rounding, other widths, or interactions.
+
+Profiles may perform export-only learning through `projectRuntimeRegions` after
+source readiness and evidence recording. Shopify reuses the fluid capture owner
+for Slick track/slide widths and relative offsets; its native pause API preserves
+the observed phase before each sample. Independent visitor comparisons call only
+`prepareRuntimeRegions`. Runtime observation evidence records the learning result
+and sampling mode; a resize sweep is not fresh-visitor evidence.
+Relative-offset learning applies only while an element remains relatively
+positioned across every sample. Rejected preparation uses the shared baseline
+owner's cleanup, including restoration of the original viewport and geometry.
+
 `RuntimeRegionRequirement.projection` explicitly selects `subtree` or
 `attributes`. Omitted requirements retain child-document-only staging. The
-observer serializes current native form selection and observes head stylesheet
+observer serializes current native form selection and observes active head/body stylesheet
 dependencies, source base URL, UA and DPR. Staging verifies prepared-document,
 observed-node and stylesheet identities, preserving root tag/ID and route/variant
 mapping. Subtrees must be addressable in the acquired document; no whole-document

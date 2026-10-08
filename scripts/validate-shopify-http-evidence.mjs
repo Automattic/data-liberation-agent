@@ -17,12 +17,13 @@ function bytes(artifact) {
 	return value;
 }
 const json = artifact => JSON.parse(bytes(artifact).toString('utf8'));
-assert.equal(report.schema, 'data-liberation/shopify-http-proof/v3');
+assert.equal(report.schema, 'data-liberation/shopify-http-proof/v4');
 assert.equal(report.accepted, false);
 assert.equal(report.complete, false);
 assert.equal(report.verdict, 'projection_measured_incomplete');
 assert.deepEqual(report.verification, { rendering: 'measured_not_equivalent', interactions: 'unverified', wordpress: 'not_run' });
 for (const artifact of [...report.evidence, ...report.source, ...report.checkEvidence]) bytes(artifact);
+for (const artifact of report.captureSource.source) bytes(artifact);
 const evidence = suffix => json(report.evidence.find(artifact => artifact.path.endsWith(suffix)));
 const receipt = evidence('capture-receipt.json');
 const acquisition = evidence('http-acquisition.json');
@@ -36,8 +37,8 @@ assert.equal(receipt.summary.complete, false);
 assert.equal(report.projectedRegions, staged.regions.length);
 assert.equal(report.runtimeObservations, runtime.attachments.length);
 assert.equal(report.runtimeObservations, 8);
-assert.equal(report.observations.length, 28);
-assert.equal(rendering.length, 28);
+assert.equal(report.observations.length, 44);
+assert.equal(rendering.length, 44);
 const keys = new Set();
 for (const observation of report.observations) {
 	const key = JSON.stringify([observation.path, observation.width, observation.mode]);
@@ -69,6 +70,18 @@ for (const row of report.comparisons) comparison(row, 'source');
 assert.equal(report.freshTablet.length, 4);
 assert.equal(new Set(report.freshTablet.map(row => row.path)).size, 4);
 for (const row of report.freshTablet) comparison({ ...row, width: 768 }, 'source-fresh-tablet');
+assert.equal(report.freshVisitors.length, 16);
+const visitorKeys = new Set();
+for (const row of report.freshVisitors) {
+	const key = JSON.stringify([row.path, row.width]);
+	assert(!visitorKeys.has(key), 'Duplicate fresh visitor'); visitorKeys.add(key);
+	comparison(row, row.sourceMode);
+	assert(row.sourceMode.startsWith('source-fresh'), 'Fresh comparison uses a resized source');
+}
+for (const path of ['/', '/collections/all', '/products/pom-pom-blanket-white', '/pages/about-us'])
+	for (const width of [390, 768, 1440]) assert(visitorKeys.has(JSON.stringify([path, width])), 'Missing independent visitor');
+for (const path of ['/', '/collections/all']) for (const width of [601, 1024])
+	assert(visitorKeys.has(JSON.stringify([path, width])), 'Missing bounded intermediate visitor');
 if (report.before) bytes(report.before);
 if (report.localization) bytes(report.localization);
 for (const coverage of staged.coverage) {
@@ -79,5 +92,6 @@ for (const coverage of staged.coverage) {
 }
 for (const region of staged.regions) if (region.childCoverage)
 	assert.equal(region.childCoverage.expected, region.childCoverage.staged + region.childCoverage.unresolved);
-assert(report.checks.length === 6 && report.checks.every(check => check.status === 0), 'Required checks did not pass');
+assert.deepEqual(report.checks.map(check => check.label), ['types', 'targeted', 'fluid-targeted', 'build', 'package', 'restore-dist', 'whitespace']);
+assert(report.checks.every(check => check.status === 0), 'Required checks did not pass');
 console.log(`Validated ${report.runtimeObservations} runtime observations, ${report.projectedRegions} projected regions and ${report.observations.length} measured views. Projection remains incomplete and unaccepted.`);

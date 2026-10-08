@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, expect, it } from 'vitest';
 import { inspectSource } from './inspect.js';
+import { sourceComplexity, type RenderedInspection } from './inspect-rendered.js';
 import { registerHost, unregisterHost } from '../platform/host.js';
 
 let server: Server;
@@ -59,6 +60,132 @@ it('reports where a capability was observed, and refuses to look decided when th
   expect(truncated.complexity.confidence).toBe('incomplete');
   expect(truncated.capabilityVocabulary.capabilities).toEqual(result.capabilityVocabulary.capabilities);
 }, 45_000);
+
+it('reports a bounded sample through the real inspection path', async () => {
+  // Three routes discovered, one sampled: the bound is doing its job. The band
+  // withholds because the view is partial; confidence stays because the sample
+  // that was declared rendered cleanly.
+  const url = await source('<main><h1>Shop</h1><p>One page of copy.</p></main><nav><a href="/about">About</a><a href="/contact">Contact</a></nav>');
+  const result = await inspectSource(url, { sampleLimit: 1 });
+
+  expect(result.coverage.discovery.routes).toBe(3);
+  expect(result.coverage.sampling.truncated).toBe(true);
+  expect(result.rendered.succeeded).toBe(1);
+  expect(result.rendered.samples[0].unknowns).toEqual([]);
+  expect(result.complexity.band).toBe('unknown');
+  expect(result.complexity.confidence).toBe('bounded-sample');
+}, 45_000);
+
+it('never samples a declared media route, even with budget left after rendering', async () => {
+  // The append after rendering walks the whole inventory to use up remaining
+  // budget. A media URL the sitemap declared never enters that inventory, so it
+  // is counted rather than appended; this loop is unreachable without rendering.
+  server = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://fixture').pathname;
+    const port = (server.address() as { port: number }).port;
+    if (path === '/sitemap.xml') {
+      res.setHeader('content-type', 'application/xml');
+      res.end(`<urlset><url><loc>http://localtest.me:${port}/gallery/hero.jpg</loc></url></urlset>`);
+      return;
+    }
+    if (path.endsWith('.jpg')) { res.setHeader('content-type', 'image/jpeg'); res.end(Buffer.from([0xff, 0xd8, 0xff])); return; }
+    res.setHeader('content-type', 'text/html');
+    res.end('<!doctype html><title>Solo</title><main><p>One page.</p></main>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+
+  // Budget far exceeds the one document route, so the append path runs.
+  const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 5 });
+
+  expect(result.routes.types).toEqual({ homepage: 1 });
+  expect(result.coverage.media).toMatchObject({ discovered: 1, truncated: false });
+  expect(result.samples.some((sample) => sample.url.endsWith('.jpg'))).toBe(false);
+  expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
+  expect(result.rendered.succeeded).toBe(1);
+}, 45_000);
+
+it('reports truncation from the inventory it ended with, not the one it started from', async () => {
+  // Rendering reveals routes the HTTP lane never saw, so a document count taken
+  // before that would report a capped selection as complete.
+  const hidden = Array.from({ length: 9 }, (unused, index) => `<a href="/p${index}">p${index}</a>`).join('');
+  server = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://fixture').pathname;
+    if (path === '/sitemap.xml') { res.statusCode = 404; res.end('x'); return; }
+    res.setHeader('content-type', 'text/html');
+    // The links live outside <nav>, so only the rendered lane collects them.
+    res.end(`<!doctype html><title>Hub</title><main><p>Body.</p>${path === '/' ? hidden : ''}</main>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+
+  const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 3 });
+
+  expect(result.coverage.discovery.routes).toBeGreaterThan(3);
+  expect(result.coverage.sampling.truncated).toBe(true);
+  expect(result.coverage.sampling.complete).toBe(false);
+}, 45_000);
+
+it('spends the rendered navigation budget on pages, not on linked media', async () => {
+  // The in-page inventory caps at 100 links. A gallery offers more media links
+  // than that, so filtering after the cap would leave the real menu
+  // undiscovered on exactly the sites this exists to read.
+  const media = Array.from({ length: 120 }, (unused, index) => `<a href="/uploads/${index}.jpg">p${index}</a>`).join('');
+  server = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://fixture').pathname;
+    if (path === '/sitemap.xml') { res.statusCode = 404; res.end('x'); return; }
+    if (path.endsWith('.jpg')) { res.setHeader('content-type', 'image/jpeg'); res.end(Buffer.from([0xff, 0xd8, 0xff])); return; }
+    res.setHeader('content-type', 'text/html');
+    res.end(`<!doctype html><title>Gallery</title><main>${media}</main><footer><nav><a href="/about">About</a><a href="/pricing">Pricing</a><a href="/contact">Contact</a></nav></footer>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+
+  const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 10 });
+
+  for (const page of ['/about', '/pricing', '/contact']) {
+    expect(result.samples.some((sample) => sample.url.endsWith(page)), page).toBe(true);
+  }
+  expect(result.coverage.discovery.truncated).toBe(false);
+  expect(result.coverage.sampling.complete).toBe(true);
+  // The exclusion is counted, not silent: the entry page linked 120 media files.
+  expect(result.rendered.samples[0].mediaLinks).toBe(120);
+  expect(result.rendered.samples[0].navigation.some((href) => href.endsWith('.jpg'))).toBe(false);
+  // Coverage sums the per-sample counts; every fixture page carries the gallery.
+  expect(result.coverage.media.renderedLinks).toBe(120 * result.rendered.succeeded);
+  expect(result.complexity.band).not.toBe('unknown');
+  expect(result.complexity.confidence).toBe('bounded-sample');
+}, 45_000);
+
+it('withholds the band when sampling was bounded, without lowering confidence in the sample that completed', () => {
+  // docs/inspection.md: `unknown` covers "truncated discovery/sampling", while
+  // `bounded-sample` means "the declared sample completed" and lists unsampled
+  // routes among the things that remain explicitly unknown. Sampling fewer
+  // routes than were discovered is the bound working as declared.
+  const sample = {
+    url: 'https://example.test/', elements: 600, textCharacters: 1200,
+    counts: { forms: 0, links: 4, images: 2, videos: 0, frames: 0, dialogs: 0 },
+    capabilities: [], excluded: [], navigation: [], mediaLinks: 0, requests: 3, bytes: 4096,
+    limited: false, unknowns: [],
+  } as unknown as RenderedInspection;
+
+  const bounded = sourceComplexity([sample], true, false);
+  expect(bounded.band).toBe('unknown');
+  expect(bounded.observedBand).toBe('moderate');
+  expect(bounded.confidence).toBe('bounded-sample');
+
+  // A sample that was declared and did not complete is still incomplete.
+  expect(sourceComplexity([sample], true, true).confidence).toBe('incomplete');
+
+  // So is one whose own resources were limited, or that reported unknowns.
+  expect(sourceComplexity([{ ...sample, limited: true }], false, false).confidence).toBe('incomplete');
+  expect(sourceComplexity([{ ...sample, unknowns: ['blocked'] } as unknown as RenderedInspection], false, false).confidence).toBe('incomplete');
+
+  // Unchanged when nothing was bounded at all.
+  const complete = sourceComplexity([sample], false, false);
+  expect(complete.band).toBe('moderate');
+  expect(complete.confidence).toBe('bounded-sample');
+});
 
 it('attributes a host badge to the host instead of to the site it is serving', async () => {
   const badge = '<main><h1>Brochure</h1><p>One page, no app.</p></main><script>const frame = document.createElement("iframe"); frame.id = "hud-badge"; frame.title = "Powered by Fixture Host"; frame.srcdoc = "<p>badge</p>"; frame.style.position = "fixed"; document.body.append(frame);</script>';
