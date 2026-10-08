@@ -1367,6 +1367,10 @@ function buildExportCapture(
 		resourceManifest,
 		outputDir
 	);
+	// The bounded asset index is the last consumer of the normalized source
+	// pair. Release every private pair, including unretained route aliases,
+	// before rendering and building the portable/identity geometry indexes.
+	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
 	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
 		retainedMediaReferenceInventory( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import * as cheerio from 'cheerio';
+import type { CheerioAPI } from 'cheerio';
 import type { AnyNode } from 'domhandler';
+import { parseLocatedStructure } from '../site-includes.js';
 
 export const LAYOUT_GEOMETRY_PROOF_SCHEMA =
 	'data-liberation/layout-geometry-proof/v1';
@@ -69,7 +70,7 @@ function stableId( sourcePath: string, selector: string ): string {
 	return `node-${ hash( `${ sourcePath }\0${ selector }` ).slice( 0, 24 ) }`;
 }
 
-function selectorForIdentity( $: cheerio.CheerioAPI, identity: string ): string | undefined {
+function selectorForIdentity( $: CheerioAPI, identity: string ): string | undefined {
 	try {
 		const node = $( `[data-dla-geometry-id~="${ identity }"]` );
 		if ( node.length !== 1 ) return undefined;
@@ -109,7 +110,7 @@ function elementDepth( node: AnyNode ): number {
 }
 
 function collectDocumentGeometry( html: string ): DocumentGeometry {
-	const $ = cheerio.load( html );
+	const $ = parseLocatedStructure( html );
 	const intervals = new Map< AnyNode, { start: number; end: number } >();
 	let position = 0;
 	const visit = ( node: AnyNode ) => {
@@ -165,7 +166,7 @@ export function buildLayoutGeometryProof(
 
 	for ( const input of orderedInputs ) {
 		const document = collectDocumentGeometry( input.html );
-		const identityDocument = cheerio.load( input.identityHtml );
+		const identityDocument = parseLocatedStructure( input.identityHtml );
 		const sourceHash = hash( input.html );
 		const byPair = new Map< string, GeometryObservation[] >();
 		for ( const observation of input.observations ) {
