@@ -47,8 +47,9 @@ const WIDGET_SELECTOR = KNOWN_WIDGETS.map((w) => w.selector).join(', ');
 const EXPAND_TOGGLE_LABELS = ['show more', 'read more'];
 
 /**
- * Phase 1 — expand statically-collapsed content so the screenshot captures it. Opens
- * `<details>`, expands disclosure panels (`[aria-expanded="false"][aria-controls]`),
+ * Phase 1 — hydrate statically-collapsed content. Native `<details>` retain their
+ * resting state; their children are already authored HTML. Expands disclosure
+ * panels (`[aria-expanded="false"][aria-controls]`),
  * and clicks "load more / view all" controls. Popup controls and
  * anchors with navigable hrefs are excluded so probing cannot leave the source document.
  * "Show more" / "read more" toggles are not activated here: leaving them open
@@ -128,14 +129,21 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         return 'navigated';
       };
 
-      document.querySelectorAll('details:not([open])').forEach((d) => {
-        // A details whose panel is a dialog is an interactive disclosure, not
-        // collapsed page content: force-opening it overlays the document with
-        // a fixed panel and flips the very toggle a later interactivity probe
-        // measures, so a working menu reports as dead.
-        if (d.closest('nav,[role="navigation"]') || d.querySelector('nav,[role="navigation"],[role="dialog"],[aria-modal="true"]')) return;
-        (d as HTMLDetailsElement).open = true;
-      });
+      // Prime lazy image requests without opening native disclosures (including
+      // exclusive named groups). Retain the author's loading hint after decoding.
+      await Promise.all(Array.from(document.querySelectorAll<HTMLImageElement>('details:not([open]) img[loading="lazy"]')).map(async (image) => {
+        image.loading = 'eager';
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            image.decode().catch(() => undefined),
+            new Promise<void>((resolve) => { timer = setTimeout(resolve, 2000); }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+          image.setAttribute('loading', 'lazy');
+        }
+      }));
 
       const populatedResting: Array<{ trigger: HTMLElement; parent: HTMLElement; controls: string; expanded: boolean }> = [];
       for (const el of Array.from(document.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls]'))) {
