@@ -89,6 +89,37 @@ describe('inspectSource', () => {
     expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
   });
 
+  it('samples a page whose slug ends in a media extension, and never samples real media', async () => {
+    // Two things the helper-level test could not show, because it checks the
+    // predicate rather than the pipeline. routeKey() preserves a trailing
+    // slash, so `/tag/node.js/` stays a page; and a media URL the sitemap
+    // declared must not be selected even when budget is left over.
+    const url = await fixture((request, response) => {
+      const path = new URL(request.url ?? '/', 'http://fixture').pathname;
+      const port = (server!.address() as { port: number }).port;
+      if (path === '/sitemap.xml') {
+        response.setHeader('content-type', 'application/xml');
+        response.end(`<urlset><url><loc>http://localtest.me:${port}/tag/node.js/</loc></url><url><loc>http://localtest.me:${port}/brochure.pdf</loc></url></urlset>`);
+        return;
+      }
+      if (path.endsWith('.pdf')) {
+        response.setHeader('content-type', 'application/pdf');
+        response.end('%PDF-1.4');
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end('<!doctype html><title>Tagged</title><main><p>Body.</p></main>');
+    });
+
+    const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 10 });
+
+    expect(result.samples.some((sample) => sample.url.endsWith('/tag/node.js/'))).toBe(true);
+    expect(result.routes.types).toEqual({ homepage: 1, page: 1, media: 1 });
+    expect(result.coverage.sampling.attempted).toBe(2);
+    expect(result.samples.some((sample) => sample.url.endsWith('.pdf'))).toBe(false);
+    expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
+  });
+
   it('validates bounded options', async () => {
     await expect(inspectSource('https://example.com', { sampleLimit: 0 })).rejects.toThrow('sampleLimit must be an integer between 1 and 10');
   });

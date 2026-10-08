@@ -76,6 +76,55 @@ it('reports a bounded sample through the real inspection path', async () => {
   expect(result.complexity.confidence).toBe('bounded-sample');
 }, 45_000);
 
+it('never samples a declared media route, even with budget left after rendering', async () => {
+  // The append after rendering walks the whole inventory to use up remaining
+  // budget. A media URL the sitemap declared is in that inventory, and only the
+  // document predicate keeps it out; this loop is unreachable without rendering.
+  server = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://fixture').pathname;
+    const port = (server.address() as { port: number }).port;
+    if (path === '/sitemap.xml') {
+      res.setHeader('content-type', 'application/xml');
+      res.end(`<urlset><url><loc>http://localtest.me:${port}/gallery/hero.jpg</loc></url></urlset>`);
+      return;
+    }
+    if (path.endsWith('.jpg')) { res.setHeader('content-type', 'image/jpeg'); res.end(Buffer.from([0xff, 0xd8, 0xff])); return; }
+    res.setHeader('content-type', 'text/html');
+    res.end('<!doctype html><title>Solo</title><main><p>One page.</p></main>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+
+  // Budget far exceeds the one document route, so the append path runs.
+  const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 5 });
+
+  expect(result.routes.types).toEqual({ homepage: 1, media: 1 });
+  expect(result.samples.some((sample) => sample.url.endsWith('.jpg'))).toBe(false);
+  expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
+  expect(result.rendered.succeeded).toBe(1);
+}, 45_000);
+
+it('reports truncation from the inventory it ended with, not the one it started from', async () => {
+  // Rendering reveals routes the HTTP lane never saw, so a document count taken
+  // before that would report a capped selection as complete.
+  const hidden = Array.from({ length: 9 }, (unused, index) => `<a href="/p${index}">p${index}</a>`).join('');
+  server = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://fixture').pathname;
+    if (path === '/sitemap.xml') { res.statusCode = 404; res.end('x'); return; }
+    res.setHeader('content-type', 'text/html');
+    // The links live outside <nav>, so only the rendered lane collects them.
+    res.end(`<!doctype html><title>Hub</title><main><p>Body.</p>${path === '/' ? hidden : ''}</main>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+
+  const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 3 });
+
+  expect(result.coverage.discovery.routes).toBeGreaterThan(3);
+  expect(result.coverage.sampling.truncated).toBe(true);
+  expect(result.coverage.sampling.complete).toBe(false);
+}, 45_000);
+
 it('spends the rendered navigation budget on pages, not on linked media', async () => {
   // The in-page inventory caps at 100 links. A gallery offers more media links
   // than that, so filtering after the cap would leave the real menu

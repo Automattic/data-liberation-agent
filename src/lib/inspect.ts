@@ -200,17 +200,21 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   // fetching it spends the budget to learn nothing and returns a body that
   // cannot render. It stays in `routes` and in `routes.types`, so a consumer can
   // still see how much of what was linked was media.
-  const documents = routes.filter((route) => route.type !== 'media');
+  //
+  // One predicate, applied at every point a route can be selected. `routes`
+  // keeps growing while sampling renders pages, so a snapshot taken here would
+  // not cover the later append.
+  const isDocumentRoute = (route: Route) => route.type !== 'media';
   const selected: Route[] = [];
   const selectedKeys = new Set<string>();
-  for (const route of documents) {
+  for (const route of routes.filter(isDocumentRoute)) {
     if (selected.length >= sampleLimit) break;
     if (route.type === 'homepage' || !selected.some((sample) => sample.type === route.type)) {
       selected.push(route);
       selectedKeys.add(route.url);
     }
   }
-  for (const route of documents) {
+  for (const route of routes.filter(isDocumentRoute)) {
     if (selected.length >= sampleLimit) break;
     if (!selectedKeys.has(route.url)) selected.push(route);
   }
@@ -253,6 +257,7 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
           for (const link of rendered.navigation) addRoute(link);
           for (const discovered of routes) {
             if (selected.length >= sampleLimit) break;
+            if (!isDocumentRoute(discovered)) continue;
             if (!selected.some((sample) => sample.url === discovered.url)) selected.push(discovered);
           }
         } catch (error) {
@@ -267,7 +272,7 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   } finally { await inspector?.close(); }
   const types: Record<string, number> = {};
   for (const route of routes) types[route.type] = (types[route.type] ?? 0) + 1;
-  const samplingTruncated = documents.length > selected.length;
+  const samplingTruncated = routes.filter(isDocumentRoute).length > selected.length;
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION,
     capabilityVocabulary: { schema: SOURCE_CAPABILITY_VOCABULARY, capabilities: SOURCE_CAPABILITIES },
