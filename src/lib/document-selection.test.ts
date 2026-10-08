@@ -89,6 +89,35 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 		} finally { await browser.close(); await site.close(); }
 	}, 60_000 );
 
+	it( 'renders the default document where the selection runtime never runs', async () => {
+		const dir = directory(); const html = exported( dir );
+		const visibility = cheerio.load( html )( 'style[data-dla-device-visibility]' ).text();
+		expect( visibility ).toContain( `html:not([data-dla-selected-document]) [data-dla-device-document="${ selection.defaultDocument }"]{display:contents!important}` );
+		const site = await startStaticServer( join( dir, 'website' ) );
+		const browser = await chromium.launch();
+		try {
+			// The block editor canvas renders this markup without the selection
+			// runtime, so nothing ever sets data-dla-selected-document. Disabling
+			// scripts reproduces that consumer without depending on WordPress.
+			const context = await browser.newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
+			const page = await context.newPage();
+			await page.goto( site.url );
+			const seen = await page.evaluate( () => ( {
+				selected: document.documentElement.getAttribute( 'data-dla-selected-document' ),
+				displays: Object.fromEntries( [ ...document.querySelectorAll<HTMLElement>( '[data-dla-device-document]' ) ]
+					.map( node => [ node.getAttribute( 'data-dla-device-document' ), getComputedStyle( node ).display ] ) ),
+				canvas: [ ...document.querySelectorAll<HTMLElement>( '.canvas' ) ].find( node => node.getClientRects().length )?.dataset.fixtureDocument,
+				painted: document.body.scrollHeight,
+			} ) );
+			expect( seen.selected ).toBeNull();
+			expect( seen.displays ).toEqual( Object.fromEntries( selection.documents.map( key =>
+				[ key, key === selection.defaultDocument ? 'contents' : 'none' ] ) ) );
+			expect( seen.canvas ).toBe( selection.defaultDocument );
+			expect( seen.painted ).toBeGreaterThan( 0 );
+			await context.close();
+		} finally { await browser.close(); await site.close(); }
+	}, 60_000 );
+
 	it( 'selects three request identities on static hosting before paint and keeps identity through resize', async () => {
 		const dir = directory(); const html = exported( dir );
 		const serialized = cheerio.load( html );
