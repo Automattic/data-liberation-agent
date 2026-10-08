@@ -11,6 +11,7 @@ import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
+import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 
 export interface ReferenceCollectorOptions {
 	cleanupPolicy?: CleanupPolicy;
@@ -131,6 +132,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							}
 							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
+						await referencePage.addInitScript( observeViewportEntrances );
 						if ( url !== 'about:blank' ) {
 							const response = await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
@@ -162,6 +164,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
 						entry.document = store( `${ stem }.html`, await referencePage.content() );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
+						await collectViewportEntranceStartup( referencePage, page );
 						entry.readiness.reasons.push( ...errors );
 						entry.readiness.ready = entry.readiness.reasons.length === 0;
 					} catch ( error ) {

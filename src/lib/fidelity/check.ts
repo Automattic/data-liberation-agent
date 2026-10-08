@@ -596,17 +596,21 @@ export async function observePage(
 			visit( document.body );
 			flush();
 
-			const occurrencesBefore = new Map< string, number >();
+			// Animation names are not identities. Removing an earlier same-name
+			// effect must not make a still-paused sibling look scroll-responsive.
+			const identities = new Map< Animation, number >();
+			const identity = ( animation: Animation ) => {
+				if ( ! identities.has( animation ) ) identities.set( animation, identities.size );
+				return identities.get( animation )!;
+			};
 			const animationsBefore = document
 				.getAnimations()
 				.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity )
 				.map( ( animation ) => {
 					const name = ( animation as Animation & { animationName?: string } ).animationName;
 					if ( ! name || name === 'none' ) return null;
-					const occurrence = occurrencesBefore.get( name ) ?? 0;
-					occurrencesBefore.set( name, occurrence + 1 );
 					return {
-						key: `${ name }:${ occurrence }`,
+						key: identity( animation ),
 						name,
 						time: animation.currentTime?.toString() ?? 'null',
 						state: animation.playState,
@@ -625,17 +629,14 @@ export async function observePage(
 				window.scrollTo( 0, Math.min( document.documentElement.scrollHeight - innerHeight, innerHeight * 1.5 ) );
 				await new Promise( ( resolve ) => requestAnimationFrame( () => requestAnimationFrame( resolve ) ) );
 				await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
-				const occurrencesAfter = new Map< string, number >();
 				const animationsAfter = document
 					.getAnimations()
 					.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity )
 					.map( ( animation ) => {
 						const name = ( animation as Animation & { animationName?: string } ).animationName;
 						if ( ! name || name === 'none' ) return null;
-						const occurrence = occurrencesAfter.get( name ) ?? 0;
-						occurrencesAfter.set( name, occurrence + 1 );
 						return {
-							key: `${ name }:${ occurrence }`,
+							key: identity( animation ),
 							name,
 							time: animation.currentTime?.toString() ?? 'null',
 							state: animation.playState,
@@ -835,6 +836,8 @@ export async function observePage(
 				animations,
 				responsiveAnimations,
 				entranceTransitions: ( window as typeof window & { __dlaEntrances?: { transitions: string[] } } ).__dlaEntrances?.transitions ?? [],
+				entranceLosses: Array.from( document.querySelectorAll( '[data-dla-viewport-entrance-loss]' ) ).filter( element => element.getClientRects().length )
+					.map( element => `${ element.id || 'anonymous target' }: ${ element.getAttribute( 'data-dla-viewport-entrance-loss' ) }` ),
 				docWidth: document.documentElement.scrollWidth,
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
 				hashTargets,
@@ -878,6 +881,7 @@ export async function observePage(
 			animations: measured.animations,
 			responsiveAnimations: measured.responsiveAnimations,
 			entranceTransitions: measured.entranceTransitions,
+			entranceLosses: measured.entranceLosses,
 			docWidth: measured.docWidth,
 			overflow: measured.overflow,
 			externalHosts: [ ...external ].sort(),
