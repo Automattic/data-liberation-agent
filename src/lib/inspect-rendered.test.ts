@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, expect, it } from 'vitest';
 import { inspectSource } from './inspect.js';
+import { sourceComplexity, type RenderedInspection } from './inspect-rendered.js';
 import { registerHost, unregisterHost } from '../platform/host.js';
 
 let server: Server;
@@ -59,6 +60,51 @@ it('reports where a capability was observed, and refuses to look decided when th
   expect(truncated.complexity.confidence).toBe('incomplete');
   expect(truncated.capabilityVocabulary.capabilities).toEqual(result.capabilityVocabulary.capabilities);
 }, 45_000);
+
+it('reports a bounded sample through the real inspection path', async () => {
+  // Two routes discovered, one sampled: the bound is doing its job. The band
+  // withholds because the view is partial; confidence stays because the sample
+  // that was declared rendered cleanly.
+  const url = await source('<main><h1>Shop</h1><p>One page of copy.</p></main><nav><a href="/about">About</a><a href="/contact">Contact</a></nav>');
+  const result = await inspectSource(url, { sampleLimit: 1 });
+
+  expect(result.coverage.discovery.routes).toBeGreaterThan(1);
+  expect(result.coverage.sampling.truncated).toBe(true);
+  expect(result.rendered.succeeded).toBe(1);
+  expect(result.rendered.samples[0].unknowns).toEqual([]);
+  expect(result.complexity.band).toBe('unknown');
+  expect(result.complexity.confidence).toBe('bounded-sample');
+}, 45_000);
+
+it('withholds the band when sampling was bounded, without lowering confidence in the sample that completed', () => {
+  // docs/inspection.md: `unknown` covers "truncated discovery/sampling", while
+  // `bounded-sample` means "the declared sample completed" and lists unsampled
+  // routes among the things that remain explicitly unknown. Sampling fewer
+  // routes than were discovered is the bound working as declared.
+  const sample = {
+    url: 'https://example.test/', elements: 600, textCharacters: 1200,
+    counts: { forms: 0, links: 4, images: 2, videos: 0, frames: 0, dialogs: 0 },
+    capabilities: [], excluded: [], navigation: [], requests: 3, bytes: 4096,
+    limited: false, unknowns: [],
+  } as unknown as RenderedInspection;
+
+  const bounded = sourceComplexity([sample], true, false);
+  expect(bounded.band).toBe('unknown');
+  expect(bounded.observedBand).toBe('moderate');
+  expect(bounded.confidence).toBe('bounded-sample');
+
+  // A sample that was declared and did not complete is still incomplete.
+  expect(sourceComplexity([sample], true, true).confidence).toBe('incomplete');
+
+  // So is one whose own resources were limited, or that reported unknowns.
+  expect(sourceComplexity([{ ...sample, limited: true }], false, false).confidence).toBe('incomplete');
+  expect(sourceComplexity([{ ...sample, unknowns: ['blocked'] } as unknown as RenderedInspection], false, false).confidence).toBe('incomplete');
+
+  // Unchanged when nothing was bounded at all.
+  const complete = sourceComplexity([sample], false, false);
+  expect(complete.band).toBe('moderate');
+  expect(complete.confidence).toBe('bounded-sample');
+});
 
 it('attributes a host badge to the host instead of to the site it is serving', async () => {
   const badge = '<main><h1>Brochure</h1><p>One page, no app.</p></main><script>const frame = document.createElement("iframe"); frame.id = "hud-badge"; frame.title = "Powered by Fixture Host"; frame.srcdoc = "<p>badge</p>"; frame.style.position = "fixed"; document.body.append(frame);</script>';

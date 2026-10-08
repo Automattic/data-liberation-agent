@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { classifyUrl } from './extraction/sitemap.js';
+import { classifyUrl, isNonDocumentUrl } from './extraction/sitemap.js';
 import { parseSitemapDocument } from './extraction/sitemap.js';
 import { extractNavLinks } from './html-extract/index.js';
 import { BodyTooLargeError, safeFetch } from './media-fetch/safe-fetch.js';
@@ -169,6 +169,10 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
     try {
       const parsed = new URL(rawUrl, finalUrl);
       if (parsed.origin !== origin) return;
+      // A link to an image or an archive is not a route. Inventoried as one it
+      // consumes the sample budget, returns a non-HTML body, and leaves the
+      // complexity band uncertain for a source nothing went wrong with.
+      if (isNonDocumentUrl(parsed.href)) return;
       const key = routeKey(parsed.href);
       if (seen.has(key)) return;
       if (routes.length >= discoveryLimit) { discoveryTruncated = true; return; }
@@ -266,8 +270,16 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION,
     capabilityVocabulary: { schema: SOURCE_CAPABILITY_VOCABULARY, capabilities: SOURCE_CAPABILITIES },
-    complexity: sourceComplexity(renderedSamples, options.rendered === false || discoveryTruncated || samplingTruncated ||
-      renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html')),
+    // The declared sample completing is independent of how much of the site was
+    // declared: a bound honoured is not a sample that failed. So truncation
+    // withholds the band without lowering confidence.
+    complexity: sourceComplexity(
+      renderedSamples,
+      options.rendered === false || discoveryTruncated || samplingTruncated ||
+        renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html'),
+      options.rendered === false || renderedSamples.length !== selected.length ||
+        samples.some((sample) => sample.outcome !== 'html'),
+    ),
     rendered: { enabled: options.rendered !== false, attempted: renderedAttempts, succeeded: renderedSamples.length, samples: renderedSamples },
     source: { requestedUrl: url, finalUrl, platform: { id: detection.platform, confidence: detection.confidence, evidence: detection.signals }, hosts: hosts.map(({ id, evidence }) => ({ id, evidence })) },
     coverage: {

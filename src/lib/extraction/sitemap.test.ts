@@ -1,7 +1,31 @@
 import { createServer } from 'node:http';
 import { allocateCaptureRoutes } from '../capture-export-routes.js';
 import { describe, it, expect, vi } from 'vitest';
-import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, resolvePageLink } from './sitemap.js';
+import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, isNonDocumentUrl, resolvePageLink } from './sitemap.js';
+
+describe('isNonDocumentUrl', () => {
+  it('excludes media, archives, data and font URLs', () => {
+    for (const path of [
+      '/wp-content/uploads/2019/03/MAGIC-88.jpg', '/img/hero.PNG', '/a/b/c.webp', '/logo.svg',
+      '/media/clip.mp4', '/audio/track.mp3', '/brochure.pdf', '/backup.zip', '/data/export.csv',
+      '/feed.xml', '/styles/site.css', '/app.js', '/fonts/body.woff2',
+    ]) {
+      expect(isNonDocumentUrl(`https://example.com${path}`), path).toBe(true);
+    }
+  });
+
+  it('keeps anything that can be a document', () => {
+    for (const path of [
+      '/', '/about', '/blog/post-one', '/index.php', '/page.aspx', '/about.html', '/x.htm',
+      // A query or fragment must not be read as the extension.
+      '/search?q=cat.jpg', '/gallery#photo.png',
+      // An unknown extension stays a candidate rather than being guessed away.
+      '/report.weird', '/v1.2/pricing',
+    ]) {
+      expect(isNonDocumentUrl(`https://example.com${path}`), path).toBe(false);
+    }
+  });
+});
 
 describe('classifyUrl', () => {
   it('classifies the homepage', () => {

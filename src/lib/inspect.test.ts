@@ -55,6 +55,39 @@ describe('inspectSource', () => {
     expect(result.unknowns).toContain('Rendered layout and responsive reflow were not measured; inspection does not run the full browser capture pipeline.');
   });
 
+  it('does not inventory linked media as routes', async () => {
+    // A gallery links straight to its own image files. Counted as routes they
+    // consume the sample budget, come back as image/jpeg, and leave complexity
+    // uncertain for a source that measured cleanly.
+    const url = await fixture((request, response) => {
+      const path = new URL(request.url ?? '/', 'http://fixture').pathname;
+      if (path === '/sitemap.xml') {
+        response.statusCode = 404;
+        response.end('missing');
+        return;
+      }
+      if (path.endsWith('.jpg')) {
+        response.setHeader('content-type', 'image/jpeg');
+        response.end(Buffer.from([0xff, 0xd8, 0xff]));
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end('<!doctype html><title>Gallery</title><nav><a href="/about">About</a>'
+        + '<a href="/uploads/one.jpg">One</a><a href="/uploads/two.jpg">Two</a>'
+        + '<a href="/uploads/three.JPG">Three</a></nav>');
+    });
+
+    const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 10 });
+
+    expect(result.routes.types).toEqual({ homepage: 1, page: 1 });
+    expect(result.coverage.discovery.routes).toBe(2);
+    expect(result.samples.every((sample) => sample.outcome === 'html')).toBe(true);
+    expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
+    // Nothing was truncated and every selected route was a document, so the
+    // measurement stands on its own rather than collapsing to unknown.
+    expect(result.coverage.sampling.complete).toBe(true);
+  });
+
   it('validates bounded options', async () => {
     await expect(inspectSource('https://example.com', { sampleLimit: 0 })).rejects.toThrow('sampleLimit must be an integer between 1 and 10');
   });
