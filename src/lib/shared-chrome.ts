@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AnyNode, Element } from 'domhandler';
-import { includeReferences, parseLocatedHtml, sourceRange, type HtmlRange } from './site-includes.js';
+import { includeReferences, parseLocatedStructure, sourceRange, type HtmlRange } from './site-includes.js';
 
 /** Only exact, site-level semantic landmarks are shared; authored bytes survive. */
 export function extractSharedChrome( root: string, routePaths: string[] ): void {
@@ -21,10 +21,14 @@ export function extractSharedChrome( root: string, routePaths: string[] ): void 
 function shareChrome( root: string, paths: string[], descendants: boolean ): string[] {
 	const partsDir = join( root, 'parts' );
 	if ( existsSync( partsDir ) && ( lstatSync( partsDir ).isSymbolicLink() || ! lstatSync( partsDir ).isDirectory() ) ) return [];
-	const documents = new Map( paths.map( path => [ path, readFileSync( join( root, path ), 'utf8' ) ] ) );
-	const groups = new Map< string, { html: string; occurrences: Array< HtmlRange & { path: string } > } >();
-	for ( const [ path, html ] of documents ) {
-		const $ = parseLocatedHtml( html );
+	// Candidate landmarks overlap, often deeply. Retaining every candidate's
+	// sliced HTML makes memory scale with the sum of all ancestor subtrees, not
+	// the source bytes. Index their original ranges and materialize only an
+	// admitted part. Source documents stay unchanged until all ranges are chosen.
+	const groups = new Map< string, { length: number; occurrences: Array< HtmlRange & { path: string } > } >();
+	for ( const path of new Set( paths ) ) {
+		const html = readFileSync( join( root, path ), 'utf8' );
+		const $ = parseLocatedStructure( html );
 		const partRole = /^parts\/(header|footer)-[a-f0-9]+\.html$/.exec( path )?.[ 1 ];
 		$( descendants ? '*' : 'header,footer,[role="banner"],[role="contentinfo"]' ).each( ( _index, node ) => {
 			if ( descendants && 'name' in node && [ 'script', 'style', 'template' ].includes( node.name ) ) return;
@@ -58,7 +62,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 			if ( ! range || !( node as Element & { sourceCodeLocation?: { endTag?: unknown } } ).sourceCodeLocation?.endTag ) return;
 			const fragment = html.slice( range.start, range.end );
 			const key = `${ role }-${ createHash( 'sha256' ).update( fragment ).digest( 'hex' ) }`;
-			const group = groups.get( key ) ?? { html: fragment, occurrences: [] };
+			const group = groups.get( key ) ?? { length: range.end - range.start, occurrences: [] };
 			group.occurrences.push( { ...range, path } );
 			groups.set( key, group );
 		} );
@@ -66,16 +70,19 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 	const replacements = new Map< string, Array< HtmlRange & { include: string } > >();
 	const created: string[] = [];
 	// Prefer maximal shared regions and avoid overlapping source ranges.
-	for ( const [ id, group ] of [ ...groups ].sort( ( a, b ) => b[ 1 ].html.length - a[ 1 ].html.length || a[ 0 ].localeCompare( b[ 0 ] ) ) ) {
+	for ( const [ id, group ] of [ ...groups ].sort( ( a, b ) => b[ 1 ].length - a[ 1 ].length || a[ 0 ].localeCompare( b[ 0 ] ) ) ) {
 		const occurrences = group.occurrences.filter( item => !( replacements.get( item.path ) ?? [] ).some( used => item.start < used.end && used.start < item.end ) );
 		if ( new Set( occurrences.map( item => item.path ) ).size < 2 ) continue;
 		const include = `<!--#include virtual="/parts/${ id }.html" -->`;
-		if ( occurrences.length * ( Buffer.byteLength( group.html ) - Buffer.byteLength( include ) ) <= Buffer.byteLength( group.html ) ) continue;
+		const source = group.occurrences[ 0 ];
+		const fragment = readFileSync( join( root, source.path ), 'utf8' ).slice( source.start, source.end );
+		const bytes = Buffer.byteLength( fragment );
+		if ( occurrences.length * ( bytes - Buffer.byteLength( include ) ) <= bytes ) continue;
 		const destination = join( root, 'parts', `${ id }.html` );
 		// Never clobber a source resource, even a same-named one.
 		if ( existsSync( destination ) ) continue;
 		mkdirSync( partsDir, { recursive: true } );
-		writeFileSync( destination, group.html, { flag: 'wx' } );
+		writeFileSync( destination, fragment, { flag: 'wx' } );
 		created.push( `parts/${ id }.html` );
 		for ( const occurrence of occurrences ) {
 			const list = replacements.get( occurrence.path ) ?? [];
@@ -84,7 +91,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 		}
 	}
 	for ( const [ path, ranges ] of replacements ) {
-		let html = documents.get( path )!;
+		let html = readFileSync( join( root, path ), 'utf8' );
 		for ( const range of ranges.sort( ( a, b ) => b.start - a.start ) ) html = html.slice( 0, range.start ) + range.include + html.slice( range.end );
 		writeFileSync( join( root, path ), html );
 	}
