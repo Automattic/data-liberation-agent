@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.4] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- show the default device document where the selection runtime never runs
+- do not inventory linked media as routes
+
 ## [0.20.3] - 2026-10-07
 
 ### Changed
