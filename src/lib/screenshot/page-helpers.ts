@@ -207,27 +207,15 @@ export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promi
  * Image load can complete before layout has incorporated the decoded intrinsic
  * size, so waiting for the request alone is not enough for responsive pages.
  *
- * Readiness is decided by layout participation, not by blanket visibility
- * hiding: an image that currently occupies a layout box waits even when it is
- * `visibility: hidden` — it can be revealed by a resize or a later class flip,
- * at which point a half-decoded alternative would capture wrong — and a visible
- * image waits even when it paints nothing yet (delayed decoding). Only images
- * that are presently neither visible NOR occupying layout space are skipped:
- * renderer `display: none` removes them from layout entirely, and they are
- * inactive responsive alternatives (a media query chose another sibling or
- * document variant) whose pending bytes will never affect the captured state.
- * This is the predicate the Spacefast #656 route profile turned ~24s of image
- * readiness waits into ~0.05s, without touching resource capture: the media
- * plan localizes those inactive assets independently of rendering readiness.
+ * Inactive alternatives without layout boxes need not delay this viewport.
+ * Visibility-hidden layout participants still settle; resource localization
+ * remains independent of rendering readiness.
  */
 export async function waitForImages(page: Page, timeoutMs: number = 4_000): Promise<void> {
   try {
     await withEvaluateTimeout(
       page.evaluate(async () => {
         const active = (image: HTMLImageElement): boolean => {
-          if (image.complete && image.naturalWidth > 0) return false;
-          // Hidden-but-laid-out participants keep their box: `visibility:hidden`
-          // and `opacity:0` render zero geometry only when nothing reserves.
           if (image.checkVisibility()) return true;
           const box = image.getBoundingClientRect();
           return box.width > 0 && box.height > 0;

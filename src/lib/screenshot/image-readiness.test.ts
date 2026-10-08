@@ -58,7 +58,8 @@ describe('waitForImages layout participation', () => {
     // the document; a visible image must keep that contract, regardless of how
     // late it decodes.
     const page = await browser.newPage();
-    await page.setContent(`<img src="${origin}/slow.svg" width="24" height="24">`);
+    await page.setContent(`<img src="${origin}/slow.svg" width="24" height="24">`, { waitUntil: 'domcontentloaded' });
+    expect(await imageState(page)).toEqual([{ complete: false, naturalWidth: 0 }]);
     await waitForImages(page, 4_000);
     expect(await imageState(page)).toEqual([{ complete: true, naturalWidth: 24 }]);
     await page.close();
@@ -92,7 +93,9 @@ describe('waitForImages layout participation', () => {
     const page = await browser.newPage();
     await page.setContent(
       `<img src="${origin}/hidden.svg" style="visibility:hidden" width="24" height="24">`,
+      { waitUntil: 'domcontentloaded' },
     );
+    expect(await imageState(page)).toEqual([{ complete: false, naturalWidth: 0 }]);
     await waitForImages(page, 4_000);
     expect(await imageState(page)).toEqual([{ complete: true, naturalWidth: 24 }]);
     await page.close();
@@ -107,7 +110,7 @@ describe('waitForImages layout participation', () => {
     await page.setContent(`<style>
       #alt { display: none; }
       @media (max-width: 800px) { #alt { display: block; } }
-    </style><img id="alt" src="${origin}/alt.svg" width="24" height="24">`);
+    </style><img id="alt" src="${origin}/alt.svg" width="24" height="24">`, { waitUntil: 'domcontentloaded' });
     await page.setViewportSize({ width: 390, height: 844 });
     await waitForImages(page, 4_000);
     expect(await imageState(page)).toEqual([{ complete: true, naturalWidth: 24 }]);
@@ -134,7 +137,7 @@ describe('waitForImages layout participation', () => {
         revealed = true;
         document.querySelector('figure').classList.add('in');
       });
-    </script>`);
+    </script>`, { waitUntil: 'domcontentloaded' });
     await triggerLazyLoad(page);
     expect(await page.locator('figure.in').count()).toBe(1);
     expect(await imageState(page)).toEqual([{ complete: true, naturalWidth: 24 }]);
@@ -152,7 +155,7 @@ describe('waitForImages layout participation', () => {
         `<img class="alt" src="${origin}/b.svg" style="display:none" width="24" height="24">`,
       ).join('\n')}
       <img id="active" src="${origin}/active.svg" width="24" height="24">
-    </main>`);
+    </main>`, { waitUntil: 'domcontentloaded' });
     await triggerLazyLoad(page);
     expect(await page.locator('#active').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(24);
     await page.close();
