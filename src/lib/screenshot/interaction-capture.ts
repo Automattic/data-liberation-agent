@@ -1039,6 +1039,10 @@ async function snapshotDialog(
 			// The portable disclosure's block fallback must not collapse flex/grid
 			// layouts whose descendants rely on the opened root's layout mode.
 			clone.style.setProperty( 'display', getComputedStyle( dialog ).display, 'important' );
+			// A runtime-owned ancestor can gate the root's visibility in CSS.
+			// Preserve the observed opened root, just as we preserve its display;
+			// portable hidden/resting state still owns closing the captured panel.
+			clone.style.setProperty( 'visibility', getComputedStyle( dialog ).visibility, 'important' );
 			for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 				unsafe.remove();
 			for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
