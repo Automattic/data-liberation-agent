@@ -58,7 +58,7 @@ export interface FluidSweepOptions {
 	document?: 'desktop' | 'mobile';
 	/** Widths to observe. More widths cost time but sharpen the fit. */
 	widths?: number[];
-	/** Settle time after each resize, for the runtime to react. */
+	/** Minimum observation window after resize, overlapping lazy work and rest. */
 	settleMs?: number;
 	onProgress?: ( ( width: number, elements: number ) => void ) | undefined;
 }
@@ -182,27 +182,7 @@ async function learnFluidGeometry(
 
 	for ( const width of widths ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await page.waitForTimeout( settleMs );
-		// Lazy content that has not loaded reports no geometry, which would
-		// teach the fitter from holes. Scroll the page to settle it first.
-		await page.evaluate( async () => {
-			const step = window.innerHeight;
-			for ( let y = 0; y < document.documentElement.scrollHeight; y += step ) {
-				window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
-				await new Promise( ( resolve ) => setTimeout( resolve, 60 ) );
-			}
-			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
-			// Some scroll-reactive runtimes only recompute their top-of-page state
-			// from the scroll handler; scrollTo alone does not emit that event.
-			window.dispatchEvent( new Event( 'scroll' ) );
-		} );
-		// The copy renders at rest — what a reader at the top of the page
-		// sees — so the samples must be taken there too. Scroll-linked chrome
-		// (a header that shrinks once the page has been scrolled) re-expands
-		// on the way back to the top on its own schedule; a fixed delay either
-		// races it or wastes time. Wait for the geometry actually being
-		// measured to go quiet instead.
-		await waitForRestGeometry( page, ID_ATTRIBUTE );
+		await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, true );
 		await baseline.evaluate( state => state.reconcile() );
 
 		const measured = await page.evaluate(
@@ -481,8 +461,7 @@ async function learnFluidGeometry(
 	// The source then owns the final clone state. Learned CSS follows that resize.
 	await baseline.evaluate( state => state.restore() );
 	if ( original ) await page.setViewportSize( original );
-	await page.waitForTimeout( settleMs );
-	await waitForRestGeometry( page, ID_ATTRIBUTE );
+	await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs );
 	await baseline.evaluate( state => state.reconcile() );
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
@@ -637,32 +616,83 @@ async function learnFluidGeometry(
 }
 
 /**
- * Wait until the runtime stops rewriting the inline styles being measured.
+ * One per-width readiness contract: observe resize, lazy work, and at-top rest.
  *
  * Scroll-linked chrome (a header that shrinks once the page is scrolled)
  * re-expands after the sweep returns to the top on the source's own schedule,
  * and the runtime rewrites the geometry that depends on it as it goes.
  * Sampling mid-transition teaches the fitter the scrolled state, which is not
  * the state the copy renders. Watch exactly what is sampled: four consecutive
- * identical reads, one second apart in total, count as rest. The bound keeps a
+ * identical reads, one second apart in total, count as rest. The resize window
+ * overlaps that observation rather than preceding it. The bound keeps a
  * perpetually animating page from stalling the sweep.
  */
-async function waitForRestGeometry( page: Page, attribute: string ): Promise< void > {
-	await page.evaluate( async ( { attribute } ) => {
-		const snapshot = () =>
-			[ ...document.querySelectorAll( `[${ attribute }]` ) ]
-				.map( ( element ) => element.getAttribute( 'style' ) ?? '' )
-				.join( '\n' );
-		const deadline = Date.now() + 3500;
+async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0, lazy = false ): Promise< void > {
+	const { withEvaluateTimeout } = await import( './page-helpers.js' );
+	await withEvaluateTimeout( page.evaluate( async ( { attribute, properties, settleMs, lazy } ) => {
+		const started = Date.now();
+		const snapshot = () => JSON.stringify(
+			[ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ].map( element => {
+				const style = element.style;
+				const pixel = ( value: string ) => /^-?\d+(?:\.\d+)?px$/.test( value.trim() ) ? Number.parseFloat( value ) : null;
+				const custom = [ ...style ].filter( property => property.startsWith( '--' ) )
+					.map( property => [ property, pixel( style.getPropertyValue( property ) ) ] )
+					.filter( ( [ , value ] ) => value !== null );
+				return [ element.getAttribute( attribute ),
+					properties.map( property => pixel( style.getPropertyValue( property ) ) ), custom,
+					// Keep the whole transform, not just X: scale/rotation must invalidate
+					// rest even when the translation component stays unchanged.
+					style.transform, style.transform ? getComputedStyle( element ).transform : null,
+					style.inset, getComputedStyle( element ).position,
+					pixel( style.width ) === null ? null : element.parentElement?.clientWidth,
+					pixel( style.height ) === null ? null : element.parentElement?.clientHeight ];
+			} )
+		);
+		const content = () => JSON.stringify( [
+			document.getElementsByTagName( '*' ).length,
+			[ ...document.images ].map( image => [ image.currentSrc, image.src, image.getAttribute( 'srcset' ), image.getClientRects().length ] ) ] );
+		const sweep = async () => {
+			// Absence of overflow is observed again at each width, never cached from
+			// a previous viewport. Arbitrary source observers cannot be proven absent,
+			// so overflowing documents still get a sweep at every width.
+			for ( let y = window.innerHeight; y < document.documentElement.scrollHeight && Date.now() - started < 20_000; y += window.innerHeight ) {
+				window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
+				await new Promise( resolve => setTimeout( resolve, 60 ) );
+			}
+			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
+			window.dispatchEvent( new Event( 'scroll' ) );
+		};
+		let sweptContent = content();
+		if ( lazy ) await sweep();
+		let sweptHeight = document.documentElement.scrollHeight;
+		// Retain the old rest budget and minimum resize window; only their
+		// redundant serial scheduling is removed. Additional sweeps share it.
+		const deadline = Date.now() + settleMs + 3500;
 		let previous = snapshot();
 		let quiet = 0;
-		while ( Date.now() < deadline && quiet < 4 ) {
+		while ( Date.now() < deadline ) {
 			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
+			const currentContent = content();
+			if ( lazy && ( currentContent !== sweptContent || document.documentElement.scrollHeight > sweptHeight ) ) {
+				// Finite delayed resize/image work can introduce another offscreen
+				// tail after the first sweep. Observe it before declaring readiness.
+				sweptContent = currentContent;
+				await sweep();
+				sweptHeight = document.documentElement.scrollHeight;
+				quiet = 0;
+				previous = snapshot();
+				continue;
+			}
 			const current = snapshot();
 			quiet = current === previous ? quiet + 1 : 0;
 			previous = current;
+			// A display:none device variant cannot be reached by scrolling. Its
+			// pending native lazy images do not describe this width's geometry;
+			// visibility is re-read above, so a later reveal invalidates the sweep.
+			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 );
+			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
 		}
-	}, { attribute } );
+	}, { attribute, properties: LEARNABLE_PROPERTIES as unknown as string[], settleMs, lazy } ), 25_000 + settleMs );
 }
 
 /** The last contiguous stretch of numeric pixel custom-property observations. */
