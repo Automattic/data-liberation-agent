@@ -14,13 +14,14 @@ describe('isNonDocumentUrl', () => {
     }
   });
 
-  it('classifies a dotted slug as media, which is the known cost of reading the extension', () => {
+  it('reads a dotted slug as non-document, which is the known cost of reading the extension', () => {
     // Recorded deliberately: a page whose slug ends in a listed token reads as a
     // file. A trailing slash -- what WordPress, Hugo and Jekyll emit -- survives,
     // so the exposure is hand-written links and generators configured without one.
     expect(isNonDocumentUrl('https://example.com/tag/node.js')).toBe(true);
     expect(isNonDocumentUrl('https://example.com/tag/node.js/')).toBe(false);
-    expect(classifyUrl('https://example.com/menu.pdf')).toBe('media');
+    // Media is an inspection concern; the shared classifier stays page-shaped.
+    expect(classifyUrl('https://example.com/menu.pdf')).toBe('page');
   });
 
   it('keeps anything that can be a document', () => {

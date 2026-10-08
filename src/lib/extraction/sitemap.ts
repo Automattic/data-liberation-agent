@@ -40,7 +40,7 @@ export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
 }
 
-export type UrlType = 'homepage' | 'post' | 'product' | 'gallery' | 'event' | 'media' | 'page';
+export type UrlType = 'homepage' | 'post' | 'product' | 'gallery' | 'event' | 'page';
 
 export interface SitemapDiagnostic {
   code: string;
@@ -65,7 +65,7 @@ export interface SitemapFetchResult {
 // Deliberately a denylist: an unknown or absent extension still gets inspected,
 // because `.php`, `.aspx` and extensionless paths are all ordinary pages. Only
 // file types we are confident about are excluded.
-export const NON_DOCUMENT_EXTENSIONS = new Set([
+const NON_DOCUMENT_EXTENSIONS = new Set([
   // images
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'svg', 'ico', 'bmp', 'tif', 'tiff', 'heic',
   // audio and video
@@ -85,10 +85,6 @@ export const NON_DOCUMENT_EXTENSIONS = new Set([
  * never render, which leaves the inspection reporting fewer rendered samples
  * than it selected and therefore an uncertain complexity band for a source that
  * measured cleanly.
- *
- * These are classified `media` rather than excluded. An excluded URL is invisible
- * — it leaves no count, no diagnostic, and a discovery that reports itself
- * complete — and this inspection holds itself to reporting what it subtracts.
  */
 export function isNonDocumentUrl(url: string): boolean {
   let path: string;
@@ -98,7 +94,7 @@ export function isNonDocumentUrl(url: string): boolean {
     path = url.toLowerCase().split(/[?#]/)[0];
   }
   const extension = path.slice(path.lastIndexOf('.') + 1);
-  return path.includes('.') && NON_DOCUMENT_EXTENSIONS.has(extension);
+  return path.includes('.') && extension !== path && NON_DOCUMENT_EXTENSIONS.has(extension);
 }
 
 export function classifyUrl(url: string): UrlType {
@@ -110,9 +106,6 @@ export function classifyUrl(url: string): UrlType {
   }
 
   if (path === '/' || path === '') return 'homepage';
-  // Before every other test: a URL naming a file is not a page of any kind, and
-  // the extension says so more reliably than the path shape does.
-  if (isNonDocumentUrl(url)) return 'media';
   // Match /blog/<slug>, /post/<slug>, /blogs/<handle>/<slug>, etc.
   // Also match Wix patterns like /blog-1/post/<slug> and older Wix /single-post/<slug>.
   // Require a slug segment after the keyword — bare `/blog` is a listing page,

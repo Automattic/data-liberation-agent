@@ -78,8 +78,8 @@ it('reports a bounded sample through the real inspection path', async () => {
 
 it('never samples a declared media route, even with budget left after rendering', async () => {
   // The append after rendering walks the whole inventory to use up remaining
-  // budget. A media URL the sitemap declared is in that inventory, and only the
-  // document predicate keeps it out; this loop is unreachable without rendering.
+  // budget. A media URL the sitemap declared never enters that inventory, so it
+  // is counted rather than appended; this loop is unreachable without rendering.
   server = createServer((req, res) => {
     const path = new URL(req.url ?? '/', 'http://fixture').pathname;
     const port = (server.address() as { port: number }).port;
@@ -98,7 +98,8 @@ it('never samples a declared media route, even with budget left after rendering'
   // Budget far exceeds the one document route, so the append path runs.
   const result = await inspectSource(url, { discoveryLimit: 50, sampleLimit: 5 });
 
-  expect(result.routes.types).toEqual({ homepage: 1, media: 1 });
+  expect(result.routes.types).toEqual({ homepage: 1 });
+  expect(result.coverage.media).toMatchObject({ discovered: 1, truncated: false });
   expect(result.samples.some((sample) => sample.url.endsWith('.jpg'))).toBe(false);
   expect(result.issues.some((issue) => issue.code === 'sample-non-html')).toBe(false);
   expect(result.rendered.succeeded).toBe(1);
@@ -147,6 +148,11 @@ it('spends the rendered navigation budget on pages, not on linked media', async 
   }
   expect(result.coverage.discovery.truncated).toBe(false);
   expect(result.coverage.sampling.complete).toBe(true);
+  // The exclusion is counted, not silent: the entry page linked 120 media files.
+  expect(result.rendered.samples[0].mediaLinks).toBe(120);
+  expect(result.rendered.samples[0].navigation.some((href) => href.endsWith('.jpg'))).toBe(false);
+  // Coverage sums the per-sample counts; every fixture page carries the gallery.
+  expect(result.coverage.media.renderedLinks).toBe(120 * result.rendered.succeeded);
   expect(result.complexity.band).not.toBe('unknown');
   expect(result.complexity.confidence).toBe('bounded-sample');
 }, 45_000);
@@ -159,7 +165,7 @@ it('withholds the band when sampling was bounded, without lowering confidence in
   const sample = {
     url: 'https://example.test/', elements: 600, textCharacters: 1200,
     counts: { forms: 0, links: 4, images: 2, videos: 0, frames: 0, dialogs: 0 },
-    capabilities: [], excluded: [], navigation: [], requests: 3, bytes: 4096,
+    capabilities: [], excluded: [], navigation: [], mediaLinks: 0, requests: 3, bytes: 4096,
     limited: false, unknowns: [],
   } as unknown as RenderedInspection;
 
