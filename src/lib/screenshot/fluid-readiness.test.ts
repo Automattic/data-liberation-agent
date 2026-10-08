@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { waitForImages } from './page-helpers.js';
 
 describe( 'responsive readiness contract', () => {
 	let browser: Browser;
@@ -120,4 +121,54 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.locator( '#box' ).getAttribute( 'data-dla-fluid-id' ) ).toBeNull();
 		} finally { await page.close(); }
 	}, 20_000 );
+	const railFixture = ( reachableDelayMs: number | null ) => `<style>body{margin:0}.rail{display:flex;overflow-x:scroll;overflow-y:hidden;width:100%}.rail img{flex:none;width:100px;height:100px}</style>
+		<div id="box" style="width:720px;height:40px">Neutral text</div>
+		${ reachableDelayMs === null ? '' : '<img id="reachable" loading="lazy" width="40" height="40" src="https://neutral.test/slow.svg">' }
+		<ul class="rail">${ Array.from( { length: 40 }, ( _, index ) => `<li><img loading="lazy" src="https://neutral.test/rail-${ index }.svg"></li>` ).join( '' ) }</ul>
+		<script>
+		const box = document.querySelector('#box');
+		function resize() { box.style.width = innerWidth / 2 + 'px'; }
+		addEventListener('resize', resize); resize();
+		</script>`;
+	const routeImages = async ( page: import( 'playwright' ).Page, slowMs: number ) => {
+		await page.route( 'https://neutral.test/*.svg', async route => {
+			if ( route.request().url().endsWith( '/slow.svg' ) ) await new Promise( resolve => setTimeout( resolve, slowMs ) );
+			await route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>' } );
+		} );
+	};
+
+	it( 'does not wait for native-lazy images clipped out of view by an overflow rail', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await routeImages( page, 0 );
+			await page.setContent( railFixture( null ) );
+			const pending = await page.evaluate( () => [ ...document.images ].filter( image => ! image.complete ).length );
+			expect( pending ).toBeGreaterThan( 0 );
+			const start = performance.now();
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 1200 } );
+			const sweepMs = performance.now() - start;
+			const imageStart = performance.now();
+			await waitForImages( page );
+			const imageMs = performance.now() - imageStart;
+			console.info( JSON.stringify( { fixture: 'clipped-lazy-rail', sweepMs: Math.round( sweepMs ), imageMs: Math.round( imageMs ), pending, result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+			// Three widths at rest take ~1.25s each; the old deadline was settleMs + 3.5s per width.
+			expect( sweepMs ).toBeLessThan( 7000 );
+			expect( imageMs ).toBeLessThan( 1000 );
+			expect( await page.evaluate( () => [ ...document.images ].filter( image => ! image.complete ).length ) ).toBeGreaterThan( 0 );
+		} finally { await page.close(); }
+	}, 30_000 );
+
+	it( 'still waits for a reachable pending native-lazy image', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await routeImages( page, 1500 );
+			await page.setContent( railFixture( 1500 ) );
+			const start = performance.now();
+			await waitForImages( page );
+			expect( performance.now() - start ).toBeGreaterThan( 1000 );
+			expect( await page.locator( '#reachable' ).evaluate( image => ( image as HTMLImageElement ).complete ) ).toBe( true );
+		} finally { await page.close(); }
+	}, 30_000 );
 } );

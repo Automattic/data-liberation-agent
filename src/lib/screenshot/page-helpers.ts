@@ -243,6 +243,44 @@ export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promi
   }
 }
 
+const UNREACHABLE_LAZY_IMAGE = 'data-liberation.unreachable-lazy-image';
+
+/**
+ * Install the page's `unreachableLazyImage( image )` readiness predicate and
+ * return its global symbol key.
+ *
+ * A pending native-lazy image whose box lies outside an ancestor's overflow
+ * clip (an image beyond the visible part of a horizontal rail, for example) is
+ * never fetched by a vertical document sweep. It therefore cannot change the
+ * geometry being waited for, and waiting on it can only spend the deadline.
+ * Images the sweep can reach still gate readiness, and revealing one later
+ * changes its intersection, so it gates the next wait again.
+ *
+ * Installed through `evaluate` rather than rebuilt from source so pages whose
+ * CSP forbids `eval` still get the same single definition.
+ */
+export async function installImageReachability(page: Page): Promise<string> {
+  await withEvaluateTimeout(page.evaluate((key) => {
+    const symbol = Symbol.for(key);
+    if (symbol in window) return;
+    Object.defineProperty(window, symbol, {
+      configurable: true,
+      value: (image: HTMLImageElement): boolean => {
+        if (image.complete || image.loading !== 'lazy') return false;
+        const box = image.getBoundingClientRect();
+        for (let node = image.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+          const clip = node.getBoundingClientRect();
+          if (box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom) return true;
+        }
+        return false;
+      },
+    });
+  }, UNREACHABLE_LAZY_IMAGE), EVALUATE_GRACE_MS);
+  return UNREACHABLE_LAZY_IMAGE;
+}
+
 /**
  * Wait for images reached by the lazy-load sweep to decode before measuring.
  * Image load can complete before layout has incorporated the decoded intrinsic
@@ -254,9 +292,12 @@ export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promi
  */
 export async function waitForImages(page: Page, timeoutMs: number = 4_000): Promise<void> {
   try {
+    const reachabilityKey = await installImageReachability(page);
     await withEvaluateTimeout(
-      page.evaluate(async () => {
+      page.evaluate(async (reachabilityKey) => {
+        const unreachable = (window as unknown as Record<symbol, (image: HTMLImageElement) => boolean>)[Symbol.for(reachabilityKey)];
         const active = (image: HTMLImageElement): boolean => {
+          if (unreachable(image)) return false;
           if (image.checkVisibility()) return true;
           const box = image.getBoundingClientRect();
           return box.width > 0 && box.height > 0;
@@ -274,7 +315,7 @@ export async function waitForImages(page: Page, timeoutMs: number = 4_000): Prom
             await image.decode().catch(() => undefined);
           })
         );
-      }),
+      }, reachabilityKey),
       timeoutMs,
     );
   } catch {
