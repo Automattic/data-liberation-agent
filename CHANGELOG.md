@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.6] - 2026-10-08
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- activate device styles from the single selection runtime
+- learn runtime-written stylesheet offsets across the width sweep
+- make the media exclusion auditable, and filter it before the link cap
+- replay source-observed finite CSS lifecycle
+
 ## [0.20.5] - 2026-10-08
 
 ### Changed
