@@ -278,6 +278,10 @@ export function removeDanglingMediaSource(
 	const variants = [
 		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
 	].sort( ( a, b ) => b.length - a.length );
+	// Callers run this once per dangling reference over the whole document.
+	// When the tag pass already blanked the only occurrence, skip the
+	// attribute-aware scan: neither replacement below can match.
+	if ( ! variants.some( ( variant ) => withoutSources.includes( variant ) ) ) return withoutSources;
 	const pattern = new RegExp(
 		`(?:${ variants
 			.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
