@@ -51,10 +51,11 @@ const HELP = `
                          interrupted, for browsing it. Liberation writes the site
                          and exits without this.
     --no-learn-fluid     Skip the width sweep and freeze the layout at one width.
-    --reference-sample <n>  Freeze baseline reference evidence for the homepage
-                         plus n-1 sampled routes (browser capture). Unsampled
-                         routes skip reference navigation; compare reports them
-                         as uncompared scope instead of failing them.
+    --reference-sample <n|all>  Freeze baseline reference evidence for the
+                         homepage plus n-1 sampled routes (default 1: homepage
+                         only), or every route with "all" for full-route parity.
+                         Unsampled routes skip reference navigation; compare
+                         reports them as uncompared scope instead of failing them.
     --portable-motion <json>  Author a portable runtime from pinned independent
                          scripts and verify it against the live source before export.
                          Learning is on by default: it keeps the copy reflowing
@@ -225,9 +226,10 @@ if (args.includes('--help')) {
   };
   const routeLimit = httpNumber('--route-limit');
   const runtimeRouteLimit = httpNumber('--runtime-route-limit');
-  const referenceSample = httpNumber('--reference-sample');
-  if (args.includes('--reference-sample') && (referenceSample === undefined || !Number.isInteger(referenceSample) || referenceSample < 1)) {
-    throw new Error('--reference-sample requires a positive integer');
+  const referenceSampleArg = args.includes('--reference-sample') ? getArg('--reference-sample') : undefined;
+  const referenceSample = referenceSampleArg === undefined ? undefined : referenceSampleArg === 'all' ? 'all' as const : Number(referenceSampleArg);
+  if (referenceSampleArg !== undefined && referenceSample !== 'all' && (referenceSampleArg === null || !Number.isInteger(referenceSample) || (referenceSample as number) < 1)) {
+    throw new Error('--reference-sample requires a positive integer or "all"');
   }
   const result = await liberateSite({
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],

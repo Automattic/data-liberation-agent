@@ -55,7 +55,7 @@ The JSON result is versioned and destination-neutral. It samples the entry route
 | `--screenshots` | Also write full-page desktop and mobile PNGs |
 | `--serve` | Keep a local server running until interrupted |
 | `--no-learn-fluid` | Freeze the layout at one width instead of learning how it reflows |
-| `--reference-sample <n>` | Freeze baseline reference evidence for the homepage plus n-1 sampled routes; unsampled routes skip reference navigation and compare reports them as uncompared scope. Default: every route |
+| `--reference-sample <n\|all>` | Freeze baseline reference evidence for the homepage plus n-1 sampled routes; unsampled routes skip reference navigation and compare reports them as uncompared scope. Default: 1 (homepage only). Use `all` for full-route parity |
 
 Fluid learning is on by default. The capture sweeps widths with the source's own runtime alive, fits how each element is sized, and emits that as ordinary CSS — so the copy keeps reflowing after the runtime is stripped, instead of being pinned to the width it was captured at.
 

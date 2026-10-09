@@ -30,9 +30,9 @@ export interface LiberateOptions {
 	 * Freeze baseline reference evidence for at most this many routes
 	 * (homepage plus an even sample of the initial routes). Unsampled routes
 	 * skip reference navigation; frozen comparison reports them as uncompared
-	 * scope. Default: every route.
+	 * scope. Default: the homepage only; 'all' freezes every route.
 	 */
-	referenceSample?: number;
+	referenceSample?: number | 'all';
 	/** Optional authored runtime; installed only after live source/portable behavior comparison passes. */
 	portableMotion?: PortableMotionRecipe;
 	log?: ( message: string ) => void;
