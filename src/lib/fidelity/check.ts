@@ -375,7 +375,7 @@ export async function observePage(
 		// while collecting frozen evidence can relatch scroll-driven page state;
 		// candidate baseline observation likewise preserves the visitor's pose.
 		// Drift observations keep the controlled sweep for lazy content/motion.
-		if ( ! skipScrollProbe ) await triggerLazyLoad( page, false, { expandContent: !captureSession } );
+		const sweepInterruption = skipScrollProbe ? null : await triggerLazyLoad( page, false, { expandContent: !captureSession } );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
@@ -385,7 +385,7 @@ export async function observePage(
 		// left it would be scored as every image having moved.
 		if ( ! skipScrollProbe ) {
 			const pose = await page.evaluate( () => ( { x: Math.round( scrollX ), y: Math.round( scrollY ) } ) );
-			if ( pose.x || pose.y ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y })` );
+			if ( pose.x || pose.y ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y })${ sweepInterruption ? ` after it was interrupted: ${ sweepInterruption }` : '' }` );
 		}
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };

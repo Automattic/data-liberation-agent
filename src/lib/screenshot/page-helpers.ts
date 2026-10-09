@@ -440,6 +440,9 @@ export async function waitForRenderIdle(
   }
 }
 
+/** Page global counting sweeps and restores; only the latest may move the document. */
+const SCROLL_POSE_GENERATION = '__dlaScrollPoseGeneration';
+
 /** Whether the document has physical overflow in either viewport dimension. */
 export async function documentCanScroll(page: Page): Promise<boolean> {
   try {
@@ -493,8 +496,12 @@ export async function documentCanScroll(page: Page): Promise<boolean> {
  * wait and repeats until a round changes nothing, bounded by round count and
  * wall-clock time so a page that grows forever (true infinite scroll) still
  * terminates rather than capturing forever.
+ *
+ * Resolves with the error that cut preparation short (or null), so a caller
+ * that refuses an unproven pose can say why the sweep did not finish.
  */
-export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = false, options: { expandContent?: boolean } = {}): Promise<void> {
+export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = false, options: { expandContent?: boolean } = {}): Promise<string | null> {
+  let interruption: string | null = null;
   try {
     const canScroll = await documentCanScroll(page);
     // One page.evaluate call per sweep, given the time it's still allowed to
@@ -506,15 +513,19 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     // thread is spinning never answers, so its own budget never fires.
     const sweepToBottom = (maxMs: number) =>
       withEvaluateTimeout(page.evaluate(
-        async ({ step, pauseMs, maxMs }) => {
+        async ({ step, pauseMs, maxMs, poseKey }) => {
           const started = Date.now();
+          // A later sweep or a pose restore supersedes this one. The driver can
+          // stop waiting for this evaluate while the page keeps running it.
+          const owner = window as unknown as Record<string, number>;
+          const generation = owner[poseKey] = (owner[poseKey] ?? 0) + 1;
           let y = window.scrollY;
           let total = document.documentElement.scrollHeight;
           // The viewport already covers the final innerHeight pixels. Walking
           // toward scrollHeight overscrolls a clamped page and sleeps despite
           // revealing nothing, again on every image-settling round.
           let bottom = Math.max(0, total - window.innerHeight);
-          while (y < bottom && Date.now() - started < maxMs) {
+          while (y < bottom && Date.now() - started < maxMs && owner[poseKey] === generation) {
             // A step taller than the layout viewport (a phone document scaled
             // into a wide window) jumps over content that never intersects, so
             // its viewport-gated loads and entrances never run.
@@ -526,7 +537,7 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
           }
           return total;
         },
-        { step: 500, pauseMs: 200, maxMs },
+        { step: 500, pauseMs: 200, maxMs, poseKey: SCROLL_POSE_GENERATION },
       ), maxMs + EVALUATE_GRACE_MS);
     const settleScroll = async () => {
       const deadline = Date.now() + 20_000;
@@ -559,29 +570,41 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     await waitForImages(page);
   } catch (error) {
     /* if the page crashes or blocks our script, don't fail the capture */
-    // A renderer that stopped answering will not answer the restore either;
-    // callers that measure check the pose themselves.
-    if (error instanceof Error && error.message.startsWith('evaluate timeout')) return;
+    interruption = error instanceof Error ? error.message : String(error);
   }
   // The sweep moved the document, so it owes the top pose back even when a
   // step above was interrupted: callers measure and serialize right after
   // this, and a skipped restore left them describing the page parked
-  // mid-sweep or at the bottom. Fire a scroll event so scroll-reactive
-  // headers recompute their at-top state — scrollTo alone doesn't trigger it.
+  // mid-sweep or at the bottom. An evaluate timeout is not a dead renderer:
+  // under load the page answers late and can still be running the sweep
+  // the driver stopped waiting for. The restore supersedes that sweep, so it
+  // cannot walk the document back down after this returns. Fire a scroll
+  // event so scroll-reactive headers recompute their at-top state —
+  // scrollTo alone doesn't trigger it.
   try {
     await restoreTopScrollState(page);
-  } catch {
-    /* an unresponsive page is reported by the caller's pose check */
+  } catch (error) {
+    // An unresponsive page is reported by the caller's pose check.
+    const restore = `pose restore failed: ${error instanceof Error ? error.message : String(error)}`;
+    interruption = interruption ? `${interruption}; ${restore}` : restore;
   }
+  return interruption;
 }
 
 /** Restore the same top-of-document state used by baseline artifacts and probes. */
 export async function restoreTopScrollState(page: Page): Promise<void> {
-  const canScroll = await documentCanScroll(page);
-  await withEvaluateTimeout(page.evaluate(() => {
+  // One evaluate, issued first: if the driver stops waiting for it, the page
+  // still runs it, in order, before any later measurement.
+  const canScroll = await withEvaluateTimeout(page.evaluate((poseKey) => {
+    // Supersede any sweep still running in the page before taking the pose.
+    const owner = window as unknown as Record<string, number>;
+    owner[poseKey] = (owner[poseKey] ?? 0) + 1;
+    const overflow = document.documentElement.scrollHeight > window.innerHeight ||
+      document.documentElement.scrollWidth > window.innerWidth;
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     window.dispatchEvent(new Event('scroll'));
-  }), EVALUATE_GRACE_MS);
+    return overflow;
+  }, SCROLL_POSE_GENERATION), EVALUATE_GRACE_MS);
   // Let throttled scroll handlers start their transitions before settling them.
   if ( canScroll ) await new Promise((resolve) => setTimeout(resolve, 400));
   await waitForAnimations(page);

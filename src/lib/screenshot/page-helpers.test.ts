@@ -321,13 +321,13 @@ describe('triggerLazyLoad', () => {
   it('does not throw on networkidle hang', async () => {
     const page = makePage();
     page.waitForLoadState = vi.fn().mockRejectedValue(new Error('timeout'));
-    await expect(triggerLazyLoad(page as never)).resolves.toBeUndefined();
+    await expect(triggerLazyLoad(page as never)).resolves.toBeNull();
   });
 
   it('does not throw on page.evaluate failure', async () => {
     const page = makePage();
     page.evaluate = vi.fn().mockRejectedValue(new Error('page crashed'));
-    await expect(triggerLazyLoad(page as never)).resolves.toBeUndefined();
+    await expect(triggerLazyLoad(page as never)).resolves.toBe('page crashed; pose restore failed: page crashed');
   });
 
   it('preserves network idle before responsive geometry learning', async () => {
@@ -372,6 +372,38 @@ describe('triggerLazyLoad', () => {
     expect(await page.locator('img').count()).toBe(2);
     await page.close();
   });
+
+  it('stops an abandoned in-page sweep before it moves the restored pose', async () => {
+    // An overloaded driver can stop waiting for a sweep (its evaluate timeout
+    // fires) while the page keeps running the scroll loop. The observation
+    // read right after must find the top pose, not a sweep still walking down.
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.setContent('<style>body{margin:0}</style><main style="height:20000px">Content</main>');
+      let abandoned = 0;
+      const stalled = new Proxy(page, {
+        get(target, property, receiver) {
+          if (property !== 'evaluate') return Reflect.get(target, property, receiver);
+          return (fn: unknown, arg?: unknown) => {
+            if (String(fn).includes('pauseMs') && ++abandoned === 1) {
+              // The page receives the sweep and keeps running it; the driver hears nothing back.
+              void target.evaluate(fn as never, { ...(arg as object), maxMs: 60_000 } as never).catch(() => undefined);
+              return Promise.reject(new Error('evaluate timeout after 25000ms'));
+            }
+            return target.evaluate(fn as never, arg as never);
+          };
+        },
+      });
+      const interruption = await triggerLazyLoad(stalled);
+      expect(interruption).toBe('evaluate timeout after 25000ms');
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+      // The abandoned loop takes another step every 200ms unless the restore superseded it.
+      await page.waitForTimeout(700);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+    } finally {
+      await page.close();
+    }
+  }, 30_000);
 
   it('restores the top pose when a sweep step is interrupted after reaching the bottom', async () => {
     // The first sweep reaches the bottom; the next settle round's sweep is
@@ -518,7 +550,7 @@ describe('triggerLazyLoad', () => {
     </body></html>`);
 
     const started = Date.now();
-    await expect(triggerLazyLoad(page as never)).resolves.toBeUndefined();
+    await expect(triggerLazyLoad(page as never)).resolves.toBeNull();
     const elapsed = Date.now() - started;
     // Internal settle budget is ~20s; give generous headroom above that
     // without allowing it to degrade into an unbounded wait.
