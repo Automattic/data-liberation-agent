@@ -9,9 +9,11 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
+import { chromium } from 'playwright';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exportWebsiteCapture } from '../capture-export.js';
 import {
@@ -1304,3 +1306,54 @@ describe( 'CapturedResourceStore', () => {
 		expect( storedMedia ).toHaveLength( 2 );
 	} );
 } );
+
+describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
+	'beacon requests in a real browser',
+	() => {
+		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async () => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-beacon-' ) );
+			dirs.push( outputDir );
+			const server = createServer( ( req, res ) => {
+				if ( req.url === '/' ) {
+					res.setHeader( 'content-type', 'text/html' );
+					res.end(
+						`<!doctype html><title>t</title><script>
+						fetch('/data/items.json').then(r => r.json());
+						fetch('/__beacon/trackevents', { method: 'POST', body: '{"e":1}' });
+						navigator.sendBeacon('/analytics/collect', '{"e":2}');
+						fetch('/analytics/ping', { method: 'PUT', body: 'x' });
+						</script>`
+					);
+				} else if ( req.url === '/data/items.json' ) {
+					res.setHeader( 'content-type', 'application/json' );
+					res.end( '{"items":[1]}' );
+				} else {
+					res.setHeader( 'content-type', 'application/json' );
+					res.end( '{"accepted":true}' );
+				}
+			} );
+			await new Promise< void >( ( done ) => server.listen( 0, '127.0.0.1', done ) );
+			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+			const browser = await chromium.launch();
+			try {
+				const page = await browser.newPage();
+				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
+				store.observe( page );
+				await page.goto( `${ origin }/`, { waitUntil: 'networkidle' } );
+				await page.waitForTimeout( 300 );
+				await store.settle( page );
+				await store.flush();
+				const manifest = JSON.parse(
+					readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+				);
+				expect( Object.keys( manifest.resources ) ).toEqual( [ `${ origin }/data/items.json` ] );
+				expect( manifest.failures ).toEqual( [] );
+				expect( existsSync( join( outputDir, 'resources', '__beacon' ) ) ).toBe( false );
+				expect( existsSync( join( outputDir, 'resources', 'analytics' ) ) ).toBe( false );
+			} finally {
+				await browser.close();
+				await new Promise( ( done ) => server.close( done ) );
+			}
+		}, 30_000 );
+	}
+);

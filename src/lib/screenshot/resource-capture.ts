@@ -564,6 +564,15 @@ export class CapturedResourceStore {
 		const resourceType = request.resourceType();
 		if ( ! CAPTURED_RESOURCE_TYPES.has( resourceType ) ) return Promise.resolve();
 
+		// Only GET responses can be page resources. A POST/PUT/PATCH/DELETE response is the
+		// result of an action, such as an analytics event or form submit, and a
+		// static copy of the page has nothing to serve it from. `fetch()` and
+		// `sendBeacon()` calls to same-origin tracking endpoints land here with
+		// resource type `fetch`, and saving their reply produced files like
+		// `resources/__l5e/trackevents` that importers reject as non-static.
+		const method = request.method?.() ?? 'GET';
+		if ( method !== 'GET' ) return Promise.resolve();
+
 		// A 3xx response is a transport hop, not a completed resource: Playwright
 		// fires a SEPARATE 'response' event (with its own Request) for the
 		// redirect target, so this one contributes nothing to capture. Recording
