@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Session } from 'node:inspector/promises';
 import { chromium, devices, type Page } from 'playwright';
 import * as cheerio from 'cheerio';
 import { exportWebsiteCapture } from './capture-export.js';
@@ -58,6 +59,39 @@ async function observation( page: Page ) {
 		};
 	} );
 }
+
+it.each( [ false, true ] )( 'normalizes each distinct captured document once for assembly and evidence (identical: %s)', async ( identical ) => {
+	const session = new Session(); session.connect();
+	try {
+		await session.post( 'Profiler.enable' );
+		await session.post( 'Profiler.startPreciseCoverage', { callCount: true, detailed: false } );
+		const dir = directory();
+		const html = exported( dir, true, document => ( identical ? fixture( 'desktop' ) : document ).replace(
+			'</main>', '</main><div data-note="HS-FORM-FRAME">Authored &amp; marker</div><div class="other-hs-form-frame">Not a form frame</div>'
+		) );
+		const coverage = await session.post( 'Profiler.takePreciseCoverage' );
+		await session.post( 'Profiler.stopPreciseCoverage' );
+		const normalization = coverage.result
+			.filter( script => script.url.endsWith( '/src/lib/capture-export.ts' ) )
+			.flatMap( script => script.functions )
+			.find( fn => fn.functionName === 'renderedHtml' );
+		expect( normalization ).toBeDefined();
+		// Measure the actual export owner, without replacing its parser or I/O.
+		// Desktop/mobile previously ran twice while tablet ran once.
+		expect( normalization!.ranges[ 0 ].count ).toBe( identical ? 1 : 3 );
+		const $ = cheerio.load( html );
+		expect( $( '[data-dla-document-scope]' ).toArray().map( node => node.attribs['data-dla-device-document'] ) ).toEqual( [ 'desktop', 'mobile', 'tablet' ] );
+		for ( const key of selection.documents ) expect( $( `[data-dla-device-document="${ key }"]` ).text() ).toContain( `${ identical ? 'desktop' : key } document` );
+		expect( $( '[data-note="HS-FORM-FRAME"]' ) ).toHaveLength( 3 );
+		expect( $( '.other-hs-form-frame' ) ).toHaveLength( 3 );
+		expect( html ).toContain( 'Authored &amp; marker' );
+		expect( $( 'iframe[src*="hsforms"]' ) ).toHaveLength( 0 );
+		expect( $( 'html' ) ).toHaveLength( 1 );
+		expect( $( 'body' ) ).toHaveLength( 1 );
+		expect( html ).not.toContain( 'sourceOnly' );
+		expect( JSON.parse( readFileSync( join( dir, 'source-profile.json' ), 'utf8' ) ) ).toMatchObject( { documentsPerRoute: 3, documentSelection: { kind: 'device' } } );
+	} finally { session.disconnect(); }
+} );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-owned document selection', () => {
 	it( 'preserves class-only body box styling on the real selected body', async () => {

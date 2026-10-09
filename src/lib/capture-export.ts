@@ -431,7 +431,9 @@ function renderedHtml( html: string ): string {
 }
 
 function normalizedDeclarativeFormEmbeds( html: string ): string {
-	if ( ! /<div\b[^>]*\bhs-form-frame\b/i.test( html ) ) return html;
+	// Most documents have no frame marker. Check that necessary condition
+	// before scanning and backtracking through every div's attributes.
+	if ( ! /hs-form-frame/i.test( html ) || ! /<div\b[^>]*\bhs-form-frame\b/i.test( html ) ) return html;
 	const $ = cheerio.load( html );
 	let retained = 0;
 	$( 'div.hs-form-frame' ).each( ( _index, element ) => {
@@ -1298,13 +1300,25 @@ function buildExportCapture(
 			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
 			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
 		}
-		const desktopHtml = normalizedDeclarativeFormEmbeds( renderedHtml( rawDesktopHtml ) );
+		// Evidence and assembly normalize the same source documents. Keep one
+		// result per exact input within this route, without retaining parser trees
+		// or carrying document state into the next route.
+		const normalizedDocuments = new Map< string, string >();
+		const portableDocument = ( html: string ): string => {
+			let normalized = normalizedDocuments.get( html );
+			if ( normalized === undefined ) {
+				normalized = normalizedDeclarativeFormEmbeds( renderedHtml( html ) );
+				normalizedDocuments.set( html, normalized );
+			}
+			return normalized;
+		};
+		const desktopHtml = portableDocument( rawDesktopHtml );
 		const mobileHtml =
 			rawMobileHtml === undefined
 				? undefined
-				: normalizedDeclarativeFormEmbeds( renderedHtml( rawMobileHtml ) );
+				: portableDocument( rawMobileHtml );
 		const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
-			Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, normalizedDeclarativeFormEmbeds( renderedHtml( html ) ) ] ) ), selection
+			Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection
 		) : undefined;
 		if ( deviceAssembly ) {
 			deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
@@ -1321,8 +1335,9 @@ function buildExportCapture(
 			switchWidth: detectedFloor,
 		} );
 		const capturedHtml = assembly.portableNormalization === 'pending'
-			? normalizedDeclarativeFormEmbeds( renderedHtml( assembly.html ) )
+			? portableDocument( assembly.html )
 			: assembly.html;
+		normalizedDocuments.clear();
 		// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
 		const styleHoistContext = capturedStyleHoistContext( capturedHtml );
 		const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
