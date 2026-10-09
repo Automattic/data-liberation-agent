@@ -1775,11 +1775,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	}
 	const frontier = opts.linkedPages ? new LinkedFrontier( {
 		...opts.linkedPages,
-		...(opts.limit !== undefined && opts.limit > 0
-			? { maxPages: Math.min(opts.limit, opts.linkedPages.maxPages ?? 256) }
-			: {}),
+		capturePageLimit: opts.limit !== undefined && opts.limit >= 0 ? opts.limit : undefined,
 	}, startTime ) : undefined;
-	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0));
+	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0, startTime, 'inventory'));
 	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
 
 	// --- same-origin ---------------------------------------------------------
@@ -1915,10 +1913,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// A redirect alias's target joins the queue unless its route is already in
 	// it, so each route is captured once however many URLs redirect to it.
 	const queuedRoutes = new Set( urls.map( documentRequestUrl ) );
-	const enqueue = (target: string, depth: number): void => {
+	const enqueue = (target: string, depth: number, ownership: 'linked' | 'alias' = 'linked'): void => {
 		const key = documentRequestUrl(target);
 		if (queuedRoutes.has(key)) return;
-		if (frontier && !frontier.admit(key, depth)) return;
+		if (frontier && !frontier.admit(key, depth, Date.now(), ownership)) return;
 		queuedRoutes.add(key);
 		if (frontier) target = key;
 		urls.push(target);
@@ -1928,12 +1926,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const capturedAt = () => new Date().toISOString();
 
 	const processUrl = async ( url: string ): Promise< void > => {
-		if (frontier?.expired()) {
-			frontier.recordTimeout(url);
-			skipped++; completed++;
-			opts.onProgress?.(completed, urls.length, url);
-			return;
-		}
 		const routeStartedAt = Date.now();
 		const base = slugify( url );
 		// On resume the URL may already have an entry — reuse its slug so the
@@ -2212,7 +2204,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( entry.redirectedTo && !urlFailures.length ) {
 			const target = entry.redirectedTo;
-			enqueue(target, frontier?.depths.get(url) ?? 0);
+			enqueue(target, frontier?.depths.get(url) ?? 0, 'alias');
 			skipped++;
 			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
 			completed++;
