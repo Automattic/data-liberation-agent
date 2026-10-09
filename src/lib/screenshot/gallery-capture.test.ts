@@ -54,6 +54,21 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	} finally { await browser.close(); }
 }, 60_000);
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('retries gallery actions ignored during the source transition lock', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		await page.setContent(`<!doctype html><section id="locked"><div id="stage">${[0,1,2,3,4].map(i => `<img width="80" height="80" src="${image(i)}">`).join('')}</div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
+		let index=0,locked=false;const urls=Array.from(document.querySelectorAll('#stage img'),img=>img.src);
+		function change(dir){if(locked)return;locked=true;index=(index+dir+5)%5;setTimeout(()=>{document.querySelectorAll('#stage img').forEach((img,slot)=>img.src=urls[(index+slot)%5]);setTimeout(()=>locked=false,300);},150);}
+		document.querySelector('[aria-label="Next picture"]').onclick=()=>change(1);document.querySelector('[aria-label="Previous picture"]').onclick=()=>change(-1);
+		</script>`);
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(5);
+	} finally { await browser.close(); }
+}, 90_000);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'replays observed cycles and image-opened galleries offline at phone, tablet and desktop widths',
 	async () => {
