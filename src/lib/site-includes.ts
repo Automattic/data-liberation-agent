@@ -69,6 +69,15 @@ function readContained( root: string, file: string, limit: number ): string {
 
 /** Compile a route in memory. No expanded copy or browser assembly is persisted. */
 export function readResolvedPage( root: string, file: string, limits = SITE_INCLUDE_LIMITS ): string {
+	return resolvePage( root, file, limits ).html;
+}
+
+/** A compiled route and every file whose bytes it was assembled from. */
+export interface ResolvedPage { html: string; files: string[] }
+
+/** Compile a route in memory, reporting the page and include files it read. */
+export function resolvePage( root: string, file: string, limits = SITE_INCLUDE_LIMITS ): ResolvedPage {
+	const files = new Set< string >();
 	let reads = 0;
 	let readBytes = 0;
 	function expand( path: string, stack: string[] ): string {
@@ -76,6 +85,7 @@ export function readResolvedPage( root: string, file: string, limits = SITE_INCL
 		if ( stack.includes( absolute ) ) throw new Error( 'Site include cycle' );
 		if ( stack.length >= limits.depth || ++reads > limits.reads ) throw new Error( 'Site include expansion limit' );
 		const html = readContained( root, absolute, Math.min( limits.fileBytes, limits.expandedBytes ) );
+		files.add( absolute );
 		readBytes += Buffer.byteLength( html );
 		if ( readBytes > limits.expandedBytes ) throw new Error( 'Site include expansion exceeds byte read limit' );
 		const chunks: string[] = [];
@@ -94,5 +104,66 @@ export function readResolvedPage( root: string, file: string, limits = SITE_INCL
 		append( html.slice( offset ) );
 		return chunks.join( '' );
 	}
-	return expand( file, [] );
+	const html = expand( file, [] );
+	return { html, files: [ ...files ] };
+}
+
+/** Identity of one file's on-disk state; any replacement, rename or write changes it. */
+function fileState( path: string ): { identity: string; changedNs: bigint } | null {
+	try {
+		const stat = lstatSync( path, { bigint: true } );
+		return stat.isFile() ? { identity: `${ stat.dev }:${ stat.ino }:${ stat.size }:${ stat.mtimeNs }:${ stat.ctimeNs }`, changedNs: stat.ctimeNs } : null;
+	} catch {
+		return null;
+	}
+}
+
+// Coarse filesystem timestamps can date a change made during a read before it.
+const TIMESTAMP_GRANULARITY_NS = 2_000_000_000n;
+
+/**
+ * Resolve each route once and reuse its bytes until the page or any include it
+ * read changes on disk. Parsing a multi-megabyte page is synchronous work; a
+ * server sharing its event loop with the browser driver must not repeat it for
+ * every request of an unchanged route. A changed, missing or replaced file
+ * re-runs full resolution, so its bounds, symlink and cycle checks still apply.
+ */
+export function createResolvedPageCache( root: string, { maxBytes = 256 * 1024 * 1024, timestampGranularityNs = TIMESTAMP_GRANULARITY_NS } = {} ) {
+	const entries = new Map< string, { html: Buffer; files: Array< [ string, string ] > } >();
+	let bytes = 0;
+	return ( file: string ): Buffer => {
+		const key = resolve( file );
+		const cached = entries.get( key );
+		if ( cached && cached.files.every( ( [ path, identity ] ) => fileState( path )?.identity === identity ) ) {
+			// Refresh recency for eviction.
+			entries.delete( key );
+			entries.set( key, cached );
+			return cached.html;
+		}
+		if ( cached ) {
+			entries.delete( key );
+			bytes -= cached.html.length;
+		}
+		const startedNs = BigInt( Date.now() ) * 1_000_000n;
+		const page = resolvePage( root, key );
+		const html = Buffer.from( page.html );
+		// A file changed while (or just before) it was read may not match the
+		// identity taken now; serve those bytes once, but never reuse them.
+		const files: Array< [ string, string ] > = [];
+		for ( const path of page.files ) {
+			const state = fileState( path );
+			if ( ! state || state.changedNs >= startedNs - timestampGranularityNs ) return html;
+			files.push( [ path, state.identity ] );
+		}
+		if ( html.length <= maxBytes ) {
+			entries.set( key, { html, files } );
+			bytes += html.length;
+			for ( const [ oldest, entry ] of entries ) {
+				if ( bytes <= maxBytes ) break;
+				entries.delete( oldest );
+				bytes -= entry.html.length;
+			}
+		}
+		return html;
+	};
 }

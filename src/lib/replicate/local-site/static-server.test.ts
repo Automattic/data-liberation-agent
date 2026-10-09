@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { startStaticServer, resolveRequestPath, type StaticServer } from './static-server.js';
 import { extractSharedChrome } from '../../shared-chrome.js';
-import { includeReferences, readResolvedPage, SITE_INCLUDE_LIMITS } from '../../site-includes.js';
+import { createResolvedPageCache, includeReferences, readResolvedPage, SITE_INCLUDE_LIMITS } from '../../site-includes.js';
 import { checkSelfConsistency } from '../../fidelity/self-consistency.js';
 import { createZipArchive } from '../../publish/zip.js';
 
@@ -70,6 +70,47 @@ describe('startStaticServer', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('resolves an unchanged route once and re-resolves it when the page or an include changes', async () => {
+    const dir = makeSite();
+    try {
+      mkdirSync(join(dir, 'parts'));
+      const part = join(dir, 'parts', 'header-a.html');
+      const page = join(dir, 'index.html');
+      writeFileSync(part, '<header>Brand</header>');
+      writeFileSync(page, '<!--#include virtual="/parts/header-a.html" --><main>Body</main>');
+      // Settle the writes before the read starts (the read start has millisecond precision).
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const read = createResolvedPageCache(dir, { timestampGranularityNs: 0n });
+      const first = read(page);
+      expect(first.toString()).toBe(readResolvedPage(dir, page));
+      // The same bytes, not a second parse of the same page.
+      expect(read(page)).toBe(first);
+      writeFileSync(part, '<header>Edited brand</header>');
+      expect(read(page).toString()).toBe('<header>Edited brand</header><main>Body</main>');
+      writeFileSync(page, '<!--#include virtual="/parts/header-a.html" --><main>New body</main>');
+      expect(read(page).toString()).toBe('<header>Edited brand</header><main>New body</main>');
+      rmSync(part);
+      symlinkSync(join(dir, 'about.html'), part);
+      expect(() => read(page)).toThrow(/symlink/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('does not reuse a route read while one of its files was being written', () => {
+    const dir = makeSite();
+    try {
+      mkdirSync(join(dir, 'parts'));
+      const page = join(dir, 'index.html');
+      writeFileSync(join(dir, 'parts', 'header-a.html'), '<header>Brand</header>');
+      writeFileSync(page, '<!--#include virtual="/parts/header-a.html" -->');
+      // Coarse timestamps cannot order a fresh write against the read, so the
+      // bytes are served but never cached.
+      const read = createResolvedPageCache(dir);
+      const first = read(page);
+      expect(read(page)).not.toBe(first);
+      expect(read(page).toString()).toBe(first.toString());
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('keeps route/nav/mobile variants and excludes content-local landmarks', () => {
