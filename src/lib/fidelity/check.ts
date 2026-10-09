@@ -721,7 +721,7 @@ export async function observePage(
 			let bodyText = document.body?.innerText ?? '';
 			// innerText reports text in overflow-clipped offstage content. Remove
 			// a text node only when none of its actual range boxes intersects an
-			// ancestor clip; any partly painted run remains counted. Do not use
+			// ancestor overflow/CSS rect clip; any partly painted run remains counted. Do not use
 			// carousel selectors, aria-hidden, or viewport position.
 			bodyText = bodyText.replace( /\s+/g, ' ' ).trim();
 			const textNodes: Array< { text: string; clipped: boolean } > = [];
@@ -740,13 +740,37 @@ export async function observePage(
 				const painted = rects.some( rect => {
 					if ( rect.width <= 0 || rect.height <= 0 ) return false;
 					let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
-					for ( let ancestor: HTMLElement | null = parent; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement ) {
+					for ( let ancestor: HTMLElement | null = parent; ancestor && ancestor !== document.documentElement; ancestor = ancestor.parentElement ) {
 						const style = getComputedStyle( ancestor );
 						if ( style.display === 'contents' ) continue;
-						if ( ! [ 'hidden', 'clip' ].includes( style.overflowX ) && ! [ 'hidden', 'clip' ].includes( style.overflowY ) ) continue;
+						// Legacy clip applies only to absolutely positioned boxes (including
+						// fixed), with offsets from the border box. Computed lengths are px;
+						// auto names that edge of the border box, not an empty rectangle.
+						const clip = [ 'absolute', 'fixed' ].includes( style.position ) && style.clip.match( /^rect\((.*)\)$/ );
+						const overflowX = ancestor !== document.body && [ 'hidden', 'clip' ].includes( style.overflowX );
+						const overflowY = ancestor !== document.body && [ 'hidden', 'clip' ].includes( style.overflowY );
+						if ( ! clip && ! overflowX && ! overflowY ) continue;
 						const box = ancestor.getBoundingClientRect();
-						if ( [ 'hidden', 'clip' ].includes( style.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
-						if ( [ 'hidden', 'clip' ].includes( style.overflowY ) ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
+						if ( clip ) {
+							const edges = clip[ 1 ]!.split( /[,\s]+/ ).filter( Boolean );
+							if ( edges.length === 4 && edges.every( edge => edge === 'auto' || /^-?[\d.]+px$/.test( edge ) ) ) {
+								const [ ct, cr, cb, cl ] = edges.map( edge => edge === 'auto' ? null : parseFloat( edge ) );
+								// An empty local clip stays empty under any transform. Nonempty
+								// transformed clips need polygon geometry; retain them conservatively.
+								if ( ( cr != null && cl != null && cr <= cl ) || ( cb != null && ct != null && cb <= ct ) ) return false;
+								let transformed = false;
+								for ( let node: HTMLElement | null = ancestor; node; node = node.parentElement ) {
+									const css = getComputedStyle( node );
+									if ( css.transform !== 'none' || css.translate !== 'none' || css.rotate !== 'none' || css.scale !== 'none' || css.perspective !== 'none' || css.zoom !== '1' ) { transformed = true; break; }
+								}
+								if ( ! transformed ) {
+									left = Math.max( left, box.left + ( cl ?? 0 ) ); right = Math.min( right, cr == null ? box.right : box.left + cr );
+									top = Math.max( top, box.top + ( ct ?? 0 ) ); bottom = Math.min( bottom, cb == null ? box.bottom : box.top + cb );
+								}
+							}
+						}
+						if ( overflowX ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
+						if ( overflowY ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
 					}
 					return right > left && bottom > top;
 				} );
