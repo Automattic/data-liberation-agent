@@ -1,12 +1,29 @@
 import { existsSync } from 'node:fs';
-import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { chromium as playwrightChromium } from 'playwright';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { captureRouteNavigation, captureTriggeredDialogs, INTERACTION_STATES_SCHEMA } from './interaction-capture.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from '../static-dialogs.js';
 
 // Browser-backed tests skip — not fail — in checkouts without Playwright's
 // Chromium (`npm install` does not download it; `npm run setup:browser` does).
-const skipBrowserTests = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
+const skipBrowserTests = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( playwrightChromium.executablePath() );
+
+let sharedBrowser: import('playwright').Browser;
+const chromium = {
+	executablePath: () => playwrightChromium.executablePath(),
+	launch: async (_options?: { headless?: boolean }) => new Proxy(sharedBrowser, {
+		get(target, property) {
+			if (property === 'close') return async () => {};
+			const value = Reflect.get(target, property, target);
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	}),
+};
+beforeAll(async () => { if (!skipBrowserTests) sharedBrowser = await playwrightChromium.launch({ headless: true }); });
+afterEach(async () => {
+	for (const context of sharedBrowser?.contexts() ?? []) await context.close();
+});
+afterAll(async () => { await sharedBrowser?.close(); });
 
 it.skipIf( skipBrowserTests )( 'replays a dropdown in its observed flow slot with verified ancestor paint and closed restoration', async () => {
 	const browser = await chromium.launch( { headless: true } );
