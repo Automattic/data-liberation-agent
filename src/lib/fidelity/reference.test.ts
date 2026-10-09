@@ -1,14 +1,14 @@
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium, devices } from 'playwright';
+import { chromium, devices, type BrowserContext, type Page } from 'playwright';
 import { PNG } from 'pngjs';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { applySourceCleanup, cleanupPolicy } from '../source-cleanup.js';
 import { checkFidelity, observePage } from './check.js';
-import { createReferenceCollector, type FidelityReference } from './reference.js';
+import { createReferenceCollector, readFrozenObservation, readReferenceArtifact, type FidelityReference } from './reference.js';
 import { matchRenderedImages } from './score.js';
 import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
@@ -17,6 +17,95 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 	let sharedBrowser: Awaited< ReturnType< typeof chromium.launch > >;
 	beforeAll( async () => { sharedBrowser = await chromium.launch(); } );
 	afterAll( async () => { await sharedBrowser?.close(); }, 30_000 );
+	it.each( [ 'profile', 'sibling', 'borrowed', 'persistent' ] as const )( 'releases only owned %s resources on success and navigation failure', async mode => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, `reference-lifetime-${ mode }-` ) );
+		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font:20px monospace}</style><h1>Neutral reference lifetime</h1>';
+		let activeRequests = 0; let peakRequests = 0;
+		const source = createServer( ( request, response ) => {
+			activeRequests++; peakRequests = Math.max( peakRequests, activeRequests );
+			setTimeout( () => {
+				response.writeHead( request.url === '/failed' ? 500 : 200, { 'content-type': 'text/html' } );
+				response.end( html ); activeRequests--;
+			}, 100 );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		const browser = await chromium.launch();
+		const identity = { screen: { width: 1920, height: 1080 }, userAgent: 'NeutralReference/1', deviceScaleFactor: 1 };
+		const persistent = mode === 'persistent' ? await chromium.launchPersistentContext( join( directory, 'browser' ), { headless: true } ) : undefined;
+		const context = persistent ?? ( mode === 'borrowed' ? ( await browser.newPage() ).context() : await browser.newContext( identity ) );
+		const page = context.pages()[ 0 ] ?? await context.newPage();
+		const siblingAcquisitions = vi.spyOn( context, 'newPage' );
+		const ownedContexts: BrowserContext[] = []; const ownedPages: Page[] = [];
+		const newContext = browser.newContext.bind( browser );
+		const contextAcquisitions = vi.spyOn( browser, 'newContext' ).mockImplementation( async options => {
+			const cellContext = await newContext( options ); ownedContexts.push( cellContext );
+			const newPage = cellContext.newPage.bind( cellContext );
+			vi.spyOn( cellContext, 'newPage' ).mockImplementation( async () => {
+				const cellPage = await newPage(); ownedPages.push( cellPage ); vi.spyOn( cellPage, 'close' ); return cellPage;
+			} );
+			vi.spyOn( cellContext, 'close' ); return cellContext;
+		} );
+		const collect = process.env.DLA_REFERENCE_BASELINE ? ( await import( process.env.DLA_REFERENCE_BASELINE ) ).createReferenceCollector as typeof createReferenceCollector : createReferenceCollector;
+		const started = Date.now();
+		try {
+			await page.goto( url ); await page.evaluate( () => localStorage.setItem( 'visitor', 'source-session' ) );
+			const observed: { width: number; screen: number; visitor: string | null }[] = [];
+			const collector = collect( directory, url, [ url ], { prepareCapture: async cellPage => {
+				observed.push( await cellPage.evaluate( () => ( { width: innerWidth, screen: screen.width, visitor: localStorage.getItem( 'visitor' ) } ) ) );
+				if ( mode === 'profile' ) await cellPage.evaluate( () => localStorage.setItem( 'visitor', 'reference-cell' ) );
+			} } );
+			const profile = mode === 'profile' ? { id: 'desktop', width: 1440, height: 900, context: identity } : undefined;
+			const addedListeners = vi.spyOn( page, 'on' ); const removedListeners = vi.spyOn( page, 'off' );
+			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, profile );
+			await collector.observe( page, `${ url }failed`, 'desktop', [], { isMobile: false, hasTouch: false }, profile );
+			const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+			const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+			const successes = manifest.entries.filter( entry => entry.sourceUrl === url );
+			const failures = manifest.entries.filter( entry => entry.sourceUrl !== url );
+			expect( manifest.scope.cells ).toHaveLength( 4 );
+			expect( successes.map( entry => entry.viewport ) ).toEqual( [ 768, 1440 ] );
+			for ( const entry of successes ) {
+				expect( readFrozenObservation( directory, entry ).observation.textChars ).toBe( 'Neutral reference lifetime'.length );
+				expect( readReferenceArtifact( directory, entry.document! ).toString() ).toContain( 'Neutral reference lifetime' );
+			}
+			for ( const entry of failures ) {
+				expect( entry.readiness ).toMatchObject( { ready: false, reasons: [ 'Error: Reference navigation HTTP 500' ] } );
+				expect( entry.document ).toBeUndefined();
+				expect( () => readFrozenObservation( directory, entry ) ).toThrow( 'Source evidence unready' );
+			}
+			expect( observed.map( item => item.width ).sort( ( a, b ) => a - b ) ).toEqual( [ 768, 1440 ] );
+			expect( observed.every( item => item.visitor === 'source-session' ) ).toBe( true );
+			if ( mode === 'profile' ) {
+				expect( observed.every( item => item.screen === identity.screen.width ) ).toBe( true );
+				expect( successes.every( entry => entry.userAgent === identity.userAgent ) ).toBe( true );
+				expect( new Set( ownedContexts ).size ).toBe( 4 );
+				expect( await page.evaluate( () => localStorage.getItem( 'visitor' ) ) ).toBe( 'source-session' );
+			}
+			expect( page.isClosed() ).toBe( false );
+			expect( context.pages() ).toEqual( [ page ] );
+			for ( const event of [ 'pageerror', 'crash' ] ) expect( removedListeners.mock.calls.filter( call => call[ 0 ] === event ) ).toEqual( addedListeners.mock.calls.filter( call => call[ 0 ] === event ) );
+			expect( browser.contexts() ).toEqual( persistent ? [] : [ context ] );
+			expect( ownedPages.every( cellPage => cellPage.isClosed() ) ).toBe( true );
+			if ( mode === 'borrowed' ) expect( peakRequests ).toBe( 1 );
+			const counts = { siblingAcquisitions: siblingAcquisitions.mock.calls.length, contextAcquisitions: contextAcquisitions.mock.calls.length,
+				pageCloses: ownedPages.reduce( ( count, cellPage ) => count + vi.mocked( cellPage.close ).mock.calls.length, 0 ),
+				contextCloses: ownedContexts.reduce( ( count, cellContext ) => count + vi.mocked( cellContext.close ).mock.calls.length, 0 ) };
+			if ( process.env.DLA_REFERENCE_EVIDENCE ) {
+				const evidence = process.env.DLA_REFERENCE_EVIDENCE; mkdirSync( evidence, { recursive: true } );
+				writeFileSync( join( evidence, `${ mode }.json` ), JSON.stringify( { mode, durationMs: Date.now() - started, counts, observed,
+					entries: manifest.entries.map( entry => ( { viewport: entry.viewport, readiness: entry.readiness, context: entry.context,
+						observation: entry.observation?.sha256, document: entry.document?.sha256, screenshot: entry.screenshot?.sha256 } ) ) }, null, 2 ) );
+			}
+			expect( counts ).toEqual( { siblingAcquisitions: mode === 'borrowed' || mode === 'profile' ? 2 : 6,
+				contextAcquisitions: mode === 'profile' ? 4 : 0, pageCloses: 0, contextCloses: mode === 'profile' ? 4 : 0 } );
+		} finally {
+			vi.restoreAllMocks(); await persistent?.close(); await browser.close();
+			source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) );
+			rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 60_000 );
 	it( 'accepts candidate-local canonical redirects using frozen evidence with the source stopped', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'frozen-canonical-redirects-' ) );

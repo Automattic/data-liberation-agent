@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import type { Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
 import { PNG } from 'pngjs';
 import { observePage, routeSourceMap } from './check.js';
 import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
@@ -103,7 +103,11 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			declare( url, recipe );
 			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device );
 			const sourceContext = page.context();
+			const browser = sourceContext.browser();
+			const identity = profile?.context ? replayBrowserIdentity( profile.context ) : undefined;
 			let supportsSiblingPages = false;
+			// Playwright exposes convenience ownership by rejecting newPage(). A
+			// preset-screen cell needs a separate context, so it cannot use this page.
 			try {
 				const probe = await sourceContext.newPage();
 				await probe.close();
@@ -111,43 +115,32 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			} catch { /* Convenience-owned contexts can only use the caller's page. */ }
 			const observeCell = async ( cell: ReferenceCell ): Promise<void> => {
 					const viewport = cell.viewport;
-					const identity = profile?.context ? replayBrowserIdentity( profile.context ) : undefined;
 					const entry: ReferenceEntry = { sourceUrl: url, viewport, viewportHeight: 900, device, profile: device, context: identity, state: 'baseline', readiness: { ready: false, reasons: [] } };
 					entries.push( entry );
 					let referencePage: Page | undefined;
-					let referenceContext: import('playwright').BrowserContext | undefined;
+					let ownedResource: BrowserContext | Page | undefined;
 					const runtimeError = ( error: Error ) => entry.readiness.reasons.push( `source runtime error: ${ error.message }` );
 					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
 					let releaseNavigation: (() => Promise<void>) | undefined;
 					let navigationUrl = url;
 					try {
-						const sourceContext = page.context();
-						const browser = typeof sourceContext.browser === 'function' ? sourceContext.browser() : null;
 						if ( identity?.screen && ! browser ) throw new Error( 'Preset screen replay requires a source browser context' );
 						if ( browser && supportsSiblingPages && profile ) {
 							// Page.setViewportSize resets screen even on an explicitly screened
 							// device context. Give every reference cell its own context at the
 							// target viewport; session state stays runtime-only, never in entry.
-							referenceContext = await browser.newContext( { ...identity, viewport: { width: viewport, height: 900 },
+							const referenceContext = await browser.newContext( { ...identity, viewport: { width: viewport, height: 900 },
 								storageState: await sourceContext.storageState(), ignoreHTTPSErrors: true,
 							} );
+							ownedResource = referenceContext;
 							await referenceContext.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 							referencePage = await referenceContext.newPage();
 						} else {
-							// Without an explicit screen, each width is an independent navigation
-							// in the source context. Resizing a page that has crossed breakpoints or
-							// scrolled can preserve runtime/header state that a fresh visitor does
-							// not have, making the reference describe a different pose than capture.
-							// browser.newPage() creates a convenience-owned context that cannot
-							// open sibling pages; keep that unit-test/one-off path compatible.
-							try {
-								referencePage = await page.context().newPage();
-							} catch {
-								// Convenience-owned contexts (browser.newPage()) cannot open a
-								// sibling page. Their callers already own the source page, so retain
-								// compatibility; capture's normal browser.newContext() path is fresh.
-								referencePage = page;
-							}
+							// Fresh siblings avoid resize/scroll history. Convenience-owned
+							// contexts borrow serially; after sibling support is proven,
+							// acquisition failures stay per-cell rather than borrowing concurrently.
+							referencePage = supportsSiblingPages ? await sourceContext.newPage() : page;
+							if ( supportsSiblingPages ) ownedResource = referencePage;
 							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
 						if (expectedBoundary) {
@@ -203,11 +196,12 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					} catch ( error ) {
 						entry.readiness.reasons.push( String( error ) );
 					} finally {
-						await releaseNavigation?.();
-						referencePage?.off( 'pageerror', runtimeError );
-						referencePage?.off( 'crash', rendererCrash );
-						if ( referencePage && referencePage !== page ) await referencePage.close().catch( () => {} );
-						await referenceContext?.close().catch( () => {} );
+						try { await releaseNavigation?.(); }
+						finally {
+							referencePage?.off( 'pageerror', runtimeError );
+							referencePage?.off( 'crash', rendererCrash );
+							await ownedResource?.close().catch( () => {} );
+						}
 					}
 				};
 			if ( supportsSiblingPages ) await Promise.all( referenceCells.map( observeCell ) );
