@@ -15,6 +15,24 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.14] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- observe reference cells concurrently
+- avoid resweeping completed image renditions
+- consolidate fluid capture sweeps
+- reduce linked-frontier browser test time
+- settle selectable activations on quiet and stop probing inert sets
+- settle on page signals
+- share Chromium across interaction suites
+- consolidate browser capture suites
+- share browser across replay suites
+- document browser test cost guidance
+
+### Fixed
+- carry adapter route ownership through admission and export
+
 ## [0.20.13] - 2026-10-09
 
 ### Changed
