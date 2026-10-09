@@ -354,7 +354,8 @@ export async function captureTriggeredDialogs(
 			// A menu control is a menu control whether authored as <button> or as
 			// role="button" (site builders often render the latter).
 			const isButton = element.tagName === 'BUTTON' || element.getAttribute( 'role' ) === 'button';
-			return element.getAttribute( 'role' ) === 'combobox' || ( isButton && /\bmenu\b/i.test( name ) );
+			return element.getAttribute( 'role' ) === 'combobox' ||
+				( isButton && ( element.getAttribute( 'role' ) === 'listbox' || /\bmenu\b/i.test( name ) ) );
 		} );
 
 		const ordered = [ ...candidates ];
