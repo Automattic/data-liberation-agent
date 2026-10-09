@@ -48,10 +48,11 @@ import { captureTypedSearchStates } from './typed-search-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
+import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -180,6 +181,8 @@ interface DesignCaptureContext {
 
 interface CapturePerViewportArgs {
 	page: Page;
+	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
+	phases?: PhaseLedger;
 	/** Stop best-effort stages after a crash; recovery belongs to the viewport loop. */
 	rendererCrashed: () => boolean;
 	learnFluid?: boolean;
@@ -749,6 +752,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		publicUrlsOnly,
 	} = args;
 	const now = () => new Date().toISOString();
+	/** Records one stage failure for this route and viewport. */
+	const fail = ( stage: FailureEntry['stage'], error: unknown, attempt = 1 ): void => {
+		failures.push( { url, viewport: viewport.id, stage, error: error instanceof Error ? error.message : String( error ), timestamp: now(), attempt } );
+	};
 	const isDesktop = viewport.id === 'desktop';
 	const isMobile = viewport.id === 'mobile';
 	// The adapter's rewrite of platform-owned identifiers applies to every stored
@@ -810,6 +817,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let navigationUrl = url;
 	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
 		try {
+			args.phases?.enter( 'navigate' );
 			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope});
 			if (navigation.boundary) {
 				const boundary = storeExternalBoundary(outputDir, navigation.boundary, viewport.width, args.browserProfile ?? {isMobile: false, hasTouch: false});
@@ -830,26 +838,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					await navSleep( navBackoffMs( attempt, response?.headers()[ 'retry-after' ] ) );
 					continue;
 				}
-				failures.push( {
-					url,
-					viewport: viewport.id,
-					stage: 'goto',
-					error: rejectedNavigationReason( status, response?.headers?.() ),
-					timestamp: now(),
-					attempt,
-				} );
+				fail( 'goto', rejectedNavigationReason( status, response?.headers?.() ), attempt );
 				return;
 			}
 			const notHtml = nonHtmlDocumentError( response?.headers?.()?.[ 'content-type' ] );
 			if ( notHtml ) {
-				failures.push( {
-					url,
-					viewport: viewport.id,
-					stage: 'goto',
-					error: notHtml,
-					timestamp: now(),
-					attempt,
-				} );
+				fail( 'goto', notHtml, attempt );
 				return;
 			}
 			navigated = true;
@@ -859,14 +853,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				await navSleep( navBackoffMs( attempt ) );
 				continue;
 			}
-			failures.push( {
-				url,
-				viewport: viewport.id,
-				stage: 'goto',
-				error: err instanceof Error ? err.message : String( err ),
-				timestamp: now(),
-				attempt,
-			} );
+			fail( 'goto', err, attempt );
 			return;
 		}
 	}
@@ -892,13 +879,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// request during baseline preparation is drift, even if aborting leaves the
 	// old DOM intact. Keep the network boundary without hiding the failure.
 	const baselineDrift = () => {
-		failures.push({url, viewport: viewport.id, stage: 'content', error: 'route drift: unexplained navigation during source baseline capture', timestamp: now(), attempt: 1});
+		fail( 'content', 'route drift: unexplained navigation during source baseline capture' );
 	};
 	let releaseBaselineNavigation = await lockMainFrameNavigation(page, baselineDrift, true);
 	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	await applySourceCleanup(page, sourcePolicy);
 
 	// --- settle, dismiss overlays, lazy load ----------------------------------
+	args.phases?.enter( 'settle' );
 	await waitForStable( page );
 	// A provider login withholding the whole route (a members-only page) was
 	// removed by the policy, leaving nothing of the page. Capture it as a
@@ -932,6 +920,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Dismiss takeover modals / consent banners BEFORE lazy-load (a modal's
 	// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
 	// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
+	args.phases?.enter( 'lazy-load' );
 	const dismissedEarly = await dismissOverlays( page );
 	await triggerLazyLoad( page, args.learnFluid === true );
 	const dismissedLate = await dismissOverlays( page );
@@ -947,14 +936,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// progress on it, so stop now with the real reason instead of letting the
 	// next unbounded evaluate wait for the renderer to die.
 	if ( ! ( await pageResponds( page, evaluateTimeoutMs ) ) ) {
-		failures.push( {
-			url,
-			viewport: viewport.id,
-			stage: 'evaluate',
-			error: `page stopped responding while settling (overlay dismissal / lazy load): no answer to an evaluate within ${ evaluateTimeoutMs }ms`,
-			timestamp: now(),
-			attempt: 1,
-		} );
+		fail( 'evaluate', `page stopped responding while settling (overlay dismissal / lazy load): no answer to an evaluate within ${ evaluateTimeoutMs }ms` );
 		return;
 	}
 
@@ -1014,6 +996,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// script is running, so read its states before any layout measurement.
 	// Observe actions while source geometry and lazy-image owners are still live.
 	// Width learning can freeze hidden overlay boxes; it cannot be the input to an action drive.
+	args.phases?.enter( 'galleries' );
 	const galleryStates = await captureGalleries(page).catch(() => []);
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
 	// Browser probes can scroll an offscreen control into view. Native view
@@ -1024,7 +1007,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
 	} ), evaluateTimeoutMs ); }
 	catch ( error ) {
-		failures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `source baseline reset unproven: ${ String( error ) }`, timestamp: now(), attempt: 1 } );
+		fail( 'evaluate', `source baseline reset unproven: ${ String( error ) }` );
 		return;
 	}
 	await args.observeSource?.( page, url, viewport.id, sourceErrors, args.browserProfile, viewport );
@@ -1040,17 +1023,18 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				entry.nativeViewTimelines[ viewport.id ] = { path: `native-view-timelines/${ viewport.id }/${ slug }.json`, preserved: native.preserved, losses: native.losses, status: native.status, failures: native.failures };
 			}
 			if ( native.status === 'unproven' ) {
-				failures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `native timeline source capture unproven: ${ native.failures.join( '; ' ) }`, timestamp: now(), attempt: 1 } );
+				fail( 'evaluate', `native timeline source capture unproven: ${ native.failures.join( '; ' ) }` );
 				return;
 			}
 		} catch ( error ) {
-			failures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `native timeline capture failed: ${ String( error ) }`, timestamp: now(), attempt: 1 } );
+			fail( 'evaluate', `native timeline capture failed: ${ String( error ) }` );
 			return;
 		}
 	}
 
 	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
 		try {
+			args.phases?.enter( 'fluid' );
 			const learned = await learnAndApplyFluidGeometry( page, {
 				document: isDesktop ? 'desktop' : 'mobile',
 				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
@@ -1066,18 +1050,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		} catch ( error ) {
 			// Never fail a capture over the optimization: a frozen copy still
 			// beats no copy, and the diagnostics record that it stayed frozen.
-			failures.push( {
-				url,
-				viewport: viewport.id,
-				stage: 'content',
-				error: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
-				timestamp: now(),
-				attempt: 1,
-			} );
+			fail( 'content', `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }` );
 		}
 	}
 	if ( args.rendererCrashed() ) return;
 
+	args.phases?.enter( 'slideshows' );
 	await applyPagerSlideshowStates( page, pagerSlideshows ).catch( () => {
 		/* best-effort — a picker that will not advance must not block capture */
 	} );
@@ -1107,6 +1085,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// same state across the visual reference and its HTML transaction.
 	if ( plan.captureFullpage ) {
 		try {
+			args.phases?.enter( 'screenshot' );
 			const buf = await withScreenshotTimeout(
 				page.screenshot( { fullPage: true, type: 'png' } ),
 				screenshotTimeoutMs
@@ -1118,29 +1097,29 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			else if ( isMobile ) entry.mobile = rel;
 		} catch ( err ) {
 			const msg = err instanceof Error ? err.message : String( err );
-			failures.push( {
-				url,
-				viewport: viewport.id,
-				stage: /screenshot timeout/.test( msg ) ? 'screenshot-timeout' : 'screenshot-fullpage',
-				error: msg,
-				timestamp: now(),
-				attempt: 1,
-			} );
+			fail( /screenshot timeout/.test( msg ) ? 'screenshot-timeout' : 'screenshot-fullpage', msg );
 		}
 	}
 
 	if ( args.rendererCrashed() ) return;
+	// The cleanup observer may have exhausted its budget before the page
+	// re-rendered a credit or ad; the saved document must be swept. A source
+	// that re-initialized its document after install has no state left to
+	// sweep — the policy lets the sweep reinstall on the fresh document.
+	// A frozen document (the static mobile carry) also has its scripts stripped.
+	const serializeDocument = async ( frozen: boolean ): Promise< { html: string; documentUrl: { url: string; baseUrl: string } } > => {
+		args.phases?.enter( 'serialize' );
+		await sweepSourceCleanup( page, sourcePolicy );
+		await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
+		const captured = await capturePageHtml( page );
+		const html = canonicalize( wireCapturedDialogs( frozen ? sanitizeFrozenHtml( captured ) : captured, galleryStates ) );
+		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
+		await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
+		return { html, documentUrl };
+	};
 	if ( plan.captureHtml ) {
 		try {
-			// The cleanup observer may have exhausted its budget before the page
-			// re-rendered a credit or ad; the saved document must be swept. A source
-			// that re-initialized its document after install has no state left to
-			// sweep — the policy lets the sweep reinstall on the fresh document.
-			await sweepSourceCleanup( page, sourcePolicy );
-			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const html = canonicalize( wireCapturedDialogs(await capturePageHtml( page ), galleryStates) );
-			const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
-			await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
+			const { html, documentUrl } = await serializeDocument( false );
 			// Refuse to persist a capture whose page navigated away from the route we
 			// were asked to capture: every DOM-mutating step above (lazy-load probing,
 			// disclosure hydration, dialog probing…) runs on a live, script-controlled
@@ -1155,25 +1134,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// the receipt honest instead of shipping a mismatched pair silently.
 			const capturedUrl = page.url();
 			if ( isRouteDrift( capturedUrl, navigationUrl ) ) {
-				failures.push( {
-					url,
-					viewport: viewport.id,
-					stage: 'content',
-					error: `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted`,
-					timestamp: now(),
-					attempt: 1,
-				} );
+				fail( 'content', `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted` );
 			} else if ( isStackingArtifact( html ) ) {
-				failures.push( {
-					url,
-					viewport: viewport.id,
-					stage: 'content',
-					error: `nested document capture (${ countBodyTags(
-						html
-					) } <body> in one page); HTML not persisted`,
-					timestamp: now(),
-					attempt: 1,
-				} );
+				fail( 'content', `nested document capture (${ countBodyTags( html ) } <body> in one page); HTML not persisted` );
 			} else {
 				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
 				writeFileSync( plan.paths.html, html );
@@ -1181,14 +1144,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				entry.documents = { ...entry.documents, [ viewport.id ]: documentUrl };
 			}
 		} catch ( err ) {
-			failures.push( {
-				url,
-				viewport: viewport.id,
-				stage: 'content',
-				error: err instanceof Error ? err.message : String( err ),
-				timestamp: now(),
-				attempt: 1,
-			} );
+			fail( 'content', err );
 		}
 	}
 	if ( args.rendererCrashed() ) return;
@@ -1202,11 +1158,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// can't reflow to. Best-effort: a miss leaves the page desktop-only.
 	if ( isMobile && plan.captureMobileHtml ) {
 		try {
-			await sweepSourceCleanup( page, sourcePolicy );
-			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const mhtml = canonicalize( wireCapturedDialogs(sanitizeFrozenHtml( await capturePageHtml( page ) ), galleryStates) );
-			const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
-			await resourceStore.captureDomDependencies( mhtml, documentUrl.baseUrl );
+			const { html: mhtml, documentUrl } = await serializeDocument( true );
 			// Same route-identity guard as the desktop HTML write above — best-effort
 			// here too (this carry already silently skips on any other failure), so a
 			// drifted mobile capture just leaves the page desktop-only rather than
@@ -1233,6 +1185,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// unset.
 	if ( isDesktop && plan.captureSections ) {
 		try {
+			args.phases?.enter( 'sections' );
 			const { specs, landmarks } = await extractFull( page, {}, evaluateTimeoutMs );
 			SectionSpecsStore.load( outputDir ).set( url, specs, landmarks, {
 				width: viewport.width,
@@ -1247,6 +1200,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	if ( isMobile && plan.captureMobileSections ) {
 		try {
+			args.phases?.enter( 'sections' );
 			const { specs, landmarks } = await extractFull( page, {}, evaluateTimeoutMs );
 			SectionSpecsStore.loadMobile( outputDir ).set( url, specs, landmarks, {
 				width: viewport.width,
@@ -1278,6 +1232,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				// fullPage:false captures the current viewport — no clip needed.
 				// (A clip would have to be inside the 0..viewport.height image, not at
 				// the page's absolute scroll position.)
+				args.phases?.enter( 'screenshot' );
 				const buf = await withScreenshotTimeout(
 					page.screenshot( { fullPage: false, type: 'png' } ),
 					screenshotTimeoutMs
@@ -1290,14 +1245,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			}
 		} catch ( err ) {
 			const msg = err instanceof Error ? err.message : String( err );
-			failures.push( {
-				url,
-				viewport: viewport.id,
-				stage: /screenshot timeout/.test( msg ) ? 'screenshot-timeout' : 'screenshot-scrolled',
-				error: msg,
-				timestamp: now(),
-				attempt: 1,
-			} );
+			fail( /screenshot timeout/.test( msg ) ? 'screenshot-timeout' : 'screenshot-scrolled', msg );
 		}
 	}
 
@@ -1305,18 +1253,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( args.rendererCrashed() ) return;
 	if ( isDesktop && shouldAnalyze ) {
 		try {
+			args.phases?.enter( 'analysis' );
 			const analysis = await analyzePage( page, evaluateTimeoutMs );
 			entry.metadata = analysis.metadata;
 			aggregator.add( url, analysis );
 		} catch ( err ) {
-			failures.push( {
-				url,
-				viewport: viewport.id,
-				stage: 'evaluate',
-				error: err instanceof Error ? err.message : String( err ),
-				timestamp: now(),
-				attempt: 1,
-			} );
+			fail( 'evaluate', err );
 		}
 		if ( args.rendererCrashed() ) return;
 		// Best-effort: capture source chrome computed-style fingerprint for later
@@ -1325,6 +1267,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			// Write into the screenshots dir — where the audit driver reads it from
 			// (readChromeFidelity(join(outputDir, 'screenshots'))). Must stay in sync.
+			args.phases?.enter( 'chrome' );
 			const n = await captureChromeFidelity(
 				page,
 				url,
@@ -1351,6 +1294,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// when multiple URLs share the same base, so we derive the design sidecar
 			// slug directly from the URL — same derivation the adapters use.
 			const designSlug = slugify( url );
+			args.phases?.enter( 'design' );
 			const designResult = await captureDesignForUrl( {
 				page,
 				url,
@@ -1396,6 +1340,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		designCtx.chromeAccum.mobileLayoutMap === null
 	) {
 		try {
+			args.phases?.enter( 'design' );
 			const mobileMap = await collectMobileChromeLayout( page );
 			if ( mobileMap && Object.keys( mobileMap ).length > 0 ) {
 				designCtx.chromeAccum.mobileLayoutMap = mobileMap;
@@ -1428,6 +1373,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		if ( DESIGN_CAPTURE_ARCHETYPES.has( archetype ) ) {
 			try {
 				const designSlug = ( await import( '../url/index.js' ) ).slugify( url );
+				args.phases?.enter( 'design' );
 				await captureMobileBodyFragment( {
 					page,
 					slug: designSlug,
@@ -1459,6 +1405,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} finally {
 		await releaseNavigationLock();
 	}
+	args.phases?.enter( 'cleanup-audit' );
 	const cleanup = await readSourceCleanup(page, sourcePolicy);
 	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
 	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
@@ -1467,6 +1414,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	try {
 		// The scrolled screenshot must not become the resting state for controls
 		// whose evidence is replayed against the top-of-document portable baseline.
+		args.phases?.enter( 'dialogs' );
 		await restoreTopScrollState( page );
 		await dismissOverlays( page );
 		const interactions = await captureTriggeredDialogs( page, url );
@@ -1483,6 +1431,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// already reports through, rather than a parallel reporting system.
 		interactions.states = [ ...galleryStates, ...disclosureStates, ...interactions.states ];
 		try {
+			args.phases?.enter( 'selectable' );
 			const selectableStates = await captureSelectableSetStates( page );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
@@ -1522,6 +1471,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// best-effort: a failed probe must not invalidate the rest of the capture.
 	if ( ! entry.scrollStates?.toggles.length ) {
 		try {
+			args.phases?.enter( 'scroll-states' );
 			const scrollStates = await captureScrollStates( page, url );
 			if ( scrollStates.toggles.length > 0 ) {
 				entry.scrollStates = scrollStates;
@@ -2005,6 +1955,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
 				let aliasDisagreement = false;
+				const phases = createPhaseLedger();
+				phases.enter( 'context' );
 				try {
 					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
 					// screenshot while keeping the rendered layout identical to a
@@ -2052,10 +2004,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeViewportEntrances );
 					await context.addInitScript( observeRuntimeStyleWrites );
 					const page = await context.newPage();
+					reportReadiness( page, ( name, outcome ) => phases.wait( name, outcome ) );
 					page.once( 'crash', () => { rendererCrashed = true; } );
 					try {
 						await capturePerViewport( {
 							page,
+							phases,
 							rendererCrashed: () => rendererCrashed,
 							browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
 							viewport: { ...viewport, context: identity },
@@ -2091,6 +2045,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 						} );
 					} finally {
+						phases.enter( 'record' );
 						// HTML and successful interaction evidence precede the final cleanup
 						// audit. A late audit failure must record a failure, not erase those
 						// artifacts (the prior shared-entry transaction retained them too).
@@ -2154,19 +2109,24 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					} );
 				} finally {
 					if ( context ) {
+						phases.enter( 'resource-settle' );
 						try {
 							const pages = context.pages();
 							await Promise.all( pages.map( ( page ) => resourceStore.settle( page ) ) );
 						} catch {
 							/* best-effort; failures are retained in the resource manifest */
 						}
-					}
-					if ( context ) {
+						phases.enter( 'context-close' );
 						try {
 							await context.close();
 						} catch {
 							/* best-effort */
 						}
+					}
+					const profileRecord = entry.profiles?.[ viewport.id ];
+					if ( profileRecord ) {
+						profileRecord.phases = phases.finish();
+						profileRecord.readiness = phases.readiness();
 					}
 				}
 				if ( rendererCrashed && urlFailures.length === failuresBefore ) {

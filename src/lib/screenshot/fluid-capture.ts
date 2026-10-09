@@ -161,7 +161,7 @@ async function learnFluidGeometry(
 		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
-	if ( tagged === 0 || await inlineGeometryIsConstant( page, baseline, widths, original, settleMs, properties ) ) {
+	if ( tagged === 0 || await inlineGeometryIsConstant( page, baseline, widths, original, settleMs ) ) {
 		await baseline.evaluate( ( state, attribute ) => {
 			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
@@ -726,6 +726,9 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
 }
 
+/** Quiet window after a probe resize; outlasts common 250–500 ms resize debounces. */
+export const PROBE_QUIET_MS = 600;
+
 /**
  * Whether every tagged inline declaration is the same at every width.
  *
@@ -742,8 +745,7 @@ async function inlineGeometryIsConstant(
 	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>,
 	widths: readonly number[],
 	original: { width: number; height: number } | null,
-	settleMs: number,
-	properties: readonly string[]
+	settleMs: number
 ): Promise< boolean > {
 	const observe = () => baseline.evaluate( ( state, { key } ) => {
 		const tracker = ( window as unknown as Record< symbol, { written( element: Element ): boolean; viewportReactive(): boolean } | undefined > )[ Symbol.for( key ) ];
@@ -753,13 +755,18 @@ async function inlineGeometryIsConstant(
 	}, { key: RUNTIME_STYLE_WRITES_KEY } );
 	const before = await observe();
 	if ( before === null || before.written ) return false;
+	// The probe asks only whether script writes the tagged elements, not what
+	// geometry they rest at, so a quiet window that outlasts common resize
+	// debounces replaces the sampling sweep's scroll-and-rest readiness.
+	const { settleDocument } = await import( './page-helpers.js' );
+	const probeSettle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
 	if ( ! before.reactive ) return true;
 	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, baseline, settleMs, true, properties );
+		await settleDocument( page, 'fluid-probe', probeSettle );
 	}
 	if ( original ) await page.setViewportSize( original );
-	await waitForRestGeometry( page, baseline, settleMs, false, properties );
+	await settleDocument( page, 'fluid-probe', probeSettle );
 	const after = await observe();
 	return after !== null && ! after.written && after.count === before.count;
 }

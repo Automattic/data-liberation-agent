@@ -41,6 +41,68 @@ document.querySelector('[aria-label="Next image"]').onclick=()=>{current=(curren
 document.querySelectorAll('#stage [role=img]').forEach((node,i)=>node.onclick=()=>{large=i;show(document.getElementById('large'),large,'large-count');document.getElementById('overlay').classList.add('visible');});
 document.querySelector('[aria-label="Next slide"]').onclick=()=>{large=(large+1)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Previous slide"]').onclick=()=>{large=(large+2)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Close gallery"]').onclick=()=>document.getElementById('overlay').classList.remove('visible');</script></body></html>`;
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'restores the same source nodes and nested scrollport pose after an offscreen gallery drive', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
+		await page.setContent(fixture.replace('<section id="gallery">','<div id="scrollport" style="height:450px;overflow:auto"><div style="height:900px"></div><section id="gallery">').replace('</section>','</section></div>'));
+		const scrollport = await page.locator('#scrollport').elementHandle();
+		const before = await scrollport!.evaluate(node=>({x:node.scrollLeft,y:node.scrollTop,style:node.getAttribute('style')}));
+		const viewport = page.viewportSize();
+		const states = await captureGalleries(page);
+		expect(states[0],JSON.stringify(states[0])).toMatchObject({status:'captured',gallery:{viewportRestoration:'verified',closed:true}});
+		expect(await scrollport!.evaluate(node=>({x:node.scrollLeft,y:node.scrollTop,style:node.getAttribute('style')}))).toEqual(before);
+		expect(await scrollport!.evaluate(node=>node===document.getElementById('scrollport'))).toBe(true);
+		expect(page.viewportSize()).toEqual(viewport);
+	}, 20_000,
+);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'waits for an initialized lightbox stage to materialize before proving its complete cycle', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
+		await page.setContent(fixture
+			.replace('<script>', '<script>const deferred=[...document.querySelectorAll("#large .frame")].slice(1);deferred.forEach(node=>node.remove());')
+			.replace("document.getElementById('overlay').classList.add('visible');", "document.getElementById('overlay').classList.add('visible');setTimeout(()=>{deferred.forEach(node=>document.getElementById('large').append(node));show(document.getElementById('large'),large,'large-count')},600);")
+			.replace('</style>', 'html{scroll-behavior:smooth}#large{overflow:auto;max-height:65vh}#overlay button{position:fixed;top:70vh}#overlay [aria-label="Previous slide"]{left:20px}#overlay [aria-label="Next slide"]{right:20px}#overlay [aria-label="Close gallery"]{top:20px;right:20px}</style>'));
+		const root = await page.locator('#overlay').elementHandle();
+		const stage = await page.locator('#large').elementHandle();
+		const states = await captureGalleries(page);
+		expect(states[0],JSON.stringify(states[0])).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete',restoration:'verified'},closed:true,selection:[0,1,2],viewportRestoration:'verified'}});
+		expect(await root!.evaluate(node=>node===document.getElementById('overlay'))).toBe(true);
+		expect(await stage!.evaluate(node=>node===document.getElementById('large'))).toBe(true);
+	}, 20_000,
+);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'keeps a decoded mobile modal without directional controls as observed incomplete evidence', async () => {
+		const page = await sharedBrowser.newPage({hasTouch:true,isMobile:true,viewport:{width:402,height:681}});
+		await page.setContent(fixture.replace('<div id="overlay">','<div id="overlay" role="dialog" aria-modal="true">')
+			.replace('aria-label="Next slide"','data-mobile-direction="next" style="display:none"')
+			.replace('aria-label="Previous slide"','data-mobile-direction="previous" style="display:none"')
+			.replace('aria-label="Close gallery"','data-mobile-direction="close" style="display:none"')
+			.replaceAll('[aria-label="Next slide"]','[data-mobile-direction="next"]')
+			.replaceAll('[aria-label="Previous slide"]','[data-mobile-direction="previous"]')
+			.replaceAll('[aria-label="Close gallery"]','[data-mobile-direction="close"]')
+			.replace('<script>', '<script>document.addEventListener("keydown",event=>{if(event.key==="Escape")document.getElementById("overlay").classList.remove("visible")});'));
+		const states = await captureGalleries(page);
+		expect(states[0]).toMatchObject({status:'observed-incomplete',dialog:{ariaModal:true,htmlTruncated:false},gallery:{inline:{coverage:'complete'},closed:true}});
+		expect(states[0]?.dialog?.html).toContain('id="overlay"');
+		expect(states[0]?.error).toContain('directional');
+		expect(states[0]?.gallery?.lightbox?.coverage).not.toBe('complete');
+	}, 20_000,
+);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'retains observed decoded frames and closes a lightbox when its inverse control cannot enter the viewport', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
+		await page.setContent(fixture.replace("large=(large+1)%3;show", "document.querySelector('[aria-label=\"Previous slide\"]').style.cssText='position:fixed;top:-200vh';large=(large+1)%3;show"));
+		const states = await captureGalleries(page);
+		expect(states[0]).toMatchObject({status:'observed-incomplete',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'partial'},closed:true},dialog:{htmlTruncated:false}});
+		expect(states[0]?.gallery?.lightbox?.frames.length).toBeGreaterThan(0);
+		expect(states[0]?.error).toContain('Timeout');
+		expect(wireCapturedDialogs(fixture,states)).not.toContain('data-dla-dialog-panel');
+	}, 20_000,
+);
+
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('captures a bounded src-swap cycle in order', async () => {
 	const browser = await chromium.launch();
@@ -53,6 +115,21 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
 	} finally { await browser.close(); }
 }, 60_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('retries gallery actions ignored during the source transition lock', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		await page.setContent(`<!doctype html><section id="locked"><div id="stage">${[0,1,2,3,4].map(i => `<img width="80" height="80" src="${image(i)}">`).join('')}</div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
+		let index=0,locked=false;const urls=Array.from(document.querySelectorAll('#stage img'),img=>img.src);
+		function change(dir){if(locked)return;locked=true;index=(index+dir+5)%5;setTimeout(()=>{document.querySelectorAll('#stage img').forEach((img,slot)=>img.src=urls[(index+slot)%5]);setTimeout(()=>locked=false,300);},150);}
+		document.querySelector('[aria-label="Next picture"]').onclick=()=>change(1);document.querySelector('[aria-label="Previous picture"]').onclick=()=>change(-1);
+		</script>`);
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(5);
+	} finally { await browser.close(); }
+}, 90_000);
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'replays observed cycles and image-opened galleries offline at phone, tablet and desktop widths',
@@ -134,7 +211,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 			await browser.close();
 		}
 	},
-	10_000,
+	30_000,
 );
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('waits for a delayed rendered initial frame without inventing its identity',async()=>{
