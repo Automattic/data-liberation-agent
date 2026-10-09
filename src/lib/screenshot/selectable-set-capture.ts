@@ -471,7 +471,41 @@ export async function captureSelectableSetStates(
 				};
 				const snapshotHtml = ( element: Element ) => {
 					const clone = element.cloneNode( true ) as Element;
-					for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) ) {
+					// The clone's frames line up one to one with the live ones. A frame
+					// that shows an https page in a box the reader can see is page
+					// content (a video, a map), so keep it with its size and a short
+					// list of attributes. Every other frame is removed.
+					const liveFrames = Array.from( element.querySelectorAll( 'iframe' ) );
+					const keptFrameAttributes = [ 'title', 'allow', 'allowfullscreen', 'loading', 'referrerpolicy', 'class' ];
+					Array.from( clone.querySelectorAll( 'iframe' ) ).forEach( ( frame, index ) => {
+						const live = liveFrames[ index ];
+						let source: URL | undefined;
+						try {
+							// A frame with no src of its own or with srcdoc is not a page to link to.
+							if ( !live?.getAttribute( 'src' )?.trim() || live.hasAttribute( 'srcdoc' ) ) throw new Error( 'no src' );
+							source = new URL( live.getAttribute( 'src' ) ?? '', document.baseURI );
+						} catch {
+							source = undefined;
+						}
+						const box = live?.getBoundingClientRect();
+						// Opacity is not checked: a panel often fades in on scroll, so a frame inside
+						// it can read as transparent while the reader sees it once the panel reveals.
+						const shown = !!box && box.width > 0 && box.height > 0 &&
+							( typeof live.checkVisibility !== 'function' ||
+								live.checkVisibility( { checkVisibilityCSS: true } ) );
+						if ( !source || source.protocol !== 'https:' || !source.hostname || source.username || source.password || !shown ) {
+							frame.remove();
+							return;
+						}
+						for ( const attribute of Array.from( frame.attributes ) ) {
+							if ( !keptFrameAttributes.includes( attribute.name.toLowerCase() ) ) frame.removeAttribute( attribute.name );
+						}
+						frame.setAttribute( 'src', source.href );
+						frame.setAttribute( 'width', String( Math.max( 1, Math.round( box.width ) ) ) );
+						frame.setAttribute( 'height', String( Math.max( 1, Math.round( box.height ) ) ) );
+						frame.textContent = '';
+					} );
+					for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript' ) ) ) {
 						unsafe.remove();
 					}
 					for ( const node of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
