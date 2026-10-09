@@ -45,10 +45,16 @@ async function readSourceResponse(route: Route, url: string, timeout: number): P
 	const acquired = await route.fetch({url, maxRedirects: 0, maxRetries: 0, timeout});
 	try {
 		const headers = acquired.headers();
+		const status = acquired.status();
+		const declared = Object.fromEntries(['location', 'refresh', 'content-type'].filter(key => headers[key] !== undefined).map(key => [key, headers[key]!]));
+		// A successful non-HTML response is an absent page (nonHtmlDocumentError):
+		// its bytes are never parsed or rendered, so the document byte budget does
+		// not apply. Binary bytes decoded as UTF-8 would also grow up to 3x.
+		if (status >= 200 && status < 300 && nonHtmlDocumentError(headers['content-type'])) return {rendered: {url, status, headers, body: Buffer.alloc(0)}, response: {url, status, headers: declared, body: ''}};
 		if (Number(headers['content-length'] ?? 0) > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
 		const body = await acquired.body();
 		if (body.length > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
-		return {rendered: {url, status: acquired.status(), headers, body}, response: {url, status: acquired.status(), headers: Object.fromEntries(['location', 'refresh', 'content-type'].filter(key => headers[key] !== undefined).map(key => [key, headers[key]!])), body: body.toString('utf8')}};
+		return {rendered: {url, status, headers, body}, response: {url, status, headers: declared, body: body.toString('utf8')}};
 	} finally { await acquired.dispose(); }
 }
 

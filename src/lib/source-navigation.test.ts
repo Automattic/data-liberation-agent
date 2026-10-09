@@ -65,6 +65,10 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			else if (path === '/script') response.end('<script>location.href="/article"</script><p>Not a declarative alias</p>');
 			else if (path === '/error') { response.statusCode=404; response.end('<h1>Observed missing route</h1>'); }
 			else if (path === '/binary') { response.setHeader('content-type','application/octet-stream'); response.end('Not HTML'); }
+			// Under the byte budget as bytes, over it once decoded as UTF-8 (each 0xff becomes U+FFFD).
+			else if (path === '/image') { response.setHeader('content-type','image/png'); response.end(Buffer.alloc(Math.floor(SOURCE_NAVIGATION_LIMITS.bytes * 0.6), 0xff)); }
+			else if (path === '/large-file') { response.setHeader('content-type','application/pdf'); response.end(Buffer.alloc(SOURCE_NAVIGATION_LIMITS.bytes + 1)); }
+			else if (path === '/large-html') response.end('x'.repeat(SOURCE_NAVIGATION_LIMITS.bytes + 1));
 			else if (path === '/slow') setTimeout(() => response.end('<p>Too late</p>'), 300);
 			else response.end('<base href="./assets/"><h1 id="text">Article</h1><button onclick="location.href=\'/elsewhere\'">Navigate</button>');
 		});
@@ -100,6 +104,9 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			await expect(navigateSourceDocument(page, `${origin}/slow`, {timeoutMs:100})).rejects.toThrow(/Timeout|timeout|budget/i);
 			expect((await navigateSourceDocument(page, `${origin}/error`)).response?.status()).toBe(404);
 			await expect(navigateSourceDocument(page, `${origin}/binary`)).rejects.toThrow(/Not an HTML document/i);
+			// A non-HTML file is an absent page at any size; the byte budget bounds documents only.
+			for (const path of ['image', 'large-file']) await expect(navigateSourceDocument(page, `${origin}/${path}`)).rejects.toThrow(/Not an HTML document/i);
+			await expect(navigateSourceDocument(page, `${origin}/large-html`)).rejects.toThrow(/byte budget/);
 			await navigateSourceDocument(page, `${origin}/article`);
 			await page.locator('button').click(); await page.waitForURL(`${origin}/elsewhere`);
 			expect(isRouteDrift(page.url(), `${origin}/article`)).toBe(true);
