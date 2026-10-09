@@ -92,14 +92,12 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 );
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'retains observed decoded frames and closes a lightbox when its inverse control cannot enter the viewport', async () => {
+	'retains a decoded lightbox cycle when its inverse control starts outside the viewport', async () => {
 		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
 		await page.setContent(fixture.replace("large=(large+1)%3;show", "document.querySelector('[aria-label=\"Previous slide\"]').style.cssText='position:fixed;top:-200vh';large=(large+1)%3;show"));
 		const states = await captureGalleries(page);
-		expect(states[0]).toMatchObject({status:'observed-incomplete',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'partial'},closed:true},dialog:{htmlTruncated:false}});
-		expect(states[0]?.gallery?.lightbox?.frames.length).toBeGreaterThan(0);
-		expect(states[0]?.error).toContain('Timeout');
-		expect(wireCapturedDialogs(fixture,states)).not.toContain('data-dla-dialog-panel');
+		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete',restoration:'verified'},closed:true},dialog:{htmlTruncated:false}});
+		expect(wireCapturedDialogs(fixture,states)).toContain('data-dla-dialog-panel');
 	}, 20_000,
 );
 
@@ -130,6 +128,30 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(5);
 	} finally { await browser.close(); }
 }, 90_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'proves a three-frame directional cycle in at most 2N+1 clicks', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.setContent(fixture.replace("document.getElementById('overlay').classList.add('visible');", ''));
+			await page.evaluate(() => {
+				(globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks = 0;
+				document.querySelectorAll('#gallery button,#gallery [role="button"]').forEach(control =>
+					control.addEventListener('click', () => {
+						(globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks!++;
+					}, true),
+				);
+			});
+			const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+			expect(await page.evaluate(() => (globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks)).toBeLessThanOrEqual(7);
+		} finally {
+			await browser.close();
+		}
+	}, 30_000,
+);
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'replays observed cycles and image-opened galleries offline at phone, tablet and desktop widths',
