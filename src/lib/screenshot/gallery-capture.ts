@@ -3,6 +3,7 @@ import * as cheerio from 'cheerio';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import { activateTrigger } from './interaction-capture.js';
 import { srcsetReferences } from '../srcset.js';
+import { waitForAnimations, withEvaluateTimeout } from './page-helpers.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -241,42 +242,52 @@ async function collect(
 	};
 	let complete = false;
 	let failure: string | undefined;
-	for (let count = 0; count < LIMIT && Date.now() < deadline; count++) {
-		const before = current;
-		await page
-			.locator(descriptor.selector)
-			.first()
-			.locator(descriptor.next)
-			.click({ timeout: 2000 });
-		await settle();
-		const after = await observe(frame => frame.key !== before.key);
-		if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
-		// The same action must not silently mean a fixed choice. Verify its inverse.
-		await page
-			.locator(descriptor.selector)
-			.first()
-			.locator(descriptor.previous)
-			.click({ timeout: 2000 });
-		await settle();
-		if (!await observe(frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
-		await page
-			.locator(descriptor.selector)
-			.first()
-			.locator(descriptor.next)
-			.click({ timeout: 2000 });
-		await settle();
-		if (!await observe(frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
-		current = after;
-		if (after.key === first.key) {
-			complete = frames.length >= 2;
-			break;
+	let pending: NonNullable<typeof first> | null = null;
+	try {
+		for (let count = 0; count < LIMIT && Date.now() < deadline; count++) {
+			const before = current;
+			await page
+				.locator(descriptor.selector)
+				.first()
+				.locator(descriptor.next)
+				.click({ timeout: 2000 });
+			await settle();
+			const after = await observe(frame => frame.key !== before.key);
+			if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
+			pending = after;
+			// The same action must not silently mean a fixed choice. Verify its inverse.
+			await page
+				.locator(descriptor.selector)
+				.first()
+				.locator(descriptor.previous)
+				.click({ timeout: 2000 });
+			await settle();
+			if (!await observe(frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
+			await page
+				.locator(descriptor.selector)
+				.first()
+				.locator(descriptor.next)
+				.click({ timeout: 2000 });
+			await settle();
+			if (!await observe(frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
+			current = after;
+			pending = null;
+			if (after.key === first.key) {
+				complete = frames.length >= 2;
+				break;
+			}
+			if (frames.some((frame) => frame.key === after!.key)) break;
+			frames.push(after);
+			if (Buffer.byteLength(JSON.stringify(frames)) > BUDGET) {
+				frames.pop();
+				break;
+			}
 		}
-		if (frames.some((frame) => frame.key === after!.key)) break;
-		frames.push(after);
-		if (Buffer.byteLength(JSON.stringify(frames)) > BUDGET) {
-			frames.pop();
-			break;
-		}
+	} catch (error) {
+		// A native actionability failure cannot erase already observed decoded
+		// frames or certify their unverified inverse. Retain evidence, not a cycle.
+		failure = String(error).slice(0, 500);
+		if (pending && !frames.some(frame => frame.key === pending!.key) && Buffer.byteLength(JSON.stringify([...frames, pending])) <= BUDGET) frames.push(pending);
 	}
 	const sourceInitial = descriptor.order.indexOf(first.key);
 	let ordered =
@@ -316,7 +327,10 @@ async function visibleGallerySurfaces(page: Page): Promise<string[]> {
 			const y = Math.max(0, rect.top) + Math.min(rect.height, innerHeight - Math.max(0, rect.top)) / 2;
 			return rect.width > 0 && rect.height > 0 && document.elementFromPoint(x, y) === image;
 		};
-		return Array.from(document.body.children).filter(el=>el.id && el.querySelector('[aria-label="Next slide"]') && el.querySelector('[aria-label*="Close" i]') && Array.from(el.querySelectorAll('img')).some(rendered)).map(el=>'#'+CSS.escape(el.id));
+		return Array.from(document.body.children).filter(el=>el.id &&
+			(el.matches('dialog,[role="dialog"],[aria-modal="true"]') ||
+				el.querySelector('[aria-label="Next slide"]') && el.querySelector('[aria-label*="Close" i]')) &&
+			Array.from(el.querySelectorAll('img')).some(rendered)).map(el=>'#'+CSS.escape(el.id));
 	});
 }
 
@@ -360,100 +374,153 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 	});
 	const states: CapturedDialogInteraction[] = [];
 	for (const root of roots) {
-		const scroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
-		await page.locator(root).scrollIntoViewIfNeeded();
-		await page.locator(root).evaluate((element, width) => element.setAttribute('data-dla-gallery-capture-width', String(width)), page.viewportSize()?.width ?? 0);
-		let inline: CapturedGallery | null;
+		// Activation moves nested scrollports as well as the window. Keep actual
+		// source node references so restoration cannot target replacement markup.
+		const viewport = page.viewportSize();
+		const scroll = await page.locator(root).evaluateHandle(element => {
+			const ancestors: Array<{node: Element; x: number; y: number}> = [];
+			for (let node: Element | null = element; node; node = node.parentElement) ancestors.push({node,x:node.scrollLeft,y:node.scrollTop});
+			return {x:scrollX,y:scrollY,ancestors};
+		});
+		let state: CapturedDialogInteraction | undefined;
 		try {
-			inline = await collect(page, await describe(page, root));
-		} catch (error) {
-			states.push({
-				status: 'click-failed',
+			await page.locator(root).scrollIntoViewIfNeeded();
+			await page.locator(root).evaluate((element, width) => element.setAttribute('data-dla-gallery-capture-width', String(width)), page.viewportSize()?.width ?? 0);
+			let inline: CapturedGallery | null;
+			try {
+				inline = await collect(page, await describe(page, root));
+			} catch (error) {
+				states.push({
+					status: 'click-failed',
+					kind: 'gallery',
+					trigger: { selector: root, tag: 'div', ariaHaspopup: '', dataBindings: {} },
+					error: String(error).slice(0, 500),
+				});
+				continue;
+			}
+			if (!inline) {
+				states.push({status:'no-dialog',kind:'gallery',trigger:{selector:root,tag:'div',ariaHaspopup:'',dataBindings:{}},error:'No single decoded rendered initial image within the bounded stage readiness window'});
+				continue;
+			}
+			state = {
+				status: 'no-dialog',
 				kind: 'gallery',
 				trigger: { selector: root, tag: 'div', ariaHaspopup: '', dataBindings: {} },
-				error: String(error).slice(0, 500),
+				gallery: { inline },
+			};
+			states.push(state);
+			// Incomplete cycles remain evidence, never a guessed portable interaction.
+			if (inline.coverage !== 'complete' || inline.restoration !== 'verified') continue;
+			const selected = await snapshot(page, inline);
+			if (!selected) continue;
+			const opener = root + inline.stage.replace(':scope', '') + ` > :nth-child(${selected.slot + 1}) img`;
+			let before: string[] = [];
+			try {
+				await activateTrigger(page, opener, async () => { before = await visibleGallerySurfaces(page); });
+			} catch (error) {
+				state.error = String(error).slice(0, 500);
+				continue;
+			}
+			let overlay: string | undefined;
+			for (let sample = 0; !overlay && sample < 30; sample++) {
+				await page.waitForTimeout(100);
+				overlay = (await visibleGallerySurfaces(page)).find(selector=>!before.includes(selector));
+			}
+			if (!overlay) {
+				state.error = 'No new visible lightbox after activating the decoded selected image';
+				await page.keyboard.press('Escape');
+				continue;
+			}
+			state.status = 'observed-incomplete';
+			let lightbox: CapturedGallery | null = null;
+			try {
+				// The open, decoded image proves a surface, not that a preinitialized
+				// stage has finished materializing. Use the existing bounded readiness
+				// window before attempting the same strict directional cycle.
+				let descriptor = await describe(page, overlay);
+				for (let sample = 0; !descriptor && sample < 30; sample++) {
+					await page.waitForTimeout(100);
+					descriptor = await describe(page, overlay);
+				}
+				lightbox = await collect(page, descriptor);
+				if (!descriptor) state.error = 'Observed decoded lightbox has no bounded stage with labelled directional controls';
+				else if (!lightbox) state.error = 'Observed lightbox has no single decoded initial frame within the bounded readiness window';
+			} catch (error) {
+				state.error = String(error).slice(0, 500);
+			}
+			if (lightbox) {
+				state.gallery!.lightbox = lightbox;
+				if (lightbox.failure) state.error = lightbox.failure;
+			}
+			const html = await page.locator(overlay).evaluate((el) => {
+				const clone = el.cloneNode(true) as HTMLElement;
+				for (const unsafe of clone.querySelectorAll('script,iframe,noscript')) unsafe.remove();
+				for (const node of [clone, ...clone.querySelectorAll('*')])
+					for (const attr of Array.from(node.attributes))
+						if (/^on|^data-lib-/i.test(attr.name)) node.removeAttribute(attr.name);
+				return clone.outerHTML;
 			});
-			continue;
+			state.dialog = {
+				selector: overlay,
+				tag: 'div',
+				ariaModal: true,
+				presentation: 'modal',
+				html: Buffer.byteLength(html) > BUDGET ? '' : html,
+				htmlBytes: Buffer.byteLength(html),
+				htmlTruncated: Buffer.byteLength(html) > BUDGET,
+			};
+			state.trigger.selector = root + inline.stage.replace(':scope', '');
+			const close = page.locator(overlay).locator('[aria-label*="Close" i]').first();
+			if (await close.count()) {
+				await close.click({ timeout: 2000 }).catch((error) => {
+					state!.error = String(error).slice(0, 500);
+				});
+			} else {
+				// Touch viewers can expose neither directional buttons nor a close
+				// icon. Escape is an existing native dialog action; closure still has
+				// to be observed, and absent directional proof stays incomplete.
+				await page.keyboard.press('Escape');
+			}
+			for (let sample = 0; sample < 30; sample++) {
+				await page.waitForTimeout(100);
+				state.gallery!.closed = !(await visibleGallerySurfaces(page)).includes(overlay);
+				if (state.gallery!.closed) break;
+			}
+			if (
+				lightbox?.coverage === 'complete' &&
+				lightbox.restoration === 'verified' &&
+				state.gallery!.closed
+			) {
+				const selection = inline.frames.map(frame => lightbox.frames.findIndex(full => full.key === (frame.fullImage || frame.key)));
+				if (selection.every(index => index >= 0) && new Set(selection).size === lightbox.frames.length) {
+					state.gallery!.selection = selection;
+					state.status = 'captured';
+				} else state.error = 'Observed inline images do not identify the complete decoded lightbox cycle';
+			}
+		} finally {
+			try {
+				await withEvaluateTimeout(scroll.evaluate(async pose => {
+					for (const {node,x,y} of pose.ancestors) if (node.isConnected) node.scrollTo({left:x,top:y,behavior:'instant'});
+					window.scrollTo({left:pose.x,top:pose.y,behavior:'instant'});
+					await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+				}), 5_000);
+				await waitForAnimations(page);
+				const restored = await scroll.evaluate(pose => scrollX === pose.x && scrollY === pose.y && pose.ancestors.every(({node,x,y}) => node.isConnected && node.scrollLeft === x && node.scrollTop === y));
+				if (state?.gallery) {
+					state.gallery.viewportRestoration = restored && JSON.stringify(page.viewportSize()) === JSON.stringify(viewport) ? 'verified' : 'unverified';
+					if (state.gallery.viewportRestoration === 'unverified' && state.status === 'captured') {
+						state.status = 'observed-incomplete';
+						state.error = 'Source gallery viewport/scroll restoration is unverified';
+					}
+				}
+			} catch (error) {
+				if (state?.gallery) {
+					state.gallery.viewportRestoration = 'unverified';
+					if (state.status === 'captured') state.status = 'observed-incomplete';
+					state.error = `Source gallery viewport/scroll restoration failed: ${String(error).slice(0, 400)}`;
+				}
+			} finally { await scroll.dispose(); }
 		}
-		if (!inline) {
-			states.push({status:'no-dialog',kind:'gallery',trigger:{selector:root,tag:'div',ariaHaspopup:'',dataBindings:{}},error:'No single decoded rendered initial image within the bounded stage readiness window'});
-			continue;
-		}
-		const state: CapturedDialogInteraction = {
-			status: 'no-dialog',
-			kind: 'gallery',
-			trigger: { selector: root, tag: 'div', ariaHaspopup: '', dataBindings: {} },
-			gallery: { inline },
-		};
-		states.push(state);
-		// Incomplete cycles remain evidence, never a guessed portable interaction.
-		if (inline.coverage !== 'complete' || inline.restoration !== 'verified') continue;
-		const selected = await snapshot(page, inline);
-		if (!selected) continue;
-		const opener = root + inline.stage.replace(':scope', '') + ` > :nth-child(${selected.slot + 1}) img`;
-		let before: string[] = [];
-		try {
-			await activateTrigger(page, opener, async () => { before = await visibleGallerySurfaces(page); });
-		} catch (error) {
-			state.error = String(error).slice(0, 500);
-			continue;
-		}
-		let overlay: string | undefined;
-		for (let sample = 0; !overlay && sample < 30; sample++) {
-			await page.waitForTimeout(100);
-			overlay = (await visibleGallerySurfaces(page)).find(selector=>!before.includes(selector));
-		}
-		if (!overlay) {
-			state.error = 'No new visible lightbox after activating the decoded selected image';
-			await page.keyboard.press('Escape');
-			continue;
-		}
-		let lightbox: CapturedGallery | null = null;
-		try {
-			lightbox = await collect(page, await describe(page, overlay));
-		} catch (error) {
-			state.error = String(error).slice(0, 500);
-		}
-		if (lightbox) state.gallery!.lightbox = lightbox;
-		const html = await page.locator(overlay).evaluate((el) => {
-			const clone = el.cloneNode(true) as HTMLElement;
-			for (const unsafe of clone.querySelectorAll('script,iframe,noscript')) unsafe.remove();
-			for (const node of [clone, ...clone.querySelectorAll('*')])
-				for (const attr of Array.from(node.attributes))
-					if (/^on|^data-lib-/i.test(attr.name)) node.removeAttribute(attr.name);
-			return clone.outerHTML;
-		});
-		state.dialog = {
-			selector: overlay,
-			tag: 'div',
-			ariaModal: true,
-			presentation: 'modal',
-			html: Buffer.byteLength(html) > BUDGET ? '' : html,
-			htmlBytes: Buffer.byteLength(html),
-			htmlTruncated: Buffer.byteLength(html) > BUDGET,
-		};
-		state.trigger.selector = root + inline.stage.replace(':scope', '');
-		const close = page.locator(overlay).locator('[aria-label*="Close" i]').first();
-		await close.click({ timeout: 2000 }).catch((error) => {
-			state.error = String(error).slice(0, 500);
-		});
-		for (let sample = 0; sample < 30; sample++) {
-			await page.waitForTimeout(100);
-			state.gallery!.closed = !(await visibleGallerySurfaces(page)).includes(overlay);
-			if (state.gallery!.closed) break;
-		}
-		if (
-			lightbox?.coverage === 'complete' &&
-			lightbox.restoration === 'verified' &&
-			state.gallery!.closed
-		) {
-			const selection = inline.frames.map(frame => lightbox.frames.findIndex(full => full.key === (frame.fullImage || frame.key)));
-			if (selection.every(index => index >= 0) && new Set(selection).size === lightbox.frames.length) {
-				state.gallery!.selection = selection;
-				state.status = 'captured';
-			} else state.error = 'Observed inline images do not identify the complete decoded lightbox cycle';
-		}
-		await page.evaluate(({x, y}) => scrollTo(x, y), scroll);
 	}
 	return states;
 }
