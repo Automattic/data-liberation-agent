@@ -132,3 +132,7 @@ data-liberation compare /tmp/check/example.com
 ```
 
 Claims about behaviour should come from a command that was actually run. Documented behaviour in this repository has been wrong before — reuse was described as automatic when it needs `--resume`, and an anonymous publish was described as returning a live URL when the space is private until claimed.
+
+## Test cost
+
+Ship a fix with the cheapest test that fails when the fix is reverted, usually a unit test of the pure function. Add a real-Chromium end-to-end test when the behavior exists only end to end. Reuse an existing pipeline run in the same file with `beforeAll` where possible, run one browser pass per behavior rather than per parameter value, and state the expected wall time in the PR. This keeps coverage focused: 81 browser-test files accounted for more than 99% of test time, and PR CI grew from about 2 minutes in mid-September to about 19 minutes on Oct 8.

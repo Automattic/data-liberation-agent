@@ -51,6 +51,10 @@ npx tsx src/cli.ts verify ./output/<site-dir>
 
 If you can't test against a real site, note that in the PR and explain what you observed.
 
+### Test cost
+
+Ship a fix with the cheapest test that fails when the fix is reverted, usually a unit test of the pure function. Use a real-Chromium end-to-end test for behavior that only exists end to end. Reuse an existing pipeline run in the same file with `beforeAll` where possible, run one browser pass per behavior rather than per parameter value, and include the expected wall time in the PR. This helps keep feedback fast: 81 browser-test files accounted for more than 99% of test time, while PR CI grew from about 2 minutes in mid-September to about 19 minutes on Oct 8.
+
 ### 3. Submit the PR
 
 ```bash
