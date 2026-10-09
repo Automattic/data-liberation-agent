@@ -35,6 +35,27 @@ describe('parseSitemapXml', () => {
     expect(document).toEqual({ kind: 'index', locs: ['https://example.com/child.xml?x=one&y=two'] });
   });
 
+  it('does not read image extension locations as page locations', () => {
+    const document = parseSitemapDocument(`<?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <url>
+        <loc>https://example.com/contact/</loc>
+        <image:image><image:loc>https://example.com/uploads/form.png</image:loc></image:image>
+        <image:image><image:loc>https://cdn.example.net/photo.webp</image:loc></image:image>
+      </url>
+      <url><loc>https://example.com/about/</loc></url>
+    </urlset>`);
+    expect(document).toEqual({ kind: 'urlset', locs: ['https://example.com/contact/', 'https://example.com/about/'] });
+  });
+
+  it('reads locations of a sitemap whose own namespace has a prefix', () => {
+    const document = parseSitemapDocument(`<sm:urlset xmlns:sm="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <sm:url><sm:loc>https://example.com/</sm:loc><image:image><image:loc>https://example.com/a.png</image:loc></image:image></sm:url>
+      <sm:url><sm:loc>https://example.com/about</sm:loc></sm:url>
+    </sm:urlset>`);
+    expect(document).toEqual({ kind: 'urlset', locs: ['https://example.com/', 'https://example.com/about'] });
+  });
+
   it('returns empty array for invalid XML', () => {
     const urls = parseSitemapXml('not xml at all');
     expect(urls).toEqual([]);

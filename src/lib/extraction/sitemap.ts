@@ -25,7 +25,13 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
     : /<\s*(?:\w+:)?urlset\b/i.test(xml) ? 'urlset'
       : 'unknown';
   const urls: string[] = [];
-  const locMatches = xml.match(/<\s*(?:\w+:)?loc\s*>([^<]+)<\/\s*(?:\w+:)?loc\s*>/gi);
+  // A location is a `loc` in the sitemap's own namespace, whose prefix the
+  // root element shows. Extensions nest their own `loc` under another prefix
+  // (`<image:image><image:loc>` in image sitemaps); those name media files,
+  // not pages or child sitemaps.
+  const root = /<\s*(?:(\w+):)?sitemapindex\b/i.exec(xml) ?? /<\s*(?:(\w+):)?urlset\b/i.exec(xml);
+  const prefix = root?.[1] ? `${root[1]}:` : '';
+  const locMatches = xml.match(new RegExp(`<\\s*${prefix}loc\\s*>([^<]+)<\\/\\s*${prefix}loc\\s*>`, 'gi'));
   if (!locMatches) return { kind, locs: urls };
   for (const match of locMatches) {
     const url = decodeXml(match.replace(/<\/?(?:\w+:)?loc\s*>/gi, '').trim());
