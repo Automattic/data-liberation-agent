@@ -2203,8 +2203,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( urlFailures.length === 0 ) {
 			captured++;
 			// Reused artifacts, absent documents and redirect aliases do not
-			// calibrate the memory cost of a fresh successful capture.
-			if ( memoryAdmission && ! entry.redirectedTo ) { sampleMemory(); calibrated = true; }
+			// calibrate the memory cost of a fresh successful capture. A bounded
+			// reference sample leaves most routes without fresh reference pages;
+			// calibrating on one of those would under-estimate the working set,
+			// so calibration waits for a route that produced them (the entrypoint
+			// is always sampled and is captured first).
+			const producedReferencePages = ! opts.referenceSampleUrls || opts.referenceSampleUrls.includes( url );
+			if ( memoryAdmission && ! entry.redirectedTo && producedReferencePages ) { sampleMemory(); calibrated = true; }
 			sendLog( server, `[ok] ${ url }` );
 		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
 			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});

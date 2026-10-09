@@ -521,6 +521,65 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		}
 	}, 300_000 );
 
+	it( 'bounds frozen reference evidence to the sampled route and reports unsampled routes as uncompared scope', async () => {
+		const parent = join( process.cwd(), '.tmp-test' );
+		mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-sample-' ) );
+		const documentRequests = new Map<string, number>();
+		const page = ( path: string, heading: string ): string => `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sampled route fixture</title><style>body{margin:0;font:16px Arial}h1{margin:0;font:24px Arial}</style></head><body><main><h1>${ heading }</h1><p>Baseline content.</p></main></body></html>`;
+		const source = createServer( ( request, response ) => {
+			const path = request.url?.split( '?' )[ 0 ] ?? '';
+			// Document navigations carry a text/html accept header; favicon and
+			// other incidental requests never do.
+			if ( [ '/', '/about', '/contact' ].includes( path ) && String( request.headers.accept ?? '' ).includes( 'text/html' ) ) {
+				documentRequests.set( path, ( documentRequests.get( path ) ?? 0 ) + 1 );
+			}
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( page( path, path === '/' ? 'Home route copy' : path === '/about' ? 'About route copy' : 'Contact route copy' ) );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
+		const home = `${ origin }/`;
+		const routes = [ home, `${ origin }/about`, `${ origin }/contact` ];
+		const collector = createReferenceCollector( directory, home, routes, { referenceSample: 1 } );
+		try {
+			const captured = await captureScreenshots( { urls: routes, primaryUrl: home, outputDir: directory, concurrency: 1, settleMs: 100, learnFluid: false,
+				observeSource: collector.observe, declareSourceProfile: collector.declare, referenceSampleUrls: collector.sampledSourceUrls } );
+			expect( captured.failed ).toBe( 0 );
+			// Unsampled routes receive exactly their capture navigations (one per
+			// capture profile: desktop + mobile) and zero reference navigations.
+			// The sampled homepage additionally navigates once per fresh reference
+			// cell (desktop 768/1440, mobile 390) plus one representative-analysis
+			// document load.
+			expect( documentRequests.get( '/about' ) ).toBe( 2 );
+			expect( documentRequests.get( '/contact' ) ).toBe( 2 );
+			expect( documentRequests.get( '/' ) ).toBeGreaterThanOrEqual( 5 );
+			expect( collector.sampledSourceUrls ).toEqual( [ home ] );
+			const receiptPath = exportWebsiteCapture( { outputDir: directory, sourceUrl: home, platform: 'default', summary: { routesDiscovered: 3, routesCaptured: 3, routesSkipped: 0, routesFailed: 0, durationMs: captured.durationMs }, failures: [], discoveryDiagnostics: [] } );
+			collector.finalize( receiptPath );
+			const manifest = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
+			expect( manifest.scope.referenceSample ).toBe( 1 );
+			expect( manifest.scope.sourceUrls ).toHaveLength( 3 );
+			expect( manifest.scope.cells?.every( cell => cell.sourceUrl === home ) ).toBe( true );
+			expect( manifest.scope.cells ).toHaveLength( 3 );
+			expect( manifest.entries.every( entry => entry.sourceUrl === home && entry.readiness.ready && entry.screenshot && entry.document ) ).toBe( true );
+			expect( manifest.scope.unknowns.some( line => line.includes( '2 of 3 routes have no frozen reference because the caller bounded the reference sample' ) ) ).toBe( true );
+			const options = { directory, settleMs: 100 };
+			const report = await checkFidelity( options );
+			expect( report.pass, JSON.stringify( { pending: report.pending, failures: report.scores.map( score => score.failures ), selfConsistency: report.selfConsistency } ) ).toBe( true );
+			expect( report.routes ).toEqual( [ '/' ] );
+			expect( report.coverage?.measured ).toBe( 3 );
+			expect( report.coverage?.unknowns.some( line => line.includes( 'bounded the reference sample' ) && line.includes( '/about/' ) && line.includes( '/contact/' ) ) ).toBe( true );
+			const explicit = await checkFidelity( { ...options, routes: [ '/about/' ] } );
+			expect( explicit.pass ).toBe( false );
+			expect( explicit.status ).toBe( 'unproven' );
+			expect( explicit.pending?.every( item => item.route === '/about/' && /no frozen reference evidence/.test( item.reason ) ) ).toBe( true );
+		} finally {
+			source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) );
+			rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 300_000 );
+
 	it( 'observes real normal/zoom occurrences and refuses correspondence after semantic roles are lost', async () => {
 		const browser = sharedBrowser;
 		const page = await browser.newPage();

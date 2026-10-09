@@ -184,6 +184,23 @@ describe( 'captureWebsite fluid learning', () => {
 			expect.objectContaining( { learnFluid: expected } )
 		);
 	} );
+
+	it.each( [ 0, -1, 1.5 ] )( 'rejects referenceSample %s before any browser starts', async ( referenceSample ) => {
+		await expect(
+			captureWebsite(
+				{ url: sourceUrl, outputDir: root, referenceSample },
+				{
+					findAdapter: () => ( {
+						id: 'generic',
+						platform: 'generic',
+						discover: async () => ( { urls: [] } ),
+						extract: async () => ( { title: '', content: '' } ),
+					} ),
+				}
+			)
+		).rejects.toThrow( 'referenceSample must be a positive integer' );
+		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
+	} );
 } );
 
 describe( 'captureWebsite completeness', () => {

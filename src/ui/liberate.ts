@@ -26,6 +26,13 @@ export interface LiberateOptions {
 	serve?: boolean;
 	/** Learn responsive sizing across widths rather than freezing one. Default: true. */
 	learnFluid?: boolean;
+	/**
+	 * Freeze baseline reference evidence for at most this many routes
+	 * (homepage plus an even sample of the initial routes). Unsampled routes
+	 * skip reference navigation; frozen comparison reports them as uncompared
+	 * scope. Default: every route.
+	 */
+	referenceSample?: number;
 	/** Optional authored runtime; installed only after live source/portable behavior comparison passes. */
 	portableMotion?: PortableMotionRecipe;
 	log?: ( message: string ) => void;
@@ -56,6 +63,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		resume: options.resume,
 		captureImages: options.screenshots,
 		learnFluid: options.learnFluid !== false,
+		referenceSample: options.referenceSample,
 		onProgress: ( progress ) => {
 			if ( progress.phase === 'capturing' && progress.total ) {
 				log(

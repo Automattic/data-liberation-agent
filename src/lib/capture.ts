@@ -42,6 +42,14 @@ export interface CaptureOptions {
 	 * instead, or pass `strict: true` to reject.
 	 */
 	strict?: boolean;
+	/**
+	 * Freeze baseline reference evidence for at most this many routes
+	 * (browser capture only): the entrypoint plus an even spread of the
+	 * remaining initial routes. Unsampled routes skip reference navigations
+	 * entirely and are reported as uncompared scope by frozen comparison
+	 * instead of failing it. Default: every route keeps reference evidence.
+	 */
+	referenceSample?: number;
 	onProgress?: ( progress: CaptureProgress ) => void;
 }
 
@@ -163,6 +171,8 @@ export async function captureWebsite(
 	if ( options.acquisition !== undefined && ! [ 'browser', 'http' ].includes( options.acquisition ) ) throw new Error( 'Unknown capture acquisition mode' );
 	if ( options.acquisition === 'http' ) ( await import( './capture-http.js' ) ).validateHttpCaptureOptions( options );
 	else if ( options.http !== undefined ) throw new Error( 'HTTP capture options require HTTP acquisition' );
+	// Reject before discovery or any browser starts.
+	if ( options.referenceSample !== undefined && ( ! Number.isInteger( options.referenceSample ) || options.referenceSample < 1 ) ) throw new Error( 'referenceSample must be a positive integer' );
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	let phase = '';
@@ -225,6 +235,7 @@ export async function captureWebsite(
 		cleanupPolicy: ( await import( './source-cleanup.js' ) ).cleanupPolicy( adapter.liberation?.cleanupRules ),
 		removeSelectors: adapter.liberation?.removeSelectors,
 		prepareCapture: adapter.liberation?.prepare,
+		referenceSample: options.referenceSample,
 	} );
 	const screenshotResult = await captureScreenshots( {
 		urls,
@@ -244,6 +255,9 @@ export async function captureWebsite(
 		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
 		observeSource: reference.observe,
+		// Memory admission must calibrate on a route that actually produced fresh
+		// reference pages; bounded samples leave most routes without them.
+		...( reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
 		...( adapter.liberation?.canonicalizeHtml
 			? { canonicalizeHtml: adapter.liberation.canonicalizeHtml.bind( adapter.liberation ) }
 			: {} ),
