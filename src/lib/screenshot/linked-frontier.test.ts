@@ -23,6 +23,22 @@ it('names concrete page, depth and time omissions without merging query or slash
 	]);
 });
 
+it('records the exact omitted addresses at a four-page frontier budget', () => {
+	const frontier = new LinkedFrontier({maxPages: 4, maxDepth: 3, timeoutMs: 100}, 0);
+	for (const [index, path] of ['/', '/second/', '/administration/', '/accounting/', '/apiary/', '/search/'].entries()) {
+		frontier.admit(`https://source.test${path}`, index ? 1 : 0, 0);
+	}
+	expect(frontier.coverage()).toMatchObject({
+		limits: {maxPages: 4},
+		scheduled: 4,
+		requiredUrls: ['https://source.test/', 'https://source.test/second/', 'https://source.test/administration/', 'https://source.test/accounting/', 'https://source.test/apiary/', 'https://source.test/search/'],
+		diagnostics: [
+			{url: 'https://source.test/apiary/', reason: 'maxPages=4 exhausted; 4 addresses scheduled'},
+			{url: 'https://source.test/search/', reason: 'maxPages=4 exhausted; 4 addresses scheduled'},
+		],
+	});
+});
+
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded rendered linked frontier', () => {
 	it('classifies public documents by response instead of path names at the full frontier budget', async () => {
 		const maxPages = 20;
