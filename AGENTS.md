@@ -76,6 +76,10 @@ To add a platform: create `src/adapters/<platform>/` with an `index.ts` that ass
 
 Both must pass for exit 0 within the declared scope. Baseline excludes dialogs, zoom and motion; downstream acceptance must request required states or leave them pending. When adding a check, put it in the cheap tier if it can be answered from disk.
 
+## Test cost
+
+Ship a fix with the cheapest test that fails when the fix is reverted, usually a unit test of the pure function. Add a real-Chromium end-to-end test when the behavior exists only end to end. Reuse an existing pipeline run in the same file with `beforeAll` where possible, run one browser pass per behavior rather than per parameter value, and state the expected wall time in the PR. This keeps coverage focused: 81 browser-test files accounted for more than 99% of test time, and PR CI grew from about 2 minutes in mid-September to about 19 minutes on Oct 8.
+
 Three things the gate has been wrong about before, all worth remembering:
 
 - The source is not what a visitor's first load shows. Capture dismisses takeover modals and consent banners before it serializes, so the copy never has one; comparing that copy to a live source with its banner still up measures two different documents, and every route fails by exactly the banner's length. Both sides now run the same `dismissOverlays` primitive, and `compare/overlay-evidence.json` records what came off each side.
