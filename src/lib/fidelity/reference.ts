@@ -16,6 +16,7 @@ import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/captur
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 
 export interface ReferenceCollectorOptions {
+	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	publicUrlsOnly?: boolean;
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
@@ -100,7 +101,15 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile, expectedBoundary?: ExternalBoundary ): Promise<void> {
 			const recipe = profile ?? { id: device, width: page.viewportSize()?.width ?? 1440, height: 900 };
 			declare( url, recipe );
-			for ( const cell of [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device ) ) {
+			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device );
+			const sourceContext = page.context();
+			let supportsSiblingPages = false;
+			try {
+				const probe = await sourceContext.newPage();
+				await probe.close();
+				supportsSiblingPages = true;
+			} catch { /* Convenience-owned contexts can only use the caller's page. */ }
+			const observeCell = async ( cell: ReferenceCell ): Promise<void> => {
 					const viewport = cell.viewport;
 					const identity = profile?.context ? replayBrowserIdentity( profile.context ) : undefined;
 					const entry: ReferenceEntry = { sourceUrl: url, viewport, viewportHeight: 900, device, profile: device, context: identity, state: 'baseline', readiness: { ready: false, reasons: [] } };
@@ -115,10 +124,10 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const sourceContext = page.context();
 						const browser = typeof sourceContext.browser === 'function' ? sourceContext.browser() : null;
 						if ( identity?.screen && ! browser ) throw new Error( 'Preset screen replay requires a source browser context' );
-						if ( identity?.screen && browser ) {
+						if ( browser && supportsSiblingPages && profile ) {
 							// Page.setViewportSize resets screen even on an explicitly screened
-							// device context. Construct at the target viewport to preserve the
-							// resolved preset. Session state stays runtime-only, never in entry.
+							// device context. Give every reference cell its own context at the
+							// target viewport; session state stays runtime-only, never in entry.
 							referenceContext = await browser.newContext( { ...identity, viewport: { width: viewport, height: 900 },
 								storageState: await sourceContext.storageState(), ignoreHTTPSErrors: true,
 							} );
@@ -142,20 +151,22 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
 						if (expectedBoundary) {
-							const navigation = await navigateSourceDocument(referencePage, url, {publicUrlsOnly: options.publicUrlsOnly});
+							const navigation = await navigateSourceDocument(referencePage, url, {publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope ?? expectedBoundary.routeScope});
 							if (!navigation.boundary || !browserProfile) throw new Error('Reference external boundary or browser profile unproven');
 							entry.outcome = storeExternalBoundary(directory, navigation.boundary, viewport, browserProfile);
 							if (boundaryIdentity(entry.outcome) !== boundaryIdentity(expectedBoundary)) throw new Error('Reference external outcome disagrees with capture');
 							entry.browserProfile = browserProfile;
 							entry.readiness.reasons.push(...errors);
 							entry.readiness.ready = entry.readiness.reasons.length === 0;
-							continue;
+							return;
 						}
 						referencePage.on( 'pageerror', runtimeError );
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
 						if ( url !== 'about:blank' ) {
-							const response = await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
+							const navigation = options.routeScope ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
+							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
+							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
 							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
 						}
@@ -164,7 +175,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
 						entry.browserProfile = browserProfile;
 						if ( ! browserProfile ) entry.readiness.reasons.push( 'source browser profile unproven' );
-						const observation = await observePage( referencePage, url, viewport, 800, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
+						const observation = await observePage( referencePage, url, viewport, 0, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
 							await applyCaptureRemovals( referencePage!, { removeSelectors: options.removeSelectors, prepare: options.prepareCapture, ctx: { url, viewport: device } } );
 						}, true, referencePage === page );
 						const cleanup = await readSourceCleanup( referencePage );
@@ -198,7 +209,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( referencePage && referencePage !== page ) await referencePage.close().catch( () => {} );
 						await referenceContext?.close().catch( () => {} );
 					}
-				}
+				};
+			if ( supportsSiblingPages ) await Promise.all( referenceCells.map( observeCell ) );
+			else for ( const cell of referenceCells ) await observeCell( cell );
 		},
 		finalize( receiptPath: string ): string {
 			const coveragePath = join(directory, 'linked-page-coverage.json');

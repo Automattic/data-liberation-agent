@@ -53,6 +53,7 @@ export type {
 
 export type {
 	Platform,
+	SiteRouteScope,
 	PlatformDetection,
 	PlatformUrlSignal,
 	PlatformHttpSignal,

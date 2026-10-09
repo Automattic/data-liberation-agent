@@ -356,7 +356,8 @@ export async function observePage(
 			const response = await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
 		}
-		await waitForStable( page, settleMs );
+		await waitForStable( page );
+		if ( settleMs > 0 ) await page.waitForTimeout( settleMs );
 		if (cleanup) {
 			const report = await applySourceCleanup(page, cleanup);
 			if (localOrigin && report.removed) throw new Error('Liberated artifact retains advertising or source attribution');

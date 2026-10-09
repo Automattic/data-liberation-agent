@@ -15,6 +15,45 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.15] - 2026-10-09
+
+### Changed
+- consolidate expensive evidence cases
+
+## [0.20.14] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- observe reference cells concurrently
+- avoid resweeping completed image renditions
+- consolidate fluid capture sweeps
+- reduce linked-frontier browser test time
+- settle selectable activations on quiet and stop probing inert sets
+- settle on page signals
+- share Chromium across interaction suites
+- consolidate browser capture suites
+- share browser across replay suites
+- document browser test cost guidance
+
+### Fixed
+- carry adapter route ownership through admission and export
+
+## [0.20.13] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- skip unreachable clipped native-lazy images in readiness waits
+- rely on loading-cover wait for startup splash evidence
+- bound structural indexes and release source pairs
+- shard Vitest across four jobs
+
+### Fixed
+- admit route workers against observed runtime memory
+- preserve descriptorless comma-bearing srcset candidates
+- settle startup and sweep motion before frozen proof
+- wait out textless loading covers and restore swept pose
+- preserve observed native control state in baseline HTML
+
 ## [0.20.12] - 2026-10-08
 
 ### Changed

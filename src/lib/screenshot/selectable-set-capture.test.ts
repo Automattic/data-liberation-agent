@@ -392,6 +392,60 @@ describe( 'captureSelectableSetStates', () => {
 		30_000
 	);
 
+	const pickerOf = ( count: number, delayMs: number ) => `<!doctype html><html><body>
+		<div id="layout">
+			<div id="picker">${ Array.from( { length: count }, ( _, index ) => `<div id="m${ index }" style="cursor:pointer">Member ${ index }</div>` ).join( '' ) }</div>
+			<div id="panel">Select a member to view details.</div>
+		</div>
+		<script>
+			document.querySelectorAll('#picker > *').forEach((member, index) => {
+				member.addEventListener('click', () => {
+					const panel = document.getElementById('panel');
+					panel.setAttribute('aria-busy', 'true');
+					const show = () => { panel.removeAttribute('aria-busy'); panel.textContent = 'Member ' + index + ' details: ' + 'neutral copy '.repeat(index + 2); };
+					${ delayMs ? `setTimeout(show, ${ delayMs });` : 'show();' }
+				});
+			});
+		</script>
+	</body></html>`;
+
+	it.skipIf( skipBrowser )(
+		'settles each activation once the document is quiet instead of a fixed window',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( pickerOf( 12, 0 ) );
+				const started = performance.now();
+				const states = await captureSelectableSetStates( page );
+				const elapsed = performance.now() - started;
+				console.info( JSON.stringify( { fixture: 'quiet-settle-picker', members: 12, elapsedMs: Math.round( elapsed ) } ) );
+				expect( states.filter( ( state ) => state.status === 'captured' ) ).toHaveLength( 12 );
+				expect( states[ 11 ].dialog?.html ).toContain( 'Member 11 details' );
+				// Twelve fixed 500 ms windows plus probes and restores exceed this bound.
+				expect( elapsed ).toBeLessThan( 4_000 );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'still captures a region that updates after an immediate selection mutation',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( pickerOf( 4, 400 ) );
+				const states = await captureSelectableSetStates( page );
+				expect( states.filter( ( state ) => state.status === 'captured' ) ).toHaveLength( 4 );
+				states.forEach( ( state, index ) => expect( state.dialog?.html ).toContain( `Member ${ index } details` ) );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
 	it.skipIf( skipBrowser )(
 		'orders states deterministically across repeated captures',
 		async () => {
@@ -1013,6 +1067,8 @@ describe( 'captureSelectableSetStates', () => {
 			maxDriveMs: 30_000,
 			maxHtmlBytes: 512 * 1024,
 			settleMs: 500,
+			quietMs: 150,
+			busyMs: 2_500,
 			maxCandidateScan: 1_500,
 			maxPointerCandidates: 80,
 			maxProbeGroups: 9,

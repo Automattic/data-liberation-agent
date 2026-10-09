@@ -56,6 +56,7 @@ import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
+import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
@@ -222,6 +223,7 @@ interface CapturePerViewportArgs {
 	mobileHeights: Record< string, number >;
 	resourceStore: CapturedResourceStore;
 	publicUrlsOnly: boolean;
+	routeScope?: ScreenshotOpts['routeScope'];
 }
 
 /** Sleep helper for navigation backoff. */
@@ -807,7 +809,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let navigationUrl = url;
 	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
 		try {
-			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly});
+			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope});
 			if (navigation.boundary) {
 				const boundary = storeExternalBoundary(outputDir, navigation.boundary, viewport.width, args.browserProfile ?? {isMobile: false, hasTouch: false});
 				entry.sourceOutcomes = [...(entry.sourceOutcomes ?? []), boundary];
@@ -896,7 +898,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	await applySourceCleanup(page, sourcePolicy);
 
 	// --- settle, dismiss overlays, lazy load ----------------------------------
-	await waitForStable( page, settleMs );
+	await waitForStable( page );
 	// A provider login withholding the whole route (a members-only page) was
 	// removed by the policy, leaving nothing of the page. Capture it as a
 	// placeholder inside the site's public shell instead (see access-gate.ts).
@@ -917,7 +919,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 		if ( shell ) {
 			await applySourceCleanup( page, sourcePolicy );
-			await waitForStable( page, settleMs );
+			await waitForStable( page );
 		}
 		accessGate = { ...gate, ...( shell ? { shell } : {} ) };
 		const placed = await page.evaluate( installAccessGatePlaceholder, {
@@ -1765,7 +1767,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const force = opts.force ?? false;
 	const server = opts.server;
 
-	let urls = opts.urls.slice();
+	if (opts.routeScope) validateRouteScope(opts.routeScope);
+	if (opts.primaryUrl && !routeInScope(opts.primaryUrl, opts.routeScope)) throw new Error('Source URL is outside its adapter route scope');
+	let urls = opts.urls.filter(url => routeInScope(url, opts.routeScope));
 	if ( opts.types && opts.types.length > 0 ) {
 		const allowed = new Set( opts.types );
 		urls = urls.filter( ( u ) => allowed.has( classifyUrl( u ) ) );
@@ -1778,7 +1782,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		...(opts.limit !== undefined && opts.limit > 0
 			? { maxPages: Math.min(opts.limit, opts.linkedPages.maxPages ?? 256) }
 			: {}),
-	}, startTime ) : undefined;
+	}, startTime, opts.routeScope ) : undefined;
 	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0));
 	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
 
@@ -1916,6 +1920,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// it, so each route is captured once however many URLs redirect to it.
 	const queuedRoutes = new Set( urls.map( documentRequestUrl ) );
 	const enqueue = (target: string, depth: number): void => {
+		if (!routeInScope(target, opts.routeScope)) return;
 		const key = documentRequestUrl(target);
 		if (queuedRoutes.has(key)) return;
 		if (frontier && !frontier.admit(key, depth)) return;
@@ -2069,6 +2074,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							mobileHeights,
 							resourceStore,
 							publicUrlsOnly: opts.publicUrlsOnly ?? false,
+							routeScope: opts.routeScope,
 							removeSelectors: opts.removeSelectors,
 							cleanupPolicy: opts.cleanupPolicy,
 							...( opts.collectResponsiveImages
@@ -2330,6 +2336,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					if ( ! existsSync( htmlPath ) ) continue;
 					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
 					for ( const link of sameOriginPageAnchors( html, url ) ) {
+						if (!routeInScope(link, opts.routeScope)) continue;
 						if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
 							candidates.add(link);
 							candidateDepths.set(link, Math.min(candidateDepths.get(link) ?? Infinity, 1 + (frontier?.depths.get(url) ?? 0)));
@@ -2352,7 +2359,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout});
 								try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
 								finally { await response.dispose(); }
-							}, opts.publicUrlsOnly);
+							}, opts.publicUrlsOnly, SOURCE_NAVIGATION_LIMITS.timeoutMs, opts.routeScope);
 							if (inspected.status === 404 || inspected.status === 410) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), sourceAbsentStatus: inspected.status});
 							else if (inspected.boundary) await manifest.updateEntry(url, {slug: prior?.slug ?? await manifest.claimSlug(slugify(url)), capturedAt: capturedAt(), externalRedirect: true});
 						} catch {

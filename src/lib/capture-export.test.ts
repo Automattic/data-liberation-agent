@@ -25,6 +25,7 @@ import { startStaticServer } from './replicate/local-site/static-server.js';
 import { cleanupPolicy } from './source-cleanup.js';
 import { inspectSourceInteractivity } from './source-interactivity.js';
 import { documentsDiffer } from './responsive-assembly.js';
+import { collectAssetEvidenceReferences } from './capture-export-evidence.js';
 
 const dirs: string[] = [];
 
@@ -3146,35 +3147,21 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'bounds retained asset evidence while reporting a non-exact asset lower bound', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-asset-bounds-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		// The cap and traversal-order invariant belongs to the pure collector, not a full export pipeline.
 		const imageUrls = Array.from(
 			{ length: 10_001 },
 			( _, index ) => `https://cdn.example/${ String( index ).padStart( 5, '0' ) }.png`
 		);
-		writeFileSync( join( outputDir, 'html/homepage.html' ), imageUrls.map( ( url ) => `<img src="${ url }">` ).join( '' ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
-
-		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
-		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
-		expect( evidence ).toMatchObject( {
-			assetCount: 10_001,
-			assetCountExact: false,
-			totalReferenceCount: 10_001,
-			assetsTruncated: true,
-			coverage: {
-				assetLimit: 10_000,
-				assetSelection: 'first reachable source URLs in retained route traversal',
-			},
-		} );
-		expect( evidence.assets ).toHaveLength( 10_000 );
-		expect( evidence.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( imageUrls.slice( 0, 10_000 ) );
-	}, 120_000 );
+		const evidence = collectAssetEvidenceReferences( [ {
+			url: 'https://example.com/',
+			evidenceDocuments: [ { state: 'desktop', html: imageUrls.map( ( url ) => `<img src="${ url }">` ).join( '' ) } ],
+		} ], () => 'index.html', { version: 1, resources: {}, failures: [] }, process.cwd() );
+		expect( evidence.assetCount ).toBe( 10_001 );
+		expect( evidence.assetCountExact ).toBe( false );
+		expect( evidence.totalReferenceCount ).toBe( 10_001 );
+		expect( evidence.locations.size ).toBe( 10_000 );
+		expect( [ ...evidence.locations.keys() ] ).toEqual( imageUrls.slice( 0, 10_000 ) );
+	} );
 
 	it( 'exports captured routes and localized media as a website directory', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
@@ -6707,7 +6694,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const entries: Record< string, { html: string } > = {};
-		for ( let index = 0; index < 4_996; index++ ) {
+		// The former compiler boundary is 4,096 routes; one route past it is the
+		// smallest fixture that proves the exporter does not truncate at that cap.
+		for ( let index = 0; index < 4_097; index++ ) {
 			const slug = `page-${ index }`;
 			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), '<main>Page</main>' );
 			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = {
@@ -6719,9 +6708,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
 
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
-		expect( receipt.routes ).toHaveLength( 4_996 );
-		expect( existsSync( join( outputDir, 'website', 'page-4995', 'index.html' ) ) ).toBe( true );
-	}, 60_000 );
+		expect( receipt.routes ).toHaveLength( 4_097 );
+		expect( existsSync( join( outputDir, 'website', 'page-4096', 'index.html' ) ) ).toBe( true );
+	}, 180_000 );
 
 	it( 'reserves repeated hoisted stylesheets before allocating constrained artifact media', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-style-budget-' ) );

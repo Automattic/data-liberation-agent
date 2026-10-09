@@ -23,8 +23,25 @@ it('names concrete page, depth and time omissions without merging query or slash
 	]);
 });
 
+it('records the exact omitted addresses at a four-page frontier budget', () => {
+	const frontier = new LinkedFrontier({maxPages: 4, maxDepth: 3, timeoutMs: 100}, 0);
+	for (const [index, path] of ['/', '/second/', '/administration/', '/accounting/', '/apiary/', '/search/'].entries()) {
+		frontier.admit(`https://source.test${path}`, index ? 1 : 0, 0);
+	}
+	expect(frontier.coverage()).toMatchObject({
+		limits: {maxPages: 4},
+		scheduled: 4,
+		requiredUrls: ['https://source.test/', 'https://source.test/second/', 'https://source.test/administration/', 'https://source.test/accounting/', 'https://source.test/apiary/', 'https://source.test/search/'],
+		diagnostics: [
+			{url: 'https://source.test/apiary/', reason: 'maxPages=4 exhausted; 4 addresses scheduled'},
+			{url: 'https://source.test/search/', reason: 'maxPages=4 exhausted; 4 addresses scheduled'},
+		],
+	});
+});
+
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded rendered linked frontier', () => {
-	it.each([20, 4])('classifies public documents by response instead of path names with maxPages=%s', async maxPages => {
+	it('classifies public documents by response instead of path names at the full frontier budget', async () => {
+		const maxPages = 20;
 		const requests: string[] = [];
 		const docs: Record<string, string> = {
 			'/': '<h1>Home</h1><a href="/second/">Second</a>',
@@ -50,12 +67,8 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages, maxDepth: 3, timeoutMs: 120_000}, concurrency: 3, settleMs: 0, learnFluid: false, observeSource: collector.observe});
 			expect(capture.captured).toBe(Math.min(maxPages, 6));
 			expect(capture.linkedPageCoverage!.requiredUrls).toHaveLength(6);
-			expect(capture.linkedPageCoverage!.diagnostics).toHaveLength(maxPages === 20 ? 0 : 2);
-			if (maxPages === 20) expect(requests).toEqual(expect.arrayContaining(Object.keys(docs)));
-			else {
-				expect(requests).not.toContain('/apiary/'); expect(requests).not.toContain('/search/');
-				expect(capture.linkedPageCoverage!.diagnostics.every(row => row.reason.includes('maxPages=4'))).toBe(true);
-			}
+			expect(capture.linkedPageCoverage!.diagnostics).toHaveLength(0);
+			expect(requests).toEqual(expect.arrayContaining(Object.keys(docs)));
 			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures: []});
 			expect(JSON.parse(readFileSync(receiptPath, 'utf8')).summary.complete).toBe(maxPages === 20);
 			const frozen = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));
@@ -112,7 +125,8 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
 		}
 	}, 180_000);
-	it.each([2, 4])('keeps budget omissions and actual source errors in required frozen scope with maxPages=%s', async maxPages => {
+	it('keeps actual source errors in required frozen scope after the frontier budget admits them', async () => {
+		const maxPages = 4;
 		const requests: string[] = [];
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
@@ -132,13 +146,8 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(capture.captured).toBe(2);
 			expect(capture.linkedPageCoverage?.requiredUrls).toHaveLength(4);
 			expect(capture.linkedPageCoverage?.diagnostics).toHaveLength(2);
-			if (maxPages === 2) {
-				expect(requests).not.toContain('/absent'); expect(requests).not.toContain('/api/data.json');
-				expect(capture.linkedPageCoverage!.diagnostics.every(row => row.reason.includes('maxPages=2'))).toBe(true);
-			} else {
-				expect(requests).toEqual(expect.arrayContaining(['/absent', '/api/data.json']));
-				expect(capture.linkedPageCoverage!.diagnostics.map(row => row.reason)).toEqual(expect.arrayContaining([expect.stringContaining('HTTP 404'), expect.stringContaining('Not an HTML document (text/plain)')]));
-			}
+			expect(requests).toEqual(expect.arrayContaining(['/absent', '/api/data.json']));
+			expect(capture.linkedPageCoverage!.diagnostics.map(row => row.reason)).toEqual(expect.arrayContaining([expect.stringContaining('HTTP 404'), expect.stringContaining('Not an HTML document (text/plain)')]));
 			const failuresPath = join(directory, 'screenshots/failures.json');
 			const failures = existsSync(failuresPath) ? JSON.parse(readFileSync(failuresPath, 'utf8')) : [];
 			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures});

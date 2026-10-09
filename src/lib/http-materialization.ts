@@ -1,6 +1,7 @@
 import { exportWebsiteCapture } from './capture-export.js';
 
 export interface HttpMaterializationOptions {
+	routeScope?: import('../platform/types.js').SiteRouteScope;
 	outputDir: string;
 	sourceUrl: string;
 	platform: string;

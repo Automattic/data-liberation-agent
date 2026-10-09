@@ -4,6 +4,7 @@ import { chromium, type Browser } from 'playwright';
 import {
   waitForStable,
   triggerLazyLoad,
+  restoreTopScrollState,
   withEvaluateTimeout,
   waitForFonts,
   waitForImages,
@@ -28,7 +29,7 @@ function makePage(): MockPage {
 describe('waitForStable', () => {
   it('waits for load then settles', async () => {
     const page = makePage();
-    await waitForStable(page as never, 10);
+    await waitForStable(page as never);
     expect(page.waitForLoadState).toHaveBeenCalledWith('load');
   });
 
@@ -37,12 +38,12 @@ describe('waitForStable', () => {
     page.waitForLoadState = vi.fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('networkidle timeout'));
-    await expect(waitForStable(page as never, 10)).resolves.toBeUndefined();
+    await expect(waitForStable(page as never)).resolves.toBeUndefined();
   });
 
   it('waits for fonts to resolve FOIT before returning', async () => {
     const page = makePage();
-    await waitForStable(page as never, 10);
+    await waitForStable(page as never);
     // the fonts wait evaluates document.fonts.ready in the page
     expect(page.evaluate).toHaveBeenCalled();
   });
@@ -53,7 +54,7 @@ describe('waitForStable', () => {
     // networkidle has given up must still be waited for — see
     // waitForDomQuiescence below for the actual mechanism.
     const page = makePage();
-    await waitForStable(page as never, 10, 250);
+    await waitForStable(page as never, 250);
     const quiescenceCall = page.evaluate.mock.calls.find(
       (call) => typeof call[1] === 'object' && call[1] !== null && 'quietMs' in call[1],
     );
@@ -68,7 +69,7 @@ describe('waitForStable', () => {
       if (args && 'quietMs' in args) return new Promise(() => {});
       return Promise.resolve(true);
     });
-    await expect(waitForStable(page as never, 0, 30)).resolves.toBeUndefined();
+    await expect(waitForStable(page as never, 30)).resolves.toBeUndefined();
   });
 });
 
@@ -140,13 +141,44 @@ describe('declared loading state', () => {
   beforeAll(async () => { browser = await chromium.launch(); });
   afterAll(async () => { await browser.close(); });
 
+  it('settles a static page without the former one-second floor', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<main>Static page</main>');
+      const started = Date.now();
+      await waitForStable(page);
+      expect(Date.now() - started).toBeLessThan(900);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('captures content rendered by a delayed fetch', async () => {
+    const page = await browser.newPage();
+    await page.route('https://fixture.test/late-content', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await route.fulfill({ body: 'Fetched content' });
+    });
+    try {
+      await page.setContent(`<base href="https://fixture.test/"><main id="content">Initial</main><script>
+        fetch('/late-content').then(response => response.text()).then(text => {
+          document.querySelector('#content').textContent = text;
+        });
+      </script>`);
+      await waitForStable(page);
+      expect(await page.locator('#content').textContent()).toBe('Fetched content');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('captures the final authored text after a sequence with quiet gaps between timers', async () => {
     const page = await browser.newPage();
     await page.setContent(`<body class="loading"><p id="status">Starting</p><script>
       setTimeout(() => document.querySelector('#status').textContent = 'Halfway', 900);
       setTimeout(() => { document.querySelector('#status').textContent = 'Complete'; document.body.classList.remove('loading'); }, 1800);
     </script></body>`);
-    await waitForStable(page, 0, 1_000);
+    await waitForStable(page, 1_000);
     expect(await page.locator('#status').textContent()).toBe('Complete');
     await page.close();
   });
@@ -228,6 +260,21 @@ describe('triggerLazyLoad', () => {
     const page = makePage();
     await triggerLazyLoad(page as never);
     expect(page.evaluate).toHaveBeenCalled();
+  });
+
+  it('skips scroll-only waits for a document that fits the viewport', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.setContent('<style>html,body{margin:0}</style><main>Short content</main>');
+      const started = Date.now();
+      await triggerLazyLoad(page);
+      await restoreTopScrollState(page);
+      // Leave a little scheduling headroom under a busy browser-test worker;
+      // the old quiet-window + restore pause alone required at least 900ms.
+      expect(Date.now() - started).toBeLessThan(800);
+    } finally {
+      await page.close();
+    }
   });
 
   it('preserves asynchronous body state and content revealed during lazy-load scrolling', async () => {

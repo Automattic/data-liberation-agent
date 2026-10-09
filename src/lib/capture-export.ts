@@ -18,6 +18,8 @@ import { allocateCaptureRoutes } from './capture-export-routes.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
+import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import type { SiteRouteScope } from '../platform/types.js';
 import {
 	indexPortableMediaReferences,
 	mediaReferenceMatched,
@@ -114,6 +116,7 @@ interface ScreenshotManifest {
 }
 
 interface ExportCaptureOptions {
+	routeScope?: SiteRouteScope;
 	resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
 	input?: HttpExportInput;
 	embeddedDocuments?: boolean;
@@ -234,6 +237,7 @@ function portableRedirectsFile( rules: Array< { from: string; to: string } > ): 
 interface PortableLinkContext {
 	documentPath: string;
 	servedPaths: Set< string >;
+	routeScope?: SiteRouteScope;
 }
 
 const PORTABLE_LINK_BASE = 'https://portable.invalid';
@@ -267,6 +271,12 @@ function rewriteCapturedRouteLinks(
 		try {
 			resolved = new URL( href, documentUrl );
 		} catch {
+			return;
+		}
+		// A platform link can share the origin and even the portable pathname,
+		// yet belong to a different site. Preserve its authored destination.
+		if ( !routeInScope( resolved.href, portable?.routeScope ) ) {
+			link.attr( 'href', resolved.href );
 			return;
 		}
 		const route = routes.get( documentRequestUrl( resolved.href ) );
@@ -452,11 +462,12 @@ function openGraphUrl( html: string ): string | undefined {
 	return cheerio.load( html )( 'meta[property="og:url"]' ).first().attr( 'content' );
 }
 
-function canonicalMetadataUrl( value: unknown, documentUrl: string ): string | undefined {
+function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?: SiteRouteScope ): string | undefined {
 	if ( typeof value !== 'string' || value.trim() === '' ) return undefined;
 	try {
 		const resolved = new URL( value, documentUrl );
 		if ( resolved.protocol !== 'http:' && resolved.protocol !== 'https:' ) return undefined;
+		if ( !routeInScope( resolved.href, routeScope ) ) return undefined;
 		return resolved.href;
 	} catch {
 		return undefined;
@@ -1037,9 +1048,11 @@ function uncapturedRouteAnchors(
 	sourceUrl: string,
 	capturedRoutes: Set< string >,
 	absentRoutes: Set< string >,
-	resourceInputs: Set< string >
+	resourceInputs: Set< string >,
+	routeScope?: SiteRouteScope
 ): Array< { sourceUrl: string; url: string; reason: string } > {
 	return sameOriginPageAnchors( html, sourceUrl )
+		.filter( url => routeInScope( url, routeScope ) )
 		.filter( ( url ) => ! capturedRoutes.has( url ) )
 		// Resource-owned links already have localization or explicit acquisition
 		// diagnostics. Avoid duplicating those as missing HTML, without changing
@@ -1080,6 +1093,10 @@ function groupFailureReasonsByUrl(
 }
 
 export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
+	if ( options.routeScope ) {
+		validateRouteScope( options.routeScope );
+		if ( !routeInScope( options.sourceUrl, options.routeScope ) ) throw new Error( 'Source URL is outside its adapter route scope' );
+	}
 	const outputDir = resolve( options.outputDir );
 	const screenshotManifestPath = join( outputDir, 'screenshots', 'manifest.json' );
 	const httpInput = options.input ? loadHttpExportInput( outputDir, options.sourceUrl, options.input ) : undefined;
@@ -1170,19 +1187,27 @@ function buildExportCapture(
 	const routeCaptureDiagnostics: Array< { code: string; url: string; reason: string } > = [];
 	const redirectAliases: Array< { url: string; target: string } > = [];
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
-		if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) ) {
+		if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) || !routeInScope( url, options.routeScope ) ) {
 			excludedRoutes.push( url );
 			continue;
 		}
 		if ( entry.redirectedTo ) {
+			if ( !routeInScope( entry.redirectedTo, options.routeScope ) ) {
+				excludedRoutes.push( url );
+				routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source redirect outside the adapter-owned site route scope' } );
+				continue;
+			}
 			redirectAliases.push( { url, target: entry.redirectedTo } );
 			continue;
 		}
 		if ( entry.externalRedirect ) {
-			// The source sends this link off-origin. Retain only the fact of the
+			// The source sends this link outside the site. Retain only the fact of the
 			// redirect; neither its destination nor its query belongs in the copy.
 			excludedRoutes.push( url );
-			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source initial-document redirect to an external origin (destination not fetched)' } );
+			const tenantBoundary = entry.sourceOutcomes?.some( outcome => outcome.routeScope && outcome.target.origin === new URL(url).origin );
+			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: tenantBoundary
+				? 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)'
+				: 'source initial-document redirect to an external origin (destination not fetched)' } );
 			continue;
 		}
 		if ( entry.sourceAbsentStatus ) {
@@ -1319,10 +1344,7 @@ function buildExportCapture(
 			...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
 			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 			sections: entry.sections,
-			canonicalUrl: canonicalMetadataUrl(
-				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
-				url
-			),
+			canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, options.routeScope ),
 			sourceData: sanitized.sourceData,
 			interactions: entry.interactions,
 			scrollStates: entry.scrollStates,
@@ -1626,7 +1648,7 @@ function buildExportCapture(
 		}
 		mkdirSync( dirname( destination ), { recursive: true } );
 		const originalHtml = readFileSync( htmlPath, 'utf8' );
-		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, resourceInputKeys ) );
+		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, resourceInputKeys, options.routeScope ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = bindSrcsetShapedImageSrc(
@@ -1652,7 +1674,7 @@ function buildExportCapture(
 				),
 				url,
 				sourceRouteLinks,
-				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
+				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths, routeScope: options.routeScope }
 			),
 			`/${ routePath }`, responsiveIdentities
 		);

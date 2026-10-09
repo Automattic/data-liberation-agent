@@ -1,13 +1,30 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+import { chromium as playwrightChromium } from 'playwright';
+import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
 import { captureGalleries } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
+
+let sharedBrowser: import('playwright').Browser;
+const chromium = {
+	executablePath: () => playwrightChromium.executablePath(),
+	launch: async () => new Proxy(sharedBrowser, {
+		get(target, property) {
+			if (property === 'close') return async () => {};
+			const value = Reflect.get(target, property, target);
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	}),
+};
+beforeAll(async () => {
+	if (!process.env.SKIP_BROWSER_TESTS && existsSync(playwrightChromium.executablePath())) sharedBrowser = await playwrightChromium.launch();
+});
+afterEach(async () => { for (const context of sharedBrowser?.contexts() ?? []) await context.close(); });
+afterAll(async () => { await sharedBrowser?.close(); });
 
 const image = (index: number, full = false) =>
 	'data:image/svg+xml,' +

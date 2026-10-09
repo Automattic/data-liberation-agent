@@ -148,6 +148,17 @@ describe( 'captureWebsite fluid learning', () => {
 		captureScreenshotsMock.mockClear();
 		rmSync( root, { recursive: true, force: true } );
 	} );
+	it( 'carries adapter document ownership into seeds, capture and export without inferring a generic subpath scope', async () => {
+		const scopedSource = 'https://example.com/tenant';
+		const routeScope = { origin: 'https://example.com', pathPrefixes: ['/tenant'] };
+		await captureWebsite( { url: scopedSource, outputDir: root }, {
+			findAdapter: () => ( { id: 'neutral', routeScope: () => routeScope,
+				discover: async () => ( { urls: [ {url: `${scopedSource}/about?view=one`}, {url: 'https://example.com/'}, {url: 'https://example.com/tenant-two'} ] } ),
+			} ),
+		} );
+		expect( captureScreenshotsMock ).toHaveBeenLastCalledWith( expect.objectContaining( { routeScope, urls: [ scopedSource, `${scopedSource}/about?view=one` ] } ) );
+		expect( exportWebsiteCapture ).toHaveBeenLastCalledWith( expect.objectContaining( { routeScope } ) );
+	} );
 
 	it.each( [
 		{ option: undefined, expected: true, label: 'defaults to enabled' },

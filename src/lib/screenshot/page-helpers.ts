@@ -8,8 +8,8 @@ const EVALUATE_GRACE_MS = 5_000;
 /**
  * Wait for a page to reach a stable state after load.
  *
- *   goto('load') ─▶ settleMs ─▶ networkidle best-effort (5s) ─▶ fonts.ready (4s)
- *     ─▶ DOM quiescence, bounded (5s) ─▶ declared loading state, if any ─▶ done
+ *   goto('load') ─▶ networkidle + DOM quiescence concurrently ─▶ fonts.ready (4s)
+ *     ─▶ declared loading state, if any ─▶ done
  *
  * Networkidle is wrapped in try/catch because chatty analytics (GA, Intercom)
  * can hold it open indefinitely; we don't want that to block capture.
@@ -43,20 +43,16 @@ const EVALUATE_GRACE_MS = 5_000;
  */
 export async function waitForStable(
   page: Page,
-  settleMs: number = 1000,
   domTimeoutMs: number = 5_000,
 ): Promise<void> {
   await page.waitForLoadState('load');
-  if (settleMs > 0) {
-    await new Promise((r) => setTimeout(r, settleMs));
-  }
-  try {
-    await page.waitForLoadState('networkidle', { timeout: 5_000 });
-  } catch {
-    /* best-effort — analytics can keep network busy forever */
-  }
+  await Promise.all([
+    page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {
+      /* best-effort — analytics can keep network busy forever */
+    }),
+    waitForDomQuiescence(page, 500, domTimeoutMs),
+  ]);
   await waitForFonts(page);
-  await waitForDomQuiescence(page, 500, domTimeoutMs);
   await waitForDeclaredLoadingState(page);
 }
 
@@ -444,6 +440,20 @@ export async function waitForRenderIdle(
   }
 }
 
+/** Whether the document has physical overflow in either viewport dimension. */
+export async function documentCanScroll(page: Page): Promise<boolean> {
+  try {
+    const canScroll = await withEvaluateTimeout(page.evaluate(() =>
+      document.documentElement.scrollHeight > window.innerHeight ||
+      document.documentElement.scrollWidth > window.innerWidth
+    ), EVALUATE_GRACE_MS);
+    return typeof canScroll === 'boolean' ? canScroll : true;
+  } catch {
+    // When the document cannot be inspected, preserve scroll-dependent waits.
+    return true;
+  }
+}
+
 /**
  * Scroll from top to bottom in 500px increments with 200ms between steps,
  * repeating the sweep until the page stops growing, wait for render-affecting
@@ -486,6 +496,7 @@ export async function waitForRenderIdle(
  */
 export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = false, options: { expandContent?: boolean } = {}): Promise<void> {
   try {
+    const canScroll = await documentCanScroll(page);
     // One page.evaluate call per sweep, given the time it's still allowed to
     // run: `maxMs` here is the REMAINING settle budget, not a fixed per-sweep
     // allowance, so a page that never stops growing can't spend the full
@@ -530,14 +541,14 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
       }
     };
     if ( requireNetworkIdle ) {
-      await settleScroll();
+      if ( canScroll ) await settleScroll();
       try {
         await page.waitForLoadState( 'networkidle', { timeout: 5_000 } );
       } catch {
         /* best-effort hydration window for the responsive geometry sweep */
       }
     } else {
-      await waitForRenderIdle(page, settleScroll);
+      if ( canScroll ) await waitForRenderIdle(page, settleScroll);
     }
     // Dynamic / JS-app content: expand statically-collapsed sections, then wait for known
     // content widgets (reviews / FAQ apps) to populate — so the snapshot captures real
@@ -566,12 +577,13 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
 
 /** Restore the same top-of-document state used by baseline artifacts and probes. */
 export async function restoreTopScrollState(page: Page): Promise<void> {
+  const canScroll = await documentCanScroll(page);
   await withEvaluateTimeout(page.evaluate(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     window.dispatchEvent(new Event('scroll'));
   }), EVALUATE_GRACE_MS);
   // Let throttled scroll handlers start their transitions before settling them.
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  if ( canScroll ) await new Promise((resolve) => setTimeout(resolve, 400));
   await waitForAnimations(page);
   await waitForFonts(page);
 }

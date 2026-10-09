@@ -31,6 +31,7 @@ export interface CaptureEvidenceInput {
 	locations: { captureRoot: string; stageRoot: string };
 	source: {
 		sourceUrl: string;
+		routeScope?: import('../platform/types.js').SiteRouteScope;
 		platform: string;
 		title?: string;
 		summary: Record< string, unknown >;
@@ -593,7 +594,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				...(cleanup ? { cleanup } : {}),
 				websiteRoot: 'website',
 				entrypoint: 'website/index.html',
-				source: { url: options.sourceUrl, platform: options.platform },
+				source: { url: options.sourceUrl, platform: options.platform, ...(options.routeScope ? { routeScope: options.routeScope } : {}) },
 				...( options.title ? { title: options.title } : {} ),
 				// Declares the class tokens this capture tool uses to mark one side
 				// of a desktop/mobile document pair inside one exported page, so a
