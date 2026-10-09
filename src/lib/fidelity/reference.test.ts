@@ -528,6 +528,40 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
 		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 60_000 );
+	it( 'observes declared reference widths concurrently and preserves ordered artifacts', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-concurrent-widths-' ) );
+		let arrivals = 0;
+		const arrivalTimes: number[] = [];
+		const source = createServer( ( request, response ) => {
+			if ( request.url !== '/' ) { response.writeHead( 404 ); response.end(); return; }
+			arrivals++;
+			arrivalTimes.push( Date.now() );
+			const respond = () => { response.setHeader( 'content-type', 'text/html' ); response.end( '<meta name="viewport" content="width=device-width,initial-scale=1"><h1>Concurrent reference</h1>' ); };
+			if ( arrivals >= 2 ) respond();
+			else setTimeout( respond, 2_000 );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		const browser = await chromium.launch();
+		try {
+			const context = await browser.newContext();
+			const page = await context.newPage();
+			const collector = createReferenceCollector( directory, url, [ url ] );
+			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 768, 1440 ] } );
+			const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+			const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+			expect( arrivals ).toBe( 2 );
+			expect( arrivalTimes[ 1 ]! - arrivalTimes[ 0 ]! ).toBeLessThan( 1_500 );
+			expect( manifest.entries.map( entry => entry.viewport ) ).toEqual( [ 768, 1440 ] );
+			for ( const entry of manifest.entries ) {
+				expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
+				expect( entry.observation?.path ).toMatch( new RegExp( `-${ entry.viewport }\\.json$` ) );
+				expect( entry.document?.path ).toMatch( new RegExp( `-${ entry.viewport }\\.html$` ) );
+				expect( PNG.sync.read( readFileSync( join( directory, entry.screenshot!.path ) ) ).width ).toBe( entry.viewport );
+			}
+		} finally { await browser.close(); source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
 } );
 
 it( 'never silently pairs normal/zoom duplicate media by geometry or index', () => {
