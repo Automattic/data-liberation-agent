@@ -15,6 +15,30 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.21.1] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- retain observed lightboxes through bounded proof
+
+## [0.21.0] - 2026-10-09
+
+### Added
+- record per-profile wall-clock phases in the manifest
+
+### Changed
+- regenerate plugin bundles
+- record viewport failures and serialize documents through one path
+- consolidate reference-cell cleanup ownership
+
+## [0.20.17] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- skip the responsive sweep when inline geometry is constant
+
 ## [0.20.16] - 2026-10-09
 
 ### Changed
