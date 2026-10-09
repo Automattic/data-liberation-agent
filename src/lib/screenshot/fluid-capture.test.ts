@@ -14,6 +14,25 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
+	it( 'leaves important-only literal insets untagged without resizing', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const learner = process.env.DLA_FLUID_BASELINE ? ( await import( process.env.DLA_FLUID_BASELINE ) ).learnAndApplyFluidGeometry as typeof learnAndApplyFluidGeometry : learnAndApplyFluidGeometry;
+		try {
+			await page.setContent( '<div id="priority" style="position:absolute;inset:10px auto auto 20px!important">Priority</div>' );
+			const original = await page.locator( '#priority' ).getAttribute( 'style' );
+			const resize = vi.spyOn( page, 'setViewportSize' );
+			const result = await learner( page, { settleMs: 10 } );
+			expect( resize ).not.toHaveBeenCalled();
+			expect( result ).toEqual( { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} } );
+			expect( await page.locator( '#priority' ).getAttribute( 'style' ) ).toBe( original );
+			expect( await page.locator( '[data-dla-fluid-id],[data-dla-fluid-segment]' ).count() ).toBe( 0 );
+			if ( process.env.DLA_FLUID_EVIDENCE ) {
+				mkdirSync( process.env.DLA_FLUID_EVIDENCE, { recursive: true } );
+				writeFileSync( `${ process.env.DLA_FLUID_EVIDENCE }/inset-only.json`, JSON.stringify( { result, style: original, resizes: resize.mock.calls.length, viewport: page.viewportSize() }, null, 2 ) );
+			}
+		} finally { vi.restoreAllMocks(); await page.close(); }
+	}, 30_000 );
+
 	it( 'preserves literal measurements, normalized rest and learned output across the full geometry ladder', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		const copy = await browser.newPage();
@@ -24,12 +43,18 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				<div id="inset" style="position:absolute;inset:10px auto auto 20px">Inset</div>
 				<div id="literal" style="position:absolute;width:.5px;height:12px!important;FONT-SIZE:20px;--literal:4px!important;inset:2px auto auto 3px!important;transform:translateX(7px)!important">Literal</div>
 				<h1 id="island" style="font-size:20px">Narrow island</h1><div id="custom" style="--size:432px">Custom</div>
+				<div id="malformed-inset" style="position:absolute;width:720px;inset:10px auto auto 20px garbage">Malformed</div>
+				<div id="duplicate-priority" style="position:absolute;inset:10px auto auto 20px!important;inset:72px auto auto 144px">Duplicate priority</div>
+				<div id="duplicate-complete" style="position:absolute;inset:36px auto auto 72px;inset:30px auto auto 40px">Duplicate complete</div>
 				<script>const update=()=>{
 					let item=document.querySelector('#item');if(innerWidth===783&&!item.hasAttribute('data-replaced')){const next=item.cloneNode(true);next.setAttribute('data-replaced','');item.replaceWith(next);item=next;}
 					item.style.width=innerWidth/2+'px';item.style.height=innerWidth/10+'px';item.style.fontSize=Math.min(40,Math.max(20,innerWidth/40))+'px';item.style.paddingTop=innerWidth/20+5+'px';item.style.left=innerWidth/10+'px';item.style.transform='matrix(1,0,0,1,'+innerWidth/10+',0)';
 					document.querySelector('#inset').style.inset=innerWidth/20+'px auto auto '+innerWidth/10+'px';
 					document.querySelector('#island').style.fontSize=innerWidth>=775&&innerWidth<799?'100px':'20px';
 					document.querySelector('#custom').style.setProperty('--size',innerWidth<800?'calc(20px + 2vw)':innerWidth*.3+'px');
+					document.querySelector('#malformed-inset').setAttribute('style','position:absolute;width:'+innerWidth/2+'px;inset:10px auto auto 20px garbage');
+					document.querySelector('#duplicate-priority').setAttribute('style','position:absolute;inset:10px auto auto 20px!important;inset:'+innerWidth/20+'px auto auto '+innerWidth/10+'px');
+					document.querySelector('#duplicate-complete').setAttribute('style','position:absolute;inset:'+innerWidth/40+'px auto auto '+innerWidth/20+'px;inset:30px auto auto 40px');
 				};addEventListener('resize',update);update();</script>` );
 			// Observe the actual renderer snapshot bytes without moving rest polling
 			// to Node or storing instrumentation on the source's window.
@@ -75,6 +100,11 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...DEFAULT_SWEEP_WIDTHS, 1440 ] );
 			const first = measurements[ 0 ] as Array<{ id: string; values: Record<string, number | null> }>;
 			expect( first.find( entry => entry.id === 'desktop-2' )!.values ).toMatchObject( { width: null, height: 12, 'font-size': null, 'transform-x': null, 'inset-top': null, '--literal': 4 } );
+			expect( first.find( entry => entry.id === 'desktop-5' )!.values ).toMatchObject( { width: 195, 'inset-top': null, 'inset-left': null } );
+			// Both legacy inset readers require a complete literal declaration:
+			// skip the important prefix, but keep the first complete duplicate.
+			expect( first.find( entry => entry.id === 'desktop-6' )!.values ).toMatchObject( { 'inset-top': 19.5, 'inset-left': 39 } );
+			expect( first.find( entry => entry.id === 'desktop-7' )!.values ).toMatchObject( { 'inset-top': 9.75, 'inset-left': 19.5 } );
 			const literalRest = JSON.parse( snapshots[ 0 ]!.json ).find( ( row: unknown[] ) => row[ 0 ] === 'desktop-2' );
 			expect( literalRest[ 1 ].slice( 0, 3 ) ).toEqual( [ 0.5, 12, 20 ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
@@ -87,7 +117,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const geometry: unknown[] = [];
 			for ( const width of [ ...DEFAULT_SWEEP_WIDTHS, 786 ] ) {
 				await copy.setViewportSize( { width, height: 900 } );
-				geometry.push( await copy.locator( '#item,#inset,#literal,#island,#custom' ).evaluateAll( nodes => nodes.map( node => {
+				geometry.push( await copy.locator( '#item,#inset,#literal,#island,#custom,#malformed-inset,#duplicate-priority,#duplicate-complete' ).evaluateAll( nodes => nodes.map( node => {
 					const rect = node.getBoundingClientRect(), style = getComputedStyle( node );
 					return { id: node.id, x: rect.x, y: rect.y, width: rect.width, height: rect.height, fontSize: style.fontSize, paddingTop: style.paddingTop, transform: style.transform };
 				} ) ) );
