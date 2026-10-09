@@ -271,9 +271,6 @@ async function collect(
 			const after = await act(descriptor.next, before, frame => frame.key !== before.key);
 			if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
 			pending = after;
-			// The same action must not silently mean a fixed choice. Verify its inverse.
-			if (!await act(descriptor.previous, after, frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
-			if (!await act(descriptor.next, before, frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
 			current = after;
 			pending = null;
 			if (after.key === first.key) {
@@ -285,6 +282,20 @@ async function collect(
 			if (Buffer.byteLength(JSON.stringify(frames)) > BUDGET) {
 				frames.pop();
 				break;
+			}
+		}
+		// Once Next has closed a cycle, walk it backwards and verify each inverse edge.
+		if (complete) {
+			for (let index = frames.length - 1; index >= 0; index--) {
+				const expected = frames[index]!;
+				const before = current;
+				const restored = await act(descriptor.previous, before, frame => frame.key === expected.key);
+				if (!restored) {
+					failure = `Previous action did not restore ${expected.key}`;
+					complete = false;
+					break;
+				}
+				current = restored;
 			}
 		}
 	} catch (error) {
