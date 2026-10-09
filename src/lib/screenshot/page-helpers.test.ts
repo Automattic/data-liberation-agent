@@ -8,9 +8,9 @@ import {
   withEvaluateTimeout,
   waitForFonts,
   waitForImages,
-  waitForAnimations,
   waitForRenderIdle,
-  waitForDomQuiescence,
+  settleDocument,
+  reportReadiness,
   waitForDeclaredLoadingState,
 } from './page-helpers.js';
 
@@ -93,45 +93,69 @@ describe('waitForFonts', () => {
   });
 });
 
-describe('waitForAnimations', () => {
-  it('awaits in-flight animations via page.evaluate', async () => {
-    const page = makePage();
-    await waitForAnimations(page as never);
-    expect(page.evaluate).toHaveBeenCalled();
-  });
-
-  it('does not throw when the animation wait rejects', async () => {
-    const page = makePage();
-    page.evaluate = vi.fn().mockRejectedValue(new Error('evaluate failed'));
-    await expect(waitForAnimations(page as never)).resolves.toBeUndefined();
-  });
-
-  it('does not throw (and resolves) when a stuck animation exceeds the timeout', async () => {
-    const page = makePage();
-    page.evaluate = vi.fn().mockImplementation(() => new Promise(() => {}));
-    await expect(waitForAnimations(page as never, 30)).resolves.toBeUndefined();
-  });
-});
-
-describe('waitForDomQuiescence', () => {
+describe('settleDocument', () => {
   it('asks the page to observe mutations with the given quiet/timeout budget', async () => {
     const page = makePage();
-    await waitForDomQuiescence(page as never, 250, 2_000);
-    expect(page.evaluate).toHaveBeenCalledWith(expect.any(Function), { quietMs: 250, timeoutMs: 2_000 });
+    page.evaluate = vi.fn().mockResolvedValue('quiet');
+    await expect(settleDocument(page as never, 'dom', { quietMs: 250, timeoutMs: 2_000 })).resolves.toMatchObject({ reason: 'quiet' });
+    expect(page.evaluate).toHaveBeenCalledWith(expect.any(Function), { quietMs: 250, timeoutMs: 2_000, animations: false });
   });
 
-  it('does not throw when the page blocks the observer script', async () => {
+  it('reports a blocked observer script or a page that never settles as a spent bound', async () => {
     const page = makePage();
     page.evaluate = vi.fn().mockRejectedValue(new Error('evaluate blocked'));
-    await expect(waitForDomQuiescence(page as never)).resolves.toBeUndefined();
+    await expect(settleDocument(page as never, 'dom', { quietMs: 10, timeoutMs: 30 })).resolves.toMatchObject({ reason: 'deadline' });
+    page.evaluate = vi.fn().mockImplementation(() => new Promise(() => {}));
+    await expect(settleDocument(page as never, 'dom', { quietMs: 10, timeoutMs: 30 })).resolves.toMatchObject({ reason: 'deadline' });
   });
 
-  it('does not hang when the page never stops mutating', async () => {
-    // A page that mutates forever (a live ticker, a looping re-render) must
-    // still let the capture proceed — bounded by timeoutMs, not indefinitely.
-    const page = makePage();
-    page.evaluate = vi.fn().mockImplementation(() => new Promise(() => {}));
-    await expect(waitForDomQuiescence(page as never, 10, 30)).resolves.toBeUndefined();
+  describe('in a browser', () => {
+    let browser: Browser;
+    beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
+    afterAll(async () => { await browser.close(); });
+
+    it('resolves quiet after one window on an idle page and reports the outcome', async () => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent('<main>Idle</main>');
+        const seen: Array<[string, string]> = [];
+        reportReadiness(page, (wait, outcome) => seen.push([wait, outcome.reason]));
+        const outcome = await settleDocument(page, 'idle', { quietMs: 100, timeoutMs: 2_000 });
+        expect(outcome.reason).toBe('quiet');
+        expect(outcome.ms).toBeGreaterThanOrEqual(100);
+        expect(outcome.ms).toBeLessThan(800);
+        expect(seen).toEqual([['idle', 'quiet']]);
+      } finally { await page.close(); }
+    });
+
+    it('extends the window while the document mutates and reports a page that never stops', async () => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(`<main id="m"></main><script>let n = 0; const t = setInterval(() => { m.textContent = String(++n); if (n === 6) clearInterval(t); }, 60);</script>`);
+        const finite = await settleDocument(page, 'finite', { quietMs: 150, timeoutMs: 3_000 });
+        expect(finite.reason).toBe('quiet');
+        expect(await page.locator('#m').textContent()).toBe('6');
+      } finally { await page.close(); }
+      const forever = await browser.newPage();
+      try {
+        await forever.setContent(`<main id="m"></main><script>let n = 0; setInterval(() => { m.textContent = String(++n); }, 40);</script>`);
+        expect((await settleDocument(forever, 'forever', { quietMs: 150, timeoutMs: 600 })).reason).toBe('deadline');
+      } finally { await forever.close(); }
+    });
+
+    it('waits for finite and chained animations but not paused or infinite ones', async () => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(`<style>@keyframes fade{from{opacity:0}to{opacity:1}}
+          #paused{animation:fade 1s both paused}#spin{animation:fade 1s infinite}#first{animation:fade 300ms both}#second.go{animation:fade 300ms both}</style>
+          <div id="paused">P</div><div id="spin">S</div><div id="first">F</div><div id="second">2</div>
+          <script>first.addEventListener('animationend', () => second.classList.add('go'))</script>`);
+        const outcome = await settleDocument(page, 'animations', { quietMs: 0, timeoutMs: 4_000, animations: true });
+        expect(outcome.reason).toBe('quiet');
+        expect(await page.locator('#second').evaluate((element) => element.getAnimations().map((animation) => animation.playState))).toEqual(['finished']);
+        expect(outcome.ms).toBeLessThan(2_500);
+      } finally { await page.close(); }
+    });
   });
 });
 

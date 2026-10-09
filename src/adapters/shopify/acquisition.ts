@@ -228,7 +228,7 @@ export async function pauseShopifySlides(page: import('playwright').Page): Promi
 }
 
 async function prepareShopifyRuntime(page: import('playwright').Page): Promise<void> {
-	const { triggerLazyLoad, waitForFonts, waitForDomQuiescence, dismissOverlays } = await import(
+	const { triggerLazyLoad, waitForFonts, settleDocument, dismissOverlays } = await import(
 		'../../lib/screenshot/page-helpers.js'
 	);
 	await page.waitForFunction(() => document.documentElement.classList.contains('supports-js'), undefined, {
@@ -268,7 +268,7 @@ async function prepareShopifyRuntime(page: import('playwright').Page): Promise<v
 		{ timeout: 10000 }
 	);
 	await waitForFonts(page);
-	await waitForDomQuiescence(page, 500, 3000);
+	await settleDocument(page, 'shopify-runtime', { quietMs: 500, timeoutMs: 3000 });
 	// Wallet markup can mount after the product's editorial/images baseline.
 	// A missing backend stays unresolved without discarding the valid parent.
 	await page.waitForFunction(() => [...document.querySelectorAll('shopify-paypal-button')].every(host => {
