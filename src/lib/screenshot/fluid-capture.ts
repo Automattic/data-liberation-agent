@@ -34,25 +34,6 @@ export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-dla-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
 const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left' ] as const;
 
-function isPureXTranslationMatrix( matrix: readonly number[] ): boolean {
-	return (
-		matrix.length === 6 &&
-		matrix.every( Number.isFinite ) &&
-		Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 &&
-		Math.abs( matrix[ 1 ]! ) <= 0.01 &&
-		Math.abs( matrix[ 2 ]! ) <= 0.01 &&
-		Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 &&
-		Math.abs( matrix[ 5 ]! ) <= 0.01
-	);
-}
-
-function pureXTranslation( transform: string ): number | null {
-	const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
-	if ( matrix && isPureXTranslationMatrix( matrix ) ) return matrix[ 4 ]!;
-	const translate = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform.trim() );
-	return translate ? Number( translate[ 1 ] ) : null;
-}
-
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'left';
 
 export interface FluidSweepOptions {
@@ -118,7 +99,7 @@ export async function learnAndApplyFluidGeometry(
 				if ( ! completed ) {
 					await baseline.evaluate( state => state.restore() );
 					if ( original ) await page.setViewportSize( original );
-					await waitForRestGeometry( page, ID_ATTRIBUTE );
+					await waitForRestGeometry( page, baseline );
 					await baseline.evaluate( state => state.restore() );
 				}
 				await baseline.evaluate( state => state.cleanup() );
@@ -139,8 +120,8 @@ async function learnFluidGeometry(
 	const original = page.viewportSize();
 	const properties = options.learnRelativeOffsets ? [ ...LEARNABLE_PROPERTIES, 'left' ] : [ ...LEARNABLE_PROPERTIES ];
 
-	const tagged = await page.evaluate(
-		( { attribute, properties, prefix } ) => {
+	const tagged = await baseline.evaluate(
+		( state, { attribute, properties, prefix } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
 				const ignorePadding = element.hasAttribute( 'data-dla-fluid-ignore-padding' );
@@ -148,7 +129,8 @@ async function learnFluidGeometry(
 				// Match the declarations the measurement pass can actually learn.
 				// A substring match also tagged min-height/max-width and percentages,
 				// which produced no observations but still paid for the whole sweep.
-				const style = element.getAttribute( 'style' ) ?? '';
+				const geometry = state.readGeometry( element );
+				const style = geometry.literal;
 				const blankParagraph = element.tagName === 'P' &&
 					! ( element.textContent ?? '' ).replace( /[ \t\r\n]/g, '' ) &&
 					! element.querySelector( ':not(br)' ) &&
@@ -163,13 +145,12 @@ async function learnFluidGeometry(
 					// have no text/glyph to size. Retain that native CSS unchanged; explicit
 					// spacer dimensions, real text and generated glyphs still qualify.
 					!( property === 'font-size' && blankParagraph ) &&
-					( property !== 'left' || getComputedStyle( element ).position === 'relative' ) &&
-					/^-?\d+(?:\.\d+)?px$/.test( element.style.getPropertyValue( property ).trim() )
+					( property !== 'left' || geometry.position === 'relative' ) &&
+					state.pixel( geometry.style.getPropertyValue( property ) ) !== null
 				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*(?:matrix\(|translate(?:3d|x)?\()/i.test( style );
-				const carriesAbsoluteInset = getComputedStyle( element ).position === 'absolute' &&
-					/(?:^|;)\s*inset\s*:\s*-?\d+(?:\.\d+)?px\s+auto\s+auto\s+-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
+				const carriesAbsoluteInset = geometry.inset !== null;
 				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
 					continue;
 				}
@@ -180,9 +161,9 @@ async function learnFluidGeometry(
 		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
-	if ( tagged === 0 || await inlineGeometryIsConstant( page, widths, original, settleMs ) ) {
-		await page.evaluate( attribute => {
-			for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) element.removeAttribute( attribute );
+	if ( tagged === 0 || await inlineGeometryIsConstant( page, baseline, widths, original, settleMs ) ) {
+		await baseline.evaluate( ( state, attribute ) => {
+			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
@@ -191,46 +172,36 @@ async function learnFluidGeometry(
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
-	const nonRelative = new Set( options.learnRelativeOffsets ? await page.evaluate( attribute =>
-		[ ...document.querySelectorAll( `[${ attribute }]` ) ]
-			.filter( element => getComputedStyle( element ).position !== 'relative' )
+	const nonRelative = new Set( options.learnRelativeOffsets ? await baseline.evaluate( ( state, attribute ) =>
+		state.elements().filter( element => state.readGeometry( element ).position !== 'relative' )
 			.map( element => element.getAttribute( attribute )! ), ID_ATTRIBUTE ) : [] );
 
 	for ( const width of widths ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, true, properties );
+		await waitForRestGeometry( page, baseline, settleMs, true, properties );
 		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
 		await observeRuntimeSheets( page );
 
-		const measured = await page.evaluate(
-			( { attribute, properties } ) =>
-				[ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ].map( ( element ) => {
-					const style = element.getAttribute( 'style' ) ?? '';
+		const measured = await baseline.evaluate(
+			( state, { attribute, properties } ) =>
+				state.elements().map( ( element ) => {
+					const geometry = state.readGeometry( element );
+					const style = geometry.literal;
 					const values: Record< string, number | null > = {};
 					const containers: Record< string, number | null > = {};
 					const customProperties = [ ...style.matchAll( /(?:^|;)\s*(--[-a-zA-Z0-9_]+)\s*:\s*[^;]+/g ) ].map( ( match ) => match[ 1 ]! );
 					const elementProperties = [ ...new Set( [ ...properties, ...customProperties ] ) ];
-					const parent = element.parentElement;
-					const relative = getComputedStyle( element ).position === 'relative';
+					const parent = geometry.parent;
+					const relative = geometry.position === 'relative';
 					for ( const property of elementProperties ) {
 						if ( property === 'inset-top' || property === 'inset-left' ) {
-							const inset = /(?:^|;)\s*inset\s*:\s*(-?\d+(?:\.\d+)?)px\s+auto\s+auto\s+(-?\d+(?:\.\d+)?)px\s*(?:;|$)/.exec( style );
-							values[ property ] = getComputedStyle( element ).position === 'absolute' && inset
-								? Number( inset[ property === 'inset-top' ? 1 : 2 ] ) : null;
+							values[ property ] = geometry.inset?.[ property === 'inset-top' ? 'top' : 'left' ] ?? null;
 							containers[ property ] = null;
 							continue;
 						}
 						if ( property === 'transform-x' ) {
-							const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style )?.[ 1 ]?.trim();
-							if ( transform ) {
-								const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
-								const translated = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform );
-								const pureMatrix = matrix && matrix.length === 6 && matrix.every( Number.isFinite ) &&
-									Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 1 ]! ) <= 0.01 &&
-									Math.abs( matrix[ 2 ]! ) <= 0.01 && Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 5 ]! ) <= 0.01;
-								values[ property ] = pureMatrix ? matrix[ 4 ]! : translated ? Number( translated[ 1 ] ) : null;
-							} else values[ property ] = null;
+							values[ property ] = geometry.translation;
 							continue;
 						}
 						// `font-size` is excluded: CSS resolves a font
@@ -382,12 +353,8 @@ async function learnFluidGeometry(
 		if ( transformX && ( model.kind !== 'breakpoint' || segmented !== null ) ) {
 			// Source resize handlers can remove measured nodes; absence is final,
 			// not a reason to auto-wait for the old identity to reappear.
-			const element = await page.evaluate(
-				( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
-				{ attribute: ID_ATTRIBUTE, id }
-			);
-			const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( element ?? '' )?.[ 1 ]?.trim();
-			if ( ! transform || pureXTranslation( transform ) === null ) {
+			const translation = await baseline.evaluate( ( state, id ) => state.translation( id ), id );
+			if ( translation === null ) {
 				// The runtime may have switched this transform after the sweep; do not
 				// replace a newly rotated, scaled, skewed, or vertically shifted matrix.
 				unmodelled++;
@@ -489,7 +456,7 @@ async function learnFluidGeometry(
 	// The source then owns the final clone state. Learned CSS follows that resize.
 	await baseline.evaluate( state => state.restore() );
 	if ( original ) await page.setViewportSize( original );
-	await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, false, properties );
+	await waitForRestGeometry( page, baseline, settleMs, false, properties );
 	await baseline.evaluate( state => state.reconcile() );
 	// A final resize may write geometry onto roles that never qualified for
 	// learning. Restore those roles without replacing the sampled role state.
@@ -500,27 +467,23 @@ async function learnFluidGeometry(
 	for ( let index = learned.length - 1; index >= 0; index-- ) {
 		const entry = learned[ index ]!;
 		if ( entry.property === 'left' && options.learnRelativeOffsets &&
-			! await page.evaluate( ( { attribute, id } ) => {
-				const element = document.querySelector( `[${ attribute }="${ id }"]` );
-				return element !== null && getComputedStyle( element ).position === 'relative';
-			}, { attribute: ID_ATTRIBUTE, id: entry.id } ) ) {
+			! await baseline.evaluate( ( state, id ) => {
+				const element = state.element( id );
+				return element !== null && state.readGeometry( element ).position === 'relative';
+			}, entry.id ) ) {
 			learned.splice( index, 1 );
 			unmodelled++;
 			continue;
 		}
 		if ( entry.property !== 'transform' ) continue;
-		const style = await page.evaluate(
-			( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
-			{ attribute: ID_ATTRIBUTE, id: entry.id }
-		);
-		const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style ?? '' )?.[ 1 ]?.trim();
-		if ( transform && pureXTranslation( transform ) !== null ) continue;
+		const translation = await baseline.evaluate( ( state, id ) => state.translation( id ), entry.id );
+		if ( translation !== null ) continue;
 		learned.splice( index, 1 );
 		unmodelled++;
 	}
 
-	const { reverted, frozen, frozenWidths, sampled, appliedCss } = await page.evaluate(
-		( { attribute, segmentAttribute, entries, tolerance } ) => {
+	const { reverted, frozen, frozenWidths, sampled, appliedCss } = await baseline.evaluate(
+		( state, { segmentAttribute, entries, tolerance } ) => {
 			let revertedCount = 0;
 			let frozenCount = 0;
 			const frozenWidths: number[] = [];
@@ -533,7 +496,7 @@ async function learnFluidGeometry(
 			// plain copy or deletes it). Index the array instead.
 			for ( let index = 0; index < entries.length; index++ ) {
 				const entry = entries[ index ]!;
-				const element = document.querySelector< HTMLElement >( `[${ attribute }="${ entry.id }"]` );
+				const element = state.element( entry.id );
 				if ( ! element ) continue;
 				if ( entry.segmentedCss !== null ) {
 					// The rules live in a stylesheet keyed by the persistent
@@ -603,7 +566,6 @@ async function learnFluidGeometry(
 			return { reverted: revertedCount, frozen: frozenCount, frozenWidths, sampled: sampledEntries, appliedCss: entries.map( entry => entry.css ) };
 		},
 		{
-			attribute: ID_ATTRIBUTE,
 			segmentAttribute: SEGMENT_ATTRIBUTE,
 			entries: learned,
 			tolerance: CONTAINER_VERIFY_TOLERANCE_PX,
@@ -671,16 +633,17 @@ async function learnFluidGeometry(
  * overlaps that observation rather than preceding it. The bound keeps a
  * perpetually animating page from stalling the sweep.
  */
-async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
+async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
 	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
 	const reachabilityKey = await installImageReachability( page );
-	await withEvaluateTimeout( page.evaluate( async ( { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
+	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
 		const started = Date.now();
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		const snapshot = () => JSON.stringify(
-			[ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ].map( element => {
-				const style = element.style;
-				const pixel = ( value: string ) => /^-?\d+(?:\.\d+)?px$/.test( value.trim() ) ? Number.parseFloat( value ) : null;
+			state.elements().map( element => {
+				const geometry = state.readGeometry( element );
+				const style = geometry.style;
+				const pixel = state.pixel;
 				const custom = [ ...style ].filter( property => property.startsWith( '--' ) )
 					.map( property => [ property, pixel( style.getPropertyValue( property ) ) ] )
 					.filter( ( [ , value ] ) => value !== null );
@@ -689,9 +652,9 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 					// Keep the whole transform, not just X: scale/rotation must invalidate
 					// rest even when the translation component stays unchanged.
 					style.transform, style.transform ? getComputedStyle( element ).transform : null,
-					style.inset, getComputedStyle( element ).position,
-					pixel( style.width ) === null ? null : element.parentElement?.clientWidth,
-					pixel( style.height ) === null ? null : element.parentElement?.clientHeight ];
+					style.inset, geometry.position,
+					pixel( style.width ) === null ? null : geometry.parent?.clientWidth,
+					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ];
 			} )
 		);
 		const imageIds = new WeakMap< HTMLImageElement, number >();
@@ -760,7 +723,7 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
 			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
 		}
-	}, { attribute, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
+	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
 }
 
 /** Quiet window after a probe resize; outlasts common 250–500 ms resize debounces. */
@@ -779,16 +742,17 @@ export const PROBE_QUIET_MS = 600;
  */
 async function inlineGeometryIsConstant(
 	page: Page,
+	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>,
 	widths: readonly number[],
 	original: { width: number; height: number } | null,
 	settleMs: number
 ): Promise< boolean > {
-	const observe = () => page.evaluate( ( { attribute, key } ) => {
+	const observe = () => baseline.evaluate( ( state, { key } ) => {
 		const tracker = ( window as unknown as Record< symbol, { written( element: Element ): boolean; viewportReactive(): boolean } | undefined > )[ Symbol.for( key ) ];
 		if ( ! tracker ) return null;
-		const tagged = [ ...document.querySelectorAll( `[${ attribute }]` ) ];
+		const tagged = state.elements();
 		return { count: tagged.length, written: tagged.some( element => tracker.written( element ) ), reactive: tracker.viewportReactive() };
-	}, { attribute: ID_ATTRIBUTE, key: RUNTIME_STYLE_WRITES_KEY } );
+	}, { key: RUNTIME_STYLE_WRITES_KEY } );
 	const before = await observe();
 	if ( before === null || before.written ) return false;
 	// The probe asks only whether script writes the tagged elements, not what
