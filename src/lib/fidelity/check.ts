@@ -1422,7 +1422,6 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	const sources = routeSourceMap( receipt );
 	let widths = options.widths ?? [ ...REFERENCE_WIDTHS ];
 	const states = options.states ?? [ 'baseline' ];
-	const routes = options.routes?.map( canonicalRoutePath ) ?? [ ...sources.keys() ];
 	const selfConsistency = checkSelfConsistency( websiteDir, routeFiles( receipt ) );
 	const scores: RouteScore[] = [];
 	const pending: NonNullable<FidelityReport['pending']> = [];
@@ -1448,6 +1447,15 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 		}
 	} catch ( error ) { invalid = `Frozen reference unproven: ${ String( error ) }`; }
 	if ( ! options.widths && manifest?.scope.cells ) widths = manifest.scope.widths;
+	// Declared cells decide the default comparison scope. A capture that bounded
+	// its reference sample freezes evidence for a subset of routes: the default
+	// compares only routes that have frozen evidence and names the rest as
+	// uncompared scope, instead of failing them for evidence the caller chose
+	// not to freeze. Explicit routes keep the loud out-of-scope failure, and
+	// manifests without declared cells keep comparing every retained route.
+	const requestedRoutes = options.routes?.map( canonicalRoutePath );
+	const declaredSources = manifest?.scope.cells ? new Set( manifest.scope.cells.map( cell => cell.sourceUrl ) ) : undefined;
+	const routes = requestedRoutes ?? ( declaredSources ? [ ...sources.keys() ].filter( route => declaredSources.has( sources.get( route )! ) ) : [ ...sources.keys() ] );
 	const required: Array<{ route: string; viewport: number; state: string; profile?: string }> = [];
 	for ( const route of routes ) {
 		const declared = manifest?.scope.cells?.filter( cell => cell.sourceUrl === sources.get( route ) );
@@ -1469,10 +1477,19 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 		} else for ( const viewport of widths ) for ( const state of states ) for ( const profile of options.profiles ?? [ undefined ] ) required.push( { route, viewport, state, ...( profile ? { profile } : {} ) } );
 	}
 	const unknowns = manifest?.scope?.unknowns ?? [ 'Capture has no valid frozen source evidence.' ];
+	// A bounded reference sample leaves unreferenced routes explicitly unknown
+	// in the report: not failures, not silent passes.
+	if ( declaredSources && ! requestedRoutes ) {
+		const uncompared = [ ...sources.keys() ].filter( route => ! declaredSources.has( sources.get( route )! ) );
+		if ( uncompared.length ) unknowns.push( `${ uncompared.length } of ${ sources.size } captured routes are not compared: no frozen reference evidence because the caller bounded the reference sample (${ uncompared.join( ', ' ) })` );
+	}
 	// Discovery failures cannot disappear simply because no portable route was written.
 	let missingRequired = 0;
 	for ( const url of options.routes ? [] : manifest?.scope?.sourceUrls ?? [] ) {
 		if ( [ ...sources.values() ].includes( url ) || receiptCoversSourceUrl( receipt, url ) ) continue;
+		// A bounded reference sample deliberately leaves unsampled source URLs
+		// without frozen evidence; they are uncompared scope, not unproven failures.
+		if ( manifest?.scope.referenceSample !== undefined && ! manifest.scope.cells?.some( cell => cell.sourceUrl === url ) ) continue;
 		const declared = manifest?.scope.cells?.filter( cell => cell.sourceUrl === url && widths.includes( cell.viewport ) && states.includes( cell.state ) && ( ! options.profiles || options.profiles.includes( cell.profile ) ) );
 		const missingCells: Array<{ viewport: number; state: string; profile?: string }> = declared?.length
 			? declared.map( cell => ( { viewport: cell.viewport, state: cell.state, profile: cell.profile } ) )
@@ -1523,6 +1540,9 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 				options.log?.( `[compare] ${ stage } ${ route } ${ profile ?? '' } @ ${ viewport }px ${ state }` );
 				if ( invalid ) throw new Error( invalid );
 				if ( ! manifest || ! sources.has( route ) ) throw new Error( 'Required route was not captured' );
+				// An explicitly requested route outside the frozen reference sample
+				// fails loudly rather than degrading to a generic missing-observation.
+				if ( manifest.scope.cells && ! manifest.scope.cells.some( cell => cell.sourceUrl === sources.get( route ) ) ) throw new Error( `Requested route ${ route } has no frozen reference evidence; the capture bounded its reference sample` );
 				if ( state !== 'baseline' || ! manifest.scope.states.includes( state ) || ! manifest.scope.widths.includes( viewport ) ) throw new Error( 'Required viewport/state is outside frozen scope' );
 				const entries = manifest.entries.filter( entry => entry.route === route && entry.sourceUrl === sources.get( route ) && entry.viewport === viewport && entry.state === state && ( profile === undefined || ( entry.profile ?? entry.device ) === profile ) );
 				if ( entries.length !== 1 ) throw new Error( 'Source observation missing or ambiguous' );
