@@ -142,7 +142,9 @@ links to the platform homepage. Native CSS, images and other resources use their
 existing acquisition policy and can live outside the document namespace. Ordinary
 sites omit the declaration and keep origin-wide discovery even when entered at a
 subpath. Slash aliases are deduped only after an observed source redirect proves
-the correspondence.
+the correspondence within a declared namespace. Ordinary captures retain their
+requested route identity while the observed final URL and authored base remain
+the browser resource-resolution facts.
 
 ## Registered package consumer (Node)
 

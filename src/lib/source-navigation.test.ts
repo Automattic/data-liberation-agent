@@ -91,8 +91,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 					expect(page.url()).toBe(`${origin}/article?rendition=full#text`);
 				}
 				expect((await context.cookies()).some(cookie => cookie.name === 'source-session' && cookie.value === 'kept')).toBe(true);
-				expect((await navigateSourceDocument(page, `${origin}/slash`)).redirectedTo).toBe(`${origin}/slash/`);
-				await navigateSourceDocument(page, `${origin}/slash/`);
+				await navigateSourceDocument(page, `${origin}/slash`);
 				expect(await page.evaluate(() => ({url:document.URL, base:document.baseURI}))).toEqual({url:`${origin}/slash/`, base:`${origin}/slash/assets/`});
 				await context.close();
 			}

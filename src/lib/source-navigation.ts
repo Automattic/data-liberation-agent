@@ -229,7 +229,13 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 				finalUrl = inspected.finalUrl ?? requestedUrl;
 				const notHtml = inspected.response && inspected.status < 400 ? nonHtmlDocumentError(inspected.response.headers['content-type']) : undefined;
 				if (notHtml) throw new SourceNavigationError(notHtml);
-				if (inspected.response) redirectedTo = serverRedirectTarget(requestedUrl, finalUrl);
+				if (inspected.response) {
+					// Ordinary captures retain the requested route while final URL/base
+					// remain resource facts. An adapter-owned namespace additionally
+					// dedupes exact addresses only when this response chain proves an alias.
+					redirectedTo = options.routeScope && documentRequestUrl(requestedUrl) !== documentRequestUrl(finalUrl)
+						? finalUrl : serverRedirectTarget(requestedUrl, finalUrl);
+				}
 			}
 			delivered = true;
 			if (boundary) await route.fulfill({status: 200, contentType: 'text/html', body: '<!doctype html><title>Observed external boundary</title>'});

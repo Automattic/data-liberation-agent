@@ -1203,7 +1203,10 @@ function buildExportCapture(
 			// The source sends this link outside the site. Retain only the fact of the
 			// redirect; neither its destination nor its query belongs in the copy.
 			excludedRoutes.push( url );
-			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source initial-document redirect outside the site route scope (destination not fetched)' } );
+			const tenantBoundary = entry.sourceOutcomes?.some( outcome => outcome.routeScope && outcome.target.origin === new URL(url).origin );
+			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: tenantBoundary
+				? 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)'
+				: 'source initial-document redirect to an external origin (destination not fetched)' } );
 			continue;
 		}
 		if ( entry.sourceAbsentStatus ) {

@@ -40,6 +40,8 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 			expect( receipt.routes ).toHaveLength( 1 );
 			expect( receipt.routes[0] ).toMatchObject( { url, path: 'website/index.html' } );
 			expect( receipt.summary.complete ).toBe( true );
+			expect( receipt.discoveryDiagnostics ).toContainEqual( { code: 'route_external_redirect', url: `${url}/leave`,
+				reason: 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)' } );
 			expect( receipt.duplicateRoutes ).toContainEqual( { url: `${url}/`, canonicalUrl: url, path: 'website/index.html' } );
 			const portable = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
 			for ( const external of [ '/', '/?utm_content=badge', '/other/' ] ) expect( portable ).toContain( `href="${origin}${external}"` );
