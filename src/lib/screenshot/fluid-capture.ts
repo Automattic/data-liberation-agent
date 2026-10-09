@@ -19,7 +19,7 @@ import {
 } from './fluid-model.js';
 import type { Page } from 'playwright';
 import { captureFluidBaseline } from './fluid-baseline.js';
-import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments } from './fluid-runtime-sheets.js';
+import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
@@ -75,6 +75,32 @@ export interface FluidLearningResult {
 export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
 
 /**
+ * Interior tablet widths sampled only when the band's edges show a change.
+ *
+ * The dense 767–801 ladder locates a narrow tablet transition. Its edges
+ * (767/768 and 800/801) stay in every sweep: when every observation is
+ * collinear across them and no runtime stylesheet was rewritten, the band holds
+ * one linear relationship and interior samples add no information to the fit.
+ */
+export const TABLET_REFINEMENT_WIDTHS = [ 769, 775, 783, 791, 799 ];
+const TABLET_BAND = [ 767, 768, 800, 801 ] as const;
+const COLLINEAR_TOLERANCE_PX = 0.5;
+
+/** Whether any observed series is not one line across the tablet band edges. */
+export function tabletBandNeedsRefinement( series: Iterable< readonly GeometrySample[] > ): boolean {
+	for ( const samples of series ) {
+		const at = TABLET_BAND.map( width => samples.find( sample => sample.viewport === width ) );
+		const present = at.filter( sample => sample !== undefined );
+		if ( present.length === 0 ) continue;
+		if ( present.length !== at.length || present.some( sample => ! Number.isFinite( sample!.value ) ) ) return true;
+		const [ a, b, c, d ] = at as GeometrySample[];
+		const line = ( viewport: number ) => a!.value + ( d!.value - a!.value ) * ( viewport - a!.viewport ) / ( d!.viewport - a!.viewport );
+		if ( Math.abs( b!.value - line( b!.viewport ) ) > COLLINEAR_TOLERANCE_PX || Math.abs( c!.value - line( c!.viewport ) ) > COLLINEAR_TOLERANCE_PX ) return true;
+	}
+	return false;
+}
+
+/**
  * Observe inline geometry across widths, fit a model per element and property,
  * and write the learned CSS back into the live DOM.
  *
@@ -115,7 +141,10 @@ async function learnFluidGeometry(
 	options: FluidSweepOptions,
 	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>
 ): Promise<FluidLearningResult> {
-	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
+	// An explicit ladder is sampled as given; the default refines its tablet band
+	// only on evidence (see TABLET_REFINEMENT_WIDTHS).
+	const adaptive = options.widths === undefined;
+	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) );
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
 	const properties = options.learnRelativeOffsets ? [ ...LEARNABLE_PROPERTIES, 'left' ] : [ ...LEARNABLE_PROPERTIES ];
@@ -176,7 +205,10 @@ async function learnFluidGeometry(
 		state.elements().filter( element => state.readGeometry( element ).position !== 'relative' )
 			.map( element => element.getAttribute( attribute )! ), ID_ATTRIBUTE ) : [] );
 
-	for ( const width of widths ) {
+	// Widths in the order they were sampled; runtime-sheet observations align to it.
+	const sampledWidths: number[] = [];
+	const sample = async ( width: number ) => {
+		sampledWidths.push( width );
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
 		await waitForRestGeometry( page, baseline, settleMs, true, properties );
 		await options.prepareViewport?.( page );
@@ -258,7 +290,12 @@ async function learnFluidGeometry(
 			}
 		}
 		options.onProgress?.( width, measured.length );
+	};
+	for ( const width of widths ) await sample( width );
+	if ( adaptive && ( await runtimeSheetsObserved( page ) || tabletBandNeedsRefinement( observations.values() ) ) ) {
+		for ( const width of TABLET_REFINEMENT_WIDTHS ) await sample( width );
 	}
+	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
 
 	const learned: Array< {
 		id: string;
@@ -595,7 +632,7 @@ async function learnFluidGeometry(
 	} );
 	// The runtime has rewritten its own sheets for the capture width by now;
 	// learned rules are validated against exactly that geometry.
-	const runtimeSheets = await applyRuntimeSheetRules( page, widths );
+	const runtimeSheets = await applyRuntimeSheetRules( page, sampledWidths );
 	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
 
 	if ( reverted > 0 ) {

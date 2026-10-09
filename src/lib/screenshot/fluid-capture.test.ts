@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
-import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, TABLET_REFINEMENT_WIDTHS, learnAndApplyFluidGeometry, tabletBandNeedsRefinement } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 	let browser: Browser;
@@ -95,9 +95,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const learningEvaluations = rendererEvaluations;
 			const snapshots = await rest.evaluate( state => state.read() );
 			await rest.evaluate( state => state.cleanup() ); await rest.dispose();
-			expect( widths ).toEqual( DEFAULT_SWEEP_WIDTHS );
+			// The fixture changes inside the tablet band, so the coarse ladder is
+			// refined: every default width is observed, interior widths last.
+			const coarse = DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) );
+			expect( widths ).toEqual( [ ...coarse, ...TABLET_REFINEMENT_WIDTHS ] );
 			expect( measurements ).toHaveLength( 17 );
-			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...DEFAULT_SWEEP_WIDTHS, 1440 ] );
+			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...coarse, ...TABLET_REFINEMENT_WIDTHS, 1440 ] );
 			const first = measurements[ 0 ] as Array<{ id: string; values: Record<string, number | null> }>;
 			expect( first.find( entry => entry.id === 'desktop-2' )!.values ).toMatchObject( { width: null, height: 12, 'font-size': null, 'transform-x': null, 'inset-top': null, '--literal': 4 } );
 			expect( first.find( entry => entry.id === 'desktop-5' )!.values ).toMatchObject( { width: 195, 'inset-top': null, 'inset-left': null } );
@@ -1057,5 +1060,22 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally {
 			await page.close();
 		}
+	} );
+	describe( 'tablet band refinement', () => {
+		const series = ( values: Record< number, number > ) => Object.entries( values ).map( ( [ viewport, value ] ) => ( { viewport: Number( viewport ), value } ) );
+		it( 'skips interior widths when every series is one line across the band edges', () => {
+			expect( tabletBandNeedsRefinement( [
+				series( { 600: 10, 767: 10, 768: 10, 800: 10, 801: 10, 1024: 10 } ),
+				series( { 767: 383.5, 768: 384, 800: 400, 801: 400.5 } ),
+				series( { 1024: 4, 1280: 8 } ),
+			] ) ).toBe( false );
+		} );
+		it( 'refines a change inside the band, at its edge, or a series that appears or vanishes there', () => {
+			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 200, 800: 200, 801: 200 } ) ] ) ).toBe( true );
+			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 100, 800: 100, 801: 300 } ) ] ) ).toBe( true );
+			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 140, 800: 100, 801: 100 } ) ] ) ).toBe( true );
+			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 100, 801: 100 } ) ] ) ).toBe( true );
+			expect( tabletBandNeedsRefinement( [ series( { 767: 1, 768: Number.NaN, 800: 1, 801: 1 } ) ] ) ).toBe( true );
+		} );
 	} );
 } );
