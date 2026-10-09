@@ -1144,7 +1144,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			await page.setViewportSize( { width: viewport, height: 900 } );
 			let sourcePng: Buffer | undefined;
 			let liberatedPng: Buffer | undefined;
-			const source = await observePage( page, sourceHref, viewport, sourceSettleMs, null, receipt.cleanup?.policy,
+			const source = await observePage( page, sourceHref, viewport, Math.max( settleMs, sourceSettleMs ), null, receipt.cleanup?.policy,
 				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);

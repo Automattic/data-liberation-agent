@@ -164,7 +164,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
 						entry.browserProfile = browserProfile;
 						if ( ! browserProfile ) entry.readiness.reasons.push( 'source browser profile unproven' );
-						const observation = await observePage( referencePage, url, viewport, 800, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
+						const observation = await observePage( referencePage, url, viewport, 0, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
 							await applyCaptureRemovals( referencePage!, { removeSelectors: options.removeSelectors, prepare: options.prepareCapture, ctx: { url, viewport: device } } );
 						}, true, referencePage === page );
 						const cleanup = await readSourceCleanup( referencePage );
