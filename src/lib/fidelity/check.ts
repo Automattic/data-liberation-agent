@@ -507,6 +507,78 @@ export async function observePage(
 			} > = [];
 			const canvas = document.createElement( 'canvas' );
 			const context = canvas.getContext( '2d' );
+			// One rendered-range proof serves both text accounting and typography.
+			// Rectangular clips can remove every glyph without changing innerText
+			// or its layout ranges. Unknown shapes stay conservative, and a partly
+			// intersecting run remains content rather than being trimmed by label.
+			const paintStyles = new WeakMap< Element, CSSStyleDeclaration >();
+			const paintStyle = ( element: Element ) => {
+				let style = paintStyles.get( element );
+				if ( ! style ) { style = getComputedStyle( element ); paintStyles.set( element, style ); }
+				return style;
+			};
+			const rectangularClip = ( element: Element, style: CSSStyleDeclaration, value: string, inset: boolean ) => {
+				const match = value.match( inset ? /^inset\(([^()]*)\)$/ : /^rect\(([^()]*)\)$/ );
+				if ( ! match ) return null;
+				const parts = match[ 1 ].split( /\s+round\s+/ )[ 0 ].trim().split( /[\s,]+/ );
+				if ( inset && ( parts.length < 1 || parts.length > 4 ) || ! inset && parts.length !== 4 ) return null;
+				const box = element.getBoundingClientRect();
+				const dimension = ( axis: 'width' | 'height' ) => {
+					const base = Number.parseFloat( style[ axis ] );
+					const edges = axis === 'width' ? [ 'Left', 'Right' ] : [ 'Top', 'Bottom' ];
+					return Number.isFinite( base ) ? base + ( style.boxSizing === 'border-box' ? 0 : edges.reduce( ( sum, edge ) => sum + Number.parseFloat( style.getPropertyValue( `padding-${ edge.toLowerCase() }` ) || '0' ) + Number.parseFloat( style.getPropertyValue( `border-${ edge.toLowerCase() }-width` ) || '0' ), 0 ) ) : box[ axis ];
+				};
+				const width = dimension( 'width' ), height = dimension( 'height' );
+				const length = ( token: string, size: number, auto: number ): number => {
+					if ( token === 'auto' && ! inset ) return auto;
+					if ( ! /^[-+]?(?:\d*\.)?\d+(?:px|%)?$/.test( token ) ) return NaN;
+					return Number.parseFloat( token ) * ( token.endsWith( '%' ) ? size / 100 : 1 );
+				};
+				const expanded = inset ? [ parts[ 0 ], parts[ 1 ] ?? parts[ 0 ], parts[ 2 ] ?? parts[ 0 ], parts[ 3 ] ?? parts[ 1 ] ?? parts[ 0 ] ] : parts;
+				const top = length( expanded[ 0 ], height, 0 ), right = length( expanded[ 1 ], width, width ), bottom = length( expanded[ 2 ], height, height ), left = length( expanded[ 3 ], width, 0 );
+				if ( [ width, height, top, right, bottom, left ].some( number => ! Number.isFinite( number ) ) ) return null;
+				const local = { left, right: inset ? width - right : right, top, bottom: inset ? height - bottom : bottom };
+				if ( local.right <= local.left || local.bottom <= local.top ) return { left: 0, right: 0, top: 0, bottom: 0 };
+				// A nonempty rotated/reflected clip needs polygon intersection. Keep
+				// it as an unknown instead of rejecting potentially painted glyphs.
+				for ( let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement ) {
+					const ancestorStyle = paintStyle( ancestor );
+					const matrix = new DOMMatrixReadOnly( ancestorStyle.transform === 'none' ? undefined : ancestorStyle.transform );
+					if ( ! matrix.is2D || matrix.b || matrix.c || matrix.a <= 0 || matrix.d <= 0 || ! [ 'none', '0deg' ].includes( ancestorStyle.rotate ) || ancestorStyle.scale.includes( '-' ) ) return null;
+				}
+				return { left: box.left + local.left * box.width / ( width || 1 ), right: box.left + local.right * box.width / ( width || 1 ), top: box.top + local.top * box.height / ( height || 1 ), bottom: box.top + local.bottom * box.height / ( height || 1 ) };
+			};
+			const paintedTextRects = ( range: Range, parent: Element, collapsedWhitespace = false ) => {
+				const style = paintStyle( parent );
+				if ( Number.parseFloat( style.fontSize ) === 0 || [ 'hidden', 'collapse' ].includes( style.visibility ) ) return [];
+				const ranges = [ ...range.getClientRects() ];
+				// Collapsed wrapping spaces can have no range box at all. Their
+				// enclosing flow still separates words, subject to the same clips.
+				if ( collapsedWhitespace && ranges.every( rect => rect.width === 0 && rect.height === 0 ) ) ranges.splice( 0, ranges.length, parent.getBoundingClientRect() );
+				return ranges.filter( rect => {
+					if ( rect.height <= 0 || rect.width < 0 || ! collapsedWhitespace && rect.width === 0 ) return false;
+					let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
+					for ( let ancestor: Element | null = parent; ancestor; ancestor = ancestor.parentElement ) {
+						const ancestorStyle = paintStyle( ancestor );
+						if ( ancestorStyle.display === 'none' ) return false;
+						if ( ancestorStyle.display === 'contents' ) continue;
+						const box = ancestor.getBoundingClientRect();
+						if ( ancestor !== document.body && ancestor !== document.documentElement ) {
+							if ( [ 'hidden', 'clip' ].includes( ancestorStyle.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
+							if ( [ 'hidden', 'clip' ].includes( ancestorStyle.overflowY ) ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
+						}
+						const clips = [ rectangularClip( ancestor, ancestorStyle, ancestorStyle.clipPath, true ) ];
+						if ( [ 'absolute', 'fixed' ].includes( ancestorStyle.position ) ) clips.push( rectangularClip( ancestor, ancestorStyle, ancestorStyle.clip, false ) );
+						for ( const clip of clips ) {
+							if ( ! clip ) continue;
+							if ( clip.right <= clip.left || clip.bottom <= clip.top ) return false;
+							left = Math.max( left, clip.left ); right = Math.min( right, clip.right ); top = Math.max( top, clip.top ); bottom = Math.min( bottom, clip.bottom );
+						}
+						if ( bottom <= top || ( collapsedWhitespace ? right < left : right <= left ) ) return false;
+					}
+					return true;
+				} );
+			};
 			// Canonicalize painted inline flow, not DOM serialization boundaries.
 			// Keep raw whitespace until the complete run is assembled; comments and
 			// equivalent inline wrappers add no glyphs, while blocks/replaced boxes,
@@ -541,7 +613,7 @@ export async function observePage(
 				if ( node.nodeType === Node.COMMENT_NODE ) return;
 				if ( node instanceof Element ) {
 					const style = getComputedStyle( node );
-					if ( node.matches( 'script,style,noscript,template' ) || style.display === 'none' || style.visibility === 'hidden' ) {
+					if ( node.matches( 'script,style,noscript,template' ) || style.display === 'none' ) {
 						flush();
 						return;
 					}
@@ -563,13 +635,10 @@ export async function observePage(
 				const rect = range.getBoundingClientRect();
 				const style = getComputedStyle( parent );
 				const signature = JSON.stringify( styleProperties.map( property => style[ property ] ) );
-				const parentRect = parent.getBoundingClientRect();
-				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
-					( style.position === 'absolute' || style.position === 'fixed' ) &&
-					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
+				const painted = paintedTextRects( range, parent, /^\s+$/.test( node.textContent ) );
 				// A collapsed inter-word space at a soft wrap has no painted width,
 				// but still separates words in the canonical text of this flow.
-				if ( rect.width === 0 && /^\s+$/.test( node.textContent ) && ! clippedLabel ) {
+				if ( rect.width === 0 && /^\s+$/.test( node.textContent ) && painted.length ) {
 					if ( run?.signature === signature ) run.text += node.textContent;
 					else flush();
 					return;
@@ -577,7 +646,7 @@ export async function observePage(
 				if (
 					rect.width <= 0 ||
 					rect.height <= 0 ||
-					clippedLabel ||
+					! painted.length ||
 					style.display === 'none' ||
 					style.visibility === 'hidden'
 				) {
@@ -714,12 +783,8 @@ export async function observePage(
 
 			// Read what describes this page before any probe click can change it.
 			const title = document.title;
-			// innerText still includes a clipped 1×1 keyboard skip link. It is
-			// useful content when focused, but not rendered body copy at rest.
-			// Remove only a direct, focus-only fragment link occupying the text
-			// prefix; editorial links with the same label remain counted.
 			let bodyText = document.body?.innerText ?? '';
-			// innerText reports text in overflow-clipped offstage content. Remove
+			// innerText reports unpainted zero-font and clipped content. Remove
 			// a text node only when none of its actual range boxes intersects an
 			// ancestor clip; any partly painted run remains counted. Do not use
 			// carousel selectors, aria-hidden, or viewport position.
@@ -730,26 +795,13 @@ export async function observePage(
 			while ( ( candidateText = textWalker.nextNode() ) ) {
 				const value = candidateText.textContent ?? '';
 				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
-				if ( candidateText.parentElement && getComputedStyle( candidateText.parentElement ).fontSize === '0px' ) continue;
 				const range = document.createRange(); range.selectNodeContents( candidateText );
 				const rects = [ ...range.getClientRects() ];
 				if ( ! rects.length ) continue;
 				const parent = candidateText.parentElement;
 				if ( ! parent ) continue;
 				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
-				const painted = rects.some( rect => {
-					if ( rect.width <= 0 || rect.height <= 0 ) return false;
-					let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
-					for ( let ancestor: HTMLElement | null = parent; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement ) {
-						const style = getComputedStyle( ancestor );
-						if ( style.display === 'contents' ) continue;
-						if ( ! [ 'hidden', 'clip' ].includes( style.overflowX ) && ! [ 'hidden', 'clip' ].includes( style.overflowY ) ) continue;
-						const box = ancestor.getBoundingClientRect();
-						if ( [ 'hidden', 'clip' ].includes( style.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
-						if ( [ 'hidden', 'clip' ].includes( style.overflowY ) ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
-					}
-					return right > left && bottom > top;
-				} );
+				const painted = paintedTextRects( range, parent ).length > 0;
 				textNodes.push( { text: value, clipped: ! painted } );
 			}
 			let textSearchFrom = 0;
@@ -762,40 +814,12 @@ export async function observePage(
 				const at = bodyText.indexOf( normalizedText, textSearchFrom );
 				if ( at >= 0 ) {
 					if ( clipped ) {
-						bodyText = `${ bodyText.slice( 0, at ) } ${ bodyText.slice( at + normalizedText.length ) }`;
-						// The stream shrinks on deletion; resume after the replacement
-						// separator while preserving later identical occurrences.
-						textSearchFrom = at + 1;
+						bodyText = bodyText.slice( 0, at ) + bodyText.slice( at + normalizedText.length );
+						// The stream shrinks on deletion; preserve its own whitespace
+						// and the position of later identical visible occurrences.
+						textSearchFrom = at;
 					} else textSearchFrom = at + normalizedText.length;
 				}
-			}
-			for ( const element of document.body?.children ?? [] ) {
-				if ( ! ( element instanceof HTMLAnchorElement ) || ! element.hash || element.matches( ':focus' ) ) continue;
-				const style = getComputedStyle( element );
-				const box = element.getBoundingClientRect();
-				if ( box.width > 1.5 || box.height > 1.5 || style.overflow !== 'hidden' || ( style.clipPath === 'none' && style.clip === 'auto' ) ) continue;
-				const label = element.innerText.replace( /\s+/g, ' ' ).trim();
-				const prefix = bodyText.trimStart();
-				if ( label && prefix.startsWith( label ) && /^\s/.test( prefix.slice( label.length ) ) ) bodyText = prefix.slice( label.length );
-			}
-			// A native decorative glyph may be replaced visually by source SVG
-			// artwork while its save-valid text remains in the DOM at font-size:0.
-			// innerText counts that unpainted text. Remove only a zero-font, leaf,
-			// explicitly decorative fragment at its actual position in its parent;
-			// identical visible symbols in an editorial label remain counted.
-			const normalized = (value: string) => value.replace(/\s+/g, ' ').trim();
-			bodyText = normalized(bodyText);
-			for (const element of document.querySelectorAll<HTMLElement>('[aria-hidden="true"]')) {
-				if (element.childElementCount || getComputedStyle(element).fontSize !== '0px') continue;
-				const parent = element.parentElement, label = normalized(element.innerText);
-				if (!parent || !label || !parent.getBoundingClientRect().height) continue;
-				const context = normalized(parent.innerText);
-				const range = document.createRange(); range.selectNodeContents(parent); range.setEndBefore(element);
-				const prefix = normalized(range.toString());
-				if (prefix && !context.startsWith(prefix)) continue;
-				const offset = context.indexOf(label, prefix.length);
-				if (offset < 0) continue;
-				bodyText = bodyText.replace(context, normalized(context.slice(0, offset) + context.slice(offset + label.length)));
 			}
 			const textChars = bodyText.replace( /\s+/g, ' ' ).trim().length;
 			if ( clickUnresolved ) {

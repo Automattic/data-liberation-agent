@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import { activateTrigger } from './interaction-capture.js';
 import { srcsetReferences } from '../srcset.js';
-import { waitForAnimations, withEvaluateTimeout } from './page-helpers.js';
+import { settleDocument, withEvaluateTimeout } from './page-helpers.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -271,9 +271,6 @@ async function collect(
 			const after = await act(descriptor.next, before, frame => frame.key !== before.key);
 			if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
 			pending = after;
-			// The same action must not silently mean a fixed choice. Verify its inverse.
-			if (!await act(descriptor.previous, after, frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
-			if (!await act(descriptor.next, before, frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
 			current = after;
 			pending = null;
 			if (after.key === first.key) {
@@ -285,6 +282,20 @@ async function collect(
 			if (Buffer.byteLength(JSON.stringify(frames)) > BUDGET) {
 				frames.pop();
 				break;
+			}
+		}
+		// Once Next has closed a cycle, walk it backwards and verify each inverse edge.
+		if (complete) {
+			for (let index = frames.length - 1; index >= 0; index--) {
+				const expected = frames[index]!;
+				const before = current;
+				const restored = await act(descriptor.previous, before, frame => frame.key === expected.key);
+				if (!restored) {
+					failure = `Previous action did not restore ${expected.key}`;
+					complete = false;
+					break;
+				}
+				current = restored;
 			}
 		}
 	} catch (error) {
@@ -508,7 +519,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 					window.scrollTo({left:pose.x,top:pose.y,behavior:'instant'});
 					await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 				}), 5_000);
-				await waitForAnimations(page);
+				await settleDocument(page, 'gallery-restore', { quietMs: 0, timeoutMs: 2_000, animations: true });
 				const restored = await scroll.evaluate(pose => scrollX === pose.x && scrollY === pose.y && pose.ancestors.every(({node,x,y}) => node.isConnected && node.scrollLeft === x && node.scrollTop === y));
 				if (state?.gallery) {
 					state.gallery.viewportRestoration = restored && JSON.stringify(page.viewportSize()) === JSON.stringify(viewport) ? 'verified' : 'unverified';

@@ -5,6 +5,82 @@ import { isSourcePromotion } from '../source-cleanup.js';
 /** Slack given to an in-page step beyond its own budget before Node gives up on it. */
 const EVALUATE_GRACE_MS = 5_000;
 
+export interface SettleOutcome {
+  /** `quiet`: the document met every requested condition; `deadline`: the bound fired first. */
+  reason: 'quiet' | 'deadline';
+  ms: number;
+}
+
+const readinessSinks = new WeakMap<Page, (wait: string, outcome: SettleOutcome) => void>();
+
+/** Route every readiness outcome on `page` to `sink` (the capture's phase ledger). */
+export function reportReadiness(page: Page, sink: (wait: string, outcome: SettleOutcome) => void): void {
+  readinessSinks.set(page, sink);
+}
+
+/**
+ * The one document readiness primitive: resolve once the document is quiet.
+ *
+ * Quiet means no DOM mutation for `quietMs` within `selector` (default: the
+ * whole document; the window starts at the call, so
+ * an already-idle page costs one window) and, with `animations`, no in-flight
+ * finite animation on the document timeline. Scroll- and view-timeline effects
+ * advance with position and infinite effects never finish, so neither can be
+ * awaited. A met condition is confirmed after two animation frames so a
+ * completion handler that chains the next effect is still observed. The wait
+ * is bounded by `timeoutMs` in the page and from Node, so a page that mutates
+ * or animates forever, blocks scripts, or stops answering cannot hang capture.
+ *
+ * Deliberately generic: it asks only whether the document is still changing,
+ * which is what any client-rendered stack reduces to. The outcome is reported
+ * to the page's readiness sink and returned.
+ */
+export async function settleDocument(
+  page: Page,
+  wait: string,
+  { quietMs, timeoutMs, animations = false, selector }: { quietMs: number; timeoutMs: number; animations?: boolean; selector?: string },
+): Promise<SettleOutcome> {
+  const started = Date.now();
+  let reason: SettleOutcome['reason'] = 'deadline';
+  try {
+    reason = await withEvaluateTimeout(
+      page.evaluate(
+        ({ quietMs, timeoutMs, animations, selector }) =>
+          new Promise<'quiet' | 'deadline'>((resolve) => {
+            const started = performance.now();
+            const deadline = started + timeoutMs;
+            let lastMutation = started;
+            const observer = new MutationObserver(() => { lastMutation = performance.now(); });
+            const root = (selector ? document.querySelector(selector) : null) ?? document.documentElement;
+            observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+            const animating = () => animations && document.getAnimations().some((animation) =>
+              animation.playState === 'running' && animation.timeline === document.timeline &&
+              animation.effect?.getComputedTiming().iterations !== Infinity);
+            const settled = () => performance.now() - lastMutation >= quietMs && !animating();
+            const finish = (outcome: 'quiet' | 'deadline') => { observer.disconnect(); resolve(outcome); };
+            const check = () => {
+              if (performance.now() >= deadline) return finish('deadline');
+              if (!settled()) return void setTimeout(check, 25);
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (settled()) finish('quiet');
+                else if (performance.now() >= deadline) finish('deadline');
+                else setTimeout(check, 25);
+              }));
+            };
+            check();
+          }),
+        { quietMs, timeoutMs, animations, selector },
+      ),
+      timeoutMs + 1_000,
+    );
+  } catch {
+    /* best-effort: a blocked or crashed page falls through as a spent bound */
+  }
+  const outcome = { reason, ms: Date.now() - started };
+  readinessSinks.get(page)?.(wait, outcome);
+  return outcome;
+}
+
 /**
  * Wait for a page to reach a stable state after load.
  *
@@ -50,7 +126,7 @@ export async function waitForStable(
     page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {
       /* best-effort — analytics can keep network busy forever */
     }),
-    waitForDomQuiescence(page, 500, domTimeoutMs),
+    settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs }),
   ]);
   await waitForFonts(page);
   await waitForDeclaredLoadingState(page);
@@ -124,68 +200,12 @@ export async function waitForDeclaredLoadingState(page: Page, timeoutMs: number 
         poll();
       });
     }, { timeoutMs }), timeoutMs + 1_000);
-    if (wasBusy) await waitForDomQuiescence(page, 500, 2_000);
+    if (wasBusy) await settleDocument(page, 'declared-loading', { quietMs: 500, timeoutMs: 2_000 });
   } catch {
     /* best-effort — never hang a capture on an orphaned loading state */
   }
 }
 
-/**
- * Wait until the document stops mutating: a MutationObserver watches the
- * whole document, and this resolves once `quietMs` has elapsed since the last
- * observed mutation, bounded overall by `timeoutMs`. A page with no further
- * mutations pending resolves after one `quietMs` window — the cost on an
- * ordinary static page — rather than a fixed sleep that would either
- * under-wait a slow page or tax every fast one for no reason.
- *
- * Deliberately generic: it has no notion of frameworks, hydration, or data
- * fetching — it only asks "is the DOM still changing?", which is what a
- * client-rendered app on ANY stack ultimately reduces to. Best-effort: a
- * blocked/crashed page falls through to the existing capture, unchanged.
- */
-export async function waitForDomQuiescence(
-  page: Page,
-  quietMs: number = 500,
-  timeoutMs: number = 5_000,
-): Promise<void> {
-  try {
-    await withEvaluateTimeout(
-      page.evaluate(
-        ({ quietMs, timeoutMs }) =>
-          new Promise<void>((resolve) => {
-            let lastMutation = Date.now();
-            const deadline = Date.now() + timeoutMs;
-            const observer = new MutationObserver(() => {
-              lastMutation = Date.now();
-            });
-            observer.observe(document.documentElement, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              characterData: true,
-            });
-            const check = () => {
-              const now = Date.now();
-              if (now - lastMutation >= quietMs || now >= deadline) {
-                observer.disconnect();
-                resolve();
-                return;
-              }
-              setTimeout(check, Math.min(50, deadline - now));
-            };
-            check();
-          }),
-        { quietMs, timeoutMs },
-      ),
-      // Outer guard is generous over the in-page deadline: the in-page
-      // setTimeout loop is what enforces timeoutMs, this just protects
-      // against the evaluate call itself never returning (page crash/hang).
-      timeoutMs + 1_000,
-    );
-  } catch {
-    /* best-effort — never block capture on a page that mutates forever */
-  }
-}
 
 /**
  * Settle the declared stacks of painted text, not only the faces layout chose.
@@ -319,57 +339,6 @@ export async function waitForImages(page: Page, timeoutMs: number = 4_000): Prom
   }
 }
 
-/**
- * Wait for in-flight CSS animations/transitions to finish so opacity/transform
- * states are fully settled before the screenshot.
- *
- * The motivating case: a scroll-reactive sticky header (Wix and others) fades on
- * scroll and transitions back when returned to the top. After `triggerLazyLoad`
- * scrolls back and re-fires a scroll event, that restore transition is in
- * flight; capturing mid-transition freezes the header at PARTIAL opacity — a Wix
- * nav caught at ~20% reads as "blank" even though the font already loaded and
- * `document.fonts.ready` resolved. This is distinct from FOIT ([[waitForFonts]]):
- * the glyphs ARE painting, the whole layer is half-faded. It also settles genuine
- * entrance reveals (sections that fade in on viewport entry).
- *
- * `getAnimations()` returns both CSSAnimation and CSSTransition objects, so
- * awaiting their `.finished` settles the transition. Infinite animations
- * (spinners, looping marquees) never finish and are excluded; the whole wait is
- * timeout-bounded so a long/stuck animation can't hang the capture.
- *
- * Only in-flight effects are awaited. A paused entrance waiting for its
- * viewport trigger cannot finish by waiting, so it must not consume the budget
- * that an effect started while settling (a deferred observer play) needs. The
- * set is re-read after each round: a play scheduled by an earlier effect's
- * completion is still in flight, not settled.
- */
-export async function waitForAnimations(page: Page, timeoutMs: number = 2_000): Promise<void> {
-  try {
-    await withEvaluateTimeout(
-      page.evaluate(async (timeoutMs) => {
-        const deadline = performance.now() + timeoutMs;
-        // Scroll/view timelines advance with position, not time; waiting cannot settle them.
-        const inFlight = () => document
-          .getAnimations()
-          .filter((a) => a.playState === 'running' && a.timeline === document.timeline && a.effect?.getComputedTiming().iterations !== Infinity);
-        for (let pending = inFlight(); pending.length && performance.now() < deadline; pending = inFlight()) {
-          // `.finished` rejects if the animation is cancelled mid-flight; swallow
-          // so one cancelled reveal doesn't reject the whole settle.
-          await Promise.race([
-            Promise.all(pending.map((a) => a.finished.catch(() => undefined))),
-            new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - performance.now()))),
-          ]);
-          // Let completion handlers start any chained effect before re-reading.
-          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        }
-        return true;
-      }, timeoutMs),
-      timeoutMs,
-    );
-  } catch {
-    /* best-effort — never block capture on a slow/stuck animation */
-  }
-}
 
 const RENDER_RESOURCE_TYPES = new Set( [ 'script', 'stylesheet', 'font', 'image', 'media' ] );
 
@@ -465,7 +434,7 @@ export async function documentCanScroll(page: Page): Promise<boolean> {
  * scroll-through above fades/hides them, and a bare `scrollTo(0, 0)` does NOT
  * un-hide them — the builder's scroll handler only recomputes the at-top state
  * on a real scroll EVENT. So we scroll to top AND dispatch a `scroll` event,
- * then [[waitForAnimations]] for the restore (and any viewport-entry reveals) to
+ * then [[settleDocument]] for the restore (and any viewport-entry reveals) to
  * finish. Without this the header is captured faded — the root cause of "blank"
  * Wix nav captures (verified: header section opacity 1 at load → 0 after a bare
  * lazy scroll → back to 1 after scrollTo(0,0)+scroll-event).
@@ -582,9 +551,10 @@ export async function restoreTopScrollState(page: Page): Promise<void> {
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     window.dispatchEvent(new Event('scroll'));
   }), EVALUATE_GRACE_MS);
-  // Let throttled scroll handlers start their transitions before settling them.
-  if ( canScroll ) await new Promise((resolve) => setTimeout(resolve, 400));
-  await waitForAnimations(page);
+  // Throttled scroll handlers react within a quiet window after the event;
+  // the transitions they start are then settled. A document that cannot
+  // scroll gave its handlers nothing new to react to.
+  await settleDocument(page, 'scroll-restore', { quietMs: canScroll ? 200 : 0, timeoutMs: 2_000, animations: true });
   await waitForFonts(page);
 }
 
