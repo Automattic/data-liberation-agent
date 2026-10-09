@@ -1,6 +1,8 @@
 import type { Page } from 'playwright';
+import * as cheerio from 'cheerio';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import { activateTrigger } from './interaction-capture.js';
+import { srcsetReferences } from '../srcset.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -18,6 +20,30 @@ export interface CapturedGallery {
 	/** Timing is deliberately not inferred from the captured index. */
 	autoplay: 'unmeasured';
 	failure?: string;
+}
+
+/** Collect every image reference observed in captured gallery frame markup. */
+export function galleryFrameMediaUrls(
+	states: readonly CapturedDialogInteraction[],
+	baseUrl: string,
+): string[] {
+	const urls = new Set< string >();
+	for ( const state of states ) {
+		for ( const gallery of [ state.gallery?.inline, state.gallery?.lightbox ] ) {
+			for ( const frame of gallery?.frames ?? [] ) {
+				const $ = cheerio.load( frame.html );
+				$( 'img[src],source[src],img[srcset],source[srcset]' ).each( ( _, element ) => {
+					const node = $( element );
+					const references = [ node.attr( 'src' ), ...srcsetReferences( node.attr( 'srcset' ) ?? '' ) ];
+					for ( const reference of references ) {
+						if ( ! reference ) continue;
+						try { urls.add( new URL( reference, baseUrl ).href ); } catch { /* Ignore malformed media references. */ }
+					}
+				} );
+			}
+		}
+	}
+	return [ ...urls ];
 }
 
 const LIMIT = 24;
@@ -51,8 +77,8 @@ async function describe(
 			};
 			const controls = Array.from(scope.querySelectorAll('button,[role="button"]'));
 			const name = (el: Element) => el.getAttribute('aria-label') || el.textContent || '';
-			const next = controls.find((el) => /^next (?:image|slide|photograph)$/i.test(name(el).trim()));
-			const previous = controls.find((el) => /^previous (?:image|slide|photograph)$/i.test(name(el).trim()));
+			const next = controls.find((el) => /^next (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
+			const previous = controls.find((el) => /^previous (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
 			if (!next || !previous) return null;
 			const stage = [scope, ...Array.from(scope.querySelectorAll('*'))].find((el) => {
 				const children = Array.from(el.children);
@@ -318,8 +344,8 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 		const controls = Array.from(document.querySelectorAll('button,[role="button"]'));
 		const label = (element: Element) => (element.getAttribute('aria-label') || element.textContent || '').trim();
 		const visible = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
-		const previous = controls.filter(element => visible(element) && /^previous (?:image|photograph)$/i.test(label(element)));
-		const next = controls.filter(element => visible(element) && /^next (?:image|photograph)$/i.test(label(element)));
+		const previous = controls.filter(element => visible(element) && /^previous (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
+		const next = controls.filter(element => visible(element) && /^next (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
 		const roots: string[] = [];
 		for (const before of previous) {
 			for (let scope = before.parentElement, depth = 0; scope && depth < 8; scope = scope.parentElement, depth++) {

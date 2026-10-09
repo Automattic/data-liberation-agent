@@ -58,6 +58,7 @@ import {
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
+import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import { isSrcsetShaped, srcsetCandidates, srcsetReferences } from './srcset.js';
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
@@ -1393,27 +1394,12 @@ function buildExportCapture(
 	const interactionMediaFamilies = new Set< string >();
 	const interactionMediaReferences = new Map< string, Set< string > >();
 	for ( const entry of retainedEntries ) {
-		for ( const state of entry.interactions?.states ?? [] ) {
-			for ( const gallery of [ state.gallery?.inline, state.gallery?.lightbox ] ) {
-				for ( const frame of gallery?.frames ?? [] ) {
-					const $ = cheerio.load( frame.html );
-					$( 'img[src],source[src],img[srcset],source[srcset]' ).each( ( _, element ) => {
-						for ( const reference of [ $( element ).attr( 'src' ), $( element ).attr( 'srcset' ) ] ) {
-							if ( ! reference ) continue;
-							for ( const value of reference.split( /[,\s]+/ ) ) {
-								try {
-									const absolute = new URL( value, entry.url ).href;
-									const family = mediaFamily( absolute );
-									interactionMediaFamilies.add( family );
-									const references = interactionMediaReferences.get( family ) ?? new Set< string >();
-									references.add( absolute );
-									interactionMediaReferences.set( family, references );
-								} catch { /* Ignore non-URL values. */ }
-							}
-						}
-					} );
-				}
-			}
+		for ( const reference of galleryFrameMediaUrls( entry.interactions?.states ?? [], entry.url ) ) {
+			const family = mediaFamily( reference );
+			interactionMediaFamilies.add( family );
+			const references = interactionMediaReferences.get( family ) ?? new Set< string >();
+			references.add( reference );
+			interactionMediaReferences.set( family, references );
 		}
 	}
 	const probeReferences: string[] = [];
