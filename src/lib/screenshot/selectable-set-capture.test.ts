@@ -1,5 +1,6 @@
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { observeViewportEntrances } from '../viewport-entrances.js';
 import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../source-cleanup.js';
 import {
 	captureSelectableSetStates,
@@ -245,6 +246,69 @@ describe( 'captureSelectableSetStates', () => {
 				expect.stringContaining( 'Charlie panel has' ),
 			] );
 			expect( new Set( states.map( ( state ) => state.dialog?.selector ) ).size ).toBe( 1 );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it.skipIf( skipBrowser )( 'stamps viewport entrances inside panels a tab click mounts below the fold', async () => {
+		const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
+		try {
+			await page.addInitScript( observeViewportEntrances );
+			await serve( page, `<style>
+				html { scroll-behavior: smooth; }
+				.reveal { transition: opacity .2s, transform .2s; }
+				.hidden-pose { opacity: 0; transform: translateY(2rem); }
+				.shown-pose { opacity: 1; transform: none; }
+			</style>
+			<main><div style="height:1500px">Spacer</div>
+				<div id="tabs">
+					<div role="tablist">
+						<button role="tab" id="t-a" aria-controls="p-a" aria-selected="true" type="button">Alpha</button>
+						<button role="tab" id="t-b" aria-controls="p-b" aria-selected="false" type="button">Bravo</button>
+					</div>
+					<div id="p-a" role="tabpanel"></div>
+					<div id="p-b" role="tabpanel" hidden></div>
+				</div>
+				<div style="height:1500px">Footer</div>
+			</main>
+			<script>
+				const copy = { a: 'Alpha panel copy with enough words to count.', b: 'Bravo panel carries different words entirely here.' };
+				const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
+					if (entry.isIntersecting) { entry.target.className = 'reveal shown-pose'; observer.unobserve(entry.target); }
+				}), { threshold: 0.1 });
+				const select = (key) => {
+					for (const k of Object.keys(copy)) {
+						const panel = document.getElementById('p-' + k);
+						document.getElementById('t-' + k).setAttribute('aria-selected', String(k === key));
+						panel.hidden = k !== key;
+						panel.innerHTML = '';
+						if (k !== key) continue;
+						const card = document.createElement('div');
+						card.className = 'reveal hidden-pose';
+						card.style.minHeight = '120px';
+						card.textContent = copy[k];
+						const late = card.cloneNode(true);
+						late.style.marginTop = '1400px';
+						panel.append(card, late);
+						observer.observe(card);
+						observer.observe(late);
+					}
+				};
+				select('a');
+				document.querySelectorAll('[role=tab]').forEach((tab) => tab.addEventListener('click', () => select(tab.id.slice(2))));
+			</script>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( ( state ) => state.status ) ).toEqual( [ 'captured', 'captured' ] );
+			for ( const state of states ) {
+				const html = state.dialog?.html ?? '';
+				expect( html ).toContain( 'data-dla-viewport-entrance' );
+				expect( html ).toContain( 'shown-pose' );
+				expect( html.match( /data-dla-viewport-entrance=/g ) ).toHaveLength( 2 );
+				expect( html ).not.toContain( 'class="reveal hidden-pose"' );
+				const evidence = JSON.parse( /data-dla-viewport-entrance="([^"]*)"/.exec( html )![ 1 ].replace( /&quot;/g, '"' ) );
+				expect( evidence.attributes.class ).toEqual( { before: 'reveal hidden-pose', after: 'reveal shown-pose' } );
+			}
 		} finally {
 			await page.close();
 		}

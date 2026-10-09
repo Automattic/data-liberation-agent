@@ -469,6 +469,39 @@ export async function captureSelectableSetStates(
 					}
 					return { ok: true };
 				};
+				/*
+				 * A panel mounted by a click starts in its pre-reveal pose, and the page-level
+				 * entrance stamp already ran before the click. Scroll through the panel so the
+				 * source's own viewport observers fire, let the transitions run, then stamp, so
+				 * the snapshot carries the same entrance evidence as the default page content.
+				 */
+				const revealEntrances = async ( region: Element ) => {
+					const entrances = ( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances;
+					if ( ! entrances ) return;
+					const { scrollX: startX, scrollY: startY } = window;
+					try {
+						const rect = region.getBoundingClientRect();
+						const top = Math.max( 0, rect.top + window.scrollY - window.innerHeight * 0.25 );
+						const bottom = rect.bottom + window.scrollY;
+						const step = Math.max( 120, window.innerHeight * 0.5 );
+						for ( let y = top; y < bottom + step; y += step ) {
+							window.scrollTo( { left: startX, top: y, behavior: 'instant' } );
+							await wait( 90 );
+						}
+						const animationDeadline = Date.now() + 2_500;
+						while ( Date.now() < animationDeadline ) {
+							const running = region.getAnimations( { subtree: true } ).some( ( animation ) =>
+								animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity );
+							if ( ! running ) break;
+							await wait( 60 );
+						}
+						entrances.stamp();
+					} catch {
+						/* best-effort: the panel is still captured without entrance evidence */
+					} finally {
+						window.scrollTo( { left: startX, top: startY, behavior: 'instant' } );
+					}
+				};
 				const snapshotHtml = ( element: Element ) => {
 					const clone = element.cloneNode( true ) as Element;
 					for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) ) {
@@ -931,6 +964,7 @@ export async function captureSelectableSetStates(
 							} );
 							continue;
 						}
+						await revealEntrances( afterRegion );
 						pushOutcome( 'captured', index, {
 							// A controlled panel is a different element per member; the shared
 							// region stays the one the set was confirmed against.
