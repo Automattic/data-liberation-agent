@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import { documentCanScroll } from './page-helpers.js';
+import { documentCanScroll, settleDocument } from './page-helpers.js';
 
 /**
  * Captures scroll-position-driven DOM mutations: a header/logo/etc. that changes
@@ -24,7 +24,6 @@ const PROBE_OFFSET_PX = 200;
 /** Refinement offsets tried, in order, only when the generous probe found a change. */
 const REFINEMENT_OFFSETS_PX = [ 2, 20, 50, 100 ];
 const SETTLE_SAMPLE_INTERVAL_MS = 120;
-const SETTLE_STABLE_SAMPLES = 2;
 const SETTLE_MAX_WAIT_MS = 1_500;
 
 export interface ScrollStyleTarget {
@@ -265,22 +264,10 @@ function parseInlineStyle( styleText: string ): Map< string, string > {
 	return map;
 }
 
-/** Snapshot candidate containers, waiting for any in-flight CSS transition to settle first. */
+/** Snapshot candidate containers once class/style writes and the transitions they start have settled. */
 async function settledSnapshot( page: Page ): Promise< ContainerSnapshot[] > {
-	let previous = '';
-	let stableSamples = 0;
-	const deadline = Date.now() + SETTLE_MAX_WAIT_MS;
-	let latest: ContainerSnapshot[] = [];
-	do {
-		latest = await snapshotContainers( page );
-		const signature = JSON.stringify( latest );
-		if ( signature === previous ) stableSamples++;
-		else stableSamples = 0;
-		previous = signature;
-		if ( stableSamples >= SETTLE_STABLE_SAMPLES ) return latest;
-		await page.waitForTimeout( SETTLE_SAMPLE_INTERVAL_MS );
-	} while ( Date.now() < deadline );
-	return latest;
+	await settleDocument( page, 'scroll-state', { quietMs: SETTLE_SAMPLE_INTERVAL_MS, timeoutMs: SETTLE_MAX_WAIT_MS, animations: true } );
+	return snapshotContainers( page );
 }
 
 async function snapshotContainers( page: Page ): Promise< ContainerSnapshot[] > {

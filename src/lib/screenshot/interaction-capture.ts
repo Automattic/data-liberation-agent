@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { CapturedGallery } from './gallery-capture.js';
+import { settleDocument } from './page-helpers.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 
@@ -987,21 +988,9 @@ async function panelIntersectsViewport( page: Page, selector: string ): Promise<
 }
 
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {
-	let previous = -1;
-	let stableSamples = 0;
-	const deadline = Date.now() + DIALOG_WAIT_MS;
-	while ( Date.now() < deadline ) {
-		await page.waitForTimeout( 150 );
-		const bytes = await page
-			.locator( selector )
-			.first()
-			.evaluate( ( element ) => new TextEncoder().encode( element.outerHTML ).length )
-			.catch( () => -1 );
-		if ( bytes > 0 && bytes === previous ) stableSamples++;
-		else stableSamples = 0;
-		if ( stableSamples >= 2 ) return;
-		previous = bytes;
-	}
+	// Content is stable once the dialog subtree has not changed for two
+	// 150 ms intervals, the window the previous sampled-size poll required.
+	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS } );
 }
 
 async function snapshotDialog(

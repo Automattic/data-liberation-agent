@@ -21,7 +21,8 @@ export function reportReadiness(page: Page, sink: (wait: string, outcome: Settle
 /**
  * The one document readiness primitive: resolve once the document is quiet.
  *
- * Quiet means no DOM mutation for `quietMs` (the window starts at the call, so
+ * Quiet means no DOM mutation for `quietMs` within `selector` (default: the
+ * whole document; the window starts at the call, so
  * an already-idle page costs one window) and, with `animations`, no in-flight
  * finite animation on the document timeline. Scroll- and view-timeline effects
  * advance with position and infinite effects never finish, so neither can be
@@ -37,20 +38,21 @@ export function reportReadiness(page: Page, sink: (wait: string, outcome: Settle
 export async function settleDocument(
   page: Page,
   wait: string,
-  { quietMs, timeoutMs, animations = false }: { quietMs: number; timeoutMs: number; animations?: boolean },
+  { quietMs, timeoutMs, animations = false, selector }: { quietMs: number; timeoutMs: number; animations?: boolean; selector?: string },
 ): Promise<SettleOutcome> {
   const started = Date.now();
   let reason: SettleOutcome['reason'] = 'deadline';
   try {
     reason = await withEvaluateTimeout(
       page.evaluate(
-        ({ quietMs, timeoutMs, animations }) =>
+        ({ quietMs, timeoutMs, animations, selector }) =>
           new Promise<'quiet' | 'deadline'>((resolve) => {
             const started = performance.now();
             const deadline = started + timeoutMs;
             let lastMutation = started;
             const observer = new MutationObserver(() => { lastMutation = performance.now(); });
-            observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+            const root = (selector ? document.querySelector(selector) : null) ?? document.documentElement;
+            observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
             const animating = () => animations && document.getAnimations().some((animation) =>
               animation.playState === 'running' && animation.timeline === document.timeline &&
               animation.effect?.getComputedTiming().iterations !== Infinity);
@@ -67,7 +69,7 @@ export async function settleDocument(
             };
             check();
           }),
-        { quietMs, timeoutMs, animations },
+        { quietMs, timeoutMs, animations, selector },
       ),
       timeoutMs + 1_000,
     );
