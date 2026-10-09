@@ -52,7 +52,7 @@ import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -2078,6 +2078,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeViewportEntrances );
 					await context.addInitScript( observeRuntimeStyleWrites );
 					const page = await context.newPage();
+					reportReadiness( page, ( name, outcome ) => phases.wait( name, outcome ) );
 					page.once( 'crash', () => { rendererCrashed = true; } );
 					try {
 						await capturePerViewport( {
@@ -2197,7 +2198,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						}
 					}
 					const profileRecord = entry.profiles?.[ viewport.id ];
-					if ( profileRecord ) profileRecord.phases = phases.finish();
+					if ( profileRecord ) {
+						profileRecord.phases = phases.finish();
+						profileRecord.readiness = phases.readiness();
+					}
 				}
 				if ( rendererCrashed && urlFailures.length === failuresBefore ) {
 					urlFailures.push( {

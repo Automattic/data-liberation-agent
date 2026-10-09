@@ -91,4 +91,23 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
+	it( 'keeps the sweep when a debounced resize handler writes geometry late', async () => {
+		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+			<script>const box = document.querySelector('#box'); let timer; addEventListener('resize', () => { clearTimeout(timer); timer = setTimeout(() => { box.style.width = innerWidth / 2 + 'px'; }, 400); });</script>` );
+		try {
+			const result = await learnAndApplyFluidGeometry( page, sweep );
+			expect( result.applied ).toBeGreaterThan( 0 );
+		} finally { await page.close(); }
+	}, 60_000 );
+
+	it( 'probes without the sampling sweep readiness', async () => {
+		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+			<script>addEventListener('resize', () => {});</script>` );
+		try {
+			const started = performance.now();
+			await learnAndApplyFluidGeometry( page, { ...sweep, settleMs: 1200 } );
+			// Three quiet windows; the sampling readiness needed at least settleMs each.
+			expect( performance.now() - started ).toBeLessThan( 3 * 1200 );
+		} finally { await page.close(); }
+	}, 30_000 );
 } );

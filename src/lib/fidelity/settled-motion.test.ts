@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import { observePage } from './check.js';
 import { createReferenceCollector } from './reference.js';
-import { triggerLazyLoad, waitForAnimations } from '../screenshot/page-helpers.js';
+import { triggerLazyLoad, settleDocument } from '../screenshot/page-helpers.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'settled motion evidence', () => {
 	it( 'settles chained in-flight effects without spending the budget on paused entrances', async () => {
@@ -17,7 +17,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				<div id="paused">Waiting for viewport</div><div id="first">First</div><div id="second">Second</div>
 				<script>document.getElementById('first').addEventListener('animationend',()=>document.getElementById('second').classList.add('go'))</script>` );
 			const started = Date.now();
-			await waitForAnimations( page, 4_000 );
+			await settleDocument( page, 'animations', { quietMs: 0, timeoutMs: 4_000, animations: true } );
 			const elapsed = Date.now() - started;
 			expect( await page.locator( '#second' ).evaluate( element => element.getAnimations().map( animation => animation.playState ) ) ).toEqual( [ 'finished' ] );
 			expect( await page.locator( '#paused' ).evaluate( element => element.getAnimations()[ 0 ]!.playState ) ).toBe( 'paused' );
