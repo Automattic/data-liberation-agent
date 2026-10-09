@@ -189,6 +189,8 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * External declarations end at an inert
  * document, before any destination request, and are returned as evidence rather
  * than as portable HTML. Unknown script navigation is never classified as a redirect.
+ * A script reload of the delivered document is its own lifecycle, replayed through
+ * the bounded reload acquisition that baseline capture also accepts.
  */
 export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope} = {}): Promise<{response: Response | null; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
@@ -202,11 +204,18 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 	let rendered: RenderedResponse | undefined;
 	let acquired = false;
 	let delivered = false;
+	let executedDocument: string | undefined;
+	let scriptReloads = 0;
 	const guard = async (route: Route) => {
 		const request = route.request();
 		if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) { await route.fallback(); return; }
 		try {
 			const address = documentRequestUrl(request.url());
+			if (delivered && address === executedDocument && request.method() === 'GET') {
+				if (scriptReloads++ >= SOURCE_NAVIGATION_LIMITS.hops) throw new SourceNavigationError('Source reload budget exhausted');
+				await replaySourceReload(route, address, Math.max(1, deadline - Date.now()));
+				return;
+			}
 			if (address !== expected || delivered) throw new SourceNavigationError('Unexplained source main-frame navigation');
 			if (!acquired) {
 				const acquireResponse = async (current: string, timeout: number) => {
@@ -242,7 +251,10 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 			else if (redirectedTo || address !== rendered!.url) {
 				// No scripts from a different document execute under the requested URL.
 				await route.fulfill({status: rendered!.status, contentType: rendered!.headers['content-type'] ?? 'text/html', body: ''});
-			} else await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});
+			} else {
+				executedDocument = address;
+				await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});
+			}
 		} catch (error) {
 			failure = error instanceof Error ? error : new Error(String(error));
 			await route.abort('blockedbyclient').catch(() => {});

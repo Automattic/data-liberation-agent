@@ -50,6 +50,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const foreign = createServer((_request, response) => { outbound++; response.end('foreign'); });
 		await new Promise<void>(resolve => foreign.listen(0, '127.0.0.1', resolve));
 		const target = `http://127.0.0.1:${(foreign.address() as {port:number}).port}/secret?token=private#meaning`;
+		const scriptReloads = new Map<string, number>();
 		const server = createServer((request, response) => {
 			const path = new URL(request.url!, 'http://fixture.test').pathname;
 			response.setHeader('content-type','text/html');
@@ -63,6 +64,13 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			else if (path.startsWith('/loop')) { response.writeHead(302, {location:path === '/loop-a' ? '/loop-b' : '/loop-a'}); response.end(); }
 			else if (path.startsWith('/hop/')) { response.writeHead(302, {location:`/hop/${Number(path.split('/').at(-1)) + 1}`}); response.end(); }
 			else if (path === '/script') response.end('<script>location.href="/article"</script><p>Not a declarative alias</p>');
+			else if (path.startsWith('/script-reload')) {
+				// A page script reloads its own document before load (the slow image
+				// holds load open), once or on every response.
+				const count = (scriptReloads.get(path) ?? 0) + 1; scriptReloads.set(path, count);
+				response.end(`${path === '/script-reload-loop' || count === 1 ? '<script>location.reload()</script><img src="/slow-image">' : ''}<h1>Reload observation ${count}</h1>`);
+			}
+			else if (path === '/slow-image') setTimeout(() => response.end(), 1_000);
 			else if (path === '/error') { response.statusCode=404; response.end('<h1>Observed missing route</h1>'); }
 			else if (path === '/binary') { response.setHeader('content-type','application/octet-stream'); response.end('Not HTML'); }
 			else if (path === '/slow') setTimeout(() => response.end('<p>Too late</p>'), 300);
@@ -97,6 +105,14 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			}
 			const page = await browser.newPage();
 			for (const [path, error] of [['loop-a','loop'],['hop/0','hop budget'],['script','Unexplained']] as const) await expect(navigateSourceDocument(page, `${origin}/${path}`)).rejects.toThrow(error);
+			// A same-document script reload is the document's own lifecycle, not
+			// drift: it settles through the bounded reload acquisition, and a
+			// script that reloads forever exhausts the reload budget.
+			const reloaded = await navigateSourceDocument(page, `${origin}/script-reload`);
+			expect(reloaded.boundary).toBeUndefined(); expect(reloaded.redirectedTo).toBeUndefined();
+			expect(await page.evaluate(() => ({url: document.URL, text: document.querySelector('h1')?.textContent}))).toEqual({url: `${origin}/script-reload`, text: 'Reload observation 2'});
+			await expect(navigateSourceDocument(page, `${origin}/script-reload-loop`)).rejects.toThrow(/reload.*budget/i);
+			expect(scriptReloads.get('/script-reload-loop')).toBeLessThanOrEqual(SOURCE_NAVIGATION_LIMITS.hops + 1);
 			await expect(navigateSourceDocument(page, `${origin}/slow`, {timeoutMs:100})).rejects.toThrow(/Timeout|timeout|budget/i);
 			expect((await navigateSourceDocument(page, `${origin}/error`)).response?.status()).toBe(404);
 			await expect(navigateSourceDocument(page, `${origin}/binary`)).rejects.toThrow(/Not an HTML document/i);
