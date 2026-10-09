@@ -41,6 +41,7 @@ import {
 import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-slideshow.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
+import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
@@ -2044,6 +2045,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	          }
 	        ` );
 					await context.addInitScript( observeViewportEntrances );
+					await context.addInitScript( observeRuntimeStyleWrites );
 					const page = await context.newPage();
 					page.once( 'crash', () => { rendererCrashed = true; } );
 					try {

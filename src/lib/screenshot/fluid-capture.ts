@@ -7,6 +7,7 @@
 // replaces the runtime-written inline pixels, which is what lets the liberated
 // copy keep reflowing after that runtime is stripped.
 //
+import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
 import {
 	breakpointsFrom,
 	learnFluidModel,
@@ -179,7 +180,10 @@ async function learnFluidGeometry(
 		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
-	if ( tagged === 0 ) {
+	if ( tagged === 0 || await inlineGeometryIsConstant( page, widths, original, settleMs, properties ) ) {
+		await page.evaluate( attribute => {
+			for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) element.removeAttribute( attribute );
+		}, ID_ATTRIBUTE );
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
 	await baseline.evaluate( state => state.bind() );
@@ -757,6 +761,43 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
 		}
 	}, { attribute, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
+}
+
+/**
+ * Whether every tagged inline declaration is the same at every width.
+ *
+ * Only script can change an inline declaration, so a declaration that no script
+ * wrote at load is constant unless a viewport change makes script rewrite it.
+ * Without any viewport-reactive registration that cannot happen, and the sweep
+ * is skipped without resizing. With one (analytics libraries commonly listen
+ * for resize), the narrowest and widest sweep widths are probed: when neither
+ * writes nor replaces a tagged element, the declarations are treated as
+ * constant. A source without the runtime tracker is always swept.
+ */
+async function inlineGeometryIsConstant(
+	page: Page,
+	widths: readonly number[],
+	original: { width: number; height: number } | null,
+	settleMs: number,
+	properties: readonly string[]
+): Promise< boolean > {
+	const observe = () => page.evaluate( ( { attribute, key } ) => {
+		const tracker = ( window as unknown as Record< symbol, { written( element: Element ): boolean; viewportReactive(): boolean } | undefined > )[ Symbol.for( key ) ];
+		if ( ! tracker ) return null;
+		const tagged = [ ...document.querySelectorAll( `[${ attribute }]` ) ];
+		return { count: tagged.length, written: tagged.some( element => tracker.written( element ) ), reactive: tracker.viewportReactive() };
+	}, { attribute: ID_ATTRIBUTE, key: RUNTIME_STYLE_WRITES_KEY } );
+	const before = await observe();
+	if ( before === null || before.written ) return false;
+	if ( ! before.reactive ) return true;
+	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
+		await page.setViewportSize( { width, height: original?.height ?? 900 } );
+		await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, true, properties );
+	}
+	if ( original ) await page.setViewportSize( original );
+	await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, false, properties );
+	const after = await observe();
+	return after !== null && ! after.written && after.count === before.count;
 }
 
 /** The last contiguous stretch of numeric pixel custom-property observations. */
