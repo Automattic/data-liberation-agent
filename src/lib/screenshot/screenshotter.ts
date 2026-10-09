@@ -1781,21 +1781,57 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
-
-		for ( const viewport of routeProfiles ) {
+		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
+			const previousInteractions = entry.interactions;
+			const previousCleanup = entry.cleanup;
+			const previousDocuments = entry.documents;
+			const previousNativeViewTimelines = entry.nativeViewTimelines;
+			const previousRedirect = entry.redirectedTo;
+			const previousOutcomes = entry.sourceOutcomes ?? [];
+			const previousLocal = Boolean( entry.html || entry.mobileHtml );
+			const profileLocal = Boolean( profileEntry.html || profileEntry.mobileHtml );
+			const aliasDisagreement = profileEntry.redirectedTo
+				? Boolean( ( previousRedirect && previousRedirect !== profileEntry.redirectedTo ) || previousLocal || previousOutcomes.length )
+				: Boolean( previousRedirect && ( profileLocal || profileEntry.sourceOutcomes?.length ) );
+			const profileRecord = profileEntry.profiles?.[ viewport.id ];
+			const { profiles: _profiles, ...passEntry } = profileEntry;
+			if ( viewport.id === 'desktop' ) Object.assign( entry, passEntry );
+			else if ( viewport.id === 'mobile' ) {
+				if ( profileEntry.mobile ) entry.mobile = profileEntry.mobile;
+				if ( profileEntry.mobileScrolled ) entry.mobileScrolled = profileEntry.mobileScrolled;
+				if ( profileEntry.mobileHtml ) entry.mobileHtml = profileEntry.mobileHtml;
+				if ( profileEntry.redirectedTo ) entry.redirectedTo = profileEntry.redirectedTo;
+				if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
+			}
+			if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
+			entry.documents = { ...previousDocuments, ...profileEntry.documents };
+			if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
+			if ( ! additional ) {
+				const latest = profileEntry.interactions;
+				const accepted = latest && hasPromotableInteractionEvidence( previousInteractions, latest );
+				entry.interactions = accepted ? mergeInteractionReports( previousInteractions, latest ) : previousInteractions;
+			}
+			if ( ! additional && ! entry.scrollStates?.toggles.length && profileEntry.scrollStates ) entry.scrollStates = profileEntry.scrollStates;
+			if ( profileEntry.cleanup ) entry.cleanup = { policy: profileEntry.cleanup.policy, reports: [ ...( previousCleanup?.reports ?? [] ), ...profileEntry.cleanup.reports ] };
+			if ( profileRecord ) entry.profiles![ viewport.id ] = profileRecord;
+			return aliasDisagreement;
+		};
+		const captureProfile = async ( viewport: Viewport ): Promise< { profileEntry: ManifestEntry; failures: FailureEntry[]; additional: boolean } | undefined > => {
 			const vpPlan = profilePlan( viewport );
-			if ( ! vpPlan.needsLoad ) continue;
+			if ( ! vpPlan.needsLoad ) return undefined;
 			const additional = ! [ 'desktop', 'mobile' ].includes( viewport.id );
 			const profileEntry: ManifestEntry = { slug, capturedAt: capturedAt() };
+			const profileFailures: FailureEntry[] = [];
+			let identity: ReturnType< typeof replayBrowserIdentity > | undefined;
+			let contextOptions: BrowserContextOptions | undefined;
 
 			// Retry a crashed renderer in a fresh context once. A disconnected browser
 			// also needs the shared relaunch before the retry.
 			for ( let crashRetry = false; ; crashRetry = true ) {
 				const attemptBrowser = browser;
-				const failuresBefore = urlFailures.length;
+				const failuresBefore = profileFailures.length;
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
-				let aliasDisagreement = false;
 				const phases = createPhaseLedger();
 				phases.enter( 'context' );
 				try {
@@ -1819,7 +1855,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					const device = viewport.device ? devices[ viewport.device ] : undefined;
 					if ( viewport.device && ! device ) throw new Error( `Unknown source device profile: ${ viewport.device }` );
 					const { defaultBrowserType: _deviceType, ...deviceContext } = device ?? {};
-					const contextOptions: BrowserContextOptions = {
+					contextOptions = {
 						...( viewport.id === 'mobile'
 							? { ...sessionContext, ...IPHONE_17_CONTEXT }
 							: sessionContext ),
@@ -1831,7 +1867,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						...deviceContext, ...viewport.context,
 						viewport: { width: viewport.width, height: viewport.height },
 					};
-					const identity = replayBrowserIdentity( contextOptions );
+					identity = replayBrowserIdentity( contextOptions );
 					context = await attemptBrowser.newContext( contextOptions );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
@@ -1860,7 +1896,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							settleMs,
 							screenshotTimeoutMs,
 							evaluateTimeoutMs,
-							failures: urlFailures,
+							failures: profileFailures,
 							entry: profileEntry,
 							aggregator,
 							shouldAnalyze: viewport.id === 'desktop' && shouldAnalyzeUrl,
@@ -1888,57 +1924,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						// HTML and successful interaction evidence precede the final cleanup
 						// audit. A late audit failure must record a failure, not erase those
 						// artifacts (the prior shared-entry transaction retained them too).
-						const previousInteractions = entry.interactions;
-						const previousCleanup = entry.cleanup;
-						const previousDocuments = entry.documents;
-						const previousNativeViewTimelines = entry.nativeViewTimelines;
-						// Every profile classifies the same initial document. A redirect
-						// alias, local document and external boundary cannot coexist.
-						const previousRedirect = entry.redirectedTo;
-						const previousOutcomes = entry.sourceOutcomes ?? [];
-						const previousLocal = Boolean( entry.html || entry.mobileHtml );
-						const profileLocal = Boolean( profileEntry.html || profileEntry.mobileHtml );
-						aliasDisagreement = profileEntry.redirectedTo
-							? Boolean( ( previousRedirect && previousRedirect !== profileEntry.redirectedTo ) || previousLocal || previousOutcomes.length )
-							: Boolean( previousRedirect && ( profileLocal || profileEntry.sourceOutcomes?.length ) );
-						if ( viewport.id === 'desktop' ) {
-							Object.assign( entry, profileEntry );
+						if ( identity && contextOptions ) {
+							const documentUrl = profileEntry.documents?.[ viewport.id ];
+							profileEntry.profiles = { [ viewport.id ]: {
+								recipe: viewport, viewport: { width: viewport.width, height: viewport.height }, identity,
+								userAgent: contextOptions.userAgent, browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
+								deviceScaleFactor: contextOptions.deviceScaleFactor ?? 1, html: viewport.id === 'mobile' ? profileEntry.mobileHtml : profileEntry.html,
+								...( documentUrl ? { documentUrl } : {} ),
+								fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
+								nativeViewTimelines: profileEntry.nativeViewTimelines,
+								interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
+							} };
 						}
-						else if ( viewport.id === 'mobile' ) {
-							if ( profileEntry.mobile ) entry.mobile = profileEntry.mobile;
-							if ( profileEntry.mobileScrolled ) entry.mobileScrolled = profileEntry.mobileScrolled;
-							if ( profileEntry.mobileHtml ) entry.mobileHtml = profileEntry.mobileHtml;
-							if ( profileEntry.redirectedTo ) entry.redirectedTo = profileEntry.redirectedTo;
-							if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
-						}
-						if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
-						entry.documents = { ...previousDocuments, ...profileEntry.documents };
-						if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
-						if ( ! additional ) {
-							const latest = profileEntry.interactions;
-							const accepted = latest && hasPromotableInteractionEvidence( previousInteractions, latest );
-							entry.interactions = accepted ? mergeInteractionReports( previousInteractions, latest ) : previousInteractions;
-						}
-						if ( ! additional && ! entry.scrollStates?.toggles.length && profileEntry.scrollStates ) entry.scrollStates = profileEntry.scrollStates;
-						if ( profileEntry.cleanup ) entry.cleanup = { policy: profileEntry.cleanup.policy, reports: [ ...( previousCleanup?.reports ?? [] ), ...profileEntry.cleanup.reports ] };
-						const htmlPath = viewport.id === 'mobile' ? profileEntry.mobileHtml : profileEntry.html;
-						const documentUrl = profileEntry.documents?.[ viewport.id ];
-						entry.profiles![ viewport.id ] = { recipe: viewport, viewport: { width: viewport.width, height: viewport.height },
-							identity,
-							userAgent: contextOptions.userAgent, browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
-							deviceScaleFactor: contextOptions.deviceScaleFactor ?? 1, html: htmlPath,
-							...( documentUrl ? { documentUrl } : {} ),
-							// The learner's document label namespaces desktop/mobile rules;
-							// every non-desktop pass writes fluidMobile, including extra profiles.
-							fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
-							nativeViewTimelines: profileEntry.nativeViewTimelines,
-							interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
-						};
+						if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 					}
-					if ( aliasDisagreement ) throw new Error( 'Source redirect aliases disagree across viewports' );
-					if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 				} catch ( err ) {
-					urlFailures.push( {
+					profileFailures.push( {
 						url,
 						viewport: viewport.id,
 						stage: 'goto',
@@ -1962,14 +1963,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							/* best-effort */
 						}
 					}
-					const profileRecord = entry.profiles?.[ viewport.id ];
+					const profileRecord = profileEntry.profiles?.[ viewport.id ];
 					if ( profileRecord ) {
 						profileRecord.phases = phases.finish();
 						profileRecord.readiness = phases.readiness();
 					}
 				}
-				if ( rendererCrashed && urlFailures.length === failuresBefore ) {
-					urlFailures.push( {
+				if ( rendererCrashed && profileFailures.length === failuresBefore ) {
+					profileFailures.push( {
 						url,
 						viewport: viewport.id,
 						stage: 'evaluate',
@@ -1978,22 +1979,50 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						attempt: crashRetry ? 2 : 1,
 					} );
 				}
-				for ( const failure of urlFailures.slice( failuresBefore ) ) {
+				for ( const failure of profileFailures.slice( failuresBefore ) ) {
 					failure.attempt = crashRetry ? 2 : failure.attempt;
 				}
-				const failed = urlFailures.length > failuresBefore;
+				const failed = profileFailures.length > failuresBefore;
 				if ( ! failed || crashRetry ) break;
 				if ( attemptBrowser.isConnected() ) {
 					if ( ! rendererCrashed ) break;
 					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
-				urlFailures.length = failuresBefore;
+				profileFailures.length = failuresBefore;
 			}
+			return { profileEntry, failures: profileFailures, additional };
+		};
+		const builtInProfiles = ( [ 'desktop', 'mobile' ] as const )
+			.map( id => routeProfiles.find( profile => profile.id === id ) )
+			.filter( ( profile ): profile is Viewport => Boolean( profile ) );
+		const builtInResults = memoryAdmission
+			? await ( async () => {
+					const results = [];
+					for ( const viewport of builtInProfiles ) results.push( await captureProfile( viewport ) );
+					return results;
+			  } )()
+			: await Promise.all( builtInProfiles.map( viewport => captureProfile( viewport ) ) );
+		for ( let index = 0; index < builtInProfiles.length; index++ ) {
+			const viewport = builtInProfiles[ index ]!;
+			const result = builtInResults[ index ];
+			if ( ! result ) continue;
+			urlFailures.push( ...result.failures );
+			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
+				url, viewport: viewport.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
+			} );
 			if ( viewport.id === 'desktop' && entry.html && ! additionalDeclared ) {
 				const before = routeProfiles.length;
 				declareAdditional( readFileSync( join( opts.outputDir, entry.html ), 'utf8' ) );
 				for ( const profile of routeProfiles.slice( before ) ) opts.declareSourceProfile?.( url, profile );
 			}
+		}
+		for ( const viewport of routeProfiles.filter( profile => ! [ 'desktop', 'mobile' ].includes( profile.id ) ) ) {
+			const result = await captureProfile( viewport );
+			if ( ! result ) continue;
+			urlFailures.push( ...result.failures );
+			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
+				url, viewport: viewport.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
+			} );
 		}
 
 		if (entry.sourceOutcomes?.length) {
