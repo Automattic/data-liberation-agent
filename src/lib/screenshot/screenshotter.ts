@@ -48,6 +48,7 @@ import { captureTypedSearchStates } from './typed-search-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
+import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
@@ -180,6 +181,8 @@ interface DesignCaptureContext {
 
 interface CapturePerViewportArgs {
 	page: Page;
+	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
+	phases?: PhaseLedger;
 	/** Stop best-effort stages after a crash; recovery belongs to the viewport loop. */
 	rendererCrashed: () => boolean;
 	learnFluid?: boolean;
@@ -810,6 +813,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let navigationUrl = url;
 	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
 		try {
+			args.phases?.enter( 'navigate' );
 			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope});
 			if (navigation.boundary) {
 				const boundary = storeExternalBoundary(outputDir, navigation.boundary, viewport.width, args.browserProfile ?? {isMobile: false, hasTouch: false});
@@ -899,6 +903,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	await applySourceCleanup(page, sourcePolicy);
 
 	// --- settle, dismiss overlays, lazy load ----------------------------------
+	args.phases?.enter( 'settle' );
 	await waitForStable( page );
 	// A provider login withholding the whole route (a members-only page) was
 	// removed by the policy, leaving nothing of the page. Capture it as a
@@ -932,6 +937,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Dismiss takeover modals / consent banners BEFORE lazy-load (a modal's
 	// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
 	// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
+	args.phases?.enter( 'lazy-load' );
 	const dismissedEarly = await dismissOverlays( page );
 	await triggerLazyLoad( page, args.learnFluid === true );
 	const dismissedLate = await dismissOverlays( page );
@@ -1014,6 +1020,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// script is running, so read its states before any layout measurement.
 	// Observe actions while source geometry and lazy-image owners are still live.
 	// Width learning can freeze hidden overlay boxes; it cannot be the input to an action drive.
+	args.phases?.enter( 'galleries' );
 	const galleryStates = await captureGalleries(page).catch(() => []);
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
 	// Browser probes can scroll an offscreen control into view. Native view
@@ -1051,6 +1058,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
 		try {
+			args.phases?.enter( 'fluid' );
 			const learned = await learnAndApplyFluidGeometry( page, {
 				document: isDesktop ? 'desktop' : 'mobile',
 				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
@@ -1078,6 +1086,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	if ( args.rendererCrashed() ) return;
 
+	args.phases?.enter( 'slideshows' );
 	await applyPagerSlideshowStates( page, pagerSlideshows ).catch( () => {
 		/* best-effort — a picker that will not advance must not block capture */
 	} );
@@ -1107,6 +1116,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// same state across the visual reference and its HTML transaction.
 	if ( plan.captureFullpage ) {
 		try {
+			args.phases?.enter( 'screenshot' );
 			const buf = await withScreenshotTimeout(
 				page.screenshot( { fullPage: true, type: 'png' } ),
 				screenshotTimeoutMs
@@ -1136,6 +1146,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// re-rendered a credit or ad; the saved document must be swept. A source
 			// that re-initialized its document after install has no state left to
 			// sweep — the policy lets the sweep reinstall on the fresh document.
+			args.phases?.enter( 'serialize' );
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const html = canonicalize( wireCapturedDialogs(await capturePageHtml( page ), galleryStates) );
@@ -1202,6 +1213,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// can't reflow to. Best-effort: a miss leaves the page desktop-only.
 	if ( isMobile && plan.captureMobileHtml ) {
 		try {
+			args.phases?.enter( 'serialize' );
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const mhtml = canonicalize( wireCapturedDialogs(sanitizeFrozenHtml( await capturePageHtml( page ) ), galleryStates) );
@@ -1233,6 +1245,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// unset.
 	if ( isDesktop && plan.captureSections ) {
 		try {
+			args.phases?.enter( 'sections' );
 			const { specs, landmarks } = await extractFull( page, {}, evaluateTimeoutMs );
 			SectionSpecsStore.load( outputDir ).set( url, specs, landmarks, {
 				width: viewport.width,
@@ -1247,6 +1260,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	if ( isMobile && plan.captureMobileSections ) {
 		try {
+			args.phases?.enter( 'sections' );
 			const { specs, landmarks } = await extractFull( page, {}, evaluateTimeoutMs );
 			SectionSpecsStore.loadMobile( outputDir ).set( url, specs, landmarks, {
 				width: viewport.width,
@@ -1278,6 +1292,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				// fullPage:false captures the current viewport — no clip needed.
 				// (A clip would have to be inside the 0..viewport.height image, not at
 				// the page's absolute scroll position.)
+				args.phases?.enter( 'screenshot' );
 				const buf = await withScreenshotTimeout(
 					page.screenshot( { fullPage: false, type: 'png' } ),
 					screenshotTimeoutMs
@@ -1305,6 +1320,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( args.rendererCrashed() ) return;
 	if ( isDesktop && shouldAnalyze ) {
 		try {
+			args.phases?.enter( 'analysis' );
 			const analysis = await analyzePage( page, evaluateTimeoutMs );
 			entry.metadata = analysis.metadata;
 			aggregator.add( url, analysis );
@@ -1325,6 +1341,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			// Write into the screenshots dir — where the audit driver reads it from
 			// (readChromeFidelity(join(outputDir, 'screenshots'))). Must stay in sync.
+			args.phases?.enter( 'chrome' );
 			const n = await captureChromeFidelity(
 				page,
 				url,
@@ -1351,6 +1368,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// when multiple URLs share the same base, so we derive the design sidecar
 			// slug directly from the URL — same derivation the adapters use.
 			const designSlug = slugify( url );
+			args.phases?.enter( 'design' );
 			const designResult = await captureDesignForUrl( {
 				page,
 				url,
@@ -1396,6 +1414,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		designCtx.chromeAccum.mobileLayoutMap === null
 	) {
 		try {
+			args.phases?.enter( 'design' );
 			const mobileMap = await collectMobileChromeLayout( page );
 			if ( mobileMap && Object.keys( mobileMap ).length > 0 ) {
 				designCtx.chromeAccum.mobileLayoutMap = mobileMap;
@@ -1428,6 +1447,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		if ( DESIGN_CAPTURE_ARCHETYPES.has( archetype ) ) {
 			try {
 				const designSlug = ( await import( '../url/index.js' ) ).slugify( url );
+				args.phases?.enter( 'design' );
 				await captureMobileBodyFragment( {
 					page,
 					slug: designSlug,
@@ -1459,6 +1479,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} finally {
 		await releaseNavigationLock();
 	}
+	args.phases?.enter( 'cleanup-audit' );
 	const cleanup = await readSourceCleanup(page, sourcePolicy);
 	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
 	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
@@ -1467,6 +1488,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	try {
 		// The scrolled screenshot must not become the resting state for controls
 		// whose evidence is replayed against the top-of-document portable baseline.
+		args.phases?.enter( 'dialogs' );
 		await restoreTopScrollState( page );
 		await dismissOverlays( page );
 		const interactions = await captureTriggeredDialogs( page, url );
@@ -1483,6 +1505,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// already reports through, rather than a parallel reporting system.
 		interactions.states = [ ...galleryStates, ...disclosureStates, ...interactions.states ];
 		try {
+			args.phases?.enter( 'selectable' );
 			const selectableStates = await captureSelectableSetStates( page );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
@@ -1522,6 +1545,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// best-effort: a failed probe must not invalidate the rest of the capture.
 	if ( ! entry.scrollStates?.toggles.length ) {
 		try {
+			args.phases?.enter( 'scroll-states' );
 			const scrollStates = await captureScrollStates( page, url );
 			if ( scrollStates.toggles.length > 0 ) {
 				entry.scrollStates = scrollStates;
@@ -2005,6 +2029,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
 				let aliasDisagreement = false;
+				const phases = createPhaseLedger();
+				phases.enter( 'context' );
 				try {
 					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
 					// screenshot while keeping the rendered layout identical to a
@@ -2056,6 +2082,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					try {
 						await capturePerViewport( {
 							page,
+							phases,
 							rendererCrashed: () => rendererCrashed,
 							browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
 							viewport: { ...viewport, context: identity },
@@ -2091,6 +2118,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 						} );
 					} finally {
+						phases.enter( 'record' );
 						// HTML and successful interaction evidence precede the final cleanup
 						// audit. A late audit failure must record a failure, not erase those
 						// artifacts (the prior shared-entry transaction retained them too).
@@ -2154,20 +2182,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					} );
 				} finally {
 					if ( context ) {
+						phases.enter( 'resource-settle' );
 						try {
 							const pages = context.pages();
 							await Promise.all( pages.map( ( page ) => resourceStore.settle( page ) ) );
 						} catch {
 							/* best-effort; failures are retained in the resource manifest */
 						}
-					}
-					if ( context ) {
+						phases.enter( 'context-close' );
 						try {
 							await context.close();
 						} catch {
 							/* best-effort */
 						}
 					}
+					const profileRecord = entry.profiles?.[ viewport.id ];
+					if ( profileRecord ) profileRecord.phases = phases.finish();
 				}
 				if ( rendererCrashed && urlFailures.length === failuresBefore ) {
 					urlFailures.push( {
