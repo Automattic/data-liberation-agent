@@ -1449,7 +1449,8 @@ function buildExportCapture(
 			references: [
 				...new Set( [ ...references, ...( renderedMediaReferences.get( family ) ?? [] ) ] ),
 			],
-				exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
+			exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
+			...( interactionMediaReferences.has( family ) ? { galleryFrame: true } : {} ),
 			bytes: statSync( stub.localPath ).size,
 			dimension: mediaDimension( sourceUrl ),
 		};
