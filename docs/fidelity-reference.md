@@ -180,10 +180,15 @@ proof exists. Query renditions keep their query allocation convention. Source
 links and redirect aliases bind exact addresses to the allocated document paths.
 
 `CaptureOptions.linkedPages` configures `maxPages` (256 by default), `maxDepth`
-(8 linked hops), and `timeoutMs` (1,800,000 ms). The time budget bounds admission
-and starting queued work; an already active capture completes under its ordinary
-navigation/capture deadlines. Seeds consume the page budget at depth zero. Every
-observed eligible link remains required even when a page, depth or time budget
+(8 linked hops), and `timeoutMs` (1,800,000 ms). The time budget bounds new linked
+admission; all admitted work completes under its ordinary navigation/capture
+deadlines. Adapter-owned initial inventory and proven redirect continuations are
+admitted independently of expansion budgets. Seeds and aliases count toward the
+scheduled page total, so they reduce the remaining `maxPages` expansion allowance
+without truncating known inventory. The low-level `limit` remains a whole-capture
+page cap, including redirect continuations; a controller's whole-run deadline
+remains caller-owned. Every observed eligible link remains required even when a
+page, depth or time budget
 prevents its capture. `linked-page-coverage.json`, the receipt and capture
 diagnostics retain exact required URLs, limits, scheduled count and concrete
 omission reasons. Budget omissions and source-error/non-HTML observations keep

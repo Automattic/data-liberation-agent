@@ -8,6 +8,7 @@ import { LinkedFrontier } from './linked-frontier.js';
 import { createReferenceCollector, readReferenceArtifact } from '../fidelity/reference.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { checkFidelity } from '../fidelity/check.js';
+import { documentRequestUrl } from '../url/route-key.js';
 
 it('names concrete page, depth and time omissions without merging query or slash identities', () => {
 	const frontier = new LinkedFrontier({maxPages: 2, maxDepth: 1, timeoutMs: 100}, 0);
@@ -39,7 +40,104 @@ it('records the exact omitted addresses at a four-page frontier budget', () => {
 	});
 });
 
+it('continues owned inventory and observed aliases while retaining expansion and capture caps', () => {
+	const frontier = new LinkedFrontier({maxPages: 1, maxDepth: 0, timeoutMs: 100, capturePageLimit: 4}, 0);
+	expect(frontier.admit('https://source.test/', 0, 200, 'inventory')).toBe(true);
+	expect(frontier.admit('https://source.test/known', 0, 200, 'inventory')).toBe(true);
+	expect(frontier.admit('https://source.test/target', 1, 200)).toBe(false);
+	expect(frontier.admit('https://source.test/target', 0, 200, 'alias')).toBe(true);
+	expect(frontier.diagnostics).toEqual([]);
+	expect(frontier.admit('https://source.test/target#duplicate', 0, 200, 'alias')).toBe(false);
+	expect(frontier.admit('https://source.test/another', 0, 200, 'alias')).toBe(true);
+	expect(frontier.admit('https://source.test/over-cap', 0, 200, 'alias')).toBe(false);
+	expect(frontier.admit('https://source.test/over-cap', 0, 200, 'alias')).toBe(false);
+	expect(frontier.coverage()).toMatchObject({scheduled: 4, diagnostics: [{url: 'https://source.test/over-cap', reason: 'capture limit=4 exhausted; 4 addresses scheduled'}]});
+});
+
+it('keeps adapter namespace admission ahead of every discovery-budget ownership kind', () => {
+	const frontier = new LinkedFrontier({maxPages: 1, timeoutMs: 1}, 0, {origin: 'https://source.test', pathPrefixes: ['/customer']});
+	for (const ownership of ['inventory', 'alias', 'linked'] as const) {
+		for (const url of ['https://source.test/', 'https://source.test/customer-other', 'https://other.test/customer']) {
+			expect(frontier.admit(url, 0, 10, ownership)).toBe(false);
+		}
+	}
+	expect(frontier.coverage()).toMatchObject({requiredUrls: [], scheduled: 0, diagnostics: []});
+	expect(frontier.admit('https://source.test/customer', 0, 10, 'inventory')).toBe(true);
+	expect(frontier.admit('https://source.test/customer/proved', 0, 10, 'alias')).toBe(true);
+	expect(frontier.admit('https://source.test/customer/unknown', 1, 10)).toBe(false);
+	expect(frontier.coverage()).toMatchObject({scheduled: 2, diagnostics: [{url: 'https://source.test/customer/unknown', reason: 'timeoutMs=1 exhausted'}]});
+});
+
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded rendered linked frontier', () => {
+	it.each(['inventory', 'deadline', 'wave', 'cap'] as const)('completes admitted %s work after discovery expires with real navigation and browser restarts', async mode => {
+		const requests: string[] = [];
+		const docs: Record<string, string> = {
+			'/': mode === 'wave' ? '<h1>Home</h1><a href="/slow">Slow</a><a href="/alias">Alias</a>' : '<h1>Home</h1><a href="/inventory">Inventory</a>',
+			'/inventory': '<h1>Inventory</h1>',
+			'/slow': '<h1>Slow</h1><a href="/late">Late unknown</a>',
+			'/target': '<h1>Target</h1><a href="/late">Late unknown</a>',
+		};
+		const timeoutMs = mode === 'wave' ? 20_000 : 1_000;
+		const source = createServer((request, response) => {
+			requests.push(request.url!);
+			if (request.url === '/alias') {response.writeHead(302, {location: '/target'}); response.end(); return;}
+			const send = () => {response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'}); response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);};
+			// Real HTTP time, not a mocked clock: expire discovery during an admitted
+			// document's navigation, leaving further inventory/wave work queued.
+			if (mode !== 'wave' && request.url === '/') setTimeout(send, timeoutMs + 100);
+			else send();
+		});
+		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
+		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
+		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', `deadline-${mode}-`));
+		try {
+			const urls = (mode === 'wave' ? ['/'] : ['/', '/inventory', '/alias', '/inventory#duplicate']).map(path => origin + path);
+			const collector = createReferenceCollector(directory, urls[0]!, [...new Set(urls.map(documentRequestUrl))]);
+			const progress: string[] = [];
+			const captureFn: typeof captureScreenshots = process.env.DLA_BASELINE_SCREENSHOTTER ? (await import(process.env.DLA_BASELINE_SCREENSHOTTER)).captureScreenshots : captureScreenshots;
+			const capture = await captureFn({urls, primaryUrl: urls[0], outputDir: directory,
+				// Known inventory exceeds expansion's maxPages in the inventory case.
+				linkedPages: {maxPages: mode === 'wave' || mode === 'deadline' ? 8 : 1, maxDepth: 2, timeoutMs},
+				...(mode === 'cap' ? {limit: 3} : {}),
+				concurrency: 1, browserRestartEvery: 1, settleMs: 0, learnFluid: false,
+				viewports: [{id: 'desktop', width: 390, height: 844, referenceWidths: [390]}],
+				// Let the first linked capture outlive admission's window without
+				// exhausting the independent per-navigation response deadline.
+				prepareCapture: async page => {if (mode === 'wave' && new URL(page.url()).pathname === '/slow') await page.waitForTimeout(timeoutMs + 100);},
+				observeSource: collector.observe, onProgress: (_current, _total, url) => progress.push(url)});
+			const expected = (mode === 'wave' ? ['/', '/slow', '/target'] : mode === 'cap' ? ['/', '/inventory'] : ['/', '/inventory', '/target']).map(path => origin + path);
+			console.info(JSON.stringify({mode, directory, captured: capture.captured, skipped: capture.skipped, failed: capture.failed, restarts: capture.browserRestarts, progress, coverage: capture.linkedPageCoverage}));
+			expect(capture.failed).toBe(0);
+			expect(capture.captured).toBe(expected.length);
+			expect(capture.skipped).toBe(1); // Observed alias, never a timeout skip.
+			expect(capture.browserRestarts).toBe(expected.length);
+			expect(new Set(progress).size).toBe(progress.length);
+			expect(progress).toEqual(expect.arrayContaining([...expected, `${origin}/alias`]));
+			expect(capture.linkedPageCoverage!.scheduled).toBe(expected.length + 1);
+			expect(capture.linkedPageCoverage!.requiredUrls).toHaveLength(expected.length + 2);
+			expect(requests).not.toContain('/late');
+			expect(capture.linkedPageCoverage!.diagnostics).toEqual([expect.objectContaining({url: `${origin}/${mode === 'cap' ? 'target' : 'late'}`, reason: expect.stringContaining(mode === 'cap' ? 'capture limit=3' : `timeoutMs=${timeoutMs}`)})]);
+			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: urls[0]!, platform: 'default', summary: {routesFailed: capture.failed}, failures: []});
+			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+			expect(receipt.summary.complete).toBe(false);
+			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual(expected.sort());
+			expect(receipt.duplicateRoutes).toEqual(mode === 'cap' ? [] : [{url: `${origin}/alias`, canonicalUrl: `${origin}/target`, path: receipt.routes.find((route: {url: string}) => route.url === `${origin}/target`).path}]);
+			for (const route of receipt.routes) expect(readFileSync(join(directory, route.path), 'utf8')).toContain('<h1>');
+			collector.requireUrls(capture.linkedPageCoverage!.requiredUrls);
+			const frozen = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));
+			expect(frozen.scope.sourceUrls.sort()).toEqual([...capture.linkedPageCoverage!.requiredUrls].sort());
+			for (const url of expected) {
+				const cells = frozen.entries.filter((entry: {sourceUrl: string}) => entry.sourceUrl === url);
+				expect(cells).toHaveLength(1);
+				expect(cells[0].readiness.ready).toBe(true);
+				readReferenceArtifact(directory, cells[0].document);
+			}
+		} finally {
+			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));
+			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
+		}
+	}, 120_000);
 	it('classifies public documents by response instead of path names at the full frontier budget', async () => {
 		const maxPages = 20;
 		const requests: string[] = [];
