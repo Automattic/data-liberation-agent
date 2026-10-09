@@ -53,6 +53,14 @@ export async function bindRuntimeSheets( page: Page ): Promise< void > {
 }
 
 /** Record the offsets of every source stylesheet whose text differs from the capture width. */
+/** Whether any source stylesheet was rewritten at a sampled width. */
+export async function runtimeSheetsObserved( page: Page ): Promise< boolean > {
+	return page.evaluate( ( { key } ) => {
+		const state = ( window as unknown as Record< string, { widths: Array< Map< Element, unknown > > } | undefined > )[ key ];
+		return state?.widths.some( width => width.size > 0 ) ?? false;
+	}, { key: STATE_KEY } );
+}
+
 export async function observeRuntimeSheets( page: Page ): Promise< void > {
 	await page.evaluate( ( { key, properties } ) => {
 		const state = ( window as unknown as Record< string, { baselines: Map< Element, string >; widths: Array< Map< Element, Record< string, string[] > > > } | undefined > )[ key ];
