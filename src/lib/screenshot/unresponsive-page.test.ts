@@ -27,7 +27,7 @@ describe('captureScreenshots — page whose script never yields (real Chromium)'
     const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
     try {
       const started = Date.now();
-      await captureScreenshots({ urls: [url], outputDir, settleMs: 0 });
+      await captureScreenshots({ urls: [url], outputDir, settleMs: 0, evaluateTimeoutMs: 100 });
       expect(Date.now() - started).toBeLessThan(90_000);
 
       const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8'));
