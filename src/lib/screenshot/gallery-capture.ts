@@ -132,7 +132,7 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 				const clone = stage.cloneNode(true) as Element;
 				Array.from(clone.querySelectorAll('img')).forEach((image, index) => { image.setAttribute('src', sources[index]!); image.removeAttribute('srcset'); image.removeAttribute('sizes'); });
 				for (const unsafe of clone.querySelectorAll('script,iframe,noscript')) unsafe.remove();
-				return { key: sources.join('\n'), html: clone.innerHTML, text: [], ordinal: undefined, slot: 0, geometry: [] };
+				return { key: sources.join('\n'), html: clone.innerHTML, text: [], ordinal: undefined, slot: 0, geometry: [], slots: sources };
 			}
 			const rendered = Array.from(stage.children).filter((child) => {
 				const image = imageFor(child);
@@ -276,6 +276,7 @@ async function collect(
 		return null;
 	};
 	let complete = false;
+	let continuityFailure = false;
 	let failure: string | undefined;
 	let pending: NonNullable<typeof first> | null = null;
 	try {
@@ -311,6 +312,18 @@ async function collect(
 				current = restored;
 			}
 		}
+		if (complete && frames.every(frame => frame.slots && frame.slots.length >= 2)) {
+			const continuous = frames.every((frame, index) => {
+				const next = frames[(index + 1) % frames.length]!;
+				return frame.slots!.length === next.slots!.length &&
+					frame.slots!.slice(1).every((source, slot) => next.slots![slot] === source);
+			});
+			if (!continuous) {
+				complete = false;
+				continuityFailure = true;
+				failure = 'Adjacent src-swap frames do not preserve overlapping slot continuity';
+			}
+		}
 	} catch (error) {
 		// A native actionability failure cannot erase already observed decoded
 		// frames or certify their unverified inverse. Retain evidence, not a cycle.
@@ -334,9 +347,9 @@ async function collect(
 	return {
 		...descriptor,
 		initial: ordered.findIndex((frame) => frame.key === first.key),
-		frames: ordered.map(({slot, geometry, ordinal, ...frame}) => frame),
+		frames: ordered.map(({slot, geometry, ordinal, slots, ...frame}) => frame),
 		coverage: complete ? 'complete' : 'partial',
-		restoration: (await snapshot(page, descriptor))?.key === first.key ? 'verified' : 'unverified',
+		restoration: !continuityFailure && (await snapshot(page, descriptor))?.key === first.key ? 'verified' : 'unverified',
 		autoplay: 'unmeasured',
 		...(failure ? {failure} : {}),
 	};
