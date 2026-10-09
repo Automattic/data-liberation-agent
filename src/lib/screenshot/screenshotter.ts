@@ -1074,7 +1074,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// and width learning can rerender their source items, discarding injected
 	// answers or mistaking the new controls for another interactive component.
 	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
-		disclosureStates = await hydrateDisclosureContent(page);
+		try {
+			disclosureStates = await hydrateDisclosureContent(page);
+		} catch (error) {
+			fail('content', error);
+			return;
+		}
 	}
 	// Gallery cycles are part of this viewport's serialization transaction, not
 	// a later drive after the baseline HTML has already been saved.
