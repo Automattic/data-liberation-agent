@@ -240,36 +240,40 @@ async function collect(
 		}
 		return null;
 	};
+	const act = async (selector: string, before: NonNullable<typeof first>, accept: (frame: NonNullable<typeof first>) => boolean) => {
+		for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
+			await page.locator(descriptor.selector).first().locator(selector).click({ timeout: 2000 });
+			await settle();
+			const immediate = await snapshot(page, descriptor);
+			if (immediate && accept(immediate)) {
+				const stable = await observe(accept);
+				if (stable) return stable;
+			} else if (immediate && immediate.key === before.key) {
+				// The source can intentionally ignore controls while its own transition lock is held.
+				continue;
+			} else if (immediate) {
+				// A different stable frame is a real but incorrect edge (for example, a
+				// Previous control that actually advances); retries must not hide it.
+				return null;
+			} else {
+				const stable = await observe(accept);
+				if (stable) return stable;
+			}
+		}
+		return null;
+	};
 	let complete = false;
 	let failure: string | undefined;
 	let pending: NonNullable<typeof first> | null = null;
 	try {
 		for (let count = 0; count < LIMIT && Date.now() < deadline; count++) {
 			const before = current;
-			await page
-				.locator(descriptor.selector)
-				.first()
-				.locator(descriptor.next)
-				.click({ timeout: 2000 });
-			await settle();
-			const after = await observe(frame => frame.key !== before.key);
+			const after = await act(descriptor.next, before, frame => frame.key !== before.key);
 			if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
 			pending = after;
 			// The same action must not silently mean a fixed choice. Verify its inverse.
-			await page
-				.locator(descriptor.selector)
-				.first()
-				.locator(descriptor.previous)
-				.click({ timeout: 2000 });
-			await settle();
-			if (!await observe(frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
-			await page
-				.locator(descriptor.selector)
-				.first()
-				.locator(descriptor.next)
-				.click({ timeout: 2000 });
-			await settle();
-			if (!await observe(frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
+			if (!await act(descriptor.previous, after, frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
+			if (!await act(descriptor.next, before, frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
 			current = after;
 			pending = null;
 			if (after.key === first.key) {
