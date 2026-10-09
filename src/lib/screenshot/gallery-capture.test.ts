@@ -35,7 +35,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]?.gallery?.inline.coverage).toBe('complete');
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
 	} finally { await browser.close(); }
-});
+}, 60_000);
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'replays observed cycles and image-opened galleries offline at phone, tablet and desktop widths',

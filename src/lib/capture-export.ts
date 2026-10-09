@@ -1624,7 +1624,7 @@ function buildExportCapture(
 	// the portable pages, so their embedded HTML must name local media too.
 	const localizeInteractionMedia = ( text: string ): string =>
 		localizeFamilyMediaUrls(
-			replaceMedia( text ),
+			replaceResources( replaceMedia( text ) ),
 			portableUrlByFamily
 		);
 	for ( const entry of retainedEntries ) {
