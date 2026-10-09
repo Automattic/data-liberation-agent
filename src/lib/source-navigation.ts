@@ -10,9 +10,10 @@ import { nonHtmlDocumentError } from './screenshot/absent-document.js';
 import { documentRequestUrl } from './url/route-key.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, bytes: 2 * 1024 * 1024, refreshDelayMs: 5_000 } as const;
+export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, refreshDelayMs: 5_000 } as const;
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
 export class SourceNavigationError extends Error {}
 export type RedirectMechanism = 'http' | 'refresh-header' | 'meta-refresh';
@@ -45,9 +46,9 @@ async function readSourceResponse(route: Route, url: string, timeout: number): P
 	const acquired = await route.fetch({url, maxRedirects: 0, maxRetries: 0, timeout});
 	try {
 		const headers = acquired.headers();
-		if (Number(headers['content-length'] ?? 0) > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
+		if (Number(headers['content-length'] ?? 0) > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${SOURCE_DOCUMENT_MAX_BYTES} bytes; Content-Length)`);
 		const body = await acquired.body();
-		if (body.length > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
+		if (body.length > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${body.length} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`);
 		return {rendered: {url, status: acquired.status(), headers, body}, response: {url, status: acquired.status(), headers: Object.fromEntries(['location', 'refresh', 'content-type'].filter(key => headers[key] !== undefined).map(key => [key, headers[key]!])), body: body.toString('utf8')}};
 	} finally { await acquired.dispose(); }
 }
@@ -111,7 +112,11 @@ export function documentRedirect(response: DocumentResponse): RedirectDeclaratio
 	return {mechanism, target: new URL(address, baseUrl).href, delayMs};
 }
 
-/** Confined raw source evidence retains declarations; public records expose no destination query/path. */
+/**
+ * Confined raw source evidence retains complete declarations: at most the
+ * navigation hop limit of document-policy-bounded responses. Terminal documents
+ * are not retained here. Public records expose no destination query/path.
+ */
 export function storeExternalBoundary(directory: string, observation: BoundaryObservation, viewport: number, browserProfile: ExternalBoundary['browserProfile']): ExternalBoundary {
 	const bytes = JSON.stringify(observation);
 	const path = `source-outcomes/${randomUUID()}.json`;
@@ -141,7 +146,7 @@ export function validateExternalBoundary(outcome: ExternalBoundary, bytes: Buffe
 	const visited = new Set<string>();
 	let declaration: RedirectDeclaration | undefined;
 	for (const response of evidence.responses) {
-		if (response.url !== expected || visited.has(expected) || !sameHttpSite(safeTarget(response.url, false).href, evidence.requestedUrl) || !routeInScope(response.url, evidence.routeScope) || Buffer.byteLength(response.body) > SOURCE_NAVIGATION_LIMITS.bytes) throw new Error('Invalid source redirect response chain');
+		if (response.url !== expected || visited.has(expected) || !sameHttpSite(safeTarget(response.url, false).href, evidence.requestedUrl) || !routeInScope(response.url, evidence.routeScope) || Buffer.byteLength(response.body) > SOURCE_DOCUMENT_MAX_BYTES) throw new Error('Invalid source redirect response chain');
 		visited.add(expected);
 		declaration = documentRedirect(response);
 		if (!declaration) throw new Error('Source outcome lacks a redirect declaration');
@@ -170,7 +175,9 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
 		if (remaining <= 0) throw new SourceNavigationError('Source navigation time budget exhausted');
 		const response = await acquire(current, Math.min(5_000, remaining));
 		if (Date.now() > deadline) throw new SourceNavigationError('Source navigation time budget exhausted');
-		if (response.url !== current || Buffer.byteLength(response.body) > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source response identity or byte budget mismatch');
+		if (response.url !== current) throw new SourceNavigationError('Source response identity mismatch');
+		const bytes = Buffer.byteLength(response.body);
+		if (bytes > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${bytes} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`);
 		const declaration = documentRedirect(response);
 		if (!declaration || declaration.reload) return {status: response.status, response, finalUrl, ...(declaration?.reload ? {reload: declaration} : {})};
 		responses.push(response);

@@ -9,6 +9,7 @@ import { validateOutputDir } from './screenshot/output-layout.js';
 import * as cheerio from 'cheerio';
 import { normalizeCssUrlEscapes } from './css-url-escapes.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 
 export interface AcquiredHttpDocument {
 	url: string;
@@ -73,7 +74,7 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 					response = await dependencies.fetch( url, {
 						...(options.routeScope ? { authorizeUrl: (target: string) => { if (!routeInScope(target, options.routeScope)) throw new Error('HTTP document is outside its adapter route scope'); } } : {}),
 						headersForOrigin: requestOrigin => requestOrigin === origin ? variant.headers : undefined,
-						timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? 8 * 1024 * 1024,
+						timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? SOURCE_DOCUMENT_MAX_BYTES,
 					} );
 					if ( attempt === 0 && [ 429, 503 ].includes( response.status ) ) {
 						const retryAfter = response.headers.get( 'retry-after' );
