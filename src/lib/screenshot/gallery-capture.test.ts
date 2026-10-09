@@ -114,6 +114,20 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	} finally { await browser.close(); }
 }, 60_000);
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('rejects a src-swap cycle that skips the same frame in both directions', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		const colors = ['red', 'green', 'blue', 'yellow'];
+		await page.setContent(`<!doctype html><section id="swap"><div aria-label="Image gallery carousel"><div id="stage">${colors.map((color, i) => `<img src="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"><rect width="30" height="30" fill="${color}"/></svg>`)}">`).join('')}</div></div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
+		let n=0;const urls=[...document.querySelectorAll('#stage img')].map(x=>x.src);function update(){document.querySelectorAll('#stage img').forEach((x,i)=>x.src=urls[(n+i)%4])}
+		document.querySelector('[aria-label="Next picture"]').onclick=()=>{n=(n+2)%4;update()};document.querySelector('[aria-label="Previous picture"]').onclick=()=>{n=(n+2)%4;update()};</script>`);
+		const gallery = (await captureGalleries(page))[0]?.gallery?.inline;
+		expect(gallery).toMatchObject({ coverage: 'partial', restoration: 'unverified', failure: 'Adjacent src-swap frames do not preserve overlapping slot continuity' });
+		expect(gallery?.frames).toHaveLength(2);
+	} finally { await browser.close(); }
+}, 60_000);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('retries gallery actions ignored during the source transition lock', async () => {
 	const browser = await chromium.launch();
 	try {
