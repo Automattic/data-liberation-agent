@@ -62,29 +62,70 @@ export async function waitForStable(
 
 /**
  * A quiet gap between timers does not mean that an authored loading sequence is
- * finished. Only wait when the document explicitly declares itself busy, and
- * bound the wait for pages whose busy state never clears.
+ * finished. Only wait when the document says it is still loading, and bound the
+ * wait for pages whose loading state never clears.
+ *
+ * The document says so in one of two ways. It may declare itself busy
+ * (`.loading` / `aria-busy` on the root or body). Or it may still be covered by
+ * its loading screen: a fixed layer that spans the whole viewport, is what the
+ * visitor hits at every sampled point, and carries no text. Such a layer hides
+ * the page rather than being part of it, and the page removes it itself once
+ * ready; measuring or serializing before then freezes the splash instead of the
+ * page. Textual full-viewport layers (consent walls, menus, dialogs) are not
+ * loading screens and are left to overlay handling.
  */
 export async function waitForDeclaredLoadingState(page: Page, timeoutMs: number = 15_000): Promise<void> {
   try {
     const wasBusy = await withEvaluateTimeout(page.evaluate(({ timeoutMs }) => {
-      const busy = () => [document.documentElement, document.body].some(
+      // Name-preserving transpilers wrap these helpers in `__name`, which the page lacks.
+      const named = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
+      named.__name ??= (fn) => fn;
+      const declared = () => [document.documentElement, document.body].some(
         (element) => element?.classList.contains('loading') || element?.getAttribute('aria-busy') === 'true'
       );
+      // Walk the composed tree: an open shadow host (a consent or chat widget)
+      // is retargeted by hit testing, while its fixed box lives inside.
+      const composedParent = (element: Element): Element | null =>
+        element.parentElement ?? ((element.getRootNode() as ShadowRoot).host ?? null);
+      const fixedRoot = (element: Element, x: number, y: number): Element | null => {
+        let current: Element | null = element;
+        for (let inner = current.shadowRoot?.elementFromPoint(x, y); inner && inner !== current; inner = current.shadowRoot?.elementFromPoint(x, y)) current = inner;
+        for (; current && current !== document.body && current !== document.documentElement; current = composedParent(current))
+          if (getComputedStyle(current).position === 'fixed') return current;
+        return null;
+      };
+      const spansViewport = (element: Element) => {
+        const box = element.getBoundingClientRect();
+        return box.left <= 0 && box.top <= 0 && box.right >= innerWidth && box.bottom >= innerHeight &&
+          !(element as HTMLElement).innerText?.trim();
+      };
+      // At every sampled point, the first thing the visitor reaches below any
+      // small fixed widgets (a floating chat or privacy button) is the same
+      // textless viewport-spanning fixed layer, not page content.
+      const covered = () => {
+        let layer: Element | null = null;
+        for (const [fx, fy] of [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) {
+          const x = innerWidth * fx, y = innerHeight * fy;
+          let reached: Element | null = null;
+          for (const hit of document.elementsFromPoint(x, y)) {
+            const root = fixedRoot(hit, x, y);
+            if (!root) return false;
+            if (spansViewport(root)) { reached = root; break; }
+          }
+          if (!reached || (layer && reached !== layer)) return false;
+          layer = reached;
+        }
+        return layer !== null;
+      };
+      const busy = () => declared() || covered();
       if (!busy()) return false;
       return new Promise<boolean>((resolve) => {
-        const observer = new MutationObserver(() => {
-          if (!busy()) finish();
-        });
-        const finish = () => {
-          clearTimeout(timer);
-          observer.disconnect();
-          resolve(true);
+        const deadline = Date.now() + timeoutMs;
+        const poll = () => {
+          if (!busy() || Date.now() >= deadline) resolve(true);
+          else setTimeout(poll, 100);
         };
-        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'aria-busy'] });
-        if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'aria-busy'] });
-        const timer = setTimeout(finish, timeoutMs);
-        if (!busy()) finish();
+        poll();
       });
     }, { timeoutMs }), timeoutMs + 1_000);
     if (wasBusy) await waitForDomQuiescence(page, 500, 2_000);
@@ -202,6 +243,44 @@ export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promi
   }
 }
 
+const UNREACHABLE_LAZY_IMAGE = 'data-liberation.unreachable-lazy-image';
+
+/**
+ * Install the page's `unreachableLazyImage( image )` readiness predicate and
+ * return its global symbol key.
+ *
+ * A pending native-lazy image whose box lies outside an ancestor's overflow
+ * clip (an image beyond the visible part of a horizontal rail, for example) is
+ * never fetched by a vertical document sweep. It therefore cannot change the
+ * geometry being waited for, and waiting on it can only spend the deadline.
+ * Images the sweep can reach still gate readiness, and revealing one later
+ * changes its intersection, so it gates the next wait again.
+ *
+ * Installed through `evaluate` rather than rebuilt from source so pages whose
+ * CSP forbids `eval` still get the same single definition.
+ */
+export async function installImageReachability(page: Page): Promise<string> {
+  await withEvaluateTimeout(page.evaluate((key) => {
+    const symbol = Symbol.for(key);
+    if (symbol in window) return;
+    Object.defineProperty(window, symbol, {
+      configurable: true,
+      value: (image: HTMLImageElement): boolean => {
+        if (image.complete || image.loading !== 'lazy') return false;
+        const box = image.getBoundingClientRect();
+        for (let node = image.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+          const clip = node.getBoundingClientRect();
+          if (box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom) return true;
+        }
+        return false;
+      },
+    });
+  }, UNREACHABLE_LAZY_IMAGE), EVALUATE_GRACE_MS);
+  return UNREACHABLE_LAZY_IMAGE;
+}
+
 /**
  * Wait for images reached by the lazy-load sweep to decode before measuring.
  * Image load can complete before layout has incorporated the decoded intrinsic
@@ -213,9 +292,12 @@ export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promi
  */
 export async function waitForImages(page: Page, timeoutMs: number = 4_000): Promise<void> {
   try {
+    const reachabilityKey = await installImageReachability(page);
     await withEvaluateTimeout(
-      page.evaluate(async () => {
+      page.evaluate(async (reachabilityKey) => {
+        const unreachable = (window as unknown as Record<symbol, (image: HTMLImageElement) => boolean>)[Symbol.for(reachabilityKey)];
         const active = (image: HTMLImageElement): boolean => {
+          if (unreachable(image)) return false;
           if (image.checkVisibility()) return true;
           const box = image.getBoundingClientRect();
           return box.width > 0 && box.height > 0;
@@ -233,7 +315,7 @@ export async function waitForImages(page: Page, timeoutMs: number = 4_000): Prom
             await image.decode().catch(() => undefined);
           })
         );
-      }),
+      }, reachabilityKey),
       timeoutMs,
     );
   } catch {
@@ -258,20 +340,34 @@ export async function waitForImages(page: Page, timeoutMs: number = 4_000): Prom
  * awaiting their `.finished` settles the transition. Infinite animations
  * (spinners, looping marquees) never finish and are excluded; the whole wait is
  * timeout-bounded so a long/stuck animation can't hang the capture.
+ *
+ * Only in-flight effects are awaited. A paused entrance waiting for its
+ * viewport trigger cannot finish by waiting, so it must not consume the budget
+ * that an effect started while settling (a deferred observer play) needs. The
+ * set is re-read after each round: a play scheduled by an earlier effect's
+ * completion is still in flight, not settled.
  */
 export async function waitForAnimations(page: Page, timeoutMs: number = 2_000): Promise<void> {
   try {
     await withEvaluateTimeout(
-      page.evaluate(() =>
-        Promise.all(
-          document
-            .getAnimations()
-            .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
-            // `.finished` rejects if the animation is cancelled mid-flight; swallow
-            // so one cancelled reveal doesn't reject the whole settle.
-            .map((a) => a.finished.catch(() => undefined)),
-        ).then(() => true),
-      ),
+      page.evaluate(async (timeoutMs) => {
+        const deadline = performance.now() + timeoutMs;
+        // Scroll/view timelines advance with position, not time; waiting cannot settle them.
+        const inFlight = () => document
+          .getAnimations()
+          .filter((a) => a.playState === 'running' && a.timeline === document.timeline && a.effect?.getComputedTiming().iterations !== Infinity);
+        for (let pending = inFlight(); pending.length && performance.now() < deadline; pending = inFlight()) {
+          // `.finished` rejects if the animation is cancelled mid-flight; swallow
+          // so one cancelled reveal doesn't reject the whole settle.
+          await Promise.race([
+            Promise.all(pending.map((a) => a.finished.catch(() => undefined))),
+            new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - performance.now()))),
+          ]);
+          // Let completion handlers start any chained effect before re-reading.
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        }
+        return true;
+      }, timeoutMs),
       timeoutMs,
     );
   } catch {
@@ -408,7 +504,10 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
           // revealing nothing, again on every image-settling round.
           let bottom = Math.max(0, total - window.innerHeight);
           while (y < bottom && Date.now() - started < maxMs) {
-            y = Math.min(y + step, bottom);
+            // A step taller than the layout viewport (a phone document scaled
+            // into a wide window) jumps over content that never intersects, so
+            // its viewport-gated loads and entrances never run.
+            y = Math.min(y + Math.max(1, Math.min(step, window.innerHeight)), bottom);
             window.scrollTo({ top: y, left: 0, behavior: 'instant' });
             await new Promise((r) => setTimeout(r, pauseMs));
             total = document.documentElement.scrollHeight;
@@ -447,11 +546,21 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     if (options.expandContent !== false) await withEvaluateTimeout(expandCollapsedContent(page), 30_000);
     await withEvaluateTimeout(waitForAppWidgets(page), 8_000 + EVALUATE_GRACE_MS);
     await waitForImages(page);
-    // Return to top AND fire a scroll event so scroll-reactive headers recompute
-    // their at-top (un-faded) state — scrollTo alone doesn't trigger their handler.
+  } catch (error) {
+    /* if the page crashes or blocks our script, don't fail the capture */
+    // A renderer that stopped answering will not answer the restore either;
+    // callers that measure check the pose themselves.
+    if (error instanceof Error && error.message.startsWith('evaluate timeout')) return;
+  }
+  // The sweep moved the document, so it owes the top pose back even when a
+  // step above was interrupted: callers measure and serialize right after
+  // this, and a skipped restore left them describing the page parked
+  // mid-sweep or at the bottom. Fire a scroll event so scroll-reactive
+  // headers recompute their at-top state — scrollTo alone doesn't trigger it.
+  try {
     await restoreTopScrollState(page);
   } catch {
-    /* if the page crashes or blocks our script, don't fail the capture */
+    /* an unresponsive page is reported by the caller's pose check */
   }
 }
 

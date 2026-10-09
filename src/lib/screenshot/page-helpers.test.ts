@@ -151,6 +151,58 @@ describe('declared loading state', () => {
     await page.close();
   });
 
+  // A fixed, textless layer spanning the viewport hides the page until the
+  // page removes it. A small fixed widget painted inside an open shadow root
+  // (a privacy button) may sit above it without making the page visible.
+  const coverFixture = (removeAfterMs: number | null, coverText = '') => `<!doctype html><style>
+      body { margin: 0; } main { height: 3000px; }
+      #cover { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 9; background: rgb(240, 238, 230); display: flex; align-items: center; justify-content: center; }
+      #cover img { width: 120px; height: 120px; }
+    </style><main><h1>Article</h1><p>Body copy.</p></main>
+    <div id="cover"><img alt="" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22/%3E">${ coverText }</div>
+    <widget-host></widget-host>
+    <script>
+      const shadow = document.querySelector('widget-host').attachShadow({ mode: 'open' });
+      shadow.innerHTML = '<button style="position:fixed;left:0;bottom:0;width:30vw;height:30vh;z-index:10">i</button>';
+      ${ removeAfterMs === null ? '' : `setTimeout(() => document.querySelector('#cover').remove(), ${ removeAfterMs });` }
+    </script>`;
+
+  it('waits for a textless full-viewport loading cover to leave', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.setContent(coverFixture(1_200));
+      await waitForDeclaredLoadingState(page, 5_000);
+      expect(await page.locator('#cover').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('does not treat a textual full-viewport layer as a loading cover', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.setContent(coverFixture(3_000, '<p>We use cookies. Accept or reject.</p>'));
+      const started = Date.now();
+      await waitForDeclaredLoadingState(page, 5_000);
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(await page.locator('#cover').count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('bounds a loading cover that never leaves', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.setContent(coverFixture(null));
+      const started = Date.now();
+      await waitForDeclaredLoadingState(page, 300);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('bounds a loading state that never clears', async () => {
     const page = await browser.newPage();
     await page.setContent('<body class="loading"><p>Static content</p></body>');
@@ -272,6 +324,31 @@ describe('triggerLazyLoad', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(await page.locator('img').count()).toBe(2);
     await page.close();
+  });
+
+  it('restores the top pose when a sweep step is interrupted after reaching the bottom', async () => {
+    // The first sweep reaches the bottom; the next settle round's sweep is
+    // interrupted (as a stalled renderer or destroyed context would). The
+    // caller measures right after this and must not see the parked page.
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.setContent('<style>body{margin:0}</style><main style="height:4000px">Content</main>');
+      let sweeps = 0;
+      const interrupted = new Proxy(page, {
+        get(target, property, receiver) {
+          if (property !== 'evaluate') return Reflect.get(target, property, receiver);
+          return (fn: unknown, arg?: unknown) => {
+            if (String(fn).includes('pauseMs') && ++sweeps > 1) return Promise.reject(new Error('Execution context was destroyed'));
+            return target.evaluate(fn as never, arg as never);
+          };
+        },
+      });
+      await triggerLazyLoad(interrupted);
+      expect(sweeps).toBeGreaterThan(1);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+    } finally {
+      await page.close();
+    }
   });
 
   it('stops scroll preparation at the reachable viewport bottom without overscroll waits', async () => {

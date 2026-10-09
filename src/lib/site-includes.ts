@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpat
 import { relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { AnyNode } from 'domhandler';
+import { adapter } from 'parse5-htmlparser2-tree-adapter';
 
 // Parse HTML comments, not lookalike strings inside scripts, attributes or raw text.
 export interface HtmlRange { start: number; end: number }
@@ -9,12 +10,20 @@ export function sourceRange( node: AnyNode ): HtmlRange | undefined {
 	const location = ( node as AnyNode & { sourceCodeLocation?: { startOffset: number; endOffset: number; endTag?: unknown } } ).sourceCodeLocation;
 	return location && { start: location.startOffset, end: location.endOffset };
 }
-export function parseLocatedHtml( html: string ) {
-	return cheerio.load( html, { sourceCodeLocationInfo: true } );
+export function parseLocatedStructure( html: string ) {
+	// This index consumes structure, comments and source ranges, never text or
+	// serialization. Preserve parse5's tree construction and text-node positions,
+	// but release character tokens instead of retaining all CSS/script/editorial
+	// text in a second DOM. Authored bytes still come from the original source.
+	return cheerio.load( html, { sourceCodeLocationInfo: true, treeAdapter: {
+		...adapter,
+		insertText: ( parent, _text ) => adapter.insertText( parent, '' ),
+		insertTextBefore: ( parent, _text, before ) => adapter.insertTextBefore( parent, '', before ),
+	} } );
 }
 
 export function includeReferences( html: string ): Array< HtmlRange & { path: string } > {
-	const $ = parseLocatedHtml( html );
+	const $ = parseLocatedStructure( html );
 	const includes: Array< HtmlRange & { path: string } > = [];
 	function visit( node: AnyNode ) {
 		if ( node.type === 'comment' && /^\s*#include/i.test( node.data ) ) {

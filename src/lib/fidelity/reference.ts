@@ -96,6 +96,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	};
 	return {
 		declare,
+		requireUrls( urls: string[] ): void { sourceUrls = [ ...new Set( [ ...sourceUrls, ...urls ] ) ]; },
 		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile, expectedBoundary?: ExternalBoundary ): Promise<void> {
 			const recipe = profile ?? { id: device, width: page.viewportSize()?.width ?? 1440, height: 900 };
 			declare( url, recipe );
@@ -200,6 +201,11 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 				}
 		},
 		finalize( receiptPath: string ): string {
+			const coveragePath = join(directory, 'linked-page-coverage.json');
+			if (existsSync(coveragePath)) {
+				const coverage = JSON.parse(readFileSync(coveragePath, 'utf8')) as {requiredUrls: string[]};
+				sourceUrls = [...new Set([...sourceUrls, ...coverage.requiredUrls])];
+			}
 			const receiptBytes = readFileSync( receiptPath );
 			const receipt = JSON.parse( receiptBytes.toString() );
 			const files: ReferenceArtifact[] = [];

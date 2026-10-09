@@ -44,6 +44,7 @@ import {
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
 import { wireNativeViewTimelines } from './native-view-timelines.js';
+import { wireNativeControlState } from './native-control-state.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
@@ -57,11 +58,11 @@ import {
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
-import { srcsetCandidates, srcsetReferences } from './srcset.js';
+import { isSrcsetShaped, srcsetCandidates, srcsetReferences } from './srcset.js';
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
 import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
-import { isSrcsetShaped, elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
+import { elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
 import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
@@ -1034,10 +1035,15 @@ function uncapturedRouteAnchors(
 	html: string,
 	sourceUrl: string,
 	capturedRoutes: Set< string >,
-	absentRoutes: Set< string >
+	absentRoutes: Set< string >,
+	resourceInputs: Set< string >
 ): Array< { sourceUrl: string; url: string; reason: string } > {
 	return sameOriginPageAnchors( html, sourceUrl )
 		.filter( ( url ) => ! capturedRoutes.has( url ) )
+		// Resource-owned links already have localization or explicit acquisition
+		// diagnostics. Avoid duplicating those as missing HTML, without changing
+		// the independent required frontier or its frozen outcome obligations.
+		.filter( ( url ) => ! resourceInputs.has( url ) )
 		.map( ( url ) => ( {
 		sourceUrl,
 		url,
@@ -1367,6 +1373,10 @@ function buildExportCapture(
 		resourceManifest,
 		outputDir
 	);
+	// The bounded asset index is the last consumer of the normalized source
+	// pair. Release every private pair, including unretained route aliases,
+	// before rendering and building the portable/identity geometry indexes.
+	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
 	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
 		retainedMediaReferenceInventory( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
@@ -1477,7 +1487,7 @@ function buildExportCapture(
 		const { url } = entry;
 		const routePath = routePathOf( url );
 		const portablePath = `/${ routePath }`;
-		portableRouteLinks.set( normalizedUrl( url ), portablePath );
+		portableRouteLinks.set( documentRequestUrl( url ), portablePath );
 		routes.push( {
 			url,
 			path: `website/${ routePath }`,
@@ -1493,24 +1503,14 @@ function buildExportCapture(
 	}
 	for ( const { url, canonicalUrl } of retainedEntries ) {
 		if ( ! canonicalUrl ) continue;
-		const canonicalKey = normalizedUrl( canonicalUrl );
+		const canonicalKey = documentRequestUrl( canonicalUrl );
 		if ( portableRouteLinks.has( canonicalKey ) ) continue;
 		const routePath = routePathOf( url );
 		portableRouteLinks.set( canonicalKey, `/${ routePath }` );
 	}
-	// Comparison keys still serve route/tab matching. Source-link coverage and
-	// rewriting require actual captured addresses or explicit proven aliases.
-	const sourceRouteLinks = new Map<string, string>();
-	for (const entry of retainedEntries) {
-		sourceRouteLinks.set(documentRequestUrl(entry.url), `/${routePathOf(entry.url)}`);
-	}
-	for (const entry of retainedEntries) {
-		if (entry.canonicalUrl && !sourceRouteLinks.has(documentRequestUrl(entry.canonicalUrl))) sourceRouteLinks.set(documentRequestUrl(entry.canonicalUrl), `/${routePathOf(entry.url)}`);
-	}
-	for (const alias of duplicateRoutes) {
-		const destination = portableRouteLinks.get(normalizedUrl(alias.url));
-		if (destination) sourceRouteLinks.set(documentRequestUrl(alias.url), destination);
-	}
+	// Source links, aliases and observed navigation all use actual request
+	// addresses. A comparison key cannot select between different slash pages.
+	const sourceRouteLinks = portableRouteLinks;
 
 	const portableServedPaths = new Set< string >();
 	for ( const path of [
@@ -1547,6 +1547,13 @@ function buildExportCapture(
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
 		.map( ( diagnostic ) => diagnostic.url ) );
 	const absentRouteKeys = new Set( [ ...absentRoutes ].map( documentRequestUrl ) );
+	const resourceInputKeys = new Set([
+		...resourceReplacements.keys(), ...mediaReplacements.keys(),
+		...unresolvedDependencies.map(row => row.url),
+	].flatMap(url => {
+		try { return [documentRequestUrl(url)]; }
+		catch { return []; } // Raw replacement strings can be relative references.
+	}));
 	// A tab for the current route cannot demonstrate a URL change on that page.
 	// Reuse only an unambiguous observation of the same navigation group on
 	// another captured route (for example Home observed from Services).
@@ -1559,7 +1566,7 @@ function buildExportCapture(
 		routeDestinations.set( key, destinations );
 	}
 	const verifiedRouteObservations = routeObservations.filter( route =>
-		portableRouteLinks.has( normalizedUrl( route.url ) ) &&
+		portableRouteLinks.has( documentRequestUrl( route.url ) ) &&
 		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
 	);
 	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false };
@@ -1602,7 +1609,7 @@ function buildExportCapture(
 		}
 		mkdirSync( dirname( destination ), { recursive: true } );
 		const originalHtml = readFileSync( htmlPath, 'utf8' );
-		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys ) );
+		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, resourceInputKeys ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = bindSrcsetShapedImageSrc(
@@ -1635,7 +1642,7 @@ function buildExportCapture(
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) );
+		writeFileSync( destination, wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}

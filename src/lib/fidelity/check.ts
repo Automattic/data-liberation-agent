@@ -12,6 +12,8 @@ import * as cheerio from 'cheerio';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { load } from 'cheerio';
+import { documentRequestUrl } from '../url/route-key.js';
+import { srcsetReferences } from '../srcset.js';
 import { boundaryIdentity, validateExternalBoundary, type ExternalBoundary } from '../source-navigation.js';
 import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
@@ -377,6 +379,13 @@ export async function observePage(
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
 		await onBaseline?.();
+		// The sweep owes the top pose back. Image and text geometry are
+		// viewport-relative, so a page still parked where an interrupted sweep
+		// left it would be scored as every image having moved.
+		if ( ! skipScrollProbe ) {
+			const pose = await page.evaluate( () => ( { x: Math.round( scrollX ), y: Math.round( scrollY ) } ) );
+			if ( pose.x || pose.y ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y })` );
+		}
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
@@ -437,35 +446,21 @@ export async function observePage(
 			// Candidates the element itself declared, not the one file the viewport
 			// happened to load. A density list does not switch on width, so a
 			// wider observation can load a different rendition of the same asset.
-			const srcsetUrls = ( value: string | null ): string[] => {
-				if ( ! value ) return [];
-				const urls: string[] = [];
-				let offset = 0;
-				while ( offset < value.length ) {
-					while ( offset < value.length && /[\s,]/.test( value[ offset ] ) ) offset++;
-					if ( offset >= value.length ) break;
-					const start = offset;
-					while ( offset < value.length && ! /\s/.test( value[ offset ] ) ) offset++;
-					const url = value.slice( start, offset ).replace( /,+$/, '' );
-					if ( url ) urls.push( url );
-					while ( offset < value.length && value[ offset ] !== ',' ) offset++;
-					if ( offset < value.length ) offset++;
-				}
-				return urls;
-			};
-			const renditionUrls = ( image: HTMLImageElement ): string[] => {
-				const urls = [
-					...srcsetUrls( image.getAttribute( 'srcset' ) ),
-					...srcsetUrls( image.getAttribute( 'data-srcset' ) ),
+			// Read raw attribute values in the renderer; the shared browser-token
+			// parser runs below, outside evaluate, for both img and picture sources.
+			const renditionSrcsets = ( image: HTMLImageElement ): string[] => {
+				const values = [
+					image.getAttribute( 'srcset' ) ?? '',
+					image.getAttribute( 'data-srcset' ) ?? '',
 				];
 				const picture = image.closest( 'picture' );
 				if ( picture ) {
 					for ( const source of picture.querySelectorAll( 'source' ) ) {
-						urls.push( ...srcsetUrls( source.getAttribute( 'srcset' ) ) );
-						urls.push( ...srcsetUrls( source.getAttribute( 'data-srcset' ) ) );
+						values.push( source.getAttribute( 'srcset' ) ?? '' );
+						values.push( source.getAttribute( 'data-srcset' ) ?? '' );
 					}
 				}
-				return urls;
+				return values;
 			};
 			const semanticRole = ( image: HTMLImageElement ): string => {
 				const parts: string[] = [];
@@ -482,15 +477,15 @@ export async function observePage(
 						src: image.currentSrc || image.getAttribute( 'src' ) || '',
 						role: semanticRole( image ),
 						decoded: image.complete && image.naturalWidth > 0,
-						renditions: renditionUrls( image ),
+						srcsets: renditionSrcsets( image ),
 						hidden: getComputedStyle( image ).visibility === 'hidden',
 					} ) )
 					.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
-					.map( async ( { rect, src, renditions, role, decoded } ) => ( {
+					.map( async ( { rect, src, srcsets, role, decoded } ) => ( {
 						key: src,
 						role,
 						decoded,
-						renditions,
+						srcsets,
 						x: Math.round( rect.x ),
 						y: Math.round( rect.y ),
 						width: Math.round( rect.width ),
@@ -619,6 +614,7 @@ export async function observePage(
 						name,
 						time: animation.currentTime?.toString() ?? 'null',
 						state: animation.playState,
+						clock: animation.timeline === document.timeline,
 					};
 				} )
 				.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
@@ -645,13 +641,21 @@ export async function observePage(
 							name,
 							time: animation.currentTime?.toString() ?? 'null',
 							state: animation.playState,
+							clock: animation.timeline === document.timeline,
 						};
 					} )
 					.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
 				responsiveAnimations = animationsAfter
 					.filter( ( animation ) => {
 						const before = animationStateBefore.get( animation.key );
-						return ! before || before.time !== animation.time || before.state !== animation.state;
+						if ( ! before ) return true;
+						// A document-timeline effect already in flight advances with the
+						// clock, not the scroll: its progress or completion during the
+						// probe is not a response. Starts, pauses, seeks and
+						// scroll-timeline progress remain responses.
+						if ( animation.clock && before.state === 'running' && ( animation.state === 'running' || animation.state === 'finished' ) &&
+							Number( animation.time ) >= Number( before.time ) ) return false;
+						return before.time !== animation.time || before.state !== animation.state;
 					} )
 					.map( ( animation ) => animation.name )
 					.sort();
@@ -865,9 +869,10 @@ export async function observePage(
 			textChars: measured.textChars,
 			widestImage: measured.widestImage,
 			images: measured.images.map( ( image ) => {
+				const { srcsets, ...observed } = image;
 				const key = normalizeImageKey( image.key );
 				const renditions: string[] = [];
-				for ( const url of image.renditions ?? [] ) {
+				for ( const url of srcsets.flatMap( srcsetReferences ) ) {
 					const rendition = normalizeImageKey( url );
 					if (
 						! rendition ||
@@ -880,7 +885,7 @@ export async function observePage(
 					}
 					renditions.push( rendition );
 				}
-				return { ...image, key, renditions };
+				return { ...observed, key, renditions };
 			} ),
 			typography: measured.typography,
 			animations: measured.animations,
@@ -1539,14 +1544,14 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
 					// The foreign document is outside scope, but authored links to the
 					// requested source route must retain their query/hash meaning in both stages.
-					const boundaryUrls = new Set((receipt.sourceOutcomes ?? []).map(outcome => normalizedUrl(outcome.requestedUrl)));
+					const boundaryUrls = new Set((receipt.sourceOutcomes ?? []).map(outcome => documentRequestUrl(outcome.requestedUrl)));
 					if (boundaryUrls.size) {
 						const html = readReferenceArtifact(directory, entry.document!).toString();
 						const $ = load(html);
 						const documentUrl = new URL($('base[href]').first().attr('href') ?? entry.sourceUrl, entry.sourceUrl).href;
 						const requiredLinks: string[] = [];
 						$('a[href],area[href]').each((_index, element) => {
-							try { const href = new URL($(element).attr('href')!, documentUrl); if (boundaryUrls.has(normalizedUrl(href.href))) requiredLinks.push(href.href); } catch { /* Non-network authored links have no boundary identity. */ }
+							try { const href = new URL($(element).attr('href')!, documentUrl); if (boundaryUrls.has(documentRequestUrl(href.href))) requiredLinks.push(href.href); } catch { /* Non-network authored links have no boundary identity. */ }
 						});
 						const actual = await page.evaluate(() => [...document.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>('a[href],area[href]')].map(link => link.href));
 						for (const href of requiredLinks) { const index = actual.indexOf(href); if (index < 0) checked.failures.push('Authored external-boundary source link meaning was lost'); else actual.splice(index, 1); }

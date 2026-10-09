@@ -15,6 +15,43 @@ function entry( dir: string, filename: string, url: string, html: string ): Rout
 }
 
 describe( 'capture export route stage', () => {
+	it( 'allocates independent nonquery collisions deterministically around authored files and directories', () => {
+		mkdirSync('.tmp-test', {recursive: true});
+		const dir = mkdtempSync(join('.tmp-test', 'dla-document-collisions-')); dirs.push(dir);
+		const home = entry(dir, 'home.html', 'https://example.com/', '<h1>Home</h1>');
+		const article = entry(dir, 'article.html', 'https://example.com/article', '<h1>Without slash</h1>');
+		const directory = entry(dir, 'directory.html', 'https://example.com/article/', '<h1>Directory</h1>');
+		const defaultDocument = entry(dir, 'default.html', 'https://example.com/article/index.html', '<h1>Default document</h1>');
+		const reservedFile = entry(dir, 'reserved.html', 'https://example.com/article/index-2.html', '<h1>Authored file</h1>');
+		const reservedDirectory = entry(dir, 'child.html', 'https://example.com/article/index-3.html/child', '<h1>Authored child</h1>');
+		const entries = [home, article, directory, defaultDocument, reservedFile, reservedDirectory];
+		const first = allocateCaptureRoutes(entries, home.url, [{url: 'https://example.com/old/', target: directory.url}]);
+		const reverse = allocateCaptureRoutes([...entries].reverse(), home.url, []);
+		expect(entries.map(({url}) => first.routePathOf(url))).toEqual(entries.map(({url}) => reverse.routePathOf(url)));
+		expect(new Set(entries.map(({url}) => first.routePathOf(url))).size).toBe(6);
+		expect(first.routePathOf(article.url)).toBe('article/index.html');
+		expect(first.routePathOf(directory.url)).toBe('article/index-4.html');
+		expect(first.routePathOf(defaultDocument.url)).toBe('article/index-5.html');
+		expect(first.canonicalRouteAliases.get('https://example.com/old/')).toBe('article/index-4.html');
+		const selected = allocateCaptureRoutes(entries, directory.url, []);
+		expect(selected.entrypointEntry).toBe(directory);
+		expect(selected.routePathOf(directory.url)).toBe('article/index.html');
+		expect(selected.routePathOf(article.url)).not.toBe('article/index.html');
+	});
+	it( 'keeps distinct self-canonical addresses while binding explicit aliases and exact redirect targets', () => {
+		mkdirSync('.tmp-test', {recursive: true});
+		const dir = mkdtempSync(join('.tmp-test', 'dla-canonical-collisions-')); dirs.push(dir);
+		const home = entry(dir, 'home.html', 'https://example.com/', '<h1>Home</h1>');
+		const article = {...entry(dir, 'article.html', 'https://example.com/article', '<h1>Without slash</h1>'), canonicalUrl: 'https://example.com/article'};
+		const directory = {...entry(dir, 'directory.html', 'https://example.com/article/', '<h1>Directory</h1>'), canonicalUrl: 'https://example.com/article/'};
+		const alias = {...entry(dir, 'alias.html', 'https://example.com/article/?ref=nav', '<h1>Directory</h1>'), canonicalUrl: directory.url};
+		const routes = allocateCaptureRoutes([home, article, directory, alias], home.url, [{url: 'https://example.com/old/', target: `${directory.url}#deep`}]);
+		expect(routes.retainedEntries).toEqual([home, article, directory]);
+		expect(routes.routePathOf(article.url)).not.toBe(routes.routePathOf(directory.url));
+		expect(routes.routePathOf(alias.url)).toBe(routes.routePathOf(directory.url));
+		expect(routes.canonicalRouteAliases.get('https://example.com/old/')).toBe(`${routes.routePathOf(directory.url)}#deep`);
+		expect(routes.canonicalRouteAliases.get(alias.url)).toBe(routes.routePathOf(directory.url));
+	});
 	it( 'allocates distinct query routes deterministically without claiming authored filenames', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const dir = mkdtempSync( join( '.tmp-test', 'dla-query-routes-' ) );
@@ -34,7 +71,7 @@ describe( 'capture export route stage', () => {
 		expect( new Set( paths ).size ).toBe( entries.length );
 		expect( first.routePathOf( base.url ) ).toBe( 'catalog/index.html' );
 		expect( first.routePathOf( authored.url ) ).toBe( 'catalog/index-query-1.html' );
-		expect( first.canonicalRouteAliases.get( 'https://example.com/catalog?old=red' ) ).toBe( first.routePathOf( red.url ) );
+		expect( first.canonicalRouteAliases.get( 'https://example.com/catalog/?old=red' ) ).toBe( first.routePathOf( red.url ) );
 		expect( first.portableRedirects ).toEqual( [] );
 	} );
 

@@ -18,6 +18,8 @@
 // That function targets <wp:attachment_url> CDATA — this one targets the
 // content surfaces a block-rendered post would expose.
 
+import { rewriteMediaReferences, srcsetReferences } from '../srcset.js';
+
 export interface RewriteWarnings {
   /** Source URLs that appeared in the input but had no mapping. */
   missing: string[];
@@ -58,17 +60,9 @@ export function rewriteMediaUrls(
     }
   }
 
-  // Scan-and-replace strategy:
-  //   - For each known source URL in the mapping, do a substring substitution.
-  //     URLs in our domain are unlikely to be substrings of one another in
-  //     practice (full origin + path), and we don't try to anchor on
-  //     attribute boundaries — replacing the URL string itself catches every
-  //     attribute surface (src/srcset/href/JSON value/etc.) without per-
-  //     attribute regex maintenance.
-  //   - For unknown URLs, run a final pass against typical attribute
-  //     surfaces and report any that look like media references but aren't
-  //     in our map. Avoids missing warnings on URLs that don't resemble
-  //     media (random links, etc.).
+  // Resolve complete attribute/list candidates first, including existing media
+  // family aliases. Media attributes use exact URL-token replacement; the other
+  // HTML/CSS/JSON surfaces retain the bounded raw replacement pass below.
   // Scan the *input* (pre-rewrite) for missing URLs so the local
   // replacement URL isn't itself reported as "missing" after the rewrite.
   const seen = new Set<string>();
@@ -115,7 +109,12 @@ export function rewriteMediaUrls(
   });
   // Match the original input once: a relative source alias must not match
   // the suffix of a local path emitted by an earlier replacement.
-  return input.replace(new RegExp(patterns.join('|'), 'g'), (source) => replacements.get(source)!);
+  const pattern = new RegExp(patterns.join('|'), 'g');
+  return rewriteMediaReferences(
+    input,
+    url => replacements.get(url) ?? url,
+    other => other.replace(pattern, source => replacements.get(source)!),
+  );
 }
 
 /**
@@ -165,21 +164,9 @@ function collectMediaCandidates(input: string): string[] {
     let m: RegExpExecArray | null;
     while ((m = re.exec(input)) !== null) {
       const value = m[2] ?? m[1];
-      // srcset can contain multiple URLs — extract via URL_LIKE so that Wix
-      // transform URLs (which embed commas in their parameter segments, e.g.
-      // `/v1/fill/w_680,h_510,q_90,enc_avif,quality_auto/`) are captured
-      // whole rather than split at each comma.  A naïve value.split(',') slices
-      // those URLs mid-parameter, producing truncated keys like
-      // `https://…/media/<HASH>~mv2.png/v1/fill/w_943` that match the alias
-      // index (same asset-id prefix) and are then a substring of the real
-      // transform URL — so the regex-replace swaps just the prefix, leaving the
-      // transform tail appended to the local path (the "mangle").
+      // Use the same browser URL tokens for descriptors and descriptorless lists.
       if (re.source.includes('srcset')) {
-        let urlMatch: RegExpExecArray | null;
-        const urlRe = new RegExp(URL_LIKE.source, 'g');
-        while ((urlMatch = urlRe.exec(value)) !== null) {
-          candidates.push(urlMatch[0]);
-        }
+        candidates.push(...srcsetReferences(value));
       } else {
         candidates.push(value);
       }
