@@ -8,6 +8,8 @@ import { serverRedirectTarget, navigationDocumentUrl } from './screenshot/docume
 import { sameHttpSite } from './screenshot/same-origin.js';
 import { nonHtmlDocumentError } from './screenshot/absent-document.js';
 import { documentRequestUrl } from './url/route-key.js';
+import type { SiteRouteScope } from '../platform/types.js';
+import { routeInScope, validateRouteScope } from './url/route-scope.js';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, bytes: 2 * 1024 * 1024, refreshDelayMs: 5_000 } as const;
@@ -21,6 +23,8 @@ export interface ExternalBoundary {
 	schema: 'data-liberation/source-outcome/v1';
 	kind: 'external-redirect';
 	requestedUrl: string;
+	/** Shared-origin ownership boundary, when narrower than the HTTP site. */
+	routeScope?: SiteRouteScope;
 	initialStatus: number;
 	mechanism: RedirectMechanism;
 	target: { origin: string; sha256: string; fetched: false };
@@ -28,7 +32,7 @@ export interface ExternalBoundary {
 	viewport: number;
 	browserProfile: { isMobile: boolean; hasTouch: boolean };
 }
-export interface BoundaryObservation { requestedUrl: string; responses: DocumentResponse[]; declaration: RedirectDeclaration; elapsedMs: number }
+export interface BoundaryObservation { requestedUrl: string; responses: DocumentResponse[]; declaration: RedirectDeclaration; elapsedMs: number; routeScope?: SiteRouteScope }
 export function navigationDigest(bytes: string | Buffer): string { return createHash('sha256').update(bytes).digest('hex'); }
 function safeTarget(url: string, publicUrlsOnly: boolean): URL {
 	const target = new URL(url);
@@ -114,13 +118,14 @@ export function storeExternalBoundary(directory: string, observation: BoundaryOb
 	mkdirSync(join(directory, 'source-outcomes'), {recursive: true});
 	writeFileSync(join(directory, path), bytes);
 	return {schema: 'data-liberation/source-outcome/v1', kind: 'external-redirect', requestedUrl: observation.requestedUrl,
+		...(observation.routeScope ? {routeScope: observation.routeScope} : {}),
 		initialStatus: observation.responses[0]!.status, mechanism: observation.declaration.mechanism,
 		target: {origin: new URL(observation.declaration.target).origin, sha256: navigationDigest(observation.declaration.target), fetched: false},
 		evidence: {path, sha256: navigationDigest(bytes)}, viewport, browserProfile};
 }
 
 export function boundaryIdentity(outcome: ExternalBoundary): string {
-	return JSON.stringify([outcome.requestedUrl, outcome.initialStatus, outcome.mechanism, outcome.target.origin, outcome.target.sha256, outcome.target.fetched]);
+	return JSON.stringify([outcome.requestedUrl, outcome.initialStatus, outcome.mechanism, outcome.target.origin, outcome.target.sha256, outcome.target.fetched, outcome.routeScope]);
 }
 
 /** Re-derive the frozen boundary from hashed raw responses, never from the current source. */
@@ -128,28 +133,32 @@ export function validateExternalBoundary(outcome: ExternalBoundary, bytes: Buffe
 	if (outcome.schema !== 'data-liberation/source-outcome/v1' || outcome.kind !== 'external-redirect' || outcome.target?.fetched !== false ||
 		!Number.isFinite(outcome.viewport) || outcome.viewport <= 0 || typeof outcome.browserProfile?.isMobile !== 'boolean' || typeof outcome.browserProfile?.hasTouch !== 'boolean') throw new Error('Invalid external source outcome');
 	const evidence = JSON.parse(bytes.toString()) as BoundaryObservation;
+	if (evidence.routeScope) validateRouteScope(evidence.routeScope);
+	if (JSON.stringify(evidence.routeScope) !== JSON.stringify(outcome.routeScope) || !routeInScope(outcome.requestedUrl, evidence.routeScope)) throw new Error('Source outcome route ownership mismatch');
 	if (evidence.requestedUrl !== outcome.requestedUrl || !evidence.responses?.length || evidence.responses.length > SOURCE_NAVIGATION_LIMITS.hops || !Number.isFinite(evidence.elapsedMs) || evidence.elapsedMs < 0 || evidence.elapsedMs > SOURCE_NAVIGATION_LIMITS.timeoutMs) throw new Error('Source outcome identity or navigation budget mismatch');
 	safeTarget(evidence.requestedUrl, false);
 	let expected = documentRequestUrl(evidence.requestedUrl);
 	const visited = new Set<string>();
 	let declaration: RedirectDeclaration | undefined;
 	for (const response of evidence.responses) {
-		if (response.url !== expected || visited.has(expected) || !sameHttpSite(safeTarget(response.url, false).href, evidence.requestedUrl) || Buffer.byteLength(response.body) > SOURCE_NAVIGATION_LIMITS.bytes) throw new Error('Invalid source redirect response chain');
+		if (response.url !== expected || visited.has(expected) || !sameHttpSite(safeTarget(response.url, false).href, evidence.requestedUrl) || !routeInScope(response.url, evidence.routeScope) || Buffer.byteLength(response.body) > SOURCE_NAVIGATION_LIMITS.bytes) throw new Error('Invalid source redirect response chain');
 		visited.add(expected);
 		declaration = documentRedirect(response);
 		if (!declaration) throw new Error('Source outcome lacks a redirect declaration');
 		expected = documentRequestUrl(safeTarget(declaration.target, false).href);
-		if (!sameHttpSite(expected, evidence.requestedUrl) && response !== evidence.responses.at(-1)) throw new Error('Source evidence followed an external boundary');
+		if ((!sameHttpSite(expected, evidence.requestedUrl) || !routeInScope(expected, evidence.routeScope)) && response !== evidence.responses.at(-1)) throw new Error('Source evidence followed an external boundary');
 	}
-	if (!declaration || sameHttpSite(declaration.target, evidence.requestedUrl) || outcome.initialStatus !== evidence.responses[0]!.status ||
+	if (!declaration || (sameHttpSite(declaration.target, evidence.requestedUrl) && routeInScope(declaration.target, evidence.routeScope)) || outcome.initialStatus !== evidence.responses[0]!.status ||
 		outcome.mechanism !== declaration.mechanism || outcome.target.origin !== new URL(declaration.target).origin ||
 		outcome.target.sha256 !== navigationDigest(declaration.target) || JSON.stringify(evidence.declaration) !== JSON.stringify(declaration)) throw new Error('Source external boundary provenance mismatch');
 }
 
 /** The bounded unscheduled-link inspector uses the same response declarations and boundary policy. */
-export async function inspectSourceDocument(requestedUrl: string, acquire: (url: string, timeoutMs: number) => Promise<DocumentResponse>, publicUrlsOnly = false, timeoutMs: number = SOURCE_NAVIGATION_LIMITS.timeoutMs): Promise<{status: number; response?: DocumentResponse; finalUrl?: string; boundary?: BoundaryObservation; reload?: RedirectDeclaration}> {
+export async function inspectSourceDocument(requestedUrl: string, acquire: (url: string, timeoutMs: number) => Promise<DocumentResponse>, publicUrlsOnly = false, timeoutMs: number = SOURCE_NAVIGATION_LIMITS.timeoutMs, routeScope?: SiteRouteScope): Promise<{status: number; response?: DocumentResponse; finalUrl?: string; boundary?: BoundaryObservation; reload?: RedirectDeclaration}> {
 	const deadline = Date.now() + timeoutMs;
 	safeTarget(requestedUrl, publicUrlsOnly);
+	if (routeScope) validateRouteScope(routeScope);
+	if (!routeInScope(requestedUrl, routeScope)) throw new SourceNavigationError('Source document is outside its adapter route scope');
 	let current = documentRequestUrl(requestedUrl);
 	let finalUrl = requestedUrl;
 	const visited = new Set<string>();
@@ -166,7 +175,7 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
 		if (!declaration || declaration.reload) return {status: response.status, response, finalUrl, ...(declaration?.reload ? {reload: declaration} : {})};
 		responses.push(response);
 		const target = safeTarget(declaration.target, publicUrlsOnly);
-		if (!sameHttpSite(target.href, requestedUrl)) return {status: responses[0]!.status, boundary: {requestedUrl, responses, declaration, elapsedMs: Date.now() - (deadline - timeoutMs)}};
+		if (!sameHttpSite(target.href, requestedUrl) || !routeInScope(target.href, routeScope)) return {status: responses[0]!.status, boundary: {requestedUrl, responses, declaration, elapsedMs: Date.now() - (deadline - timeoutMs), ...(routeScope ? {routeScope} : {})}};
 		current = documentRequestUrl(target.href);
 		finalUrl = target.href;
 	}
@@ -181,7 +190,7 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * document, before any destination request, and are returned as evidence rather
  * than as portable HTML. Unknown script navigation is never classified as a redirect.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean} = {}): Promise<{response: Response | null; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope} = {}): Promise<{response: Response | null; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
@@ -203,7 +212,7 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 				const acquireResponse = async (current: string, timeout: number) => {
 					const acquired = await readSourceResponse(route, current, timeout); rendered = acquired.rendered; return acquired.response;
 				};
-				let inspected = await inspectSourceDocument(requestedUrl, acquireResponse, publicOnly, Math.max(1, deadline - Date.now()));
+				let inspected = await inspectSourceDocument(requestedUrl, acquireResponse, publicOnly, Math.max(1, deadline - Date.now()), options.routeScope);
 				// Settle imminent declared reloads before serialization. This uses
 				// the same bounded acquisition as reload recovery; it cannot turn a
 				// refreshed response into a redirect alias or an external outcome.
@@ -211,7 +220,7 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 				while (inspected.reload && inspected.reload.delayMs <= SOURCE_NAVIGATION_LIMITS.refreshDelayMs) {
 					if (reloads++ >= SOURCE_NAVIGATION_LIMITS.hops || Date.now() + inspected.reload.delayMs >= deadline) throw new SourceNavigationError('Source reload budget exhausted');
 					if (inspected.reload.delayMs) await new Promise(resolve => setTimeout(resolve, inspected.reload!.delayMs));
-					const refreshed = await inspectSourceDocument(inspected.finalUrl!, acquireResponse, publicOnly, Math.max(1, deadline - Date.now()));
+					const refreshed = await inspectSourceDocument(inspected.finalUrl!, acquireResponse, publicOnly, Math.max(1, deadline - Date.now()), options.routeScope);
 					if (refreshed.boundary || refreshed.finalUrl !== inspected.finalUrl) throw new SourceNavigationError('Source reload changed its document identity or response outcome');
 					inspected = refreshed;
 				}
@@ -220,7 +229,13 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 				finalUrl = inspected.finalUrl ?? requestedUrl;
 				const notHtml = inspected.response && inspected.status < 400 ? nonHtmlDocumentError(inspected.response.headers['content-type']) : undefined;
 				if (notHtml) throw new SourceNavigationError(notHtml);
-				if (inspected.response) redirectedTo = serverRedirectTarget(requestedUrl, finalUrl);
+				if (inspected.response) {
+					// Ordinary captures retain the requested route while final URL/base
+					// remain resource facts. An adapter-owned namespace additionally
+					// dedupes exact addresses only when this response chain proves an alias.
+					redirectedTo = options.routeScope && documentRequestUrl(requestedUrl) !== documentRequestUrl(finalUrl)
+						? finalUrl : serverRedirectTarget(requestedUrl, finalUrl);
+				}
 			}
 			delivered = true;
 			if (boundary) await route.fulfill({status: 200, contentType: 'text/html', body: '<!doctype html><title>Observed external boundary</title>'});

@@ -23,6 +23,7 @@ export function validateHttpCaptureOptions( options: CaptureOptions ): void {
 
 export async function captureHttpWebsite( input: {
 	options: CaptureOptions; sourceUrl: string; platform: Platform; urls: string[]; startedAt: number;
+	routeScope?: import('../platform/types.js').SiteRouteScope;
 	progress: ( progress: CaptureProgress ) => void; title?: string;
 	discoveryDiagnostics: Array<{ code: string; url: string; reason: string }>;
 } ): Promise<CaptureResult> {
@@ -34,7 +35,7 @@ export async function captureHttpWebsite( input: {
 	const inventory = [ ...new Set( input.urls ) ];
 	const urls = inventory.slice( 0, options.http?.routeLimit ?? inventory.length );
 	const acquisition = await acquireHttpDocuments( {
-		url: input.sourceUrl, urls, outputDir: options.outputDir, profile, collectAssets: true,
+		url: input.sourceUrl, urls, routeScope: input.routeScope, outputDir: options.outputDir, profile, collectAssets: true,
 		onProgress: ( current, total, document ) => progress( { phase: 'capturing', current, total, unit: 'documents', url: document.url } ),
 	} );
 	let runtime: { attachments: number; observations: number; failures: Array<{ url: string; error: string }> } | undefined;
@@ -44,7 +45,7 @@ export async function captureHttpWebsite( input: {
 		} ); } catch ( error ) { runtime = { attachments: 0, observations: 0, failures: [ { url: input.sourceUrl, error: `Runtime observation unavailable: ${ String( error ) }` } ] }; }
 	}
 	progress( { phase: 'finalizing', current: urls.length, total: urls.length, unit: 'routes' } );
-	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0 } );
+	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0 } );
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	const failures = acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => ( { url: document.url, error: `${ document.variant }: ${ document.error ?? document.status }` } ) );
 	if ( runtime ) failures.push( ...runtime.failures );
