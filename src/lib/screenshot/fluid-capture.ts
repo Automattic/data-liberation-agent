@@ -690,9 +690,17 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 					pixel( style.height ) === null ? null : element.parentElement?.clientHeight ];
 			} )
 		);
-		const content = () => JSON.stringify( [
-			document.getElementsByTagName( '*' ).length,
-			[ ...document.images ].map( image => [ image.currentSrc, image.src, image.getAttribute( 'srcset' ), image.getClientRects().length ] ) ] );
+		const imageIds = new WeakMap< HTMLImageElement, number >();
+		let nextImageId = 0;
+		const content = () => ( {
+			structure: JSON.stringify( [ document.getElementsByTagName( '*' ).length,
+				[ ...document.images ].map( image => {
+					if ( ! imageIds.has( image ) ) imageIds.set( image, nextImageId++ );
+					return [ imageIds.get( image ), image.getClientRects().length ];
+				} ) ] ),
+			sources: new Map( [ ...document.images ].map( image =>
+				[ image, JSON.stringify( [ image.currentSrc, image.src, image.getAttribute( 'srcset' ) ] ) ] ) ),
+		} );
 		const sweep = async () => {
 			// Absence of overflow is observed again at each width, never cached from
 			// a previous viewport. Arbitrary source observers cannot be proven absent,
@@ -715,12 +723,24 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 		while ( Date.now() < deadline ) {
 			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
 			const currentContent = content();
-			if ( lazy && ( currentContent !== sweptContent || document.documentElement.scrollHeight > sweptHeight ) ) {
+			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) => source !== sweptContent.sources.get( image ) );
+			if ( lazy && ( currentContent.structure !== sweptContent.structure ||
+				changedImages.some( ( [ image ] ) => ! image.complete ) || document.documentElement.scrollHeight > sweptHeight ) ) {
 				// Finite delayed resize/image work can introduce another offscreen
 				// tail after the first sweep. Observe it before declaring readiness.
 				sweptContent = currentContent;
 				await sweep();
 				sweptHeight = document.documentElement.scrollHeight;
+				quiet = 0;
+				previous = snapshot();
+				continue;
+			}
+			// An existing image's completed rendition is not an offscreen load
+			// waiting for another visit. Still restart at-top rest: its intrinsic
+			// size can change layout. Pending replacements, new/replaced nodes,
+			// revealed images and document growth retain the full sweep above.
+			sweptContent = currentContent;
+			if ( lazy && changedImages.length ) {
 				quiet = 0;
 				previous = snapshot();
 				continue;
