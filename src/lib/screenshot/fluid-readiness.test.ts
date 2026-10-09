@@ -53,7 +53,7 @@ describe( 'responsive readiness contract', () => {
 				setInterval(() => { box.style.color = ++tick % 2 ? 'red' : 'blue'; box.style.setProperty('--paint', String(tick)); }, 80);
 				</script>` );
 			const start = performance.now();
-			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 1200 } );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 200 } );
 			const elapsed = performance.now() - start;
 			console.info( JSON.stringify( { fixture: 'paint-only', elapsedMs: Math.round( elapsed ), result } ) );
 			expect( result.applied ).toBeGreaterThan( 0 );
@@ -88,7 +88,8 @@ describe( 'responsive readiness contract', () => {
 				});
 				</script>` );
 			const start = performance.now();
-			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 1200 } );
+			// The 450ms resize callback and delayed image complete inside this budget.
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 700 } );
 			console.info( JSON.stringify( { fixture: 'finite-lazy', elapsedMs: Math.round( performance.now() - start ) } ) );
 			expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 700 } );
@@ -116,7 +117,8 @@ describe( 'responsive readiness contract', () => {
 					}, 600);
 				});
 				</script>` );
-			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768 ], settleMs: 1200 } );
+			// The 600ms transform write must settle before the restored matrix is checked.
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768 ], settleMs: 700 } );
 			expect( await page.locator( '#box' ).evaluate( element => getComputedStyle( element ).transform ) ).toBe( 'matrix(2, 0, 0, 2, 144, 0)' );
 			expect( await page.locator( '#box' ).getAttribute( 'data-dla-fluid-id' ) ).toBeNull();
 		} finally { await page.close(); }
