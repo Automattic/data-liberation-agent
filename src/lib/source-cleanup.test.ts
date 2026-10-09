@@ -109,7 +109,7 @@ body{margin:0;font:16px Arial;padding-top:50px}#WIX_ADS{position:fixed;top:0;hei
 <script>
 if (!sessionStorage.getItem('reinit')) {
   sessionStorage.setItem('reinit', '1');
-  setTimeout(function () { location.reload(); }, 40);
+  setTimeout(function () { location.reload(); }, 500);
 }
 </script></body></html>`;
 
@@ -128,7 +128,7 @@ it('reinstalls cleanup when the source re-initializes its document after install
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(url);
     await applySourceCleanup(page, policy);
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(700);
     await expect(readSourceCleanup(page)).rejects.toThrow('Source cleanup evidence is missing');
     // With the policy in hand the read reinstalls on the re-initialized
     // document and its report says so — the chrome really is removed.
@@ -143,7 +143,7 @@ it('reinstalls cleanup when the source re-initializes its document after install
     const swept = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await swept.goto(url);
     await applySourceCleanup(swept, policy);
-    await swept.waitForTimeout(200);
+    await swept.waitForTimeout(700);
     await sweepSourceCleanup(swept);
     expect(await swept.locator('#WIX_ADS').count()).toBe(1);
     await sweepSourceCleanup(swept, policy);
