@@ -1566,12 +1566,23 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Some runtimes report an unlimited uint64 sentinel rather than zero.
 	// Only a representable byte budget is evidence of a usable constraint.
 	const memoryAdmission = Number.isSafeInteger( memoryLimit ) && memoryLimit > 0 && typeof process.availableMemory === 'function';
+	// Admission reserves memory per route, so it needs a per-route estimate:
+	// group growth above the idle floor (Node, Chromium and retained resources
+	// with no route running), divided across the routes active when sampled.
+	// The whole-group peak would count that floor and every concurrent route
+	// against each new route, throttling harder the more routes overlap.
 	let observedWorkingSet = 0;
+	let idleFloor: number | undefined;
+	let routeWorkingSet = 0;
+	let activeRoutes = 0;
 	let calibrated = false;
 	const sampleMemory = (): number => {
 		const available = process.availableMemory();
 		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
-		observedWorkingSet = Math.max( observedWorkingSet, memoryLimit - available );
+		const used = memoryLimit - available;
+		observedWorkingSet = Math.max( observedWorkingSet, used );
+		if ( activeRoutes === 0 ) idleFloor = used;
+		else if ( idleFloor !== undefined ) routeWorkingSet = Math.max( routeWorkingSet, ( used - idleFloor ) / activeRoutes );
 		return available;
 	};
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
@@ -2087,9 +2098,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					: waveEnd;
 				let cursor = segStart;
 				const running = new Set< Promise<void> >();
-				// Reserve the observed whole-group working set for routes whose peak
-				// may still be ahead. Even one unseen route can exceed the budget;
-				// this admits overlap, rather than enforcing a per-source byte cap.
+				// Reserve one observed per-route working set for every running route
+				// whose peak may still be ahead, plus the route being admitted. Even
+				// one unseen route can exceed the budget; this admits overlap, rather
+				// than enforcing a per-source byte cap.
 				const admit = (): boolean => {
 					if ( ! memoryAdmission ) return true;
 					const available = sampleMemory();
@@ -2097,15 +2109,16 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						if ( available === 0 ) throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` );
 						return true;
 					}
-					return calibrated && available >= ( running.size + 1 ) * observedWorkingSet;
+					return calibrated && available >= ( running.size + 1 ) * routeWorkingSet;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
 				try {
 					while ( cursor < segEnd || running.size ) {
 						while ( cursor < segEnd && running.size < concurrency && admit() ) {
 							const url = urls[ cursor++ ];
-							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, activeRoutes: running.size + 1, calibrated, url } ) }\n` );
-							const pending = processUrl( url ).then( () => {
+							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: Math.round( routeWorkingSet ), activeRoutes: running.size + 1, calibrated, url } ) }\n` );
+							activeRoutes++;
+							const pending = processUrl( url ).finally( () => { activeRoutes--; } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
 							running.add( pending );
