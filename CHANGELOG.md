@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.21.3] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- settle dialog content and scroll-state snapshots through settleDocument
+- share baseline-owned geometry predicates
+- one document readiness primitive with recorded outcomes
+
+### Fixed
+- settle gallery restore through shared readiness
+- share rendered text clip accounting
+
 ## [0.21.2] - 2026-10-09
 
 ### Changed
