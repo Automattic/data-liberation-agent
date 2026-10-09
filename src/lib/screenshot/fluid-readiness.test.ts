@@ -258,4 +258,33 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.locator( '#reachable' ).evaluate( image => ( image as HTMLImageElement ).complete ) ).toBe( true );
 		} finally { await page.close(); }
 	}, 30_000 );
+	it( 'does not resweep for a perpetual rotator that toggles already-loaded images within the swept extent', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.route( 'https://neutral.test/*.svg', route => route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"/>' } ) );
+			await page.setContent( `<style>body{margin:0}.slot img{width:40px;height:40px}</style>
+				<div id="box" style="width:720px;height:40px">Neutral text</div><div style="height:2400px"></div>
+				<div style="height:200px;overflow:hidden"><div class="slot">${ Array.from( { length: 12 }, ( _, index ) => `<img src="https://neutral.test/a${ index }.svg">` ).join( '' ) }</div><ul id="log"></ul></div>
+				<script>
+				const box = document.querySelector('#box');
+				function resize() { box.style.width = innerWidth / 2 + 'px'; }
+				addEventListener('resize', resize); resize();
+				const images = [ ...document.querySelectorAll('.slot img') ];
+				let tick = 0;
+				setInterval(() => {
+					tick++;
+					images.forEach((image, index) => { image.style.display = (index + tick) % 3 ? '' : 'none'; });
+					document.querySelector('#log').append(document.createElement('li'));
+				}, 200);
+				</script>` );
+			await page.waitForFunction( () => [ ...document.images ].every( image => image.complete ) );
+			const start = performance.now();
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 800 } );
+			const elapsed = performance.now() - start;
+			console.info( JSON.stringify( { fixture: 'perpetual-rotator', elapsedMs: Math.round( elapsed ), result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			// Each width rests in ~1.3 s; a resweep every rotation spends the 4.3 s deadline.
+			expect( elapsed ).toBeLessThan( 9_000 );
+		} finally { await page.close(); }
+	}, 40_000 );
 } );
