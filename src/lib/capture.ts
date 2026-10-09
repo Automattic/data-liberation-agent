@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { load as loadHtml } from 'cheerio';
 import { findAdapter } from '../adapters/index.js';
 import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
@@ -9,6 +10,15 @@ import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
+
+interface GalleryFrameManifest {
+	entries?: Record< string, {
+		interactions?: { states?: Array< { gallery?: {
+			inline?: { frames?: Array< { html?: string } > };
+			lightbox?: { frames?: Array< { html?: string } > };
+		} } > };
+	} >;
+}
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -124,6 +134,29 @@ export async function downloadCaptureSectionMedia(
 						// Invalid media URLs are dropped by downloadSectionMedia.
 					}
 					sectionUrls.push( mediaUrl );
+				}
+			}
+		}
+	}
+	const manifestPath = join( outputDir, 'screenshots', 'manifest.json' );
+	if ( existsSync( manifestPath ) ) {
+		const manifest = JSON.parse( readFileSync( manifestPath, 'utf8' ) ) as GalleryFrameManifest;
+		for ( const [ pageUrl, entry ] of Object.entries( manifest.entries ?? {} ) ) {
+			for ( const state of entry.interactions?.states ?? [] ) {
+				for ( const gallery of [ state.gallery?.inline, state.gallery?.lightbox ] ) {
+					for ( const frame of gallery?.frames ?? [] ) {
+						if ( ! frame.html ) continue;
+						const $ = loadHtml( frame.html );
+						$( 'img[src],source[src],img[srcset],source[srcset]' ).each( ( _, element ) => {
+							const image = $( element );
+							for ( const value of [ image.attr( 'src' ), image.attr( 'srcset' )?.split( ',' ).map( candidate => candidate.trim().split( /\s+/ )[ 0 ] ).join( ' ' ) ] ) {
+								if ( ! value ) continue;
+								for ( const candidate of value.split( /\s+/ ) ) {
+									try { sectionUrls.push( new URL( candidate, pageUrl ).href ); } catch { /* Invalid references are filtered by the downloader. */ }
+								}
+							}
+						} );
+					}
 				}
 			}
 		}

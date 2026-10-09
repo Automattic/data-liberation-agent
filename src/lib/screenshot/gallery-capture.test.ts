@@ -24,6 +24,19 @@ document.querySelector('[aria-label="Next image"]').onclick=()=>{current=(curren
 document.querySelectorAll('#stage [role=img]').forEach((node,i)=>node.onclick=()=>{large=i;show(document.getElementById('large'),large,'large-count');document.getElementById('overlay').classList.add('visible');});
 document.querySelector('[aria-label="Next slide"]').onclick=()=>{large=(large+1)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Previous slide"]').onclick=()=>{large=(large+2)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Close gallery"]').onclick=()=>document.getElementById('overlay').classList.remove('visible');</script></body></html>`;
 
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('captures a bounded src-swap cycle in order', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		const colors = ['red', 'green', 'blue'];
+		await page.setContent(`<!doctype html><section id="swap"><div aria-label="Image gallery carousel"><div id="stage">${colors.slice(0, 3).map((_, i) => `<img src="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"><rect width="30" height="30" fill="${colors[i]}"/></svg>`)}">`).join('')}</div></div><button aria-label="Previous image">Previous</button><button aria-label="Next image">Next</button></section><script>let n=0;const urls=[...document.querySelectorAll('#stage img')].map(x=>x.src);function update(){document.querySelectorAll('#stage img').forEach((x,i)=>x.src=urls[(n+i)%3])}document.querySelector('[aria-label="Next image"]').onclick=()=>{n=(n+1)%3;update()};document.querySelector('[aria-label="Previous image"]').onclick=()=>{n=(n+2)%3;update()}</script>`);
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline.coverage).toBe('complete');
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+	} finally { await browser.close(); }
+});
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'replays observed cycles and image-opened galleries offline at phone, tablet and desktop widths',
 	async () => {

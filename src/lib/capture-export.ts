@@ -1390,6 +1390,32 @@ function buildExportCapture(
 			}
 		} )
 	);
+	const interactionMediaFamilies = new Set< string >();
+	const interactionMediaReferences = new Map< string, Set< string > >();
+	for ( const entry of retainedEntries ) {
+		for ( const state of entry.interactions?.states ?? [] ) {
+			for ( const gallery of [ state.gallery?.inline, state.gallery?.lightbox ] ) {
+				for ( const frame of gallery?.frames ?? [] ) {
+					const $ = cheerio.load( frame.html );
+					$( 'img[src],source[src],img[srcset],source[srcset]' ).each( ( _, element ) => {
+						for ( const reference of [ $( element ).attr( 'src' ), $( element ).attr( 'srcset' ) ] ) {
+							if ( ! reference ) continue;
+							for ( const value of reference.split( /[,\s]+/ ) ) {
+								try {
+									const absolute = new URL( value, entry.url ).href;
+									const family = mediaFamily( absolute );
+									interactionMediaFamilies.add( family );
+									const references = interactionMediaReferences.get( family ) ?? new Set< string >();
+									references.add( absolute );
+									interactionMediaReferences.set( family, references );
+								} catch { /* Ignore non-URL values. */ }
+							}
+						}
+					} );
+				}
+			}
+		}
+	}
 	const probeReferences: string[] = [];
 	const seenProbeReferences = new Set< string >();
 	for ( const [ sourceUrl ] of mediaStubs.list() ) {
@@ -1419,7 +1445,7 @@ function buildExportCapture(
 		const exactReferences = references.filter( ( reference ) =>
 			mediaReferenceMatched( referenceIndex, reference )
 		);
-		const isReferenced = retainedMediaFamilies.has( family ) || exactReferences.length > 0;
+		const isReferenced = retainedMediaFamilies.has( family ) || interactionMediaFamilies.has( family ) || exactReferences.length > 0;
 		if ( stub.status === 'error' && isReferenced ) {
 			failedMedia.push( { family, sourceUrl, error: stub.error ?? 'media download failed', references } );
 			continue;
@@ -1437,7 +1463,7 @@ function buildExportCapture(
 			references: [
 				...new Set( [ ...references, ...( renderedMediaReferences.get( family ) ?? [] ) ] ),
 			],
-			exactReferences,
+				exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
 			bytes: statSync( stub.localPath ).size,
 			dimension: mediaDimension( sourceUrl ),
 		};
@@ -1449,9 +1475,13 @@ function buildExportCapture(
 		portableMediaBudget,
 		entrypointEntry.htmlPath,
 	);
+	const retainedReferences = new Map( retainedMediaFamilies );
+	for ( const [ family, references ] of interactionMediaReferences ) {
+		retainedReferences.set( family, [ ...new Set( [ ...( retainedReferences.get( family ) ?? [] ), ...references ] ) ] );
+	}
 	const mediaStage = materializePortableMedia( {
 		websiteDir, plan: portableMediaPlan, maxBytes: portableMediaBudget,
-		retainedReferences: retainedMediaFamilies, failedMedia,
+		retainedReferences, failedMedia,
 	} );
 	let { mediaReplacements, portablePathsBySource } = mediaStage;
 	const { portableUrlByFamily, assetPathsByHash, assetHashesByPath, assets, unresolvedMedia, portableMedia } = mediaStage;
