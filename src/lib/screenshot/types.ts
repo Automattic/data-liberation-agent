@@ -1,4 +1,3 @@
-import type { ExtractedNav } from './nav-extract.js';
 import type { UrlType } from '../extraction/sitemap.js';
 import type { CaptureProfile } from './capture-profiles.js';
 
@@ -61,18 +60,6 @@ export interface ScreenshotOpts {
 	/** Reject non-public requests and redirect targets during browser capture. */
 	publicUrlsOnly?: boolean;
 	/**
-	 * Capture design fragment + CSS/JS aggregates for page/post archetypes.
-	 * Default: false. When true, writes design/<slug>.fragment.html and
-	 * accumulates site.css (and site.js when includeScripts=true) in outputDir.
-	 */
-	captureDesign?: boolean;
-	/**
-	 * Include first-party and allowlisted-CDN scripts in the JS aggregate.
-	 * Only effective when captureDesign=true. Default: false.
-	 * Full flag plumbing is Task 12; for now this opts into script capture.
-	 */
-	includeScripts?: boolean;
-	/**
 	 * Per-URL progress callback. Fired after each URL finishes (success,
 	 * fail, or skip). `current` is the count of completed URLs (1-indexed),
 	 * `total` is the total to capture. Used by the watch TUI so the
@@ -127,41 +114,4 @@ export interface ScreenshotResult {
 	/** Every URL processed, including redirect targets queued during capture. */
 	urls: string[];
 	linkedPageCoverage?: import('./linked-frontier.js').LinkedPageCoverage;
-	/** Absolute path to site.css when captureDesign=true and at least one page/post was captured. */
-	siteCssPath?: string;
-	/** CSS media URLs discovered across all captured page/post CSS. */
-	cssMediaUrls?: string[];
-	/**
-	 * Deduplicated <link> hrefs collected from all captured page <head> elements
-	 * during design capture (fonts, preconnects, etc.). Empty array when
-	 * captureDesign=false.
-	 */
-	headLinks?: string[];
-	/**
-	 * Aggregated first-party JS text from JsAggregator.toString() when
-	 * includeScripts=true and at least one script was collected. Undefined when
-	 * includeScripts=false or no first-party scripts were found.
-	 */
-	siteJsText?: string;
-	/**
-	 * Structured nav data extracted from the first captured page that yielded a
-	 * detectable header element. Replaces the old headerHtml field. Used to
-	 * generate a native WP Navigation block header (responsive hamburger).
-	 * Undefined when captureDesign=false or no header was detected.
-	 */
-	nav?: ExtractedNav;
-	/**
-	 * Sanitized site footer HTML extracted from the first captured page that
-	 * yielded a detectable footer element. Undefined when captureDesign=false or
-	 * no footer was detected across any captured page.
-	 */
-	footerHtml?: string;
-	/**
-	 * Responsive chrome CSS generated from dual-viewport (desktop + mobile) baked
-	 * layout maps. Uses `@media (min-width: 768px)` for desktop rules and
-	 * `@media (max-width: 767px)` for mobile rules keyed on `.dla-fx-N` marker
-	 * classes. Undefined when captureDesign=false, no chrome was detected, or only
-	 * desktop layout was available (falls back to desktop-only rules).
-	 */
-	chromeCssText?: string;
 }
