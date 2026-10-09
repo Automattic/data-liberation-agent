@@ -133,6 +133,36 @@ it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into na
 
 describe( 'captureTriggeredDialogs', () => {
 	it.skipIf( skipBrowserTests )(
+		'restores a language toggle that a probe click switched so later states stay in the source language',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><body>
+					<nav><div id="lang"><button id="en" type="button">EN</button><span>|</span><button id="es" type="button">ES</button></div></nav>
+					<main><h1 id="title">Welcome</h1><p id="copy">English copy.</p></main>
+					<script>
+						const text = { en: ['Welcome', 'English copy.'], es: ['Bienvenido', 'Texto en espanol.'] };
+						const set = (lang) => {
+							document.documentElement.lang = lang;
+							document.getElementById('title').textContent = text[lang][0];
+							document.getElementById('copy').textContent = text[lang][1];
+						};
+						document.getElementById('en').addEventListener('click', () => set('en'));
+						document.getElementById('es').addEventListener('click', () => set('es'));
+						set('en');
+					</script>
+				</body>` );
+				await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( await page.locator( '#title' ).textContent() ).toBe( 'Welcome' );
+				expect( await page.locator( '#copy' ).textContent() ).toBe( 'English copy.' );
+			} finally {
+				await browser.close();
+			}
+		}
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'captures initially visible dialogs with verified native dismissal and bounds probes',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );

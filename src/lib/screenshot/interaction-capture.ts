@@ -433,6 +433,7 @@ export async function captureTriggeredDialogs(
 					continue;
 				}
 			}
+			const pageBefore = await pageStateFingerprint( page );
 			let before: string[] = [];
 			try {
 				await activateTrigger( page, trigger.probeSelector, async () => {
@@ -466,6 +467,7 @@ export async function captureTriggeredDialogs(
 			if ( ! dialog ) {
 				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
 				await page.keyboard.press( 'Escape' ).catch( () => undefined );
+				await restoreToggledPageState( page, trigger.probeSelector, pageBefore );
 				if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 				continue;
 			}
@@ -541,6 +543,48 @@ export async function captureTriggeredDialogs(
 		states,
 		...( initialDialogs.length > 0 ? { initialDialogs } : {} ),
 	};
+}
+
+/**
+ * Text and language of the rendered page. A probe that opens no dialog but
+ * changes this has flipped a page-wide preference (a language or unit toggle).
+ */
+async function pageStateFingerprint( page: Page ): Promise< string > {
+	return page
+		.evaluate( () => `${ document.documentElement.lang }\n${ document.body.innerText.replace( /\s+/g, ' ' ).trim() }` )
+		.catch( () => '' );
+}
+
+/**
+ * A probe click can flip a persistent page preference, such as an EN/ES
+ * language toggle. Later probes and tab/panel capture would then record the
+ * wrong variant. When a no-dialog probe changed the page, click the sibling
+ * controls of the same group until the original page state is back.
+ */
+async function restoreToggledPageState( page: Page, probeSelector: string, before: string ): Promise< void > {
+	if ( ! before ) return;
+	await page.waitForTimeout( 150 );
+	if ( ( await pageStateFingerprint( page ) ) === before ) return;
+	const count = await page.evaluate( selector => {
+		const trigger = ( globalThis as typeof globalThis & { __dlaProbeTriggers?: Map< string, Element > } ).__dlaProbeTriggers?.get( selector ) ?? document.querySelector( selector );
+		for ( const element of document.querySelectorAll( '[data-lib-restore-sibling]' ) ) element.removeAttribute( 'data-lib-restore-sibling' );
+		const siblings = Array.from( trigger?.parentElement?.children ?? [] ).filter(
+			sibling => sibling !== trigger && ( sibling.tagName === 'BUTTON' || sibling.getAttribute( 'role' ) === 'button' )
+		);
+		siblings.forEach( ( sibling, index ) => sibling.setAttribute( 'data-lib-restore-sibling', String( index ) ) );
+		return siblings.length;
+	}, probeSelector ).catch( () => 0 );
+	try {
+		for ( let index = 0; index < count; index++ ) {
+			await page.locator( `[data-lib-restore-sibling="${ index }"]` ).first().click( { timeout: 1_000 } ).catch( () => undefined );
+			await page.waitForTimeout( 150 );
+			if ( ( await pageStateFingerprint( page ) ) === before ) return;
+		}
+	} finally {
+		await page.evaluate( () => {
+			for ( const element of document.querySelectorAll( '[data-lib-restore-sibling]' ) ) element.removeAttribute( 'data-lib-restore-sibling' );
+		} ).catch( () => undefined );
+	}
 }
 
 async function restoreExpandedTrigger( page: Page, selector: string ): Promise< void > {
