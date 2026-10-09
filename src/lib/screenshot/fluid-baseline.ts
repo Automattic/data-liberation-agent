@@ -3,6 +3,32 @@ import type { Page } from 'playwright';
 /** Capture-owned geometry belongs to a document role, not to a copied DOM id. */
 export function captureFluidBaseline( page: Page, attribute: string ) {
 	return page.evaluateHandle( attribute => {
+		const pixel = ( value: string ) => /^-?\d+(?:\.\d+)?px$/.test( value.trim() ) ? Number.parseFloat( value ) : null;
+		const elements = () => [ ...document.querySelectorAll<HTMLElement>( `[${ attribute }]` ) ];
+		const element = ( id: string ) => document.querySelector<HTMLElement>( `[${ attribute }="${ id }"]` );
+		const pureXTranslation = ( transform: string ) => {
+			const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
+			if ( matrix && matrix.length === 6 && matrix.every( Number.isFinite ) &&
+				Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 1 ]! ) <= 0.01 &&
+				Math.abs( matrix[ 2 ]! ) <= 0.01 && Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 5 ]! ) <= 0.01 ) return matrix[ 4 ]!;
+			const translated = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform );
+			return translated ? Number( translated[ 1 ] ) : null;
+		};
+		// Keep both views: measurement interprets literal source declarations,
+		// while tagging/rest read CSSOM and rest retains the whole transform.
+		const readGeometry = ( node: HTMLElement ) => {
+			const literal = node.getAttribute( 'style' ) ?? '';
+			const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( literal )?.[ 1 ]?.trim();
+			const position = getComputedStyle( node ).position;
+			const inset = position === 'absolute' ? /(?:^|;)\s*inset\s*:\s*(-?\d+(?:\.\d+)?)px\s+auto\s+auto\s+(-?\d+(?:\.\d+)?)px\s*(?:;|$)/.exec( literal ) : null;
+			return { literal, style: node.style, position, parent: node.parentElement,
+				inset: inset ? { top: Number( inset[ 1 ] ), left: Number( inset[ 2 ] ) } : null,
+				translation: transform ? pureXTranslation( transform ) : null };
+		};
+		const translation = ( id: string ) => {
+			const node = element( id );
+			return node ? readGeometry( node ).translation : null;
+		};
 		interface Role {
 			element: Element;
 			style: string | null;
@@ -78,7 +104,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			for ( const role of roles ) role.current = undefined;
 			walk( root, document.documentElement, restore, matched, unlearnedOnly );
 			// An unproven new role cannot participate under an identity it copied.
-			for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) {
+			for ( const element of elements() ) {
 				if ( ! matched.has( element ) ) element.removeAttribute( attribute );
 			}
 		};
@@ -88,6 +114,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			...['aria-hidden', 'aria-expanded'].map( key => JSON.stringify( element.getAttribute( key ) ) ),
 		];
 		return {
+			pixel, elements, element, readGeometry, translation,
 			bind: () => { for ( const role of roles ) role.identity = role.element.getAttribute( attribute ); },
 			reconcile: () => project( false ),
 			restore: ( unlearnedOnly = false ) => project( true, unlearnedOnly ),
@@ -140,7 +167,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			cleanup: () => {
 				marking = false;
 				for ( const role of roles ) role.element.removeAttribute( attribute );
-				for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) element.removeAttribute( attribute );
+				for ( const element of elements() ) element.removeAttribute( attribute );
 			},
 		};
 	}, attribute );

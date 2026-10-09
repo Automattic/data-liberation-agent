@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
-import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 	let browser: Browser;
@@ -12,6 +13,92 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	afterAll( async () => {
 		await browser.close();
 	} );
+
+	it( 'preserves literal measurements, normalized rest and learned output across the full geometry ladder', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		const learner = process.env.DLA_FLUID_BASELINE ? ( await import( process.env.DLA_FLUID_BASELINE ) ).learnAndApplyFluidGeometry as typeof learnAndApplyFluidGeometry : learnAndApplyFluidGeometry;
+		try {
+			await page.setContent( `<style>body{margin:0}#parent{width:80vw;height:200px}#item{position:relative}#custom{width:var(--size)}</style>
+				<div id="parent"><div id="item" style="width:720px;height:80px;font-size:20px;padding-top:40px;left:144px;transform:matrix(1,0,0,1,144,0)">Geometry</div></div>
+				<div id="inset" style="position:absolute;inset:10px auto auto 20px">Inset</div>
+				<div id="literal" style="position:absolute;width:.5px;height:12px!important;FONT-SIZE:20px;--literal:4px!important;inset:2px auto auto 3px!important;transform:translateX(7px)!important">Literal</div>
+				<h1 id="island" style="font-size:20px">Narrow island</h1><div id="custom" style="--size:432px">Custom</div>
+				<script>const update=()=>{
+					let item=document.querySelector('#item');if(innerWidth===783&&!item.hasAttribute('data-replaced')){const next=item.cloneNode(true);next.setAttribute('data-replaced','');item.replaceWith(next);item=next;}
+					item.style.width=innerWidth/2+'px';item.style.height=innerWidth/10+'px';item.style.fontSize=Math.min(40,Math.max(20,innerWidth/40))+'px';item.style.paddingTop=innerWidth/20+5+'px';item.style.left=innerWidth/10+'px';item.style.transform='matrix(1,0,0,1,'+innerWidth/10+',0)';
+					document.querySelector('#inset').style.inset=innerWidth/20+'px auto auto '+innerWidth/10+'px';
+					document.querySelector('#island').style.fontSize=innerWidth>=775&&innerWidth<799?'100px':'20px';
+					document.querySelector('#custom').style.setProperty('--size',innerWidth<800?'calc(20px + 2vw)':innerWidth*.3+'px');
+				};addEventListener('resize',update);update();</script>` );
+			// Observe the actual renderer snapshot bytes without moving rest polling
+			// to Node or storing instrumentation on the source's window.
+			const rest = await page.evaluateHandle( () => {
+				const serialize = JSON.stringify;
+				const snapshots: { width: number; json: string }[] = [];
+				JSON.stringify = ( value, replacer, space ) => {
+					const json: string = Reflect.apply( serialize, JSON, [ value, replacer, space ] );
+					if ( Array.isArray( value ) && value.length && value.every( row => Array.isArray( row ) && row.length === 9 && typeof row[ 0 ] === 'string' && row[ 0 ].startsWith( 'desktop-' ) ) ) {
+					const previous = snapshots.at( -1 );
+						if ( previous?.width === innerWidth ) previous.json = json;
+						else snapshots.push( { width: innerWidth, json } );
+					}
+					return json;
+				};
+				return { read: () => snapshots, cleanup: () => { JSON.stringify = serialize; } };
+			} );
+			const measurements: unknown[] = [];
+			let rendererEvaluations = 0;
+			const handles = { created: 0, disposed: 0 };
+			const record = ( result: unknown ) => {
+				if ( Array.isArray( result ) && result.length && result.every( entry => entry && typeof entry === 'object' && 'values' in entry && 'containers' in entry && 'relative' in entry ) ) measurements.push( result );
+			};
+			const evaluate = page.evaluate.bind( page );
+			const evaluateHandle = page.evaluateHandle.bind( page );
+			vi.spyOn( page, 'evaluate' ).mockImplementation( async ( callback, arg ) => { rendererEvaluations++; const result = await evaluate( callback, arg ); record( result ); return result; } );
+			vi.spyOn( page, 'evaluateHandle' ).mockImplementation( async ( callback, arg ) => {
+				const handle = await evaluateHandle( callback, arg );
+				handles.created++;
+				const evaluate = handle.evaluate.bind( handle );
+				vi.spyOn( handle, 'evaluate' ).mockImplementation( async ( callback, arg ) => { rendererEvaluations++; const result = await evaluate( callback, arg ); record( result ); return result; } );
+				const dispose = handle.dispose.bind( handle );
+				vi.spyOn( handle, 'dispose' ).mockImplementation( async () => { await dispose(); handles.disposed++; } );
+				return handle;
+			} );
+			const widths: number[] = [];
+			const result = await learner( page, { document: 'desktop', settleMs: 10, learnRelativeOffsets: true, onProgress: width => widths.push( width ) } );
+			const learningEvaluations = rendererEvaluations;
+			const snapshots = await rest.evaluate( state => state.read() );
+			await rest.evaluate( state => state.cleanup() ); await rest.dispose();
+			expect( widths ).toEqual( DEFAULT_SWEEP_WIDTHS );
+			expect( measurements ).toHaveLength( 17 );
+			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...DEFAULT_SWEEP_WIDTHS, 1440 ] );
+			const first = measurements[ 0 ] as Array<{ id: string; values: Record<string, number | null> }>;
+			expect( first.find( entry => entry.id === 'desktop-2' )!.values ).toMatchObject( { width: null, height: 12, 'font-size': null, 'transform-x': null, 'inset-top': null, '--literal': 4 } );
+			const literalRest = JSON.parse( snapshots[ 0 ]!.json ).find( ( row: unknown[] ) => row[ 0 ] === 'desktop-2' );
+			expect( literalRest[ 1 ].slice( 0, 3 ) ).toEqual( [ 0.5, 12, 20 ] );
+			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
+			expect( handles ).toEqual( { created: 1, disposed: 1 } );
+			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '#item[data-replaced]' ).count() ).toBe( 1 );
+			const css = await page.locator( 'style[data-dla-fluid-rules]' ).allTextContents();
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			const html = await page.content(); await copy.setContent( html );
+			const geometry: unknown[] = [];
+			for ( const width of [ ...DEFAULT_SWEEP_WIDTHS, 786 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				geometry.push( await copy.locator( '#item,#inset,#literal,#island,#custom' ).evaluateAll( nodes => nodes.map( node => {
+					const rect = node.getBoundingClientRect(), style = getComputedStyle( node );
+					return { id: node.id, x: rect.x, y: rect.y, width: rect.width, height: rect.height, fontSize: style.fontSize, paddingTop: style.paddingTop, transform: style.transform };
+				} ) ) );
+			}
+			expect( await copy.locator( '#island' ).evaluate( node => getComputedStyle( node ).fontSize ) ).toBe( '100px' );
+			if ( process.env.DLA_FLUID_EVIDENCE ) {
+				mkdirSync( process.env.DLA_FLUID_EVIDENCE, { recursive: true } );
+				writeFileSync( `${ process.env.DLA_FLUID_EVIDENCE }/geometry.json`, JSON.stringify( { widths, learningEvaluations, handles, measurements, snapshots, result, css, html, geometry }, null, 2 ) );
+			}
+		} finally { vi.restoreAllMocks(); await page.close(); await copy.close(); }
+	}, 60_000 );
 
 	it.each( [ false, true ] )( 'preserves non-relative left declarations with relative-offset learning (other geometry: %s)', async otherGeometry => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
