@@ -40,6 +40,49 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 20_000 );
 
+	it.each( [ 'source', 'node' ] )( 'revisits a pending native-lazy image after a delayed %s replacement', async replacement => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 500 } } );
+		try {
+			await page.route( 'https://neutral.test/replacement.svg', async route => {
+				await new Promise( resolve => setTimeout( resolve, 1500 ) );
+				await route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"/>' } );
+			} );
+			await page.setContent( `<style>body{margin:0}</style>
+				<div id="box" style="width:720px;height:40px">Neutral text</div>
+				<div style="height:3500px"></div>
+				<img id="image" loading="lazy" width="40" height="40" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'/%3E">
+				<script>
+				window.positions = [];
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top > 0) positions.push(options.top); scroll(options); };
+				addEventListener('resize', () => {
+					document.querySelector('#box').style.width = innerWidth / 2 + 'px';
+					if (innerWidth !== 768) return;
+					setTimeout(() => {
+						const image = document.querySelector('#image');
+						${ replacement === 'node' ? "const next = image.cloneNode(); next.src = 'https://neutral.test/replacement.svg'; image.replaceWith(next);" : "image.src = 'https://neutral.test/replacement.svg';" }
+					}, 100);
+				});
+				</script>` );
+			await learnAndApplyFluidGeometry( page, {
+				widths: [ 768 ], settleMs: 1200,
+				prepareViewport: async source => {
+					const observed = await source.evaluate( () => ({
+						positions: (window as unknown as {positions: number[]}).positions,
+						height: document.documentElement.scrollHeight,
+						viewport: innerHeight,
+						ready: [...document.images].every(image => image.complete && image.naturalWidth === 40),
+						top: scrollY,
+					}) );
+					expect( observed.ready ).toBe( true );
+					expect( observed.top ).toBe( 0 );
+					expect( observed.positions.length ).toBeGreaterThanOrEqual( 2 * (Math.ceil( observed.height / observed.viewport ) - 1) );
+				},
+			} );
+			expect( await page.locator( '#image' ).getAttribute( 'src' ) ).toBe( 'https://neutral.test/replacement.svg' );
+		} finally { await page.close(); }
+	}, 20_000 );
+
 	it( 'ignores perpetual paint-only writes without spending the rest deadline', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
@@ -100,6 +143,48 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
+
+	it( 'does not repeat a completed sweep solely because an existing image finished changing rendition', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 500 } } );
+		try {
+			await page.setContent( `<style>body{margin:0}</style>
+				<div id="box" style="width:720px;height:40px">Neutral text <a href="#tail">Tail</a></div>
+				<img id="image" width="40" height="40" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'/%3E">
+				<div id="tail" style="height:3500px"></div>
+				<script>
+				window.positions = [];
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top > 0) positions.push(options.top); scroll(options); };
+				addEventListener('resize', () => {
+					document.querySelector('#box').style.width = innerWidth / 2 + 'px';
+					setTimeout(() => { document.querySelector('#image').src += '#loaded-' + innerWidth; }, 100);
+				});
+				</script>` );
+			await waitForImages( page );
+			await learnAndApplyFluidGeometry( page, {
+				widths: [ 768 ], settleMs: 1200,
+				prepareViewport: async source => {
+					const observed = await source.evaluate( () => ({
+						positions: (window as unknown as {positions: number[]}).positions,
+						height: document.documentElement.scrollHeight,
+						viewport: innerHeight,
+						ready: [...document.images].every(image => image.complete && image.naturalWidth > 0),
+						top: scrollY,
+					}) );
+					expect( observed.ready ).toBe( true );
+					expect( observed.top ).toBe( 0 );
+					// Every viewport is still visited; a completed rendition is not a
+					// newly unreachable lazy target requiring the same visits twice.
+					expect( observed.positions ).toEqual( Array.from(
+						{ length: Math.ceil( observed.height / observed.viewport ) - 1 },
+						(_, index) => (index + 1) * observed.viewport,
+					) );
+				},
+			} );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+			expect( await page.locator( 'a' ).getAttribute( 'href' ) ).toBe( '#tail' );
+		} finally { await page.close(); }
+	}, 20_000 );
 
 	it( 'waits for genuine delayed transform changes and validates the restored matrix', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
