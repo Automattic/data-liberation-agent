@@ -896,7 +896,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	await applySourceCleanup(page, sourcePolicy);
 
 	// --- settle, dismiss overlays, lazy load ----------------------------------
-	await waitForStable( page, settleMs );
+	await waitForStable( page );
 	// A provider login withholding the whole route (a members-only page) was
 	// removed by the policy, leaving nothing of the page. Capture it as a
 	// placeholder inside the site's public shell instead (see access-gate.ts).
@@ -917,7 +917,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 		if ( shell ) {
 			await applySourceCleanup( page, sourcePolicy );
-			await waitForStable( page, settleMs );
+			await waitForStable( page );
 		}
 		accessGate = { ...gate, ...( shell ? { shell } : {} ) };
 		const placed = await page.evaluate( installAccessGatePlaceholder, {

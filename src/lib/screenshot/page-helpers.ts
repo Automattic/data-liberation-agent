@@ -8,8 +8,8 @@ const EVALUATE_GRACE_MS = 5_000;
 /**
  * Wait for a page to reach a stable state after load.
  *
- *   goto('load') ─▶ settleMs ─▶ networkidle best-effort (5s) ─▶ fonts.ready (4s)
- *     ─▶ DOM quiescence, bounded (5s) ─▶ declared loading state, if any ─▶ done
+ *   goto('load') ─▶ networkidle + DOM quiescence concurrently ─▶ fonts.ready (4s)
+ *     ─▶ declared loading state, if any ─▶ done
  *
  * Networkidle is wrapped in try/catch because chatty analytics (GA, Intercom)
  * can hold it open indefinitely; we don't want that to block capture.
@@ -43,20 +43,16 @@ const EVALUATE_GRACE_MS = 5_000;
  */
 export async function waitForStable(
   page: Page,
-  settleMs: number = 1000,
   domTimeoutMs: number = 5_000,
 ): Promise<void> {
   await page.waitForLoadState('load');
-  if (settleMs > 0) {
-    await new Promise((r) => setTimeout(r, settleMs));
-  }
-  try {
-    await page.waitForLoadState('networkidle', { timeout: 5_000 });
-  } catch {
-    /* best-effort — analytics can keep network busy forever */
-  }
+  await Promise.all([
+    page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {
+      /* best-effort — analytics can keep network busy forever */
+    }),
+    waitForDomQuiescence(page, 500, domTimeoutMs),
+  ]);
   await waitForFonts(page);
-  await waitForDomQuiescence(page, 500, domTimeoutMs);
   await waitForDeclaredLoadingState(page);
 }
 

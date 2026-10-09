@@ -3305,7 +3305,7 @@ export async function extractFullFromSavedHtml(
       return route.continue();
     });
     await page.goto(docUrl, { waitUntil: 'load', timeout: 30_000 });
-    await waitForStable(page, opts.settleMs ?? 500);
+    await waitForStable(page);
     await triggerLazyLoad(page);
     return await extractFull(page, mediaMap, opts.timeoutMs ?? 15_000);
   } finally {
@@ -3351,7 +3351,7 @@ export async function extractFullFromUrl(
   try {
     const page = await context.newPage();
     await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
-    await waitForStable(page, opts.settleMs ?? 1_000);
+    await waitForStable(page);
     await triggerLazyLoad(page);
     return await extractFull(page, mediaMap, opts.timeoutMs ?? 15_000);
   } finally {

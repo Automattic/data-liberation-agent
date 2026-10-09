@@ -11,6 +11,8 @@ export const SELECTABLE_SET_LIMITS = {
 	maxDriveMs: 30_000,
 	maxHtmlBytes: 512 * 1024,
 	settleMs: 500,
+	quietMs: 150,
+	busyMs: 2_500,
 	maxCandidateScan: 1_500,
 	maxPointerCandidates: 80,
 	maxProbeGroups: 9,
@@ -101,6 +103,8 @@ export async function captureSelectableSetStates(
 				maxMembers: number;
 				maxDriveMs: number;
 				settleMs: number;
+				quietMs: number;
+				busyMs: number;
 				maxCandidateScan: number;
 				maxPointerCandidates: number;
 				maxProbeGroups: number;
@@ -383,16 +387,47 @@ export async function captureSelectableSetStates(
 						event.target instanceof Element ? event.target.closest( 'a[href]' ) : null;
 					if ( anchor && isNavigable( anchor ) ) event.preventDefault();
 				};
+				// An activation has settled once the document has been quiet for a short
+				// window after its last mutation. Observation starts before the click so
+				// synchronous handlers count. A click that mutates nothing keeps the full
+				// settle window, so late asynchronous responses are still observed;
+				// callers that compare regions keep their own bounded change polling.
+				const observeSettle = () => {
+					const started = Date.now();
+					let lastMutation = 0;
+					const observer = new MutationObserver( () => { lastMutation = Date.now(); } );
+					observer.observe( document, { subtree: true, childList: true, attributes: true, characterData: true } );
+					const settled = () => new Promise< void >( ( resolve ) => {
+						const tick = () => {
+							const now = Date.now();
+							const elapsed = now - started;
+							// A region that declares itself busy is still loading its content, so
+							// it holds the window open up to the shared change-observation bound.
+							const busy = elapsed < limits.busyMs && document.querySelector( '[aria-busy="true"]' ) !== null;
+							const quiet = lastMutation > 0 && now - lastMutation >= limits.quietMs;
+							if ( ! busy && ( quiet || elapsed >= limits.settleMs ) ) {
+								observer.disconnect();
+								resolve();
+								return;
+							}
+							setTimeout( tick, 25 );
+						};
+						tick();
+					} );
+					return { settled, stop: () => observer.disconnect() };
+				};
 				const activate = async (
 					element: Element
 				): Promise< { ok: true } | { ok: false; error: string; navigated?: boolean } > => {
 					const before = currentRoute();
 					const beforeState = history.state;
 					let clickError: string | undefined;
+					let settle: ReturnType< typeof observeSettle > | undefined;
 					document.addEventListener( 'click', preventNavigation );
 					document.addEventListener( 'submit', preventNavigation );
 					try {
 						if ( element instanceof HTMLElement ) element.scrollIntoView( { block: 'center', inline: 'center' } );
+						settle = observeSettle();
 						// Tab runtimes commonly select on mousedown rather than click, so a
 						// bare click() leaves their panels untouched.
 						if ( ( element.getAttribute( 'role' ) || '' ).toLowerCase() === 'tab' ) {
@@ -414,10 +449,11 @@ export async function captureSelectableSetStates(
 								} )
 							);
 						}
-						await wait( limits.settleMs );
+						await settle.settled();
 					} catch ( error ) {
 						clickError = ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 );
 					} finally {
+						settle?.stop();
 						document.removeEventListener( 'click', preventNavigation );
 						document.removeEventListener( 'submit', preventNavigation );
 					}
@@ -661,7 +697,11 @@ export async function captureSelectableSetStates(
 					};
 
 					const probeLimit = Math.min( group.members.length, 4 );
-					for ( let index = 0; index < probeLimit && Date.now() < deadline; index++ ) {
+					// Members of one set behave alike. Two members that leave the group and
+					// every candidate region untouched show the set drives nothing outside it,
+					// so further probes would only spend their observation windows.
+					let inertProbes = 0;
+					for ( let index = 0; index < probeLimit && inertProbes < 2 && Date.now() < deadline; index++ ) {
 						if ( ! ( await restoreChoiceGroup() ) ) {
 							discoveryError ??= {
 								index,
@@ -686,12 +726,15 @@ export async function captureSelectableSetStates(
 						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
 							await wait( 100 );
 						}
-						observations.push( {
+						const observation = {
 							fps: candidates.map( fingerprint ),
 							texts: candidates.map( textOf ),
 							groupHtml: snapshotChoiceGroup( group.root, group.members ),
 							selected: group.members.map( observedSelection ),
-						} );
+						};
+						observations.push( observation );
+						if ( observationDeadline && observation.groupHtml === initialGroupHtml &&
+							observation.fps.every( ( fp, candidateIndex ) => fp === initialFp[ candidateIndex ] ) ) inertProbes++;
 					}
 
 					let regionIdx = -1;
@@ -914,6 +957,8 @@ export async function captureSelectableSetStates(
 				maxMembers,
 				maxDriveMs,
 				settleMs,
+				quietMs: SELECTABLE_SET_LIMITS.quietMs,
+				busyMs: SELECTABLE_SET_LIMITS.busyMs,
 				maxCandidateScan,
 				maxPointerCandidates,
 				maxProbeGroups,
