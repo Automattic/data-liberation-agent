@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import { activateTrigger } from './interaction-capture.js';
 import { srcsetReferences } from '../srcset.js';
-import { waitForAnimations, withEvaluateTimeout } from './page-helpers.js';
+import { settleDocument, withEvaluateTimeout } from './page-helpers.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -508,7 +508,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 					window.scrollTo({left:pose.x,top:pose.y,behavior:'instant'});
 					await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 				}), 5_000);
-				await waitForAnimations(page);
+				await settleDocument(page, 'gallery-restore', { quietMs: 0, timeoutMs: 2_000, animations: true });
 				const restored = await scroll.evaluate(pose => scrollX === pose.x && scrollY === pose.y && pose.ancestors.every(({node,x,y}) => node.isConnected && node.scrollLeft === x && node.scrollTop === y));
 				if (state?.gallery) {
 					state.gallery.viewportRestoration = restored && JSON.stringify(page.viewportSize()) === JSON.stringify(viewport) ? 'verified' : 'unverified';
