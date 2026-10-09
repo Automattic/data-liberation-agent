@@ -19,7 +19,7 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 		if (root.is('[data-dla-gallery]')) return;
 		const width = root.attr('data-dla-gallery-capture-width');
 		if (width && Number(width) !== gallery.viewport?.width) return;
-		const select = (selector: string) => selector === ':scope' ? root : root.find(selector.replace(/^:scope\s*>?\s*/, ''));
+		const select = (selector: string) => selector === ':scope' ? root : root.find(selector);
 		const stage = select(gallery.stage);
 		const next = select(gallery.next), previous = select(gallery.previous);
 		if (stage.length !== 1 || next.length !== 1 || previous.length !== 1) return;

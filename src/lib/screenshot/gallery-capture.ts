@@ -250,6 +250,10 @@ async function collect(
 			} else if (immediate && immediate.key === before.key) {
 				// The source can intentionally ignore controls while its own transition lock is held.
 				continue;
+			} else if (immediate) {
+				// A different stable frame is a real but incorrect edge (for example, a
+				// Previous control that actually advances); retries must not hide it.
+				return null;
 			} else {
 				const stable = await observe(accept);
 				if (stable) return stable;

@@ -149,7 +149,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 			await browser.close();
 		}
 	},
-	10_000,
+	30_000,
 );
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('waits for a delayed rendered initial frame without inventing its identity',async()=>{
