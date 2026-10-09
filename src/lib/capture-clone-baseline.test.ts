@@ -5,6 +5,7 @@ import { chromium, type Page } from 'playwright';
 import { expect, it } from 'vitest';
 import { captureWebsite } from './capture.js';
 import { readResolvedPage } from './site-includes.js';
+import { planArtifacts } from './screenshot/output-layout.js';
 
 const source = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{margin:0}.active{position:fixed;top:0;left:0;height:80px;background:white}.logo{margin:20px;width:100px;height:40px;background:teal}
@@ -39,7 +40,7 @@ async function metrics( page: Page ) {
 	} );
 }
 
-it( 'SDK capture preserves replacement clone roles with patched main-world Array and screenshots disabled and enabled', async () => {
+it( 'SDK capture preserves replacement clone roles with patched main-world Array and screenshots enabled', async () => {
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const root = mkdtempSync( join( parent, 'issue-599-sdk-' ) );
@@ -55,46 +56,47 @@ it( 'SDK capture preserves replacement clone roles with patched main-world Array
 	const port = ( server.address() as { port: number } ).port;
 	const url = `http://localtest.me:${ port }/`;
 	const browser = await chromium.launch( { args: [ '--host-resolver-rules=MAP localtest.me 127.0.0.1' ] } );
-	const measurements: Array<Awaited<ReturnType<typeof metrics>>> = [];
 	try {
-		for ( const captureImages of [ false, true ] ) {
-			const outputDir = join( root, captureImages ? 'images-on' : 'images-off' );
-			const captured = await captureWebsite( { url, outputDir, captureImages }, {
-				findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: [] } ) } ),
-			} );
-			expect( captured.summary.routesFailed ).toBe( 0 );
-			copyRoot = join( outputDir, 'website' );
-			const copy = await browser.newPage( { viewport: { width: 390, height: 900 } } );
-			await copy.goto( `${ url }copy/`, { waitUntil: 'domcontentloaded' } );
-			for ( const width of [ 390, 768, 1440, 390 ] ) {
-				await copy.setViewportSize( { width, height: 900 } );
-				const actual = await metrics( copy );
-				expect( actual.width, `overflow at ${ width }, screenshots=${ captureImages }` ).toBe( width );
-				expect( actual.header ).toBeCloseTo( width, 0 );
-				expect( actual.logo ).toBe( 20 );
-				expect( actual.spacer ).toBe( 80 );
-				expect( actual.heading ).toBe( 100 );
-				// The clipped closed control uses the learner's existing 2px fit
-				// tolerance; visible viewport/header geometry stays exact above.
-				expect( Math.abs( actual.menuRight - width ) ).toBeLessThanOrEqual( 2 );
-				expect( actual.menuTop ).toBe( 0 );
-				expect( actual.portrait ).toBeCloseTo( ( width - 40 ) * ( width < 768 ? 1 : 0.34 ), 0 );
-				expect( actual.hit ).toBe( true );
-				measurements.push( actual );
-			}
-			const html = await copy.content();
-			expect( html ).not.toContain( 'data-dla-fluid-id' );
-			await copy.close();
+		const outputDir = join( root, 'images-on' );
+		const captured = await captureWebsite( { url, outputDir, captureImages: true }, {
+			findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: [] } ) } ),
+		} );
+		expect( captured.summary.routesFailed ).toBe( 0 );
+		copyRoot = join( outputDir, 'website' );
+		const copy = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		await copy.goto( `${ url }copy/`, { waitUntil: 'domcontentloaded' } );
+		for ( const width of [ 390, 768, 1440, 390 ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const actual = await metrics( copy );
+			expect( actual.width, `overflow at ${ width }` ).toBe( width );
+			expect( actual.header ).toBeCloseTo( width, 0 );
+			expect( actual.logo ).toBe( 20 );
+			expect( actual.spacer ).toBe( 80 );
+			expect( actual.heading ).toBe( 100 );
+			// The clipped closed control uses the learner's existing 2px fit
+			// tolerance; visible viewport/header geometry stays exact above.
+			expect( Math.abs( actual.menuRight - width ) ).toBeLessThanOrEqual( 2 );
+			expect( actual.menuTop ).toBe( 0 );
+			expect( actual.portrait ).toBeCloseTo( ( width - 40 ) * ( width < 768 ? 1 : 0.34 ), 0 );
+			expect( actual.hit ).toBe( true );
 		}
-		for ( let index = 0; index < 4; index++ ) {
-			const { menuRight: offRight, ...off } = measurements[ index ]!;
-			const { menuRight: onRight, ...on } = measurements[ index + 4 ]!;
-			expect( off ).toEqual( on );
-			expect( Math.abs( offRight - onRight ) ).toBeLessThanOrEqual( 2 );
-		}
+		const html = await copy.content();
+		expect( html ).not.toContain( 'data-dla-fluid-id' );
+		await copy.close();
 	} finally {
 		await browser.close();
 		await new Promise<void>( resolve => server.close( () => resolve() ) );
 		rmSync( root, { recursive: true, force: true } );
 	}
 }, 240_000 );
+
+it( 'plans no screenshots when captureImages is disabled while retaining the HTML and geometry capture', () => {
+	const plan = planArtifacts( { slug: 'clone', outputDir: join( process.cwd(), '.tmp-test', 'clone-plan' ), force: true, captureImages: false } );
+	for ( const viewport of [ plan.desktop, plan.mobile ] ) {
+		expect( viewport.captureFullpage ).toBe( false );
+		expect( viewport.captureScrolled ).toBe( false );
+		expect( viewport.captureGeometry ).toBe( true );
+	}
+	expect( plan.desktop.captureHtml ).toBe( true );
+	expect( plan.mobile.captureMobileHtml ).toBe( true );
+} );

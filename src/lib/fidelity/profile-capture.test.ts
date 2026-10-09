@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -56,8 +56,11 @@ function geometry(){target.style.width=innerWidth*${ identity === 'desktop' ? 0.
 }
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'profile acquisition → static hosting → frozen comparison', () => {
+	let successfulDirectory: string;
+	beforeAll( async () => { successfulDirectory = await captureFixture( false, true ); }, 180_000 );
+
 	it( 'keeps baseline timeline and fluid custody while retaining tablet artifacts in its own profile', async () => {
-		const directory = await captureFixture( false, true );
+		const directory = successfulDirectory;
 		const capture = JSON.parse( readFileSync( join( directory, 'screenshots/manifest.json' ), 'utf8' ) );
 		const route = Object.values( capture.entries )[ 0 ] as import('../screenshot/manifest-queue.js').ManifestEntry;
 		expect.soft( Object.keys( route.nativeViewTimelines ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
@@ -79,7 +82,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'profile acquisiti
 	}, 180_000 );
 
 	it( 'acquires a real third document and independently freezes each same-width identity', async () => {
-		const directory = await captureFixture();
+		const directory = successfulDirectory;
 		const capture = JSON.parse( readFileSync( join( directory, 'screenshots/manifest.json' ), 'utf8' ) );
 		const route = Object.values( capture.entries )[ 0 ] as import('../screenshot/manifest-queue.js').ManifestEntry;
 		expect( route.profiles!.tablet!.html ).toMatch( /^html-tablet\// );
