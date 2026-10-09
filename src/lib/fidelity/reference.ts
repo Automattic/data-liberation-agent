@@ -100,7 +100,15 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile, expectedBoundary?: ExternalBoundary ): Promise<void> {
 			const recipe = profile ?? { id: device, width: page.viewportSize()?.width ?? 1440, height: 900 };
 			declare( url, recipe );
-			for ( const cell of [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device ) ) {
+			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device );
+			const sourceContext = page.context();
+			let supportsSiblingPages = false;
+			try {
+				const probe = await sourceContext.newPage();
+				await probe.close();
+				supportsSiblingPages = true;
+			} catch { /* Convenience-owned contexts can only use the caller's page. */ }
+			const observeCell = async ( cell: ReferenceCell ): Promise<void> => {
 					const viewport = cell.viewport;
 					const identity = profile?.context ? replayBrowserIdentity( profile.context ) : undefined;
 					const entry: ReferenceEntry = { sourceUrl: url, viewport, viewportHeight: 900, device, profile: device, context: identity, state: 'baseline', readiness: { ready: false, reasons: [] } };
@@ -115,10 +123,10 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const sourceContext = page.context();
 						const browser = typeof sourceContext.browser === 'function' ? sourceContext.browser() : null;
 						if ( identity?.screen && ! browser ) throw new Error( 'Preset screen replay requires a source browser context' );
-						if ( identity?.screen && browser ) {
+						if ( browser && supportsSiblingPages && profile ) {
 							// Page.setViewportSize resets screen even on an explicitly screened
-							// device context. Construct at the target viewport to preserve the
-							// resolved preset. Session state stays runtime-only, never in entry.
+							// device context. Give every reference cell its own context at the
+							// target viewport; session state stays runtime-only, never in entry.
 							referenceContext = await browser.newContext( { ...identity, viewport: { width: viewport, height: 900 },
 								storageState: await sourceContext.storageState(), ignoreHTTPSErrors: true,
 							} );
@@ -149,7 +157,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							entry.browserProfile = browserProfile;
 							entry.readiness.reasons.push(...errors);
 							entry.readiness.ready = entry.readiness.reasons.length === 0;
-							continue;
+							return;
 						}
 						referencePage.on( 'pageerror', runtimeError );
 						referencePage.on( 'crash', rendererCrash );
@@ -198,7 +206,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( referencePage && referencePage !== page ) await referencePage.close().catch( () => {} );
 						await referenceContext?.close().catch( () => {} );
 					}
-				}
+				};
+			if ( supportsSiblingPages ) await Promise.all( referenceCells.map( observeCell ) );
+			else for ( const cell of referenceCells ) await observeCell( cell );
 		},
 		finalize( receiptPath: string ): string {
 			const coveragePath = join(directory, 'linked-page-coverage.json');
