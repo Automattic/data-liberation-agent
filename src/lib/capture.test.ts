@@ -128,6 +128,19 @@ describe( 'downloadCaptureSectionMedia', () => {
 			'https://cdn.example.com/desktop.jpg': expect.objectContaining( { status: 'success' } ),
 		} );
 	} );
+
+	it( 'downloads media referenced only by captured gallery frame HTML', async () => {
+		const manifestDir = join( root, 'screenshots' );
+		mkdirSync( manifestDir, { recursive: true } );
+		writeFileSync( join( manifestDir, 'manifest.json' ), JSON.stringify( {
+			entries: { [ sourceUrl ]: { interactions: { states: [ { kind: 'gallery', gallery: { inline: { frames: [ { html: '<figure><img src="https://cdn.example.com/frame-only.jpg" srcset="https://cdn.example.com/frame,one.jpg 1x, https://cdn.example.com/frame-two.jpg 2x"></figure>' } ] } } } ] } } },
+		} ) );
+
+		expect( await downloadCaptureSectionMedia( root, [ sourceUrl ] ) ).toBe( 3 );
+		expect( MediaStubStore.load( root ).get( 'https://cdn.example.com/frame-only.jpg' )?.status ).toBe( 'success' );
+		expect( MediaStubStore.load( root ).get( 'https://cdn.example.com/frame,one.jpg' )?.status ).toBe( 'success' );
+		expect( MediaStubStore.load( root ).get( 'https://cdn.example.com/frame-two.jpg' )?.status ).toBe( 'success' );
+	} );
 } );
 
 describe( 'captureWebsite fluid learning', () => {

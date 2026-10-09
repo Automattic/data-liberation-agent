@@ -10,6 +10,8 @@ import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
+import type { ManifestEntry } from './screenshot/manifest-queue.js';
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -127,6 +129,13 @@ export async function downloadCaptureSectionMedia(
 					sectionUrls.push( mediaUrl );
 				}
 			}
+		}
+	}
+	const manifestPath = join( outputDir, 'screenshots', 'manifest.json' );
+	if ( existsSync( manifestPath ) ) {
+		const manifest = JSON.parse( readFileSync( manifestPath, 'utf8' ) ) as { entries?: Record< string, ManifestEntry > };
+		for ( const [ pageUrl, entry ] of Object.entries( manifest.entries ?? {} ) ) {
+			sectionUrls.push( ...galleryFrameMediaUrls( entry.interactions?.states ?? [], pageUrl ) );
 		}
 	}
 

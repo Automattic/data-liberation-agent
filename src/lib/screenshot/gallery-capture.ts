@@ -1,6 +1,8 @@
 import type { Page } from 'playwright';
+import * as cheerio from 'cheerio';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import { activateTrigger } from './interaction-capture.js';
+import { srcsetReferences } from '../srcset.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -18,6 +20,30 @@ export interface CapturedGallery {
 	/** Timing is deliberately not inferred from the captured index. */
 	autoplay: 'unmeasured';
 	failure?: string;
+}
+
+/** Collect every image reference observed in captured gallery frame markup. */
+export function galleryFrameMediaUrls(
+	states: readonly CapturedDialogInteraction[],
+	baseUrl: string,
+): string[] {
+	const urls = new Set< string >();
+	for ( const state of states ) {
+		for ( const gallery of [ state.gallery?.inline, state.gallery?.lightbox ] ) {
+			for ( const frame of gallery?.frames ?? [] ) {
+				const $ = cheerio.load( frame.html );
+				$( 'img[src],source[src],img[srcset],source[srcset]' ).each( ( _, element ) => {
+					const node = $( element );
+					const references = [ node.attr( 'src' ), ...srcsetReferences( node.attr( 'srcset' ) ?? '' ) ];
+					for ( const reference of references ) {
+						if ( ! reference ) continue;
+						try { urls.add( new URL( reference, baseUrl ).href ); } catch { /* Ignore malformed media references. */ }
+					}
+				} );
+			}
+		}
+	}
+	return [ ...urls ];
 }
 
 const LIMIT = 24;
@@ -51,23 +77,21 @@ async function describe(
 			};
 			const controls = Array.from(scope.querySelectorAll('button,[role="button"]'));
 			const name = (el: Element) => el.getAttribute('aria-label') || el.textContent || '';
-			const next = controls.find((el) => /^next (?:image|slide)$/i.test(name(el).trim()));
-			const previous = controls.find((el) => /^previous (?:image|slide)$/i.test(name(el).trim()));
+			const next = controls.find((el) => /^next (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
+			const previous = controls.find((el) => /^previous (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
 			if (!next || !previous) return null;
-			const stage = Array.from(scope.querySelectorAll('*')).find((el) => {
+			const stage = [scope, ...Array.from(scope.querySelectorAll('*'))].find((el) => {
 				const children = Array.from(el.children);
 				return (
 					children.length >= 2 &&
 					children.length <= 24 &&
-					children.every((child) => child.tagName !== 'BUTTON') &&
-					children.filter((child) => child.querySelector('img')).length >= 2 &&
-					children.every((child) => !child.querySelector('a[href],button,[role="button"]'))
+					children.filter(child => child.matches('img') || child.querySelector('img')).length >= 2
 				);
 			});
 			if (!stage) return null;
 			return {
 				selector: '',
-				stage: path(stage, scope),
+				stage: stage === scope ? ':scope' : path(stage, scope),
 				next: path(next, scope),
 				previous: path(previous, scope),
 				order: Array.from(stage.children)
@@ -83,10 +107,11 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 		.locator(gallery.selector)
 		.first()
 		.evaluate((scope, stageSelector) => {
-			const stage = scope.querySelector(stageSelector);
+			const stage = stageSelector === ':scope' ? scope : scope.querySelector(stageSelector);
 			if (!stage) return null;
+			const imageFor = (child: Element): HTMLImageElement | null => child.matches('img') ? child as HTMLImageElement : child.querySelector('img');
 			const laidOut = Array.from(stage.children).filter(child => {
-				const image = child.querySelector('img');
+				const image = imageFor(child);
 				if (!image) return false;
 				const rect = image.getBoundingClientRect();
 				if (!rect.width || !rect.height) return false;
@@ -98,9 +123,18 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			});
 			// A different-height successor can be outside a nested scrollport after
 			// its arrow was clicked. Normalize that activation movement before hit testing.
-			if (laidOut.length === 1) laidOut[0]!.querySelector('img')!.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+			if (laidOut.length === 1) imageFor(laidOut[0]!)!.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+			const images = Array.from(stage.querySelectorAll('img'));
+			if (images.length >= 2 && Array.from(stage.children).filter(child => imageFor(child)).length >= 2 && images.every(image => image.parentElement && (image.parentElement === stage || image.parentElement.parentElement === stage) && getComputedStyle(image.parentElement).display !== 'none')) {
+				if (images.some(image => !image.complete || image.naturalWidth <= 1)) return null;
+				const sources = images.map(image => image.currentSrc || image.src);
+				const clone = stage.cloneNode(true) as Element;
+				Array.from(clone.querySelectorAll('img')).forEach((image, index) => { image.setAttribute('src', sources[index]!); image.removeAttribute('srcset'); image.removeAttribute('sizes'); });
+				for (const unsafe of clone.querySelectorAll('script,iframe,noscript')) unsafe.remove();
+				return { key: sources.join('\n'), html: clone.innerHTML, text: [], ordinal: undefined, slot: 0, geometry: [] };
+			}
 			const rendered = Array.from(stage.children).filter((child) => {
-				const image = child.querySelector('img');
+				const image = imageFor(child);
 				if (!image) return false;
 				const rect = image.getBoundingClientRect();
 				const x =
@@ -306,27 +340,24 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 	await page.evaluate(() => {
 		(globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown }).__name ??= (fn) => fn;
 	});
-	const roots = await page.evaluate(() =>
-		Array.from(document.querySelectorAll('[aria-label]'))
-			.filter((el) =>
-				/gallery.*carousel|carousel.*gallery/i.test(el.getAttribute('aria-label') || ''),
-			)
-			.slice(0, 2)
-			.map((el) => {
-				let scope = el.parentElement;
-				for (let depth = 0; scope && depth < 8; depth++, scope = scope.parentElement) {
-					if (
-						scope.querySelector('[aria-label="Next image"]') &&
-						scope.querySelector('[aria-label="Previous image"]')
-					) {
-						if (!scope.id) continue;
-						return '#' + CSS.escape(scope.id);
-					}
-				}
-				return '';
-			})
-			.filter(Boolean),
-	);
+	const roots = await page.evaluate(() => {
+		const controls = Array.from(document.querySelectorAll('button,[role="button"]'));
+		const label = (element: Element) => (element.getAttribute('aria-label') || element.textContent || '').trim();
+		const visible = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
+		const previous = controls.filter(element => visible(element) && /^previous (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
+		const next = controls.filter(element => visible(element) && /^next (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
+		const roots: string[] = [];
+		for (const before of previous) {
+			for (let scope = before.parentElement, depth = 0; scope && depth < 8; scope = scope.parentElement, depth++) {
+				if (!next.some(after => scope!.contains(after)) || scope.querySelectorAll('img').length < 2) continue;
+				if (!scope.id) scope.id = `dla-gallery-${roots.length}`;
+				roots.push('#' + CSS.escape(scope.id));
+				break;
+			}
+			if (roots.length >= 2) break;
+		}
+		return roots;
+	});
 	const states: CapturedDialogInteraction[] = [];
 	for (const root of roots) {
 		const scroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));

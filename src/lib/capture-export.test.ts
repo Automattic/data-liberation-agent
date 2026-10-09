@@ -2523,6 +2523,41 @@ describe( 'exportWebsiteCapture', () => {
 		expect( website ).toContain( 'data-image-src="/media/portrait.webp"' );
 	} );
 
+	it( 'localizes large media referenced only by gallery frames', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-gallery-frame-media-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const frameUrl = 'https://example.com/photos/large-frame.jpg';
+		const pageUrl = 'https://example.com/';
+		const page = '<html><body><section id="carousel"><div id="stage"></div><button id="previous">Previous</button><button id="next">Next</button></section></body></html>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), page );
+		const mediaPath = join( outputDir, 'media', 'large-frame.jpg' );
+		writeFileSync( mediaPath, Buffer.alloc( 6 * 1024 * 1024, 1 ) );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: { [ pageUrl ]: {
+				html: 'html/homepage.html',
+				interactions: {
+					schema: 'data-liberation/interaction-states/v2', sourceUrl: pageUrl,
+					viewport: { width: 1440, height: 900 }, capturedAt: '2026-10-09T00:00:00.000Z',
+					states: [ { status: 'captured', kind: 'gallery', trigger: { selector: '#carousel', tag: 'section', ariaHaspopup: '', dataBindings: {} }, gallery: { inline: {
+						selector: '#carousel', stage: ':scope > div', next: '#next', previous: '#previous', viewport: { width: 1440, height: 900 }, order: [ frameUrl ], initial: 0,
+						frames: [ { key: frameUrl, html: `<div><img src="${frameUrl}"></div>`, text: [] } ], coverage: 'complete', restoration: 'verified', autoplay: 'unmeasured',
+					} } } ], initialDialogs: [],
+				},
+			} },
+		} ) );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( frameUrl, mediaPath );
+		media.flush();
+		exportWebsiteCapture( { outputDir, sourceUrl: pageUrl, platform: 'generic', summary: {}, failures: [] } );
+
+		const states = readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' );
+		expect( states ).not.toContain( frameUrl );
+		expect( states ).toContain( '/media/large-frame.jpg' );
+		expect( existsSync( join( outputDir, 'website', 'media', 'large-frame.jpg' ) ) ).toBe( true );
+	} );
+
 	it( 'keeps htmlBytes equal to the html length after localizing interaction-state images', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-interaction-bytes-export-' ) );
 		dirs.push( outputDir );
