@@ -78,7 +78,8 @@ const SEMANTIC_POPUP_SELECTOR =
 	'dialog,[role="dialog"],[aria-modal="true"],[role="listbox"],[role="menu"],[role="tree"],[role="grid"]';
 
 export interface CapturedDialogInteraction {
-	status: 'captured' | 'no-dialog' | 'click-failed';
+	/** An opened surface whose bounded interaction proof is incomplete is not an absent dialog. */
+	status: 'captured' | 'observed-incomplete' | 'no-dialog' | 'click-failed';
 	/**
 	 * Distinguishes an in-page disclosure/accordion panel (content restored in
 	 * place, before HTML serialization — see `hydrateDisclosureContent`) from a
@@ -91,7 +92,7 @@ export interface CapturedDialogInteraction {
 	 */
 	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search' | 'gallery';
 	/** Directional replay requires a complete cycle, inverse edges and source restoration. */
-	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean; selection?: number[] };
+	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean; selection?: number[]; viewportRestoration?: 'verified' | 'unverified' };
 	collectionFilter?: import('./typed-search-capture.js').CapturedCollectionFilter;
 	trigger: {
 		selector: string;
