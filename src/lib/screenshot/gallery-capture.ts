@@ -242,13 +242,26 @@ async function collect(
 	};
 	const act = async (selector: string, before: NonNullable<typeof first>, accept: (frame: NonNullable<typeof first>) => boolean) => {
 		for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
+			const mutation = await page.locator(descriptor.selector).first().locator(descriptor.stage).evaluateHandle(stage => {
+				let changed = false;
+				const observer = new MutationObserver(() => { changed = true; });
+				observer.observe(stage, { attributes: true, childList: true, characterData: true, subtree: true });
+				return { observer, changed: () => changed };
+			});
 			await page.locator(descriptor.selector).first().locator(selector).click({ timeout: 2000 });
+			await mutation.evaluate(state => new Promise<void>(resolve => {
+				const started = performance.now();
+				const check = () => state.changed() || performance.now() - started >= 800 ? resolve() : setTimeout(check, 20);
+				check();
+			}));
 			await settle();
+			const changed = await mutation.evaluate(state => { state.observer.disconnect(); return state.changed(); });
+			await mutation.dispose();
 			const immediate = await snapshot(page, descriptor);
 			if (immediate && accept(immediate)) {
 				const stable = await observe(accept);
 				if (stable) return stable;
-			} else if (immediate && immediate.key === before.key) {
+			} else if (immediate && immediate.key === before.key && !changed) {
 				// The source can intentionally ignore controls while its own transition lock is held.
 				continue;
 			} else if (immediate) {
