@@ -148,6 +148,37 @@ describe( 'checkWidthsFor', () => {
 } );
 
 describe( 'observePage typography', () => {
+	it.skipIf( skipBrowserTests )( 'counts only painted CSS clip text without losing repeated or partly painted runs', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		try {
+			const visible = 'Price Price Partial Auto Relative Static Boxless';
+			for ( const left of [ 'auto', '-10000px' ] ) {
+				await page.setContent( `<!doctype html><style>
+					main{position:relative;overflow:hidden;width:300px;height:300px}
+					.hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0px,0px,0px,0px);left:${ left }}
+					.partial{position:absolute;top:50px;clip:rect(0px,10px,30px,0px)}
+					.auto{position:fixed;top:80px;clip:rect(auto,auto,auto,auto)}
+					.relative{position:relative;clip:rect(0px,0px,0px,0px)}
+					.static{clip:rect(0px,0px,0px,0px)}
+					.boxless{display:contents;overflow:hidden;clip:rect(0px,0px,0px,0px)}
+				</style><main><span>Price</span> <span class="hidden">Price</span> <span>Price</span>
+				<span style="position:absolute;top:110px;clip:rect(0px,200px,30px,150px)">Outside</span>
+				<span style="position:fixed;top:140px;clip:rect(0px,0px,0px,0px)"><span>Descendant</span></span>
+				<span class="partial">Partial</span> <span class="auto">Auto</span>
+				<span class="relative">Relative</span> <span class="static">Static</span>
+				<span class="boxless">Boxless</span></main>` );
+				const observation = await observePage( page, page.url(), 1440, 0, null, undefined, undefined, true );
+				expect( observation.textChars, left ).toBe( visible.length );
+				await page.locator( '.relative' ).evaluate( element => element.remove() );
+				const loss = await observePage( page, page.url(), 1440, 0, null, undefined, undefined, true );
+				expect( observation.textChars - loss.textChars ).toBe( 'Relative '.length );
+			}
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it.skipIf( skipBrowserTests )( 'does not compare line metrics for a clipped accessible-only label', async () => {
 		const browser = await chromium.launch();
 		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
