@@ -153,6 +153,29 @@ it('reinstalls cleanup when the source re-initializes its document after install
   } finally { await browser.close(); }
 }, 20_000);
 
+it('installs cleanup on the document that a same-document reload commits during install', async () => {
+  let served = 0;
+  server = createServer((_req, res) => {
+    res.setHeader('content-type', 'text/html');
+    res.end(`<!doctype html><title>Owner site</title><div id="WIX_ADS">Free website by Wix</div><main><h1>Owner document ${++served}</h1></main>`);
+  });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://localtest.me:${(server.address() as { port: number }).port}/`);
+    // The source reloads itself and keeps its main thread busy, so the reloaded
+    // document commits while the install evaluate is still queued behind it.
+    await page.evaluate(() => { setTimeout(() => { location.reload(); const start = performance.now(); while (performance.now() - start < 600) { /* busy */ } }, 0); });
+    await page.waitForTimeout(200);
+    const report = await applySourceCleanup(page, policy);
+    expect(report.removed).toBe(1);
+    expect(await page.locator('h1').innerText()).toBe('Owner document 2');
+    expect(await page.locator('#WIX_ADS').count()).toBe(0);
+    expect((await readSourceCleanup(page)).recovered).toBeUndefined();
+  } finally { await browser.close(); }
+}, 20_000);
+
 it('keeps a route whose source re-initializes mid-capture, recording the recovery in the evidence', async () => {
   const url = await reinitSource();
   mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
