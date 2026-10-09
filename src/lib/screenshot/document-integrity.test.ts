@@ -65,15 +65,15 @@ describe('isRouteDrift', () => {
 
   it('resolves a same-origin server redirect to another route as its target', () => {
     expect(serverRedirectTarget('https://example.com/about', 'https://example.com/about-us')).toBe('https://example.com/about-us');
-    // Same route (trailing slash, query) or another origin is not an alias.
-    expect(serverRedirectTarget('https://example.com/about', 'https://example.com/about/?x=1')).toBeUndefined();
+    // An observed redirect proves an alias even when only slash/query differs.
+    expect(serverRedirectTarget('https://example.com/about', 'https://example.com/about/?x=1')).toBe('https://example.com/about/?x=1');
     expect(serverRedirectTarget('https://example.com/about', 'https://other.example/about-us')).toBeUndefined();
   });
 
   it('recognizes observed HTTP/HTTPS aliases without weakening post-load drift', () => {
     expect(serverRedirectTarget('https://example.com/old', 'http://example.com/new/')).toBe('http://example.com/new/');
     expect(serverRedirectTarget('http://example.com/old', 'https://example.com/new/')).toBe('https://example.com/new/');
-    expect(serverRedirectTarget('https://example.com/author', 'http://example.com/author/')).toBeUndefined();
+    expect(serverRedirectTarget('https://example.com/author', 'http://example.com/author/')).toBe('http://example.com/author/');
     expect(isRouteDrift('http://example.com/author/', 'https://example.com/author')).toBe(true);
     expect(serverRedirectTarget('https://example.com/old', 'http://other.example/new')).toBeUndefined();
     expect(serverRedirectTarget('https://example.com/old', 'http://example.com:8080/new')).toBeUndefined();

@@ -35,6 +35,7 @@ export interface ScreenshotOpts {
 	urls: string[];
 	outputDir: string;
 	primaryUrl?: string; // reference for same-origin enforcement
+	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	viewports?: Viewport[];
 	additionalProfiles?: import('../../adapters/page-actions.js').LiberationHooks['additionalProfiles'];
 	referenceWidths?: number[];

@@ -16,6 +16,7 @@ import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/captur
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 
 export interface ReferenceCollectorOptions {
+	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	publicUrlsOnly?: boolean;
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
@@ -142,7 +143,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
 						if (expectedBoundary) {
-							const navigation = await navigateSourceDocument(referencePage, url, {publicUrlsOnly: options.publicUrlsOnly});
+							const navigation = await navigateSourceDocument(referencePage, url, {publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope ?? expectedBoundary.routeScope});
 							if (!navigation.boundary || !browserProfile) throw new Error('Reference external boundary or browser profile unproven');
 							entry.outcome = storeExternalBoundary(directory, navigation.boundary, viewport, browserProfile);
 							if (boundaryIdentity(entry.outcome) !== boundaryIdentity(expectedBoundary)) throw new Error('Reference external outcome disagrees with capture');
@@ -155,7 +156,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
 						if ( url !== 'about:blank' ) {
-							const response = await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
+							const navigation = options.routeScope ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
+							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
+							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
 							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
 						}

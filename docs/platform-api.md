@@ -26,12 +26,19 @@ Internal orchestration is deliberately **not** exported — the `exports` map in
 interface Platform {
   /** Opaque, stable, unique id, e.g. 'acme-builder'. */
   id: string;
+  /** Optional adapter-owned document namespaces on a shared origin. */
+  routeScope?(sourceUrl: string): SiteRouteScope;
   /** This platform's automatic-detection signals (all tiers optional). */
   detection?: PlatformDetection;
   /** Inventory a site: sitemap/routes/navigation. THE required capability. */
   discover(url: string, opts: Record<string, unknown>): Promise<unknown>;
   /** Optional source-specific hooks applied during liberation. */
   liberation?: LiberationHooks;
+}
+
+interface SiteRouteScope {
+  origin: string;
+  pathPrefixes: string[];
 }
 ```
 
@@ -119,6 +126,23 @@ The built-in generic fallback (`default`) is registered through this same API
 
 Anything beyond these fields belongs to your platform (the built-in extract-era
 adapters return richer inventories).
+
+### Shared-origin route ownership
+
+An adapter can return `routeScope(sourceUrl)` to describe a customer site on a
+multi-tenant origin, for example `{ origin: 'https://builder.example',
+pathPrefixes: ['/customer'] }`. Prefixes are segment-bounded: `/customer` includes
+`/customer` and `/customer/about`, while `/customer-two` belongs elsewhere. Multiple
+prefixes compose one site; query renditions keep their exact request identity.
+
+The pipeline carries this declaration through seeds, rendered link expansion,
+navigation redirects, HTTP document acquisition, export links and required-route
+coverage. Out-of-scope links retain their source destinations, including relative
+links to the platform homepage. Native CSS, images and other resources use their
+existing acquisition policy and can live outside the document namespace. Ordinary
+sites omit the declaration and keep origin-wide discovery even when entered at a
+subpath. Slash aliases are deduped only after an observed source redirect proves
+the correspondence.
 
 ## Registered package consumer (Node)
 

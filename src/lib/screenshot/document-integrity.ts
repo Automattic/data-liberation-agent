@@ -1,4 +1,5 @@
 import { sameHttpSite } from './same-origin.js';
+import { documentRequestUrl } from '../url/route-key.js';
 
 // src/lib/screenshot/document-integrity.ts
 //
@@ -76,7 +77,7 @@ export function navigationDocumentUrl(requestedUrl: string, responseUrl: string,
 
 /**
  * The route a server redirect resolved `requestedUrl` to during navigation, or
- * undefined when it names the same path or another site. `finalUrl` is the
+ * undefined when it names the same request address or another site. `finalUrl` is the
  * URL of the response navigation ended on after following redirect hops.
  *
  * A redirect answered by the server is the site saying the requested URL is
@@ -88,7 +89,7 @@ export function navigationDocumentUrl(requestedUrl: string, responseUrl: string,
 export function serverRedirectTarget( requestedUrl: string, finalUrl: string ): string | undefined {
 	if ( ! sameHttpSite( requestedUrl, finalUrl ) ) return undefined;
 	try {
-		return normalizeRoutePath( new URL( finalUrl ).pathname ) !== normalizeRoutePath( new URL( requestedUrl ).pathname ) ? finalUrl : undefined;
+		return documentRequestUrl( finalUrl ) !== documentRequestUrl( requestedUrl ) ? finalUrl : undefined;
 	} catch {
 		return undefined;
 	}

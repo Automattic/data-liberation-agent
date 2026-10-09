@@ -8,6 +8,7 @@ import { isRouteDrift } from './screenshot/document-integrity.js';
 import { validateOutputDir } from './screenshot/output-layout.js';
 import * as cheerio from 'cheerio';
 import { normalizeCssUrlEscapes } from './css-url-escapes.js';
+import { routeInScope, validateRouteScope } from './url/route-scope.js';
 
 export interface AcquiredHttpDocument {
 	url: string;
@@ -29,6 +30,7 @@ export interface AcquiredHttpDocument {
 }
 
 export interface HttpAcquisitionOptions {
+	routeScope?: import('../platform/types.js').SiteRouteScope;
 	url: string;
 	urls: readonly string[];
 	outputDir: string;
@@ -46,11 +48,12 @@ const digest = ( value: string | Buffer ) => createHash( 'sha256' ).update( valu
 /** Acquire actual route responses. This receipt never claims browser or portable-site parity. */
 export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dependencies = { fetch: safeFetch } ) {
 	validateOutputDir( options.outputDir );
+	if (options.routeScope) validateRouteScope(options.routeScope);
 	const origin = new URL( options.url ).origin;
 	assertPublicHttpUrl( options.url );
 	const variants = options.profile.variants;
 	if ( variants.length === 0 || variants.some( variant => ! variant.id.trim() ) || new Set( variants.map( variant => variant.id ) ).size !== variants.length ) throw new Error( 'Acquisition requires unique, nonempty variants' );
-	const urls = [ ...new Set( options.urls ) ];
+	const urls = [ ...new Set( options.urls ) ].filter(url => routeInScope(url, options.routeScope));
 	for ( const url of urls ) {
 		assertPublicHttpUrl( url );
 		if ( new URL( url ).origin !== origin ) throw new Error( `Acquisition route is off-origin: ${ url }` );
@@ -68,6 +71,7 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 				document.attempts++;
 				try {
 					response = await dependencies.fetch( url, {
+						...(options.routeScope ? { authorizeUrl: (target: string) => { if (!routeInScope(target, options.routeScope)) throw new Error('HTTP document is outside its adapter route scope'); } } : {}),
 						headersForOrigin: requestOrigin => requestOrigin === origin ? variant.headers : undefined,
 						timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? 8 * 1024 * 1024,
 					} );
@@ -86,6 +90,7 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 			}
 			if ( ! response ) throw new Error( 'Acquisition returned no response' );
 			document.finalUrl = response.finalUrl;
+			if (!routeInScope(response.finalUrl, options.routeScope)) throw new Error('HTTP document is outside its adapter route scope');
 			document.httpStatus = response.status;
 			if ( response.status < 200 || response.status >= 300 ) throw new Error( `HTTP ${ response.status }` );
 			const contentType = response.headers.get( 'content-type' ) ?? '';
