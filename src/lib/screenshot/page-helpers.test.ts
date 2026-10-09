@@ -143,6 +143,17 @@ describe('settleDocument', () => {
       } finally { await forever.close(); }
     });
 
+    it('scopes quiet to a selector so unrelated document churn does not hold the wait', async () => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(`<div id="dialog">Static</div><div id="ticker"></div><script>let n = 0; setInterval(() => { ticker.textContent = String(++n); }, 40);</script>`);
+        const scoped = await settleDocument(page, 'dialog-content', { selector: '#dialog', quietMs: 150, timeoutMs: 1_500 });
+        expect(scoped.reason).toBe('quiet');
+        expect(scoped.ms).toBeLessThan(800);
+        expect((await settleDocument(page, 'document', { quietMs: 150, timeoutMs: 600 })).reason).toBe('deadline');
+      } finally { await page.close(); }
+    });
+
     it('waits for finite and chained animations but not paused or infinite ones', async () => {
       const page = await browser.newPage();
       try {
