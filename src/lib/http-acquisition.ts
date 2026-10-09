@@ -8,6 +8,7 @@ import { isRouteDrift } from './screenshot/document-integrity.js';
 import { validateOutputDir } from './screenshot/output-layout.js';
 import * as cheerio from 'cheerio';
 import { normalizeCssUrlEscapes } from './css-url-escapes.js';
+import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 
 export interface AcquiredHttpDocument {
 	url: string;
@@ -69,7 +70,7 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 				try {
 					response = await dependencies.fetch( url, {
 						headersForOrigin: requestOrigin => requestOrigin === origin ? variant.headers : undefined,
-						timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? 8 * 1024 * 1024,
+						timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? SOURCE_DOCUMENT_MAX_BYTES,
 					} );
 					if ( attempt === 0 && [ 429, 503 ].includes( response.status ) ) {
 						const retryAfter = response.headers.get( 'retry-after' );
