@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -49,4 +49,36 @@ jobs:
             exit 1
           fi
       - run: npm run test:package
-      - run: npm test
+
+  test-shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npx vitest run --shard=${{ matrix.shard }}/4
+
+  test:
+    if: always()
+    needs: [checks, test-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require checks and all test shards to succeed
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          SHARDS_RESULT: ${{ needs.test-shard.result }}
+        run: |
+          if [[ "$CHECKS_RESULT" != "success" || "$SHARDS_RESULT" != "success" ]]; then
+            echo "checks: $CHECKS_RESULT; test shards: $SHARDS_RESULT"
+            exit 1
+          fi
