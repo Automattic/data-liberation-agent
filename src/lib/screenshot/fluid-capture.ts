@@ -657,17 +657,19 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ];
 			} )
 		);
-		const imageIds = new WeakMap< HTMLImageElement, number >();
-		let nextImageId = 0;
 		const content = () => ( {
-			structure: JSON.stringify( [ document.getElementsByTagName( '*' ).length,
-				[ ...document.images ].map( image => {
-					if ( ! imageIds.has( image ) ) imageIds.set( image, nextImageId++ );
-					return [ imageIds.get( image ), image.getClientRects().length ];
-				} ) ] ),
+			rendered: new Map( [ ...document.images ].map( image => [ image, image.getClientRects().length > 0 ] ) ),
 			sources: new Map( [ ...document.images ].map( image =>
 				[ image, JSON.stringify( [ image.currentSrc, image.src, image.getAttribute( 'srcset' ) ] ) ] ) ),
 		} );
+		// Another sweep can only reach new work when the document grew or an image
+		// it may load newly entered the render tree: rendered, still pending, and
+		// reachable. Nodes and images that merely toggle within the swept extent
+		// (a perpetual rotator, a ticker) give a sweep nothing new to load, and
+		// their geometry effect is already part of the sampled snapshot.
+		const revealedPending = ( current: ReturnType< typeof content >, swept: ReturnType< typeof content > ) =>
+			[ ...current.rendered ].some( ( [ image, rendered ] ) =>
+				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! unreachable( image ) );
 		const sweep = async () => {
 			// Absence of overflow is observed again at each width, never cached from
 			// a previous viewport. Arbitrary source observers cannot be proven absent,
@@ -691,7 +693,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
 			const currentContent = content();
 			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) => source !== sweptContent.sources.get( image ) );
-			if ( lazy && ( currentContent.structure !== sweptContent.structure ||
+			if ( lazy && ( revealedPending( currentContent, sweptContent ) ||
 				changedImages.some( ( [ image ] ) => ! image.complete ) || document.documentElement.scrollHeight > sweptHeight ) ) {
 				// Finite delayed resize/image work can introduce another offscreen
 				// tail after the first sweep. Observe it before declaring readiness.
