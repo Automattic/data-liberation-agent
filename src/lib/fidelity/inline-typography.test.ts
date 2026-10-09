@@ -1,12 +1,15 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { observePage } from './check.js';
 import { checkTypography } from './rendered-contract-checks.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'painted inline typography correspondence', () => {
+ let browser: Awaited< ReturnType< typeof chromium.launch > >;
+ beforeAll( async () => { browser = await chromium.launch(); } );
+ afterAll( async () => { await browser?.close(); } );
+
 	it( 'compares adjacent text, comments and equivalent spans to serialized text at all reference widths', async () => {
-		const browser = await chromium.launch();
 		try {
 			for ( const width of [ 390, 768, 1440 ] ) {
 				const page = await browser.newPage( { viewport: { width, height: 900 } } );
@@ -24,10 +27,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				}
 				await page.close();
 			}
-		} finally { await browser.close(); }
+		} finally { /* shared browser is closed after the suite */ }
 	}, 60_000 );
 	it( 'retains word boundaries and natural line wrapping without joining across a break or replaced box', async () => {
-		const browser = await chromium.launch();
 		const page = await browser.newPage();
 		try {
 			const observe = async ( content: string ) => {
@@ -42,6 +44,6 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				const separated = await observe( `Contiguous${ boundary } typography wraps naturally` );
 				expect( checkTypography( source, separated ).failures?.length, boundary ).toBeGreaterThan( 0 );
 			}
-		} finally { await browser.close(); }
+		} finally { await page.close(); }
 	}, 30_000 );
 } );
