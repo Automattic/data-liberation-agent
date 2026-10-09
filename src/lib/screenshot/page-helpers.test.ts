@@ -4,6 +4,7 @@ import { chromium, type Browser } from 'playwright';
 import {
   waitForStable,
   triggerLazyLoad,
+  restoreTopScrollState,
   withEvaluateTimeout,
   waitForFonts,
   waitForImages,
@@ -259,6 +260,21 @@ describe('triggerLazyLoad', () => {
     const page = makePage();
     await triggerLazyLoad(page as never);
     expect(page.evaluate).toHaveBeenCalled();
+  });
+
+  it('skips scroll-only waits for a document that fits the viewport', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.setContent('<style>html,body{margin:0}</style><main>Short content</main>');
+      const started = Date.now();
+      await triggerLazyLoad(page);
+      await restoreTopScrollState(page);
+      // Leave a little scheduling headroom under a busy browser-test worker;
+      // the old quiet-window + restore pause alone required at least 900ms.
+      expect(Date.now() - started).toBeLessThan(800);
+    } finally {
+      await page.close();
+    }
   });
 
   it('preserves asynchronous body state and content revealed during lazy-load scrolling', async () => {

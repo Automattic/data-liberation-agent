@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { documentCanScroll } from './page-helpers.js';
 
 /**
  * Captures scroll-position-driven DOM mutations: a header/logo/etc. that changes
@@ -75,6 +76,7 @@ export async function captureScrollStates(
 		capturedAt: new Date().toISOString(),
 		toggles: [],
 	};
+	if ( ! await documentCanScroll( page ) ) return empty;
 
 	const scrollTo = async ( y: number ): Promise< void > => {
 		await page.evaluate( ( value ) => window.scrollTo( 0, value ), y );

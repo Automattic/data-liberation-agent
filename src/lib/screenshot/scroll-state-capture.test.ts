@@ -58,6 +58,32 @@ const BODY_AFFIX_INNER_BAR_FIXTURE = `<!doctype html><html><head><style>
 
 describe( 'captureScrollStates', () => {
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'returns the empty report without scrolling when the document fits the viewport',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( '<header id="header">Static header</header>' );
+				await page.evaluate( () => {
+					(window as Window & { attemptedScrolls?: number }).attemptedScrolls = 0;
+					const original = window.scrollTo.bind( window );
+					window.scrollTo = ( ( ...args: Parameters<typeof window.scrollTo> ) => {
+						(window as Window & { attemptedScrolls?: number }).attemptedScrolls =
+							((window as Window & { attemptedScrolls?: number }).attemptedScrolls ?? 0) + 1;
+						original( ...args );
+					} ) as typeof window.scrollTo;
+				} );
+				const report = await captureScrollStates( page, 'https://example.test/' );
+				expect( report.toggles ).toHaveLength( 0 );
+				expect( await page.evaluate( () => (window as Window & { attemptedScrolls?: number }).attemptedScrolls ) ).toBe( 0 );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'captures a scroll-driven class toggle and inline-style shrink, with a reproducible threshold',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
