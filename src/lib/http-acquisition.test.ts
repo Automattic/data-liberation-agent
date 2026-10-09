@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acquireHttpDocuments } from './http-acquisition.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import type { HttpAcquisitionProfile } from '../platform/acquisition.js';
+import { materializeHttpDocuments } from './http-materialization.js';
 
 const directories: string[] = [];
 const source = 'https://acquisition.example/';
@@ -20,6 +21,33 @@ afterEach( () => { for ( const root of directories.splice( 0 ) ) rmSync( root, {
 const dependencies = ( fetchImpl: typeof fetch ) => ( { fetch: ( url: string, options: Parameters<typeof safeFetch>[1] ) => safeFetch( url, { ...options, fetchImpl } ) } );
 
 describe( 'HTTP document acquisition', () => {
+	it( 'carries scoped seeds and redirect admission through HTTP export while keeping queries and shared resources', async () => {
+		const root = directory();
+		const url = `${source}customer`;
+		const routeScope = { origin: new URL(source).origin, pathPrefixes: ['/customer'] };
+		const fetchImpl = vi.fn<typeof fetch>( async input => {
+			const address = String(input);
+			if ( address === `${url}/leave` ) return new Response('', {status: 302, headers: {location: '/other/private'}});
+			if ( address === `${source}shared/theme.css` ) return new Response('article{color:navy}', {headers: {'content-type': 'text/css'}});
+			return new Response(`<link rel="stylesheet" href="/shared/theme.css"><article>${address}</article><a href="/">Platform</a>`, {headers: {'content-type': 'text/html'}});
+		} );
+		const single = { ...profile, variants: [{id: 'desktop'}] };
+		const result = await acquireHttpDocuments( { url, urls: [url, `${url}?view=one`, `${url}?view=two`, `${url}/leave`, source], routeScope, outputDir: root, profile: single, collectAssets: true }, dependencies(fetchImpl) );
+		expect( result.coverage ).toEqual( {routes: 4, requiredDocuments: 4, acquired: 3, browserRequired: 0, failed: 1} );
+		expect( result.documents.find(document => document.url.endsWith('/leave'))?.error ).toContain('adapter route scope');
+		const requested = fetchImpl.mock.calls.map(([input]) => String(input));
+		expect( requested ).not.toContain(source);
+		expect( requested ).not.toContain(`${source}other/private`);
+		expect( requested ).toContain(`${source}shared/theme.css`);
+		expect( result.resources ).toMatchObject( {captured: 1, failures: 0} );
+		const receipt = JSON.parse( readFileSync( materializeHttpDocuments( {outputDir: root, sourceUrl: url, platform: 'neutral-tenant', routeScope, desktopVariant: 'desktop'} ), 'utf8' ) );
+		expect( receipt.source.routeScope ).toEqual(routeScope);
+		expect( receipt.routes ).toHaveLength(3);
+		expect( new Set(receipt.routes.filter((route: {url: string}) => route.url.includes('?view=')).map((route: {path: string}) => route.path)).size ).toBe(2);
+		expect( readFileSync(join(root, 'website/index.html'), 'utf8') ).toContain(`href="${source}"`);
+		// HTTP remains an explicitly unverified review candidate, including any failed owned route.
+		expect( receipt.summary.complete ).toBe(false);
+	} );
 	it( 'retains a valid empty stylesheet as a shared no-op dependency', async () => {
 		const fetchImpl = vi.fn<typeof fetch>( async input => String( input ).endsWith( '/empty.css' )
 			? new Response( '', { headers: { 'content-type': 'text/css' } } )

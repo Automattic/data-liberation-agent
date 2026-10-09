@@ -54,6 +54,20 @@ it('continues owned inventory and observed aliases while retaining expansion and
 	expect(frontier.coverage()).toMatchObject({scheduled: 4, diagnostics: [{url: 'https://source.test/over-cap', reason: 'capture limit=4 exhausted; 4 addresses scheduled'}]});
 });
 
+it('keeps adapter namespace admission ahead of every discovery-budget ownership kind', () => {
+	const frontier = new LinkedFrontier({maxPages: 1, timeoutMs: 1}, 0, {origin: 'https://source.test', pathPrefixes: ['/customer']});
+	for (const ownership of ['inventory', 'alias', 'linked'] as const) {
+		for (const url of ['https://source.test/', 'https://source.test/customer-other', 'https://other.test/customer']) {
+			expect(frontier.admit(url, 0, 10, ownership)).toBe(false);
+		}
+	}
+	expect(frontier.coverage()).toMatchObject({requiredUrls: [], scheduled: 0, diagnostics: []});
+	expect(frontier.admit('https://source.test/customer', 0, 10, 'inventory')).toBe(true);
+	expect(frontier.admit('https://source.test/customer/proved', 0, 10, 'alias')).toBe(true);
+	expect(frontier.admit('https://source.test/customer/unknown', 1, 10)).toBe(false);
+	expect(frontier.coverage()).toMatchObject({scheduled: 2, diagnostics: [{url: 'https://source.test/customer/unknown', reason: 'timeoutMs=1 exhausted'}]});
+});
+
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded rendered linked frontier', () => {
 	it.each(['inventory', 'deadline', 'wave', 'cap'] as const)('completes admitted %s work after discovery expires with real navigation and browser restarts', async mode => {
 		const requests: string[] = [];

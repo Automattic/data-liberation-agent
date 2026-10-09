@@ -147,6 +147,8 @@ export function assertPublicHttpUrl(rawUrl: string): URL {
 }
 
 export interface SafeFetchOpts {
+  /** Optional caller-owned admission check, before the initial request and every redirect hop. */
+  authorizeUrl?: ( url: string ) => void;
   /** Per-request timeout in ms. Defaults to {@link DEFAULT_TIMEOUT_MS}. */
   timeoutMs?: number;
   /** Max body bytes. Defaults to {@link MAX_DOWNLOAD_BYTES}. */
@@ -201,6 +203,7 @@ export async function safeFetch(rawUrl: string, opts: SafeFetchOpts = {}): Promi
   let currentUrl = assertPublicHttpUrl(rawUrl).toString();
 
   for (let hop = 0; hop <= maxRedirects; hop++) {
+    opts.authorizeUrl?.(currentUrl);
     const originHeaders = opts.headersForOrigin
       ? await opts.headersForOrigin(new URL(currentUrl).origin)
       : undefined;

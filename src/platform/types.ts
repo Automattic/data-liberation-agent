@@ -75,6 +75,8 @@ export interface PlatformDetection {
 export interface Platform {
 	/** Opaque, stable, unique id (e.g. 'wix', 'godaddy-wm', 'acme-builder'). */
 	id: string;
+	/** Adapter-owned document namespaces on a shared origin. Omitted means the whole site; never an asset policy. */
+	routeScope?( sourceUrl: string ): SiteRouteScope;
 	/** Automatic-detection signals owned by this platform. */
 	detection?: PlatformDetection;
 	/** Inventory a site: sitemap/routes/navigation. Required. */
@@ -85,6 +87,12 @@ export interface Platform {
 	acquisition?: HttpAcquisitionProfile;
 	/** Read-only selectors identifying platform-owned application surfaces. */
 	inspection?: CapabilityRule[];
+}
+
+/** Serializable, segment-bounded route ownership; query strings retain document identity. */
+export interface SiteRouteScope {
+	origin: string;
+	pathPrefixes: string[];
 }
 
 /** Options accepted by {@link registerPlatform}. */

@@ -1,4 +1,6 @@
 import { documentRequestUrl } from '../url/route-key.js';
+import type { SiteRouteScope } from '../../platform/types.js';
+import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 
 export interface LinkedPageLimits {
 	maxPages?: number;
@@ -28,8 +30,9 @@ export class LinkedFrontier {
 	private readonly deadline: number;
 	private readonly capturePageLimit?: number;
 
-	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now()) {
+	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope) {
 		this.capturePageLimit = limits.capturePageLimit;
+		if (routeScope) validateRouteScope(routeScope);
 		this.limits = {
 			maxPages: limits.maxPages ?? 256,
 			maxDepth: limits.maxDepth ?? 8,
@@ -42,6 +45,7 @@ export class LinkedFrontier {
 	}
 
 	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked'): boolean {
+		if (!routeInScope(url, this.routeScope)) return false;
 		url = documentRequestUrl(url);
 		if (this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
 		this.required.add(url);

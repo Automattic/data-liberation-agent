@@ -9,6 +9,7 @@ import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
+import { routeInScope, validateRouteScope } from './url/route-scope.js';
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -180,6 +181,11 @@ export async function captureWebsite(
 		throw new UnsupportedCapturePlatformError(
 			`No adapter available for platform: ${ detection.platform }`
 		);
+	const routeScope = adapter.routeScope?.( sourceUrl );
+	if ( routeScope ) {
+		validateRouteScope( routeScope );
+		if ( !routeInScope( sourceUrl, routeScope ) ) throw new Error( 'Source URL is outside its adapter route scope' );
+	}
 	if ( options.acquisition === 'http' && ! adapter.acquisition ) throw new UnsupportedCapturePlatformError( `Platform ${ adapter.id } has no HTTP acquisition profile` );
 
 	progress( { phase: 'discovering', url: sourceUrl } );
@@ -193,11 +199,11 @@ export async function captureWebsite(
 		sourceUrl,
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
-			.filter( ( url ) => documentRequestUrl( url ) !== sourceRoute ),
+			.filter( ( url ) => routeInScope( url, routeScope ) && documentRequestUrl( url ) !== sourceRoute ),
 	];
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics: inventory.diagnostics ?? [] } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics: inventory.diagnostics ?? [] } );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
 	}
@@ -205,6 +211,7 @@ export async function captureWebsite(
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
 	const { createReferenceCollector } = await import( './fidelity/reference.js' );
 	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
+		routeScope,
 		publicUrlsOnly: true,
 		cleanupPolicy: ( await import( './source-cleanup.js' ) ).cleanupPolicy( adapter.liberation?.cleanupRules ),
 		removeSelectors: adapter.liberation?.removeSelectors,
@@ -212,6 +219,7 @@ export async function captureWebsite(
 	} );
 	const screenshotResult = await captureScreenshots( {
 		urls,
+		routeScope,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
 		primaryUrl: sourceUrl,
@@ -267,6 +275,7 @@ export async function captureWebsite(
 		outputDir,
 		sourceUrl,
 		platform: detection.platform,
+		routeScope,
 		resolveDocumentSelection: adapter.liberation?.documentSelection,
 		title: inventory.siteMeta?.title,
 		summary,

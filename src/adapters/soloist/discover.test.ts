@@ -49,11 +49,13 @@ describe('Soloist tenant discovery', () => {
 		const inventory = await discoverSoloist(`${origin}/gallery-artist/about`, {});
 		expect(inventory.urls).toEqual([
 			{ url: `${origin}/gallery-artist/`, type: 'homepage' },
-			{ url: `${origin}/gallery-artist/about`, type: 'page' },
+			{ url: `${origin}/gallery-artist/about?ref=nav`, type: 'page' },
 			{ url: `${origin}/gallery-artist/contact`, type: 'page' },
+			{ url: `${origin}/gallery-artist/about`, type: 'page' },
+			{ url: `${origin}/gallery-artist/about/?ref=nav`, type: 'page' },
 			{ url: `${origin}/gallery-artist/blog/first`, type: 'post' },
 		]);
-		expect(inventory.counts).toEqual({ homepage: 1, page: 2, post: 1 });
+		expect(inventory.counts).toEqual({ homepage: 1, page: 4, post: 1 });
 		expect(inventory.siteMeta).toMatchObject({ title: 'Artist', language: 'pt' });
 		expect(inventory.navigation.every((link) => new URL(link.href).pathname.startsWith('/gallery-artist/'))).toBe(true);
 		expect(requests).toEqual(['/gallery-artist/']);
@@ -65,7 +67,7 @@ describe('Soloist tenant discovery', () => {
 				<a href="/tenant/about/">About</a><script id="__NEXT_DATA__">${metadata}</script>`);
 			const inventory = await discoverSoloist(`${origin}/tenant/`, {});
 			expect(inventory.urls).toEqual([
-				{ url: `${origin}/tenant/`, type: 'homepage' }, { url: `${origin}/tenant/about`, type: 'page' },
+				{ url: `${origin}/tenant/`, type: 'homepage' }, { url: `${origin}/tenant/about/`, type: 'page' },
 			]);
 			expect(requests).toEqual(['/tenant/']);
 		},
