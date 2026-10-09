@@ -129,6 +129,21 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	} finally { await browser.close(); }
 }, 90_000);
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('does not retry a click whose gallery mutation is delayed', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		await page.setContent(`<!doctype html><section id="delayed"><div id="stage">${[0,1,2].map(i => `<img width="80" height="80" src="${image(i)}">`).join('')}</div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
+		let index=0;const urls=Array.from(document.querySelectorAll('#stage img'),img=>img.src);
+		function change(dir){setTimeout(()=>{index=(index+dir+3)%3;document.querySelectorAll('#stage img').forEach((img,slot)=>img.src=urls[(index+slot)%3])},600)}
+		document.querySelector('[aria-label="Next picture"]').onclick=()=>change(1);document.querySelector('[aria-label="Previous picture"]').onclick=()=>change(-1);
+		</script>`);
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+	} finally { await browser.close(); }
+}, 90_000);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'proves a three-frame directional cycle in at most 2N+1 clicks', async () => {
 		const browser = await chromium.launch();
