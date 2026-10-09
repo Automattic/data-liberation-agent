@@ -250,6 +250,51 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
+	it.skipIf( skipBrowser )( 'keeps a visible https iframe (even inside a faded-in wrapper) in a panel snapshot and drops unsafe ones', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<main><section>
+				<div id="tabs">
+					<div role="tablist" tabindex="0">
+						<button role="tab" id="t-a" aria-controls="p-a" aria-selected="true" tabindex="-1" type="button">Alpha</button>
+						<button role="tab" id="t-b" aria-controls="p-b" aria-selected="false" tabindex="-1" type="button">Bravo</button>
+					</div>
+					<div role="tabpanel" id="p-a"></div>
+					<div role="tabpanel" id="p-b" hidden></div>
+				</div>
+			</section></main>
+			<script>
+				const panels = {
+					a: '<p>Alpha panel copy with enough words to count.</p><div style="width:320px;opacity:0"><iframe src="https://video.example.test/embed/abc123" title="Demo video" width="900" height="500" style="width:320px;height:180px;border:0" onload="x()" data-extra="1" allowfullscreen></iframe></div>',
+					b: '<p>Bravo panel carries different words entirely here.</p><iframe src="http://insecure.example.test/x" style="width:200px;height:100px"></iframe><iframe src="https://hidden.example.test/y" style="display:none"></iframe><iframe srcdoc="<p>x</p>" style="width:200px;height:100px"></iframe>',
+				};
+				const select = (key) => {
+					for (const k of Object.keys(panels)) {
+						const tab = document.getElementById('t-' + k), panel = document.getElementById('p-' + k);
+						tab.setAttribute('aria-selected', String(k === key));
+						tab.tabIndex = k === key ? 0 : -1;
+						panel.hidden = k !== key;
+						panel.innerHTML = k === key ? panels[k] : '';
+					}
+				};
+				select('a');
+				document.querySelectorAll('[role=tab]').forEach((tab) => tab.addEventListener('mousedown', () => select(tab.id.slice(2))));
+			</script>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			const [ alpha, bravo ] = states.map( ( state ) => state.dialog?.html ?? '' );
+			expect( alpha ).toContain( '<iframe' );
+			expect( alpha ).toContain( 'src="https://video.example.test/embed/abc123"' );
+			expect( alpha ).toContain( 'width="320"' );
+			expect( alpha ).toContain( 'height="180"' );
+			expect( alpha ).toContain( 'title="Demo video"' );
+			expect( alpha.match( /<iframe[^>]*>/ )?.[ 0 ] ).not.toMatch( /onload|data-extra|style=/ );
+			expect( bravo ).toContain( 'Bravo panel' );
+			expect( bravo ).not.toContain( '<iframe' );
+		} finally {
+			await page.close();
+		}
+	} );
+
 	const pressedGroupPage = ( initial: [ boolean, boolean ], exclusive: boolean ) => `<main><section>
 		<div id="view-switch">
 			<button type="button" aria-pressed="${ initial[ 0 ] }">First view</button>
