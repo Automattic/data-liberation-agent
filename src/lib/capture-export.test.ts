@@ -2459,6 +2459,48 @@ describe( 'exportWebsiteCapture', () => {
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 	} );
 
+	it( 'keeps a ?tab= link on the captured route when the value names one of that page\'s tabs', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-tab-link-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<html><body><a id="good" href="https://example.com/treatments?tab=oral-habits">Oral</a><a id="unknown" href="https://example.com/treatments?tab=bogus">Bogus</a><a id="other" href="https://example.com/treatments?page=2">Other</a></body></html>' );
+		writeFileSync( join( outputDir, 'html', 'treatments.html' ), '<html><body><div role="tablist"><button role="tab" id="radix-:r0:-trigger-braces">Braces</button><button role="tab" id="radix-:r0:-trigger-oral-habits">Oral</button></div></body></html>' );
+		const tab = ( id: string ) => ( {
+			status: 'captured',
+			kind: 'selectable-set',
+			trigger: { selector: `#${ id }`, tag: 'button', id, role: 'tab', ariaHaspopup: '', dataBindings: {} },
+			dialog: { selector: '#panel', tag: 'div', ariaModal: false, html: '<div>Panel</div>', htmlBytes: 12, htmlTruncated: false },
+			set: { selector: 'body > div', size: 2, index: 0 },
+		} );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/treatments': {
+						html: 'html/treatments.html',
+						interactions: {
+							schema: 'data-liberation/interaction-states/v2',
+							sourceUrl: 'https://example.com/treatments',
+							viewport: { width: 1440, height: 900 },
+							capturedAt: '2026-08-22T00:00:00.000Z',
+							states: [ tab( 'radix-:r0:-trigger-braces' ), tab( 'radix-:r0:-trigger-oral-habits' ) ],
+							initialDialogs: [],
+						},
+					},
+				},
+			} )
+		);
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '#good' ).attr( 'href' ) ).toBe( '/treatments/index.html?tab=oral-habits' );
+		expect( $( '#unknown' ).attr( 'href' ) ).toBe( 'https://example.com/treatments?tab=bogus' );
+		expect( $( '#other' ).attr( 'href' ) ).toBe( 'https://example.com/treatments?page=2' );
+		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].states;
+		expect( states.map( ( state: { trigger: { tabKey?: string } } ) => state.trigger.tabKey ) ).toEqual( [ 'braces', 'oral-habits' ] );
+	} );
+
 	it( 'localizes images named inside captured interaction states, including renditions that were never downloaded', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-interaction-media-export-' ) );
 		dirs.push( outputDir );

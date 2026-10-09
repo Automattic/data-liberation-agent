@@ -238,6 +238,18 @@ interface PortableLinkContext {
 	documentPath: string;
 	servedPaths: Set< string >;
 	routeScope?: SiteRouteScope;
+	/** Selectable-set tab keys per captured document, keyed by `documentRequestUrl`. */
+	tabKeysByRoute?: Map< string, Set< string > >;
+}
+
+/**
+ * The stable key a tab library gives a tab trigger, which the source uses as
+ * the value of a `?tab=` style deep link. Radix names triggers
+ * `radix-<scope>-trigger-<value>`; the value is what its links carry.
+ */
+export function tabKeyOfTrigger( trigger: { role?: string; id?: string } ): string | undefined {
+	if ( trigger.role !== 'tab' || ! trigger.id ) return undefined;
+	return /^radix-.+?-trigger-([A-Za-z0-9_-]+)$/.exec( trigger.id )?.[ 1 ];
 }
 
 const PORTABLE_LINK_BASE = 'https://portable.invalid';
@@ -289,6 +301,19 @@ function rewriteCapturedRouteLinks(
 		if (comparisonRoutes.has(normalizedUrl(resolved.href))) {
 			link.attr('href', resolved.href);
 			return;
+		}
+		// A query that names one of the target page's own tabs selects a tab on
+		// that captured page; it is not a different document.
+		if ( resolved.search && portable?.tabKeysByRoute ) {
+			const base = new URL( resolved.href );
+			base.search = '';
+			const baseKey = documentRequestUrl( base.href );
+			const values = [ ...resolved.searchParams.values() ];
+			const baseRoute = routes.get( baseKey );
+			if ( baseRoute && values.length === 1 && portable.tabKeysByRoute.get( baseKey )?.has( values[ 0 ] ) ) {
+				link.attr( 'href', `${ baseRoute }${ resolved.search }${ resolved.hash }` );
+				return;
+			}
 		}
 		// A captured pathname does not prove an uncaptured query rendition.
 		if ( resolved.search ) {
@@ -1639,6 +1664,19 @@ function buildExportCapture(
 	for ( const entry of retainedEntries ) {
 		if ( entry.interactions ) localizeStringsInPlace( entry.interactions, localizeInteractionMedia );
 	}
+	// Give every selectable-set tab trigger its source key, so a consumer can
+	// match `?tab=<key>` links and select the tab without knowing the platform.
+	const tabKeysByRoute = new Map< string, Set< string > >();
+	for ( const entry of retainedEntries ) {
+		for ( const state of entry.interactions?.states ?? [] ) {
+			if ( state.kind !== 'selectable-set' ) continue;
+			const key = tabKeyOfTrigger( state.trigger );
+			if ( ! key ) continue;
+			( state.trigger as { tabKey?: string } ).tabKey = key;
+			const routeKey = documentRequestUrl( entry.url );
+			tabKeysByRoute.set( routeKey, ( tabKeysByRoute.get( routeKey ) ?? new Set() ).add( key ) );
+		}
+	}
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -1674,7 +1712,7 @@ function buildExportCapture(
 				),
 				url,
 				sourceRouteLinks,
-				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths, routeScope: options.routeScope }
+				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths, routeScope: options.routeScope, tabKeysByRoute }
 			),
 			`/${ routePath }`, responsiveIdentities
 		);
