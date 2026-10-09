@@ -1742,7 +1742,24 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	for ( const viewport of viewports ) validateCaptureProfile( viewport );
 	if ( new Set( viewports.map( viewport => viewport.id ) ).size !== viewports.length ) throw new Error( 'Duplicate source capture profile' );
 	const rawConcurrency = opts.concurrency ?? 6;
-	const concurrency = Math.max( 1, Math.min( 10, rawConcurrency ) );
+	const concurrency = Math.max( 1, Math.floor( Math.min( 10, rawConcurrency ) ) || 1 );
+	// Node reports the process group's memory constraint, including Chromium's
+	// children. RSS of this Node process alone misses the dominant capture owner.
+	// Explicit concurrency remains caller-owned; unconstrained runtimes retain
+	// the existing pool. Under a constraint, calibrate on one complete route
+	// (including its fresh reference pages) before admitting parallel routes.
+	const memoryLimit = opts.concurrency === undefined ? process.constrainedMemory() : 0;
+	// Some runtimes report an unlimited uint64 sentinel rather than zero.
+	// Only a representable byte budget is evidence of a usable constraint.
+	const memoryAdmission = Number.isSafeInteger( memoryLimit ) && memoryLimit > 0 && typeof process.availableMemory === 'function';
+	let observedWorkingSet = 0;
+	let calibrated = false;
+	const sampleMemory = (): number => {
+		const available = process.availableMemory();
+		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
+		observedWorkingSet = Math.max( observedWorkingSet, memoryLimit - available );
+		return available;
+	};
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
 	const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;
 	const evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 5_000;
@@ -2227,6 +2244,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				: urlFailures.filter( ( failure ) => ! isAbsentDocumentError( failure.error ) );
 		if ( urlFailures.length === 0 ) {
 			captured++;
+			// Reused artifacts, absent documents and redirect aliases do not
+			// calibrate the memory cost of a fresh successful capture.
+			if ( memoryAdmission && ! entry.redirectedTo ) { sampleMemory(); calibrated = true; }
 			sendLog( server, `[ok] ${ url }` );
 		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
 			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});
@@ -2265,12 +2285,39 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					? Math.min( waveEnd, segStart + browserRestartEvery - urlsSinceRestart )
 					: waveEnd;
 				let cursor = segStart;
-				const worker = async (): Promise< void > => {
-					// Each worker claims a distinct index before awaiting.
-					while ( cursor < segEnd ) await processUrl( urls[ cursor++ ] );
+				const running = new Set< Promise<void> >();
+				// Reserve the observed whole-group working set for routes whose peak
+				// may still be ahead. Even one unseen route can exceed the budget;
+				// this admits overlap, rather than enforcing a per-source byte cap.
+				const admit = (): boolean => {
+					if ( ! memoryAdmission ) return true;
+					const available = sampleMemory();
+					if ( running.size === 0 ) {
+						if ( available === 0 ) throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` );
+						return true;
+					}
+					return calibrated && available >= ( running.size + 1 ) * observedWorkingSet;
 				};
-				const poolSize = Math.min( concurrency, segEnd - segStart );
-				await Promise.all( Array.from( { length: poolSize }, () => worker() ) );
+				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
+				try {
+					while ( cursor < segEnd || running.size ) {
+						while ( cursor < segEnd && running.size < concurrency && admit() ) {
+							const url = urls[ cursor++ ];
+							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, activeRoutes: running.size + 1, calibrated, url } ) }\n` );
+							const pending = processUrl( url ).then( () => {
+								if ( memoryAdmission ) sampleMemory();
+							} );
+							running.add( pending );
+							// The race observes fatal rejection before browser cleanup.
+							void pending.then( () => running.delete( pending ), () => {} );
+						}
+						if ( running.size ) await Promise.race( running );
+					}
+				} finally {
+					if ( timer ) clearInterval( timer );
+					// Drain existing context cleanup without suppressing fatal errors.
+					await Promise.allSettled( running );
+				}
 				urlsSinceRestart += segEnd - segStart;
 				segStart = segEnd;
 			}

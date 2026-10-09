@@ -41,7 +41,9 @@ export interface ScreenshotOpts {
 	referenceWidths?: number[];
 	/** Declare required cells before navigating, so failed profiles stay pending. */
 	declareSourceProfile?: (url: string, profile: import('./capture-profiles.js').CaptureProfile) => void;
-	concurrency?: number; // default: 6
+	/** Maximum route workers. Explicit values override runtime-memory admission;
+	 * defaults to 6 on unconstrained hosts, measured admission under a Node memory constraint. */
+	concurrency?: number;
 	browserRestartEvery?: number; // default: 100
 	cdpPort?: number;
 	force?: boolean;
