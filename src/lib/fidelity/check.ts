@@ -50,6 +50,8 @@ const MAX_ROUTE_CHECKS = 32;
 
 /** Routes compared against the live source by default. Each costs a browser round trip. */
 const BROWSER_ROUTE_SAMPLE = 4;
+/** Sampled drift routes compared at once; each owns one source/copy page. */
+const DRIFT_ROUTE_CONCURRENCY = 3;
 
 /**
  * Widths the learning sweep does not visit. 1600 and 1728 sit above the
@@ -1157,20 +1159,20 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or a portable runtime receipt' );
 		validateMotionContract( motionContract );
 	}
-	let observe = options.observe;
-	const browser = observe ? null : await (await import('playwright')).chromium.launch();
+	const browser = options.observe ? null : await (await import('playwright')).chromium.launch();
 	let server: Awaited<ReturnType<typeof startStaticServer>> | null = null;
-	let page: Page | null = null;
 	try {
-		server = observe || candidate ? null : await startStaticServer( websiteDir );
-		page = browser ? await browser.newPage( await sourceContextOptions( browser, sourceUrl ) ) : null;
+		server = options.observe || candidate ? null : await startStaticServer( websiteDir );
 	} catch (error) {
 		await browser?.close();
-		await server?.close();
 		throw error;
 	}
-	if ( ! observe ) {
-		observe = async ( sourceHref, localHref, viewport, sourceSettleMs = 0 ) => {
+	// Each sampled route owns one page, so routes compare concurrently without
+	// sharing navigation, viewport or request listeners. Widths within a route
+	// stay sequential on that page. An injected observer keeps one sequential lane.
+	const routeConcurrency = options.observe ? 1 : DRIFT_ROUTE_CONCURRENCY;
+	const observeFor = ( page: Page | null, cleanupSink: CleanupReport[] ): ObservePair => options.observe ?? (
+		async ( sourceHref, localHref, viewport, sourceSettleMs = 0 ) => {
 			if ( ! page ) throw new Error( 'browser page missing' );
 			await page.setViewportSize( { width: viewport, height: 900 } );
 			let sourcePng: Buffer | undefined;
@@ -1179,7 +1181,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
-				cleanupReports.push(report);
+				cleanupSink.push(report);
 				if (report.failures.length || report.residual) throw new Error('Comparison source cleanup incomplete');
 			}
 			// Leave the source before observing the copy in this same tab. Sources
@@ -1215,8 +1217,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				}
 			}
 			return { source, liberated, sourcePng, liberatedPng };
-		};
-	}
+		} );
 
 	const scores: RouteScore[] = [];
 	const motionEvidence: MotionEvidence[] = [];
@@ -1225,6 +1226,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	// viewport. A reader comparing a shorter copy to a longer source needs to
 	// see whether a banner came off the source here, or nothing did.
 	const recordOverlays = (
+		sink: OverlayRecord[],
 		route: string,
 		viewport: number,
 		sourceHref: string,
@@ -1236,12 +1238,19 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			[ 'copy', localHref, pair.liberated ],
 		] as const ) {
 			const dismissed = observation.dismissedOverlays ?? [];
-			if ( dismissed.length ) overlays.push( { route, viewport, side, url, dismissed } );
+			if ( dismissed.length ) sink.push( { route, viewport, side, url, dismissed } );
 		}
 	};
 	let comparisonCompleted = false;
+	// Per-route evidence buffers, merged in route order even when a route fails,
+	// so partial-run evidence keeps every observation that completed.
+	const perRoute = routes.map( () => ( { routeScores: [] as RouteScore[], routeOverlays: [] as OverlayRecord[], routeMotion: [] as MotionEvidence[], routeCleanup: [] as CleanupReport[] } ) );
 	try {
-		for ( const route of routes ) {
+		await mapPool( routes, routeConcurrency, async ( route, index ) => {
+			const { routeScores, routeOverlays, routeMotion, routeCleanup } = perRoute[ index ];
+			const page = browser ? await browser.newPage( await sourceContextOptions( browser, sourceUrl ) ) : null;
+			const observe = observeFor( page, routeCleanup );
+			try {
 			const sourceHref = sources.get( route )!;
 			const localHref = `${ candidate ?? server?.url ?? 'http://liberated.invalid' }${ route }`;
 			const signals = unreproducedMotion.get( sourceHref );
@@ -1249,16 +1258,16 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			if ( signals && contract && browser ) {
 				for ( const width of motionContract!.widths ) {
 					log( `[compare] ${ route } @ ${ width }px source/candidate motion` );
-					motionEvidence.push( await verifyCandidateMotion( browser, route, width, sourceHref, localHref, contract, signals ) );
+					routeMotion.push( await verifyCandidateMotion( browser, route, width, sourceHref, localHref, contract, signals ) );
 				}
 			}
 			const candidateMotionVerified = !! signals && !! contract && [ 390, 768, 1440 ].every( ( width ) =>
-				motionEvidence.some( ( evidence ) => evidence.route === route && evidence.viewport === width && evidence.pass )
+				routeMotion.some( ( evidence ) => evidence.route === route && evidence.viewport === width && evidence.pass )
 			);
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width, contract ? contract.ready.sourceSettleMs : undefined );
-				recordOverlays( route, width, sourceHref, localHref, pair );
+				recordOverlays( routeOverlays, route, width, sourceHref, localHref, pair );
 				const evidenceDir = join(
 					dirname( receiptPath ),
 					'compare',
@@ -1314,7 +1323,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 						score.notes.push( evidence.error );
 					}
 				}
-				scores.push( score );
+				routeScores.push( score );
 			}
 			// The interactivity pass deliberately does not run the check registry.
 			// It blanks every field except dialogs so that one narrow question can
@@ -1324,7 +1333,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			if ( ! widths.includes( 390 ) ) {
 				log( `[compare] ${ route } @ 390px interactivity` );
 				const pair = await observe( sourceHref, localHref, 390, contract ? contract.ready.sourceSettleMs : undefined );
-				recordOverlays( route, 390, sourceHref, localHref, pair );
+				recordOverlays( routeOverlays, route, 390, sourceHref, localHref, pair );
 				const dialogOnly = ( observation: LayoutObservation ): LayoutObservation => ( {
 					...observation,
 					title: 'x',
@@ -1361,11 +1370,21 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				}
 				if ( candidateMotionVerified ) score.notes.push( portable ? `raw capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime verified` : 'source/capture motion unreproduced; independent candidate interaction verified' );
 				score.notes.push( 'interactivity' );
-				scores.push( score );
+				routeScores.push( score );
 			}
-		}
+			} finally {
+				await page?.close().catch( () => {} );
+			}
+		} );
 		comparisonCompleted = true;
 	} finally {
+		// Merge in route order so reports and evidence stay deterministic.
+		for ( const result of perRoute ) {
+			scores.push( ...result.routeScores );
+			overlays.push( ...result.routeOverlays );
+			motionEvidence.push( ...result.routeMotion );
+			cleanupReports.push( ...result.routeCleanup );
+		}
 		await browser?.close();
 		await server?.close();
 		const evidenceDir = join(dirname(receiptPath), 'compare');
