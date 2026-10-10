@@ -19,6 +19,7 @@ import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import {
 	dismissOverlays,
+	settleDocument,
 	triggerLazyLoad,
 	waitForStable,
 	type DismissedOverlay,
@@ -331,6 +332,9 @@ export function externalRequestHost( href: string, localOrigin: string | null ):
 	}
 }
 
+/** Quiet window that proves an observed document settled before its settle budget. */
+const OBSERVATION_QUIET_MS = 500;
+
 export async function observePage(
 	page: Page,
 	url: string,
@@ -357,7 +361,10 @@ export async function observePage(
 			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
 		}
 		await waitForStable( page );
-		if ( settleMs > 0 ) await page.waitForTimeout( settleMs );
+		// settleMs bounds readiness rather than fixing a sleep: a document whose
+		// DOM and finite animations are already quiet is observed immediately,
+		// while a source still mutating keeps the full budget.
+		if ( settleMs > 0 ) await settleDocument( page, 'observation', { quietMs: OBSERVATION_QUIET_MS, timeoutMs: settleMs, animations: true } );
 		if (cleanup) {
 			const report = await applySourceCleanup(page, cleanup);
 			if (localOrigin && report.removed) throw new Error('Liberated artifact retains advertising or source attribution');
