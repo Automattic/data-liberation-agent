@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, TABLET_REFINEMENT_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { waitForImages } from './page-helpers.js';
 
 describe( 'responsive readiness contract', () => {
@@ -287,4 +287,58 @@ describe( 'responsive readiness contract', () => {
 			expect( elapsed ).toBeLessThan( 9_000 );
 		} finally { await page.close(); }
 	}, 40_000 );
+	const writer = ( rule: string ) => `<style>body{margin:0}</style><div id="box" style="width:720px;height:40px">Neutral text</div>
+		<script>const box = document.querySelector('#box'); function resize() { box.style.width = (${ rule }) + 'px'; } addEventListener('resize', resize); resize();</script>`;
+
+	it( 'samples the coarse ladder only when the tablet band holds one relationship', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( writer( 'innerWidth / 2' ) );
+			const widths: number[] = [];
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => widths.push( width ) } );
+			expect( widths ).toEqual( DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+		} finally { await page.close(); }
+	}, 60_000 );
+
+	it( 'refines the tablet band and learns a switch inside it', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( writer( 'innerWidth >= 783 ? 600 : 300' ) );
+			const widths: number[] = [];
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => widths.push( width ) } );
+			expect( [ ...widths ].sort( ( a, b ) => a - b ) ).toEqual( DEFAULT_SWEEP_WIDTHS );
+			expect( result.breakpoints ).toContain( 783 );
+		} finally { await page.close(); }
+	}, 60_000 );
+	it.each( [
+		[ 'smooth', 'innerWidth / 2', false ],
+		[ 'mobile switch at 768', 'innerWidth < 768 ? innerWidth - 20 : innerWidth / 2', true ],
+		[ 'tablet-only regime', 'innerWidth >= 768 && innerWidth <= 800 ? 500 : innerWidth / 2', true ],
+		[ 'clamped outside the band', 'Math.min( 600, innerWidth * 0.6 )', false ],
+	] )( 'learns the same copy from the adaptive and full ladders: %s', async ( _, rule, refines ) => {
+		const copyGeometry = async ( widths?: number[] ) => {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			try {
+				await page.setContent( writer( rule ) );
+				const visited: number[] = [];
+				await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => visited.push( width ), ...( widths ? { widths } : {} ) } );
+				await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+				await copy.setContent( await page.content() );
+				const geometry: number[] = [];
+				// Widths neither ladder samples, across every regime.
+				for ( const width of [ 500, 700, 772, 786, 795, 900, 1100, 1700 ] ) {
+					await copy.setViewportSize( { width, height: 900 } );
+					geometry.push( Math.round( await copy.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ) );
+				}
+				return { visited: visited.length, geometry };
+			} finally { await page.close(); await copy.close(); }
+		};
+		const full = await copyGeometry( DEFAULT_SWEEP_WIDTHS );
+		const adaptive = await copyGeometry();
+		expect( adaptive.geometry ).toEqual( full.geometry );
+		expect( adaptive.visited ).toBe( refines ? DEFAULT_SWEEP_WIDTHS.length : DEFAULT_SWEEP_WIDTHS.length - TABLET_REFINEMENT_WIDTHS.length );
+	}, 120_000 );
 } );
