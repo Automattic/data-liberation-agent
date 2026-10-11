@@ -52,7 +52,7 @@ vi.mock( './media-fetch/media.js', () => ( {
 	} ),
 } ) );
 
-import { captureWebsite, downloadCaptureSectionMedia, IncompleteCaptureError } from './capture.js';
+import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, downloadCaptureSectionMedia, IncompleteCaptureError } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
 
@@ -183,6 +183,47 @@ describe( 'captureWebsite fluid learning', () => {
 		expect( captureScreenshotsMock ).toHaveBeenCalledWith(
 			expect.objectContaining( { learnFluid: expected } )
 		);
+	} );
+
+	it.each( [
+		{ option: undefined, expected: DEFAULT_REFERENCE_SAMPLE, label: 'bounds reference evidence to the default sample' },
+		{ option: 3, expected: 3, label: 'honors an explicit reference sample' },
+		{ option: 'all' as const, expected: undefined, label: "freezes every route with referenceSample 'all'" },
+	] )( '$label', async ( { option, expected } ) => {
+		await captureWebsite(
+			{ url: sourceUrl, outputDir: root, ...( option === undefined ? {} : { referenceSample: option } ) },
+			{
+				findAdapter: () => ( {
+					id: 'generic',
+					platform: 'generic',
+					discover: async () => ( { urls: Array.from( { length: 9 }, ( _, i ) => ( { url: `${ sourceUrl }page-${ i }` } ) ) } ),
+					extract: async () => ( { title: '', content: '' } ),
+				} ),
+			}
+		);
+		const call = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { referenceSampleUrls?: readonly string[] };
+		if ( expected === undefined ) expect( call.referenceSampleUrls ).toBeUndefined();
+		else {
+			expect( call.referenceSampleUrls ).toHaveLength( expected );
+			expect( call.referenceSampleUrls ).toContain( sourceUrl );
+		}
+	} );
+
+	it.each( [ 0, -1, 1.5 ] )( 'rejects referenceSample %s before any browser starts', async ( referenceSample ) => {
+		await expect(
+			captureWebsite(
+				{ url: sourceUrl, outputDir: root, referenceSample },
+				{
+					findAdapter: () => ( {
+						id: 'generic',
+						platform: 'generic',
+						discover: async () => ( { urls: [] } ),
+						extract: async () => ( { title: '', content: '' } ),
+					} ),
+				}
+			)
+		).rejects.toThrow( 'referenceSample must be a positive integer' );
+		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
 	} );
 } );
 

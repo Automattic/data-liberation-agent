@@ -45,8 +45,13 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('source locale (real Chromium)',
       expect(requests).toHaveLength(3); // one harvest, one desktop, one mobile
       expect(requests.every((request) => request.language?.startsWith('en-US'))).toBe(true);
       expect(requests[0].userAgent).toContain('Chrome/');
-      expect(requests[1].userAgent).not.toContain('HeadlessChrome');
-      expect(requests[2].userAgent).toContain('iPhone');
+      // Desktop and mobile passes run concurrently, so their requests arrive in either order.
+      const passes = requests.slice(1);
+      const mobile = passes.filter((request) => request.userAgent.includes('iPhone'));
+      const desktop = passes.filter((request) => !request.userAgent.includes('iPhone'));
+      expect(mobile).toHaveLength(1);
+      expect(desktop).toHaveLength(1);
+      expect(desktop[0].userAgent).not.toContain('HeadlessChrome');
       expect(requests.slice(1).every((request) => request.cookie?.includes('language-session=ready'))).toBe(true);
       const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8'));
       expect(Object.keys(manifest.entries)).toHaveLength(1);

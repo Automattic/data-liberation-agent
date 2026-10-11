@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { CapturedGallery } from './gallery-capture.js';
+import { settleDocument } from './page-helpers.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 
@@ -78,7 +79,8 @@ const SEMANTIC_POPUP_SELECTOR =
 	'dialog,[role="dialog"],[aria-modal="true"],[role="listbox"],[role="menu"],[role="tree"],[role="grid"]';
 
 export interface CapturedDialogInteraction {
-	status: 'captured' | 'no-dialog' | 'click-failed';
+	/** An opened surface whose bounded interaction proof is incomplete is not an absent dialog. */
+	status: 'captured' | 'observed-incomplete' | 'no-dialog' | 'click-failed';
 	/**
 	 * Distinguishes an in-page disclosure/accordion panel (content restored in
 	 * place, before HTML serialization — see `hydrateDisclosureContent`) from a
@@ -91,7 +93,7 @@ export interface CapturedDialogInteraction {
 	 */
 	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search' | 'gallery';
 	/** Directional replay requires a complete cycle, inverse edges and source restoration. */
-	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean; selection?: number[] };
+	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean; selection?: number[]; viewportRestoration?: 'verified' | 'unverified' };
 	collectionFilter?: import('./typed-search-capture.js').CapturedCollectionFilter;
 	trigger: {
 		selector: string;
@@ -986,21 +988,9 @@ async function panelIntersectsViewport( page: Page, selector: string ): Promise<
 }
 
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {
-	let previous = -1;
-	let stableSamples = 0;
-	const deadline = Date.now() + DIALOG_WAIT_MS;
-	while ( Date.now() < deadline ) {
-		await page.waitForTimeout( 150 );
-		const bytes = await page
-			.locator( selector )
-			.first()
-			.evaluate( ( element ) => new TextEncoder().encode( element.outerHTML ).length )
-			.catch( () => -1 );
-		if ( bytes > 0 && bytes === previous ) stableSamples++;
-		else stableSamples = 0;
-		if ( stableSamples >= 2 ) return;
-		previous = bytes;
-	}
+	// Content is stable once the dialog subtree has not changed for two
+	// 150 ms intervals, the window the previous sampled-size poll required.
+	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS } );
 }
 
 async function snapshotDialog(

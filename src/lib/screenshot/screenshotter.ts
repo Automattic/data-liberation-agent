@@ -14,9 +14,7 @@ import { applyCaptureRemovals } from './apply-removals.js';
 import { accessGateRemoval, applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
 import { accessGateNote, installAccessGatePlaceholder, openAccessGateShell, routeKeptContent, type AccessGateEvidence } from '../access-gate.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
-import { CssAggregator } from './css-aggregator.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
-import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture-runner.js';
 import {
 	countBodyTags,
 	isRouteDrift,
@@ -24,8 +22,6 @@ import {
 	navigationDocumentUrl,
 	serverRedirectTarget,
 } from './document-integrity.js';
-import { collectMobileChromeLayout } from './dom-capture.js';
-import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
@@ -45,14 +41,13 @@ import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
-import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -70,7 +65,6 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import type { ExtractedNav } from './nav-extract.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /**
@@ -160,25 +154,6 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 	}
 }
 
-interface DesignCaptureContext {
-	cssAgg: CssAggregator;
-	jsAgg?: JsAggregator;
-	headLinks: Set< string >;
-	cssMediaUrls: Set< string >;
-	baseUrl: string;
-	includeScripts: boolean;
-	/** Run-level accumulator: first non-null value wins. */
-	chromeAccum: {
-		/** Structured nav data extracted from the header (replaces headerHtml). */
-		nav: ExtractedNav | null;
-		footerHtml: string | null;
-		/** Desktop baked layout map (marker → props). Set on first successful chrome capture. */
-		desktopLayoutMap: BakedLayoutMap | null;
-		/** Mobile baked layout map (marker → props). Collected during the mobile viewport pass. */
-		mobileLayoutMap: BakedLayoutMap | null;
-	};
-}
-
 interface CapturePerViewportArgs {
 	page: Page;
 	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
@@ -209,7 +184,6 @@ interface CapturePerViewportArgs {
 	plan: ArtifactPlan;
 	url: string;
 	slug: string;
-	archetype: string;
 	settleMs: number;
 	screenshotTimeoutMs: number;
 	evaluateTimeoutMs: number;
@@ -217,7 +191,6 @@ interface CapturePerViewportArgs {
 	entry: ManifestEntry;
 	aggregator: SiteAnalysisAggregator;
 	shouldAnalyze: boolean;
-	designCtx?: DesignCaptureContext; // present when design capture is enabled
 	outputDir: string;
 	/** Accumulates {media id → mobile-variant URL} from the mobile viewport, for
 	 *  responsive-image carry. Mutated in place; written once after all captures. */
@@ -736,7 +709,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		plan,
 		url,
 		slug,
-		archetype,
 		settleMs,
 		screenshotTimeoutMs,
 		evaluateTimeoutMs,
@@ -744,7 +716,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		entry,
 		aggregator,
 		shouldAnalyze,
-		designCtx,
 		outputDir,
 		responsiveImages,
 		mobileHeights,
@@ -1284,114 +1255,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
-	// --- desktop-only design capture (page/post archetypes only) ---------------
-	if ( args.rendererCrashed() ) return;
-	if ( isDesktop && designCtx ) {
-		try {
-			// The design sidecar slug MUST match the WXR item slug used by adapters
-			// (item.slug = slugify(url)) so flushPendingImports can find the sidecar
-			// by entry.slug. The manifest `slug` may have a collision suffix (-2, -3)
-			// when multiple URLs share the same base, so we derive the design sidecar
-			// slug directly from the URL — same derivation the adapters use.
-			const designSlug = slugify( url );
-			args.phases?.enter( 'design' );
-			const designResult = await captureDesignForUrl( {
-				page,
-				url,
-				slug: designSlug,
-				archetype,
-				outputDir,
-				baseUrl: designCtx.baseUrl,
-				includeScripts: designCtx.includeScripts,
-				cssAgg: designCtx.cssAgg,
-				jsAgg: designCtx.jsAgg,
-				headLinks: designCtx.headLinks,
-				chromeAccum: designCtx.chromeAccum,
-			} );
-			if ( designResult ) {
-				for ( const u of designResult.cssMediaUrls ) designCtx.cssMediaUrls.add( u );
-			}
-		} catch ( err ) {
-			// Non-fatal — design capture failure does not fail the screenshot run
-			// (captureDesignForUrl already catches + logs internally; this guard
-			// catches any unexpected throw from the orchestration layer itself)
-			console.error(
-				`[design] unexpected error for ${ url }: ${
-					err instanceof Error ? err.message : String( err )
-				}`
-			);
-		}
-	}
-
-	// --- mobile-only chrome layout collection (dual-viewport bake) ------------
-	// Collect the mobile computed layout for the chrome using the marker classes
-	// assigned during the desktop pass. Only runs once — after the desktop pass
-	// has established the chromeAccum with a desktopLayoutMap AND the mobile
-	// layout hasn't been collected yet.
-	//
-	// Limitation: if Wix (or similar) renders a different chrome DOM at mobile
-	// (hamburger menu), collectMobileChromeLayout returns null (no markers found)
-	// and mobileLayoutMap stays null. generateChromeCss then emits desktop-only
-	// rules. The static hamburger is not interactive — known limitation.
-	if (
-		isMobile &&
-		designCtx &&
-		designCtx.chromeAccum.desktopLayoutMap !== null &&
-		designCtx.chromeAccum.mobileLayoutMap === null
-	) {
-		try {
-			args.phases?.enter( 'design' );
-			const mobileMap = await collectMobileChromeLayout( page );
-			if ( mobileMap && Object.keys( mobileMap ).length > 0 ) {
-				designCtx.chromeAccum.mobileLayoutMap = mobileMap;
-			}
-		} catch ( err ) {
-			// Non-fatal — mobile chrome layout collection failure degrades to desktop-only CSS.
-			console.error(
-				`[design] mobile chrome layout collection failed for ${ url }: ${
-					err instanceof Error ? err.message : String( err )
-				}`
-			);
-		}
-	}
-
-	// --- mobile-only body fragment capture (dual-viewport page content) --------
-	// Capture the chrome-stripped body fragment at the mobile viewport and write
-	// design/<slug>.mobile.fragment.html. This is the counterpart to the desktop
-	// sidecar written by captureDesignForUrl during the desktop pass. Both sidecars
-	// are consumed by flushPendingImports to build the viewport-toggle contentOverride.
-	//
-	// Only run when:
-	//   - this is the mobile viewport pass
-	//   - design capture is active (designCtx present)
-	//   - the archetype is a design-captured content type (same gate as desktop)
-	//
-	// The check against `archetype` uses the same DESIGN_CAPTURE_ARCHETYPES set logic.
-	// We re-derive the slug the same way the desktop pass does: slugify(url).
-	if ( isMobile && designCtx ) {
-		const DESIGN_CAPTURE_ARCHETYPES = new Set( [ 'homepage', 'page', 'post', 'gallery', 'event' ] );
-		if ( DESIGN_CAPTURE_ARCHETYPES.has( archetype ) ) {
-			try {
-				const designSlug = ( await import( '../url/index.js' ) ).slugify( url );
-				args.phases?.enter( 'design' );
-				await captureMobileBodyFragment( {
-					page,
-					slug: designSlug,
-					outputDir,
-					cssAgg: designCtx.cssAgg,
-				} );
-			} catch ( err ) {
-				// Non-fatal — mobile body capture failure means only desktop fragment is available.
-				// flushPendingImports falls back to desktop-only wrapping.
-				console.error(
-					`[design] mobile body fragment capture failed for ${ url }: ${
-						err instanceof Error ? err.message : String( err )
-					}`
-				);
-			}
-		}
-	}
-
 	// Dialogs and selectable sets are captured only after every baseline artifact
 	// so probing a trigger cannot alter screenshots, geometry, sidecars, or page
 	// HTML. Each viewport needs its own probe: a desktop dialog must not suppress
@@ -1703,12 +1566,23 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Some runtimes report an unlimited uint64 sentinel rather than zero.
 	// Only a representable byte budget is evidence of a usable constraint.
 	const memoryAdmission = Number.isSafeInteger( memoryLimit ) && memoryLimit > 0 && typeof process.availableMemory === 'function';
+	// Admission reserves memory per route, so it needs a per-route estimate:
+	// group growth above the idle floor (Node, Chromium and retained resources
+	// with no route running), divided across the routes active when sampled.
+	// The whole-group peak would count that floor and every concurrent route
+	// against each new route, throttling harder the more routes overlap.
 	let observedWorkingSet = 0;
+	let idleFloor: number | undefined;
+	let routeWorkingSet = 0;
+	let activeRoutes = 0;
 	let calibrated = false;
 	const sampleMemory = (): number => {
 		const available = process.availableMemory();
 		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
-		observedWorkingSet = Math.max( observedWorkingSet, memoryLimit - available );
+		const used = memoryLimit - available;
+		observedWorkingSet = Math.max( observedWorkingSet, used );
+		if ( activeRoutes === 0 ) idleFloor = used;
+		else if ( idleFloor !== undefined ) routeWorkingSet = Math.max( routeWorkingSet, ( used - idleFloor ) / activeRoutes );
 		return available;
 	};
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
@@ -1792,12 +1666,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const aggregator = new SiteAnalysisAggregator();
 	const aggregateAlreadyFresh = ! force && hasSingleUrlAggregate( opts.outputDir );
 
-	// --- design capture aggregators (run-level) --------------------------------
-	// Constructed once per run; populated during the per-URL capture pass.
-	// Only active when opts.captureDesign is true.
-	const includeScripts = opts.includeScripts ?? false;
-	// Derive a stable base URL from the URL list for first-party checks.
-	// Fall back to a bare origin of the first URL if primaryUrl isn't provided.
 	const baseUrl = opts.primaryUrl
 		? opts.primaryUrl.includes( '://' )
 			? opts.primaryUrl
@@ -1810,23 +1678,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					return 'https://localhost';
 				}
 		  } )();
-	const cssAgg = new CssAggregator();
-	const jsAgg = includeScripts ? new JsAggregator( baseUrl ) : undefined;
-	const headLinks = new Set< string >();
-	const cssMediaUrls = new Set< string >();
 	const resourceStore = new CapturedResourceStore( opts.outputDir, baseUrl );
-	if ( opts.captureDesign ) {
-		cssAgg.init( opts.outputDir );
-	}
-	const chromeAccum = {
-		nav: null as ExtractedNav | null,
-		footerHtml: null as string | null,
-		desktopLayoutMap: null as BakedLayoutMap | null,
-		mobileLayoutMap: null as BakedLayoutMap | null,
-	};
-	const designCtx: DesignCaptureContext | undefined = opts.captureDesign
-		? { cssAgg, jsAgg, headLinks, cssMediaUrls, baseUrl, includeScripts, chromeAccum }
-		: undefined;
 
 	// --- browser -----------------------------------------------------------
 	let browser: Browser = ( await connectBrowser( {
@@ -1940,21 +1792,57 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
-
-		for ( const viewport of routeProfiles ) {
+		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
+			const previousInteractions = entry.interactions;
+			const previousCleanup = entry.cleanup;
+			const previousDocuments = entry.documents;
+			const previousNativeViewTimelines = entry.nativeViewTimelines;
+			const previousRedirect = entry.redirectedTo;
+			const previousOutcomes = entry.sourceOutcomes ?? [];
+			const previousLocal = Boolean( entry.html || entry.mobileHtml );
+			const profileLocal = Boolean( profileEntry.html || profileEntry.mobileHtml );
+			const aliasDisagreement = profileEntry.redirectedTo
+				? Boolean( ( previousRedirect && previousRedirect !== profileEntry.redirectedTo ) || previousLocal || previousOutcomes.length )
+				: Boolean( previousRedirect && ( profileLocal || profileEntry.sourceOutcomes?.length ) );
+			const profileRecord = profileEntry.profiles?.[ viewport.id ];
+			const { profiles: _profiles, ...passEntry } = profileEntry;
+			if ( viewport.id === 'desktop' ) Object.assign( entry, passEntry );
+			else if ( viewport.id === 'mobile' ) {
+				if ( profileEntry.mobile ) entry.mobile = profileEntry.mobile;
+				if ( profileEntry.mobileScrolled ) entry.mobileScrolled = profileEntry.mobileScrolled;
+				if ( profileEntry.mobileHtml ) entry.mobileHtml = profileEntry.mobileHtml;
+				if ( profileEntry.redirectedTo ) entry.redirectedTo = profileEntry.redirectedTo;
+				if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
+			}
+			if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
+			entry.documents = { ...previousDocuments, ...profileEntry.documents };
+			if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
+			if ( ! additional ) {
+				const latest = profileEntry.interactions;
+				const accepted = latest && hasPromotableInteractionEvidence( previousInteractions, latest );
+				entry.interactions = accepted ? mergeInteractionReports( previousInteractions, latest ) : previousInteractions;
+			}
+			if ( ! additional && ! entry.scrollStates?.toggles.length && profileEntry.scrollStates ) entry.scrollStates = profileEntry.scrollStates;
+			if ( profileEntry.cleanup ) entry.cleanup = { policy: profileEntry.cleanup.policy, reports: [ ...( previousCleanup?.reports ?? [] ), ...profileEntry.cleanup.reports ] };
+			if ( profileRecord ) entry.profiles![ viewport.id ] = profileRecord;
+			return aliasDisagreement;
+		};
+		const captureProfile = async ( viewport: Viewport ): Promise< { profileEntry: ManifestEntry; failures: FailureEntry[]; additional: boolean } | undefined > => {
 			const vpPlan = profilePlan( viewport );
-			if ( ! vpPlan.needsLoad ) continue;
+			if ( ! vpPlan.needsLoad ) return undefined;
 			const additional = ! [ 'desktop', 'mobile' ].includes( viewport.id );
 			const profileEntry: ManifestEntry = { slug, capturedAt: capturedAt() };
+			const profileFailures: FailureEntry[] = [];
+			let identity: ReturnType< typeof replayBrowserIdentity > | undefined;
+			let contextOptions: BrowserContextOptions | undefined;
 
 			// Retry a crashed renderer in a fresh context once. A disconnected browser
 			// also needs the shared relaunch before the retry.
 			for ( let crashRetry = false; ; crashRetry = true ) {
 				const attemptBrowser = browser;
-				const failuresBefore = urlFailures.length;
+				const failuresBefore = profileFailures.length;
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
-				let aliasDisagreement = false;
 				const phases = createPhaseLedger();
 				phases.enter( 'context' );
 				try {
@@ -1978,7 +1866,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					const device = viewport.device ? devices[ viewport.device ] : undefined;
 					if ( viewport.device && ! device ) throw new Error( `Unknown source device profile: ${ viewport.device }` );
 					const { defaultBrowserType: _deviceType, ...deviceContext } = device ?? {};
-					const contextOptions: BrowserContextOptions = {
+					contextOptions = {
 						...( viewport.id === 'mobile'
 							? { ...sessionContext, ...IPHONE_17_CONTEXT }
 							: sessionContext ),
@@ -1990,7 +1878,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						...deviceContext, ...viewport.context,
 						viewport: { width: viewport.width, height: viewport.height },
 					};
-					const identity = replayBrowserIdentity( contextOptions );
+					identity = replayBrowserIdentity( contextOptions );
 					context = await attemptBrowser.newContext( contextOptions );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
@@ -2004,6 +1892,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeViewportEntrances );
 					await context.addInitScript( observeRuntimeStyleWrites );
 					const page = await context.newPage();
+					reportReadiness( page, ( name, outcome ) => phases.wait( name, outcome ) );
 					page.once( 'crash', () => { rendererCrashed = true; } );
 					try {
 						await capturePerViewport( {
@@ -2015,15 +1904,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							plan: vpPlan,
 							url,
 							slug,
-							archetype: classifyUrl( url ),
 							settleMs,
 							screenshotTimeoutMs,
 							evaluateTimeoutMs,
-							failures: urlFailures,
+							failures: profileFailures,
 							entry: profileEntry,
 							aggregator,
 							shouldAnalyze: viewport.id === 'desktop' && shouldAnalyzeUrl,
-							designCtx: additional ? undefined : designCtx,
 							outputDir: opts.outputDir,
 							responsiveImages,
 							mobileHeights,
@@ -2048,57 +1935,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						// HTML and successful interaction evidence precede the final cleanup
 						// audit. A late audit failure must record a failure, not erase those
 						// artifacts (the prior shared-entry transaction retained them too).
-						const previousInteractions = entry.interactions;
-						const previousCleanup = entry.cleanup;
-						const previousDocuments = entry.documents;
-						const previousNativeViewTimelines = entry.nativeViewTimelines;
-						// Every profile classifies the same initial document. A redirect
-						// alias, local document and external boundary cannot coexist.
-						const previousRedirect = entry.redirectedTo;
-						const previousOutcomes = entry.sourceOutcomes ?? [];
-						const previousLocal = Boolean( entry.html || entry.mobileHtml );
-						const profileLocal = Boolean( profileEntry.html || profileEntry.mobileHtml );
-						aliasDisagreement = profileEntry.redirectedTo
-							? Boolean( ( previousRedirect && previousRedirect !== profileEntry.redirectedTo ) || previousLocal || previousOutcomes.length )
-							: Boolean( previousRedirect && ( profileLocal || profileEntry.sourceOutcomes?.length ) );
-						if ( viewport.id === 'desktop' ) {
-							Object.assign( entry, profileEntry );
+						if ( identity && contextOptions ) {
+							const documentUrl = profileEntry.documents?.[ viewport.id ];
+							profileEntry.profiles = { [ viewport.id ]: {
+								recipe: viewport, viewport: { width: viewport.width, height: viewport.height }, identity,
+								userAgent: contextOptions.userAgent, browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
+								deviceScaleFactor: contextOptions.deviceScaleFactor ?? 1, html: viewport.id === 'mobile' ? profileEntry.mobileHtml : profileEntry.html,
+								...( documentUrl ? { documentUrl } : {} ),
+								fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
+								nativeViewTimelines: profileEntry.nativeViewTimelines,
+								interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
+							} };
 						}
-						else if ( viewport.id === 'mobile' ) {
-							if ( profileEntry.mobile ) entry.mobile = profileEntry.mobile;
-							if ( profileEntry.mobileScrolled ) entry.mobileScrolled = profileEntry.mobileScrolled;
-							if ( profileEntry.mobileHtml ) entry.mobileHtml = profileEntry.mobileHtml;
-							if ( profileEntry.redirectedTo ) entry.redirectedTo = profileEntry.redirectedTo;
-							if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
-						}
-						if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
-						entry.documents = { ...previousDocuments, ...profileEntry.documents };
-						if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
-						if ( ! additional ) {
-							const latest = profileEntry.interactions;
-							const accepted = latest && hasPromotableInteractionEvidence( previousInteractions, latest );
-							entry.interactions = accepted ? mergeInteractionReports( previousInteractions, latest ) : previousInteractions;
-						}
-						if ( ! additional && ! entry.scrollStates?.toggles.length && profileEntry.scrollStates ) entry.scrollStates = profileEntry.scrollStates;
-						if ( profileEntry.cleanup ) entry.cleanup = { policy: profileEntry.cleanup.policy, reports: [ ...( previousCleanup?.reports ?? [] ), ...profileEntry.cleanup.reports ] };
-						const htmlPath = viewport.id === 'mobile' ? profileEntry.mobileHtml : profileEntry.html;
-						const documentUrl = profileEntry.documents?.[ viewport.id ];
-						entry.profiles![ viewport.id ] = { recipe: viewport, viewport: { width: viewport.width, height: viewport.height },
-							identity,
-							userAgent: contextOptions.userAgent, browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
-							deviceScaleFactor: contextOptions.deviceScaleFactor ?? 1, html: htmlPath,
-							...( documentUrl ? { documentUrl } : {} ),
-							// The learner's document label namespaces desktop/mobile rules;
-							// every non-desktop pass writes fluidMobile, including extra profiles.
-							fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
-							nativeViewTimelines: profileEntry.nativeViewTimelines,
-							interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
-						};
+						if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 					}
-					if ( aliasDisagreement ) throw new Error( 'Source redirect aliases disagree across viewports' );
-					if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 				} catch ( err ) {
-					urlFailures.push( {
+					profileFailures.push( {
 						url,
 						viewport: viewport.id,
 						stage: 'goto',
@@ -2122,11 +1974,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							/* best-effort */
 						}
 					}
-					const profileRecord = entry.profiles?.[ viewport.id ];
-					if ( profileRecord ) profileRecord.phases = phases.finish();
+					const profileRecord = profileEntry.profiles?.[ viewport.id ];
+					if ( profileRecord ) {
+						profileRecord.phases = phases.finish();
+						profileRecord.readiness = phases.readiness();
+					}
 				}
-				if ( rendererCrashed && urlFailures.length === failuresBefore ) {
-					urlFailures.push( {
+				if ( rendererCrashed && profileFailures.length === failuresBefore ) {
+					profileFailures.push( {
 						url,
 						viewport: viewport.id,
 						stage: 'evaluate',
@@ -2135,22 +1990,50 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						attempt: crashRetry ? 2 : 1,
 					} );
 				}
-				for ( const failure of urlFailures.slice( failuresBefore ) ) {
+				for ( const failure of profileFailures.slice( failuresBefore ) ) {
 					failure.attempt = crashRetry ? 2 : failure.attempt;
 				}
-				const failed = urlFailures.length > failuresBefore;
+				const failed = profileFailures.length > failuresBefore;
 				if ( ! failed || crashRetry ) break;
 				if ( attemptBrowser.isConnected() ) {
 					if ( ! rendererCrashed ) break;
 					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
-				urlFailures.length = failuresBefore;
+				profileFailures.length = failuresBefore;
 			}
+			return { profileEntry, failures: profileFailures, additional };
+		};
+		const builtInProfiles = ( [ 'desktop', 'mobile' ] as const )
+			.map( id => routeProfiles.find( profile => profile.id === id ) )
+			.filter( ( profile ): profile is Viewport => Boolean( profile ) );
+		const builtInResults = memoryAdmission
+			? await ( async () => {
+					const results = [];
+					for ( const viewport of builtInProfiles ) results.push( await captureProfile( viewport ) );
+					return results;
+			  } )()
+			: await Promise.all( builtInProfiles.map( viewport => captureProfile( viewport ) ) );
+		for ( let index = 0; index < builtInProfiles.length; index++ ) {
+			const viewport = builtInProfiles[ index ]!;
+			const result = builtInResults[ index ];
+			if ( ! result ) continue;
+			urlFailures.push( ...result.failures );
+			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
+				url, viewport: viewport.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
+			} );
 			if ( viewport.id === 'desktop' && entry.html && ! additionalDeclared ) {
 				const before = routeProfiles.length;
 				declareAdditional( readFileSync( join( opts.outputDir, entry.html ), 'utf8' ) );
 				for ( const profile of routeProfiles.slice( before ) ) opts.declareSourceProfile?.( url, profile );
 			}
+		}
+		for ( const viewport of routeProfiles.filter( profile => ! [ 'desktop', 'mobile' ].includes( profile.id ) ) ) {
+			const result = await captureProfile( viewport );
+			if ( ! result ) continue;
+			urlFailures.push( ...result.failures );
+			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
+				url, viewport: viewport.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
+			} );
 		}
 
 		if (entry.sourceOutcomes?.length) {
@@ -2203,8 +2086,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( urlFailures.length === 0 ) {
 			captured++;
 			// Reused artifacts, absent documents and redirect aliases do not
-			// calibrate the memory cost of a fresh successful capture.
-			if ( memoryAdmission && ! entry.redirectedTo ) { sampleMemory(); calibrated = true; }
+			// calibrate the memory cost of a fresh successful capture. A bounded
+			// reference sample leaves most routes without fresh reference pages;
+			// calibrating on one of those would under-estimate the working set,
+			// so calibration waits for a route that produced them (the entrypoint
+			// is always sampled and is captured first).
+			const producedReferencePages = ! opts.referenceSampleUrls || opts.referenceSampleUrls.includes( url );
+			if ( memoryAdmission && ! entry.redirectedTo && producedReferencePages ) { sampleMemory(); calibrated = true; }
 			sendLog( server, `[ok] ${ url }` );
 		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
 			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});
@@ -2244,9 +2132,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					: waveEnd;
 				let cursor = segStart;
 				const running = new Set< Promise<void> >();
-				// Reserve the observed whole-group working set for routes whose peak
-				// may still be ahead. Even one unseen route can exceed the budget;
-				// this admits overlap, rather than enforcing a per-source byte cap.
+				// Reserve one observed per-route working set for every running route
+				// whose peak may still be ahead, plus the route being admitted. Even
+				// one unseen route can exceed the budget; this admits overlap, rather
+				// than enforcing a per-source byte cap.
 				const admit = (): boolean => {
 					if ( ! memoryAdmission ) return true;
 					const available = sampleMemory();
@@ -2254,15 +2143,16 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						if ( available === 0 ) throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` );
 						return true;
 					}
-					return calibrated && available >= ( running.size + 1 ) * observedWorkingSet;
+					return calibrated && available >= ( running.size + 1 ) * routeWorkingSet;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
 				try {
 					while ( cursor < segEnd || running.size ) {
 						while ( cursor < segEnd && running.size < concurrency && admit() ) {
 							const url = urls[ cursor++ ];
-							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, activeRoutes: running.size + 1, calibrated, url } ) }\n` );
-							const pending = processUrl( url ).then( () => {
+							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: Math.round( routeWorkingSet ), activeRoutes: running.size + 1, calibrated, url } ) }\n` );
+							activeRoutes++;
+							const pending = processUrl( url ).finally( () => { activeRoutes--; } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
 							running.add( pending );
@@ -2382,35 +2272,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				);
 			}
 		}
-		// Serialize design CSS aggregate if any pages/posts were captured
-		if ( designCtx && designCtx.cssAgg.toString().trim() ) {
-			try {
-				designCtx.cssAgg.serialize( opts.outputDir );
-			} catch ( err ) {
-				sendLog(
-					server,
-					`[warn] design cssAgg serialize failed: ${
-						err instanceof Error ? err.message : String( err )
-					}`
-				);
-			}
-		}
-		// Serialize design JS aggregate when includeScripts=true and content was collected
-		if ( designCtx && designCtx.jsAgg ) {
-			const jsText = designCtx.jsAgg.toString().trim();
-			if ( jsText ) {
-				try {
-					writeFileSync( join( opts.outputDir, 'site.js' ), jsText, 'utf8' );
-				} catch ( err ) {
-					sendLog(
-						server,
-						`[warn] design jsAgg serialize failed: ${
-							err instanceof Error ? err.message : String( err )
-						}`
-					);
-				}
-			}
-		}
 		try {
 			await browser.close();
 		} catch {
@@ -2418,37 +2279,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 	}
 
-	const siteCssPath =
-		designCtx && designCtx.cssAgg.toString().trim()
-			? join( opts.outputDir, 'site.css' )
-			: undefined;
-
-	const siteJsTextRaw = designCtx?.jsAgg?.toString().trim();
-	const siteJsText = siteJsTextRaw || undefined;
-
-	// --- generate responsive chrome.css from dual-viewport layout maps ----------
-	// Emit @media min-width:768px (desktop) + @media max-width:767px (mobile)
-	// rules keyed on .dla-fx-N marker classes. Gracefully degrades to desktop-only
-	// when mobile layout was not collected (different DOM, mobile capture failed,
-	// or captureDesign=false).
-	let chromeCssText: string | undefined;
-	if ( designCtx?.chromeAccum.desktopLayoutMap ) {
-		const css = generateChromeCss(
-			designCtx.chromeAccum.desktopLayoutMap,
-			designCtx.chromeAccum.mobileLayoutMap ?? undefined
-		);
-		if ( css.trim() ) {
-			chromeCssText = css;
-			try {
-				writeFileSync( join( opts.outputDir, 'chrome.css' ), css, 'utf8' );
-			} catch ( err ) {
-				sendLog(
-					server,
-					`[warn] chrome.css write failed: ${ err instanceof Error ? err.message : String( err ) }`
-				);
-			}
-		}
-	}
 
 	return {
 		captured,
@@ -2459,13 +2289,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		manifestPath,
 		urls,
 		...(frontier ? {linkedPageCoverage: frontier.coverage()} : {}),
-		siteCssPath,
-		cssMediaUrls: designCtx ? [ ...designCtx.cssMediaUrls ] : undefined,
-		headLinks: designCtx ? [ ...designCtx.headLinks ] : undefined,
-		siteJsText,
-		nav: designCtx?.chromeAccum.nav ?? undefined,
-		footerHtml: designCtx?.chromeAccum.footerHtml ?? undefined,
-		chromeCssText,
 	};
 }
 

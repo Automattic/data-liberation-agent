@@ -25,4 +25,14 @@ describe( 'createPhaseLedger', () => {
 		now = 50;
 		expect( ledger.finish() ).toEqual( [ { phase: 'context', ms: 10 } ] );
 	} );
+	it( 'tallies readiness outcomes by wait name', () => {
+		const ledger = createPhaseLedger( () => 0 );
+		ledger.wait( 'stable', { reason: 'quiet', ms: 600 } );
+		ledger.wait( 'stable', { reason: 'deadline', ms: 5000 } );
+		ledger.wait( 'scroll-restore', { reason: 'quiet', ms: 210 } );
+		expect( ledger.readiness() ).toEqual( {
+			stable: { count: 2, ms: 5600, deadline: 1 },
+			'scroll-restore': { count: 1, ms: 210, deadline: 0 },
+		} );
+	} );
 } );

@@ -143,7 +143,7 @@ describe('captureScreenshots', () => {
 		try {
 			const result = await captureScreenshots( { urls: [ 'https://example.com/a', 'https://example.com/b' ], outputDir, settleMs: 0 } );
 			expect( result.captured ).toBe( 2 );
-			expect( peak ).toBe( 2 );
+			expect( peak ).toBe( 4 );
 			expect( available ).not.toHaveBeenCalled();
 		} finally {
 			constrained.mockRestore(); available.mockRestore();
@@ -182,7 +182,7 @@ describe('captureScreenshots', () => {
 		try {
 			const result = await captureScreenshots( { urls: [ 'https://example.com/a', 'https://example.com/b' ], outputDir, concurrency, settleMs: 0 } );
 			expect( result.captured ).toBe( 2 );
-			expect( peak ).toBe( 1 );
+			expect( peak ).toBe( 2 );
 			expect( constrained ).not.toHaveBeenCalled();
 			expect( available ).not.toHaveBeenCalled();
 		} finally {
@@ -330,6 +330,73 @@ describe('captureScreenshots', () => {
       expect(Object.keys(manifest.entries)).toHaveLength(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('overlaps desktop/mobile contexts and deterministically merges like sequential capture', async () => {
+    const url = 'https://example.com/overlap';
+    const viewports = [{ id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 }] as const;
+    const concurrentDir = mkdtempSync(join(tmpdir(), 'viewport-overlap-'));
+    const sequentialDir = mkdtempSync(join(tmpdir(), 'viewport-sequential-'));
+    let active = 0;
+    let peak = 0;
+    let opened = 0;
+    let release!: () => void;
+    const bothContexts = new Promise<void>(resolve => { release = resolve; });
+    const concurrentBrowser = makeMockBrowser();
+    const originalNewContext = concurrentBrowser.newContext;
+    concurrentBrowser.newContext = vi.fn(async options => {
+      const context = await originalNewContext(options);
+      opened++;
+      peak = Math.max(peak, ++active);
+      if (opened === 2) release();
+      await bothContexts;
+      await new Promise(resolve => setTimeout(resolve, 40));
+      const close = context.close;
+      context.close = async () => { try { await close(); } finally { active--; } };
+      return context;
+    });
+    const run = async (outputDir: string, browser: MockBrowser, constrained = false) => {
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+      const result = await captureScreenshots({ urls: [url], outputDir, ...(constrained ? {} : { concurrency: 1 }), settleMs: 0, viewports: [...viewports] });
+      return { entry: JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8')).entries[url], durationMs: result.durationMs };
+    };
+    const stable = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(stable);
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+        .filter(([key]) => key !== 'capturedAt')
+        .map(([key, child]) => [key, key === 'ms' ? 0 : stable(child)]));
+      return value;
+    };
+    let constrainedMemory: ReturnType<typeof vi.spyOn> | undefined;
+    let availableMemory: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const concurrent = await run(concurrentDir, concurrentBrowser);
+      expect(peak).toBe(2);
+      const phaseMs = Object.values(concurrent.entry.profiles).flatMap((profile: any) => profile.phases).reduce((total: number, phase: any) => total + phase.ms, 0);
+      expect(concurrent.durationMs).toBeLessThan(phaseMs);
+
+      constrainedMemory = vi.spyOn(process, 'constrainedMemory').mockReturnValue(1024 ** 3);
+      availableMemory = vi.spyOn(process, 'availableMemory').mockReturnValue(900 * 1024 ** 2);
+      const sequentialBrowser = makeMockBrowser();
+      const sequentialNewContext = sequentialBrowser.newContext;
+      let sequentialActive = 0;
+      let sequentialPeak = 0;
+      sequentialBrowser.newContext = vi.fn(async options => {
+        const context = await sequentialNewContext(options);
+        sequentialPeak = Math.max(sequentialPeak, ++sequentialActive);
+        const close = context.close;
+        context.close = async () => { try { await close(); } finally { sequentialActive--; } };
+        return context;
+      });
+      const sequential = await run(sequentialDir, sequentialBrowser, true);
+      expect(sequentialPeak).toBe(1);
+      expect(JSON.stringify(stable(concurrent.entry))).toBe(JSON.stringify(stable(sequential.entry)));
+    } finally {
+      constrainedMemory?.mockRestore();
+      availableMemory?.mockRestore();
+      rmSync(concurrentDir, { recursive: true, force: true });
+      rmSync(sequentialDir, { recursive: true, force: true });
     }
   });
 
