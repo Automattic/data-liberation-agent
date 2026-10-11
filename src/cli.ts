@@ -42,7 +42,10 @@ const HELP = `
 
   Liberate options:
     --acquisition <mode> browser (default), or http for an unverified review candidate
-    --route-limit <n>    Bound HTTP routes; omitted routes remain diagnosed
+    --route-limit <n|all> Capture at most n routes, homepage included: the
+                         homepage plus an even spread of the rest, linked pages
+                         counted (browser default 50; http default all). Omitted
+                         routes are diagnosed and counted, never failed.
     --runtime-route-limit <n> Observe HTTP runtime regions on at most n routes (0-50)
     --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
@@ -224,7 +227,11 @@ if (args.includes('--help')) {
     if (value === null) throw new Error(`${name} requires an integer`);
     return Number(value);
   };
-  const routeLimit = httpNumber('--route-limit');
+  const routeLimitArg = args.includes('--route-limit') ? getArg('--route-limit') : undefined;
+  const routeLimit = routeLimitArg === undefined ? undefined : routeLimitArg === 'all' ? 'all' as const : Number(routeLimitArg);
+  if (routeLimitArg !== undefined && routeLimit !== 'all' && (routeLimitArg === null || !Number.isSafeInteger(routeLimit) || (routeLimit as number) < 1)) {
+    throw new Error('--route-limit requires a positive integer or "all"');
+  }
   const runtimeRouteLimit = httpNumber('--runtime-route-limit');
   const referenceSampleArg = args.includes('--reference-sample') ? getArg('--reference-sample') : undefined;
   const referenceSample = referenceSampleArg === undefined ? undefined : referenceSampleArg === 'all' ? 'all' as const : Number(referenceSampleArg);
@@ -233,7 +240,8 @@ if (args.includes('--help')) {
   }
   const result = await liberateSite({
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
-    http: acquisition === 'http' || routeLimit !== undefined || runtimeRouteLimit !== undefined ? {routeLimit, runtimeRouteLimit} : undefined,
+    http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
+    routeLimit,
     url,
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),
@@ -248,6 +256,7 @@ if (args.includes('--help')) {
   const notes = [
     result.routesSkipped ? `${result.routesSkipped} reused` : '',
     result.routesFailed ? `${result.routesFailed} failed` : '',
+    result.routesOmitted ? `${result.routesOmitted} omitted by route budget` : '',
     result.complete ? '' : 'incomplete',
   ].filter(Boolean);
   console.log(

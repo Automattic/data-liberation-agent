@@ -52,7 +52,7 @@ vi.mock( './media-fetch/media.js', () => ( {
 	} ),
 } ) );
 
-import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture } from './capture.js';
+import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_ROUTE_LIMIT, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
 
@@ -447,6 +447,121 @@ describe( 'captureWebsite completeness', () => {
 				}
 			)
 		).rejects.toBeInstanceOf( IncompleteCaptureError );
+	} );
+} );
+
+describe( 'captureWebsite route budget', () => {
+	const store = Array.from( { length: 3_000 }, ( _, index ) => `https://example.com/product/item-${ index }/` );
+	const storeAdapter = () => ( {
+		findAdapter: () => ( {
+			id: 'generic', platform: 'generic',
+			discover: async () => ( { urls: store.map( url => ( { url, type: 'product' } ) ) } ),
+			extract: async () => ( { title: '', content: '' } ),
+		} ),
+	} );
+	const capturedUrls = () => ( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[] } ).urls;
+	afterEach( () => {
+		captureScreenshotsMock.mockClear();
+		vi.mocked( exportWebsiteCapture ).mockClear();
+		rmSync( root, { recursive: true, force: true } );
+	} );
+
+	it( 'bounds a store-sized inventory to the default budget and reports every omitted route', async () => {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, storeAdapter() );
+		const call = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[]; limit?: number };
+		expect( DEFAULT_ROUTE_LIMIT ).toBe( 50 );
+		expect( call.urls ).toHaveLength( DEFAULT_ROUTE_LIMIT );
+		expect( call.urls[ 0 ] ).toBe( sourceUrl );
+		// Linked-page admissions share the same budget.
+		expect( call.limit ).toBe( DEFAULT_ROUTE_LIMIT );
+		// An even spread reaches the end of the inventory, not just its head.
+		expect( call.urls ).toContain( store.at( -1 ) );
+		const omitted = result.discoveryDiagnostics.filter( row => row.code === 'route_omitted_by_budget' );
+		expect( omitted ).toHaveLength( store.length + 1 - DEFAULT_ROUTE_LIMIT );
+		expect( new Set( [ ...omitted.map( row => row.url ), ...call.urls ] ).size ).toBe( store.length + 1 );
+		expect( omitted[ 0 ] ).toEqual( { code: 'route_omitted_by_budget', url: expect.any( String ), reason: 'Outside the route budget of 50 routes' } );
+		expect( result.summary ).toMatchObject( { routesDiscovered: DEFAULT_ROUTE_LIMIT, routesOmitted: store.length + 1 - DEFAULT_ROUTE_LIMIT, routesFailed: 0 } );
+		expect( result.missingRoutes ).toEqual( [] );
+		expect( result.complete ).toBe( true );
+		expect( isUsableCapture( result ) ).toBe( true );
+		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ] ).toMatchObject( {
+			summary: { routesOmitted: store.length + 1 - DEFAULT_ROUTE_LIMIT },
+			discoveryDiagnostics: expect.arrayContaining( [ omitted[ 0 ] ] ),
+		} );
+	} );
+
+	it( 'selects the same routes, entrypoint first, for the same inventory', async () => {
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 7 }, storeAdapter() );
+		const first = capturedUrls();
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 7 }, storeAdapter() );
+		expect( capturedUrls() ).toEqual( first );
+		expect( first ).toHaveLength( 7 );
+		expect( first[ 0 ] ).toBe( sourceUrl );
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 1 }, storeAdapter() );
+		expect( capturedUrls() ).toEqual( [ sourceUrl ] );
+	} );
+
+	it( "captures the whole inventory with routeLimit 'all'", async () => {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 'all' }, storeAdapter() );
+		const call = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[]; limit?: number };
+		expect( call.urls ).toHaveLength( store.length + 1 );
+		expect( call.limit ).toBeUndefined();
+		expect( result.summary.routesOmitted ).toBe( 0 );
+		expect( result.discoveryDiagnostics.filter( row => row.code === 'route_omitted_by_budget' ) ).toEqual( [] );
+	} );
+
+	it.each( [ 0, -1, 1.5, 'some' ] )( 'rejects routeLimit %s before any fetch or browser', async ( routeLimit ) => {
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: routeLimit as number }, storeAdapter() ) )
+			.rejects.toThrow( "routeLimit must be a positive integer or 'all'" );
+		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
+	} );
+
+	it( 'counts frontier budget omissions once and keeps them out of failure and completeness', async () => {
+		const linked = 'https://example.com/linked-only/';
+		captureScreenshotsMock.mockImplementationOnce( async ( { urls }: { urls: string[] } ) => ( {
+			urls, captured: urls.length, skipped: 0, failed: 0, durationMs: 1,
+			linkedPageCoverage: {
+				limits: { maxPages: 256, maxDepth: 8, timeoutMs: 1_800_000 },
+				requiredUrls: [ ...urls, linked, store[ 1 ]! ],
+				scheduled: urls.length,
+				// One linked route is new; the other is an inventory route the
+				// initial selection already omitted.
+				diagnostics: [ linked, store[ 1 ]! ].map( url => ( { code: 'route_omitted_by_budget', url, reason: 'Outside the route budget of 3 routes' } ) ),
+			},
+		} ) as Awaited< ReturnType< typeof captureScreenshotsMock > > );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 3 }, storeAdapter() );
+		expect( capturedUrls() ).toHaveLength( 3 );
+		expect( result.summary ).toMatchObject( { routesDiscovered: 3, routesCaptured: 3, routesFailed: 0, routesOmitted: store.length + 1 - 3 + 1 } );
+		expect( result.discoveryDiagnostics.filter( row => row.url === store[ 1 ] ) ).toHaveLength( 1 );
+		expect( result.discoveryDiagnostics.filter( row => row.url === linked ) ).toHaveLength( 1 );
+		expect( result.complete ).toBe( true );
+	} );
+
+	it( 'reports links to omitted routes with their own reason and stays complete under strict', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		const kept = 'https://example.com/kept';
+		const omitted = 'https://example.com/omitted';
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl, kept ], captured: 2, skipped: 0, failed: 0, durationMs: 1 } );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( root, directory ), { recursive: true } );
+		writeFileSync( join( root, 'html', 'home.html' ), '<h1>Home</h1><a href="/omitted">Omitted</a><a href="/kept">Kept</a>' );
+		writeFileSync( join( root, 'html', 'kept.html' ), '<h1>Kept</h1>' );
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, [ kept ]: { html: 'html/kept.html' } },
+		} ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 2, strict: true }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: [ omitted, kept ].map( url => ( { url, type: 'page' } ) ) } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		expect( capturedUrls() ).toEqual( [ sourceUrl, kept ] );
+		expect( result.unresolvedAnchors ).toEqual( [ { sourceUrl, url: omitted, reason: 'target route was omitted by the route budget' } ] );
+		expect( result.summary ).toMatchObject( { routesOmitted: 1, routesFailed: 0, complete: true } );
+		const receipt = JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) );
+		expect( receipt.summary ).toMatchObject( { routesOmitted: 1, complete: true } );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ { code: 'route_omitted_by_budget', url: omitted, reason: 'Outside the route budget of 2 routes' } ] );
 	} );
 } );
 

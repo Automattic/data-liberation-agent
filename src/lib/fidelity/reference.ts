@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { BrowserContext, Page } from 'playwright';
 import { PNG } from 'pngjs';
-import { observePage, routeSourceMap, spreadSample } from './check.js';
+import { observePage, routeSourceMap } from './check.js';
+import { spreadSample } from '../route-budget.js';
 import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
 import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';

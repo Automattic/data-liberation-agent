@@ -34,6 +34,13 @@ describe('cli', () => {
     expect(result.stderr).not.toContain('SsrfBlockedError');
   }, 30_000);
 
+  it('documents the shared route budget and rejects an invalid one before any request', async () => {
+    expect((await runCli(['--help'])).stdout).toContain('--route-limit <n|all>');
+    const result = await runCli(['https://example.invalid/', '--route-limit', '0']);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('--route-limit requires a positive integer or "all"');
+  }, 30_000);
+
   it('reproduces the reported repro verbatim: "capture" alone fails with guidance, not an SSRF stack trace', async () => {
     const result = await runCli(['capture']);
     expect(result.code).toBe(1);

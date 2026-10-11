@@ -61,7 +61,7 @@ const TOOLS = [
         resume: { type: 'boolean', description: 'Reuse artifacts already on disk instead of recapturing.' },
         screenshots: { type: 'boolean', description: 'Also capture full-page and scrolled PNGs.' },
         acquisition: { type: 'string', enum: ['browser', 'http'], description: 'Browser by default; HTTP produces an explicitly unverified review candidate.' },
-        routeLimit: { type: 'integer', minimum: 1, description: 'Maximum HTTP routes requested; omitted routes remain diagnosed.' },
+        routeLimit: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'string', enum: ['all'] }], description: 'Route budget shared by browser and HTTP capture, entrypoint included: the entrypoint plus an even spread of the rest, linked pages counted. Browser default 50; HTTP default all. Omitted routes are diagnosed (route_omitted_by_budget) and counted in routesOmitted, never failed.' },
         runtimeRouteLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Maximum HTTP routes observed for runtime regions; default 0.' },
         portableMotion: { type: 'object', description: 'Optional author-supplied, hash-pinned portable motion recipe verified in the browser before export.' },
       },
@@ -131,7 +131,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { liberateSite } = await import('./ui/liberate.js');
       const result = await liberateSite({
         acquisition: args.acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
-        http: args.acquisition === 'http' || args.routeLimit !== undefined || args.runtimeRouteLimit !== undefined ? { routeLimit: args.routeLimit as number | undefined, runtimeRouteLimit: args.runtimeRouteLimit as number | undefined } : undefined,
+        http: args.acquisition === 'http' || args.runtimeRouteLimit !== undefined ? { runtimeRouteLimit: args.runtimeRouteLimit as number | undefined } : undefined,
+        routeLimit: args.routeLimit as import('./lib/capture.js').CaptureOptions['routeLimit'],
         url: String(args.url ?? ''),
         outputBase: typeof args.outputDir === 'string' ? args.outputDir : resolveOutputBase(),
         resume: args.resume === true,
@@ -147,6 +148,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         routesCaptured: result.routesCaptured,
         routesSkipped: result.routesSkipped,
         routesFailed: result.routesFailed,
+        routesOmitted: result.routesOmitted,
         complete: result.complete,
         entrypointCaptured: result.entrypointCaptured,
         missingRoutes: result.missingRoutes,

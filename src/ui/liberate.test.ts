@@ -44,6 +44,7 @@ describe( 'liberateSite', () => {
 					routesCaptured: 2,
 					routesSkipped: 0,
 					routesFailed: 0,
+					routesOmitted: 0,
 					durationMs: 10,
 					complete: true,
 					entrypointCaptured: true,
@@ -85,7 +86,7 @@ describe( 'liberateSite', () => {
 		} );
 	} );
 
-	it( 'writes the site without serving when serving is disabled', async () => {
+	it( 'writes the site without serving when serving is disabled and passes the route budget through', async () => {
 		mkdirSync( root, { recursive: true } );
 		const outputBase = mkdtempSync( join( root, 'liberate-' ) );
 		dirs.push( outputBase );
@@ -99,6 +100,7 @@ describe( 'liberateSite', () => {
 					routesCaptured: 1,
 					routesSkipped: 0,
 					routesFailed: 0,
+					routesOmitted: 7,
 					durationMs: 5,
 					complete: true,
 					entrypointCaptured: true,
@@ -117,8 +119,12 @@ describe( 'liberateSite', () => {
 			url: 'https://example.com/',
 			outputBase,
 			serve: false,
+			routeLimit: 1,
 		} );
 
+		expect( vi.mocked( captureWebsite ).mock.calls.at( -1 )![ 0 ] ).toMatchObject( { routeLimit: 1 } );
+		expect( result.routesOmitted ).toBe( 7 );
+		expect( result.usable ).toBe( true );
 		expect( result.server ).toBeNull();
 		expect( result.websiteDir ).toBe( join( outputBase, 'example.com', 'website' ) );
 	} );
