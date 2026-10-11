@@ -571,7 +571,10 @@ export async function restoreTopScrollState(page: Page): Promise<void> {
     const overflow = document.documentElement.scrollHeight > window.innerHeight ||
       document.documentElement.scrollWidth > window.innerWidth;
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    window.dispatchEvent(new Event('scroll'));
+    // Source libraries (e.g. MooTools) replace window.Event; use the native factory.
+    const scrolled = document.createEvent('Event');
+    scrolled.initEvent('scroll', false, false);
+    window.dispatchEvent(scrolled);
     return overflow;
   }, SCROLL_POSE_GENERATION), EVALUATE_GRACE_MS);
   // Throttled scroll handlers react within a quiet window after the event;

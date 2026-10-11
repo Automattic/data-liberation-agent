@@ -15,13 +15,70 @@ import { sameHttpSite } from './same-origin.js';
 // (to quarantine corrupted fixtures) and by the capture phase (to refuse/clean a
 // corrupted snapshot rather than persist it).
 
-/** Number of `<body>` open tags — a clean document has exactly one. */
+// Content the HTML parser treats as text (or inert markup), so a `<body` inside
+// it is not an element: serialized script/style/textarea/title/template bodies
+// and comments routinely carry markup-looking strings.
+const RAW_TEXT_ELEMENTS = new Set( [ 'script', 'style', 'textarea', 'title', 'xmp', 'noscript', 'noembed', 'noframes', 'iframe' ] );
+
+/**
+ * Number of real `<body>` elements — a clean document has exactly one.
+ *
+ * Tokenizes the markup instead of matching substrings: comments, raw-text
+ * element contents, `<template>` contents and attribute values are skipped.
+ */
 export function countBodyTags(html: string): number {
-  return (html.match(/<body[\s>]/gi) ?? []).length;
+  const lower = html.toLowerCase();
+  const end = html.length;
+  let count = 0;
+  let i = 0;
+  const skipPast = (marker: string, from: number): number => {
+    const at = lower.indexOf(marker, from);
+    return at === -1 ? end : at + marker.length;
+  };
+  while (i < end) {
+    const open = html.indexOf('<', i);
+    if (open === -1) break;
+    i = open + 1;
+    if (html.startsWith('!--', i)) { i = skipPast('-->', i + 3); continue; }
+    const first = html[i] ?? '';
+    if (first === '!' || first === '?' || first === '/') { i = skipPast('>', i); continue; }
+    if (!/[a-z]/i.test(first)) continue;
+    let nameEnd = i;
+    while (nameEnd < end && !/[\s/>]/.test(html[nameEnd]!)) nameEnd++;
+    const name = lower.slice(i, nameEnd);
+    // Attributes: quoted values may contain `>` and `<body`.
+    i = nameEnd;
+    while (i < end && html[i] !== '>') {
+      if (html[i] === '=') {
+        i++;
+        while (i < end && /\s/.test(html[i]!)) i++;
+        const quote = html[i];
+        if (quote === '"' || quote === "'") {
+          const close = html.indexOf(quote, i + 1);
+          i = close === -1 ? end : close + 1;
+        } else {
+          while (i < end && !/[\s>]/.test(html[i]!)) i++;
+        }
+      } else i++;
+    }
+    i++;
+    if (name === 'body') count++;
+    else if (RAW_TEXT_ELEMENTS.has(name)) i = skipPast(`</${name}`, i);
+    else if (name === 'plaintext') i = end;
+    else if (name === 'template') {
+      for (let depth = 1; depth > 0 && i < end;) {
+        const close = lower.indexOf('</template', i);
+        const nested = lower.indexOf('<template', i);
+        if (nested !== -1 && (close === -1 || nested < close)) { depth++; i = nested + 9; }
+        else i = close === -1 ? end : (depth--, close + 10);
+      }
+    }
+  }
+  return count;
 }
 
 /**
- * True when the HTML nests more than one document (>1 `<body>`), i.e. the capture
+ * True when the HTML nests more than one document (>1 real `<body>` element), i.e. the capture
  * stacked the page into itself. Such a snapshot is not a faithful single-page
  * render and must not be used as a parity fixture or persisted as output.
  */
