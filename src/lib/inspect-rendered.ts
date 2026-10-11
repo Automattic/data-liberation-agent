@@ -24,6 +24,15 @@ const NAVIGATION_LIMIT = 100;
 const LINK_LIMIT = 1000;
 /** Per-asset ceiling inside a rendered inspect sample. */
 export const INSPECT_ASSET_MAX_BYTES = 2 * 1024 * 1024;
+/**
+ * Rendered requests fetched from one origin at once. Node fetches every request
+ * a sample makes, so Chromium's own per-host connection limit never applies,
+ * and a page with dozens of stylesheets opened one connection per stylesheet
+ * at once. Servers with a per-client connection limit reset those connections
+ * and then refuse the client for minutes, which also fails the capture that
+ * runs after inspection. Six matches Chromium's HTTP/1.1 limit per host.
+ */
+const RENDERED_REQUESTS_PER_ORIGIN = 6;
 export type SourceCapability = (typeof SOURCE_CAPABILITIES)[number];
 /** One host-injected surface to attribute away from the source. */
 export interface HostResidue { host: string; selector: string; evidence: string }
@@ -77,12 +86,39 @@ const GENERIC_RULES: CapabilityRule[] = [
   { capability: 'commerce', selector: '[itemtype*="schema.org/Product"],a[href*="/checkout"],form[action*="/cart"]', evidence: 'Product or checkout surface; transactions were not exercised' },
 ];
 
+/** Runs at most `limit` requests per origin at once; later ones wait in order. */
+function perOriginLimiter(limit: number) {
+  const origins = new Map<string, { active: number; waiting: Array<() => void> }>();
+  return async <T>(url: string, task: () => Promise<T>): Promise<T> => {
+    const origin = new URL(url).origin;
+    let slot = origins.get(origin);
+    if (!slot) origins.set(origin, (slot = { active: 0, waiting: [] }));
+    if (slot.active < limit) slot.active++;
+    else await new Promise<void>((resolve) => slot!.waiting.push(resolve));
+    const release = () => {
+      // A finished request hands its place to the next waiter, if there is one.
+      const next = slot!.waiting.shift();
+      if (next) next();
+      else if (--slot!.active === 0) origins.delete(origin);
+    };
+    try {
+      return await task();
+    } finally {
+      // Node's fetch returns a finished connection to its pool on a later
+      // turn. Handing the place over at once makes the next request open a
+      // new connection, so connections would grow to twice the limit.
+      setImmediate(release);
+    }
+  };
+}
+
 /** A bounded browser reader. Every network response is fetched through the same
  * size/redirect guard as HTTP inspection, including script-initiated requests.
  * POSTs and service workers are blocked; inspection never activates controls. */
 export async function createRenderedInspector(signal: AbortSignal, requestTimeoutMs: number) {
   signal.throwIfAborted();
   const { chromium } = await import('playwright');
+  const withOriginSlot = perOriginLimiter(RENDERED_REQUESTS_PER_ORIGIN);
   let browser: Browser | undefined;
   const close = async () => { await browser?.close(); };
   const abort = () => { void close().catch(() => undefined); };
@@ -121,7 +157,7 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
               limited = true;
               throw new Error('Rendered resource budget reached');
             }
-            const response = await safeFetch(request.url(), {
+            const response = await withOriginSlot(request.url(), () => safeFetch(request.url(), {
               timeoutMs: requestTimeoutMs,
               maxBytes: Math.min(
                 request.isNavigationRequest() ? INSPECT_DOCUMENT_MAX_BYTES : INSPECT_ASSET_MAX_BYTES,
@@ -136,7 +172,7 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
                 const cookie = await sourceSessionCookieHeader(origin);
                 return cookie ? { cookie } : undefined;
               },
-            });
+            }));
             bytes += response.body.length;
             if (bytes > 10 * 1024 * 1024) { limited = true; throw new Error('Rendered byte budget reached'); }
             // Redirects are resolved by safeFetch; document origin must remain the
