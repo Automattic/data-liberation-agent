@@ -19,6 +19,8 @@ export interface PortableMediaCandidate {
 	exactReferences: string[];
 	bytes: number;
 	dimension: number;
+	/** Gallery frame assets may use the existing larger responsive-image byte bound. */
+	galleryFrame?: boolean;
 }
 
 export interface PortableMediaReferenceIndex {
@@ -110,10 +112,11 @@ export function mediaReferenceMatched(
 
 function selectMediaCandidate(
 	candidates: PortableMediaCandidate[],
+	maxBytes: number,
 ): PortableMediaCandidate | undefined {
 	const bounded = candidates.filter(
 		( candidate ) =>
-			candidate.bytes <= MAX_PORTABLE_MEDIA_BYTES &&
+			candidate.bytes <= maxBytes &&
 			candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
 	);
 	return [ ...bounded ].sort(
@@ -131,10 +134,10 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[] ): Portable
 	const bounded = dimensionBounded.filter(
 		( candidate ) =>
 			candidate.bytes <=
-			( responsiveFamily ? MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES : MAX_PORTABLE_MEDIA_BYTES )
+			( candidate.galleryFrame || responsiveFamily ? MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES : MAX_PORTABLE_MEDIA_BYTES )
 	);
 	const exact = bounded.filter( ( candidate ) => candidate.exactReferences.length > 0 );
-	const fallback = selectMediaCandidate( bounded );
+	const fallback = selectMediaCandidate( bounded, MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES );
 	const selected = exact.length > 0 ? exact : fallback ? [ fallback ] : [];
 	return [ ...selected ].sort(
 		( a, b ) =>

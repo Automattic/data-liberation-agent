@@ -147,6 +147,20 @@ if ( retained > 6 * 1024 * 1024 ) throw new Error( 'reference index retained ' +
 } );
 
 describe( 'planPortableMediaFamilies', () => {
+	it( 'admits a gallery frame beyond the ordinary image byte bound within the responsive cap', () => {
+		const dir = tempDir( 'dla-media-plan-gallery-frame-' );
+		const homepage = join( dir, 'home.html' );
+		writeFileSync( homepage, '<main></main>' );
+		const gallery = { ...candidate( dir, 'gallery.jpg', 'https://cdn.example/gallery.jpg', 6 * 1024 * 1024, 0 ), galleryFrame: true };
+		const ordinary = candidate( dir, 'ordinary.jpg', 'https://cdn.example/ordinary.jpg', 6 * 1024 * 1024, 0 );
+		const plan = planPortableMediaFamilies(
+			[ { family: gallery.sourceUrl, candidates: [ gallery ] }, { family: ordinary.sourceUrl, candidates: [ ordinary ] } ],
+			16 * 1024 * 1024,
+			homepage,
+		);
+		expect( plan.families.map( decision => decision.outcome ) ).toEqual( [ 'selected', 'limit-excluded' ] );
+	} );
+
 	it( 'admits by homepage priority, then eligible first bytes, then source URL, independent of insertion order', () => {
 		const dir = tempDir( 'dla-media-plan-order-' );
 		const homepage = join( dir, 'home.html' );

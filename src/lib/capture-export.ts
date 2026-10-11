@@ -60,6 +60,7 @@ import {
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
+import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import { isSrcsetShaped, srcsetCandidates, srcsetReferences } from './srcset.js';
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
@@ -1412,6 +1413,17 @@ function buildExportCapture(
 			}
 		} )
 	);
+	const interactionMediaFamilies = new Set< string >();
+	const interactionMediaReferences = new Map< string, Set< string > >();
+	for ( const entry of retainedEntries ) {
+		for ( const reference of galleryFrameMediaUrls( entry.interactions?.states ?? [], entry.url ) ) {
+			const family = mediaFamily( reference );
+			interactionMediaFamilies.add( family );
+			const references = interactionMediaReferences.get( family ) ?? new Set< string >();
+			references.add( reference );
+			interactionMediaReferences.set( family, references );
+		}
+	}
 	const probeReferences: string[] = [];
 	const seenProbeReferences = new Set< string >();
 	for ( const [ sourceUrl ] of mediaStubs.list() ) {
@@ -1441,7 +1453,7 @@ function buildExportCapture(
 		const exactReferences = references.filter( ( reference ) =>
 			mediaReferenceMatched( referenceIndex, reference )
 		);
-		const isReferenced = retainedMediaFamilies.has( family ) || exactReferences.length > 0;
+		const isReferenced = retainedMediaFamilies.has( family ) || interactionMediaFamilies.has( family ) || exactReferences.length > 0;
 		if ( stub.status === 'error' && isReferenced ) {
 			failedMedia.push( { family, sourceUrl, error: stub.error ?? 'media download failed', references } );
 			continue;
@@ -1459,7 +1471,8 @@ function buildExportCapture(
 			references: [
 				...new Set( [ ...references, ...( renderedMediaReferences.get( family ) ?? [] ) ] ),
 			],
-			exactReferences,
+			exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
+			...( interactionMediaReferences.has( family ) ? { galleryFrame: true } : {} ),
 			bytes: statSync( stub.localPath ).size,
 			dimension: mediaDimension( sourceUrl ),
 		};
@@ -1471,9 +1484,13 @@ function buildExportCapture(
 		portableMediaBudget,
 		entrypointEntry.htmlPath,
 	);
+	const retainedReferences = new Map( retainedMediaFamilies );
+	for ( const [ family, references ] of interactionMediaReferences ) {
+		retainedReferences.set( family, [ ...new Set( [ ...( retainedReferences.get( family ) ?? [] ), ...references ] ) ] );
+	}
 	const mediaStage = materializePortableMedia( {
 		websiteDir, plan: portableMediaPlan, maxBytes: portableMediaBudget,
-		retainedReferences: retainedMediaFamilies, failedMedia,
+		retainedReferences, failedMedia,
 	} );
 	let { mediaReplacements, portablePathsBySource } = mediaStage;
 	const { portableUrlByFamily, assetPathsByHash, assetHashesByPath, assets, unresolvedMedia, portableMedia } = mediaStage;
@@ -1616,7 +1633,7 @@ function buildExportCapture(
 	// the portable pages, so their embedded HTML must name local media too.
 	const localizeInteractionMedia = ( text: string ): string =>
 		localizeFamilyMediaUrls(
-			replaceMedia( text ),
+			replaceResources( replaceMedia( text ) ),
 			portableUrlByFamily
 		);
 	for ( const entry of retainedEntries ) {

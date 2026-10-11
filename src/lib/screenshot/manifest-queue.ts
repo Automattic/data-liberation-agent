@@ -29,6 +29,10 @@ export interface ManifestEntry {
     nativeViewTimelines?: ManifestEntry['nativeViewTimelines'];
     interactions?: InteractionStatesReport;
     scrollStates?: ScrollStatesReport;
+    /** Wall-clock phases of this profile's capture, in order; see phase-ledger.ts. */
+    phases?: import('./phase-ledger.js').CapturePhase[];
+    /** How each named readiness wait ended (quiet or spent bound); see settleDocument. */
+    readiness?: Record<string, import('./phase-ledger.js').ReadinessTally>;
   }>;
   /** Browser URL and effective base per named profile; the manifest key remains the requested route. */
   documents?: Partial<Record<string, import('../document-resource-base.js').RenderedDocumentUrl>>;

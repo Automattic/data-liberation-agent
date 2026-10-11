@@ -52,7 +52,7 @@ vi.mock( './media-fetch/media.js', () => ( {
 	} ),
 } ) );
 
-import { captureWebsite, downloadCaptureSectionMedia, IncompleteCaptureError } from './capture.js';
+import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, downloadCaptureSectionMedia, IncompleteCaptureError } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
 
@@ -128,6 +128,19 @@ describe( 'downloadCaptureSectionMedia', () => {
 			'https://cdn.example.com/desktop.jpg': expect.objectContaining( { status: 'success' } ),
 		} );
 	} );
+
+	it( 'downloads media referenced only by captured gallery frame HTML', async () => {
+		const manifestDir = join( root, 'screenshots' );
+		mkdirSync( manifestDir, { recursive: true } );
+		writeFileSync( join( manifestDir, 'manifest.json' ), JSON.stringify( {
+			entries: { [ sourceUrl ]: { interactions: { states: [ { kind: 'gallery', gallery: { inline: { frames: [ { html: '<figure><img src="https://cdn.example.com/frame-only.jpg" srcset="https://cdn.example.com/frame,one.jpg 1x, https://cdn.example.com/frame-two.jpg 2x"></figure>' } ] } } } ] } } },
+		} ) );
+
+		expect( await downloadCaptureSectionMedia( root, [ sourceUrl ] ) ).toBe( 3 );
+		expect( MediaStubStore.load( root ).get( 'https://cdn.example.com/frame-only.jpg' )?.status ).toBe( 'success' );
+		expect( MediaStubStore.load( root ).get( 'https://cdn.example.com/frame,one.jpg' )?.status ).toBe( 'success' );
+		expect( MediaStubStore.load( root ).get( 'https://cdn.example.com/frame-two.jpg' )?.status ).toBe( 'success' );
+	} );
 } );
 
 describe( 'captureWebsite fluid learning', () => {
@@ -170,6 +183,47 @@ describe( 'captureWebsite fluid learning', () => {
 		expect( captureScreenshotsMock ).toHaveBeenCalledWith(
 			expect.objectContaining( { learnFluid: expected } )
 		);
+	} );
+
+	it.each( [
+		{ option: undefined, expected: DEFAULT_REFERENCE_SAMPLE, label: 'bounds reference evidence to the default sample' },
+		{ option: 3, expected: 3, label: 'honors an explicit reference sample' },
+		{ option: 'all' as const, expected: undefined, label: "freezes every route with referenceSample 'all'" },
+	] )( '$label', async ( { option, expected } ) => {
+		await captureWebsite(
+			{ url: sourceUrl, outputDir: root, ...( option === undefined ? {} : { referenceSample: option } ) },
+			{
+				findAdapter: () => ( {
+					id: 'generic',
+					platform: 'generic',
+					discover: async () => ( { urls: Array.from( { length: 9 }, ( _, i ) => ( { url: `${ sourceUrl }page-${ i }` } ) ) } ),
+					extract: async () => ( { title: '', content: '' } ),
+				} ),
+			}
+		);
+		const call = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { referenceSampleUrls?: readonly string[] };
+		if ( expected === undefined ) expect( call.referenceSampleUrls ).toBeUndefined();
+		else {
+			expect( call.referenceSampleUrls ).toHaveLength( expected );
+			expect( call.referenceSampleUrls ).toContain( sourceUrl );
+		}
+	} );
+
+	it.each( [ 0, -1, 1.5 ] )( 'rejects referenceSample %s before any browser starts', async ( referenceSample ) => {
+		await expect(
+			captureWebsite(
+				{ url: sourceUrl, outputDir: root, referenceSample },
+				{
+					findAdapter: () => ( {
+						id: 'generic',
+						platform: 'generic',
+						discover: async () => ( { urls: [] } ),
+						extract: async () => ( { title: '', content: '' } ),
+					} ),
+				}
+			)
+		).rejects.toThrow( 'referenceSample must be a positive integer' );
+		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
 	} );
 } );
 
