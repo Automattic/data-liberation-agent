@@ -34,6 +34,15 @@ export function missingRoutes( discoveryDiagnostics: ReadonlyArray< { code?: unk
 }
 
 /**
+ * Whether some exported route lacks the document of a declared capture profile
+ * (`route_profile_uncaptured`). The route still counts as captured; the capture
+ * is not complete.
+ */
+export function hasUncapturedProfiles( discoveryDiagnostics: ReadonlyArray< { code?: unknown } > = [] ): boolean {
+	return discoveryDiagnostics.some( diagnostic => diagnostic.code === 'route_profile_uncaptured' );
+}
+
+/**
  * Route counts once export has run. A route export dropped (`route_export_failed`)
  * produced no page: it moves from captured to failed, keeping
  * captured + skipped + failed <= discovered.

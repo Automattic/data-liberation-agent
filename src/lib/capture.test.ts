@@ -341,11 +341,12 @@ describe( 'captureWebsite completeness', () => {
 		const degraded = 'https://example.com/degraded';
 		const dropped = 'https://example.com/dropped';
 		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl, degraded, dropped ], captured: 3, skipped: 0, failed: 0, durationMs: 1 } );
-		mkdirSync( join( root, 'html' ), { recursive: true } );
-		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
+		for ( const directory of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( root, directory ), { recursive: true } );
 		const entries: Record< string, { html: string } > = {};
 		for ( const [ index, url ] of [ sourceUrl, degraded, dropped ].entries() ) {
 			writeFileSync( join( root, 'html', `page-${ index }.html` ), `<h1>${ url === dropped ? 'Dropped' : 'Page' } ${ index }</h1>` );
+			// Every declared profile produced its document; only a later stage failed.
+			writeFileSync( join( root, 'html-mobile', `page-${ index }.html` ), `<h1>Phone ${ index }</h1>` );
 			entries[ url ] = { html: `html/page-${ index }.html` };
 		}
 		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );

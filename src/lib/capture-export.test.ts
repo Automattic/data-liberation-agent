@@ -7140,7 +7140,7 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 	} );
 
 	it( 'records stage failures on a route with saved HTML as route_capture_degraded and keeps the page', () => {
-		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), failures: [ 'scrolled screenshot timed out' ] } } );
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), mobile: page( 'Home phone' ), failures: [ 'scrolled screenshot timed out' ] } } );
 		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
 		expect( receipt.routes ).toHaveLength( 1 );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( {
@@ -7149,6 +7149,17 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 		} );
 		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
 		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0, complete: true } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'keeps a declared profile without its document as an incomplete profile finding, not a failed route', () => {
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), failures: [ 'HTTP 403' ] } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ {
+			code: 'route_profile_uncaptured', url: 'https://example.test/', reason: 'mobile/screenshot-scrolled: HTTP 403', unit: 'profile', severity: 'error', profile: 'mobile',
+		} ] );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0, complete: false } );
 		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
 	} );
 

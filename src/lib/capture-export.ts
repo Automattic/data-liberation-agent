@@ -1072,12 +1072,13 @@ function uncapturedRouteAnchors(
 /**
  * Group screenshot-stage failures (goto timeouts, nested-document rejections,
  * etc.) by URL so a route that never produced HTML can report every viewport
- * failure that led there, instead of the receipt just losing the route.
+ * failure that led there, instead of the receipt just losing the route. Each
+ * reason keeps the capture profile (viewport) it failed in.
  */
 function groupFailureReasonsByUrl(
 	failures: Array< { url: unknown; error: unknown } >
-): Map< string, string[] > {
-	const byUrl = new Map< string, string[] >();
+): Map< string, Array< { profile: string; reason: string } > > {
+	const byUrl = new Map< string, Array< { profile: string; reason: string } > >();
 	for ( const failure of failures ) {
 		if ( typeof failure.url !== 'string' ) continue;
 		const record = failure as Record< string, unknown >;
@@ -1090,7 +1091,7 @@ function groupFailureReasonsByUrl(
 					? 'unknown error'
 					: JSON.stringify( failure.error );
 		const list = byUrl.get( failure.url ) ?? [];
-		list.push( `${ viewport }/${ stage }: ${ error.split( '\n' )[ 0 ] }` );
+		list.push( { profile: viewport, reason: `${ viewport }/${ stage }: ${ error.split( '\n' )[ 0 ] }` } );
 		byUrl.set( failure.url, list );
 	}
 	return byUrl;
@@ -1224,7 +1225,7 @@ function buildExportCapture(
 				continue;
 			}
 			if ( ! entry.html ) {
-				const reason = routeFailureReasons.get( url )?.join( '; ' )
+				const reason = routeFailureReasons.get( url )?.map( failure => failure.reason ).join( '; ' )
 					?? 'capture completed without producing page HTML';
 				if ( failuresAreAbsentDocument( options.failures, url ) ) {
 					excludedRoutes.push( url );
@@ -1354,8 +1355,18 @@ function buildExportCapture(
 	        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
 	        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
 			// A route whose HTML was saved is captured even when a stage failed on it.
-			const stageFailures = routeFailureReasons.get( url );
-			if ( stageFailures ) routeCaptureDiagnostics.push( { code: 'route_capture_degraded', url, reason: stageFailures.join( '; ' ), unit: 'route', severity: 'warning', metrics: { failedStages: stageFailures.length } } );
+			// A declared capture profile (a manifest profile record, or a viewport a
+			// stage failed in) without its document stays a profile-level loss; the
+			// remaining stage failures only degrade the route.
+			const stageFailures = routeFailureReasons.get( url ) ?? [];
+			const uncapturedProfiles = [ ...new Set( [ ...Object.keys( entry.profiles ?? {} ), ...stageFailures.map( failure => failure.profile ) ] ) ]
+				.filter( profile => profile !== 'all' && profile !== 'unknown' && ! ( profile in sourceDocuments ) );
+			for ( const profile of uncapturedProfiles ) {
+				const reasons = stageFailures.filter( failure => failure.profile === profile ).map( failure => failure.reason );
+				routeCaptureDiagnostics.push( { code: 'route_profile_uncaptured', url, reason: reasons.join( '; ' ) || `declared capture profile ${ profile } produced no document`, unit: 'profile', severity: 'error', profile } );
+			}
+			const degraded = stageFailures.filter( failure => ! uncapturedProfiles.includes( failure.profile ) );
+			if ( degraded.length ) routeCaptureDiagnostics.push( { code: 'route_capture_degraded', url, reason: degraded.map( failure => failure.reason ).join( '; ' ), unit: 'route', severity: 'warning', metrics: { failedStages: degraded.length } } );
 			const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 			writeFileSync( stagedHtmlPath, html );
 			capturedEntries.push( {
