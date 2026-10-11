@@ -36,23 +36,37 @@ jobs:
       - run: npm test
 
       - name: Commit verified plugin bundles
+        id: bundles
         run: |
+          source_sha="$(git rev-parse HEAD)"
           git add -- dist
           if ! git diff --cached --quiet; then
             git -c user.name='github-actions[bot]' \
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit -m "build: regenerate plugin bundles"
           fi
-          # A concurrent source merge makes this fail safely. Its queued run
-          # rebuilds the new main; generated output is never rebased or forced.
-          git push origin HEAD:main
+          # Generated output is never rebased or forced. If a newer merge moved
+          # main past the source this run built, that merge's queued run
+          # rebuilds and releases both, so this run stands down successfully.
+          if git push origin HEAD:main; then
+            exit 0
+          fi
+          git fetch origin main
+          if [ "$(git rev-parse origin/main)" != "$source_sha" ] && git merge-base --is-ancestor "$source_sha" origin/main; then
+            echo "::notice::main moved past ${source_sha}; the queued release run for $(git rev-parse --short origin/main) releases this change."
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit 1
       - name: Verify committed bundle reproducibility
+        if: steps.bundles.outputs.superseded != 'true'
         run: |
           npm run build:mcp-bundle
           test -z "$(git status --porcelain -- dist)"
 
       - uses: Extra-Chill/homeboy-action@v2
         id: release
+        if: steps.bundles.outputs.superseded != 'true'
         with:
           extension: nodejs
           component: data-liberation-agent
