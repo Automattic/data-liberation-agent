@@ -10,7 +10,7 @@
 import { createServer, type Server } from 'node:http';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, resolve, extname, sep } from 'node:path';
-import { readResolvedPage } from '../../site-includes.js';
+import { createResolvedPageCache } from '../../site-includes.js';
 
 export interface StaticServer {
   url: string;
@@ -101,6 +101,9 @@ export function resolveRequestPath(root: string, rawPath: string): string | null
 
 export function startStaticServer(root: string): Promise<StaticServer> {
   const absRoot = resolve(root);
+  // Browser checks request the same multi-megabyte routes thousands of times;
+  // this server shares its event loop with the Playwright driver.
+  const readPage = createResolvedPageCache(absRoot);
   return new Promise((resolvePromise, reject) => {
     const server: Server = createServer((req, res) => {
       const file = resolveRequestPath(absRoot, req.url ?? '/');
@@ -110,7 +113,7 @@ export function startStaticServer(root: string): Promise<StaticServer> {
         return;
       }
       try {
-        const body = extname(file) === '.html' ? readResolvedPage(absRoot, file) : readFileSync(file);
+        const body = extname(file) === '.html' ? readPage(file) : readFileSync(file);
         res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' });
         res.end(body);
       } catch (error) {

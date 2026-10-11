@@ -19,7 +19,7 @@ import {
 } from './fluid-model.js';
 import type { Page } from 'playwright';
 import { captureFluidBaseline } from './fluid-baseline.js';
-import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments } from './fluid-runtime-sheets.js';
+import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
@@ -33,25 +33,6 @@ export const SEGMENT_STYLE_ATTRIBUTE = 'data-dla-fluid-rules';
 export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-dla-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
 const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left' ] as const;
-
-function isPureXTranslationMatrix( matrix: readonly number[] ): boolean {
-	return (
-		matrix.length === 6 &&
-		matrix.every( Number.isFinite ) &&
-		Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 &&
-		Math.abs( matrix[ 1 ]! ) <= 0.01 &&
-		Math.abs( matrix[ 2 ]! ) <= 0.01 &&
-		Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 &&
-		Math.abs( matrix[ 5 ]! ) <= 0.01
-	);
-}
-
-function pureXTranslation( transform: string ): number | null {
-	const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
-	if ( matrix && isPureXTranslationMatrix( matrix ) ) return matrix[ 4 ]!;
-	const translate = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform.trim() );
-	return translate ? Number( translate[ 1 ] ) : null;
-}
 
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'left';
 
@@ -94,6 +75,32 @@ export interface FluidLearningResult {
 export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
 
 /**
+ * Interior tablet widths sampled only when the band's edges show a change.
+ *
+ * The dense 767–801 ladder locates a narrow tablet transition. Its edges
+ * (767/768 and 800/801) stay in every sweep: when every observation is
+ * collinear across them and no runtime stylesheet was rewritten, the band holds
+ * one linear relationship and interior samples add no information to the fit.
+ */
+export const TABLET_REFINEMENT_WIDTHS = [ 769, 775, 783, 791, 799 ];
+const TABLET_BAND = [ 767, 768, 800, 801 ] as const;
+const COLLINEAR_TOLERANCE_PX = 0.5;
+
+/** Whether any observed series is not one line across the tablet band edges. */
+export function tabletBandNeedsRefinement( series: Iterable< readonly GeometrySample[] > ): boolean {
+	for ( const samples of series ) {
+		const at = TABLET_BAND.map( width => samples.find( sample => sample.viewport === width ) );
+		const present = at.filter( sample => sample !== undefined );
+		if ( present.length === 0 ) continue;
+		if ( present.length !== at.length || present.some( sample => ! Number.isFinite( sample!.value ) ) ) return true;
+		const [ a, b, c, d ] = at as GeometrySample[];
+		const line = ( viewport: number ) => a!.value + ( d!.value - a!.value ) * ( viewport - a!.viewport ) / ( d!.viewport - a!.viewport );
+		if ( Math.abs( b!.value - line( b!.viewport ) ) > COLLINEAR_TOLERANCE_PX || Math.abs( c!.value - line( c!.viewport ) ) > COLLINEAR_TOLERANCE_PX ) return true;
+	}
+	return false;
+}
+
+/**
  * Observe inline geometry across widths, fit a model per element and property,
  * and write the learned CSS back into the live DOM.
  *
@@ -118,7 +125,7 @@ export async function learnAndApplyFluidGeometry(
 				if ( ! completed ) {
 					await baseline.evaluate( state => state.restore() );
 					if ( original ) await page.setViewportSize( original );
-					await waitForRestGeometry( page, ID_ATTRIBUTE );
+					await waitForRestGeometry( page, baseline );
 					await baseline.evaluate( state => state.restore() );
 				}
 				await baseline.evaluate( state => state.cleanup() );
@@ -134,13 +141,16 @@ async function learnFluidGeometry(
 	options: FluidSweepOptions,
 	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>
 ): Promise<FluidLearningResult> {
-	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
+	// An explicit ladder is sampled as given; the default refines its tablet band
+	// only on evidence (see TABLET_REFINEMENT_WIDTHS).
+	const adaptive = options.widths === undefined;
+	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) );
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
 	const properties = options.learnRelativeOffsets ? [ ...LEARNABLE_PROPERTIES, 'left' ] : [ ...LEARNABLE_PROPERTIES ];
 
-	const tagged = await page.evaluate(
-		( { attribute, properties, prefix } ) => {
+	const tagged = await baseline.evaluate(
+		( state, { attribute, properties, prefix } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
 				const ignorePadding = element.hasAttribute( 'data-dla-fluid-ignore-padding' );
@@ -148,7 +158,8 @@ async function learnFluidGeometry(
 				// Match the declarations the measurement pass can actually learn.
 				// A substring match also tagged min-height/max-width and percentages,
 				// which produced no observations but still paid for the whole sweep.
-				const style = element.getAttribute( 'style' ) ?? '';
+				const geometry = state.readGeometry( element );
+				const style = geometry.literal;
 				const blankParagraph = element.tagName === 'P' &&
 					! ( element.textContent ?? '' ).replace( /[ \t\r\n]/g, '' ) &&
 					! element.querySelector( ':not(br)' ) &&
@@ -163,13 +174,12 @@ async function learnFluidGeometry(
 					// have no text/glyph to size. Retain that native CSS unchanged; explicit
 					// spacer dimensions, real text and generated glyphs still qualify.
 					!( property === 'font-size' && blankParagraph ) &&
-					( property !== 'left' || getComputedStyle( element ).position === 'relative' ) &&
-					/^-?\d+(?:\.\d+)?px$/.test( element.style.getPropertyValue( property ).trim() )
+					( property !== 'left' || geometry.position === 'relative' ) &&
+					state.pixel( geometry.style.getPropertyValue( property ) ) !== null
 				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*(?:matrix\(|translate(?:3d|x)?\()/i.test( style );
-				const carriesAbsoluteInset = getComputedStyle( element ).position === 'absolute' &&
-					/(?:^|;)\s*inset\s*:\s*-?\d+(?:\.\d+)?px\s+auto\s+auto\s+-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
+				const carriesAbsoluteInset = geometry.inset !== null;
 				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
 					continue;
 				}
@@ -180,9 +190,9 @@ async function learnFluidGeometry(
 		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
-	if ( tagged === 0 || await inlineGeometryIsConstant( page, widths, original, settleMs, properties ) ) {
-		await page.evaluate( attribute => {
-			for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) element.removeAttribute( attribute );
+	if ( tagged === 0 || await inlineGeometryIsConstant( page, baseline, widths, original, settleMs ) ) {
+		await baseline.evaluate( ( state, attribute ) => {
+			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
@@ -191,46 +201,39 @@ async function learnFluidGeometry(
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
-	const nonRelative = new Set( options.learnRelativeOffsets ? await page.evaluate( attribute =>
-		[ ...document.querySelectorAll( `[${ attribute }]` ) ]
-			.filter( element => getComputedStyle( element ).position !== 'relative' )
+	const nonRelative = new Set( options.learnRelativeOffsets ? await baseline.evaluate( ( state, attribute ) =>
+		state.elements().filter( element => state.readGeometry( element ).position !== 'relative' )
 			.map( element => element.getAttribute( attribute )! ), ID_ATTRIBUTE ) : [] );
 
-	for ( const width of widths ) {
+	// Widths in the order they were sampled; runtime-sheet observations align to it.
+	const sampledWidths: number[] = [];
+	const sample = async ( width: number ) => {
+		sampledWidths.push( width );
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, true, properties );
+		await waitForRestGeometry( page, baseline, settleMs, true, properties );
 		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
 		await observeRuntimeSheets( page );
 
-		const measured = await page.evaluate(
-			( { attribute, properties } ) =>
-				[ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ].map( ( element ) => {
-					const style = element.getAttribute( 'style' ) ?? '';
+		const measured = await baseline.evaluate(
+			( state, { attribute, properties } ) =>
+				state.elements().map( ( element ) => {
+					const geometry = state.readGeometry( element );
+					const style = geometry.literal;
 					const values: Record< string, number | null > = {};
 					const containers: Record< string, number | null > = {};
 					const customProperties = [ ...style.matchAll( /(?:^|;)\s*(--[-a-zA-Z0-9_]+)\s*:\s*[^;]+/g ) ].map( ( match ) => match[ 1 ]! );
 					const elementProperties = [ ...new Set( [ ...properties, ...customProperties ] ) ];
-					const parent = element.parentElement;
-					const relative = getComputedStyle( element ).position === 'relative';
+					const parent = geometry.parent;
+					const relative = geometry.position === 'relative';
 					for ( const property of elementProperties ) {
 						if ( property === 'inset-top' || property === 'inset-left' ) {
-							const inset = /(?:^|;)\s*inset\s*:\s*(-?\d+(?:\.\d+)?)px\s+auto\s+auto\s+(-?\d+(?:\.\d+)?)px\s*(?:;|$)/.exec( style );
-							values[ property ] = getComputedStyle( element ).position === 'absolute' && inset
-								? Number( inset[ property === 'inset-top' ? 1 : 2 ] ) : null;
+							values[ property ] = geometry.inset?.[ property === 'inset-top' ? 'top' : 'left' ] ?? null;
 							containers[ property ] = null;
 							continue;
 						}
 						if ( property === 'transform-x' ) {
-							const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style )?.[ 1 ]?.trim();
-							if ( transform ) {
-								const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
-								const translated = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform );
-								const pureMatrix = matrix && matrix.length === 6 && matrix.every( Number.isFinite ) &&
-									Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 1 ]! ) <= 0.01 &&
-									Math.abs( matrix[ 2 ]! ) <= 0.01 && Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 5 ]! ) <= 0.01;
-								values[ property ] = pureMatrix ? matrix[ 4 ]! : translated ? Number( translated[ 1 ] ) : null;
-							} else values[ property ] = null;
+							values[ property ] = geometry.translation;
 							continue;
 						}
 						// `font-size` is excluded: CSS resolves a font
@@ -287,7 +290,12 @@ async function learnFluidGeometry(
 			}
 		}
 		options.onProgress?.( width, measured.length );
+	};
+	for ( const width of widths ) await sample( width );
+	if ( adaptive && ( await runtimeSheetsObserved( page ) || tabletBandNeedsRefinement( observations.values() ) ) ) {
+		for ( const width of TABLET_REFINEMENT_WIDTHS ) await sample( width );
 	}
+	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
 
 	const learned: Array< {
 		id: string;
@@ -382,12 +390,8 @@ async function learnFluidGeometry(
 		if ( transformX && ( model.kind !== 'breakpoint' || segmented !== null ) ) {
 			// Source resize handlers can remove measured nodes; absence is final,
 			// not a reason to auto-wait for the old identity to reappear.
-			const element = await page.evaluate(
-				( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
-				{ attribute: ID_ATTRIBUTE, id }
-			);
-			const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( element ?? '' )?.[ 1 ]?.trim();
-			if ( ! transform || pureXTranslation( transform ) === null ) {
+			const translation = await baseline.evaluate( ( state, id ) => state.translation( id ), id );
+			if ( translation === null ) {
 				// The runtime may have switched this transform after the sweep; do not
 				// replace a newly rotated, scaled, skewed, or vertically shifted matrix.
 				unmodelled++;
@@ -489,7 +493,7 @@ async function learnFluidGeometry(
 	// The source then owns the final clone state. Learned CSS follows that resize.
 	await baseline.evaluate( state => state.restore() );
 	if ( original ) await page.setViewportSize( original );
-	await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, false, properties );
+	await waitForRestGeometry( page, baseline, settleMs, false, properties );
 	await baseline.evaluate( state => state.reconcile() );
 	// A final resize may write geometry onto roles that never qualified for
 	// learning. Restore those roles without replacing the sampled role state.
@@ -500,27 +504,23 @@ async function learnFluidGeometry(
 	for ( let index = learned.length - 1; index >= 0; index-- ) {
 		const entry = learned[ index ]!;
 		if ( entry.property === 'left' && options.learnRelativeOffsets &&
-			! await page.evaluate( ( { attribute, id } ) => {
-				const element = document.querySelector( `[${ attribute }="${ id }"]` );
-				return element !== null && getComputedStyle( element ).position === 'relative';
-			}, { attribute: ID_ATTRIBUTE, id: entry.id } ) ) {
+			! await baseline.evaluate( ( state, id ) => {
+				const element = state.element( id );
+				return element !== null && state.readGeometry( element ).position === 'relative';
+			}, entry.id ) ) {
 			learned.splice( index, 1 );
 			unmodelled++;
 			continue;
 		}
 		if ( entry.property !== 'transform' ) continue;
-		const style = await page.evaluate(
-			( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
-			{ attribute: ID_ATTRIBUTE, id: entry.id }
-		);
-		const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style ?? '' )?.[ 1 ]?.trim();
-		if ( transform && pureXTranslation( transform ) !== null ) continue;
+		const translation = await baseline.evaluate( ( state, id ) => state.translation( id ), entry.id );
+		if ( translation !== null ) continue;
 		learned.splice( index, 1 );
 		unmodelled++;
 	}
 
-	const { reverted, frozen, frozenWidths, sampled, appliedCss } = await page.evaluate(
-		( { attribute, segmentAttribute, entries, tolerance } ) => {
+	const { reverted, frozen, frozenWidths, sampled, appliedCss } = await baseline.evaluate(
+		( state, { segmentAttribute, entries, tolerance } ) => {
 			let revertedCount = 0;
 			let frozenCount = 0;
 			const frozenWidths: number[] = [];
@@ -533,7 +533,7 @@ async function learnFluidGeometry(
 			// plain copy or deletes it). Index the array instead.
 			for ( let index = 0; index < entries.length; index++ ) {
 				const entry = entries[ index ]!;
-				const element = document.querySelector< HTMLElement >( `[${ attribute }="${ entry.id }"]` );
+				const element = state.element( entry.id );
 				if ( ! element ) continue;
 				if ( entry.segmentedCss !== null ) {
 					// The rules live in a stylesheet keyed by the persistent
@@ -603,7 +603,6 @@ async function learnFluidGeometry(
 			return { reverted: revertedCount, frozen: frozenCount, frozenWidths, sampled: sampledEntries, appliedCss: entries.map( entry => entry.css ) };
 		},
 		{
-			attribute: ID_ATTRIBUTE,
 			segmentAttribute: SEGMENT_ATTRIBUTE,
 			entries: learned,
 			tolerance: CONTAINER_VERIFY_TOLERANCE_PX,
@@ -633,7 +632,7 @@ async function learnFluidGeometry(
 	} );
 	// The runtime has rewritten its own sheets for the capture width by now;
 	// learned rules are validated against exactly that geometry.
-	const runtimeSheets = await applyRuntimeSheetRules( page, widths );
+	const runtimeSheets = await applyRuntimeSheetRules( page, sampledWidths );
 	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
 
 	if ( reverted > 0 ) {
@@ -671,16 +670,17 @@ async function learnFluidGeometry(
  * overlaps that observation rather than preceding it. The bound keeps a
  * perpetually animating page from stalling the sweep.
  */
-async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
+async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
 	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
 	const reachabilityKey = await installImageReachability( page );
-	await withEvaluateTimeout( page.evaluate( async ( { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
+	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
 		const started = Date.now();
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		const snapshot = () => JSON.stringify(
-			[ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ].map( element => {
-				const style = element.style;
-				const pixel = ( value: string ) => /^-?\d+(?:\.\d+)?px$/.test( value.trim() ) ? Number.parseFloat( value ) : null;
+			state.elements().map( element => {
+				const geometry = state.readGeometry( element );
+				const style = geometry.style;
+				const pixel = state.pixel;
 				const custom = [ ...style ].filter( property => property.startsWith( '--' ) )
 					.map( property => [ property, pixel( style.getPropertyValue( property ) ) ] )
 					.filter( ( [ , value ] ) => value !== null );
@@ -689,22 +689,24 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 					// Keep the whole transform, not just X: scale/rotation must invalidate
 					// rest even when the translation component stays unchanged.
 					style.transform, style.transform ? getComputedStyle( element ).transform : null,
-					style.inset, getComputedStyle( element ).position,
-					pixel( style.width ) === null ? null : element.parentElement?.clientWidth,
-					pixel( style.height ) === null ? null : element.parentElement?.clientHeight ];
+					style.inset, geometry.position,
+					pixel( style.width ) === null ? null : geometry.parent?.clientWidth,
+					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ];
 			} )
 		);
-		const imageIds = new WeakMap< HTMLImageElement, number >();
-		let nextImageId = 0;
 		const content = () => ( {
-			structure: JSON.stringify( [ document.getElementsByTagName( '*' ).length,
-				[ ...document.images ].map( image => {
-					if ( ! imageIds.has( image ) ) imageIds.set( image, nextImageId++ );
-					return [ imageIds.get( image ), image.getClientRects().length ];
-				} ) ] ),
+			rendered: new Map( [ ...document.images ].map( image => [ image, image.getClientRects().length > 0 ] ) ),
 			sources: new Map( [ ...document.images ].map( image =>
 				[ image, JSON.stringify( [ image.currentSrc, image.src, image.getAttribute( 'srcset' ) ] ) ] ) ),
 		} );
+		// Another sweep can only reach new work when the document grew or an image
+		// it may load newly entered the render tree: rendered, still pending, and
+		// reachable. Nodes and images that merely toggle within the swept extent
+		// (a perpetual rotator, a ticker) give a sweep nothing new to load, and
+		// their geometry effect is already part of the sampled snapshot.
+		const revealedPending = ( current: ReturnType< typeof content >, swept: ReturnType< typeof content > ) =>
+			[ ...current.rendered ].some( ( [ image, rendered ] ) =>
+				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! unreachable( image ) );
 		const sweep = async () => {
 			// Absence of overflow is observed again at each width, never cached from
 			// a previous viewport. Arbitrary source observers cannot be proven absent,
@@ -728,7 +730,7 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
 			const currentContent = content();
 			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) => source !== sweptContent.sources.get( image ) );
-			if ( lazy && ( currentContent.structure !== sweptContent.structure ||
+			if ( lazy && ( revealedPending( currentContent, sweptContent ) ||
 				changedImages.some( ( [ image ] ) => ! image.complete ) || document.documentElement.scrollHeight > sweptHeight ) ) {
 				// Finite delayed resize/image work can introduce another offscreen
 				// tail after the first sweep. Observe it before declaring readiness.
@@ -760,8 +762,11 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
 			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
 			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
 		}
-	}, { attribute, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
+	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
 }
+
+/** Quiet window after a probe resize; outlasts common 250–500 ms resize debounces. */
+export const PROBE_QUIET_MS = 600;
 
 /**
  * Whether every tagged inline declaration is the same at every width.
@@ -776,26 +781,31 @@ async function waitForRestGeometry( page: Page, attribute: string, settleMs = 0,
  */
 async function inlineGeometryIsConstant(
 	page: Page,
+	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>,
 	widths: readonly number[],
 	original: { width: number; height: number } | null,
-	settleMs: number,
-	properties: readonly string[]
+	settleMs: number
 ): Promise< boolean > {
-	const observe = () => page.evaluate( ( { attribute, key } ) => {
+	const observe = () => baseline.evaluate( ( state, { key } ) => {
 		const tracker = ( window as unknown as Record< symbol, { written( element: Element ): boolean; viewportReactive(): boolean } | undefined > )[ Symbol.for( key ) ];
 		if ( ! tracker ) return null;
-		const tagged = [ ...document.querySelectorAll( `[${ attribute }]` ) ];
+		const tagged = state.elements();
 		return { count: tagged.length, written: tagged.some( element => tracker.written( element ) ), reactive: tracker.viewportReactive() };
-	}, { attribute: ID_ATTRIBUTE, key: RUNTIME_STYLE_WRITES_KEY } );
+	}, { key: RUNTIME_STYLE_WRITES_KEY } );
 	const before = await observe();
 	if ( before === null || before.written ) return false;
+	// The probe asks only whether script writes the tagged elements, not what
+	// geometry they rest at, so a quiet window that outlasts common resize
+	// debounces replaces the sampling sweep's scroll-and-rest readiness.
+	const { settleDocument } = await import( './page-helpers.js' );
+	const probeSettle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
 	if ( ! before.reactive ) return true;
 	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, true, properties );
+		await settleDocument( page, 'fluid-probe', probeSettle );
 	}
 	if ( original ) await page.setViewportSize( original );
-	await waitForRestGeometry( page, ID_ATTRIBUTE, settleMs, false, properties );
+	await settleDocument( page, 'fluid-probe', probeSettle );
 	const after = await observe();
 	return after !== null && ! after.written && after.count === before.count;
 }

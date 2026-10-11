@@ -45,10 +45,16 @@ async function readSourceResponse(route: Route, url: string, timeout: number): P
 	const acquired = await route.fetch({url, maxRedirects: 0, maxRetries: 0, timeout});
 	try {
 		const headers = acquired.headers();
+		const status = acquired.status();
+		const declared = Object.fromEntries(['location', 'refresh', 'content-type'].filter(key => headers[key] !== undefined).map(key => [key, headers[key]!]));
+		// A successful non-HTML response is an absent page (nonHtmlDocumentError):
+		// its bytes are never parsed or rendered, so the document byte budget does
+		// not apply. Binary bytes decoded as UTF-8 would also grow up to 3x.
+		if (status >= 200 && status < 300 && nonHtmlDocumentError(headers['content-type'])) return {rendered: {url, status, headers, body: Buffer.alloc(0)}, response: {url, status, headers: declared, body: ''}};
 		if (Number(headers['content-length'] ?? 0) > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
 		const body = await acquired.body();
 		if (body.length > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
-		return {rendered: {url, status: acquired.status(), headers, body}, response: {url, status: acquired.status(), headers: Object.fromEntries(['location', 'refresh', 'content-type'].filter(key => headers[key] !== undefined).map(key => [key, headers[key]!])), body: body.toString('utf8')}};
+		return {rendered: {url, status, headers, body}, response: {url, status, headers: declared, body: body.toString('utf8')}};
 	} finally { await acquired.dispose(); }
 }
 
@@ -189,6 +195,8 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * External declarations end at an inert
  * document, before any destination request, and are returned as evidence rather
  * than as portable HTML. Unknown script navigation is never classified as a redirect.
+ * A script reload of the delivered document is its own lifecycle, replayed through
+ * the bounded reload acquisition that baseline capture also accepts.
  */
 export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope} = {}): Promise<{response: Response | null; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
@@ -202,11 +210,18 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 	let rendered: RenderedResponse | undefined;
 	let acquired = false;
 	let delivered = false;
+	let executedDocument: string | undefined;
+	let scriptReloads = 0;
 	const guard = async (route: Route) => {
 		const request = route.request();
 		if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) { await route.fallback(); return; }
 		try {
 			const address = documentRequestUrl(request.url());
+			if (delivered && address === executedDocument && request.method() === 'GET') {
+				if (scriptReloads++ >= SOURCE_NAVIGATION_LIMITS.hops) throw new SourceNavigationError('Source reload budget exhausted');
+				await replaySourceReload(route, address, Math.max(1, deadline - Date.now()));
+				return;
+			}
 			if (address !== expected || delivered) throw new SourceNavigationError('Unexplained source main-frame navigation');
 			if (!acquired) {
 				const acquireResponse = async (current: string, timeout: number) => {
@@ -242,7 +257,10 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 			else if (redirectedTo || address !== rendered!.url) {
 				// No scripts from a different document execute under the requested URL.
 				await route.fulfill({status: rendered!.status, contentType: rendered!.headers['content-type'] ?? 'text/html', body: ''});
-			} else await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});
+			} else {
+				executedDocument = address;
+				await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});
+			}
 		} catch (error) {
 			failure = error instanceof Error ? error : new Error(String(error));
 			await route.abort('blockedbyclient').catch(() => {});

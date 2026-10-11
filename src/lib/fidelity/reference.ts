@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { BrowserContext, Page } from 'playwright';
 import { PNG } from 'pngjs';
-import { observePage, routeSourceMap } from './check.js';
+import { observePage, routeSourceMap, spreadSample } from './check.js';
 import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
 import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';
@@ -21,6 +21,12 @@ export interface ReferenceCollectorOptions {
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
 	prepareCapture?: ( page: Page, ctx: { url: string; viewport: string } ) => Promise<void>;
+	/**
+	 * Freeze baseline reference evidence for at most this many routes;
+	 * every other route skips reference navigations entirely and is reported as
+	 * uncompared scope instead of being fabricated. Default: every route.
+	 */
+	referenceSample?: number;
 }
 
 export const REFERENCE_WIDTHS = [ 390, 768, 1440 ];
@@ -55,7 +61,7 @@ export interface FidelityReference {
 	createdAt: string;
 	receipt: ReferenceArtifact;
 	capture: ReferenceArtifact[];
-	scope: { sourceUrls: string[]; widths: number[]; states: string[]; unknowns: string[]; cells?: ReferenceCell[] };
+	scope: { sourceUrls: string[]; widths: number[]; states: string[]; unknowns: string[]; cells?: ReferenceCell[]; referenceSample?: number };
 	entries: ReferenceEntry[];
 }
 export interface ReferenceCell {
@@ -83,7 +89,17 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	const captureId = randomUUID();
 	const entries: ReferenceEntry[] = [];
 	const cells = new Map<string, ReferenceCell>();
+	// Bounded sample: the entrypoint plus an even spread over the remaining
+	// initial routes (spreadSample, entrypoint first), decided once here so the
+	// choice is deterministic and holds whenever a route's capture runs. Routes
+	// discovered later through linked-page expansion are outside the sample.
+	// Unbounded (default) admits every route, including later discoveries.
+	const sampleLimit = options.referenceSample;
+	if ( sampleLimit !== undefined && ( ! Number.isInteger( sampleLimit ) || sampleLimit < 1 ) ) throw new Error( 'referenceSample must be a positive integer' );
+	const sampledUrls = new Set( sampleLimit === undefined ? [] : spreadSample( [ ...new Set( [ sourceUrl, ...sourceUrls ] ) ], sampleLimit ) );
+	const inSample = ( url: string ): boolean => sampleLimit === undefined || sampledUrls.has( url );
 	const declare = ( url: string, profile: CaptureProfile ): void => {
+		if ( ! inSample( url ) ) return;
 		for ( const viewport of profile.referenceWidths ?? ( profile.id === 'mobile' ? [ 390 ] : profile.id === 'desktop' ? [ 768, 1440 ] : [ profile.width ] ) ) {
 			const cell = { sourceUrl: url, profile: profile.id, viewport, state: 'baseline' };
 			cells.set( JSON.stringify( cell ), cell );
@@ -97,8 +113,13 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	};
 	return {
 		declare,
+		/** Routes outside this set were never navigated for reference evidence. */
+		sampledSourceUrls: sampleLimit === undefined ? undefined : [ ...sampledUrls ] as readonly string[],
 		requireUrls( urls: string[] ): void { sourceUrls = [ ...new Set( [ ...sourceUrls, ...urls ] ) ]; },
 		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile, expectedBoundary?: ExternalBoundary ): Promise<void> {
+			// A bounded sample leaves unsampled routes without reference evidence:
+			// no cells, no entries, and no reference page or context is opened.
+			if ( ! inSample( url ) ) return;
 			const recipe = profile ?? { id: device, width: page.viewportSize()?.width ?? 1440, height: 900 };
 			declare( url, recipe );
 			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device );
@@ -227,11 +248,16 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			const routes = routeSourceMap( receipt );
 			const capturedUrls = [ ...routes.values() ];
 			for ( const entry of entries ) entry.route = [ ...routes ].find( ( [ , url ] ) => url === entry.sourceUrl )?.[0];
+			const scopeSourceUrls = [ ...new Set( [ ...sourceUrls, ...capturedUrls ] ) ];
+			const unknowns = [ 'Interaction states are not frozen; baseline scope excludes dialogs, zoom, and motion.', 'Readiness is bounded to settled layout, cleanup and decoded images; asynchronous application work may remain.' ];
+			// Scope stays truthful: skipped routes are named as unknowns, never fabricated.
+			const unfrozenRoutes = scopeSourceUrls.filter( url => ! sampledUrls.has( url ) ).length;
+			if ( sampleLimit !== undefined && unfrozenRoutes > 0 ) unknowns.push( `${ unfrozenRoutes } of ${ scopeSourceUrls.length } routes have no frozen reference because the caller bounded the reference sample.` );
 			const manifest: FidelityReference = {
 				schema: 'data-liberation/fidelity-reference/v1', captureId, sourceUrl, createdAt: new Date().toISOString(),
 				receipt: { path: relative( directory, receiptPath ), sha256: digest( receiptBytes ) }, capture: files,
-				scope: { sourceUrls: [ ...new Set( [ ...sourceUrls, ...capturedUrls ] ) ], widths: cells.size ? [ ...new Set( [ ...cells.values() ].map( cell => cell.viewport ) ) ].sort( ( a, b ) => a - b ) : [ ...REFERENCE_WIDTHS ], states: [ 'baseline' ], cells: [ ...cells.values() ],
-					unknowns: [ 'Interaction states are not frozen; baseline scope excludes dialogs, zoom, and motion.', 'Readiness is bounded to settled layout, cleanup and decoded images; asynchronous application work may remain.' ] },
+				scope: { sourceUrls: scopeSourceUrls, widths: cells.size ? [ ...new Set( [ ...cells.values() ].map( cell => cell.viewport ) ) ].sort( ( a, b ) => a - b ) : [ ...REFERENCE_WIDTHS ], states: [ 'baseline' ], cells: [ ...cells.values() ],
+					...( sampleLimit !== undefined ? { referenceSample: sampleLimit } : {} ), unknowns },
 				entries,
 			};
 			const path = join( directory, 'fidelity-reference.json' );

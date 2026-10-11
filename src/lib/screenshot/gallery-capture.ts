@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import { activateTrigger } from './interaction-capture.js';
 import { srcsetReferences } from '../srcset.js';
-import { waitForAnimations, withEvaluateTimeout } from './page-helpers.js';
+import { settleDocument, withEvaluateTimeout } from './page-helpers.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -132,7 +132,7 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 				const clone = stage.cloneNode(true) as Element;
 				Array.from(clone.querySelectorAll('img')).forEach((image, index) => { image.setAttribute('src', sources[index]!); image.removeAttribute('srcset'); image.removeAttribute('sizes'); });
 				for (const unsafe of clone.querySelectorAll('script,iframe,noscript')) unsafe.remove();
-				return { key: sources.join('\n'), html: clone.innerHTML, text: [], ordinal: undefined, slot: 0, geometry: [] };
+				return { key: sources.join('\n'), html: clone.innerHTML, text: [], ordinal: undefined, slot: 0, geometry: [], slots: sources };
 			}
 			const rendered = Array.from(stage.children).filter((child) => {
 				const image = imageFor(child);
@@ -242,13 +242,26 @@ async function collect(
 	};
 	const act = async (selector: string, before: NonNullable<typeof first>, accept: (frame: NonNullable<typeof first>) => boolean) => {
 		for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
+			const mutation = await page.locator(descriptor.selector).first().locator(descriptor.stage).evaluateHandle(stage => {
+				let changed = false;
+				const observer = new MutationObserver(() => { changed = true; });
+				observer.observe(stage, { attributes: true, childList: true, characterData: true, subtree: true });
+				return { observer, changed: () => changed };
+			});
 			await page.locator(descriptor.selector).first().locator(selector).click({ timeout: 2000 });
+			await mutation.evaluate(state => new Promise<void>(resolve => {
+				const started = performance.now();
+				const check = () => state.changed() || performance.now() - started >= 800 ? resolve() : setTimeout(check, 20);
+				check();
+			}));
 			await settle();
+			const changed = await mutation.evaluate(state => { state.observer.disconnect(); return state.changed(); });
+			await mutation.dispose();
 			const immediate = await snapshot(page, descriptor);
 			if (immediate && accept(immediate)) {
 				const stable = await observe(accept);
 				if (stable) return stable;
-			} else if (immediate && immediate.key === before.key) {
+			} else if (immediate && immediate.key === before.key && !changed) {
 				// The source can intentionally ignore controls while its own transition lock is held.
 				continue;
 			} else if (immediate) {
@@ -263,6 +276,7 @@ async function collect(
 		return null;
 	};
 	let complete = false;
+	let continuityFailure = false;
 	let failure: string | undefined;
 	let pending: NonNullable<typeof first> | null = null;
 	try {
@@ -271,9 +285,6 @@ async function collect(
 			const after = await act(descriptor.next, before, frame => frame.key !== before.key);
 			if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
 			pending = after;
-			// The same action must not silently mean a fixed choice. Verify its inverse.
-			if (!await act(descriptor.previous, after, frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
-			if (!await act(descriptor.next, before, frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
 			current = after;
 			pending = null;
 			if (after.key === first.key) {
@@ -285,6 +296,32 @@ async function collect(
 			if (Buffer.byteLength(JSON.stringify(frames)) > BUDGET) {
 				frames.pop();
 				break;
+			}
+		}
+		// Once Next has closed a cycle, walk it backwards and verify each inverse edge.
+		if (complete) {
+			for (let index = frames.length - 1; index >= 0; index--) {
+				const expected = frames[index]!;
+				const before = current;
+				const restored = await act(descriptor.previous, before, frame => frame.key === expected.key);
+				if (!restored) {
+					failure = `Previous action did not restore ${expected.key}`;
+					complete = false;
+					break;
+				}
+				current = restored;
+			}
+		}
+		if (complete && frames.every(frame => frame.slots && frame.slots.length >= 2)) {
+			const continuous = frames.every((frame, index) => {
+				const next = frames[(index + 1) % frames.length]!;
+				return frame.slots!.length === next.slots!.length &&
+					frame.slots!.slice(1).every((source, slot) => next.slots![slot] === source);
+			});
+			if (!continuous) {
+				complete = false;
+				continuityFailure = true;
+				failure = 'Adjacent src-swap frames do not preserve overlapping slot continuity';
 			}
 		}
 	} catch (error) {
@@ -310,9 +347,9 @@ async function collect(
 	return {
 		...descriptor,
 		initial: ordered.findIndex((frame) => frame.key === first.key),
-		frames: ordered.map(({slot, geometry, ordinal, ...frame}) => frame),
+		frames: ordered.map(({slot, geometry, ordinal, slots, ...frame}) => frame),
 		coverage: complete ? 'complete' : 'partial',
-		restoration: (await snapshot(page, descriptor))?.key === first.key ? 'verified' : 'unverified',
+		restoration: !continuityFailure && (await snapshot(page, descriptor))?.key === first.key ? 'verified' : 'unverified',
 		autoplay: 'unmeasured',
 		...(failure ? {failure} : {}),
 	};
@@ -508,7 +545,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 					window.scrollTo({left:pose.x,top:pose.y,behavior:'instant'});
 					await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 				}), 5_000);
-				await waitForAnimations(page);
+				await settleDocument(page, 'gallery-restore', { quietMs: 0, timeoutMs: 2_000, animations: true });
 				const restored = await scroll.evaluate(pose => scrollX === pose.x && scrollY === pose.y && pose.ancestors.every(({node,x,y}) => node.isConnected && node.scrollLeft === x && node.scrollTop === y));
 				if (state?.gallery) {
 					state.gallery.viewportRestoration = restored && JSON.stringify(page.viewportSize()) === JSON.stringify(viewport) ? 'verified' : 'unverified';

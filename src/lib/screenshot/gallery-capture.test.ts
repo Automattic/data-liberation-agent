@@ -92,14 +92,12 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 );
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'retains observed decoded frames and closes a lightbox when its inverse control cannot enter the viewport', async () => {
+	'retains a decoded lightbox cycle when its inverse control starts outside the viewport', async () => {
 		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
 		await page.setContent(fixture.replace("large=(large+1)%3;show", "document.querySelector('[aria-label=\"Previous slide\"]').style.cssText='position:fixed;top:-200vh';large=(large+1)%3;show"));
 		const states = await captureGalleries(page);
-		expect(states[0]).toMatchObject({status:'observed-incomplete',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'partial'},closed:true},dialog:{htmlTruncated:false}});
-		expect(states[0]?.gallery?.lightbox?.frames.length).toBeGreaterThan(0);
-		expect(states[0]?.error).toContain('Timeout');
-		expect(wireCapturedDialogs(fixture,states)).not.toContain('data-dla-dialog-panel');
+		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete',restoration:'verified'},closed:true},dialog:{htmlTruncated:false}});
+		expect(wireCapturedDialogs(fixture,states)).toContain('data-dla-dialog-panel');
 	}, 20_000,
 );
 
@@ -113,6 +111,20 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		const states = await captureGalleries(page);
 		expect(states[0]?.gallery?.inline.coverage).toBe('complete');
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+	} finally { await browser.close(); }
+}, 60_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('rejects a src-swap cycle that skips the same frame in both directions', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		const colors = ['red', 'green', 'blue', 'yellow'];
+		await page.setContent(`<!doctype html><section id="swap"><div aria-label="Image gallery carousel"><div id="stage">${colors.map((color, i) => `<img src="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"><rect width="30" height="30" fill="${color}"/></svg>`)}">`).join('')}</div></div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
+		let n=0;const urls=[...document.querySelectorAll('#stage img')].map(x=>x.src);function update(){document.querySelectorAll('#stage img').forEach((x,i)=>x.src=urls[(n+i)%4])}
+		document.querySelector('[aria-label="Next picture"]').onclick=()=>{n=(n+2)%4;update()};document.querySelector('[aria-label="Previous picture"]').onclick=()=>{n=(n+2)%4;update()};</script>`);
+		const gallery = (await captureGalleries(page))[0]?.gallery?.inline;
+		expect(gallery).toMatchObject({ coverage: 'partial', restoration: 'unverified', failure: 'Adjacent src-swap frames do not preserve overlapping slot continuity' });
+		expect(gallery?.frames).toHaveLength(2);
 	} finally { await browser.close(); }
 }, 60_000);
 
@@ -130,6 +142,45 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(5);
 	} finally { await browser.close(); }
 }, 90_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('does not retry a click whose gallery mutation is delayed', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		await page.setContent(`<!doctype html><section id="delayed"><div id="stage">${[0,1,2].map(i => `<img width="80" height="80" src="${image(i)}">`).join('')}</div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
+		let index=0;const urls=Array.from(document.querySelectorAll('#stage img'),img=>img.src);
+		function change(dir){setTimeout(()=>{index=(index+dir+3)%3;document.querySelectorAll('#stage img').forEach((img,slot)=>img.src=urls[(index+slot)%3])},600)}
+		document.querySelector('[aria-label="Next picture"]').onclick=()=>change(1);document.querySelector('[aria-label="Previous picture"]').onclick=()=>change(-1);
+		</script>`);
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+	} finally { await browser.close(); }
+}, 90_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'proves a three-frame directional cycle in at most 2N+1 clicks', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.setContent(fixture.replace("document.getElementById('overlay').classList.add('visible');", ''));
+			await page.evaluate(() => {
+				(globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks = 0;
+				document.querySelectorAll('#gallery button,#gallery [role="button"]').forEach(control =>
+					control.addEventListener('click', () => {
+						(globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks!++;
+					}, true),
+				);
+			});
+			const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+			expect(await page.evaluate(() => (globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks)).toBeLessThanOrEqual(7);
+		} finally {
+			await browser.close();
+		}
+	}, 30_000,
+);
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'replays observed cycles and image-opened galleries offline at phone, tablet and desktop widths',

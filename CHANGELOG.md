@@ -15,6 +15,67 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.21.8] - 2026-10-11
+
+### Changed
+- regenerate plugin bundles
+- accept desktop and mobile requests in either order
+- freeze reference evidence for the entrypoint by default (route-sample option, 'all' for full parity)
+- refine the tablet sweep band only on observed change
+- admit routes against a per-route working set above the idle floor
+- compare sampled drift routes concurrently
+- bound observation settle by readiness instead of a fixed sleep
+- run viewport passes concurrently
+
+### Fixed
+- restore an abandoned sweep's pose and resolve served routes once
+- fetch rendered sample requests with a browser-like connection limit
+- name the network cause when a source request fails
+- settle a source's own same-document reload
+- skip non-HTML routes before the document byte budget
+- do not read image sitemap entries as page routes
+
+## [0.21.7] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- verify src-swap slot continuity
+
+## [0.21.6] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- resweep only when the document grew or revealed a pending image
+
+### Fixed
+- avoid retry after stage mutation
+
+## [0.21.5] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- remove unused design capture path
+
+## [0.21.4] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- prove cycles with fewer actions
+
+## [0.21.3] - 2026-10-09
+
+### Changed
+- regenerate plugin bundles
+- settle dialog content and scroll-state snapshots through settleDocument
+- share baseline-owned geometry predicates
+- one document readiness primitive with recorded outcomes
+
+### Fixed
+- settle gallery restore through shared readiness
+- share rendered text clip accounting
+
 ## [0.21.2] - 2026-10-09
 
 ### Changed
