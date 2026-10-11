@@ -307,6 +307,29 @@ describe( 'captureWebsite completeness', () => {
 		expect( result.unresolvedAnchors ).toEqual( [ { sourceUrl, url: 'https://example.com/gone', reason: 'target route is absent at source' } ] );
 	} );
 
+	it( 'counts discovered routes over the same route set as captured, skipped and failed', async () => {
+		const other = 'https://example.com/other';
+		const unscheduled = [ 'https://example.com/a', 'https://example.com/b', 'https://example.com/c' ];
+		captureScreenshotsMock.mockResolvedValueOnce( {
+			urls: [ sourceUrl, other ], captured: 1, skipped: 0, failed: 1, durationMs: 1,
+			linkedPageCoverage: {
+				limits: { maxPages: 2, maxDepth: 8, timeoutMs: 1_800_000 },
+				requiredUrls: [ sourceUrl, other, ...unscheduled ],
+				scheduled: 2,
+				diagnostics: unscheduled.map( url => ( { code: 'linked_page_budget_exhausted', url, reason: 'maxPages=2 exhausted; 2 addresses scheduled' } ) ),
+			},
+		} as Awaited< ReturnType< typeof captureScreenshotsMock > > );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( { id: 'generic', platform: 'generic', discover: async () => ( { urls: [] } ), extract: async () => ( { title: '', content: '' } ) } ),
+		} );
+		const { routesDiscovered, routesCaptured, routesSkipped, routesFailed } = result.summary;
+		expect( { routesDiscovered, routesCaptured, routesSkipped, routesFailed } ).toEqual( { routesDiscovered: 2, routesCaptured: 1, routesSkipped: 0, routesFailed: 1 } );
+		expect( routesCaptured + routesSkipped + routesFailed ).toBeLessThanOrEqual( routesDiscovered );
+		// Unscheduled routes stay visible as diagnostics and keep the capture incomplete.
+		expect( result.discoveryDiagnostics.map( row => row.url ) ).toEqual( unscheduled );
+		expect( result.complete ).toBe( false );
+	} );
+
 	it( 'rejects in strict mode so programmatic callers fail closed', async () => {
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
 			mkdirSync( outputDir, { recursive: true } );

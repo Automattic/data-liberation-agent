@@ -298,7 +298,8 @@ export async function captureWebsite(
 		  } > )
 		: [];
 	const summary = {
-		routesDiscovered: screenshotResult.linkedPageCoverage?.requiredUrls.length ?? screenshotResult.urls.length,
+		// Same route set `captured`, `skipped` and `failed` are counted over.
+		routesDiscovered: screenshotResult.urls.length,
 		routesCaptured: screenshotResult.captured,
 		routesSkipped: screenshotResult.skipped,
 		routesFailed: screenshotResult.failed,
