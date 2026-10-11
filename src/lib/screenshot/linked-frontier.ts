@@ -5,6 +5,7 @@ import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 export interface LinkedPageLimits {
 	maxPages?: number;
 	maxDepth?: number;
+	/** Bounds new linked-route admission, not completion of admitted captures. */
 	timeoutMs?: number;
 }
 export interface FrontierDiagnostic {
@@ -27,8 +28,10 @@ export class LinkedFrontier {
 	readonly diagnostics: FrontierDiagnostic[] = [];
 	readonly limits: Required<LinkedPageLimits>;
 	private readonly deadline: number;
+	private readonly capturePageLimit?: number;
 
-	constructor(limits: LinkedPageLimits = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope) {
+	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope) {
+		this.capturePageLimit = limits.capturePageLimit;
 		if (routeScope) validateRouteScope(routeScope);
 		this.limits = {
 			maxPages: limits.maxPages ?? 256,
@@ -41,26 +44,32 @@ export class LinkedFrontier {
 		this.deadline = now + this.limits.timeoutMs;
 	}
 
-	admit(url: string, depth: number, now = Date.now()): boolean {
+	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked'): boolean {
 		if (!routeInScope(url, this.routeScope)) return false;
 		url = documentRequestUrl(url);
-		if (this.required.has(url)) return false;
+		if (this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
 		this.required.add(url);
-		const reason = now >= this.deadline ? `timeoutMs=${this.limits.timeoutMs} exhausted` :
+		// Adapter inventory is already discovered. A proven redirect continues an
+		// admitted route rather than opening a new linked-discovery branch. Both
+		// still obey the caller's explicit whole-capture page cap.
+		const reason = this.capturePageLimit !== undefined && this.depths.size >= this.capturePageLimit ? `capture limit=${this.capturePageLimit} exhausted; ${this.depths.size} addresses scheduled` :
+			ownership !== 'linked' ? undefined :
+			now >= this.deadline ? `timeoutMs=${this.limits.timeoutMs} exhausted` :
 			depth > this.limits.maxDepth ? `depth=${depth} exceeds maxDepth=${this.limits.maxDepth}` :
 			this.depths.size >= this.limits.maxPages ? `maxPages=${this.limits.maxPages} exhausted; ${this.depths.size} addresses scheduled` : undefined;
 		if (reason) {
-			this.diagnostics.push( { code: 'linked_page_budget_exhausted', url, reason } );
+			if (!this.diagnostics.some(row => row.url === url && row.code === 'linked_page_budget_exhausted')) {
+				this.diagnostics.push( { code: 'linked_page_budget_exhausted', url, reason } );
+			}
 			return false;
+		}
+		// An observed alias can prove a previously budget-rejected link belongs to
+		// work already admitted. Its old omission is no longer true.
+		for (let i = this.diagnostics.length - 1; i >= 0; i--) {
+			if (this.diagnostics[i]!.url === url && this.diagnostics[i]!.code === 'linked_page_budget_exhausted') this.diagnostics.splice(i, 1);
 		}
 		this.depths.set(url, depth);
 		return true;
-	}
-
-	expired(now = Date.now()): boolean { return now >= this.deadline; }
-
-	recordTimeout(url: string): void {
-		if (!this.diagnostics.some(row => row.url === url)) this.diagnostics.push({code: 'linked_page_budget_exhausted', url, reason: `timeoutMs=${this.limits.timeoutMs} exhausted before scheduled capture`});
 	}
 
 	coverage(): LinkedPageCoverage {
