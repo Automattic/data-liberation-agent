@@ -15,6 +15,26 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.21.8] - 2026-10-11
+
+### Changed
+- regenerate plugin bundles
+- accept desktop and mobile requests in either order
+- freeze reference evidence for the entrypoint by default (route-sample option, 'all' for full parity)
+- refine the tablet sweep band only on observed change
+- admit routes against a per-route working set above the idle floor
+- compare sampled drift routes concurrently
+- bound observation settle by readiness instead of a fixed sleep
+- run viewport passes concurrently
+
+### Fixed
+- restore an abandoned sweep's pose and resolve served routes once
+- fetch rendered sample requests with a browser-like connection limit
+- name the network cause when a source request fails
+- settle a source's own same-document reload
+- skip non-HTML routes before the document byte budget
+- do not read image sitemap entries as page routes
+
 ## [0.21.7] - 2026-10-09
 
 ### Changed
