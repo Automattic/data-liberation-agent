@@ -716,7 +716,11 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 				await new Promise( resolve => setTimeout( resolve, 60 ) );
 			}
 			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
-			window.dispatchEvent( new Event( 'scroll' ) );
+			// Source libraries (e.g. MooTools) replace window.Event; the document's
+			// native factory still builds a real event.
+			const scrolled = document.createEvent( 'Event' );
+			scrolled.initEvent( 'scroll', false, false );
+			window.dispatchEvent( scrolled );
 		};
 		let sweptContent = content();
 		if ( lazy ) await sweep();

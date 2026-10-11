@@ -26,6 +26,21 @@ describe('document-integrity', () => {
     const html = '<html><body><p>&lt;bodyguard&gt; and <bodyguard></p></body></html>';
     expect(countBodyTags(html)).toBe(1);
   });
+
+  it('does not count "<body" in scripts, comments, textareas, templates, titles or attribute values', () => {
+    const html = `<html><head><title>a <body> b</title></head><body data-x="<body>" title='x > <body class=y>'>
+      <script>w.document.write('<body leftmargin="0"><img></body>');</script>
+      <style>/* <body> */</style><!-- <body> --><textarea><body></textarea>
+      <template><body><template><body></template><body></template></body></html>`;
+    expect(countBodyTags(html)).toBe(1);
+    expect(isStackingArtifact(html)).toBe(false);
+  });
+
+  it('counts real body elements that follow raw-text content', () => {
+    const html = '<body><script>var a="<body>"</script><div><body class="b"></body></div></body>';
+    expect(countBodyTags(html)).toBe(2);
+    expect(isStackingArtifact(html)).toBe(true);
+  });
 });
 
 describe('isRouteDrift', () => {

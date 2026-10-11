@@ -18,6 +18,8 @@ export interface CaptureFluidEvidence {
 	breakpoints: number[];
 	canvasFloor?: number | null;
 	byKind: Record< string, number >;
+	/** Learning threw; the document stayed frozen. */
+	diagnostic?: string;
 }
 export interface CaptureDocumentFluidEvidence {
 	desktop?: CaptureFluidEvidence;

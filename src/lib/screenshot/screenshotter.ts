@@ -1021,7 +1021,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		} catch ( error ) {
 			// Never fail a capture over the optimization: a frozen copy still
 			// beats no copy, and the diagnostics record that it stayed frozen.
-			fail( 'content', `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }` );
+			entry[ isDesktop ? 'fluid' : 'fluidMobile' ] = {
+				applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {},
+				diagnostic: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
+			};
 		}
 	}
 	if ( args.rendererCrashed() ) return;

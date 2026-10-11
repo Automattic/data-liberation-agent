@@ -365,7 +365,9 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 			root.style.scrollBehavior = 'auto';
 			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
 			root.style.scrollBehavior = behavior;
-			window.dispatchEvent( new Event( 'scroll' ) );
+			const scrolled = document.createEvent( 'Event' );
+			scrolled.initEvent( 'scroll', false, false );
+			window.dispatchEvent( scrolled );
 		} )
 		.catch( () => undefined );
 	// The handler is throttled, so its transition starts a beat after the event.
