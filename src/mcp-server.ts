@@ -148,6 +148,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         routesSkipped: result.routesSkipped,
         routesFailed: result.routesFailed,
         complete: result.complete,
+        entrypointCaptured: result.entrypointCaptured,
+        missingRoutes: result.missingRoutes,
+        usable: result.usable,
         unresolvedAnchors: result.unresolvedAnchors,
       });
     }

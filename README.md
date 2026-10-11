@@ -157,6 +157,18 @@ not script strings, and resolve virtual paths relative to the website root. It
 does not require client-side fetching. DLA retains no expanded authoring copies.
 See [runtime serving and limits](docs/runtime-api.md#shared-parts-and-serving).
 
+### Usable partial captures
+
+A capture is `complete: true` only when every discovered route was captured and no link points at a missing route. A partial site is still written and returned with `complete: false` (`strict: true` rejects instead). One failed route should not sink an import, so the result carries what a caller needs to decide:
+
+| Field | |
+|---|---|
+| `entrypointCaptured` | The entrypoint route is in the capture (also in `summary`). Always `true` on a resolved result: when the entrypoint is not rendered, capture rejects with the recorded cause, whatever happened to other routes. |
+| `missingRoutes` | `{ url, code: 'route_capture_failed', reason }` for each route that failed (deadline, engine error, uncaptured redirect target). Routes the source itself lacks (`route_not_found`) or redirects off-site (`route_external_redirect`) are not listed; they remain in the receipt's `discoveryDiagnostics`. |
+| `unresolvedAnchors` | Links to missing routes stay unresolved anchors. |
+
+Recommended default policy (`USABLE_PARTIAL_CAPTURE_POLICY`, version 1; `isUsableCapture(result)`; surfaced as `usable` by `liberate` and the MCP tool): a capture is usable when the entrypoint was captured and it is either complete or its `missingRoutes` are at most `max(1, 10%)` of `summary.routesDiscovered`. A capture whose entrypoint failed is never usable. Import a usable partial capture and report `missingRoutes` instead of failing. Capture itself never applies the policy.
+
 ## Using it from an agent
 
 The `liberate` skill drives the CLI. It is the only skill: a URL becomes a verified, portable site, and optionally a live URL.

@@ -8,6 +8,7 @@
 import { join } from 'node:path';
 import { captureWebsite } from '../lib/capture.js';
 import type { CaptureOptions, UnresolvedAnchor } from '../lib/capture.js';
+import { isUsableCapture, type MissingRoute } from '../lib/capture-usability.js';
 import { siteOutputDir } from '../lib/paths.js';
 import { startStaticServer } from '../lib/replicate/local-site/static-server.js';
 import type { StaticServer } from '../lib/replicate/local-site/static-server.js';
@@ -47,6 +48,10 @@ export interface LiberateResult {
 	routesSkipped: number;
 	routesFailed: number;
 	complete: boolean;
+	entrypointCaptured: boolean;
+	missingRoutes: MissingRoute[];
+	/** Recommended policy (README "Usable partial captures"): entrypoint captured and few failed routes. */
+	usable: boolean;
 	unresolvedAnchors: UnresolvedAnchor[];
 	/** Running local server, or null when serving is disabled. */
 	server: StaticServer | null;
@@ -88,6 +93,9 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		routesSkipped: capture.summary.routesSkipped,
 		routesFailed: capture.summary.routesFailed,
 		complete: capture.complete,
+		entrypointCaptured: capture.entrypointCaptured,
+		missingRoutes: capture.missingRoutes,
+		usable: isUsableCapture( capture ),
 		unresolvedAnchors: capture.unresolvedAnchors,
 		server: options.serve === false ? null : await startStaticServer( websiteDir ),
 	};

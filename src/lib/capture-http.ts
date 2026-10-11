@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Platform } from '../platform/types.js';
 import type { CaptureOptions, CaptureProgress, CaptureResult } from './capture.js';
+import { missingRoutes } from './capture-usability.js';
 import { acquireHttpDocuments } from './http-acquisition.js';
 import { materializeHttpDocuments } from './http-materialization.js';
 
@@ -51,7 +52,7 @@ export async function captureHttpWebsite( input: {
 	if ( runtime ) failures.push( ...runtime.failures );
 	const diagnostics = [ ...input.discoveryDiagnostics, ...( receipt.discoveryDiagnostics ?? [] ), ...inventory.slice( urls.length ).map( url => ( { code: 'http_route_not_requested', url, reason: 'Outside the explicit HTTP route limit' } ) ) ];
 	const failedRoutes = new Set( acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => document.url ) );
-	const summary = { routesDiscovered: inventory.length, routesCaptured: receipt.routes.length, routesSkipped: 0, routesFailed: failedRoutes.size, durationMs: Date.now() - input.startedAt, complete: false };
+	const summary = { routesDiscovered: inventory.length, routesCaptured: receipt.routes.length, routesSkipped: 0, routesFailed: failedRoutes.size, durationMs: Date.now() - input.startedAt, complete: false, entrypointCaptured: true };
 	receipt.summary = summary;
 	receipt.discoveryDiagnostics = diagnostics;
 	receipt.failures = failures;
@@ -63,5 +64,5 @@ export async function captureHttpWebsite( input: {
 	diagnostic.discoveryDiagnostics = diagnostics; diagnostic.failures = failures;
 	writeFileSync( diagnosticPath, JSON.stringify( diagnostic, null, 2 ) + '\n' );
 	progress( { phase: 'complete', current: urls.length, total: inventory.length, unit: 'routes' } );
-	return { captureReceiptPath, outputDir: options.outputDir, summary, complete: false, failures, discoveryDiagnostics: diagnostics, unresolvedAnchors: diagnostic.unresolvedAnchors ?? [], provenance: { provider: 'data-liberation/http-capture', platform: platform.id } };
+	return { captureReceiptPath, outputDir: options.outputDir, summary, complete: false, entrypointCaptured: true, missingRoutes: missingRoutes( diagnostics ), failures, discoveryDiagnostics: diagnostics, unresolvedAnchors: diagnostic.unresolvedAnchors ?? [], provenance: { provider: 'data-liberation/http-capture', platform: platform.id } };
 }
