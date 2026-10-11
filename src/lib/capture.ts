@@ -12,6 +12,9 @@ import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
+import { missingRoutes, type MissingRoute } from './capture-usability.js';
+
+export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -81,8 +84,16 @@ export interface CaptureResult {
 		routesFailed: number;
 		durationMs: number;
 		complete: boolean;
+		entrypointCaptured: boolean;
 	};
 	complete: boolean;
+	/**
+	 * The entrypoint route is in the capture. Always true on a resolved result:
+	 * export rejects with the recorded cause when the entrypoint was not rendered.
+	 */
+	entrypointCaptured: boolean;
+	/** Routes that failed to capture, by URL with cause. Excludes source-absent and external-redirect routes. */
+	missingRoutes: MissingRoute[];
 	failures: Array< { url: unknown; error: unknown } >;
 	discoveryDiagnostics: Array< { code: string; url: string; reason: string } >;
 	unresolvedAnchors: UnresolvedAnchor[];
@@ -346,8 +357,10 @@ export async function captureWebsite(
 	const result: CaptureResult = {
 		captureReceiptPath,
 		outputDir,
-		summary: { ...summary, complete },
+		summary: { ...summary, complete, entrypointCaptured: true },
 		complete,
+		entrypointCaptured: true,
+		missingRoutes: missingRoutes( receipt.discoveryDiagnostics ),
 		failures,
 		discoveryDiagnostics: [...(inventory.diagnostics ?? []), ...(screenshotResult.linkedPageCoverage?.diagnostics ?? [])],
 		unresolvedAnchors,

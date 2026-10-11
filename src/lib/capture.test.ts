@@ -52,7 +52,7 @@ vi.mock( './media-fetch/media.js', () => ( {
 	} ),
 } ) );
 
-import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, downloadCaptureSectionMedia, IncompleteCaptureError } from './capture.js';
+import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
 
@@ -307,6 +307,51 @@ describe( 'captureWebsite completeness', () => {
 		expect( result.unresolvedAnchors ).toEqual( [ { sourceUrl, url: 'https://example.com/gone', reason: 'target route is absent at source' } ] );
 	} );
 
+	it( 'reports a captured entrypoint and a structured missing route when one of twelve routes fails', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		const others = Array.from( { length: 11 }, ( _, index ) => `https://example.com/p${ index }` );
+		const failed = others[ 3 ]!;
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl, ...others ], captured: 11, skipped: 0, failed: 1, durationMs: 1 } );
+		mkdirSync( join( root, 'html' ), { recursive: true } );
+		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
+		const entries: Record< string, { html?: string } > = {};
+		for ( const [ index, url ] of [ sourceUrl, ...others ].entries() ) {
+			if ( url === failed ) { entries[ url ] = {}; continue; }
+			writeFileSync( join( root, 'html', `page-${ index }.html` ), `<h1>Page ${ index }</h1>` );
+			entries[ url ] = { html: `html/page-${ index }.html` };
+		}
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		writeFileSync( join( root, 'screenshots', 'failures.json' ), JSON.stringify( [
+			{ url: failed, viewport: 'desktop', stage: 'goto', error: 'Navigation timeout of 30000 ms exceeded', attempt: 4 },
+		] ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( { id: 'generic', platform: 'generic', discover: async () => ( { urls: others.map( url => ( { url, type: 'page' } ) ) } ), extract: async () => ( { title: '', content: '' } ) } ),
+		} );
+		expect( result.complete ).toBe( false );
+		expect( result.entrypointCaptured ).toBe( true );
+		expect( result.summary.entrypointCaptured ).toBe( true );
+		expect( result.missingRoutes ).toEqual( [ { url: failed, code: 'route_capture_failed', reason: 'desktop/goto: Navigation timeout of 30000 ms exceeded' } ] );
+		expect( isUsableCapture( result ) ).toBe( true );
+	} );
+
+	it( 'rejects a capture whose entrypoint failed, whatever happened to other routes', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		const other = 'https://example.com/other';
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl, other ], captured: 1, skipped: 0, failed: 1, durationMs: 1 } );
+		mkdirSync( join( root, 'html' ), { recursive: true } );
+		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( root, 'html', 'other.html' ), '<h1>Other</h1>' );
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { [ sourceUrl ]: {}, [ other ]: { html: 'html/other.html' } },
+		} ) );
+		writeFileSync( join( root, 'screenshots', 'failures.json' ), JSON.stringify( [ { url: sourceUrl, viewport: 'desktop', stage: 'goto', error: 'HTTP 403', attempt: 1 } ] ) );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( { id: 'generic', platform: 'generic', discover: async () => ( { urls: [ { url: other, type: 'page' } ] } ), extract: async () => ( { title: '', content: '' } ) } ),
+		} ) ).rejects.toThrow( `Source homepage ${ sourceUrl } was not captured: desktop/goto: HTTP 403` );
+	} );
+
 	it( 'rejects in strict mode so programmatic callers fail closed', async () => {
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
 			mkdirSync( outputDir, { recursive: true } );
@@ -363,5 +408,21 @@ describe( 'captureWebsite phase progress', () => {
 		);
 
 		expect( phases ).toEqual( [ 'discovering', 'capturing', 'media', 'finalizing', 'complete' ] );
+	} );
+} );
+
+describe( 'isUsableCapture policy', () => {
+	const capture = ( failed: number, discovered: number, entrypointCaptured = true ) => ( {
+		complete: false, entrypointCaptured, missingRoutes: Array.from( { length: failed }, () => ( {} ) ), summary: { routesDiscovered: discovered },
+	} );
+	it( 'allows max(1, 10%) failed routes', () => {
+		expect( isUsableCapture( capture( 1, 12 ) ) ).toBe( true );
+		expect( isUsableCapture( capture( 2, 12 ) ) ).toBe( false );
+		expect( isUsableCapture( capture( 5, 52 ) ) ).toBe( true );
+		expect( isUsableCapture( capture( 6, 52 ) ) ).toBe( false );
+	} );
+	it( 'is unusable without the entrypoint, whatever happened elsewhere', () => {
+		expect( isUsableCapture( capture( 0, 12, false ) ) ).toBe( false );
+		expect( isUsableCapture( { ...capture( 0, 12, false ), complete: true } ) ).toBe( false );
 	} );
 } );
