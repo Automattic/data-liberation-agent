@@ -1,8 +1,11 @@
+import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
+
 /**
  * A route that was attempted (or advertised as a redirect target) and did not
  * produce a page. Routes the source itself lacks (`route_not_found`) or sends
  * elsewhere (`route_external_redirect`) are not missing: the source has nothing
- * to copy there.
+ * to copy there. Routes the caller's route budget left out
+ * (`route_omitted_by_budget`) were never attempted and are not missing either.
  */
 export interface MissingRoute {
 	url: string;
@@ -34,6 +37,21 @@ export function missingRoutes( discoveryDiagnostics: ReadonlyArray< { code?: unk
 }
 
 /**
+ * Routes the route budget left out (`route_omitted_by_budget`), one per URL.
+ *
+ * Budget omission is the caller's explicit scope choice, not a capture defect:
+ * omitted routes never count as failed or missing, links to them are reported
+ * as unresolved anchors with their own reason, and they do not make a capture
+ * incomplete. `complete` therefore means "everything inside the requested
+ * budget was captured"; callers that need the whole source check
+ * `summary.routesOmitted === 0` or capture with `routeLimit: 'all'`.
+ */
+export function budgetOmittedRoutes( discoveryDiagnostics: ReadonlyArray< { code?: unknown; url?: unknown } > = [] ): string[] {
+	return [ ...new Set( discoveryDiagnostics.flatMap( diagnostic =>
+		diagnostic.code === ROUTE_OMITTED_BY_BUDGET && typeof diagnostic.url === 'string' ? [ diagnostic.url ] : [] ) ) ];
+}
+
+/**
  * Whether some exported route lacks the document of a declared capture profile
  * (`route_profile_uncaptured`). The route still counts as captured; the capture
  * is not complete.
@@ -59,7 +77,12 @@ export function withExportDroppedRoutes< S extends Record< string, unknown > >(
 	};
 }
 
-/** Apply `USABLE_PARTIAL_CAPTURE_POLICY`. A capture without its entrypoint is never usable. */
+/**
+ * Apply `USABLE_PARTIAL_CAPTURE_POLICY`. A capture without its entrypoint is
+ * never usable. Budget-omitted routes are neither missing nor discovered for
+ * this policy (`routesDiscovered` counts the attempted route set), so a route
+ * budget never makes a capture less usable.
+ */
 export function isUsableCapture( result: {
 	complete: boolean;
 	entrypointCaptured: boolean;

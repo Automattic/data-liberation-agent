@@ -12,9 +12,11 @@ import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
-import { hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
+import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
+import { DEFAULT_ROUTE_LIMIT, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, type RouteLimit } from './route-budget.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
+export { DEFAULT_ROUTE_LIMIT, type RouteLimit } from './route-budget.js';
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -38,6 +40,16 @@ export interface CaptureOptions {
 	/** Opt-in source-only review capture; browser rendering remains the default. */
 	acquisition?: 'browser' | 'http';
 	http?: import('./capture-http.js').HttpCaptureOptions;
+	/**
+	 * Route budget shared by browser and HTTP acquisition: capture at most this
+	 * many routes, counting the entrypoint and linked-page admissions. The
+	 * entrypoint is always kept; the rest is an even, deterministic spread over
+	 * the discovered inventory. Each omitted route is a `route_omitted_by_budget`
+	 * discovery diagnostic and counts in `summary.routesOmitted`, never in
+	 * `routesFailed`. Browser default: `DEFAULT_ROUTE_LIMIT`; HTTP default:
+	 * `'all'`. Pass `'all'` to capture the whole inventory.
+	 */
+	routeLimit?: RouteLimit;
 	url: string;
 	outputDir: string;
 	resume?: boolean;
@@ -82,6 +94,8 @@ export interface CaptureResult {
 		routesCaptured: number;
 		routesSkipped: number;
 		routesFailed: number;
+		/** Discovered routes the route budget left out; not attempted, not failed. */
+		routesOmitted: number;
 		durationMs: number;
 		complete: boolean;
 		entrypointCaptured: boolean;
@@ -195,6 +209,8 @@ export async function captureWebsite(
 	// Reject before discovery or any browser starts.
 	if ( options.referenceSample !== undefined && options.referenceSample !== 'all' && ( ! Number.isInteger( options.referenceSample ) || options.referenceSample < 1 ) ) throw new Error( "referenceSample must be a positive integer or 'all'" );
 	const referenceSample = options.referenceSample === 'all' ? undefined : options.referenceSample ?? DEFAULT_REFERENCE_SAMPLE;
+	validateRouteLimit( options.routeLimit );
+	const routeLimit = options.routeLimit === 'all' ? undefined : options.routeLimit ?? ( options.acquisition === 'http' ? undefined : DEFAULT_ROUTE_LIMIT );
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	let phase = '';
@@ -236,15 +252,22 @@ export async function captureWebsite(
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	const sourceRoute = documentRequestUrl( sourceUrl );
-	const urls = [
+	const { selected: urls, omitted } = selectRouteBudget( [
 		sourceUrl,
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
 			.filter( ( url ) => routeInScope( url, routeScope ) && documentRequestUrl( url ) !== sourceRoute ),
+	], routeLimit );
+	const discoveryDiagnostics = [
+		...( inventory.diagnostics ?? [] ),
+		// Request identity, as the linked frontier records it, so a link to an
+		// omitted route is the same diagnostic rather than a second one.
+		...omitted.map( url => ( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: routeBudgetReason( routeLimit! ) } ) ),
 	];
+	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics: inventory.diagnostics ?? [] } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics } );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
 	}
@@ -264,6 +287,9 @@ export async function captureWebsite(
 		routeScope,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
+		// The same budget bounds linked-page admissions, so the frontier cannot
+		// push the total past it.
+		...( routeLimit !== undefined ? { limit: routeLimit } : {} ),
 		primaryUrl: sourceUrl,
 		additionalProfiles: adapter.liberation?.additionalProfiles,
 		referenceWidths: adapter.liberation?.referenceWidths,
@@ -308,12 +334,19 @@ export async function captureWebsite(
 				error: unknown;
 		  } > )
 		: [];
+	// One diagnostic per budget-omitted route: initial inventory the budget did
+	// not select, plus linked routes the frontier refused once it was spent.
+	const omittedRoutes = new Set( omitted.map( documentRequestUrl ) );
+	const linkedDiagnostics = ( screenshotResult.linkedPageCoverage?.diagnostics ?? [] ).filter( row =>
+		row.code !== ROUTE_OMITTED_BY_BUDGET || ! omittedRoutes.has( row.url ) );
+	const captureDiagnostics = [ ...discoveryDiagnostics, ...linkedDiagnostics ];
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
 		routesDiscovered: screenshotResult.urls.length,
 		routesCaptured: screenshotResult.captured,
 		routesSkipped: screenshotResult.skipped,
 		routesFailed: screenshotResult.failed,
+		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
 		durationMs: screenshotResult.durationMs,
 	};
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
@@ -326,7 +359,7 @@ export async function captureWebsite(
 		title: inventory.siteMeta?.title,
 		summary,
 		failures,
-		discoveryDiagnostics: [...(inventory.diagnostics ?? []), ...(screenshotResult.linkedPageCoverage?.diagnostics ?? [])],
+		discoveryDiagnostics: captureDiagnostics,
 	} );
 	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
 	const previewStartedAt = Date.now();
@@ -355,7 +388,9 @@ export async function captureWebsite(
 		finalSummary.routesFailed === 0 &&
 		! hasUncapturedProfiles( receipt.discoveryDiagnostics ) &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
-		!screenshotResult.linkedPageCoverage?.diagnostics.length &&
+		// Budget omission is the caller's scope choice, not a defect (see
+		// `budgetOmittedRoutes`); links to omitted routes carry their own reason.
+		! linkedDiagnostics.some( row => row.code !== ROUTE_OMITTED_BY_BUDGET ) &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,
@@ -365,7 +400,7 @@ export async function captureWebsite(
 		entrypointCaptured: true,
 		missingRoutes: missingRoutes( receipt.discoveryDiagnostics ),
 		failures,
-		discoveryDiagnostics: [...(inventory.diagnostics ?? []), ...(screenshotResult.linkedPageCoverage?.diagnostics ?? [])],
+		discoveryDiagnostics: captureDiagnostics,
 		unresolvedAnchors,
 		provenance: { provider: 'data-liberation/browser-capture', platform: detection.platform },
 	};

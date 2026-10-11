@@ -90,7 +90,7 @@ describe('orchestrated HTTP review capture', () => {
 			await page.locator('#host').evaluate(node => { (node as HTMLElement).style.width = '100%'; });
 			return { primitive: 'neutral-geometry', sampling: 'source-runtime-resize' };
 		};
-		const result = await captureWebsite({ url, outputDir, acquisition: 'http', http: { routeLimit: 1, runtimeRouteLimit: 1 } }, { findAdapter: () => platform });
+		const result = await captureWebsite({ url, outputDir, acquisition: 'http', routeLimit: 1, http: { runtimeRouteLimit: 1 } }, { findAdapter: () => platform });
 		expect(order).toEqual(['source-evidence', 'export-projection']);
 		const runtime = JSON.parse(readFileSync(join(outputDir, 'runtime-observations.json'), 'utf8'));
 		expect(runtime.attachments[0].observation.projection).toEqual({ primitive: 'neutral-geometry', sampling: 'source-runtime-resize' });
@@ -107,7 +107,7 @@ describe('orchestrated HTTP review capture', () => {
 			browserRegions: [{ selector: '.item', reason: 'Bounded node coverage', projection: 'subtree' }],
 		});
 		const result = await captureWebsite(
-			{ url, outputDir, acquisition: 'http', http: { routeLimit: 1, runtimeRouteLimit: 1 } },
+			{ url, outputDir, acquisition: 'http', routeLimit: 1, http: { runtimeRouteLimit: 1 } },
 			{ findAdapter: () => platform }
 		);
 		const staged = JSON.parse(readFileSync(join(outputDir, 'embedded-documents.json'), 'utf8'));
@@ -152,17 +152,19 @@ describe('orchestrated HTTP review capture', () => {
 		expect(browserCapture).not.toHaveBeenCalled();
 	});
 
-	it('limits requested routes without hiding the discovered remainder and preserves strict failure', async () => {
+	it('honours the shared route budget without hiding the discovered remainder and preserves strict failure', async () => {
 		const outputDir = directory();
 		const result = await captureWebsite(
-			{ url, outputDir, acquisition: 'http', http: { routeLimit: 1 } },
+			{ url, outputDir, acquisition: 'http', routeLimit: 1 },
 			{ findAdapter: adapter }
 		);
-		expect(result.summary).toMatchObject({ routesDiscovered: 3, routesCaptured: 1, routesFailed: 0, complete: false });
-		expect(result.discoveryDiagnostics.filter((row) => row.code === 'http_route_not_requested')).toHaveLength(2);
+		expect(result.summary).toMatchObject({ routesDiscovered: 1, routesCaptured: 1, routesFailed: 0, routesOmitted: 2, complete: false });
+		expect(result.discoveryDiagnostics.filter((row) => row.code === 'route_omitted_by_budget').map((row) => row.url)).toEqual([`${url}post/`, `${url}requires-browser/`]);
+		expect(result.missingRoutes).toEqual([]);
+		expect(JSON.parse(readFileSync(result.captureReceiptPath, 'utf8')).orchestration).toMatchObject({ requestedRoutes: 1, discoveredRoutes: 3 });
 		await expect(
 			captureWebsite(
-				{ url, outputDir: directory(), acquisition: 'http', strict: true, http: { routeLimit: 1 } },
+				{ url, outputDir: directory(), acquisition: 'http', strict: true, routeLimit: 1 },
 				{ findAdapter: adapter }
 			)
 		).rejects.toBeInstanceOf(IncompleteCaptureError);
@@ -172,7 +174,7 @@ describe('orchestrated HTTP review capture', () => {
 		state.runtime = true;
 		const outputDir = directory();
 		const result = await captureWebsite(
-			{ url, outputDir, acquisition: 'http', http: { routeLimit: 2, runtimeRouteLimit: 1 } },
+			{ url, outputDir, acquisition: 'http', routeLimit: 2, http: { runtimeRouteLimit: 1 } },
 			{ findAdapter: adapter }
 		);
 		const report = JSON.parse(readFileSync(join(outputDir, 'runtime-observations.json'), 'utf8'));
@@ -187,7 +189,7 @@ describe('orchestrated HTTP review capture', () => {
 		state.runtime = true;
 		const outputDir = directory();
 		const result = await captureWebsite(
-			{ url, outputDir, acquisition: 'http', http: { routeLimit: 1, runtimeRouteLimit: 1 } },
+			{ url, outputDir, acquisition: 'http', routeLimit: 1, http: { runtimeRouteLimit: 1 } },
 			{ findAdapter: adapter }
 		);
 		const html = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
@@ -224,7 +226,7 @@ describe('orchestrated HTTP review capture', () => {
 		state.runtime = true;
 		const outputDir = directory();
 		await captureWebsite(
-			{ url, outputDir, acquisition: 'http', http: { routeLimit: 1, runtimeRouteLimit: 1 } },
+			{ url, outputDir, acquisition: 'http', routeLimit: 1, http: { runtimeRouteLimit: 1 } },
 			{ findAdapter: adapter }
 		);
 		const path = join(outputDir, 'embedded-documents.json');
@@ -251,7 +253,7 @@ describe('orchestrated HTTP review capture', () => {
 		state.redirected = true;
 		const outputDir = directory();
 		await captureWebsite(
-			{ url, outputDir, acquisition: 'http', http: { routeLimit: 1, runtimeRouteLimit: 1 } },
+			{ url, outputDir, acquisition: 'http', routeLimit: 1, http: { runtimeRouteLimit: 1 } },
 			{ findAdapter: adapter }
 		);
 		const report = JSON.parse(readFileSync(join(outputDir, 'runtime-observations.json'), 'utf8'));
@@ -265,7 +267,7 @@ describe('orchestrated HTTP review capture', () => {
 	it.each([
 		{ resume: true },
 		{ captureImages: true },
-		{ http: { routeLimit: 0 } },
+		{ routeLimit: 0 },
 		{ http: { runtimeRouteLimit: 51 } },
 	])('rejects unsupported options before fetching: %j', async (option) => {
 		await expect(

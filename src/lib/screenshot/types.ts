@@ -47,6 +47,7 @@ export interface ScreenshotOpts {
 	cdpPort?: number;
 	force?: boolean;
 	types?: UrlType[];
+	/** Route budget for the whole capture: initial routes and linked admissions together. */
 	limit?: number;
 	/** Expand rendered same-origin links through the normal capture queue. */
 	linkedPages?: import('./linked-frontier.js').LinkedPageLimits;

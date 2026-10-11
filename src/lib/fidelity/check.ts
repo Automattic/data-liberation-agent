@@ -13,6 +13,7 @@ import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { load } from 'cheerio';
 import { documentRequestUrl } from '../url/route-key.js';
+import { spreadSample } from '../route-budget.js';
 import { srcsetReferences } from '../srcset.js';
 import { boundaryIdentity, validateExternalBoundary, type ExternalBoundary } from '../source-navigation.js';
 import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.js';
@@ -222,29 +223,6 @@ export function routeFiles( receipt: CaptureReceipt ): Map< string, string > {
 		files.set( canonicalRoutePath( `/${ relative.replace( /^\/*/, '' ) }` ), relative );
 	}
 	return files;
-}
-
-/**
- * Pick `limit` routes spread evenly across the list, entrypoint first.
- *
- * Even spacing is the point. Taking the first N of an alphabetical list on a
- * site with sixty posts and a shop page spends every check inside /blog/ and
- * never reaches /shop/.
- */
-export function spreadSample( routes: string[], limit: number ): string[] {
-	if ( limit <= 0 ) return [];
-	if ( routes.length <= limit ) return [ ...routes ];
-	const [ first, ...rest ] = routes as [ string, ...string[] ];
-	const picks = [ first ];
-	const take = limit - 1;
-	// Span both ends of the remainder. Stopping short leaves whatever sorts last
-	// — often the very sections a blog was burying — permanently unmeasured.
-	for ( let index = 0; index < take; index++ ) {
-		const position = take === 1 ? rest.length - 1 : Math.round( ( index * ( rest.length - 1 ) ) / ( take - 1 ) );
-		const candidate = rest[ position ];
-		if ( candidate && ! picks.includes( candidate ) ) picks.push( candidate );
-	}
-	return picks;
 }
 
 /** Filesystem-safe stem for a route, so per-route evidence cannot collide. */

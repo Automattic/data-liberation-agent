@@ -20,6 +20,8 @@ import { IntegrityError, isIntegrityError } from './failure-class.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
+import { budgetOmittedRoutes } from './capture-usability.js';
+import { OMITTED_ROUTE_REASON } from './route-budget.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import {
@@ -1045,13 +1047,15 @@ function unresolvedCapturedAnchors(
  *
  * Checked against the pre-rewrite document so hrefs still resolve on the
  * source origin. The bounded inspection recorded by capture can establish
- * absence or an external redirect; all other missing pages remain blocking.
+ * absence or an external redirect, and the route budget names the routes it
+ * left out on purpose; all other missing pages remain blocking.
  */
 function uncapturedRouteAnchors(
 	html: string,
 	sourceUrl: string,
 	capturedRoutes: Set< string >,
 	absentRoutes: Set< string >,
+	omittedRoutes: Set< string >,
 	resourceInputs: Set< string >,
 	routeScope?: SiteRouteScope
 ): Array< { sourceUrl: string; url: string; reason: string } > {
@@ -1065,7 +1069,7 @@ function uncapturedRouteAnchors(
 		.map( ( url ) => ( {
 		sourceUrl,
 		url,
-		reason: absentRoutes.has( url ) ? 'target route is absent at source' : UNCAPTURED_ROUTE_REASON,
+		reason: absentRoutes.has( url ) ? 'target route is absent at source' : omittedRoutes.has( url ) ? OMITTED_ROUTE_REASON : UNCAPTURED_ROUTE_REASON,
 	} ) );
 }
 
@@ -1633,6 +1637,13 @@ function buildExportCapture(
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
 		.map( ( diagnostic ) => diagnostic.url ) );
 	const absentRouteKeys = new Set( [ ...absentRoutes ].map( documentRequestUrl ) );
+	// Budget omissions arrive from the caller's initial selection and from the
+	// linked frontier once the same budget was spent.
+	const linkedCoveragePath = join( outputDir, 'linked-page-coverage.json' );
+	const linkedCoverageDiagnostics = existsSync( linkedCoveragePath )
+		? ( JSON.parse( readFileSync( linkedCoveragePath, 'utf8' ) ) as { diagnostics?: Array< { code?: unknown; url?: unknown } > } ).diagnostics ?? []
+		: [];
+	const omittedRouteKeys = new Set( budgetOmittedRoutes( [ ...( options.discoveryDiagnostics ?? [] ), ...linkedCoverageDiagnostics ] ).map( documentRequestUrl ) );
 	const resourceInputKeys = new Set([
 		...resourceReplacements.keys(), ...mediaReplacements.keys(),
 		...unresolvedDependencies.map(row => row.url),
@@ -1695,7 +1706,7 @@ function buildExportCapture(
 		}
 		mkdirSync( dirname( destination ), { recursive: true } );
 		const originalHtml = readFileSync( htmlPath, 'utf8' );
-		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, resourceInputKeys, options.routeScope ) );
+		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, options.routeScope ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = bindSrcsetShapedImageSrc(

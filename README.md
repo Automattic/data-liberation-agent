@@ -50,7 +50,7 @@ The JSON result is versioned and destination-neutral. It samples the entry route
 | `--output <dir>` | Output base. Default `~/data-liberation`, or `DLA_OUTPUT_DIR` |
 | `--resume` | Reuse what is already on disk instead of recapturing |
 | `--acquisition http` | Acquire and export an explicitly unverified HTTP review candidate; browser capture remains the default |
-| `--route-limit <n>` | Bound HTTP route requests while retaining the full discovered inventory in diagnostics |
+| `--route-limit <n\|all>` | Route budget, shared by browser and HTTP acquisition: capture at most n routes, homepage included, counting linked pages. The homepage is always kept and the rest is an even, deterministic spread over the discovered inventory. Default: 50 for browser capture, `all` for HTTP. Omitted routes are diagnosed and counted in `routesOmitted`, never as failures. See [route budget](#route-budget) |
 | `--runtime-route-limit <n>` | Observe declared runtime regions on at most 0–50 HTTP routes (default 0) |
 | `--screenshots` | Also write full-page desktop and mobile PNGs |
 | `--serve` | Keep a local server running until interrupted |
@@ -157,17 +157,29 @@ not script strings, and resolve virtual paths relative to the website root. It
 does not require client-side fetching. DLA retains no expanded authoring copies.
 See [runtime serving and limits](docs/runtime-api.md#shared-parts-and-serving).
 
+### Route budget
+
+Browser capture renders every route in several profiles, so a store-sized inventory cannot finish inside a typical hosted deadline. One measured source inventoried 3,689 routes and reached about 180 of them in an hour. Capture therefore takes at most `routeLimit` routes (CLI `--route-limit`, MCP `routeLimit`, `captureWebsite({ routeLimit })`):
+
+- **Default:** 50 for browser capture, about 17 minutes at that worst observed throughput. HTTP review acquisition is unbounded by default: it fetches documents without rendering them, so the same inventory finishes in minutes. Pass `all` to capture every route in either mode.
+- **Selection:** the entrypoint, then an even spread over the remaining inventory (the same rule as `referenceSample`). The same inventory always yields the same selection. The budget counts the entrypoint.
+- **Linked pages:** linked-page discovery keeps its own `maxPages`, but its admissions draw from the same budget, so the total stays bounded. A redirect target continues a route already admitted and does not spend budget.
+- **Omitted routes:** each is a `route_omitted_by_budget` entry in `discoveryDiagnostics` and counts in `summary.routesOmitted`. Omitted routes are never attempted, so they are not in `routesDiscovered`, `routesFailed` or `missingRoutes`. Links to them stay unresolved anchors with reason `target route was omitted by the route budget`.
+
+The budget is the caller's chosen scope, so omission does not make a capture incomplete: `complete` means every route inside the budget was captured. A caller that needs the whole source checks `summary.routesOmitted === 0` or passes `routeLimit: 'all'`.
+
 ### Usable partial captures
 
-A capture is `complete: true` only when every discovered route was captured with a document for each declared capture profile and no link points at a missing route. A partial site is still written and returned with `complete: false` (`strict: true` rejects instead). One failed route should not sink an import, so the result carries what a caller needs to decide:
+A capture is `complete: true` only when every route inside the [route budget](#route-budget) was captured with a document for each declared capture profile and no link points at a missing route. Links to budget-omitted routes are not missing. A partial site is still written and returned with `complete: false` (`strict: true` rejects instead). One failed route should not sink an import, so the result carries what a caller needs to decide:
 
 | Field | |
 |---|---|
 | `entrypointCaptured` | The entrypoint route is in the capture (also in `summary`). Always `true` on a resolved result: when the entrypoint is not rendered, capture rejects with the recorded cause, whatever happened to other routes. |
 | `missingRoutes` | `{ url, code: 'route_capture_failed' \| 'route_export_failed', reason }` for each route with no usable page (deadline, engine error, uncaptured redirect target, or a non-integrity error while exporting that route). A route whose HTML was saved counts as captured even when a stage failed on it. A declared capture profile that produced no document stays a `route_profile_uncaptured` finding (`unit: 'profile'`, named in `profile`) and makes the capture incomplete; other stage failures are a `route_capture_degraded` finding, and an unparseable author stylesheet left unprojected is `stylesheet_unparseable`, all in `discoveryDiagnostics`. Routes the source itself lacks (`route_not_found`) or redirects off-site (`route_external_redirect`) are not listed; they remain in the receipt's `discoveryDiagnostics`. |
-| `unresolvedAnchors` | Links to missing routes stay unresolved anchors. |
+| `summary.routesOmitted` | Discovered routes the [route budget](#route-budget) left out, one `route_omitted_by_budget` diagnostic each. Never counted as failed or missing. |
+| `unresolvedAnchors` | Links to missing routes stay unresolved anchors. Links to budget-omitted routes carry reason `target route was omitted by the route budget`. |
 
-Recommended default policy (`USABLE_PARTIAL_CAPTURE_POLICY`, version 1; `isUsableCapture(result)`; surfaced as `usable` by `liberate` and the MCP tool): a capture is usable when the entrypoint was captured and it is either complete or its `missingRoutes` are at most `max(1, 10%)` of `summary.routesDiscovered`. A capture whose entrypoint failed is never usable. Import a usable partial capture and report `missingRoutes` instead of failing. Capture itself never applies the policy.
+Recommended default policy (`USABLE_PARTIAL_CAPTURE_POLICY`, version 1; `isUsableCapture(result)`; surfaced as `usable` by `liberate` and the MCP tool): a capture is usable when the entrypoint was captured and it is either complete or its `missingRoutes` are at most `max(1, 10%)` of `summary.routesDiscovered` (the attempted routes; budget-omitted routes count in neither). A capture whose entrypoint failed is never usable. Import a usable partial capture and report `missingRoutes` instead of failing. Capture itself never applies the policy.
 
 ## Using it from an agent
 

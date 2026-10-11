@@ -17,6 +17,8 @@ import { authorPortableMotion, type PortableMotionRecipe } from '../lib/portable
 export interface LiberateOptions {
 	acquisition?: CaptureOptions['acquisition'];
 	http?: CaptureOptions['http'];
+	/** Route budget shared by browser and HTTP capture. Browser default: 50; 'all' captures every route. */
+	routeLimit?: CaptureOptions['routeLimit'];
 	url: string;
 	/** Base directory; the site lands in a per-source subdirectory. */
 	outputBase: string;
@@ -47,6 +49,8 @@ export interface LiberateResult {
 	/** Routes already on disk and reused instead of recaptured. */
 	routesSkipped: number;
 	routesFailed: number;
+	/** Discovered routes the route budget left out on purpose; never counted as failed. */
+	routesOmitted: number;
 	complete: boolean;
 	entrypointCaptured: boolean;
 	missingRoutes: MissingRoute[];
@@ -62,7 +66,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 	const outputDir = siteOutputDir( options.outputBase, options.url );
 
 	const capture = await captureWebsite( {
-		acquisition: options.acquisition, http: options.http,
+		acquisition: options.acquisition, http: options.http, routeLimit: options.routeLimit,
 		url: options.url,
 		outputDir,
 		resume: options.resume,
@@ -92,6 +96,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		routesCaptured: capture.summary.routesCaptured,
 		routesSkipped: capture.summary.routesSkipped,
 		routesFailed: capture.summary.routesFailed,
+		routesOmitted: capture.summary.routesOmitted,
 		complete: capture.complete,
 		entrypointCaptured: capture.entrypointCaptured,
 		missingRoutes: capture.missingRoutes,

@@ -40,7 +40,7 @@ it('records the exact omitted addresses at a four-page frontier budget', () => {
 	});
 });
 
-it('continues owned inventory and observed aliases while retaining expansion and capture caps', () => {
+it('continues owned inventory and observed aliases while retaining expansion and route budgets', () => {
 	const frontier = new LinkedFrontier({maxPages: 1, maxDepth: 0, timeoutMs: 100, capturePageLimit: 4}, 0);
 	expect(frontier.admit('https://source.test/', 0, 200, 'inventory')).toBe(true);
 	expect(frontier.admit('https://source.test/known', 0, 200, 'inventory')).toBe(true);
@@ -49,9 +49,26 @@ it('continues owned inventory and observed aliases while retaining expansion and
 	expect(frontier.diagnostics).toEqual([]);
 	expect(frontier.admit('https://source.test/target#duplicate', 0, 200, 'alias')).toBe(false);
 	expect(frontier.admit('https://source.test/another', 0, 200, 'alias')).toBe(true);
-	expect(frontier.admit('https://source.test/over-cap', 0, 200, 'alias')).toBe(false);
-	expect(frontier.admit('https://source.test/over-cap', 0, 200, 'alias')).toBe(false);
-	expect(frontier.coverage()).toMatchObject({scheduled: 4, diagnostics: [{url: 'https://source.test/over-cap', reason: 'capture limit=4 exhausted; 4 addresses scheduled'}]});
+	// A redirect target continues a route already admitted: the redirecting
+	// address becomes an alias, not a page, so the budget stays unspent.
+	expect(frontier.admit('https://source.test/redirected', 0, 200, 'alias')).toBe(true);
+	expect(frontier.admit('https://source.test/over-budget', 0, 200, 'inventory')).toBe(false);
+	expect(frontier.admit('https://source.test/over-budget', 0, 200, 'inventory')).toBe(false);
+	expect(frontier.coverage()).toMatchObject({scheduled: 5, diagnostics: [
+		{code: 'route_omitted_by_budget', url: 'https://source.test/over-budget', reason: 'Outside the route budget of 4 routes'},
+	]});
+});
+
+it('keeps initial inventory plus linked admissions inside the route budget whatever maxPages allows', () => {
+	const frontier = new LinkedFrontier({maxPages: 256, maxDepth: 8, timeoutMs: 1_000, capturePageLimit: 3}, 0);
+	for (const path of ['/', '/a', '/b']) expect(frontier.admit(`https://source.test${path}`, 0, 0, 'inventory')).toBe(true);
+	for (let index = 0; index < 10; index++) expect(frontier.admit(`https://source.test/linked-${index}`, 1, 0)).toBe(false);
+	expect(frontier.coverage().scheduled).toBe(3);
+	expect(frontier.diagnostics).toHaveLength(10);
+	expect(new Set(frontier.diagnostics.map(row => row.code))).toEqual(new Set(['route_omitted_by_budget']));
+	// A link seen twice is one omitted route, not two.
+	expect(frontier.admit('https://source.test/linked-0#again', 2, 0)).toBe(false);
+	expect(frontier.diagnostics).toHaveLength(10);
 });
 
 it('keeps adapter namespace admission ahead of every discovery-budget ownership kind', () => {
@@ -106,7 +123,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 				// exhausting the independent per-navigation response deadline.
 				prepareCapture: async page => {if (mode === 'wave' && new URL(page.url()).pathname === '/slow') await page.waitForTimeout(timeoutMs + 100);},
 				observeSource: collector.observe, onProgress: (_current, _total, url) => progress.push(url)});
-			const expected = (mode === 'wave' ? ['/', '/slow', '/target'] : mode === 'cap' ? ['/', '/inventory'] : ['/', '/inventory', '/target']).map(path => origin + path);
+			const expected = (mode === 'wave' ? ['/', '/slow', '/target'] : ['/', '/inventory', '/target']).map(path => origin + path);
 			console.info(JSON.stringify({mode, directory, captured: capture.captured, skipped: capture.skipped, failed: capture.failed, restarts: capture.browserRestarts, progress, coverage: capture.linkedPageCoverage}));
 			expect(capture.failed).toBe(0);
 			expect(capture.captured).toBe(expected.length);
@@ -117,12 +134,16 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(capture.linkedPageCoverage!.scheduled).toBe(expected.length + 1);
 			expect(capture.linkedPageCoverage!.requiredUrls).toHaveLength(expected.length + 2);
 			expect(requests).not.toContain('/late');
-			expect(capture.linkedPageCoverage!.diagnostics).toEqual([expect.objectContaining({url: `${origin}/${mode === 'cap' ? 'target' : 'late'}`, reason: expect.stringContaining(mode === 'cap' ? 'capture limit=3' : `timeoutMs=${timeoutMs}`)})]);
+			// The route budget leaves the late link out on purpose; discovery
+			// expiry leaves it out as an incomplete frontier.
+			expect(capture.linkedPageCoverage!.diagnostics).toEqual([mode === 'cap'
+				? {code: 'route_omitted_by_budget', url: `${origin}/late`, reason: 'Outside the route budget of 3 routes'}
+				: expect.objectContaining({code: 'linked_page_budget_exhausted', url: `${origin}/late`, reason: expect.stringContaining(`timeoutMs=${timeoutMs}`)})]);
 			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: urls[0]!, platform: 'default', summary: {routesFailed: capture.failed}, failures: []});
 			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
-			expect(receipt.summary.complete).toBe(false);
+			expect(receipt.summary.complete).toBe(mode === 'cap');
 			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual(expected.sort());
-			expect(receipt.duplicateRoutes).toEqual(mode === 'cap' ? [] : [{url: `${origin}/alias`, canonicalUrl: `${origin}/target`, path: receipt.routes.find((route: {url: string}) => route.url === `${origin}/target`).path}]);
+			expect(receipt.duplicateRoutes).toEqual([{url: `${origin}/alias`, canonicalUrl: `${origin}/target`, path: receipt.routes.find((route: {url: string}) => route.url === `${origin}/target`).path}]);
 			for (const route of receipt.routes) expect(readFileSync(join(directory, route.path), 'utf8')).toContain('<h1>');
 			collector.requireUrls(capture.linkedPageCoverage!.requiredUrls);
 			const frozen = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));

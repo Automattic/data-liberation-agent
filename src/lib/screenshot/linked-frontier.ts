@@ -1,6 +1,7 @@
 import { documentRequestUrl } from '../url/route-key.js';
 import type { SiteRouteScope } from '../../platform/types.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
+import { ROUTE_OMITTED_BY_BUDGET, routeBudgetReason } from '../route-budget.js';
 
 export interface LinkedPageLimits {
 	maxPages?: number;
@@ -49,27 +50,36 @@ export class LinkedFrontier {
 		url = documentRequestUrl(url);
 		if (this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
 		this.required.add(url);
-		// Adapter inventory is already discovered. A proven redirect continues an
-		// admitted route rather than opening a new linked-discovery branch. Both
-		// still obey the caller's explicit whole-capture page cap.
-		const reason = this.capturePageLimit !== undefined && this.depths.size >= this.capturePageLimit ? `capture limit=${this.capturePageLimit} exhausted; ${this.depths.size} addresses scheduled` :
-			ownership !== 'linked' ? undefined :
+		// The caller's route budget bounds every new route: adapter inventory and
+		// linked discovery alike. A proven redirect continues a route already
+		// admitted (the redirecting address is recorded as an alias, not a page),
+		// so it does not spend budget and an in-budget route never loses its target.
+		if (ownership !== 'alias' && this.capturePageLimit !== undefined && this.depths.size >= this.capturePageLimit) {
+			this.omit(url, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason(this.capturePageLimit));
+			return false;
+		}
+		// Adapter inventory is already discovered and an alias continues an
+		// admitted route; only linked discovery spends the frontier's own limits.
+		const reason = ownership !== 'linked' ? undefined :
 			now >= this.deadline ? `timeoutMs=${this.limits.timeoutMs} exhausted` :
 			depth > this.limits.maxDepth ? `depth=${depth} exceeds maxDepth=${this.limits.maxDepth}` :
 			this.depths.size >= this.limits.maxPages ? `maxPages=${this.limits.maxPages} exhausted; ${this.depths.size} addresses scheduled` : undefined;
 		if (reason) {
-			if (!this.diagnostics.some(row => row.url === url && row.code === 'linked_page_budget_exhausted')) {
-				this.diagnostics.push( { code: 'linked_page_budget_exhausted', url, reason } );
-			}
+			this.omit(url, 'linked_page_budget_exhausted', reason);
 			return false;
 		}
 		// An observed alias can prove a previously budget-rejected link belongs to
 		// work already admitted. Its old omission is no longer true.
 		for (let i = this.diagnostics.length - 1; i >= 0; i--) {
-			if (this.diagnostics[i]!.url === url && this.diagnostics[i]!.code === 'linked_page_budget_exhausted') this.diagnostics.splice(i, 1);
+			const row = this.diagnostics[i]!;
+			if (row.url === url && (row.code === 'linked_page_budget_exhausted' || row.code === ROUTE_OMITTED_BY_BUDGET)) this.diagnostics.splice(i, 1);
 		}
 		this.depths.set(url, depth);
 		return true;
+	}
+
+	private omit(url: string, code: string, reason: string): void {
+		if (!this.diagnostics.some(row => row.url === url && row.code === code)) this.diagnostics.push({code, url, reason});
 	}
 
 	coverage(): LinkedPageCoverage {
