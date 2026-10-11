@@ -147,9 +147,9 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			else if (path === '/error') { response.statusCode=404; response.end('<h1>Observed missing route</h1>'); }
 			else if (path === '/binary') { response.setHeader('content-type','application/octet-stream'); response.end('Not HTML'); }
 			// Under the byte budget as bytes, over it once decoded as UTF-8 (each 0xff becomes U+FFFD).
-			else if (path === '/image') { response.setHeader('content-type','image/png'); response.end(Buffer.alloc(Math.floor(SOURCE_NAVIGATION_LIMITS.bytes * 0.6), 0xff)); }
-			else if (path === '/large-file') { response.setHeader('content-type','application/pdf'); response.end(Buffer.alloc(SOURCE_NAVIGATION_LIMITS.bytes + 1)); }
-			else if (path === '/large-html') response.end('x'.repeat(SOURCE_NAVIGATION_LIMITS.bytes + 1));
+			else if (path === '/image') { response.setHeader('content-type','image/png'); response.end(Buffer.alloc(Math.floor(SOURCE_DOCUMENT_MAX_BYTES * 0.6), 0xff)); }
+			else if (path === '/large-file') { response.setHeader('content-type','application/pdf'); response.end(Buffer.alloc(SOURCE_DOCUMENT_MAX_BYTES + 1)); }
+			else if (path === '/large-html') response.end('x'.repeat(SOURCE_DOCUMENT_MAX_BYTES + 1));
 			else if (path === '/slow') setTimeout(() => response.end('<p>Too late</p>'), 300);
 			else response.end('<base href="./assets/"><h1 id="text">Article</h1><button onclick="location.href=\'/elsewhere\'">Navigate</button>');
 		});
