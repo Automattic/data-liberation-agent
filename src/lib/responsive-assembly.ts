@@ -5,7 +5,7 @@ import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
-import { parseCss, scopeCss } from './replicate/css-scope.js';
+import { parseCss, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 
@@ -997,9 +997,10 @@ function responsiveHtml(
 	mobileHtml: string,
 	switchWidth: number,
 	resolved: ResolvedResponsivePair,
-	bindingGate?: string
+	bindingGate?: string,
+	onUnparseable?: UnparseableStylesheetSink
 ): { html: string; evidence: ResponsiveVariantEvidence } {
-	const assembled = assembleResponsiveHtml( desktopHtml, mobileHtml, switchWidth, resolved, bindingGate );
+	const assembled = assembleResponsiveHtml( desktopHtml, mobileHtml, switchWidth, resolved, bindingGate, onUnparseable );
 	return {
 		html: withScrollDrivenAnimations( withMobileLinkedStyles( assembled.html, mobileHtml, switchWidth ) ),
 		evidence: assembled.evidence,
@@ -1018,6 +1019,8 @@ export interface ResponsiveAssemblyInput {
 	/** Mobile after the same portable normalization. */
 	portableMobileHtml?: string;
 	switchWidth?: number;
+	/** Told when a mobile stylesheet could not be parsed and was left out of the assembly. */
+	onUnparseableStylesheet?: UnparseableStylesheetSink;
 }
 
 export interface ResponsiveAssembly {
@@ -1058,7 +1061,8 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 			portableMobileHtml,
 			switchWidth,
 			source,
-			source.gate
+			source.gate,
+			input.onUnparseableStylesheet
 		);
 		return emittedAssembly( assembled, 'applied' );
 	}
@@ -1070,12 +1074,12 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 			'emitted'
 		);
 		return emittedAssembly(
-			responsiveHtml( input.portableDesktopHtml, portableMobileHtml, switchWidth, emitted ),
+			responsiveHtml( input.portableDesktopHtml, portableMobileHtml, switchWidth, emitted, undefined, input.onUnparseableStylesheet ),
 			'applied'
 		);
 	}
 	return emittedAssembly(
-		responsiveHtml( input.rawDesktopHtml, input.rawMobileHtml, switchWidth, source ),
+		responsiveHtml( input.rawDesktopHtml, input.rawMobileHtml, switchWidth, source, undefined, input.onUnparseableStylesheet ),
 		'pending'
 	);
 }
@@ -1229,7 +1233,7 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 	return css.toString();
 }
 
-export function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string,string>; namedAliases: boolean } ): string {
+export function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string,string>; namedAliases: boolean }, onUnparseable?: UnparseableStylesheetSink ): string {
 	// Named aliases need reconciliation even when the responsive source
 	// collapsed to a single document. Preserve the cheap path for other pages.
 	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) && ! /<a\b[^>]*\bname\s*=/i.test( html ) ) return html;
@@ -1310,7 +1314,9 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		} );
 		$( 'style' ).each( ( _index, element ) => {
 			const node = $( element );
-			node.html( projectResponsiveIdentityCss( node.html() ?? '', renamed, aliases.size > 0 ) );
+			const source = node.html() ?? '';
+			const projected = projectStylesheet( () => projectResponsiveIdentityCss( source, renamed, aliases.size > 0 ), onUnparseable );
+			if ( projected !== undefined ) node.html( projected );
 		} );
 		if ( identities ) { for ( const [ key, value ] of renamed ) identities.ids.set( key, value ); identities.namedAliases ||= aliases.size > 0; }
 	}
@@ -1323,7 +1329,8 @@ function assembleResponsiveHtml(
 	mobileHtml: string,
 	switchWidth: number = DEFAULT_SWITCH_WIDTH,
 	resolved: ResolvedResponsivePair,
-	bindingGate?: string
+	bindingGate?: string,
+	onUnparseable?: UnparseableStylesheetSink
 ): { html: string; evidence: ResponsiveVariantEvidence } {
 	const desktopBodyMatch = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml );
 	let desktopBody = desktopBodyMatch?.[ 2 ];
@@ -1518,7 +1525,9 @@ function assembleResponsiveHtml(
 		mobileHtml,
 		`.${ MOBILE_DOCUMENT_CLASS }`,
 		switchWidth,
-		shared
+		shared,
+		undefined,
+		onUnparseable
 	);
 	return {
 		html: withMobileViewport(
@@ -1696,7 +1705,8 @@ function responsiveMobileStyles(
 	scope?: string,
 	switchWidth: number = DEFAULT_SWITCH_WIDTH,
 	skip: ReadonlySet< string > = new Set(),
-	classAliases: ReadonlyMap<string, string> = new Map()
+	classAliases: ReadonlyMap<string, string> = new Map(),
+	onUnparseable?: UnparseableStylesheetSink
 ): string {
 	const bodyAttributes = /<body\b([^>]*)>/i.exec( mobileHtml )?.[ 1 ] ?? '';
 	const rootClasses = (
@@ -1715,7 +1725,8 @@ function responsiveMobileStyles(
 		.map(
 			( original ) => {
 				const style = aliasResponsiveClasses( original, classAliases );
-				return `<style media="(max-width:${ switchWidth }px)">${ scope ? scopeCss( style, { scope, rootClasses } ) : style }</style>`;
+				const projected = scope ? projectStylesheet( () => scopeCss( style, { scope, rootClasses } ), onUnparseable ) : style;
+				return projected === undefined ? '' : `<style media="(max-width:${ switchWidth }px)">${ projected }</style>`;
 			}
 		)
 		.join( '' );

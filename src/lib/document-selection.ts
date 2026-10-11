@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
-import { scopeCss } from './replicate/css-scope.js';
+import { projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { IntegrityError } from './failure-class.js';
 
 /** Platform-owned, ordered request-identity rules. No viewport/capability inference. */
 export interface DeviceDocumentSelection {
@@ -26,9 +27,9 @@ export type DocumentSelection = DeviceDocumentSelection | {
 export function validateDeviceSelection( selection: DeviceDocumentSelection ): void {
 	if ( ! selection.id || ! selection.evidence || new Set( selection.documents ).size !== selection.documents.length ||
 		! selection.documents.length || selection.documents.some( key => ! /^[a-z][a-z0-9-]*$/.test( key ) ) ||
-		! selection.documents.includes( selection.defaultDocument ) ) throw new Error( 'Invalid device document selection' );
+		! selection.documents.includes( selection.defaultDocument ) ) throw new IntegrityError( 'Invalid device document selection' );
 	for ( const rule of selection.rules ) {
-		if ( ! selection.documents.includes( rule.document ) || ! /^[im]*$/.test( rule.flags ?? '' ) ) throw new Error( 'Invalid device document rule' );
+		if ( ! selection.documents.includes( rule.document ) || ! /^[im]*$/.test( rule.flags ?? '' ) ) throw new IntegrityError( 'Invalid device document rule' );
 		new RegExp( rule.userAgent, rule.flags );
 	}
 }
@@ -72,7 +73,7 @@ function rootCss( css: string, bodyClasses: readonly string[] ): string {
 }
 
 /** Preserve each document's cascade and body flags; identity never collapses by tree similarity. */
-export function assembleDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection ): DeviceAssembly {
+export function assembleDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, onUnparseable?: UnparseableStylesheetSink ): DeviceAssembly {
 	validateDeviceSelection( selection );
 	const base = documents[ selection.defaultDocument ];
 	if ( ! base ) throw new Error( 'Default device document was not captured' );
@@ -105,7 +106,12 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		for ( const node of source( 'style,link[rel~="stylesheet"]' ).toArray() ) {
 			const original = source( node );
 			const copy = $( source.html( node ) );
-			if ( original.is( 'style' ) ) copy.text( scopeCss( original.text(), { scope, rootClasses } ) + rootCss( original.text(), rootClasses ) );
+			if ( original.is( 'style' ) ) {
+				const scoped = projectStylesheet( () => scopeCss( original.text(), { scope, rootClasses } ) + rootCss( original.text(), rootClasses ), onUnparseable );
+				// An unparseable stylesheet stays out of the assembled document.
+				if ( scoped === undefined ) continue;
+				copy.text( scoped );
+			}
 			copy.attr( 'data-dla-device-style', key ).attr( 'data-dla-source-media', original.attr( 'media' ) ?? 'all' ).attr( 'media', 'not all' );
 			$( 'head' ).append( copy );
 		}

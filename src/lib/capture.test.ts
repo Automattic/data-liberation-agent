@@ -335,6 +335,45 @@ describe( 'captureWebsite completeness', () => {
 		expect( isUsableCapture( result ) ).toBe( true );
 	} );
 
+	it( 'counts a route saved with a failed stage as captured and a route export dropped as failed', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		const degraded = 'https://example.com/degraded';
+		const dropped = 'https://example.com/dropped';
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl, degraded, dropped ], captured: 3, skipped: 0, failed: 0, durationMs: 1 } );
+		mkdirSync( join( root, 'html' ), { recursive: true } );
+		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
+		const entries: Record< string, { html: string } > = {};
+		for ( const [ index, url ] of [ sourceUrl, degraded, dropped ].entries() ) {
+			writeFileSync( join( root, 'html', `page-${ index }.html` ), `<h1>${ url === dropped ? 'Dropped' : 'Page' } ${ index }</h1>` );
+			entries[ url ] = { html: `html/page-${ index }.html` };
+		}
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		writeFileSync( join( root, 'screenshots', 'failures.json' ), JSON.stringify( [
+			{ url: degraded, viewport: 'mobile', stage: 'screenshot-scrolled', error: 'screenshot timeout', attempt: 1 },
+		] ) );
+		const documentSelection = ( documents: Record< string, string > ) => {
+			if ( documents.desktop?.includes( 'Dropped' ) ) throw new Error( 'cannot export page' );
+			return undefined;
+		};
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic', liberation: { documentSelection },
+				discover: async () => ( { urls: [ degraded, dropped ].map( url => ( { url, type: 'page' } ) ) } ), extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		const { routesDiscovered, routesCaptured, routesSkipped, routesFailed } = result.summary;
+		expect( { routesDiscovered, routesCaptured, routesSkipped, routesFailed } ).toEqual( { routesDiscovered: 3, routesCaptured: 2, routesSkipped: 0, routesFailed: 1 } );
+		expect( routesCaptured + routesSkipped + routesFailed ).toBeLessThanOrEqual( routesDiscovered );
+		expect( result.missingRoutes ).toEqual( [ { url: dropped, code: 'route_export_failed', reason: 'cannot export page' } ] );
+		expect( result.complete ).toBe( false );
+		expect( isUsableCapture( result ) ).toBe( true );
+		const receipt = JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) );
+		expect( receipt.discoveryDiagnostics.map( ( row: { code: string; url: string } ) => [ row.code, row.url ] ) ).toEqual( [
+			[ 'route_capture_degraded', degraded ], [ 'route_export_failed', dropped ],
+		] );
+	} );
+
 	it( 'rejects a capture whose entrypoint failed, whatever happened to other routes', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );

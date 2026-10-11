@@ -9,12 +9,14 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import { capturedStyleHoistContext, materializeSharedStylesheets, type StyleHoistContext } from './shared-stylesheets.js';
 export { portableInlineStyle } from './shared-stylesheets.js';
-import { allocateCaptureRoutes } from './capture-export-routes.js';
+import { allocateCaptureRoutes, type RouteDiagnostic } from './capture-export-routes.js';
+import { projectStylesheet } from './replicate/css-scope.js';
+import { IntegrityError, isIntegrityError } from './failure-class.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
@@ -1186,194 +1188,213 @@ function buildExportCapture(
 	// the same {code,url,reason} shape sitemap discovery already reports
 	// rejected leaves through, rather than a parallel reporting mechanism.
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
-	const routeCaptureDiagnostics: Array< { code: string; url: string; reason: string } > = [];
+	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
 	const redirectAliases: Array< { url: string; target: string } > = [];
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
-		if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) || !routeInScope( url, options.routeScope ) ) {
-			excludedRoutes.push( url );
-			continue;
-		}
-		if ( entry.redirectedTo ) {
-			if ( !routeInScope( entry.redirectedTo, options.routeScope ) ) {
+		// One route's non-integrity failure drops that route, not the capture. Integrity
+		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
+		const rollback = { diagnostics: routeCaptureDiagnostics.length, switchWidths: switchWidths.length, deviceSelections: deviceSelections.length, widthSelections: widthSelections.length, fluidReports: fluidReports.length };
+		try {
+			if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) || !routeInScope( url, options.routeScope ) ) {
 				excludedRoutes.push( url );
-				routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source redirect outside the adapter-owned site route scope' } );
 				continue;
 			}
-			redirectAliases.push( { url, target: entry.redirectedTo } );
-			continue;
-		}
-		if ( entry.externalRedirect ) {
-			// The source sends this link outside the site. Retain only the fact of the
-			// redirect; neither its destination nor its query belongs in the copy.
-			excludedRoutes.push( url );
-			const tenantBoundary = entry.sourceOutcomes?.some( outcome => outcome.routeScope && outcome.target.origin === new URL(url).origin );
-			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: tenantBoundary
-				? 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)'
-				: 'source initial-document redirect to an external origin (destination not fetched)' } );
-			continue;
-		}
-		if ( entry.sourceAbsentStatus ) {
-			excludedRoutes.push( url );
-			routeCaptureDiagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
-			continue;
-		}
-		if ( ! entry.html ) {
-			const reason = routeFailureReasons.get( url )?.join( '; ' )
-				?? 'capture completed without producing page HTML';
-			if ( failuresAreAbsentDocument( options.failures, url ) ) {
+			if ( entry.redirectedTo ) {
+				if ( !routeInScope( entry.redirectedTo, options.routeScope ) ) {
+					excludedRoutes.push( url );
+					routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source redirect outside the adapter-owned site route scope' } );
+					continue;
+				}
+				redirectAliases.push( { url, target: entry.redirectedTo } );
+				continue;
+			}
+			if ( entry.externalRedirect ) {
+				// The source sends this link outside the site. Retain only the fact of the
+				// redirect; neither its destination nor its query belongs in the copy.
+				excludedRoutes.push( url );
+				const tenantBoundary = entry.sourceOutcomes?.some( outcome => outcome.routeScope && outcome.target.origin === new URL(url).origin );
+				routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: tenantBoundary
+					? 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)'
+					: 'source initial-document redirect to an external origin (destination not fetched)' } );
+				continue;
+			}
+			if ( entry.sourceAbsentStatus ) {
+				excludedRoutes.push( url );
+				routeCaptureDiagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
+				continue;
+			}
+			if ( ! entry.html ) {
+				const reason = routeFailureReasons.get( url )?.join( '; ' )
+					?? 'capture completed without producing page HTML';
+				if ( failuresAreAbsentDocument( options.failures, url ) ) {
+					excludedRoutes.push( url );
+					routeCaptureDiagnostics.push( {
+						code: 'route_not_found',
+						url,
+						reason,
+					} );
+				} else {
+					routeCaptureDiagnostics.push( {
+						code: 'route_capture_failed',
+						url,
+						reason,
+					} );
+				}
+				continue;
+			}
+			const capturedHtmlPath = resolve( outputDir, entry.html );
+			if ( ! pathWithin( outputDir, capturedHtmlPath ) || ! existsSync( capturedHtmlPath ) ) {
+				routeCaptureDiagnostics.push( {
+					code: 'route_capture_failed',
+					url,
+					reason: `captured HTML file is missing or outside the output directory: ${ entry.html }`,
+				} );
+				continue;
+			}
+			const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
+			const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
+			let rawDesktopHtml = embedded && options.input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, options.input.desktopVariant, desktopHash, embedded.receipt.regions), url, options.input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
+			rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
+			const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
+			// A client-routed SPA answers every route with HTTP 200 and renders its
+			// own not-found screen in JavaScript, so the HTTP-status check above
+			// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
+			// succeeded, there is no failure to inspect. Never applied to the source
+			// URL itself -- it is known good regardless of what it renders.
+			if (
+				! isSourceCaptureUrl( url, options.sourceUrl ) &&
+				isAbsentDocumentRender( rawDesktopHtml )
+			) {
 				excludedRoutes.push( url );
 				routeCaptureDiagnostics.push( {
 					code: 'route_not_found',
 					url,
-					reason,
+					reason:
+						'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page',
 				} );
-			} else {
-				routeCaptureDiagnostics.push( {
-					code: 'route_capture_failed',
-					url,
-					reason,
-				} );
+				continue;
 			}
-			continue;
-		}
-		const capturedHtmlPath = resolve( outputDir, entry.html );
-		if ( ! pathWithin( outputDir, capturedHtmlPath ) || ! existsSync( capturedHtmlPath ) ) {
-			routeCaptureDiagnostics.push( {
-				code: 'route_capture_failed',
-				url,
-				reason: `captured HTML file is missing or outside the output directory: ${ entry.html }`,
-			} );
-			continue;
-		}
-		const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
-		const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
-		let rawDesktopHtml = embedded && options.input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, options.input.desktopVariant, desktopHash, embedded.receipt.regions), url, options.input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
-		rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
-		const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
-		// A client-routed SPA answers every route with HTTP 200 and renders its
-		// own not-found screen in JavaScript, so the HTTP-status check above
-		// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
-		// succeeded, there is no failure to inspect. Never applied to the source
-		// URL itself -- it is known good regardless of what it renders.
-		if (
-			! isSourceCaptureUrl( url, options.sourceUrl ) &&
-			isAbsentDocumentRender( rawDesktopHtml )
-		) {
-			excludedRoutes.push( url );
-			routeCaptureDiagnostics.push( {
-				code: 'route_not_found',
-				url,
-				reason:
-					'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page',
-			} );
-			continue;
-		}
-		const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
-		const acquiredMobileHtml =
-			( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
-				? readFileSync( mobileHtmlPath, 'utf8' )
-				: undefined;
-		const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
-		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
-		if (rawMobileHtml !== undefined) rawMobileHtml = resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl);
-		const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
-		for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
-			if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
-			const path = resolve( outputDir, profile.html );
-			if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new Error( `Device document is missing or outside capture: ${ key }` );
-			const documentUrl = entry.documents?.[ key ];
-			sourceDocuments[ key ] = resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl );
-		}
-		const selection = options.resolveDocumentSelection?.( sourceDocuments );
-		if ( selection?.kind === 'width' ) {
-			if ( ! Number.isInteger( selection.switchWidth ) || selection.switchWidth <= 0 || ! selection.evidence ) throw new Error( 'Invalid observed document switch' );
-			widthSelections.push( { url, ...selection } );
-		}
-		const detectedFloor =
-			selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
-				? Math.round( entry.fluid.canvasFloor )
-				: siteSwitchWidth;
-		if ( detectedFloor ) switchWidths.push( detectedFloor );
-		if ( entry.fluid ) fluidReports.push( entry.fluid );
-		if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
-		if ( selection?.kind !== 'device' && embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
-			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
-			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
-		}
-		// Evidence and assembly normalize the same source documents. Keep one
-		// result per exact input within this route, without retaining parser trees
-		// or carrying document state into the next route.
-		const normalizedDocuments = new Map< string, string >();
-		const portableDocument = ( html: string ): string => {
-			let normalized = normalizedDocuments.get( html );
-			if ( normalized === undefined ) {
-				normalized = normalizedDeclarativeFormEmbeds( renderedHtml( html ) );
-				normalizedDocuments.set( html, normalized );
+			const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
+			const acquiredMobileHtml =
+				( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
+					? readFileSync( mobileHtmlPath, 'utf8' )
+					: undefined;
+			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
+			let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
+			if (rawMobileHtml !== undefined) rawMobileHtml = resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl);
+			const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
+			for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
+				if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
+				const path = resolve( outputDir, profile.html );
+				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new IntegrityError( `Device document is missing or outside capture: ${ key }` );
+				const documentUrl = entry.documents?.[ key ];
+				sourceDocuments[ key ] = resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl );
 			}
-			return normalized;
-		};
-		const desktopHtml = portableDocument( rawDesktopHtml );
-		const mobileHtml =
-			rawMobileHtml === undefined
-				? undefined
-				: portableDocument( rawMobileHtml );
-		const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
-			Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection
-		) : undefined;
-		if ( deviceAssembly ) {
-			deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
-			for ( const key of deviceAssembly.missing ) routeCaptureDiagnostics.push( { code: 'device_document_uncaptured', url, reason: `Source identity ${ key } has no captured document; portable runtime reports unavailable instead of selecting another identity` } );
-		}
-		const assembly = deviceAssembly ? {
-			html: deviceAssembly.html, hasMobileDocument: 'mobile' in sourceDocuments, portableNormalization: 'applied' as const,
-			evidence: { variants: Object.keys( deviceAssembly.viewports ).length, outcome: 'dual-structural' as const, reason: `Source-owned device selection: ${ deviceAssembly.selection.id }` },
-		} : assembleResponsiveCapture( {
-			rawDesktopHtml,
-			rawMobileHtml,
-			portableDesktopHtml: desktopHtml,
-			portableMobileHtml: mobileHtml,
-			switchWidth: detectedFloor,
-		} );
-		const capturedHtml = assembly.portableNormalization === 'pending'
-			? portableDocument( assembly.html )
-			: assembly.html;
-		normalizedDocuments.clear();
-		// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
-		const styleHoistContext = capturedStyleHoistContext( capturedHtml );
-		const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
-        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
-        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
-		const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
-		writeFileSync( stagedHtmlPath, html );
-		capturedEntries.push( {
-			slug: entry.slug ?? basename( entry.html, '.html' ),
-			url,
-			htmlPath: stagedHtmlPath,
-			evidenceDocuments: [
-				{ state: 'desktop', html: desktopHtml },
-				...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
-			],
-			hasMobileDocument: assembly.hasMobileDocument,
-			responsiveVariants: assembly.evidence,
-			documentSelection: deviceAssembly ? { kind: 'device', id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } : selection?.kind === 'width' ? selection : undefined,
-			...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
-			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
-			sections: entry.sections,
-			canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, options.routeScope ),
-			sourceData: sanitized.sourceData,
-			interactions: entry.interactions,
-			scrollStates: entry.scrollStates,
-			styleHoistContext,
-			sourceInteractivity,
-		} );
-		if (
-			entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
-			entry.interactions?.schema === LEGACY_INTERACTION_STATES_SCHEMA
-		) {
-			interactionPages.push( entry.interactions );
-		}
-		if ( entry.scrollStates?.schema === SCROLL_STATES_SCHEMA && entry.scrollStates.toggles.length > 0 ) {
-			scrollStatesPages.push( entry.scrollStates );
+			const selection = options.resolveDocumentSelection?.( sourceDocuments );
+			if ( selection?.kind === 'width' ) {
+				if ( ! Number.isInteger( selection.switchWidth ) || selection.switchWidth <= 0 || ! selection.evidence ) throw new IntegrityError( 'Invalid observed document switch' );
+				widthSelections.push( { url, ...selection } );
+			}
+			const detectedFloor =
+				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
+					? Math.round( entry.fluid.canvasFloor )
+					: siteSwitchWidth;
+			if ( detectedFloor ) switchWidths.push( detectedFloor );
+			if ( entry.fluid ) fluidReports.push( entry.fluid );
+			if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
+			if ( selection?.kind !== 'device' && embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
+				const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
+				rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
+			}
+			// Evidence and assembly normalize the same source documents. Keep one
+			// result per exact input within this route, without retaining parser trees
+			// or carrying document state into the next route.
+			const normalizedDocuments = new Map< string, string >();
+			const portableDocument = ( html: string ): string => {
+				let normalized = normalizedDocuments.get( html );
+				if ( normalized === undefined ) {
+					normalized = normalizedDeclarativeFormEmbeds( renderedHtml( html ) );
+					normalizedDocuments.set( html, normalized );
+				}
+				return normalized;
+			};
+			const desktopHtml = portableDocument( rawDesktopHtml );
+			const mobileHtml =
+				rawMobileHtml === undefined
+					? undefined
+					: portableDocument( rawMobileHtml );
+			const onUnparseableStylesheet = ( reason: string ): void => {
+				routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url, reason, unit: 'stylesheet', severity: 'warning' } );
+			};
+			const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
+				Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection, onUnparseableStylesheet
+			) : undefined;
+			if ( deviceAssembly ) {
+				deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
+				for ( const key of deviceAssembly.missing ) routeCaptureDiagnostics.push( { code: 'device_document_uncaptured', url, reason: `Source identity ${ key } has no captured document; portable runtime reports unavailable instead of selecting another identity` } );
+			}
+			const assembly = deviceAssembly ? {
+				html: deviceAssembly.html, hasMobileDocument: 'mobile' in sourceDocuments, portableNormalization: 'applied' as const,
+				evidence: { variants: Object.keys( deviceAssembly.viewports ).length, outcome: 'dual-structural' as const, reason: `Source-owned device selection: ${ deviceAssembly.selection.id }` },
+			} : assembleResponsiveCapture( {
+				rawDesktopHtml,
+				rawMobileHtml,
+				portableDesktopHtml: desktopHtml,
+				portableMobileHtml: mobileHtml,
+				switchWidth: detectedFloor,
+				onUnparseableStylesheet,
+			} );
+			const capturedHtml = assembly.portableNormalization === 'pending'
+				? portableDocument( assembly.html )
+				: assembly.html;
+			normalizedDocuments.clear();
+			// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
+			const styleHoistContext = capturedStyleHoistContext( capturedHtml );
+			const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
+	        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
+	        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
+			// A route whose HTML was saved is captured even when a stage failed on it.
+			const stageFailures = routeFailureReasons.get( url );
+			if ( stageFailures ) routeCaptureDiagnostics.push( { code: 'route_capture_degraded', url, reason: stageFailures.join( '; ' ), unit: 'route', severity: 'warning', metrics: { failedStages: stageFailures.length } } );
+			const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
+			writeFileSync( stagedHtmlPath, html );
+			capturedEntries.push( {
+				slug: entry.slug ?? basename( entry.html, '.html' ),
+				url,
+				htmlPath: stagedHtmlPath,
+				evidenceDocuments: [
+					{ state: 'desktop', html: desktopHtml },
+					...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
+				],
+				hasMobileDocument: assembly.hasMobileDocument,
+				responsiveVariants: assembly.evidence,
+				documentSelection: deviceAssembly ? { kind: 'device', id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } : selection?.kind === 'width' ? selection : undefined,
+				...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
+				...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
+				sections: entry.sections,
+				canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, options.routeScope ),
+				sourceData: sanitized.sourceData,
+				interactions: entry.interactions,
+				scrollStates: entry.scrollStates,
+				styleHoistContext,
+				sourceInteractivity,
+			} );
+			if (
+				entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
+				entry.interactions?.schema === LEGACY_INTERACTION_STATES_SCHEMA
+			) {
+				interactionPages.push( entry.interactions );
+			}
+			if ( entry.scrollStates?.schema === SCROLL_STATES_SCHEMA && entry.scrollStates.toggles.length > 0 ) {
+				scrollStatesPages.push( entry.scrollStates );
+			}
+		} catch ( error ) {
+			if ( isIntegrityError( error ) ) throw error;
+			// The dropped route keeps only its route_export_failed row.
+			routeCaptureDiagnostics.length = rollback.diagnostics;
+			switchWidths.length = rollback.switchWidths; deviceSelections.length = rollback.deviceSelections;
+			widthSelections.length = rollback.widthSelections; fluidReports.length = rollback.fluidReports;
+			routeCaptureDiagnostics.push( { code: 'route_export_failed', url, reason: ( error as Error ).message, unit: 'route', severity: 'error' } );
 		}
 	}
 
@@ -1691,7 +1712,8 @@ function buildExportCapture(
 				sourceRouteLinks,
 				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths, routeScope: options.routeScope }
 			),
-			`/${ routePath }`, responsiveIdentities
+			`/${ routePath }`, responsiveIdentities,
+			reason => routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url, reason, unit: 'stylesheet', severity: 'warning', path: `website/${ routePath }` } )
 		);
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
@@ -1710,8 +1732,11 @@ function buildExportCapture(
 				if ( entry.isDirectory() ) projectStylesheets( path );
 				else if ( entry.isFile() && entry.name.endsWith( '.css' ) ) {
 					const original = readFileSync( path, 'utf8' );
-					const projected = projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases );
-					if ( original !== projected ) writeFileSync( path, projected );
+					const projected = projectStylesheet(
+						() => projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases ),
+						reason => routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url: options.sourceUrl, reason, unit: 'stylesheet', severity: 'warning', path: relative( stageDir, path ).replace( /\\/g, '/' ) } )
+					);
+					if ( projected !== undefined && original !== projected ) writeFileSync( path, projected );
 				}
 			}
 		};
