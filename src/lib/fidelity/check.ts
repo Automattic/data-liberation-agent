@@ -19,6 +19,7 @@ import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import {
 	dismissOverlays,
+	settleDocument,
 	triggerLazyLoad,
 	waitForStable,
 	type DismissedOverlay,
@@ -49,6 +50,8 @@ const MAX_ROUTE_CHECKS = 32;
 
 /** Routes compared against the live source by default. Each costs a browser round trip. */
 const BROWSER_ROUTE_SAMPLE = 4;
+/** Sampled drift routes compared at once; each owns one source/copy page. */
+const DRIFT_ROUTE_CONCURRENCY = 3;
 
 /**
  * Widths the learning sweep does not visit. 1600 and 1728 sit above the
@@ -331,6 +334,9 @@ export function externalRequestHost( href: string, localOrigin: string | null ):
 	}
 }
 
+/** Quiet window that proves an observed document settled before its settle budget. */
+const OBSERVATION_QUIET_MS = 500;
+
 export async function observePage(
 	page: Page,
 	url: string,
@@ -357,7 +363,10 @@ export async function observePage(
 			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
 		}
 		await waitForStable( page );
-		if ( settleMs > 0 ) await page.waitForTimeout( settleMs );
+		// settleMs bounds readiness rather than fixing a sleep: a document whose
+		// DOM and finite animations are already quiet is observed immediately,
+		// while a source still mutating keeps the full budget.
+		if ( settleMs > 0 ) await settleDocument( page, 'observation', { quietMs: OBSERVATION_QUIET_MS, timeoutMs: settleMs, animations: true } );
 		if (cleanup) {
 			const report = await applySourceCleanup(page, cleanup);
 			if (localOrigin && report.removed) throw new Error('Liberated artifact retains advertising or source attribution');
@@ -375,7 +384,7 @@ export async function observePage(
 		// while collecting frozen evidence can relatch scroll-driven page state;
 		// candidate baseline observation likewise preserves the visitor's pose.
 		// Drift observations keep the controlled sweep for lazy content/motion.
-		if ( ! skipScrollProbe ) await triggerLazyLoad( page, false, { expandContent: !captureSession } );
+		const sweepInterruption = skipScrollProbe ? null : await triggerLazyLoad( page, false, { expandContent: !captureSession } );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
@@ -385,7 +394,7 @@ export async function observePage(
 		// left it would be scored as every image having moved.
 		if ( ! skipScrollProbe ) {
 			const pose = await page.evaluate( () => ( { x: Math.round( scrollX ), y: Math.round( scrollY ) } ) );
-			if ( pose.x || pose.y ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y })` );
+			if ( pose.x || pose.y ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y })${ sweepInterruption ? ` after it was interrupted: ${ sweepInterruption }` : '' }` );
 		}
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
@@ -507,6 +516,78 @@ export async function observePage(
 			} > = [];
 			const canvas = document.createElement( 'canvas' );
 			const context = canvas.getContext( '2d' );
+			// One rendered-range proof serves both text accounting and typography.
+			// Rectangular clips can remove every glyph without changing innerText
+			// or its layout ranges. Unknown shapes stay conservative, and a partly
+			// intersecting run remains content rather than being trimmed by label.
+			const paintStyles = new WeakMap< Element, CSSStyleDeclaration >();
+			const paintStyle = ( element: Element ) => {
+				let style = paintStyles.get( element );
+				if ( ! style ) { style = getComputedStyle( element ); paintStyles.set( element, style ); }
+				return style;
+			};
+			const rectangularClip = ( element: Element, style: CSSStyleDeclaration, value: string, inset: boolean ) => {
+				const match = value.match( inset ? /^inset\(([^()]*)\)$/ : /^rect\(([^()]*)\)$/ );
+				if ( ! match ) return null;
+				const parts = match[ 1 ].split( /\s+round\s+/ )[ 0 ].trim().split( /[\s,]+/ );
+				if ( inset && ( parts.length < 1 || parts.length > 4 ) || ! inset && parts.length !== 4 ) return null;
+				const box = element.getBoundingClientRect();
+				const dimension = ( axis: 'width' | 'height' ) => {
+					const base = Number.parseFloat( style[ axis ] );
+					const edges = axis === 'width' ? [ 'Left', 'Right' ] : [ 'Top', 'Bottom' ];
+					return Number.isFinite( base ) ? base + ( style.boxSizing === 'border-box' ? 0 : edges.reduce( ( sum, edge ) => sum + Number.parseFloat( style.getPropertyValue( `padding-${ edge.toLowerCase() }` ) || '0' ) + Number.parseFloat( style.getPropertyValue( `border-${ edge.toLowerCase() }-width` ) || '0' ), 0 ) ) : box[ axis ];
+				};
+				const width = dimension( 'width' ), height = dimension( 'height' );
+				const length = ( token: string, size: number, auto: number ): number => {
+					if ( token === 'auto' && ! inset ) return auto;
+					if ( ! /^[-+]?(?:\d*\.)?\d+(?:px|%)?$/.test( token ) ) return NaN;
+					return Number.parseFloat( token ) * ( token.endsWith( '%' ) ? size / 100 : 1 );
+				};
+				const expanded = inset ? [ parts[ 0 ], parts[ 1 ] ?? parts[ 0 ], parts[ 2 ] ?? parts[ 0 ], parts[ 3 ] ?? parts[ 1 ] ?? parts[ 0 ] ] : parts;
+				const top = length( expanded[ 0 ], height, 0 ), right = length( expanded[ 1 ], width, width ), bottom = length( expanded[ 2 ], height, height ), left = length( expanded[ 3 ], width, 0 );
+				if ( [ width, height, top, right, bottom, left ].some( number => ! Number.isFinite( number ) ) ) return null;
+				const local = { left, right: inset ? width - right : right, top, bottom: inset ? height - bottom : bottom };
+				if ( local.right <= local.left || local.bottom <= local.top ) return { left: 0, right: 0, top: 0, bottom: 0 };
+				// A nonempty rotated/reflected clip needs polygon intersection. Keep
+				// it as an unknown instead of rejecting potentially painted glyphs.
+				for ( let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement ) {
+					const ancestorStyle = paintStyle( ancestor );
+					const matrix = new DOMMatrixReadOnly( ancestorStyle.transform === 'none' ? undefined : ancestorStyle.transform );
+					if ( ! matrix.is2D || matrix.b || matrix.c || matrix.a <= 0 || matrix.d <= 0 || ! [ 'none', '0deg' ].includes( ancestorStyle.rotate ) || ancestorStyle.scale.includes( '-' ) ) return null;
+				}
+				return { left: box.left + local.left * box.width / ( width || 1 ), right: box.left + local.right * box.width / ( width || 1 ), top: box.top + local.top * box.height / ( height || 1 ), bottom: box.top + local.bottom * box.height / ( height || 1 ) };
+			};
+			const paintedTextRects = ( range: Range, parent: Element, collapsedWhitespace = false ) => {
+				const style = paintStyle( parent );
+				if ( Number.parseFloat( style.fontSize ) === 0 || [ 'hidden', 'collapse' ].includes( style.visibility ) ) return [];
+				const ranges = [ ...range.getClientRects() ];
+				// Collapsed wrapping spaces can have no range box at all. Their
+				// enclosing flow still separates words, subject to the same clips.
+				if ( collapsedWhitespace && ranges.every( rect => rect.width === 0 && rect.height === 0 ) ) ranges.splice( 0, ranges.length, parent.getBoundingClientRect() );
+				return ranges.filter( rect => {
+					if ( rect.height <= 0 || rect.width < 0 || ! collapsedWhitespace && rect.width === 0 ) return false;
+					let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
+					for ( let ancestor: Element | null = parent; ancestor; ancestor = ancestor.parentElement ) {
+						const ancestorStyle = paintStyle( ancestor );
+						if ( ancestorStyle.display === 'none' ) return false;
+						if ( ancestorStyle.display === 'contents' ) continue;
+						const box = ancestor.getBoundingClientRect();
+						if ( ancestor !== document.body && ancestor !== document.documentElement ) {
+							if ( [ 'hidden', 'clip' ].includes( ancestorStyle.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
+							if ( [ 'hidden', 'clip' ].includes( ancestorStyle.overflowY ) ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
+						}
+						const clips = [ rectangularClip( ancestor, ancestorStyle, ancestorStyle.clipPath, true ) ];
+						if ( [ 'absolute', 'fixed' ].includes( ancestorStyle.position ) ) clips.push( rectangularClip( ancestor, ancestorStyle, ancestorStyle.clip, false ) );
+						for ( const clip of clips ) {
+							if ( ! clip ) continue;
+							if ( clip.right <= clip.left || clip.bottom <= clip.top ) return false;
+							left = Math.max( left, clip.left ); right = Math.min( right, clip.right ); top = Math.max( top, clip.top ); bottom = Math.min( bottom, clip.bottom );
+						}
+						if ( bottom <= top || ( collapsedWhitespace ? right < left : right <= left ) ) return false;
+					}
+					return true;
+				} );
+			};
 			// Canonicalize painted inline flow, not DOM serialization boundaries.
 			// Keep raw whitespace until the complete run is assembled; comments and
 			// equivalent inline wrappers add no glyphs, while blocks/replaced boxes,
@@ -541,7 +622,7 @@ export async function observePage(
 				if ( node.nodeType === Node.COMMENT_NODE ) return;
 				if ( node instanceof Element ) {
 					const style = getComputedStyle( node );
-					if ( node.matches( 'script,style,noscript,template' ) || style.display === 'none' || style.visibility === 'hidden' ) {
+					if ( node.matches( 'script,style,noscript,template' ) || style.display === 'none' ) {
 						flush();
 						return;
 					}
@@ -563,13 +644,10 @@ export async function observePage(
 				const rect = range.getBoundingClientRect();
 				const style = getComputedStyle( parent );
 				const signature = JSON.stringify( styleProperties.map( property => style[ property ] ) );
-				const parentRect = parent.getBoundingClientRect();
-				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
-					( style.position === 'absolute' || style.position === 'fixed' ) &&
-					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
+				const painted = paintedTextRects( range, parent, /^\s+$/.test( node.textContent ) );
 				// A collapsed inter-word space at a soft wrap has no painted width,
 				// but still separates words in the canonical text of this flow.
-				if ( rect.width === 0 && /^\s+$/.test( node.textContent ) && ! clippedLabel ) {
+				if ( rect.width === 0 && /^\s+$/.test( node.textContent ) && painted.length ) {
 					if ( run?.signature === signature ) run.text += node.textContent;
 					else flush();
 					return;
@@ -577,7 +655,7 @@ export async function observePage(
 				if (
 					rect.width <= 0 ||
 					rect.height <= 0 ||
-					clippedLabel ||
+					! painted.length ||
 					style.display === 'none' ||
 					style.visibility === 'hidden'
 				) {
@@ -714,12 +792,8 @@ export async function observePage(
 
 			// Read what describes this page before any probe click can change it.
 			const title = document.title;
-			// innerText still includes a clipped 1×1 keyboard skip link. It is
-			// useful content when focused, but not rendered body copy at rest.
-			// Remove only a direct, focus-only fragment link occupying the text
-			// prefix; editorial links with the same label remain counted.
 			let bodyText = document.body?.innerText ?? '';
-			// innerText reports text in overflow-clipped offstage content. Remove
+			// innerText reports unpainted zero-font and clipped content. Remove
 			// a text node only when none of its actual range boxes intersects an
 			// ancestor clip; any partly painted run remains counted. Do not use
 			// carousel selectors, aria-hidden, or viewport position.
@@ -730,26 +804,13 @@ export async function observePage(
 			while ( ( candidateText = textWalker.nextNode() ) ) {
 				const value = candidateText.textContent ?? '';
 				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
-				if ( candidateText.parentElement && getComputedStyle( candidateText.parentElement ).fontSize === '0px' ) continue;
 				const range = document.createRange(); range.selectNodeContents( candidateText );
 				const rects = [ ...range.getClientRects() ];
 				if ( ! rects.length ) continue;
 				const parent = candidateText.parentElement;
 				if ( ! parent ) continue;
 				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
-				const painted = rects.some( rect => {
-					if ( rect.width <= 0 || rect.height <= 0 ) return false;
-					let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
-					for ( let ancestor: HTMLElement | null = parent; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement ) {
-						const style = getComputedStyle( ancestor );
-						if ( style.display === 'contents' ) continue;
-						if ( ! [ 'hidden', 'clip' ].includes( style.overflowX ) && ! [ 'hidden', 'clip' ].includes( style.overflowY ) ) continue;
-						const box = ancestor.getBoundingClientRect();
-						if ( [ 'hidden', 'clip' ].includes( style.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
-						if ( [ 'hidden', 'clip' ].includes( style.overflowY ) ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
-					}
-					return right > left && bottom > top;
-				} );
+				const painted = paintedTextRects( range, parent ).length > 0;
 				textNodes.push( { text: value, clipped: ! painted } );
 			}
 			let textSearchFrom = 0;
@@ -762,40 +823,12 @@ export async function observePage(
 				const at = bodyText.indexOf( normalizedText, textSearchFrom );
 				if ( at >= 0 ) {
 					if ( clipped ) {
-						bodyText = `${ bodyText.slice( 0, at ) } ${ bodyText.slice( at + normalizedText.length ) }`;
-						// The stream shrinks on deletion; resume after the replacement
-						// separator while preserving later identical occurrences.
-						textSearchFrom = at + 1;
+						bodyText = bodyText.slice( 0, at ) + bodyText.slice( at + normalizedText.length );
+						// The stream shrinks on deletion; preserve its own whitespace
+						// and the position of later identical visible occurrences.
+						textSearchFrom = at;
 					} else textSearchFrom = at + normalizedText.length;
 				}
-			}
-			for ( const element of document.body?.children ?? [] ) {
-				if ( ! ( element instanceof HTMLAnchorElement ) || ! element.hash || element.matches( ':focus' ) ) continue;
-				const style = getComputedStyle( element );
-				const box = element.getBoundingClientRect();
-				if ( box.width > 1.5 || box.height > 1.5 || style.overflow !== 'hidden' || ( style.clipPath === 'none' && style.clip === 'auto' ) ) continue;
-				const label = element.innerText.replace( /\s+/g, ' ' ).trim();
-				const prefix = bodyText.trimStart();
-				if ( label && prefix.startsWith( label ) && /^\s/.test( prefix.slice( label.length ) ) ) bodyText = prefix.slice( label.length );
-			}
-			// A native decorative glyph may be replaced visually by source SVG
-			// artwork while its save-valid text remains in the DOM at font-size:0.
-			// innerText counts that unpainted text. Remove only a zero-font, leaf,
-			// explicitly decorative fragment at its actual position in its parent;
-			// identical visible symbols in an editorial label remain counted.
-			const normalized = (value: string) => value.replace(/\s+/g, ' ').trim();
-			bodyText = normalized(bodyText);
-			for (const element of document.querySelectorAll<HTMLElement>('[aria-hidden="true"]')) {
-				if (element.childElementCount || getComputedStyle(element).fontSize !== '0px') continue;
-				const parent = element.parentElement, label = normalized(element.innerText);
-				if (!parent || !label || !parent.getBoundingClientRect().height) continue;
-				const context = normalized(parent.innerText);
-				const range = document.createRange(); range.selectNodeContents(parent); range.setEndBefore(element);
-				const prefix = normalized(range.toString());
-				if (prefix && !context.startsWith(prefix)) continue;
-				const offset = context.indexOf(label, prefix.length);
-				if (offset < 0) continue;
-				bodyText = bodyText.replace(context, normalized(context.slice(0, offset) + context.slice(offset + label.length)));
 			}
 			const textChars = bodyText.replace( /\s+/g, ' ' ).trim().length;
 			if ( clickUnresolved ) {
@@ -1126,20 +1159,20 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or a portable runtime receipt' );
 		validateMotionContract( motionContract );
 	}
-	let observe = options.observe;
-	const browser = observe ? null : await (await import('playwright')).chromium.launch();
+	const browser = options.observe ? null : await (await import('playwright')).chromium.launch();
 	let server: Awaited<ReturnType<typeof startStaticServer>> | null = null;
-	let page: Page | null = null;
 	try {
-		server = observe || candidate ? null : await startStaticServer( websiteDir );
-		page = browser ? await browser.newPage( await sourceContextOptions( browser, sourceUrl ) ) : null;
+		server = options.observe || candidate ? null : await startStaticServer( websiteDir );
 	} catch (error) {
 		await browser?.close();
-		await server?.close();
 		throw error;
 	}
-	if ( ! observe ) {
-		observe = async ( sourceHref, localHref, viewport, sourceSettleMs = 0 ) => {
+	// Each sampled route owns one page, so routes compare concurrently without
+	// sharing navigation, viewport or request listeners. Widths within a route
+	// stay sequential on that page. An injected observer keeps one sequential lane.
+	const routeConcurrency = options.observe ? 1 : DRIFT_ROUTE_CONCURRENCY;
+	const observeFor = ( page: Page | null, cleanupSink: CleanupReport[] ): ObservePair => options.observe ?? (
+		async ( sourceHref, localHref, viewport, sourceSettleMs = 0 ) => {
 			if ( ! page ) throw new Error( 'browser page missing' );
 			await page.setViewportSize( { width: viewport, height: 900 } );
 			let sourcePng: Buffer | undefined;
@@ -1148,7 +1181,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
-				cleanupReports.push(report);
+				cleanupSink.push(report);
 				if (report.failures.length || report.residual) throw new Error('Comparison source cleanup incomplete');
 			}
 			// Leave the source before observing the copy in this same tab. Sources
@@ -1184,8 +1217,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				}
 			}
 			return { source, liberated, sourcePng, liberatedPng };
-		};
-	}
+		} );
 
 	const scores: RouteScore[] = [];
 	const motionEvidence: MotionEvidence[] = [];
@@ -1194,6 +1226,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	// viewport. A reader comparing a shorter copy to a longer source needs to
 	// see whether a banner came off the source here, or nothing did.
 	const recordOverlays = (
+		sink: OverlayRecord[],
 		route: string,
 		viewport: number,
 		sourceHref: string,
@@ -1205,12 +1238,19 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			[ 'copy', localHref, pair.liberated ],
 		] as const ) {
 			const dismissed = observation.dismissedOverlays ?? [];
-			if ( dismissed.length ) overlays.push( { route, viewport, side, url, dismissed } );
+			if ( dismissed.length ) sink.push( { route, viewport, side, url, dismissed } );
 		}
 	};
 	let comparisonCompleted = false;
+	// Per-route evidence buffers, merged in route order even when a route fails,
+	// so partial-run evidence keeps every observation that completed.
+	const perRoute = routes.map( () => ( { routeScores: [] as RouteScore[], routeOverlays: [] as OverlayRecord[], routeMotion: [] as MotionEvidence[], routeCleanup: [] as CleanupReport[] } ) );
 	try {
-		for ( const route of routes ) {
+		await mapPool( routes, routeConcurrency, async ( route, index ) => {
+			const { routeScores, routeOverlays, routeMotion, routeCleanup } = perRoute[ index ];
+			const page = browser ? await browser.newPage( await sourceContextOptions( browser, sourceUrl ) ) : null;
+			const observe = observeFor( page, routeCleanup );
+			try {
 			const sourceHref = sources.get( route )!;
 			const localHref = `${ candidate ?? server?.url ?? 'http://liberated.invalid' }${ route }`;
 			const signals = unreproducedMotion.get( sourceHref );
@@ -1218,16 +1258,16 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			if ( signals && contract && browser ) {
 				for ( const width of motionContract!.widths ) {
 					log( `[compare] ${ route } @ ${ width }px source/candidate motion` );
-					motionEvidence.push( await verifyCandidateMotion( browser, route, width, sourceHref, localHref, contract, signals ) );
+					routeMotion.push( await verifyCandidateMotion( browser, route, width, sourceHref, localHref, contract, signals ) );
 				}
 			}
 			const candidateMotionVerified = !! signals && !! contract && [ 390, 768, 1440 ].every( ( width ) =>
-				motionEvidence.some( ( evidence ) => evidence.route === route && evidence.viewport === width && evidence.pass )
+				routeMotion.some( ( evidence ) => evidence.route === route && evidence.viewport === width && evidence.pass )
 			);
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width, contract ? contract.ready.sourceSettleMs : undefined );
-				recordOverlays( route, width, sourceHref, localHref, pair );
+				recordOverlays( routeOverlays, route, width, sourceHref, localHref, pair );
 				const evidenceDir = join(
 					dirname( receiptPath ),
 					'compare',
@@ -1283,7 +1323,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 						score.notes.push( evidence.error );
 					}
 				}
-				scores.push( score );
+				routeScores.push( score );
 			}
 			// The interactivity pass deliberately does not run the check registry.
 			// It blanks every field except dialogs so that one narrow question can
@@ -1293,7 +1333,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			if ( ! widths.includes( 390 ) ) {
 				log( `[compare] ${ route } @ 390px interactivity` );
 				const pair = await observe( sourceHref, localHref, 390, contract ? contract.ready.sourceSettleMs : undefined );
-				recordOverlays( route, 390, sourceHref, localHref, pair );
+				recordOverlays( routeOverlays, route, 390, sourceHref, localHref, pair );
 				const dialogOnly = ( observation: LayoutObservation ): LayoutObservation => ( {
 					...observation,
 					title: 'x',
@@ -1330,11 +1370,21 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				}
 				if ( candidateMotionVerified ) score.notes.push( portable ? `raw capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime verified` : 'source/capture motion unreproduced; independent candidate interaction verified' );
 				score.notes.push( 'interactivity' );
-				scores.push( score );
+				routeScores.push( score );
 			}
-		}
+			} finally {
+				await page?.close().catch( () => {} );
+			}
+		} );
 		comparisonCompleted = true;
 	} finally {
+		// Merge in route order so reports and evidence stay deterministic.
+		for ( const result of perRoute ) {
+			scores.push( ...result.routeScores );
+			overlays.push( ...result.routeOverlays );
+			motionEvidence.push( ...result.routeMotion );
+			cleanupReports.push( ...result.routeCleanup );
+		}
 		await browser?.close();
 		await server?.close();
 		const evidenceDir = join(dirname(receiptPath), 'compare');
@@ -1398,7 +1448,6 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	const sources = routeSourceMap( receipt );
 	let widths = options.widths ?? [ ...REFERENCE_WIDTHS ];
 	const states = options.states ?? [ 'baseline' ];
-	const routes = options.routes?.map( canonicalRoutePath ) ?? [ ...sources.keys() ];
 	const selfConsistency = checkSelfConsistency( websiteDir, routeFiles( receipt ) );
 	const scores: RouteScore[] = [];
 	const pending: NonNullable<FidelityReport['pending']> = [];
@@ -1424,6 +1473,15 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 		}
 	} catch ( error ) { invalid = `Frozen reference unproven: ${ String( error ) }`; }
 	if ( ! options.widths && manifest?.scope.cells ) widths = manifest.scope.widths;
+	// Declared cells decide the default comparison scope. A capture that bounded
+	// its reference sample freezes evidence for a subset of routes: the default
+	// compares only routes that have frozen evidence and names the rest as
+	// uncompared scope, instead of failing them for evidence the caller chose
+	// not to freeze. Explicit routes keep the loud out-of-scope failure, and
+	// manifests without declared cells keep comparing every retained route.
+	const requestedRoutes = options.routes?.map( canonicalRoutePath );
+	const declaredSources = manifest?.scope.cells ? new Set( manifest.scope.cells.map( cell => cell.sourceUrl ) ) : undefined;
+	const routes = requestedRoutes ?? ( declaredSources ? [ ...sources.keys() ].filter( route => declaredSources.has( sources.get( route )! ) ) : [ ...sources.keys() ] );
 	const required: Array<{ route: string; viewport: number; state: string; profile?: string }> = [];
 	for ( const route of routes ) {
 		const declared = manifest?.scope.cells?.filter( cell => cell.sourceUrl === sources.get( route ) );
@@ -1445,10 +1503,19 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 		} else for ( const viewport of widths ) for ( const state of states ) for ( const profile of options.profiles ?? [ undefined ] ) required.push( { route, viewport, state, ...( profile ? { profile } : {} ) } );
 	}
 	const unknowns = manifest?.scope?.unknowns ?? [ 'Capture has no valid frozen source evidence.' ];
+	// A bounded reference sample leaves unreferenced routes explicitly unknown
+	// in the report: not failures, not silent passes.
+	if ( declaredSources && ! requestedRoutes ) {
+		const uncompared = [ ...sources.keys() ].filter( route => ! declaredSources.has( sources.get( route )! ) );
+		if ( uncompared.length ) unknowns.push( `${ uncompared.length } of ${ sources.size } captured routes are not compared: no frozen reference evidence because the caller bounded the reference sample (${ uncompared.join( ', ' ) })` );
+	}
 	// Discovery failures cannot disappear simply because no portable route was written.
 	let missingRequired = 0;
 	for ( const url of options.routes ? [] : manifest?.scope?.sourceUrls ?? [] ) {
 		if ( [ ...sources.values() ].includes( url ) || receiptCoversSourceUrl( receipt, url ) ) continue;
+		// A bounded reference sample deliberately leaves unsampled source URLs
+		// without frozen evidence; they are uncompared scope, not unproven failures.
+		if ( manifest?.scope.referenceSample !== undefined && ! manifest.scope.cells?.some( cell => cell.sourceUrl === url ) ) continue;
 		const declared = manifest?.scope.cells?.filter( cell => cell.sourceUrl === url && widths.includes( cell.viewport ) && states.includes( cell.state ) && ( ! options.profiles || options.profiles.includes( cell.profile ) ) );
 		const missingCells: Array<{ viewport: number; state: string; profile?: string }> = declared?.length
 			? declared.map( cell => ( { viewport: cell.viewport, state: cell.state, profile: cell.profile } ) )
@@ -1499,6 +1566,9 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 				options.log?.( `[compare] ${ stage } ${ route } ${ profile ?? '' } @ ${ viewport }px ${ state }` );
 				if ( invalid ) throw new Error( invalid );
 				if ( ! manifest || ! sources.has( route ) ) throw new Error( 'Required route was not captured' );
+				// An explicitly requested route outside the frozen reference sample
+				// fails loudly rather than degrading to a generic missing-observation.
+				if ( manifest.scope.cells && ! manifest.scope.cells.some( cell => cell.sourceUrl === sources.get( route ) ) ) throw new Error( `Requested route ${ route } has no frozen reference evidence; the capture bounded its reference sample` );
 				if ( state !== 'baseline' || ! manifest.scope.states.includes( state ) || ! manifest.scope.widths.includes( viewport ) ) throw new Error( 'Required viewport/state is outside frozen scope' );
 				const entries = manifest.entries.filter( entry => entry.route === route && entry.sourceUrl === sources.get( route ) && entry.viewport === viewport && entry.state === state && ( profile === undefined || ( entry.profile ?? entry.device ) === profile ) );
 				if ( entries.length !== 1 ) throw new Error( 'Source observation missing or ambiguous' );
