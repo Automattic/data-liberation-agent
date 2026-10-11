@@ -45,3 +45,36 @@ it.skipIf( skipBrowser )( 'counts routes, not failure records, across viewports 
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 60_000 );
+
+it.skipIf( skipBrowser )( 'counts a route whose HTML was saved as captured when a stage fails on it', async () => {
+	const server = createServer( ( request, response ) => {
+		if ( request.url === '/degraded' && /Mobile/i.test( request.headers[ 'user-agent' ] ?? '' ) ) {
+			// The phone profile never loads, but the desktop document is saved.
+			response.writeHead( 503, { 'retry-after': '0' } );
+			response.end();
+			return;
+		}
+		response.setHeader( 'content-type', 'text/html' );
+		response.end( '<!doctype html><title>Page</title><p>Page</p>' );
+	} );
+	await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'route-degraded-' ) );
+	try {
+		const result = await captureScreenshots( {
+			urls: [ `${ origin }/`, `${ origin }/degraded` ],
+			outputDir, concurrency: 1, settleMs: 0, learnFluid: false,
+			viewports: [ { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 } ],
+		} );
+		const failures = JSON.parse( readFileSync( join( outputDir, 'screenshots/failures.json' ), 'utf8' ) ) as Array< { url: string; viewport: string } >;
+		expect( failures.filter( failure => failure.url === `${ origin }/degraded` ).map( failure => failure.viewport ) ).toEqual( [ 'mobile' ] );
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots/manifest.json' ), 'utf8' ) ) as { entries: Record< string, { html?: string } > };
+		expect( manifest.entries[ `${ origin }/degraded` ]?.html ).toBeTruthy();
+		expect( result ).toMatchObject( { captured: 2, skipped: 0, failed: 0 } );
+		expect( result.captured + result.skipped + result.failed ).toBeLessThanOrEqual( result.urls.length );
+	} finally {
+		await new Promise< void >( resolve => server.close( () => resolve() ) );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 60_000 );

@@ -159,12 +159,12 @@ See [runtime serving and limits](docs/runtime-api.md#shared-parts-and-serving).
 
 ### Usable partial captures
 
-A capture is `complete: true` only when every discovered route was captured and no link points at a missing route. A partial site is still written and returned with `complete: false` (`strict: true` rejects instead). One failed route should not sink an import, so the result carries what a caller needs to decide:
+A capture is `complete: true` only when every discovered route was captured with a document for each declared capture profile and no link points at a missing route. A partial site is still written and returned with `complete: false` (`strict: true` rejects instead). One failed route should not sink an import, so the result carries what a caller needs to decide:
 
 | Field | |
 |---|---|
 | `entrypointCaptured` | The entrypoint route is in the capture (also in `summary`). Always `true` on a resolved result: when the entrypoint is not rendered, capture rejects with the recorded cause, whatever happened to other routes. |
-| `missingRoutes` | `{ url, code: 'route_capture_failed', reason }` for each route that failed (deadline, engine error, uncaptured redirect target). Routes the source itself lacks (`route_not_found`) or redirects off-site (`route_external_redirect`) are not listed; they remain in the receipt's `discoveryDiagnostics`. |
+| `missingRoutes` | `{ url, code: 'route_capture_failed' \| 'route_export_failed', reason }` for each route with no usable page (deadline, engine error, uncaptured redirect target, or a non-integrity error while exporting that route). A route whose HTML was saved counts as captured even when a stage failed on it. A declared capture profile that produced no document stays a `route_profile_uncaptured` finding (`unit: 'profile'`, named in `profile`) and makes the capture incomplete; other stage failures are a `route_capture_degraded` finding, and an unparseable author stylesheet left unprojected is `stylesheet_unparseable`, all in `discoveryDiagnostics`. Routes the source itself lacks (`route_not_found`) or redirects off-site (`route_external_redirect`) are not listed; they remain in the receipt's `discoveryDiagnostics`. |
 | `unresolvedAnchors` | Links to missing routes stay unresolved anchors. |
 
 Recommended default policy (`USABLE_PARTIAL_CAPTURE_POLICY`, version 1; `isUsableCapture(result)`; surfaced as `usable` by `liberate` and the MCP tool): a capture is usable when the entrypoint was captured and it is either complete or its `missingRoutes` are at most `max(1, 10%)` of `summary.routesDiscovered`. A capture whose entrypoint failed is never usable. Import a usable partial capture and report `missingRoutes` instead of failing. Capture itself never applies the policy.

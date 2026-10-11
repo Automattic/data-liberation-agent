@@ -6,6 +6,7 @@ import type { RuntimeRegionObservation } from './runtime-regions.js';
 import type { AcquiredHttpDocument } from './http-acquisition.js';
 import { CapturedResourceStore, type CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
+import { IntegrityError } from './failure-class.js';
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { escapeHtmlAttr } from './html-escape.js';
 import { isElementNode } from './html-nodes.js';
@@ -499,9 +500,9 @@ export function projectEmbeddedRegions(
 ): string {
 	const $ = cheerio.load(html);
 	for (const region of regions.filter((region) => region.url === url && region.variant === variant)) {
-		if (region.documentSha256 !== documentSha256) throw new Error('Runtime attachment prepared-document hash mismatch');
+		if (region.documentSha256 !== documentSha256) throw new IntegrityError('Runtime attachment prepared-document hash mismatch');
 		const node = $(region.selector).eq(region.index);
-		if (!node.length) throw new Error('Runtime attachment region is missing from acquired document');
+		if (!node.length) throw new IntegrityError('Runtime attachment region is missing from acquired document');
 		if (region.projection === 'attributes') {
 			const observed = cheerio.load(region.html)(region.selector).first();
 			if (
@@ -510,7 +511,7 @@ export function projectEmbeddedRegions(
 				node[0].tagName !== observed[0].tagName ||
 				node.attr('id') !== observed.attr('id')
 			)
-				throw new Error('Runtime projection source-owned identity mismatch');
+				throw new IntegrityError('Runtime projection source-owned identity mismatch');
 			for (const name of Object.keys(node[0].attribs)) if (!/^on/i.test(name) && name !== 'id') node.removeAttr(name);
 			for (const [name, value] of Object.entries(region.attributes ?? {}))
 				if (!/^on/i.test(name) && name !== 'id') node.attr(name, value);
@@ -523,7 +524,7 @@ export function projectEmbeddedRegions(
 					node[0].tagName !== observed[0].tagName ||
 					node.attr('id') !== observed.attr('id')
 				)
-					throw new Error('Runtime projection source-owned identity mismatch');
+					throw new IntegrityError('Runtime projection source-owned identity mismatch');
 			}
 			node.replaceWith(region.html);
 		}
@@ -541,7 +542,7 @@ export function projectRuntimePresentation(
 	const presentation = receipt.presentation?.find((row) => row.url === url && row.variant === variant);
 	if (!presentation) return html;
 	if (presentation.documentSha256 !== documentSha256)
-		throw new Error('Runtime presentation prepared-document hash mismatch');
+		throw new IntegrityError('Runtime presentation prepared-document hash mismatch');
 	const $ = cheerio.load(html);
 	const styles = cheerio.load(presentation.styles, null, false);
 	const original = $('style,link[rel~="stylesheet"]').filter((_, node) =>
@@ -599,7 +600,7 @@ export function mergeResponsiveEmbeddedRegions(options: {
 			node.is('iframe') ? node : node.find('iframe[data-dla-embedded-document]');
 		const df = frames(d, desktopNode),
 			mf = frames(m, mobileNode);
-		if (df.length !== mf.length) throw new Error('Responsive embedded frame identities differ structurally');
+		if (df.length !== mf.length) throw new IntegrityError('Responsive embedded frame identities differ structurally');
 		for (let index = 0; index < df.length; index++) {
 			const desktopFrame = df.eq(index),
 				mobileFrame = mf.eq(index);

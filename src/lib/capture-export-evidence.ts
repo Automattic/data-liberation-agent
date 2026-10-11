@@ -9,6 +9,8 @@ import type { InteractionStatesReport } from './screenshot/interaction-capture.j
 import type { ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import { DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, type ResponsiveVariantEvidence } from './responsive-assembly.js';
 import { pathWithin } from './portable-assets.js';
+import type { RouteDiagnostic } from './capture-export-routes.js';
+import { hasUncapturedProfiles, withExportDroppedRoutes } from './capture-usability.js';
 import { dependencyReferences, type PortableDependency } from './portable-references.js';
 import { exportPublicationBoundary, EXPORT_PUBLICATION_BOUNDARIES } from './export-publication.js';
 
@@ -38,7 +40,7 @@ export interface CaptureEvidenceInput {
 		title?: string;
 		summary: Record< string, unknown >;
 		failures: ReadonlyArray< { url: unknown; error: unknown } >;
-		discoveryDiagnostics?: ReadonlyArray< { code: string; url: string; reason: string } >;
+		discoveryDiagnostics?: ReadonlyArray< RouteDiagnostic >;
 	};
 	capture: {
 		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' > > >;
@@ -82,7 +84,7 @@ export interface CaptureEvidenceInput {
 	};
 	semantic?: SemanticEvidenceArtifacts;
 	diagnostics: {
-		capture: ReadonlyArray< { code: string; url: string; reason: string } >;
+		capture: ReadonlyArray< RouteDiagnostic >;
 		dependencies: ReadonlyArray< { url: string; sourceUrl: string; error: string } >;
 		media: ReadonlyArray< { url: string; error: string } >;
 		anchors: ReadonlyArray< { sourceUrl: string; reason: string; fragment?: string; targetCount?: number; url?: string } >;
@@ -574,8 +576,9 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			page.reports?.length && page.reports.every((report) => report.failures.length === 0 && report.residual === 0)),
 	} : undefined;
 	if (cleanup) writeFileSync(join(stageDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
+	const summary = withExportDroppedRoutes( options.summary, routeCaptureDiagnostics );
 	const complete =
-		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
+		! httpInput && Number( summary.routesFailed ?? 0 ) === 0 && ! hasUncapturedProfiles( routeCaptureDiagnostics ) &&
 		! discoveryDiagnostics.some( diagnostic => diagnostic.code === 'linked_page_budget_exhausted' || diagnostic.code === 'linked_page_outcome_unproven' ) &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
 	const nativePages = Object.entries( capture.entries ).filter( ([ , entry ]) => entry.nativeViewTimelines ).map( ([ url, entry ]) => ({ url, profiles: entry.nativeViewTimelines }) );
@@ -620,7 +623,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				duplicateRoutes,
 				...( linkedPageCoverage ? { linkedPageCoverage } : {} ),
 				discoveryDiagnostics,
-				summary: { ...options.summary, complete },
+				summary: { ...summary, complete },
 			},
 			null,
 			2

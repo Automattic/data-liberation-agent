@@ -70,10 +70,22 @@ function declaresCanonicalRoute( entry: RouteEntry, claimed: RouteEntry ): boole
 	return documentRequestUrl( entry.canonicalUrl ) === claimedCanonical;
 }
 
+/**
+ * One finding about a route. `unit` names what was lost or degraded (the whole
+ * route, one declared capture profile of it, or one stylesheet in it); a row
+ * without `unit` describes the route.
+ */
 export interface RouteDiagnostic {
 	code: string;
 	url: string;
 	reason: string;
+	unit?: 'route' | 'profile' | 'stylesheet';
+	severity?: 'warning' | 'error';
+	/** The declared capture profile a `profile` finding is about. */
+	profile?: string;
+	/** The exported file the finding is about. */
+	path?: string;
+	metrics?: Record< string, number >;
 }
 
 function documentIdentity( url: string ): string | undefined {

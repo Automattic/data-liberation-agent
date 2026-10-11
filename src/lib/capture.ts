@@ -12,7 +12,7 @@ import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
-import { missingRoutes, type MissingRoute } from './capture-usability.js';
+import { hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 
@@ -350,15 +350,17 @@ export async function captureWebsite(
 	await ( await import( './behavior-discovery.js' ) ).discoverCapturedBehavior( outputDir );
 	reference.requireUrls(screenshotResult.linkedPageCoverage?.requiredUrls ?? screenshotResult.urls);
 	reference.finalize( captureReceiptPath );
+	const finalSummary = withExportDroppedRoutes( summary, receipt.discoveryDiagnostics );
 	const complete =
-		summary.routesFailed === 0 &&
+		finalSummary.routesFailed === 0 &&
+		! hasUncapturedProfiles( receipt.discoveryDiagnostics ) &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
 		!screenshotResult.linkedPageCoverage?.diagnostics.length &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,
 		outputDir,
-		summary: { ...summary, complete, entrypointCaptured: true },
+		summary: { ...finalSummary, complete, entrypointCaptured: true },
 		complete,
 		entrypointCaptured: true,
 		missingRoutes: missingRoutes( receipt.discoveryDiagnostics ),

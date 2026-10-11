@@ -2100,6 +2100,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});
 			skipped++;
 			sendLog( server, `[skip] ${ url } (${ absentFailures[ 0 ].error })` );
+		} else if ( entry.html && ! entry.redirectedTo ) {
+			// Saved HTML is a captured route. The failed stages are findings on it
+			// (`route_capture_degraded`, projected by export from failures.json),
+			// not a failed route.
+			captured++;
+			sendLog( server, `[degraded] ${ url } (${ urlFailures.length } stage failures; HTML saved)` );
 		} else {
 			failedRoutes.add( url );
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );

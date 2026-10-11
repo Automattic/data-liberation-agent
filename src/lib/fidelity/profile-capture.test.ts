@@ -48,7 +48,9 @@ function geometry(){target.style.width=innerWidth*${ identity === 'desktop' ? 0.
 			referenceWidths: widths, observeSource: collector.observe, declareSourceProfile: collector.declare,
 			additionalProfiles: () => [ { id: 'tablet', ...( failTablet ? { context: { userAgent: 'Neutral iPad', isMobile: true, hasTouch: true } } : { device: 'iPad (gen 7)' } ), width: 768, height: 900, referenceWidths: widths } ],
 		} );
-		expect( captured.failed ).toBe( failTablet ? 1 : 0 );
+		// The desktop document was saved, so the route is captured even when the
+		// tablet profile is not; that loss is a profile finding, checked below.
+		expect( captured ).toMatchObject( { captured: 1, skipped: 0, failed: 0 } );
 		const receipt = exportWebsiteCapture( { outputDir: directory, sourceUrl: url, platform: 'neutral', summary: {}, failures: [], resolveDocumentSelection: () => selection } );
 		collector.finalize( receipt );
 	} finally { await new Promise<void>( resolve => source.close( () => resolve() ) ); }
@@ -157,6 +159,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'profile acquisiti
 		const directory = await captureFixture( true );
 		const reference = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
 		expect( reference.scope.cells ).toHaveLength( 6 ); expect( reference.entries ).toHaveLength( 4 );
+		const receipt = JSON.parse( readFileSync( join( directory, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_profile_uncaptured', unit: 'profile', severity: 'error', profile: 'tablet' } ) );
+		expect( receipt.summary.complete ).toBe( false );
 		const manifest = JSON.parse( readFileSync( join( directory, 'screenshots/manifest.json' ), 'utf8' ) );
 		const attempted = Object.values( manifest.entries )[ 0 ] as { profiles: Record<string,{deviceScaleFactor: number}> };
 		expect( attempted.profiles.tablet!.deviceScaleFactor ).toBe( 1 );

@@ -26,6 +26,8 @@ import { cleanupPolicy } from './source-cleanup.js';
 import { inspectSourceInteractivity } from './source-interactivity.js';
 import { documentsDiffer } from './responsive-assembly.js';
 import { collectAssetEvidenceReferences } from './capture-export-evidence.js';
+import { IntegrityError } from './failure-class.js';
+import { missingRoutes } from './capture-usability.js';
 
 const dirs: string[] = [];
 
@@ -7083,5 +7085,98 @@ describe( 'exportWebsiteCapture entrypoint failures', () => {
 		];
 		expect( () => exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures } ) )
 			.toThrow( 'Source homepage https://example.test/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
+	} );
+} );
+
+describe( 'exportWebsiteCapture per-route containment', () => {
+	const fixture = ( pages: Record< string, { desktop: string; mobile?: string; failures?: string[] } > ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-route-containment-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const entries: Record< string, unknown > = {};
+		const failures: Array< { url: string; viewport: string; stage: string; error: string } > = [];
+		for ( const [ slug, page ] of Object.entries( pages ) ) {
+			writeFileSync( join( outputDir, `html/${ slug }.html` ), page.desktop );
+			if ( page.mobile ) writeFileSync( join( outputDir, `html-mobile/${ slug }.html` ), page.mobile );
+			const url = slug === 'home' ? 'https://example.test/' : `https://example.test/${ slug }/`;
+			entries[ url ] = { html: `html/${ slug }.html`, slug };
+			for ( const error of page.failures ?? [] ) failures.push( { url, viewport: 'mobile', stage: 'screenshot-scrolled', error } );
+		}
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const summary = { routesDiscovered: Object.keys( pages ).length, routesCaptured: Object.keys( pages ).length, routesSkipped: 0, routesFailed: 0 };
+		return { outputDir, options: { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary, failures } };
+	};
+	const page = ( title: string ) => `<html><body><main><h1>${ title }</h1></main></body></html>`;
+	const fail = ( title: string ) => ( documents: Record< string, string > ) => {
+		if ( documents.desktop?.includes( title ) ) throw new Error( `cannot export ${ title }` );
+		return undefined;
+	};
+
+	it( 'drops a route whose export throws a non-integrity error and exports the rest', () => {
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ) }, about: { desktop: page( 'About' ) } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { ...options, resolveDocumentSelection: fail( 'About' ) } ), 'utf8' ) );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ 'https://example.test/' ] );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( {
+			code: 'route_export_failed', url: 'https://example.test/about/', reason: 'cannot export About', unit: 'route', severity: 'error',
+		} );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [ { url: 'https://example.test/about/', code: 'route_export_failed', reason: 'cannot export About' } ] );
+		// The dropped route moves from captured to failed; the invariant holds.
+		expect( receipt.summary ).toMatchObject( { routesDiscovered: 2, routesCaptured: 1, routesFailed: 1, complete: false } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'fails closed on an integrity error', () => {
+		const { options } = fixture( { home: { desktop: page( 'Home' ) }, about: { desktop: page( 'About' ) } } );
+		const resolveDocumentSelection = () => { throw new IntegrityError( 'identity mismatch' ); };
+		expect( () => exportWebsiteCapture( { ...options, resolveDocumentSelection } ) ).toThrow( 'identity mismatch' );
+		const programmerError = () => { throw new TypeError( 'undefined is not a function' ); };
+		expect( () => exportWebsiteCapture( { ...options, resolveDocumentSelection: programmerError } ) ).toThrow( TypeError );
+	} );
+
+	it( 'still fails the capture when the entrypoint route cannot be exported', () => {
+		const { options } = fixture( { home: { desktop: page( 'Home' ) }, about: { desktop: page( 'About' ) } } );
+		expect( () => exportWebsiteCapture( { ...options, resolveDocumentSelection: fail( 'Home' ) } ) )
+			.toThrow( 'Source homepage https://example.test/ was not captured: cannot export Home' );
+	} );
+
+	it( 'records stage failures on a route with saved HTML as route_capture_degraded and keeps the page', () => {
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), mobile: page( 'Home phone' ), failures: [ 'scrolled screenshot timed out' ] } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.routes ).toHaveLength( 1 );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( {
+			code: 'route_capture_degraded', url: 'https://example.test/', reason: 'mobile/screenshot-scrolled: scrolled screenshot timed out',
+			unit: 'route', severity: 'warning', metrics: { failedStages: 1 },
+		} );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0, complete: true } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'keeps a declared profile without its document as an incomplete profile finding, not a failed route', () => {
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), failures: [ 'HTTP 403' ] } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ {
+			code: 'route_profile_uncaptured', url: 'https://example.test/', reason: 'mobile/screenshot-scrolled: HTTP 403', unit: 'profile', severity: 'error', profile: 'mobile',
+		} ] );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0, complete: false } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'leaves an unparseable author stylesheet unprojected and still exports the page', () => {
+		const broken = '#nav{color:red}}';
+		const { outputDir, options } = fixture( { home: {
+			desktop: '<html><head><style>.shell{margin:0}</style></head><body><nav id="nav">Menu</nav><main><h1>Desktop</h1></main></body></html>',
+			mobile: `<html><head><style>.shell{margin:0}</style><style>${ broken }</style></head><body><header><p>Phone header</p></header><main><h1>Phone</h1></main></body></html>`,
+		} } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
+			code: 'stylesheet_unparseable', url: 'https://example.test/', unit: 'stylesheet', severity: 'warning',
+		} ) );
+		expect( receipt.discoveryDiagnostics.some( ( row: { code: string } ) => row.code === 'route_export_failed' ) ).toBe( false );
+		const html = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
+		expect( html ).toContain( 'Phone' );
+		expect( html ).not.toContain( broken );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0 } );
 	} );
 } );
