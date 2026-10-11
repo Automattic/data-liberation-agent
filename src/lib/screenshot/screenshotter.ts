@@ -1734,7 +1734,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if (frontier) target = key;
 		urls.push(target);
 	};
-	const allFailures: FailureEntry[] = [];
+	// Routes, not failure records: failures.json keeps one record per
+	// viewport × stage × attempt, the summary counts each failed URL once.
+	const failedRoutes = new Set< string >();
 
 	const capturedAt = () => new Date().toISOString();
 
@@ -2096,7 +2098,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			skipped++;
 			sendLog( server, `[skip] ${ url } (${ absentFailures[ 0 ].error })` );
 		} else {
-			allFailures.push( ...captureFailures );
+			failedRoutes.add( url );
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
@@ -2280,7 +2282,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	return {
 		captured,
 		skipped,
-		failed: allFailures.length,
+		failed: failedRoutes.size,
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,
