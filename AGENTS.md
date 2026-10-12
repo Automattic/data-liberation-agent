@@ -122,6 +122,15 @@ Reuse is opt-in: a plain re-run recaptures, and `--resume` is what reports `reus
 - Screenshot capture restarts the browser every 100 URLs at batch boundaries to bound memory.
 - Cross-origin stylesheets are skipped when aggregating design tokens — their `.cssRules` throw.
 
+## Failure classes
+
+A problem confined to one unit degrades that unit and records a finding; only integrity violations fail a capture closed (#761). Every `throw`, `Promise.reject(…)` and `reject(…)` in a `new Promise` executor on the capture → export path (`src/lib/**` and `src/adapters/**`, except the `compare`, `publish` and `inspect` verbs and the `--serve` preview) declares its class in one of two ways:
+
+- Throw `IntegrityError` (`src/lib/failure-class.ts`) or a subclass. The guard also maps built-in programmer errors (`TypeError`, `RangeError`, …) to `programmer`, and `TimeoutError` and `BodyTooLargeError` to `operational`.
+- Otherwise, annotate the throw line or the line above: `// failure-class: integrity`, `operational`, `programmer`, or `representability:<unit>`. The unit is required and is one of `item`, `block`, `page`, `route`, `asset`, `stylesheet` or `profile`. A representability site should become a dropped unit plus a finding, not a throw.
+
+The annotation is a declaration; runtime containment still follows `isIntegrityError`. `src/lib/failure-class-guard.test.ts` enforces this. Sites that were unclassified when the guard landed are listed in `src/lib/failure-class-baseline.json`, keyed by file and normalized site text. That baseline only shrinks: the test fails on a new unclassified site and on an entry whose site is gone. When you classify or remove a baselined site, lower or delete its entry.
+
 ## Verifying a change
 
 Run the gate against a real site, not only the unit tests:
