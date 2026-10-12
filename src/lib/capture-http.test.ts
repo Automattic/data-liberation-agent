@@ -150,6 +150,15 @@ describe('orchestrated HTTP review capture', () => {
 		expect(existsSync(join(outputDir, 'fidelity-reference.json'))).toBe(false);
 		expect(existsSync(join(outputDir, 'screenshots/manifest.json'))).toBe(false);
 		expect(browserCapture).not.toHaveBeenCalled();
+		const findings = JSON.parse(readFileSync(join(outputDir, 'website/capture-findings.json'), 'utf8'));
+		expect(findings).toMatchObject({
+			schema: 'data-liberation-agent/capture-findings/v1',
+			entrypoint: 'index.html',
+			complete: false,
+			usable: true,
+			summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0 },
+		});
+		expect(findings.missing_routes).toEqual(result.missingRoutes);
 	});
 
 	it('honours the shared route budget without hiding the discovered remainder and preserves strict failure', async () => {
