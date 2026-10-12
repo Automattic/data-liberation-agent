@@ -15,6 +15,8 @@ import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
 import { DEFAULT_ROUTE_LIMIT, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, type RouteLimit } from './route-budget.js';
+import type { RouteDiagnostic } from './capture-export-routes.js';
+import { writeCaptureFindings } from './capture-findings.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 export { DEFAULT_ROUTE_LIMIT, type RouteLimit } from './route-budget.js';
@@ -110,7 +112,8 @@ export interface CaptureResult {
 	/** Routes that failed to capture, by URL with cause. Excludes source-absent and external-redirect routes. */
 	missingRoutes: MissingRoute[];
 	failures: Array< { url: unknown; error: unknown } >;
-	discoveryDiagnostics: Array< { code: string; url: string; reason: string } >;
+	/** Discovery and capture findings; loss rows carry `unit`, `severity`, `path`, `profile` and `metrics`. */
+	discoveryDiagnostics: RouteDiagnostic[];
 	unresolvedAnchors: UnresolvedAnchor[];
 	provenance: { provider: string; platform: string };
 }
@@ -393,8 +396,6 @@ export async function captureWebsite(
 	// recipe. Discovery remains explicit untranslated evidence until a portable
 	// implementation passes the independent source fidelity gate.
 	await ( await import( './behavior-discovery.js' ) ).discoverCapturedBehavior( outputDir );
-	reference.requireUrls(screenshotResult.linkedPageCoverage?.requiredUrls ?? screenshotResult.urls);
-	reference.finalize( captureReceiptPath );
 	const finalSummary = withExportDroppedRoutes( summary, receipt.discoveryDiagnostics );
 	const complete =
 		finalSummary.routesFailed === 0 &&
@@ -417,6 +418,11 @@ export async function captureWebsite(
 		unresolvedAnchors,
 		provenance: { provider: 'data-liberation/browser-capture', platform: detection.platform },
 	};
+	// Inside website/, so the findings travel with the artifact and the
+	// fidelity reference hashes them with the rest of the capture.
+	writeCaptureFindings( outputDir, { ...result, discoveryDiagnostics: receipt.discoveryDiagnostics ?? [] } );
+	reference.requireUrls(screenshotResult.linkedPageCoverage?.requiredUrls ?? screenshotResult.urls);
+	reference.finalize( captureReceiptPath );
 	progress( { phase: 'complete', current: urls.length, total: urls.length } );
 	if ( options.strict && ! complete ) throw new IncompleteCaptureError( result );
 	return result;

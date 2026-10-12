@@ -70,7 +70,7 @@ The target shape from #761 is `code`, `severity`, `unit`, `path`, `reason`, `met
 
 Definitions:
 
-- **DLA:** `src/lib/capture-export-routes.ts:73-89`.
+- **DLA:** `src/lib/capture-export-routes.ts:73-89`. `CaptureResult.discoveryDiagnostics` is typed `RouteDiagnostic[]`.
 - **BE:** `ArtifactCompiler::diagnostic()` (`src/ArtifactCompiler/ArtifactCompiler.php:5660-5671`) builds `{code, severity, message, source, context}`. Site-plan rows are flat (`src/WordPressSitePlan/WordPressSitePlan.php:2001-2008`, `:2028-2033`, `:4269-4277`). Omitted-page rows are flat with `unit` (`ArtifactCompiler.php:5618-5632`).
 - **SSI:** normalization `includes/class-static-site-importer-diagnostic-projection.php:1986-2029`, compact row allowlist `:2473-2525`.
 
@@ -172,7 +172,8 @@ DLA captureWebsite()
   rows: RouteDiagnostic[] → receipt.discoveryDiagnostics (capture receipt + diagnostics.json)
   result: complete, entrypointCaptured, missingRoutes, summary{routesDiscovered, routesCaptured,
           routesFailed, routesOmitted}, unresolvedAnchors
-        │  website/ files only; findings do not travel with the artifact
+  artifact: website/ files + website/capture-findings.json (loss rows, section 5.1)
+        │
         ▼
 BE ArtifactCompiler::compile() / compose()
   rows: result.diagnostics + wordpress_site_plan.diagnostics
@@ -188,7 +189,45 @@ SSI Receipt_Projection::compose()
 ```
 
 - **DLA.** Diagnostics are collected at `src/lib/capture.ts:342` and `:362`. `complete` is computed at `:386-395` and the result built at `:396-405`. The receipt is written at `src/lib/capture-export-evidence.ts:625` and `:640`. `complete` is false when `routesFailed > 0`, when a profile is uncaptured, when a document selection is missing, when there is a non-budget linked-page diagnostic, or when an anchor targets an uncaptured route. Budget omission never makes a capture incomplete.
-- **BE.** Merging and the omitted-page path are described in `php-transformer/docs/contracts/omitted-page-receipt.md`.
+- **BE.** Merging and the omitted-page path are described in `php-transformer/docs/contracts/omitted-page-receipt.md`. BE never sees `capture-findings.json`: SSI removes it at intake.
+
+### 5.1 Capture findings in the artifact
+
+The capture receipt and `diagnostics.json` sit next to `website/`, outside the artifact an importer receives. So that capture losses travel with the site, capture writes one small static file at the website root, `website/capture-findings.json` (`src/lib/capture-findings.ts`). Browser and HTTP capture both write it once the result is known; browser capture writes it before the fidelity reference hashes `website/`.
+
+```json
+{
+  "schema": "data-liberation-agent/capture-findings/v1",
+  "entrypoint": "index.html",
+  "complete": false,
+  "usable": true,
+  "summary": { "routes_discovered": 3, "routes_captured": 2, "routes_failed": 1, "routes_omitted": 0, "unresolved_anchors": 0 },
+  "findings": [
+    { "code": "route_capture_degraded", "severity": "warning", "unit": "route", "url": "https://example.test/about/", "path": "about/index.html", "reason": "mobile/screenshot-scrolled: screenshot timeout", "metrics": { "failedStages": 1 } },
+    { "code": "route_export_failed", "severity": "error", "unit": "route", "url": "https://example.test/pricing/", "reason": "cannot export Pricing" }
+  ],
+  "omitted_findings": 0,
+  "missing_routes": [ { "url": "https://example.test/pricing/", "code": "route_export_failed", "reason": "cannot export Pricing" } ]
+}
+```
+
+- `findings`: every receipt `discoveryDiagnostics` row with a `unit`, plus the missing-route codes (`route_capture_failed`, `route_export_failed`, `route_path_collision`). Discovery evidence (`sitemap_*`, `http_*`, `route_omitted_by_budget`, `route_not_found`, `route_external_redirect`) is left out. `unit` defaults to `route` and `severity` to `error` for missing-route rows and `warning` otherwise. `path` and `entrypoint` are relative to the website root. `profile` and `metrics` appear when the row has them.
+- Rows are de-duplicated and sorted by `url`, `code`, `unit`, `path`, `profile` and `reason`, so the same capture writes the same bytes. At most 500 rows are written; `omitted_findings` counts the rest.
+- `missing_routes` is `missingRoutes()` over the receipt rows, sorted by URL. It is never bounded.
+- `complete` is the capture result's `complete`; `usable` is `isUsableCapture()` under `USABLE_PARTIAL_CAPTURE_POLICY`.
+- The file is JSON, so it passes SSI's static-content policy. A new field is additive within `v1`; a changed meaning needs `v2`.
+
+SSI reads the file at intake when it is present (Automattic/static-site-importer `includes/class-static-site-importer-capture-findings.php`). It validates `schema` and the `findings` and `missing_routes` lists, removes the file from the artifact, and adds one report row per finding, plus one per missing route that has no finding row with the same code and URL. Rows carry the canonical finding fields: `code`, `severity`, `unit`, `location` (`website/<path>`, else the URL), `message` from `reason`, the code as `reason_code`, numeric `metrics`, `owning_layer: data-liberation-agent`, `loss_class` and `acceptability`; `url` and `context.profile` are kept too. SSI classifies capture codes by code in its reported-loss registry:
+
+| Code | SSI loss class | Unit |
+|---|---|---|
+| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin` | `omitted_unit` | route |
+| `route_profile_uncaptured` | `omitted_unit` | profile |
+| `route_capture_degraded` | `degraded_unit` | route |
+| `stylesheet_unparseable` | `degraded_unit` | stylesheet |
+| `native_timeline_unproven`, `disclosure_unrestored` | `degraded_unit` | block |
+
+Each has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary's `loss_class_summary`, `loss_count` and `loss_counts`. A capture code SSI does not know yet is stamped `degraded_unit`, so a new DLA code is still counted as a loss. A capture without the file imports as before. A file that cannot be read or fails validation adds one `capture_findings_unreadable` warning and never fails the import.
 - **SSI.** `compose()` is at `includes/class-static-site-importer-receipt-projection.php:50-103`. Compact summary fields (`diagnostic-projection.php:1374-1416`):
   - `status` (`completed`/`failed` from `fail_import`)
   - `quality_pass`, `fail_import`, `failure_reasons`
@@ -212,7 +251,7 @@ SSI Receipt_Projection::compose()
 3. **Compile:** proceed unless `status === 'failed'`.
 4. **Import:** accept when `compact_summary.status === 'completed'`.
 5. **Report, never gate** on the rest:
-   - capture: `missingRoutes`, `summary.routesOmitted`, and `discoveryDiagnostics` rows that have a `unit`
+   - capture: `missingRoutes`, `summary.routesOmitted`, and `discoveryDiagnostics` rows that have a `unit` (the same rows reach the import report through `capture-findings.json`)
    - import: `loss_class_summary`, the `page_compile_omitted` count, `omitted_file_count`, `unresolved_link_count`
 
    Present them as one list keyed by `code` and `unit`.
@@ -222,13 +261,13 @@ A stricter caller tightens step 2 (for example `complete && summary.routesOmitte
 ## 7. Open gaps
 
 - **Caller policy not adopted.** The hosted runner still fails on any `complete: false` capture instead of `isUsableCapture()` (#761, "Caller policy").
-- **The ledger breaks at capture → import.** SSI never reads DLA's `discoveryDiagnostics`, `missingRoutes` or `unresolvedAnchors`. Capture findings reach the import report only if the caller joins them. Routes and pages share no key except the exported path.
+- **Unresolved anchors cross only as a count.** `capture-findings.json` carries capture loss rows and missing routes into the import report (section 5.1), but only `summary.unresolved_anchors` for `unresolvedAnchors`. Routes and pages still share no key except the exported path.
 - **Field names differ.**
   - Human text: DLA `reason` is free text; BE and SSI use `message`, with `reason_code` as the machine reason.
   - BE `reason` is overloaded: it is `'truncated'` on overflow rows and the raw error in `context.reason`.
   - Location: `url` (DLA), `path` (DLA file, SSI intake) and `source_path` (BE, SSI).
   - BE puts `source_path` at the top level on some rows and in `context` on others (editability, include codes).
-- **`unit`, `owning_layer` and `loss_class` are sparse.** DLA has no `owning_layer` or `loss_class`. BE sets `unit` on one code. SSI stamps `unit` and `owning_layer` only on `page_compile_omitted`.
+- **`unit`, `owning_layer` and `loss_class` are sparse.** DLA has no `owning_layer` or `loss_class`. BE sets `unit` on one code. SSI stamps `unit` and `owning_layer` only on `page_compile_omitted` and on capture rows from `capture-findings.json`.
 - **`severity` means different things.** DLA `severity` is optional and absent on `route_capture_failed`. DLA `error` does not imply incompleteness: `disclosure_unrestored` is `error`, but the page counts and `complete` is unaffected. BE `error` means the compile failed.
 - **Losses classed as acceptable.** New degrade codes with no specific `pattern_family` fall through BE's default repair bucket `review_generic_mapping` (`src/Contract/ConversionFindingContract.php:353-355`), so SSI classes them `editable_approximation` / `acceptable_conversion` rather than as a loss. This covers `editability_policy_degraded`, `html_include_*`, `glyph_color_undecodable`, `*_link_declaration`, `*_navigation_link` and `static_site_importer_non_static_file_skipped`. Separately, `runtime_form_graph_rejected` maps to `importer_materialization_bug` (`materialize_form_provider`).
 - **Unmapped repair buckets.** BE emits `restore_compiled_document_identity` and `restore_projected_selector_binding`, which SSI's map does not list (`loss-classes.php:123-160`). They are recorded as drift and fall back to the heuristic.
@@ -236,5 +275,4 @@ A stricter caller tightens step 2 (for example `complete && summary.routesOmitte
 - **Compact rows are truncated.** `compact_summary.diagnostics` keeps the first 50 rows in report order. It drops top-level `code`, `url`, `value` and `metrics`.
 - **The partial-site rule is inconsistent.** An omitted page imports, but an omitted artifact file refuses the whole import.
 - **Not every loss is a finding row.** #2712's form-style drops are recorded as `style_value_unrepresentable:<property>` strings inside the form presentation graph's `diagnostics` list, not as rows.
-- **DLA types are narrower than its rows.** `CaptureResult.discoveryDiagnostics` is typed `{code, url, reason}` (`src/lib/capture.ts:112`, `src/lib/capture-http.ts:28`), although the rows carry `unit`, `severity`, `path`, `profile` and `metrics`.
 - **No classification guard.** No repository yet requires every throw site on the compile and import path to be classified (#761, "Classification guard"). Remaining conversions: Automattic/blocks-engine#2713 items 4-8, Automattic/static-site-importer#2054, #762, and #769 (capture-side glyph colour).

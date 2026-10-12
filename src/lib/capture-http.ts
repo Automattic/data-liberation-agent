@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import type { Platform } from '../platform/types.js';
 import type { CaptureOptions, CaptureProgress, CaptureResult } from './capture.js';
 import { budgetOmittedRoutes, missingRoutes } from './capture-usability.js';
+import type { RouteDiagnostic } from './capture-export-routes.js';
+import { writeCaptureFindings } from './capture-findings.js';
 import { acquireHttpDocuments } from './http-acquisition.js';
 import { materializeHttpDocuments } from './http-materialization.js';
 
@@ -25,7 +27,7 @@ export async function captureHttpWebsite( input: {
 	/** Routes the shared route budget kept, entrypoint first. */
 	urls: string[];
 	/** Discovery diagnostics, including one `route_omitted_by_budget` row per omitted route. */
-	discoveryDiagnostics: Array<{ code: string; url: string; reason: string }>;
+	discoveryDiagnostics: RouteDiagnostic[];
 } ): Promise<CaptureResult> {
 	const { options, platform, progress } = input;
 	const profile = platform.acquisition;
@@ -48,7 +50,7 @@ export async function captureHttpWebsite( input: {
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	const failures = acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => ( { url: document.url, error: `${ document.variant }: ${ document.error ?? document.status }` } ) );
 	if ( runtime ) failures.push( ...runtime.failures );
-	const diagnostics = [ ...input.discoveryDiagnostics, ...( receipt.discoveryDiagnostics ?? [] ) ];
+	const diagnostics: RouteDiagnostic[] = [ ...input.discoveryDiagnostics, ...( receipt.discoveryDiagnostics ?? [] ) ];
 	const failedRoutes = new Set( acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => document.url ) );
 	const summary = { routesDiscovered: urls.length, routesCaptured: receipt.routes.length, routesSkipped: 0, routesFailed: failedRoutes.size, routesOmitted: budgetOmittedRoutes( diagnostics ).length, durationMs: Date.now() - input.startedAt, complete: false, entrypointCaptured: true };
 	receipt.summary = summary;
@@ -61,6 +63,8 @@ export async function captureHttpWebsite( input: {
 	const diagnostic = JSON.parse( readFileSync( diagnosticPath, 'utf8' ) );
 	diagnostic.discoveryDiagnostics = diagnostics; diagnostic.failures = failures;
 	writeFileSync( diagnosticPath, JSON.stringify( diagnostic, null, 2 ) + '\n' );
+	const result: CaptureResult = { captureReceiptPath, outputDir: options.outputDir, summary, complete: false, entrypointCaptured: true, missingRoutes: missingRoutes( diagnostics ), failures, discoveryDiagnostics: diagnostics, unresolvedAnchors: diagnostic.unresolvedAnchors ?? [], provenance: { provider: 'data-liberation/http-capture', platform: platform.id } };
+	writeCaptureFindings( options.outputDir, result );
 	progress( { phase: 'complete', current: urls.length, total: urls.length, unit: 'routes' } );
-	return { captureReceiptPath, outputDir: options.outputDir, summary, complete: false, entrypointCaptured: true, missingRoutes: missingRoutes( diagnostics ), failures, discoveryDiagnostics: diagnostics, unresolvedAnchors: diagnostic.unresolvedAnchors ?? [], provenance: { provider: 'data-liberation/http-capture', platform: platform.id } };
+	return result;
 }

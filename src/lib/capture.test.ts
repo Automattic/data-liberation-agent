@@ -373,6 +373,23 @@ describe( 'captureWebsite completeness', () => {
 		expect( receipt.discoveryDiagnostics.map( ( row: { code: string; url: string } ) => [ row.code, row.url ] ) ).toEqual( [
 			[ 'route_capture_degraded', degraded ], [ 'route_export_failed', dropped ],
 		] );
+		// The findings travel inside the website artifact an importer receives.
+		const findings = JSON.parse( readFileSync( join( root, 'website', 'capture-findings.json' ), 'utf8' ) );
+		expect( findings ).toEqual( {
+			schema: 'data-liberation-agent/capture-findings/v1',
+			entrypoint: 'index.html',
+			complete: false,
+			usable: true,
+			summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0, unresolved_anchors: 0 },
+			findings: [
+				{ code: 'route_capture_degraded', severity: 'warning', unit: 'route', url: degraded, reason: expect.stringContaining( 'screenshot timeout' ), metrics: { failedStages: 1 } },
+				{ code: 'route_export_failed', severity: 'error', unit: 'route', url: dropped, reason: 'cannot export page' },
+			],
+			omitted_findings: 0,
+			missing_routes: [ { url: dropped, code: 'route_export_failed', reason: 'cannot export page' } ],
+		} );
+		const reference = JSON.parse( readFileSync( join( root, 'fidelity-reference.json' ), 'utf8' ) );
+		expect( reference.capture.map( ( file: { path: string } ) => file.path ) ).toContain( 'website/capture-findings.json' );
 	} );
 
 	it( 'records off-origin inventory URLs the browser capture dropped without counting them as missing', async () => {
