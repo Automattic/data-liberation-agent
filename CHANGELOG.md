@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.23.2] - 2026-10-12
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- do not admit state-changing action URLs as routes
+- give each document hop the remaining navigation budget
+- drop colliding routes, off-origin URLs and lost evidence blocks instead of failing the capture
+
 ## [0.23.1] - 2026-10-12
 
 ### Changed
