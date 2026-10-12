@@ -7,6 +7,7 @@ import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { parseCss, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
+import { documentElementTags } from './screenshot/document-integrity.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 
 /**
@@ -49,6 +50,61 @@ const RESPONSIVE_PROJECTION_CLASS_PREFIX = 'data-liberation-responsive-';
 /** Switches which captured document is shown, at the detected width. */
 function documentSwitchCss( switchWidth: number ): string {
 	return `@media(max-width:${ switchWidth }px){.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ MOBILE_DOCUMENT_CLASS }{display:contents!important}}`;
+}
+
+// Document boundaries come from the real tags only. Captured pages keep their
+// scripts as text, and a script can carry `<head>`, `<body …>` or `</body>`
+// strings (a popup written with document.write); a regex would stop there.
+
+/** A real head or body element of a serialized document, as raw markup slices. */
+interface DocumentElement {
+	attributes: string;
+	open: string;
+	content: string;
+	close: string;
+	start: number;
+	end: number;
+}
+
+function documentElement( html: string, name: 'head' | 'body' ): DocumentElement | undefined {
+	const { open, close } = documentElementTags( html, name );
+	if ( ! open || ! close || close.start < open.end ) return undefined;
+	return {
+		attributes: open.attributes,
+		open: html.slice( open.start, open.end ),
+		content: html.slice( open.end, close.start ),
+		close: html.slice( close.start, close.end ),
+		start: open.start,
+		end: close.end,
+	};
+}
+
+/** Raw attributes of the real `<body>` start tag; empty when there is none. */
+function bodyAttributes( html: string ): string {
+	return documentElementTags( html, 'body' ).open?.attributes ?? '';
+}
+
+/** Replace the real head or body element, start tag through end tag. Unchanged without one. */
+function replaceDocumentElement( html: string, name: 'head' | 'body', render: ( element: DocumentElement ) => string ): string {
+	const element = documentElement( html, name );
+	return element ? html.slice( 0, element.start ) + render( element ) + html.slice( element.end ) : html;
+}
+
+function hasHeadClose( html: string ): boolean {
+	return documentElementTags( html, 'head' ).close !== undefined;
+}
+
+/** Insert markup before the real `</head>`. Unchanged without one. */
+function insertBeforeHeadClose( html: string, markup: string ): string {
+	const close = documentElementTags( html, 'head' ).close;
+	return close ? html.slice( 0, close.start ) + markup + html.slice( close.start ) : html;
+}
+
+/** Give a document without `</head>` an empty head before its real body. */
+function withHeadElement( html: string ): string {
+	if ( hasHeadClose( html ) ) return html;
+	const open = documentElementTags( html, 'body' ).open;
+	return open ? `${ html.slice( 0, open.start ) }<head></head>${ html.slice( open.start ) }` : html;
 }
 
 /**
@@ -130,8 +186,8 @@ function childNodes( node: AnyNode ): AnyNode[] {
  * would otherwise ship two copies of the same responsive document.
  */
 export function documentsDiffer( desktopHtml: string, mobileHtml: string ): boolean {
-	const desktopBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml )?.[ 2 ];
-	const mobileBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( mobileHtml )?.[ 2 ];
+	const desktopBody = documentElement( desktopHtml, 'body' )?.content;
+	const mobileBody = documentElement( mobileHtml, 'body' )?.content;
 	if ( desktopBody === undefined || mobileBody === undefined ) return false;
 	return responsiveBodySignature( desktopBody ) !== responsiveBodySignature( mobileBody );
 }
@@ -174,7 +230,7 @@ interface ResolvedResponsivePair {
 }
 
 function responsiveBodyContent( html: string ): string | undefined {
-	return /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i.exec( html )?.[ 1 ];
+	return documentElement( html, 'body' )?.content;
 }
 
 /**
@@ -191,7 +247,6 @@ function mobileBodyClassGatesDesktopCss(
 	mobileHtml: string,
 	desktopCss: string
 ): string | undefined {
-	const bodyAttributes = ( html: string ): string => /<body\b([^>]*)>/i.exec( html )?.[ 1 ] ?? '';
 	const bodyClasses = ( attributes: string ): string[] =>
 		( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' )
 			.split( /\s+/ )
@@ -377,7 +432,7 @@ function identitySubsetMerge(
 	);
 	let unsafeClassAlias = false;
 	const bodyClasses = ( html: string ) => {
-		const attributes = /<body\b([^>]*)>/i.exec( html )?.[ 1 ] ?? '';
+		const attributes = bodyAttributes( html );
 		return ( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 	};
 	const desktopBodyClasses = new Set( bodyClasses( desktopHtml ) );
@@ -966,7 +1021,9 @@ function withBodyClasses( openTag: string, mobileBodyAttributes: string, aliases
 	const body = $( 'body' );
 	const classes = ( body.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 	body.attr( 'class', [ ...new Set( [ ...classes, ...mobileClasses ] ) ].join( ' ' ) );
-	return /<body\b[^>]*>/i.exec( $.html() )?.[ 0 ] ?? openTag;
+	const serialized = $.html();
+	const open = documentElementTags( serialized, 'body' ).open;
+	return open ? serialized.slice( open.start, open.end ) : openTag;
 }
 
 /** Width-scoped visibility for elements only one side of the switch renders. */
@@ -987,8 +1044,8 @@ function withScrollDrivenAnimations( html: string ): string {
 	if ( sourceCss === '' ) return html;
 	const override = appendScrollDrivenAnimations( '', sourceCss );
 	if ( override === '' ) return html;
-	return /<\/head\s*>/i.test( html )
-		? html.replace( /<\/head\s*>/i, `<style>${ override }</style></head>` )
+	return hasHeadClose( html )
+		? insertBeforeHeadClose( html, `<style>${ override }</style>` )
 		: `${ html }<style>${ override }</style>`;
 }
 
@@ -1097,9 +1154,9 @@ function emittedAssembly(
 }
 
 function withMobileLinkedStyles( html: string, mobileHtml: string, switchWidth: number ): string {
-	const mobileHead = /<head\b[^>]*>([\s\S]*?)<\/head\s*>/i.exec( mobileHtml )?.[ 1 ];
+	const mobileHead = documentElement( mobileHtml, 'head' )?.content;
 	if ( ! mobileHead || ! /<link\b/i.test( mobileHead ) ) return html;
-	return html.replace( /(<head\b[^>]*>)([\s\S]*?)(<\/head\s*>)/i, ( _match, open: string, head: string, close: string ) => {
+	return replaceDocumentElement( html, 'head', ( { open, content: head, close } ) => {
 		const $ = cheerio.load( head, undefined, false );
 		const mobile = cheerio.load( mobileHead, undefined, false );
 		const selector = 'style,link[rel~="stylesheet" i][href]:not([rel~="alternate" i]):not([disabled])';
@@ -1332,10 +1389,10 @@ function assembleResponsiveHtml(
 	bindingGate?: string,
 	onUnparseable?: UnparseableStylesheetSink
 ): { html: string; evidence: ResponsiveVariantEvidence } {
-	const desktopBodyMatch = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml );
-	let desktopBody = desktopBodyMatch?.[ 2 ];
-	const mobileBodyMatch = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( mobileHtml );
-	let mobileBody = mobileBodyMatch?.[ 2 ];
+	const desktopBodyMatch = documentElement( desktopHtml, 'body' );
+	let desktopBody = desktopBodyMatch?.content;
+	const mobileBodyMatch = documentElement( mobileHtml, 'body' );
+	let mobileBody = mobileBodyMatch?.content;
 	if ( desktopBody === undefined || mobileBody === undefined ) {
 		// The desktop document is what ships. A source gate cannot claim two
 		// documents when this pair has no body to wrap.
@@ -1349,7 +1406,7 @@ function assembleResponsiveHtml(
 		if ( ! mobileViewport ) return html;
 		return /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i.test( html )
 			? html.replace( /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i, mobileViewport )
-			: html.replace( /<\/head\s*>/i, `${ mobileViewport }</head>` );
+			: insertBeforeHeadClose( html, mobileViewport );
 	};
 	if ( gatedByMobileClass === undefined && ! resolved.dual && ! resolved.merge ) {
 		// Equivalent trees can still carry different inline presentation: the
@@ -1362,17 +1419,13 @@ function assembleResponsiveHtml(
 		const projectionStyle = projection ? `<style>${ projection.css }</style>` : '';
 		const withProjectedBody = ( html: string ): string =>
 			projection
-				? html.replace(
-						/(<body\b[^>]*>)[\s\S]*?(<\/body\s*>)/i,
-						( _match, open: string, close: string ) => `${ open }${ projection.body }${ close }`
-				  )
+				? replaceDocumentElement( html, 'body', ( { open, close } ) => `${ open }${ projection.body }${ close }` )
 				: html;
 		// Projection rules are inserted before </head>; a document without one
 		// would silently lose them.
 		const withProjectionStyle = ( html: string ): string => {
 			if ( ! projectionStyle ) return html;
-			const withHead = /<\/head\s*>/i.test( html ) ? html : html.replace( /<body\b/i, '<head></head><body' );
-			return withHead.replace( /<\/head\s*>/i, `${ projectionStyle }</head>` );
+			return insertBeforeHeadClose( withHeadElement( html ), projectionStyle );
 		};
 		if ( styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' ) )
 			return { html: withMobileViewport( withProjectionStyle( withProjectedBody( desktopHtml ) ) ), evidence };
@@ -1382,11 +1435,11 @@ function assembleResponsiveHtml(
 		const shared = sharedStyleContents( desktopHtml, mobileHtml );
 		return {
 			html: withProjectionStyle(
-				withMobileViewport(
-					withProjectedBody( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) )
-				).replace(
-					/<\/head\s*>/i,
-					`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }</head>`
+				insertBeforeHeadClose(
+					withMobileViewport(
+						withProjectedBody( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) )
+					),
+					responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared )
 				)
 			),
 			evidence,
@@ -1401,23 +1454,19 @@ function assembleResponsiveHtml(
 		const shared = sharedStyleContents( desktopHtml, mobileHtml );
 		// Projection and visibility rules are inserted before </head>; a document
 		// without one would silently lose them.
-		const withHead = ( html: string ): string =>
-			/<\/head\s*>/i.test( html ) ? html : html.replace( /<body\b/i, '<head></head><body' );
+		const withBody = replaceDocumentElement(
+			withMobileViewport( withHeadElement( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) ) ),
+			'body',
+			( { open, close } ) =>
+				`${ withBodyClasses( open, mobileBodyMatch?.attributes ?? '', identitySubset.classAliases ) }${ identitySubset.body }${ close }`
+		);
 		return {
-			html: withMobileViewport(
-				withHead( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) )
-			)
-				.replace(
-					/(<body\b[^>]*>)[\s\S]*?(<\/body\s*>)/i,
-					( _match, open: string, close: string ) =>
-						`${ withBodyClasses( open, mobileBodyMatch?.[ 1 ] ?? '', identitySubset.classAliases ) }${ identitySubset.body }${ close }`
-				)
-				.replace(
-					/<\/head\s*>/i,
-					`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared, identitySubset.classAliases ) }${ identitySubsetVisibilityCss( switchWidth ) }${
-						identitySubset.css ? `<style>${ identitySubset.css }</style>` : ''
-					}</head>`
-				),
+			html: insertBeforeHeadClose(
+				withBody,
+				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared, identitySubset.classAliases ) }${ identitySubsetVisibilityCss( switchWidth ) }${
+					identitySubset.css ? `<style>${ identitySubset.css }</style>` : ''
+				}`
+			),
 			evidence: resolved.evidence,
 		};
 	}
@@ -1481,8 +1530,8 @@ function assembleResponsiveHtml(
 		( cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? '' )
 			.split( /\s+/ )
 			.filter( Boolean );
-	const mobileBodyClasses = new Set( bodyClasses( mobileBodyMatch?.[ 1 ] ?? '' ) );
-	const sharedBodyClasses = [ ...new Set( bodyClasses( desktopBodyMatch?.[ 1 ] ?? '' ) ) ].filter(
+	const mobileBodyClasses = new Set( bodyClasses( mobileBodyMatch?.attributes ?? '' ) );
+	const sharedBodyClasses = [ ...new Set( bodyClasses( desktopBodyMatch?.attributes ?? '' ) ) ].filter(
 		( className ) => mobileBodyClasses.has( className )
 	);
 	const outerBody = `<body${
@@ -1492,10 +1541,10 @@ function assembleResponsiveHtml(
 	}>`;
 	const responsiveBody = `<div ${ wrapperAttributes(
 		DESKTOP_DOCUMENT_CLASS,
-		desktopBodyMatch?.[ 1 ] ?? ''
+		desktopBodyMatch?.attributes ?? ''
 	) } data-dla-document-scope>${ desktopBody }</div><div ${ wrapperAttributes(
 		MOBILE_DOCUMENT_CLASS,
-		mobileBodyMatch?.[ 1 ] ?? ''
+		mobileBodyMatch?.attributes ?? ''
 	) } data-dla-document-scope>${ mobileBody }</div>`;
 	const sharedStyles = styleBlocks( desktopHtml );
 	const evidence = dualStructuralEvidence( gatedByMobileClass );
@@ -1505,15 +1554,14 @@ function assembleResponsiveHtml(
 		sharedStyles.join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' )
 	) {
 		return {
-			html: withMobileViewport( desktopHtml )
-				.replace(
-					/<\/head\s*>/i,
-					`<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style></head>`
-				)
-				.replace(
-					/<body\b[^>]*>[\s\S]*?(<\/body\s*>)/i,
-					( _match, closingBody: string ) => `${ outerBody }${ responsiveBody }${ closingBody }`
+			html: replaceDocumentElement(
+				insertBeforeHeadClose(
+					withMobileViewport( desktopHtml ),
+					`<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style>`
 				),
+				'body',
+				( { close } ) => `${ outerBody }${ responsiveBody }${ close }`
+			),
 			evidence,
 		};
 	}
@@ -1530,17 +1578,14 @@ function assembleResponsiveHtml(
 		onUnparseable
 	);
 	return {
-		html: withMobileViewport(
-			scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared )
-		)
-			.replace(
-				/<\/head\s*>/i,
-				`${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style></head>`
-			)
-			.replace(
-				/<body\b[^>]*>[\s\S]*?(<\/body\s*>)/i,
-				( _match, closingBody: string ) => `${ outerBody }${ responsiveBody }${ closingBody }`
+		html: replaceDocumentElement(
+			insertBeforeHeadClose(
+				withMobileViewport( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) ),
+				`${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style>`
 			),
+			'body',
+			( { close } ) => `${ outerBody }${ responsiveBody }${ close }`
+		),
 		evidence,
 	};
 }
@@ -1629,8 +1674,8 @@ function resolveResponsivePair(
 			evidence: dualStructuralEvidence( gate ),
 		};
 	}
-	const desktopBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml )?.[ 2 ];
-	const mobileBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( mobileHtml )?.[ 2 ];
+	const desktopBody = documentElement( desktopHtml, 'body' )?.content;
+	const mobileBody = documentElement( mobileHtml, 'body' )?.content;
 	if ( desktopBody === undefined || mobileBody === undefined ) {
 		return { role, missingBody: true, dual: false, evidence: missingBodyEvidence() };
 	}
@@ -1708,9 +1753,9 @@ function responsiveMobileStyles(
 	classAliases: ReadonlyMap<string, string> = new Map(),
 	onUnparseable?: UnparseableStylesheetSink
 ): string {
-	const bodyAttributes = /<body\b([^>]*)>/i.exec( mobileHtml )?.[ 1 ] ?? '';
+	const mobileBodyAttributes = bodyAttributes( mobileHtml );
 	const rootClasses = (
-		cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
+		cheerio.load( `<body${ mobileBodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
 	)
 		.split( /\s+/ )
 		.filter( Boolean );

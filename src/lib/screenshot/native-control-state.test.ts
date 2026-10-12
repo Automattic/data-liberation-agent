@@ -208,3 +208,11 @@ it('reconstructs only owned code after stripping forged scripts and rejects inva
     expect(sanitizeSourceHtml(clean)).not.toContain('<script');
   } finally { await browser.close(); }
 });
+
+it('installs the runtime before the real </body>, not inside a source script that writes one', () => {
+  const popup = `<script>function preview(src) { window.open('#').document.write('<body><img src="' + src + '"></body>'); }</script>`;
+  const html = `<html><head></head><body><input type="checkbox" ${NATIVE_CONTROL_STATE_ATTRIBUTE}="{}">${popup}<p>after</p></body></html>`;
+  const wired = wireNativeControlState(html);
+  expect(wired).toContain(popup);
+  expect(wired).toMatch(/<p>after<\/p><script data-dla-native-control-runtime>[\s\S]*<\/script><\/body><\/html>$/);
+});

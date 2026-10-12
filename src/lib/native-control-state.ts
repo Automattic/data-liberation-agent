@@ -1,3 +1,5 @@
+import { documentElementTags } from './screenshot/document-integrity.js';
+
 /** Current native properties and authored reset defaults are separate facts.
  * Markup retains authored attributes; this versioned, inert contract carries
  * properties which HTML cannot express independently of those defaults.
@@ -74,5 +76,7 @@ export function wireNativeControlState( html: string ): string {
 	const clean = html.replace( /<script\b[^>]*\bdata-dla-native-control-runtime\b[^>]*>[\s\S]*?<\/script\s*>/gi, '' );
 	if ( ! clean.includes( `${ NATIVE_CONTROL_STATE_ATTRIBUTE }=` ) ) return clean;
 	const script = `<script data-dla-native-control-runtime>${ NATIVE_CONTROL_STATE_RUNTIME }</script>`;
-	return /<\/body\s*>/i.test( clean ) ? clean.replace( /<\/body\s*>/i, `${ script }</body>` ) : clean + script;
+	// The real </body>: a source script can carry `</body>` text (document.write popups).
+	const bodyEnd = documentElementTags( clean, 'body' ).close;
+	return bodyEnd ? clean.slice( 0, bodyEnd.start ) + script + clean.slice( bodyEnd.start ) : clean + script;
 }
