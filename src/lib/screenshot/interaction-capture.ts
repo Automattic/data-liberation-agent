@@ -472,9 +472,19 @@ export async function captureTriggeredDialogs(
 			}
 			await waitForDialogContentStable( page, dialog.selector );
 			const presentation = dialog.presentation;
+			// The source can unmount what the probe picked before it settles, such
+			// as a menu item still animating out of a panel an earlier probe closed.
+			// Content that removed itself is not a dialog this trigger opened, and an
+			// unbounded wait for it would discard every state this page captured.
 			const baselineSelector = await page.locator( dialog.selector ).first().evaluate( element =>
-				( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors?.get( element )
-			);
+				( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors?.get( element ) ?? null,
+			undefined, { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
+			if ( baselineSelector === undefined ) {
+				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
+				await page.keyboard.press( 'Escape' ).catch( () => undefined );
+				if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
+				continue;
+			}
 			dialog = ( await snapshotDialog( page, dialog.selector ) ) ?? dialog;
 			if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
 
