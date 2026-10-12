@@ -3,7 +3,7 @@ import { gzipSync } from 'node:zlib';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
-import { documentRedirect, navigateSourceDocument, inspectSourceDocument, SOURCE_NAVIGATION_LIMITS, storeExternalBoundary, validateExternalBoundary } from './source-navigation.js';
+import { documentRedirect, navigateSourceDocument, inspectSourceDocument, SOURCE_NAVIGATION_LIMITS, SourceNavigationError, storeExternalBoundary, validateExternalBoundary } from './source-navigation.js';
 import { join } from 'node:path';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 import { isRouteDrift, navigationDocumentUrl } from './screenshot/document-integrity.js';
@@ -206,4 +206,37 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			await Promise.all([new Promise<void>(resolve => server.close(() => resolve())),new Promise<void>(resolve => foreign.close(() => resolve()))]);
 		}
 	}, 60_000);
+	it('completes on document arrival, reports a held subresource, and still times out a document that never arrives', async () => {
+		// Held responses are released only when the server closes.
+		const server = createServer((request, response) => {
+			response.setHeader('content-type', 'text/html');
+			if (request.url === '/held-image' || request.url === '/never') return;
+			if (request.url === '/held') { setTimeout(() => response.end('<h1 id="text">Delivered</h1><img src="/held-image">'), 300); return; }
+			response.end('<h1 id="text">Complete</h1>');
+		});
+		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			const started = Date.now();
+			const held = await navigateSourceDocument(page, `${origin}/held`, {timeoutMs: 1_500});
+			expect(Date.now() - started).toBeLessThan(5_000);
+			expect(held.loadIncomplete).toBe(true);
+			expect(held.response?.status()).toBe(200);
+			expect(await page.evaluate(() => ({url: document.URL, text: document.querySelector('h1')?.textContent}))).toEqual({url: `${origin}/held`, text: 'Delivered'});
+			const complete = await navigateSourceDocument(page, `${origin}/complete`, {timeoutMs: 1_500});
+			expect(complete.loadIncomplete).toBeUndefined();
+			// The document is acquired under its per-response bound, below the
+			// navigation budget, so a document that never arrives fails as a
+			// timeout (and stays retryable: it is not a SourceNavigationError).
+			const never = await navigateSourceDocument(page, `${origin}/never`, {timeoutMs: 8_000}).catch((error: unknown) => error);
+			expect(never).toBeInstanceOf(Error);
+			expect(never).not.toBeInstanceOf(SourceNavigationError);
+			expect(String(never)).toMatch(/Timeout/);
+		} finally {
+			await browser.close(); server.closeAllConnections();
+			await new Promise<void>(resolve => server.close(() => resolve()));
+		}
+	}, 30_000);
 });

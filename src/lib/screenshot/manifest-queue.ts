@@ -33,6 +33,8 @@ export interface ManifestEntry {
     phases?: import('./phase-ledger.js').CapturePhase[];
     /** How each named readiness wait ended (quiet or spent bound); see settleDocument. */
     readiness?: Record<string, import('./phase-ledger.js').ReadinessTally>;
+    /** Non-fatal observations about this profile's capture (e.g. `source_load_incomplete`). */
+    diagnostics?: ProfileDiagnostic[];
   }>;
   /** Browser URL and effective base per named profile; the manifest key remains the requested route. */
   documents?: Partial<Record<string, import('../document-resource-base.js').RenderedDocumentUrl>>;
@@ -81,6 +83,11 @@ export interface ManifestEntry {
     jsonLdTypes?: string[];
     htmlBytes?: number;
   };
+}
+
+export interface ProfileDiagnostic {
+  code: string;
+  reason: string;
 }
 
 export interface FailureEntry {

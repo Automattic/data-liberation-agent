@@ -84,7 +84,7 @@ export async function settleDocument(
 /**
  * Wait for a page to reach a stable state after load.
  *
- *   goto('load') ─▶ networkidle + DOM quiescence concurrently ─▶ fonts.ready (4s)
+ *   load (best-effort, 5s) ─▶ networkidle + DOM quiescence concurrently ─▶ fonts.ready (4s)
  *     ─▶ declared loading state, if any ─▶ done
  *
  * Networkidle is wrapped in try/catch because chatty analytics (GA, Intercom)
@@ -121,7 +121,11 @@ export async function waitForStable(
   page: Page,
   domTimeoutMs: number = 5_000,
 ): Promise<void> {
-  await page.waitForLoadState('load');
+  // Navigation already awaited `load` within its own budget; a subresource
+  // that is still pending must not fail the route here either.
+  await page.waitForLoadState('load', { timeout: 5_000 }).catch(() => {
+    /* best-effort — a held image or script never fires load */
+  });
   await Promise.all([
     page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {
       /* best-effort — analytics can keep network busy forever */
