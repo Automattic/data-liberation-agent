@@ -557,6 +557,58 @@ describe( 'captureWebsite route budget', () => {
 		expect( result.complete ).toBe( true );
 	} );
 
+	it( 'keeps inventory action URLs out of the budget, failure and omission counts with one diagnostic each', async () => {
+		const pages = [ 'https://example.com/shop/', 'https://example.com/?page=2', 'https://example.com/?s=query' ];
+		const actions = [ 'https://example.com/?add-to-cart=12', 'https://example.com/post/?replytocom=5#respond', 'https://example.com/wp-login.php?action=logout' ];
+		captureScreenshotsMock.mockImplementationOnce( async ( { urls }: { urls: string[] } ) => ( {
+			urls, captured: urls.length, skipped: 0, failed: 0, durationMs: 1,
+			linkedPageCoverage: {
+				limits: { maxPages: 256, maxDepth: 8, timeoutMs: 1_800_000 },
+				requiredUrls: urls, scheduled: urls.length,
+				// The frontier refuses the same action link again when a page links it.
+				diagnostics: [ { code: 'route_excluded_action_url', url: 'https://example.com/?add-to-cart=12', reason: 'State-changing action URL (query add-to-cart)' } ],
+			},
+		} ) as Awaited< ReturnType< typeof captureScreenshotsMock > > );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 4, strict: true }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: [ ...actions, ...pages, actions[ 0 ]! ].map( url => ( { url, type: 'page' } ) ) } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		// Every budgeted slot goes to a page.
+		expect( capturedUrls() ).toEqual( [ sourceUrl, ...pages ] );
+		expect( result.discoveryDiagnostics.filter( row => row.code === 'route_excluded_action_url' ) ).toEqual( [
+			{ code: 'route_excluded_action_url', url: 'https://example.com/?add-to-cart=12', reason: 'State-changing action URL (query add-to-cart)' },
+			{ code: 'route_excluded_action_url', url: 'https://example.com/post/?replytocom=5', reason: 'State-changing action URL (query replytocom)' },
+			{ code: 'route_excluded_action_url', url: 'https://example.com/wp-login.php?action=logout', reason: 'State-changing action URL (query action=logout)' },
+		] );
+		expect( result.summary ).toMatchObject( { routesDiscovered: 4, routesFailed: 0, routesOmitted: 0, complete: true } );
+		expect( result.missingRoutes ).toEqual( [] );
+	} );
+
+	it( 'reports links to action URLs with their own reason and stays complete under strict', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		const action = 'https://example.com/?add-to-cart=12';
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl ], captured: 1, skipped: 0, failed: 0, durationMs: 1 } );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( root, directory ), { recursive: true } );
+		writeFileSync( join( root, 'html', 'home.html' ), '<h1>Home</h1><a href="/?add-to-cart=12">Add to cart</a>' );
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, strict: true }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: [ { url: action, type: 'page' } ] } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		expect( capturedUrls() ).toEqual( [ sourceUrl ] );
+		expect( result.unresolvedAnchors ).toEqual( [ { sourceUrl, url: action, reason: 'target is a state-changing action URL' } ] );
+		expect( result.summary ).toMatchObject( { routesOmitted: 0, routesFailed: 0, complete: true } );
+		const receipt = JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ { code: 'route_excluded_action_url', url: action, reason: 'State-changing action URL (query add-to-cart)' } ] );
+	} );
+
 	it( 'reports links to omitted routes with their own reason and stays complete under strict', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );

@@ -55,6 +55,7 @@ import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
+import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
@@ -2248,7 +2249,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let context: BrowserContext | undefined;
 				try {
 					context = await browser.newContext( await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
-					for ( const url of [ ...candidates ].slice(0, 32) ) {
+					// Inspecting an action URL performs the action; export names it instead.
+					for ( const url of [ ...candidates ].filter( url => ! stateChangingAction( url ) ).slice(0, 32) ) {
 						try {
 							// A plain rerun must not trust a prior probe when the source changed.
 							const prior = manifest.getEntry( url );
