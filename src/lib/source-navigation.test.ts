@@ -227,9 +227,8 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(await page.evaluate(() => ({url: document.URL, text: document.querySelector('h1')?.textContent}))).toEqual({url: `${origin}/held`, text: 'Delivered'});
 			const complete = await navigateSourceDocument(page, `${origin}/complete`, {timeoutMs: 1_500});
 			expect(complete.loadIncomplete).toBeUndefined();
-			// The document is acquired under its per-response bound, below the
-			// navigation budget, so a document that never arrives fails as a
-			// timeout (and stays retryable: it is not a SourceNavigationError).
+			// A document that never arrives exhausts the navigation budget and
+			// fails as a timeout (retryable: it is not a SourceNavigationError).
 			const never = await navigateSourceDocument(page, `${origin}/never`, {timeoutMs: 8_000}).catch((error: unknown) => error);
 			expect(never).toBeInstanceOf(Error);
 			expect(never).not.toBeInstanceOf(SourceNavigationError);
@@ -239,4 +238,49 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			await new Promise<void>(resolve => server.close(() => resolve()));
 		}
 	}, 30_000);
+	it('gives a slow document hop the remaining navigation budget and releases its guard when the budget runs out', async () => {
+		// A slow but healthy origin: the document takes ~7 s, past any fixed
+		// 5 s per-response cap, and well within the 30 s navigation budget.
+		const server = createServer((request, response) => {
+			response.setHeader('content-type', 'text/html');
+			if (request.url === '/never') return;
+			if (request.url === '/slow-redirect') { setTimeout(() => { response.writeHead(302, {location: '/slow'}); response.end(); }, 1_000); return; }
+			if (request.url === '/slow') { setTimeout(() => response.end('<h1 id="text">Slow document</h1>'), 7_000); return; }
+			response.end('<h1 id="text">Complete</h1>');
+		});
+		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			let started = Date.now();
+			const slow = await navigateSourceDocument(page, `${origin}/slow`);
+			expect(Date.now() - started).toBeGreaterThanOrEqual(7_000);
+			expect(slow.response?.status()).toBe(200);
+			expect(await page.evaluate(() => ({url: document.URL, text: document.querySelector('h1')?.textContent}))).toEqual({url: `${origin}/slow`, text: 'Slow document'});
+			// A later hop receives what remains of the chain budget, not a fixed cap.
+			started = Date.now();
+			const redirected = await navigateSourceDocument(page, `${origin}/slow-redirect`);
+			expect(Date.now() - started).toBeGreaterThanOrEqual(8_000);
+			expect(redirected.redirectedTo).toBe(`${origin}/slow`);
+			expect(redirected.boundary).toBeUndefined();
+			// The budget still bounds the chain: a document that never arrives
+			// fails within it, and a document that arrives only after `goto` has
+			// given up does not leave the guard installed or `unroute` hanging.
+			for (const [path, budget] of [['never', 6_000], ['slow', 3_000]] as const) {
+				started = Date.now();
+				const failed = await navigateSourceDocument(page, `${origin}/${path}`, {timeoutMs: budget}).catch((error: unknown) => error);
+				expect(Date.now() - started).toBeLessThan(budget + 2_000);
+				expect(failed).toBeInstanceOf(Error);
+				expect(failed).not.toBeInstanceOf(SourceNavigationError);
+				expect(String(failed)).toMatch(/Timeout/);
+				const after = await navigateSourceDocument(page, `${origin}/complete`, {timeoutMs: 3_000});
+				expect(after.response?.status()).toBe(200);
+				expect(await page.locator('#text').textContent()).toBe('Complete');
+			}
+		} finally {
+			await browser.close(); server.closeAllConnections();
+			await new Promise<void>(resolve => server.close(() => resolve()));
+		}
+	}, 60_000);
 });
