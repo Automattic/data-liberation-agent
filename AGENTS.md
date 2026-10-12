@@ -115,7 +115,7 @@ Reuse is opt-in: a plain re-run recaptures, and `--resume` is what reports `reus
 - Liberation writes the site and exits. `--serve` opts into a server that holds the process until interrupted. Anything automated should not pass it.
 - Guidance goes to stderr; stdout stays the machine-readable result.
 - `validateOutputDir` rejects paths containing `..` or outside `process.cwd()`. Tests use a cwd-local `.tmp-test/` directory rather than `os.tmpdir()`.
-- Same-origin enforcement: every captured URL must share an origin with the `url` argument, or throw `SameOriginViolation`.
+- Same-origin enforcement: an entry URL off the `url` argument's origin throws `SameOriginViolation` (an `IntegrityError`); any other discovered URL off that origin is dropped before capture as a `route_off_origin` finding.
 - Media filename collisions use numeric suffixes (`-2`, `-3`), not hashes.
 - `detect-platform` uses domain-level URL patterns and HTTP fingerprinting — no path-based detection. Sites detecting as `unknown` resolve to the `default` adapter via `resolveAdapter`, so "No adapter available" is unreachable.
 - Scrolled-state screenshots are skipped silently when a page is too short to have a distinct scrolled state.

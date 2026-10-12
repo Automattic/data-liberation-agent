@@ -84,11 +84,11 @@ it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead
   } finally { await browser.close(); }
 }, 10000);
 
-it.skipIf(skipBrowser)('records unproven hydration in the viewport lifecycle without persisting mutated baseline artifacts', async () => {
+it.skipIf(skipBrowser)('drops only the disclosure block when hydration cannot prove its baseline and keeps the page', async () => {
   const server = createServer((_request, response) => {
     response.setHeader('content-type', 'text/html');
     response.end(`<!doctype html><body><div><button id="opener" type="button" aria-expanded="false">Open choices</button></div>
-      <aside id="recommendation">Use suggested unit Keep current unit</aside>
+      <aside id="recommendation">Use suggested unit Keep current unit</aside><main><h1>Editorial content</h1></main>
       <script>const control=document.getElementById('opener');control.onclick=()=>{
         document.getElementById('recommendation')?.remove();
         const open=control.getAttribute('aria-expanded')==='false';control.setAttribute('aria-expanded',String(open));
@@ -103,13 +103,17 @@ it.skipIf(skipBrowser)('records unproven hydration in the viewport lifecycle wit
   try {
     const result = await captureScreenshots({ urls: [url], outputDir, concurrency: 1, settleMs: 0,
       viewports: [{ id: 'desktop', width: 1440, height: 900 }], learnFluid: false });
-    expect(result.failed).toBe(1);
-    const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots/failures.json'), 'utf8'));
-    expect(failures).toEqual([expect.objectContaining({ stage: 'content', error: expect.stringContaining('Disclosure baseline restoration unproven') })]);
+    expect(result).toMatchObject({ captured: 1, failed: 0 });
+    const failuresPath = join(outputDir, 'screenshots/failures.json');
+    expect(existsSync(failuresPath) ? JSON.parse(readFileSync(failuresPath, 'utf8')) : []).toEqual([]);
     const entry = JSON.parse(readFileSync(result.manifestPath, 'utf8')).entries[url];
-    expect(entry.html).toBeUndefined();
-    expect(entry.desktop).toBeUndefined();
-    expect(entry.sections).toBeUndefined();
+    expect(entry.blockLosses).toEqual([{
+      code: 'disclosure_unrestored', unit: 'block', severity: 'error', profile: 'desktop',
+      reason: expect.stringContaining('Disclosure baseline restoration unproven'),
+    }]);
+    const html = readFileSync(join(outputDir, entry.html), 'utf8');
+    expect(html).toContain('Editorial content');
+    expect(html).not.toContain('data-dla-hydrated-disclosure');
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(outputDir, { recursive: true, force: true });

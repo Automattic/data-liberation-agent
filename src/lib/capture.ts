@@ -339,7 +339,7 @@ export async function captureWebsite(
 	const omittedRoutes = new Set( omitted.map( documentRequestUrl ) );
 	const linkedDiagnostics = ( screenshotResult.linkedPageCoverage?.diagnostics ?? [] ).filter( row =>
 		row.code !== ROUTE_OMITTED_BY_BUDGET || ! omittedRoutes.has( row.url ) );
-	const captureDiagnostics = [ ...discoveryDiagnostics, ...linkedDiagnostics ];
+	const captureDiagnostics = [ ...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics ];
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
 		routesDiscovered: screenshotResult.urls.length,

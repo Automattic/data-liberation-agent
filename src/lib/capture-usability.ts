@@ -1,16 +1,21 @@
 import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
 
+/** Routes export dropped after capture saved their page: they count as failed, not captured. */
+const EXPORT_DROPPED_ROUTE_CODES = [ 'route_export_failed', 'route_path_collision' ] as const;
+const MISSING_ROUTE_CODES = [ 'route_capture_failed', ...EXPORT_DROPPED_ROUTE_CODES ] as const;
+
 /**
  * A route that was attempted (or advertised as a redirect target) and did not
  * produce a page. Routes the source itself lacks (`route_not_found`) or sends
  * elsewhere (`route_external_redirect`) are not missing: the source has nothing
  * to copy there. Routes the caller's route budget left out
- * (`route_omitted_by_budget`) were never attempted and are not missing either.
+ * (`route_omitted_by_budget`) were never attempted and are not missing either,
+ * nor are discovered URLs outside the entry origin (`route_off_origin`).
  */
 export interface MissingRoute {
 	url: string;
-	code: 'route_capture_failed' | 'route_export_failed';
-	/** The cause as recorded by capture or export: deadline, engine error, uncaptured redirect target, export error. */
+	code: typeof MISSING_ROUTE_CODES[ number ];
+	/** The cause as recorded by capture or export: deadline, engine error, uncaptured redirect target, export error, path collision. */
 	reason: string;
 }
 
@@ -26,11 +31,14 @@ export const USABLE_PARTIAL_CAPTURE_POLICY = {
 	maxFailedFraction: 0.1,
 } as const;
 
-/** The receipt's `route_capture_failed` and `route_export_failed` diagnostics, one per URL. */
+const isMissingRouteCode = ( code: unknown ): code is MissingRoute['code'] =>
+	( MISSING_ROUTE_CODES as readonly unknown[] ).includes( code );
+
+/** The receipt's missing-route diagnostics (`MISSING_ROUTE_CODES`), one per URL. */
 export function missingRoutes( discoveryDiagnostics: ReadonlyArray< { code?: unknown; url?: unknown; reason?: unknown } > = [] ): MissingRoute[] {
 	const missing = new Map< string, MissingRoute >();
 	for ( const diagnostic of discoveryDiagnostics ) {
-		if ( ( diagnostic.code !== 'route_capture_failed' && diagnostic.code !== 'route_export_failed' ) || typeof diagnostic.url !== 'string' || missing.has( diagnostic.url ) ) continue;
+		if ( ! isMissingRouteCode( diagnostic.code ) || typeof diagnostic.url !== 'string' || missing.has( diagnostic.url ) ) continue;
 		missing.set( diagnostic.url, { url: diagnostic.url, code: diagnostic.code, reason: String( diagnostic.reason ?? '' ) } );
 	}
 	return [ ...missing.values() ];
@@ -61,14 +69,14 @@ export function hasUncapturedProfiles( discoveryDiagnostics: ReadonlyArray< { co
 }
 
 /**
- * Route counts once export has run. A route export dropped (`route_export_failed`)
- * produced no page: it moves from captured to failed, keeping
- * captured + skipped + failed <= discovered.
+ * Route counts once export has run. A route export dropped (`route_export_failed`,
+ * `route_path_collision`) produced no page: it moves from captured to failed,
+ * keeping captured + skipped + failed <= discovered.
  */
 export function withExportDroppedRoutes< S extends Record< string, unknown > >(
 	summary: S, discoveryDiagnostics: ReadonlyArray< { code?: unknown; url?: unknown; reason?: unknown } > = []
 ): S {
-	const dropped = missingRoutes( discoveryDiagnostics ).filter( route => route.code === 'route_export_failed' ).length;
+	const dropped = missingRoutes( discoveryDiagnostics ).filter( route => ( EXPORT_DROPPED_ROUTE_CODES as readonly string[] ).includes( route.code ) ).length;
 	if ( dropped === 0 ) return summary;
 	return {
 		...summary,
