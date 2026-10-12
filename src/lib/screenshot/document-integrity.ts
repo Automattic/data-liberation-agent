@@ -20,20 +20,39 @@ import { sameHttpSite } from './same-origin.js';
 // and comments routinely carry markup-looking strings.
 const RAW_TEXT_ELEMENTS = new Set( [ 'script', 'style', 'textarea', 'title', 'xmp', 'noscript', 'noembed', 'noframes', 'iframe' ] );
 
+/** One real start or end tag found by `scanHtmlTags`. */
+export interface HtmlTagToken {
+  /** Lower-case tag name. */
+  name: string;
+  closing: boolean;
+  /** Index of `<`. */
+  start: number;
+  /** Index just after `>` (or the end of the input for an unterminated tag). */
+  end: number;
+  /** Raw text between the tag name and `>`; empty for end tags. */
+  attributes: string;
+}
+
 /**
- * Number of real `<body>` elements — a clean document has exactly one.
+ * Visit the real start and end tags of serialized HTML, in order. Return `true`
+ * from `visit` to stop.
  *
  * Tokenizes the markup instead of matching substrings: comments, raw-text
- * element contents, `<template>` contents and attribute values are skipped.
+ * element contents, `<template>` contents and attribute values are skipped, so
+ * markup-looking strings inside them (a script that `document.write`s a
+ * `<body>…</body>` popup, a commented-out block) are never reported as tags.
  */
-export function countBodyTags(html: string): number {
+export function scanHtmlTags(html: string, visit: (tag: HtmlTagToken) => boolean | void): void {
   const lower = html.toLowerCase();
   const end = html.length;
-  let count = 0;
   let i = 0;
   const skipPast = (marker: string, from: number): number => {
     const at = lower.indexOf(marker, from);
     return at === -1 ? end : at + marker.length;
+  };
+  const indexOrEnd = (marker: string, from: number): number => {
+    const at = lower.indexOf(marker, from);
+    return at === -1 ? end : at;
   };
   while (i < end) {
     const open = html.indexOf('<', i);
@@ -41,11 +60,20 @@ export function countBodyTags(html: string): number {
     i = open + 1;
     if (html.startsWith('!--', i)) { i = skipPast('-->', i + 3); continue; }
     const first = html[i] ?? '';
-    if (first === '!' || first === '?' || first === '/') { i = skipPast('>', i); continue; }
-    if (!/[a-z]/i.test(first)) continue;
+    if (first === '!' || first === '?') { i = skipPast('>', i); continue; }
+    const closing = first === '/';
+    if (closing) {
+      if (!/[a-z]/i.test(html[i + 1] ?? '')) { i = skipPast('>', i); continue; }
+      i++;
+    } else if (!/[a-z]/i.test(first)) continue;
     let nameEnd = i;
     while (nameEnd < end && !/[\s/>]/.test(html[nameEnd]!)) nameEnd++;
     const name = lower.slice(i, nameEnd);
+    if (closing) {
+      i = skipPast('>', nameEnd);
+      if (visit({ name, closing, start: open, end: i, attributes: '' })) return;
+      continue;
+    }
     // Attributes: quoted values may contain `>` and `<body`.
     i = nameEnd;
     while (i < end && html[i] !== '>') {
@@ -61,20 +89,65 @@ export function countBodyTags(html: string): number {
         }
       } else i++;
     }
-    i++;
-    if (name === 'body') count++;
-    else if (RAW_TEXT_ELEMENTS.has(name)) i = skipPast(`</${name}`, i);
+    const attributes = html.slice(nameEnd, Math.min(i, end));
+    i = Math.min(i + 1, end);
+    if (visit({ name, closing, start: open, end: i, attributes })) return;
+    // The raw text runs to its end tag, which is then tokenized like any other.
+    if (RAW_TEXT_ELEMENTS.has(name)) i = indexOrEnd(`</${name}`, i);
     else if (name === 'plaintext') i = end;
     else if (name === 'template') {
       for (let depth = 1; depth > 0 && i < end;) {
         const close = lower.indexOf('</template', i);
         const nested = lower.indexOf('<template', i);
         if (nested !== -1 && (close === -1 || nested < close)) { depth++; i = nested + 9; }
-        else i = close === -1 ? end : (depth--, close + 10);
+        else if (close === -1) i = end;
+        else if (--depth > 0) i = close + 10;
+        else i = close;
       }
     }
   }
+}
+
+/**
+ * Number of real `<body>` elements — a clean document has exactly one.
+ * Strings inside scripts, comments, templates and attribute values do not count.
+ */
+export function countBodyTags(html: string): number {
+  let count = 0;
+  scanHtmlTags(html, (tag) => { if (!tag.closing && tag.name === 'body') count++; });
   return count;
+}
+
+/** The real start and end tag of one document-level element (`head` or `body`). */
+export interface DocumentElementTags {
+  open?: { start: number; end: number; attributes: string };
+  /** The first real end tag after the start tag (or anywhere, when there is no start tag). */
+  close?: { start: number; end: number };
+}
+
+/**
+ * Locate the real `<head>`/`<body>` start tag and its end tag in serialized
+ * HTML. Use this instead of a `/<body\b[^>]*>([\s\S]*?)<\/body>/` style match:
+ * a regex stops at the first `</body>` text, which can sit inside a script.
+ */
+export function documentElementTags(html: string, name: 'head' | 'body'): DocumentElementTags {
+  const found: DocumentElementTags = {};
+  let strayClose: DocumentElementTags['close'];
+  scanHtmlTags(html, (tag) => {
+    if (tag.name !== name) return false;
+    if (!tag.closing) {
+      if (!found.open) found.open = { start: tag.start, end: tag.end, attributes: tag.attributes };
+      return false;
+    }
+    if (!found.open) {
+      strayClose ??= { start: tag.start, end: tag.end };
+      return false;
+    }
+    found.close = { start: tag.start, end: tag.end };
+    return true;
+  });
+  if (!found.open && strayClose) found.close = strayClose;
+  return found;
 }
 
 /**

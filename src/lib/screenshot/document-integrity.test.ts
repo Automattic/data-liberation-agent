@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countBodyTags, isRouteDrift, isStackingArtifact, serverRedirectTarget } from './document-integrity.js';
+import { countBodyTags, documentElementTags, isRouteDrift, isStackingArtifact, serverRedirectTarget } from './document-integrity.js';
 
 describe('document-integrity', () => {
   it('counts a clean single-document page as one body', () => {
@@ -40,6 +40,39 @@ describe('document-integrity', () => {
     const html = '<body><script>var a="<body>"</script><div><body class="b"></body></div></body>';
     expect(countBodyTags(html)).toBe(2);
     expect(isStackingArtifact(html)).toBe(true);
+  });
+});
+
+describe('documentElementTags', () => {
+  const slice = (html: string, at?: { start: number; end: number }) => (at ? html.slice(at.start, at.end) : undefined);
+
+  it('finds the real body tags past body markup inside a script string', () => {
+    const html = `<html><head><title>t</title></head><body class="home"><main>a</main>
+      <script>w.document.write('<body leftmargin="0"><img src="' + src + '"></body>'); if (i<n.length) go();</script>
+      <p>after</p></body></html>`;
+    const { open, close } = documentElementTags(html, 'body');
+    expect(slice(html, open)).toBe('<body class="home">');
+    expect(open?.attributes).toBe(' class="home"');
+    expect(slice(html, close)).toBe('</body>');
+    expect(html.slice(open!.end, close!.start)).toContain('<p>after</p>');
+  });
+
+  it('skips head and body markup in head scripts, comments, templates and attribute values', () => {
+    const html = `<html><head><!-- </head> --><script>d.write("<head></head><body>x</body>")</script>
+      <meta content="</head><body>"></head><body data-x="a > b"><template></body></template><p>x</p></BODY></html>`;
+    const head = documentElementTags(html, 'head');
+    expect(html.slice(head.close!.start)).toMatch(/^<\/head><body data-x/);
+    const body = documentElementTags(html, 'body');
+    expect(slice(html, body.open)).toBe('<body data-x="a > b">');
+    expect(slice(html, body.close)).toBe('</BODY>');
+  });
+
+  it('reports a missing tag instead of guessing', () => {
+    expect(documentElementTags('<html><head></head><main>x</main></html>', 'body')).toEqual({});
+    const unclosed = '<html><body><p>x</p><script>"</body>"';
+    expect(documentElementTags(unclosed, 'body').close).toBeUndefined();
+    // An end tag with no start tag (a head-less document) is still found.
+    expect(documentElementTags('<title>x</title></head><body></body>', 'head').close).toEqual({ start: 16, end: 23 });
   });
 });
 
