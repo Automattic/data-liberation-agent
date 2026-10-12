@@ -1407,7 +1407,7 @@ function buildExportCapture(
 				scrollStatesPages.push( entry.scrollStates );
 			}
 		} catch ( error ) {
-			if ( isIntegrityError( error ) ) throw error;
+			if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
 			// The dropped route keeps only its route_export_failed row.
 			routeCaptureDiagnostics.length = rollback.diagnostics;
 			switchWidths.length = rollback.switchWidths; deviceSelections.length = rollback.deviceSelections;
