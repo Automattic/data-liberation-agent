@@ -60,13 +60,15 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			// to Node or storing instrumentation on the source's window.
 			const rest = await page.evaluateHandle( () => {
 				const serialize = JSON.stringify;
-				const snapshots: { width: number; json: string }[] = [];
+				// Rest serializes one 9-field row per tagged element; keep the latest
+				// row per element for each width the sweep rested at.
+				const snapshots: { width: number; rows: Record< string, string > }[] = [];
 				JSON.stringify = ( value, replacer, space ) => {
 					const json: string = Reflect.apply( serialize, JSON, [ value, replacer, space ] );
-					if ( Array.isArray( value ) && value.length && value.every( row => Array.isArray( row ) && row.length === 9 && typeof row[ 0 ] === 'string' && row[ 0 ].startsWith( 'desktop-' ) ) ) {
-					const previous = snapshots.at( -1 );
-						if ( previous?.width === innerWidth ) previous.json = json;
-						else snapshots.push( { width: innerWidth, json } );
+					if ( Array.isArray( value ) && value.length === 9 && typeof value[ 0 ] === 'string' && value[ 0 ].startsWith( 'desktop-' ) ) {
+						let current = snapshots.at( -1 );
+						if ( current?.width !== innerWidth ) snapshots.push( current = { width: innerWidth, rows: {} } );
+						current.rows[ value[ 0 ] ] = json;
 					}
 					return json;
 				};
@@ -95,12 +97,15 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const learningEvaluations = rendererEvaluations;
 			const snapshots = await rest.evaluate( state => state.read() );
 			await rest.evaluate( state => state.cleanup() ); await rest.dispose();
-			// The fixture changes inside the tablet band, so the coarse ladder is
-			// refined: every default width is observed, interior widths last.
+			// The probe widths come first; the fixture varies across them, so the
+			// rest of the coarse ladder follows, and the tablet band is refined:
+			// every default width is observed once, interior widths last.
 			const coarse = DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) );
-			expect( widths ).toEqual( [ ...coarse, ...TABLET_REFINEMENT_WIDTHS ] );
+			const probe = [ 390, 768, 1920 ];
+			const ladder = [ ...probe, ...coarse.filter( width => ! probe.includes( width ) ), ...TABLET_REFINEMENT_WIDTHS ];
+			expect( widths ).toEqual( ladder );
 			expect( measurements ).toHaveLength( 17 );
-			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...coarse, ...TABLET_REFINEMENT_WIDTHS, 1440 ] );
+			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...ladder, 1440 ] );
 			const first = measurements[ 0 ] as Array<{ id: string; values: Record<string, number | null> }>;
 			expect( first.find( entry => entry.id === 'desktop-2' )!.values ).toMatchObject( { width: null, height: 12, 'font-size': null, 'transform-x': null, 'inset-top': null, '--literal': 4 } );
 			expect( first.find( entry => entry.id === 'desktop-5' )!.values ).toMatchObject( { width: 195, 'inset-top': null, 'inset-left': null } );
@@ -108,7 +113,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			// skip the important prefix, but keep the first complete duplicate.
 			expect( first.find( entry => entry.id === 'desktop-6' )!.values ).toMatchObject( { 'inset-top': 19.5, 'inset-left': 39 } );
 			expect( first.find( entry => entry.id === 'desktop-7' )!.values ).toMatchObject( { 'inset-top': 9.75, 'inset-left': 19.5 } );
-			const literalRest = JSON.parse( snapshots[ 0 ]!.json ).find( ( row: unknown[] ) => row[ 0 ] === 'desktop-2' );
+			const literalRest = JSON.parse( snapshots[ 0 ]!.rows[ 'desktop-2' ]! );
 			expect( literalRest[ 1 ].slice( 0, 3 ) ).toEqual( [ 0.5, 12, 20 ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( handles ).toEqual( { created: 1, disposed: 1 } );
@@ -148,6 +153,26 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			if ( ! otherGeometry ) expect( resize ).not.toHaveBeenCalled();
 		} finally { await page.close(); }
 	}, 20_000 );
+
+	it( 'reaches rest at every width when a script animates an element forever', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			// #spinner is rewritten every frame (a perpetual animation): it can never be
+			// quiet, so it must not hold every width to the full rest deadline.
+			await page.setContent( `<div id="box" style="width:720px">Box</div><div id="spinner" style="transform:translate3d(0px, 0px, 0px)">Spin</div>
+				<script>const update=()=>{document.querySelector('#box').style.width=innerWidth/2+'px'};addEventListener('resize',update);update();
+				let turn=0;const spin=()=>{turn=(turn+3)%360;document.querySelector('#spinner').style.transform='translate3d('+turn+'px, 0px, 0px)';requestAnimationFrame(spin)};spin();</script>` );
+			const widths = [ 390, 768, 1024, 1440 ];
+			const started = Date.now();
+			const result = await learnAndApplyFluidGeometry( page, { widths, settleMs: 30 } );
+			const elapsed = Date.now() - started;
+			expect( result.applied ).toBeGreaterThan( 0 );
+			// Before: every width spent its whole rest deadline (settleMs + 3.5 s), at least 14 s
+			// for these four widths. Movers are classified once and excluded, so each later
+			// width only needs its own quiet window.
+			expect( elapsed ).toBeLessThan( widths.length * 3_500 * 0.6 );
+		} finally { await page.close(); }
+	}, 40_000 );
 
 	it( 'rejects sparse relative-left fits when authored media changes position during the sweep', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );

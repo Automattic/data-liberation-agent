@@ -296,9 +296,20 @@ describe( 'responsive readiness contract', () => {
 			await page.setContent( writer( 'innerWidth / 2' ) );
 			const widths: number[] = [];
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => widths.push( width ) } );
-			expect( widths ).toEqual( DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) ) );
+			expect( [ ...widths ].sort( ( a, b ) => a - b ) ).toEqual( DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) ) );
 			expect( result.applied ).toBeGreaterThan( 0 );
 			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+		} finally { await page.close(); }
+	}, 60_000 );
+
+	it( 'stops after the probe widths when script-written geometry is the same at each', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( writer( '640' ) );
+			const widths: number[] = [];
+			await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => widths.push( width ) } );
+			expect( widths ).toEqual( [ 390, 768, 1920 ] );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 640, 0 );
 		} finally { await page.close(); }
 	}, 60_000 );
 
