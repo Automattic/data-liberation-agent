@@ -113,3 +113,85 @@ it.skipIf( skipBrowser )( 'reports bounded and non-restored ancestor evidence wi
 		}
 	} finally { await browser.close(); }
 }, 30_000 );
+
+// Squarespace-style overlay: the burger only toggles a body class, and the
+// full-screen menu is shown by `.menu-open .overlay`. It is a modal, so it
+// keeps its own mount, but the class must still be recorded and replayed.
+// Escape closes it with a fade, so the probe must not toggle it open again.
+it.skipIf( skipBrowser )( 'records and replays the ancestor class that shows a modal menu', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	try {
+		await page.setContent( `<!doctype html><style>
+		body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff;transition:opacity .4s,visibility .6s}
+		.menu-open .overlay{opacity:1;visibility:visible}
+		</style><body class="page"><header id="header" class="dark header"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header><main>Body</main>
+		<script>const header=document.getElementById('header');
+		const set=open=>{document.body.classList.toggle('menu-open',open);header.classList.remove(open?'dark':'light');header.classList.add(open?'light':'dark');};
+		document.getElementById('burger').addEventListener('click',()=>set(!document.body.classList.contains('menu-open')));
+		addEventListener('keydown',event=>{if(event.key==='Escape')set(false);});</script>` );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'burger' );
+		expect( state?.dialog ).toMatchObject( {
+			presentation: 'modal',
+			ancestorState: { status: 'verified', ancestors: [
+				{ selector: '#header', tag: 'header', depth: 1, closed: { class: 'dark header' }, opened: { class: 'header light' } },
+				{ selector: 'body', tag: 'body', depth: 2, closed: { class: 'page' }, opened: { class: 'page menu-open' } },
+			] },
+		} );
+		// Closing re-added the header's theme class in a new order; as tokens it is restored.
+		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'header dark' );
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page' );
+		const portable = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states );
+		await page.setContent( portable );
+		expect( await page.locator( '#burger + [data-dla-dialog-panel]:not([data-dla-observed-placement])' ).count() ).toBe( 1 );
+		await page.locator( '#burger' ).click();
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page menu-open' );
+		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'header light' );
+		await page.keyboard.press( 'Escape' );
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page' );
+		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'header dark' );
+	} finally { await browser.close(); }
+}, 30_000 );
+
+// Squarespace's body carries its whole style configuration as classes, far
+// over the per-value bound. Only the changed tokens are recorded and replayed.
+it.skipIf( skipBrowser )( 'records only the changed tokens of an ancestor class list over the bound', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	const config = Array.from( { length: 400 }, ( _, index ) => `tweak-setting-${ index }` ).join( ' ' );
+	try {
+		await page.setContent( `<!doctype html><style>
+		body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff}
+		.menu-open .overlay{opacity:1;visibility:visible}
+		</style><body class="${ config } menu-closed"><header id="header"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header><main>Body</main>
+		<script>document.getElementById('burger').addEventListener('click',()=>{document.body.classList.add('menu-open');document.body.classList.remove('menu-closed');});
+		addEventListener('keydown',event=>{if(event.key==='Escape'){document.body.classList.remove('menu-open');document.body.classList.add('menu-closed');}});</script>` );
+		expect( Buffer.byteLength( config ) ).toBeGreaterThan( 4096 );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'burger' );
+		expect( state?.dialog?.ancestorState ).toEqual( expect.objectContaining( {
+			status: 'verified',
+			ancestors: [ { selector: 'body', tag: 'body', depth: 2, closed: { class: 'menu-closed' }, opened: { class: 'menu-open' } } ],
+		} ) );
+		await page.setContent( wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states ) );
+		await page.locator( '#burger' ).click();
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-open` );
+		await page.keyboard.press( 'Escape' );
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-closed` );
+	} finally { await browser.close(); }
+}, 30_000 );
+
+it.skipIf( skipBrowser )( 'adds no ancestor evidence to a modal that leaves its ancestors unchanged', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	try {
+		await page.setContent( `<!doctype html><body><header><button id="burger">Open Menu</button></header><script>
+		document.getElementById('burger').addEventListener('click',()=>{const nav=document.createElement('nav');nav.style.cssText='position:fixed;inset:0;background:#fff';nav.innerHTML='<a href="/about">About</a>';document.body.append(nav);
+		addEventListener('keydown',()=>nav.remove(),{once:true});});</script>` );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'burger' );
+		expect( state?.dialog?.presentation ).toBe( 'modal' );
+		expect( state?.dialog ).not.toHaveProperty( 'ancestorState' );
+	} finally { await browser.close(); }
+}, 30_000 );
