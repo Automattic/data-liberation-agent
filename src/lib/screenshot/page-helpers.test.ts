@@ -27,10 +27,19 @@ function makePage(): MockPage {
 }
 
 describe('waitForStable', () => {
-  it('waits for load then settles', async () => {
+  it('waits for load (bounded) then settles', async () => {
     const page = makePage();
     await waitForStable(page as never);
-    expect(page.waitForLoadState).toHaveBeenCalledWith('load');
+    expect(page.waitForLoadState).toHaveBeenCalledWith('load', { timeout: 5_000 });
+  });
+
+  it('settles a delivered document whose load never fires', async () => {
+    const page = makePage();
+    page.waitForLoadState = vi.fn()
+      .mockRejectedValueOnce(new Error('load timeout'))
+      .mockResolvedValueOnce(undefined);
+    await expect(waitForStable(page as never)).resolves.toBeUndefined();
+    expect(page.waitForLoadState).toHaveBeenCalledWith('networkidle', { timeout: 5_000 });
   });
 
   it('swallows networkidle failures (chatty analytics)', async () => {

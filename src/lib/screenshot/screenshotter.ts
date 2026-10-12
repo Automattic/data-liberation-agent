@@ -4,7 +4,7 @@ import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
-import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
+import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_LOAD_INCOMPLETE, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -42,7 +42,7 @@ import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
-import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
+import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
@@ -188,6 +188,8 @@ interface CapturePerViewportArgs {
 	screenshotTimeoutMs: number;
 	evaluateTimeoutMs: number;
 	failures: FailureEntry[];
+	/** Non-fatal observations about this profile's capture, recorded on its manifest profile. */
+	diagnostics?: ProfileDiagnostic[];
 	entry: ManifestEntry;
 	aggregator: SiteAnalysisAggregator;
 	shouldAnalyze: boolean;
@@ -817,6 +819,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				fail( 'goto', notHtml, attempt );
 				return;
 			}
+			// The document arrived; capture's own bounded readiness takes over
+			// from here, so a pending subresource is evidence, not a failure.
+			if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ SOURCE_NAVIGATION_LIMITS.timeoutMs }ms navigation budget; subresources were still pending` } );
 			navigated = true;
 			break;
 		} catch ( err ) {
@@ -1846,6 +1851,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
 				const phases = createPhaseLedger();
+				const profileDiagnostics: ProfileDiagnostic[] = [];
 				phases.enter( 'context' );
 				try {
 					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
@@ -1910,6 +1916,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							screenshotTimeoutMs,
 							evaluateTimeoutMs,
 							failures: profileFailures,
+							diagnostics: profileDiagnostics,
 							entry: profileEntry,
 							aggregator,
 							shouldAnalyze: viewport.id === 'desktop' && shouldAnalyzeUrl,
@@ -1947,7 +1954,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
 								nativeViewTimelines: profileEntry.nativeViewTimelines,
 								interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
+								...( profileDiagnostics.length ? { diagnostics: profileDiagnostics } : {} ),
 							} };
+							for ( const diagnostic of profileDiagnostics ) sendLog( server, `[${ diagnostic.code }] ${ url } (${ viewport.id }): ${ diagnostic.reason }` );
 						}
 						if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 					}

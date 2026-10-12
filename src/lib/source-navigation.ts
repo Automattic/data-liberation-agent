@@ -14,6 +14,8 @@ import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, refreshDelayMs: 5_000 } as const;
+/** Diagnostic code for a delivered source document whose `load` event did not fire within the navigation budget. */
+export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
 export class SourceNavigationError extends Error {}
 export type RedirectMechanism = 'http' | 'refresh-header' | 'meta-refresh';
@@ -204,8 +206,13 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * than as portable HTML. Unknown script navigation is never classified as a redirect.
  * A script reload of the delivered document is its own lifecycle, replayed through
  * the bounded reload acquisition that baseline capture also accepts.
+ *
+ * The time budget bounds document arrival (`domcontentloaded`); a document that
+ * never arrives fails with a (retryable) timeout. The `load` event is awaited
+ * within what remains of the same budget, and `loadIncomplete` reports a
+ * delivered document whose subresources were still pending when it ran out.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope} = {}): Promise<{response: Response | null; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
@@ -274,16 +281,26 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 		}
 	};
 	await page.route('**/*', guard);
+	// Navigation is complete once the document has been parsed; capture reads
+	// the DOM next and runs its own bounded readiness (settle, lazy-load sweep,
+	// image decode, fonts). The full `load` event additionally waits for every
+	// subresource, so a slow image or script on a healthy origin must not fail
+	// the route: it is awaited best-effort within the remaining budget only.
+	const open = (address: string) => page.goto(address, {waitUntil: 'domcontentloaded', timeout: Math.max(1, deadline - Date.now())});
 	try {
-		let response = await page.goto(requestedUrl, {waitUntil: 'load', timeout: Math.max(1, deadline - Date.now())});
+		let response = await open(requestedUrl);
 		if (failure) throw failure;
 		if (!boundary && !redirectedTo && rendered && finalUrl !== requestedUrl) {
 			expected = rendered.url;
 			delivered = false;
-			response = await page.goto(finalUrl, {waitUntil: 'load', timeout: Math.max(1, deadline - Date.now())});
+			response = await open(finalUrl);
 			if (failure) throw failure;
 		}
-		return {response, ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {})};
+		// A same-document reload the source starts before `load` settles here,
+		// through the guard, exactly as it did while navigation awaited `load`.
+		const loaded = await page.waitForLoadState('load', {timeout: Math.max(1, deadline - Date.now())}).then(() => true, () => false);
+		if (failure) throw failure;
+		return {response, ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {})};
 	} catch (error) { throw failure ?? error; }
 	finally { await page.unroute('**/*', guard); }
 }
