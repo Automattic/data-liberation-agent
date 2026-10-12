@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.23.3] - 2026-10-12
+
+### Changed
+- regenerate plugin bundles
+- guard that capture/export throw and reject sites declare a failure class
+
+### Fixed
+- find head and body by real tags, not by text inside scripts
+
 ## [0.23.2] - 2026-10-12
 
 ### Changed
