@@ -226,6 +226,7 @@ The server exposes the same four verbs as tools — `inspect`, `liberate`, `comp
 
 - [Platform API — custom platforms](/docs/platform-api.md)
 - [Wix authenticated content endpoints](/docs/wix-content-endpoints.md) — the load-bearing content endpoints behind Wix's editor and dashboard auth
+- [Loss ledger contract](/docs/contracts/loss-ledger.md) — how capture, compile and import report degraded units, and the one caller-side acceptance policy
 
 ## Related
 
