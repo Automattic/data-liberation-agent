@@ -4,7 +4,7 @@ import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
-import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_LOAD_INCOMPLETE, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
+import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -49,7 +49,8 @@ import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } f
 import { rejectedNavigationReason } from './navigation-rejection.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
-import { enforceSameOrigin } from './same-origin.js';
+import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
+import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
@@ -989,7 +990,25 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	await args.observeSource?.( page, url, viewport.id, sourceErrors, args.browserProfile, viewport );
 	if ( args.rendererCrashed() ) return;
+	// A failed native timeline or disclosure probe loses that block of evidence,
+	// not the page: record the loss and keep serializing once the page answers
+	// again at its capture viewport and at-top pose. A page that no longer
+	// answers (a stalled main thread) cannot be serialized, so the route fails.
+	const captureViewport = page.viewportSize();
+	const loseBlock = async ( stage: FailureEntry['stage'], loss: Omit< NonNullable< ManifestEntry['blockLosses'] >[ number ], 'unit' | 'profile' > ): Promise< boolean > => {
+		try {
+			if ( ! ( await pageResponds( page, evaluateTimeoutMs ) ) ) throw new Error( `no answer to an evaluate within ${ evaluateTimeoutMs }ms` );
+			if ( captureViewport ) await withEvaluateTimeout( page.setViewportSize( captureViewport ), evaluateTimeoutMs );
+			await withEvaluateTimeout( page.evaluate( () => window.scrollTo( { top: 0, left: 0, behavior: 'instant' } ) ), evaluateTimeoutMs );
+		} catch ( error ) {
+			fail( stage, `${ loss.reason }; the page did not return to its capture pose: ${ error instanceof Error ? error.message : String( error ) }` );
+			return false;
+		}
+		( entry.blockLosses ??= [] ).push( { ...loss, unit: 'block', profile: viewport.id } );
+		return true;
+	};
 	if ( plan.captureHtml || plan.captureMobileHtml ) {
+		let unproven: string | undefined;
 		try {
 			const native = await captureNativeViewTimelines( page, viewport.id, evaluateTimeoutMs );
 			if ( native.samples.length || native.status === 'unproven' ) {
@@ -999,14 +1018,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				entry.nativeViewTimelines ??= {};
 				entry.nativeViewTimelines[ viewport.id ] = { path: `native-view-timelines/${ viewport.id }/${ slug }.json`, preserved: native.preserved, losses: native.losses, status: native.status, failures: native.failures };
 			}
-			if ( native.status === 'unproven' ) {
-				fail( 'evaluate', `native timeline source capture unproven: ${ native.failures.join( '; ' ) }` );
-				return;
-			}
+			if ( native.status === 'unproven' ) unproven = `native timeline source capture unproven: ${ native.failures.join( '; ' ) }`;
 		} catch ( error ) {
-			fail( 'evaluate', `native timeline capture failed: ${ String( error ) }` );
-			return;
+			unproven = `native timeline capture failed: ${ String( error ) }`;
 		}
+		// Unproven timelines carry no effects into the page; the evidence record above keeps the loss.
+		if ( unproven !== undefined && ! ( await loseBlock( 'evaluate', { code: 'native_timeline_unproven', reason: unproven, severity: 'warning' } ) ) ) return;
 	}
 
 	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
@@ -1057,8 +1074,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			disclosureStates = await hydrateDisclosureContent(page);
 		} catch (error) {
-			fail('content', error);
-			return;
+			// No hydrated panel is kept. The probe could not prove the baseline it
+			// left, so the finding is an error on the saved page, not a warning.
+			const reason = error instanceof Error ? error.message : String( error );
+			if ( ! ( await loseBlock( 'content', { code: 'disclosure_unrestored', reason, severity: 'error' } ) ) ) return;
 		}
 	}
 	// Gallery cycles are part of this viewport's serialization transaction, not
@@ -1606,9 +1625,29 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const force = opts.force ?? false;
 	const server = opts.server;
 
+	// --- same-origin ---------------------------------------------------------
+	// Normalize `primaryUrl` to include a protocol — callers sometimes pass
+	// the bare hostname the user typed (e.g. `maus.com`), matching the
+	// forgiving convention in fetchSitemap.
+	const primaryRef = opts.primaryUrl
+		? opts.primaryUrl.includes( '://' )
+			? opts.primaryUrl
+			: `https://${ opts.primaryUrl }`
+		: null;
+	// The first route is the entry route: off its origin the capture is not of
+	// this site, so it fails closed (SameOriginViolation is an IntegrityError).
+	// Any other discovered URL off that origin is dropped before it can take a
+	// route budget slot, as a `route_off_origin` finding.
+	enforceSameOrigin( primaryRef, opts.urls.slice( 0, 1 ) );
+	const offOrigin = offOriginUrls( primaryRef, opts.urls );
+	const routeDiagnostics: RouteDiagnostic[] = offOrigin.violations.map( url => ( {
+		code: 'route_off_origin', url, reason: `discovered URL is outside the entry origin ${ offOrigin.expected }`, unit: 'route', severity: 'warning',
+	} ) );
+
 	if (opts.routeScope) validateRouteScope(opts.routeScope);
 	if (opts.primaryUrl && !routeInScope(opts.primaryUrl, opts.routeScope)) throw new Error('Source URL is outside its adapter route scope');
-	let urls = opts.urls.filter(url => routeInScope(url, opts.routeScope));
+	const offOriginRoutes = new Set( offOrigin.violations );
+	let urls = opts.urls.filter(url => ! offOriginRoutes.has( url ) && routeInScope(url, opts.routeScope));
 	if ( opts.types && opts.types.length > 0 ) {
 		const allowed = new Set( opts.types );
 		urls = urls.filter( ( u ) => allowed.has( classifyUrl( u ) ) );
@@ -1623,16 +1662,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0, startTime, 'inventory'));
 	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
 
-	// --- same-origin ---------------------------------------------------------
-	// Normalize `primaryUrl` to include a protocol — callers sometimes pass
-	// the bare hostname the user typed (e.g. `maus.com`), matching the
-	// forgiving convention in fetchSitemap.
-	const primaryRef = opts.primaryUrl
-		? opts.primaryUrl.includes( '://' )
-			? opts.primaryUrl
-			: `https://${ opts.primaryUrl }`
-		: null;
-	enforceSameOrigin( primaryRef, urls );
 	// The URL a session (if any) is harvested from — see sourceContextOptions
 	// call below. Falls back to the first route when no primaryUrl was given
 	// (e.g. a direct captureScreenshots() call), which just reproduces the
@@ -1797,7 +1826,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined,
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
 		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
@@ -1805,6 +1834,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const previousCleanup = entry.cleanup;
 			const previousDocuments = entry.documents;
 			const previousNativeViewTimelines = entry.nativeViewTimelines;
+			const previousBlockLosses = entry.blockLosses ?? [];
 			const previousRedirect = entry.redirectedTo;
 			const previousOutcomes = entry.sourceOutcomes ?? [];
 			const previousLocal = Boolean( entry.html || entry.mobileHtml );
@@ -1824,6 +1854,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 			if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
 			entry.documents = { ...previousDocuments, ...profileEntry.documents };
+			const blockLosses = [ ...previousBlockLosses, ...( profileEntry.blockLosses ?? [] ) ];
+			entry.blockLosses = blockLosses.length ? blockLosses : undefined;
 			if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
 			if ( ! additional ) {
 				const latest = profileEntry.interactions;
@@ -2012,6 +2044,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				profileFailures.length = failuresBefore;
+				profileEntry.blockLosses = undefined;
 			}
 			return { profileEntry, failures: profileFailures, additional };
 		};
@@ -2223,7 +2256,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							const prior = manifest.getEntry( url );
 							if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
 							const inspected = await inspectSourceDocument(url, async (current, timeout) => {
-								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout});
+								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout: Math.min(SOURCE_LINK_PROBE_REQUEST_MS, timeout)});
 								try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
 								finally { await response.dispose(); }
 							}, opts.publicUrlsOnly, SOURCE_NAVIGATION_LIMITS.timeoutMs, opts.routeScope);
@@ -2308,6 +2341,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		manifestPath,
 		urls,
 		...(frontier ? {linkedPageCoverage: frontier.coverage()} : {}),
+		...(routeDiagnostics.length ? {routeDiagnostics} : {}),
 	};
 }
 

@@ -93,6 +93,7 @@ interface CaptureManifestEntry {
 	documents?: import('./screenshot/manifest-queue.js').ManifestEntry['documents'];
 	profiles?: import('./screenshot/manifest-queue.js').ManifestEntry['profiles'];
 	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
+	blockLosses?: import('./screenshot/manifest-queue.js').ManifestEntry['blockLosses'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	accessGate?: AccessGateEvidence;
 	slug?: string;
@@ -1373,6 +1374,8 @@ function buildExportCapture(
 			}
 			const degraded = stageFailures.filter( failure => ! uncapturedProfiles.includes( failure.profile ) );
 			if ( degraded.length ) routeCaptureDiagnostics.push( { code: 'route_capture_degraded', url, reason: degraded.map( failure => failure.reason ).join( '; ' ), unit: 'route', severity: 'warning', metrics: { failedStages: degraded.length } } );
+			// Evidence blocks capture lost while it still saved the page.
+			for ( const loss of entry.blockLosses ?? [] ) routeCaptureDiagnostics.push( { ...loss, url } );
 			const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 			writeFileSync( stagedHtmlPath, html );
 			capturedEntries.push( {
@@ -1417,8 +1420,12 @@ function buildExportCapture(
 
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
-		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData,
+		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData, pathCollisions,
 	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases, routeCaptureDiagnostics );
+	// Like a route_export_failed route, a colliding route keeps only its route_path_collision row.
+	const collidedUrls = new Set( pathCollisions.map( collision => collision.url ) );
+	const keptDiagnostics = routeCaptureDiagnostics.filter( diagnostic => ! collidedUrls.has( diagnostic.url ) );
+	routeCaptureDiagnostics.splice( 0, routeCaptureDiagnostics.length, ...keptDiagnostics, ...pathCollisions );
 	for ( const { claimed, sourceData } of duplicateSourceData ) {
 		writeFileSync( claimed.htmlPath, appendSourceData( readFileSync( claimed.htmlPath, 'utf8' ), sourceData ) );
 	}

@@ -122,4 +122,6 @@ export interface ScreenshotResult {
 	/** Every URL processed, including redirect targets queued during capture. */
 	urls: string[];
 	linkedPageCoverage?: import('./linked-frontier.js').LinkedPageCoverage;
+	/** Findings about input routes dropped before capture (`route_off_origin`). */
+	routeDiagnostics?: import('../capture-export-routes.js').RouteDiagnostic[];
 }

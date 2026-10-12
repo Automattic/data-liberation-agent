@@ -91,6 +91,62 @@ describe( 'capture export route stage', () => {
 		expect( withBase.routePathOf( base.url ) ).not.toBe( 'index.html' );
 	} );
 
+	describe( 'path collisions', () => {
+		// `/index.html` is a content alias of `/`, and `/?ref=nav` declares
+		// `/index.html` canonical. All three need website/index.html, but `/` and
+		// `/?ref=nav` do not prove they are the same page.
+		const homeRoutes = () => {
+			mkdirSync( '.tmp-test', { recursive: true } );
+			const dir = mkdtempSync( join( '.tmp-test', 'dla-path-collision-' ) ); dirs.push( dir );
+			const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
+			const defaultDocument = entry( dir, 'default.html', 'https://example.com/index.html', '<h1>Home</h1>' );
+			const tracked = { ...entry( dir, 'tracked.html', 'https://example.com/?ref=nav', '<h1>Tracked</h1>' ), canonicalUrl: defaultDocument.url };
+			return { home, defaultDocument, tracked };
+		};
+
+		it( 'keeps the first claimant, drops the colliding route with a finding, and is independent of capture order', () => {
+			const { home, defaultDocument, tracked } = homeRoutes();
+			for ( const entries of [ [ home, defaultDocument, tracked ], [ tracked, defaultDocument, home ] ] ) {
+				const routes = allocateCaptureRoutes( entries, home.url, [ { url: 'https://example.com/old', target: tracked.url } ] );
+				expect( routes.retainedEntries ).toEqual( [ home ] );
+				expect( routes.duplicateRoutes.map( ( { url } ) => url ) ).toEqual( [ defaultDocument.url ] );
+				expect( routes.pathCollisions ).toEqual( [ {
+					code: 'route_path_collision', url: tracked.url, reason: `website/index.html is already claimed by ${ home.url }`,
+					unit: 'route', severity: 'error', path: 'website/index.html',
+				} ] );
+				// A redirect to the dropped route is a redirect to a page that was not exported.
+				expect( routes.missingRedirectTargets ).toEqual( [ {
+					code: 'route_capture_failed', url: 'https://example.com/old',
+					reason: `redirects to ${ tracked.url }, which was dropped: website/index.html is already claimed by ${ home.url }`,
+				} ] );
+			}
+		} );
+
+		it( 'lets the entrypoint win a collision it would otherwise lose', () => {
+			const { home, defaultDocument, tracked } = homeRoutes();
+			const routes = allocateCaptureRoutes( [ home, defaultDocument, tracked ], tracked.url, [] );
+			expect( routes.entrypointEntry ).toBe( tracked );
+			expect( routes.retainedEntries ).toEqual( [ tracked ] );
+			expect( routes.routePathOf( tracked.url ) ).toBe( 'index.html' );
+			expect( routes.pathCollisions.map( ( { url, path } ) => [ url, path ] ) ).toEqual( [ [ home.url, 'website/index.html' ] ] );
+		} );
+
+		it( 'drops routes that need a directory another route holds as a file', () => {
+			mkdirSync( '.tmp-test', { recursive: true } );
+			const dir = mkdtempSync( join( '.tmp-test', 'dla-file-directory-' ) ); dirs.push( dir );
+			const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
+			const file = entry( dir, 'file.html', 'https://example.com/docs.html', '<h1>Docs</h1>' );
+			const guide = entry( dir, 'guide.html', 'https://example.com/docs.html/guide/', '<h1>Guide</h1>' );
+			const guideDefault = entry( dir, 'guide-default.html', 'https://example.com/docs.html/guide/index.html', '<h1>Guide default</h1>' );
+			const routes = allocateCaptureRoutes( [ guideDefault, guide, file, home ], home.url, [] );
+			expect( routes.retainedEntries ).toEqual( [ home, file ] );
+			expect( routes.pathCollisions.map( ( { url, path, reason } ) => [ url, path, reason ] ) ).toEqual( [
+				[ guide.url, 'website/docs.html/guide/index.html', `website/docs.html/guide/index.html needs website/docs.html as a directory, which is the page of ${ file.url }` ],
+				[ guideDefault.url, 'website/docs.html/guide/index.html', `website/docs.html/guide/index.html needs website/docs.html as a directory, which is the page of ${ file.url }` ],
+			] );
+		} );
+	} );
+
 	it( 'collapses canonical aliases of a query rendition onto its allocated path', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const dir = mkdtempSync( join( '.tmp-test', 'dla-query-canonical-' ) );

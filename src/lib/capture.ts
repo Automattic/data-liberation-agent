@@ -351,7 +351,7 @@ export async function captureWebsite(
 		.map( row => `${ row.code } ${ row.url }` ) );
 	const linkedDiagnostics = ( screenshotResult.linkedPageCoverage?.diagnostics ?? [] ).filter( row =>
 		! initialRefusals.has( `${ row.code } ${ row.url }` ) );
-	const captureDiagnostics = [ ...discoveryDiagnostics, ...linkedDiagnostics ];
+	const captureDiagnostics = [ ...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics ];
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
 		routesDiscovered: screenshotResult.urls.length,

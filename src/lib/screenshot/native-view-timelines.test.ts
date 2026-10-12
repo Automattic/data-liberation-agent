@@ -190,6 +190,42 @@ it.each( [ 'resize', 'snapshot', 'baseline' ] as const )( 'bounds a nonrespondin
 	} finally { await new Promise<void>( resolve => server.close( () => resolve() ) ); }
 }, 60_000 );
 
+it( 'keeps the page when native timeline restoration is unproven on a page that still responds', async () => {
+	const server = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( FIXTURE ); } );
+	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'native-unproven-block-' ) );
+	try {
+		const result = await captureScreenshots( {
+			urls: [ url ], outputDir, concurrency: 1, settleMs: 0, evaluateTimeoutMs: 2_000, viewports: [ { id: 'desktop', width: 1000, height: 900 } ],
+			// The probe's scroll restore is refused once; the page itself keeps answering.
+			prepareCapture: async page => { await page.evaluate( () => {
+				const original = window.scrollTo.bind( window );
+				let refused = false;
+				window.scrollTo = ( ( ...args: [ number, number ] ) => {
+					if ( ! refused && typeof args[ 0 ] === 'number' ) { refused = true; throw new Error( 'scroll restore refused' ); }
+					return original( ...args );
+				} ) as typeof window.scrollTo;
+			} ); },
+		} );
+		const manifest = JSON.parse( readFileSync( result.manifestPath, 'utf8' ) );
+		const entry = manifest.entries[ url ];
+		expect( result ).toMatchObject( { captured: 1, failed: 0 } );
+		expect( entry.html ).toBeTruthy();
+		expect( entry.nativeViewTimelines.desktop ).toMatchObject( { status: 'unproven', preserved: 0 } );
+		expect( entry.blockLosses ).toEqual( [ {
+			code: 'native_timeline_unproven', unit: 'block', severity: 'warning', profile: 'desktop',
+			reason: expect.stringMatching( /^native timeline source capture unproven: .*scroll restore refused/ ),
+		} ] );
+		// No native effects are carried into the saved page.
+		expect( readFileSync( join( outputDir, entry.html ), 'utf8' ) ).not.toContain( 'data-dla-native-effects' );
+		exportWebsiteCapture( { outputDir, sourceUrl: url, platform: 'generic', summary: {}, failures: [] } );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( { ...entry.blockLosses[ 0 ], url } );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ url ] );
+	} finally { await new Promise<void>( resolve => server.close( () => resolve() ) ); }
+}, 60_000 );
+
 it( 'binds duplicate node tokens within generic device document scopes and reports missing local subjects', async () => {
 	const browser = await chromium.launch();
 	try {

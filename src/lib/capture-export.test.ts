@@ -7089,7 +7089,7 @@ describe( 'exportWebsiteCapture entrypoint failures', () => {
 } );
 
 describe( 'exportWebsiteCapture per-route containment', () => {
-	const fixture = ( pages: Record< string, { desktop: string; mobile?: string; failures?: string[] } > ) => {
+	const fixture = ( pages: Record< string, { desktop: string; mobile?: string; failures?: string[]; url?: string; blockLosses?: unknown[] } > ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-route-containment-' ) );
 		dirs.push( outputDir );
 		for ( const directory of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
@@ -7098,8 +7098,8 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 		for ( const [ slug, page ] of Object.entries( pages ) ) {
 			writeFileSync( join( outputDir, `html/${ slug }.html` ), page.desktop );
 			if ( page.mobile ) writeFileSync( join( outputDir, `html-mobile/${ slug }.html` ), page.mobile );
-			const url = slug === 'home' ? 'https://example.test/' : `https://example.test/${ slug }/`;
-			entries[ url ] = { html: `html/${ slug }.html`, slug };
+			const url = page.url ?? ( slug === 'home' ? 'https://example.test/' : `https://example.test/${ slug }/` );
+			entries[ url ] = { html: `html/${ slug }.html`, slug, ...( page.blockLosses ? { blockLosses: page.blockLosses } : {} ) };
 			for ( const error of page.failures ?? [] ) failures.push( { url, viewport: 'mobile', stage: 'screenshot-scrolled', error } );
 		}
 		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
@@ -7122,6 +7122,34 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [ { url: 'https://example.test/about/', code: 'route_export_failed', reason: 'cannot export About' } ] );
 		// The dropped route moves from captured to failed; the invariant holds.
 		expect( receipt.summary ).toMatchObject( { routesDiscovered: 2, routesCaptured: 1, routesFailed: 1, complete: false } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'drops a route whose website path collides with an earlier claimant and counts it as failed', () => {
+		const { outputDir, options } = fixture( {
+			home: { desktop: page( 'Home' ) },
+			docs: { desktop: page( 'Docs' ), url: 'https://example.test/docs.html' },
+			guide: { desktop: page( 'Guide' ), url: 'https://example.test/docs.html/guide/', failures: [ 'scrolled screenshot timed out' ] },
+		} );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ 'https://example.test/', 'https://example.test/docs.html' ] );
+		const reason = 'website/docs.html/guide/index.html needs website/docs.html as a directory, which is the page of https://example.test/docs.html';
+		// The dropped route keeps only its collision row, like a route_export_failed route.
+		expect( receipt.discoveryDiagnostics.filter( ( row: { url: string } ) => row.url === 'https://example.test/docs.html/guide/' ) ).toEqual( [ {
+			code: 'route_path_collision', url: 'https://example.test/docs.html/guide/', reason, unit: 'route', severity: 'error', path: 'website/docs.html/guide/index.html',
+		} ] );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [ { url: 'https://example.test/docs.html/guide/', code: 'route_path_collision', reason } ] );
+		expect( receipt.summary ).toMatchObject( { routesDiscovered: 3, routesCaptured: 2, routesFailed: 1, complete: false } );
+		expect( readFileSync( join( outputDir, 'website/docs.html' ), 'utf8' ) ).toContain( 'Docs' );
+	} );
+
+	it( 'reports evidence blocks capture lost on a saved page as block findings and keeps the page', () => {
+		const loss = { code: 'disclosure_unrestored', reason: 'Disclosure baseline restoration unproven: no unique panel', unit: 'block', severity: 'error', profile: 'desktop' };
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), blockLosses: [ loss ] } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ { ...loss, url: 'https://example.test/' } ] );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0 } );
 		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
 	} );
 

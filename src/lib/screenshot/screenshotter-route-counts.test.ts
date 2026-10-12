@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
+import { IntegrityError } from '../failure-class.js';
 import { captureScreenshots } from './screenshotter.js';
 
 const skipBrowser = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
@@ -78,3 +79,47 @@ it.skipIf( skipBrowser )( 'counts a route whose HTML was saved as captured when 
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 60_000 );
+
+it.skipIf( skipBrowser )( 'drops off-origin inventory URLs as findings and captures the rest', async () => {
+	const requested: string[] = [];
+	const server = createServer( ( request, response ) => {
+		requested.push( `${ request.headers.host }${ request.url }` );
+		response.setHeader( 'content-type', 'text/html' );
+		response.end( '<!doctype html><title>Page</title><p>Page</p>' );
+	} );
+	await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const port = ( server.address() as { port: number } ).port;
+	const origin = `http://127.0.0.1:${ port }`;
+	// Served by the same server, so only the origin check keeps it out.
+	const offOrigin = `http://localhost:${ port }/elsewhere`;
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'route-off-origin-' ) );
+	try {
+		const result = await captureScreenshots( {
+			urls: [ `${ origin }/`, offOrigin, `${ origin }/about` ], primaryUrl: `${ origin }/`,
+			outputDir, concurrency: 1, settleMs: 0, learnFluid: false, viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
+		} );
+		expect( result.routeDiagnostics ).toEqual( [ {
+			code: 'route_off_origin', url: offOrigin, reason: `discovered URL is outside the entry origin ${ origin }`, unit: 'route', severity: 'warning',
+		} ] );
+		expect( result.urls ).toEqual( [ `${ origin }/`, `${ origin }/about` ] );
+		expect( result ).toMatchObject( { captured: 2, skipped: 0, failed: 0 } );
+		expect( requested.some( request => request.startsWith( 'localhost' ) ) ).toBe( false );
+	} finally {
+		await new Promise< void >( resolve => server.close( () => resolve() ) );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 60_000 );
+
+it( 'rejects an entry URL off the reference origin as an integrity failure before any browser starts', async () => {
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'route-off-origin-entry-' ) );
+	try {
+		const capture = captureScreenshots( { urls: [ 'https://other.test/', 'https://example.test/about' ], primaryUrl: 'https://example.test/', outputDir } );
+		await expect( capture ).rejects.toBeInstanceOf( IntegrityError );
+		await expect( capture ).rejects.toThrow( 'Same-origin violation — expected https://example.test, got: https://other.test/' );
+		expect( existsSync( join( outputDir, 'screenshots' ) ) ).toBe( false );
+	} finally {
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+} );

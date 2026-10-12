@@ -375,6 +375,26 @@ describe( 'captureWebsite completeness', () => {
 		] );
 	} );
 
+	it( 'records off-origin inventory URLs the browser capture dropped without counting them as missing', async () => {
+		const offOrigin = 'https://cdn.other.test/landing';
+		captureScreenshotsMock.mockImplementationOnce( async ( { urls } ) => ( {
+			urls: urls.filter( url => url !== offOrigin ), captured: 1, skipped: 0, failed: 0, durationMs: 1,
+			routeDiagnostics: [ { code: 'route_off_origin', url: offOrigin, reason: 'discovered URL is outside the entry origin https://example.com', unit: 'route', severity: 'warning' } ],
+		} ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: [ { url: offOrigin, type: 'page' } ] } ), extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		const offOriginRow = { code: 'route_off_origin', url: offOrigin, reason: 'discovered URL is outside the entry origin https://example.com', unit: 'route', severity: 'warning' };
+		expect( result.discoveryDiagnostics ).toEqual( [ offOriginRow ] );
+		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )?.[ 0 ].discoveryDiagnostics ).toEqual( [ offOriginRow ] );
+		expect( result.summary ).toMatchObject( { routesDiscovered: 1, routesCaptured: 1, routesFailed: 0 } );
+		expect( result.missingRoutes ).toEqual( [] );
+		expect( result.complete ).toBe( true );
+	} );
+
 	it( 'rejects a capture whose entrypoint failed, whatever happened to other routes', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
