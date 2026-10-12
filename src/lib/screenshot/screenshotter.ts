@@ -4,7 +4,7 @@ import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
-import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_LOAD_INCOMPLETE, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
+import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -2254,7 +2254,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							const prior = manifest.getEntry( url );
 							if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
 							const inspected = await inspectSourceDocument(url, async (current, timeout) => {
-								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout});
+								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout: Math.min(SOURCE_LINK_PROBE_REQUEST_MS, timeout)});
 								try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
 								finally { await response.dispose(); }
 							}, opts.publicUrlsOnly, SOURCE_NAVIGATION_LIMITS.timeoutMs, opts.routeScope);

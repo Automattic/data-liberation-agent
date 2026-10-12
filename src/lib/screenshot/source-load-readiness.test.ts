@@ -12,6 +12,10 @@ function slowOrigin(): Server {
 	return createServer( ( request, response ) => {
 		response.setHeader( 'content-type', 'text/html' );
 		if ( request.url === '/held-image.png' || request.url === '/never' ) return;
+		if ( request.url === '/slow-document' ) {
+			setTimeout( () => response.end( '<!doctype html><html><head><title>Slow document</title></head><body><h1>Slow document</h1></body></html>' ), 7_000 );
+			return;
+		}
 		setTimeout( () => response.end( `<!doctype html><html><head><title>Slow origin</title></head><body>
 			<h1>Delivered document</h1><img width="32" height="32" src="/held-image.png">
 			<div style="height:1200px">Preserved text</div></body></html>` ), 1_000 );
@@ -66,18 +70,46 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		}
 	}, 120_000 );
 
+	it( 'captures a document that takes longer than 5 s to arrive within the navigation budget', async () => {
+		const server = slowOrigin();
+		const origin = await listen( server );
+		const outputDir = tempOutput( 'source-slow-document' );
+		try {
+			const url = `${ origin }/slow-document`;
+			const result = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir, concurrency: 1, learnFluid: false, settleMs: 0, viewports: [ { id: 'desktop', width: 1440, height: 900 } ] } );
+			const failuresPath = join( outputDir, 'screenshots', 'failures.json' );
+			expect( existsSync( failuresPath ) ? JSON.parse( readFileSync( failuresPath, 'utf8' ) ) : [] ).toEqual( [] );
+			expect( result.failed ).toBe( 0 );
+			expect( result.captured ).toBe( 1 );
+			const entry = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ).entries[ url ];
+			expect( readFileSync( join( outputDir, entry.html ), 'utf8' ) ).toContain( 'Slow document' );
+		} finally {
+			await close( server );
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 120_000 );
+
 	it( 'still fails and retries a route whose document never arrives', async () => {
+		// Each attempt spends the whole navigation budget; shrink it so four
+		// attempts stay short.
+		const limits = SOURCE_NAVIGATION_LIMITS as { timeoutMs: number };
+		const budget = limits.timeoutMs;
+		limits.timeoutMs = 6_000;
 		const server = slowOrigin();
 		const origin = await listen( server );
 		const outputDir = tempOutput( 'source-document-never' );
 		try {
 			const url = `${ origin }/never`;
+			const started = Date.now();
 			const result = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir, concurrency: 1, learnFluid: false, settleMs: 0, viewports: [ { id: 'desktop', width: 1440, height: 900 } ] } );
 			expect( result.failed ).toBe( 1 );
 			expect( result.captured ).toBe( 0 );
 			const failures = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'failures.json' ), 'utf8' ) );
 			expect( failures ).toEqual( [ expect.objectContaining( { url, viewport: 'desktop', stage: 'goto', error: expect.stringMatching( /Timeout/ ), attempt: 4 } ) ] );
+			// Four bounded attempts plus backoff and the session-harvest visit; no hang.
+			expect( Date.now() - started ).toBeLessThan( 100_000 );
 		} finally {
+			limits.timeoutMs = budget;
 			await close( server );
 			rmSync( outputDir, { recursive: true, force: true } );
 		}

@@ -14,6 +14,12 @@ import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, refreshDelayMs: 5_000 } as const;
+/**
+ * Per-request bound for the serial unscheduled-link probe (up to 32 links, one
+ * after another). Navigation hops are bounded by the navigation budget alone;
+ * this keeps one unresponsive candidate from stalling the whole probe pass.
+ */
+export const SOURCE_LINK_PROBE_REQUEST_MS = 5_000;
 /** Diagnostic code for a delivered source document whose `load` event did not fire within the navigation budget. */
 export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
@@ -181,7 +187,10 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
 		visited.add(current);
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) throw new SourceNavigationError('Source navigation time budget exhausted');
-		const response = await acquire(current, Math.min(5_000, remaining));
+		// Each hop may use what remains of the chain budget: a slow but healthy
+		// document must not fail under a tighter per-response cap. Callers that
+		// need a per-request bound (the link probe) apply it in `acquire`.
+		const response = await acquire(current, remaining);
 		if (Date.now() > deadline) throw new SourceNavigationError('Source navigation time budget exhausted');
 		if (response.url !== current) throw new SourceNavigationError('Source response identity mismatch');
 		const bytes = Buffer.byteLength(response.body);
@@ -280,7 +289,19 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 			await route.abort('blockedbyclient').catch(() => {});
 		}
 	};
-	await page.route('**/*', guard);
+	// Removing a route handler while it still holds an intercepted request makes
+	// Playwright fall the request through to the network, and for a navigation
+	// that `goto` already abandoned that fallback never settles, so `unroute`
+	// hangs. Every guard await is bounded by the navigation deadline, so waiting
+	// for in-flight invocations before unrouting is itself bounded.
+	const inFlight = new Set<Promise<void>>();
+	const tracked = (route: Route): Promise<void> => {
+		const invocation = guard(route).finally(() => { inFlight.delete(invocation); });
+		inFlight.add(invocation);
+		return invocation;
+	};
+	const settled = async () => { while (inFlight.size) await Promise.allSettled([...inFlight]); };
+	await page.route('**/*', tracked);
 	// Navigation is complete once the document has been parsed; capture reads
 	// the DOM next and runs its own bounded readiness (settle, lazy-load sweep,
 	// image decode, fonts). The full `load` event additionally waits for every
@@ -301,6 +322,13 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 		const loaded = await page.waitForLoadState('load', {timeout: Math.max(1, deadline - Date.now())}).then(() => true, () => false);
 		if (failure) throw failure;
 		return {response, ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {})};
-	} catch (error) { throw failure ?? error; }
-	finally { await page.unroute('**/*', guard); }
+	} catch (error) {
+		// A `goto` timeout can precede the guard's own bounded outcome; report
+		// the guard's failure (policy or acquisition timeout) once it settles.
+		await settled();
+		throw failure ?? error;
+	} finally {
+		await settled();
+		await page.unroute('**/*', tracked);
+	}
 }
