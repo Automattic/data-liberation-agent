@@ -85,7 +85,70 @@ it('keeps adapter namespace admission ahead of every discovery-budget ownership 
 	expect(frontier.coverage()).toMatchObject({scheduled: 2, diagnostics: [{url: 'https://source.test/customer/unknown', reason: 'timeoutMs=1 exhausted'}]});
 });
 
+it('refuses action URLs for every ownership kind before budget or required evidence', () => {
+	const frontier = new LinkedFrontier({maxPages: 256, capturePageLimit: 2}, 0);
+	expect(frontier.admit('https://source.test/', 0, 0, 'inventory')).toBe(true);
+	for (const ownership of ['inventory', 'alias', 'linked'] as const) {
+		expect(frontier.admit('https://source.test/?add-to-cart=12', 1, 0, ownership)).toBe(false);
+		expect(frontier.admit('https://source.test/post/?replytocom=5#respond', 1, 0, ownership)).toBe(false);
+	}
+	// The one budgeted slot left still goes to a page.
+	expect(frontier.admit('https://source.test/?page=2', 1, 0)).toBe(true);
+	expect(frontier.coverage()).toEqual(expect.objectContaining({
+		requiredUrls: ['https://source.test/', 'https://source.test/?page=2'],
+		scheduled: 2,
+		diagnostics: [
+			{code: 'route_excluded_action_url', url: 'https://source.test/?add-to-cart=12', reason: 'State-changing action URL (query add-to-cart)'},
+			{code: 'route_excluded_action_url', url: 'https://source.test/post/?replytocom=5', reason: 'State-changing action URL (query replytocom)'},
+		],
+	}));
+});
+
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded rendered linked frontier', () => {
+	it('never visits linked action URLs, records them once, and keeps them as named unresolved anchors', async () => {
+		const requests: string[] = [];
+		const docs: Record<string, string> = {
+			'/': '<h1>Home</h1><a href="/shop/">Shop</a><a href="/?add-to-cart=12">Add to cart</a><a href="/?replytocom=5#respond">Reply</a><a href="/wp-login.php?action=logout">Log out</a><a href="/?s=query">Search</a>',
+			'/shop/': '<h1>Shop</h1><a href="/?add-to-cart=12">Add again</a><a href="/?page=2">Next</a>',
+			'/?s=query': '<h1>Search results</h1>',
+			'/?page=2': '<h1>Page two</h1>',
+		};
+		const source = createServer((request, response) => {
+			requests.push(request.url!);
+			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
+			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);
+		});
+		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
+		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
+		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'action-frontier-'));
+		try {
+			const url = `${origin}/`;
+			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, limit: 4, concurrency: 2, settleMs: 0, learnFluid: false, viewports: [{id: 'desktop', width: 390, height: 844}]});
+			expect(capture.failed).toBe(0);
+			expect(capture.captured).toBe(4);
+			expect(capture.linkedPageCoverage!.requiredUrls.sort()).toEqual(['/', '/shop/', '/?s=query', '/?page=2'].map(path => origin + path).sort());
+			expect(requests.filter(path => /add-to-cart|replytocom|action=logout/.test(path))).toEqual([]);
+			expect(capture.linkedPageCoverage!.diagnostics).toEqual(expect.arrayContaining([
+				{code: 'route_excluded_action_url', url: `${origin}/?add-to-cart=12`, reason: 'State-changing action URL (query add-to-cart)'},
+				{code: 'route_excluded_action_url', url: `${origin}/?replytocom=5`, reason: 'State-changing action URL (query replytocom)'},
+				{code: 'route_excluded_action_url', url: `${origin}/wp-login.php?action=logout`, reason: 'State-changing action URL (query action=logout)'},
+			]));
+			expect(capture.linkedPageCoverage!.diagnostics).toHaveLength(3);
+			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures: [], discoveryDiagnostics: capture.linkedPageCoverage!.diagnostics});
+			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+			expect(receipt.summary.complete).toBe(true);
+			expect(receipt.routes).toHaveLength(4);
+			expect(receipt.discoveryDiagnostics.filter((row: {code: string}) => row.code === 'route_excluded_action_url')).toHaveLength(3);
+			const anchors = JSON.parse(readFileSync(join(directory, 'diagnostics.json'), 'utf8')).unresolvedAnchors as Array<{url?: string; reason: string}>;
+			expect(anchors.filter(anchor => anchor.url).map(anchor => anchor.reason)).toEqual(expect.arrayContaining(['target is a state-changing action URL']));
+			expect(new Set(anchors.filter(anchor => anchor.url).map(anchor => anchor.url))).toEqual(new Set([`${origin}/?add-to-cart=12`, `${origin}/?replytocom=5`, `${origin}/wp-login.php?action=logout`]));
+			expect(anchors.every(anchor => !anchor.url || anchor.reason === 'target is a state-changing action URL')).toBe(true);
+		} finally {
+			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));
+			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
+		}
+	}, 120_000);
 	it.each(['inventory', 'deadline', 'wave', 'cap'] as const)('completes admitted %s work after discovery expires with real navigation and browser restarts', async mode => {
 		const requests: string[] = [];
 		const docs: Record<string, string> = {

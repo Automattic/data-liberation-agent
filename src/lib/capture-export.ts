@@ -22,6 +22,7 @@ import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
 import { budgetOmittedRoutes } from './capture-usability.js';
 import { OMITTED_ROUTE_REASON } from './route-budget.js';
+import { ACTION_URL_REASON, stateChangingAction } from './url/action-url.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import {
@@ -1047,8 +1048,9 @@ function unresolvedCapturedAnchors(
  *
  * Checked against the pre-rewrite document so hrefs still resolve on the
  * source origin. The bounded inspection recorded by capture can establish
- * absence or an external redirect, and the route budget names the routes it
- * left out on purpose; all other missing pages remain blocking.
+ * absence or an external redirect, the route budget names the routes it left
+ * out on purpose, and action URLs are never pages; all other missing pages
+ * remain blocking.
  */
 function uncapturedRouteAnchors(
 	html: string,
@@ -1069,7 +1071,7 @@ function uncapturedRouteAnchors(
 		.map( ( url ) => ( {
 		sourceUrl,
 		url,
-		reason: absentRoutes.has( url ) ? 'target route is absent at source' : omittedRoutes.has( url ) ? OMITTED_ROUTE_REASON : UNCAPTURED_ROUTE_REASON,
+		reason: absentRoutes.has( url ) ? 'target route is absent at source' : omittedRoutes.has( url ) ? OMITTED_ROUTE_REASON : stateChangingAction( url ) ? ACTION_URL_REASON : UNCAPTURED_ROUTE_REASON,
 	} ) );
 }
 

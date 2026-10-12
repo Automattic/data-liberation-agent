@@ -10,6 +10,7 @@ import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import { actionUrlExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
@@ -252,14 +253,23 @@ export async function captureWebsite(
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	const sourceRoute = documentRequestUrl( sourceUrl );
+	// Action URLs leave the inventory before the budget sees it, so they never
+	// spend, and never appear as omitted, failed or missing routes.
+	const excludedActions = new Map< string, { code: string; url: string; reason: string } >();
 	const { selected: urls, omitted } = selectRouteBudget( [
 		sourceUrl,
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
-			.filter( ( url ) => routeInScope( url, routeScope ) && documentRequestUrl( url ) !== sourceRoute ),
+			.filter( ( url ) => {
+				if ( ! routeInScope( url, routeScope ) || documentRequestUrl( url ) === sourceRoute ) return false;
+				const action = actionUrlExclusion( url );
+				if ( action ) excludedActions.set( action.url, action );
+				return ! action;
+			} ),
 	], routeLimit );
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
+		...excludedActions.values(),
 		// Request identity, as the linked frontier records it, so a link to an
 		// omitted route is the same diagnostic rather than a second one.
 		...omitted.map( url => ( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: routeBudgetReason( routeLimit! ) } ) ),
@@ -334,11 +344,13 @@ export async function captureWebsite(
 				error: unknown;
 		  } > )
 		: [];
-	// One diagnostic per budget-omitted route: initial inventory the budget did
-	// not select, plus linked routes the frontier refused once it was spent.
-	const omittedRoutes = new Set( omitted.map( documentRequestUrl ) );
+	// One diagnostic per budget-omitted or action-excluded route: initial
+	// inventory selection refused it, or the linked frontier did.
+	const initialRefusals = new Set( discoveryDiagnostics
+		.filter( row => row.code === ROUTE_OMITTED_BY_BUDGET || row.code === ROUTE_EXCLUDED_ACTION_URL )
+		.map( row => `${ row.code } ${ row.url }` ) );
 	const linkedDiagnostics = ( screenshotResult.linkedPageCoverage?.diagnostics ?? [] ).filter( row =>
-		row.code !== ROUTE_OMITTED_BY_BUDGET || ! omittedRoutes.has( row.url ) );
+		! initialRefusals.has( `${ row.code } ${ row.url }` ) );
 	const captureDiagnostics = [ ...discoveryDiagnostics, ...linkedDiagnostics ];
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
@@ -388,9 +400,10 @@ export async function captureWebsite(
 		finalSummary.routesFailed === 0 &&
 		! hasUncapturedProfiles( receipt.discoveryDiagnostics ) &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
-		// Budget omission is the caller's scope choice, not a defect (see
-		// `budgetOmittedRoutes`); links to omitted routes carry their own reason.
-		! linkedDiagnostics.some( row => row.code !== ROUTE_OMITTED_BY_BUDGET ) &&
+		// Budget omission is the caller's scope choice and an action URL is not a
+		// page (see `budgetOmittedRoutes`, `actionUrlExclusion`); links to either
+		// carry their own reason.
+		! linkedDiagnostics.some( row => row.code !== ROUTE_OMITTED_BY_BUDGET && row.code !== ROUTE_EXCLUDED_ACTION_URL ) &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,

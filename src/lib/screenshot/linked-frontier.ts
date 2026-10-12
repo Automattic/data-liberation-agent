@@ -2,6 +2,7 @@ import { documentRequestUrl } from '../url/route-key.js';
 import type { SiteRouteScope } from '../../platform/types.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { ROUTE_OMITTED_BY_BUDGET, routeBudgetReason } from '../route-budget.js';
+import { actionUrlExclusion } from '../url/action-url.js';
 
 export interface LinkedPageLimits {
 	maxPages?: number;
@@ -48,6 +49,12 @@ export class LinkedFrontier {
 	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked'): boolean {
 		if (!routeInScope(url, this.routeScope)) return false;
 		url = documentRequestUrl(url);
+		// Never visited, so never required evidence and never spending budget.
+		const action = actionUrlExclusion(url);
+		if (action) {
+			this.omit(url, action.code, action.reason);
+			return false;
+		}
 		if (this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
 		this.required.add(url);
 		// The caller's route budget bounds every new route: adapter inventory and
