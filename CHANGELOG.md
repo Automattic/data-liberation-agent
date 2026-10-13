@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.26.1] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+- Record the ancestor state that shows a modal menu
+- Keep a page's dialog states when a probed panel unmounts itself
+
 ## [0.26.0] - 2026-10-13
 
 ### Added
