@@ -1323,7 +1323,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 	'beacon requests in a real browser',
 	() => {
 		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async () => {
-			const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-beacon-' ) );
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-beacon-' ) );
 			dirs.push( outputDir );
 			const server = createServer( ( req, res ) => {
 				if ( req.url === '/' ) {
