@@ -3,7 +3,7 @@ import { gzipSync } from 'node:zlib';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
-import { documentRedirect, navigateSourceDocument, inspectSourceDocument, SOURCE_NAVIGATION_LIMITS, SourceNavigationError, storeExternalBoundary, validateExternalBoundary } from './source-navigation.js';
+import { documentRedirect, isNavigationTimeout, navigateSourceDocument, inspectSourceDocument, SOURCE_NAVIGATION_LIMITS, SourceNavigationError, storeExternalBoundary, validateExternalBoundary } from './source-navigation.js';
 import { join } from 'node:path';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 import { isRouteDrift, navigationDocumentUrl } from './screenshot/document-integrity.js';
@@ -283,4 +283,15 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			await new Promise<void>(resolve => server.close(() => resolve()));
 		}
 	}, 60_000);
+});
+
+describe('navigation timeout classification', () => {
+	it('counts transport timeouts and an exhausted chain budget, and nothing else', () => {
+		expect(isNavigationTimeout(Object.assign(new Error('page.goto: Timeout 30000ms exceeded.'), {name: 'TimeoutError'}))).toBe(true);
+		expect(isNavigationTimeout(new Error('route.fetch: Timeout 5000ms exceeded.\nCall log: ...'))).toBe(true);
+		expect(isNavigationTimeout(new SourceNavigationError('Source navigation time budget exhausted'))).toBe(true);
+		expect(isNavigationTimeout(new SourceNavigationError('Source redirect loop'))).toBe(false);
+		expect(isNavigationTimeout(new Error('net::ERR_CONNECTION_RESET'))).toBe(false);
+		expect(isNavigationTimeout('Timeout 5000ms exceeded')).toBe(false);
+	});
 });
