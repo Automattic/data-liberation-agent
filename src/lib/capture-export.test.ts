@@ -26,6 +26,8 @@ import { cleanupPolicy } from './source-cleanup.js';
 import { inspectSourceInteractivity } from './source-interactivity.js';
 import { documentsDiffer } from './responsive-assembly.js';
 import { collectAssetEvidenceReferences } from './capture-export-evidence.js';
+import { IntegrityError } from './failure-class.js';
+import { missingRoutes } from './capture-usability.js';
 
 const dirs: string[] = [];
 
@@ -35,16 +37,16 @@ afterEach( () => {
 
 describe( 'exportWebsiteCapture', () => {
 	it( 'compacts both landmarks after evidence projection within the published website tree', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-canonical-parts-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-canonical-parts-' ) );
 		dirs.push( outputDir );
 		for ( const directory of [ 'html', 'screenshots', 'layout-geometry' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
 		const header = `<header id="brand"><nav><a href="https://external.test/">External</a></nav><div>${ 'Brand content '.repeat( 100 ) }</div></header>`;
 		const footer = `<footer id="copyright">${ 'Copyright content '.repeat( 100 ) }</footer>`;
 		const entries = Object.fromEntries( [ 'home', 'about' ].map( ( slug, i ) => {
 			const html = `html/${ slug }.html`;
-			writeFileSync( join( outputDir, html ), `<html><body><div>${ header }<main><div data-dla-geometry-id="wrapper"><section data-dla-geometry-id="target"><h1>Route ${ i }</h1><a href="#copyright">Copyright</a></section></div></main>${ footer }</div></body></html>` );
+			writeFileSync( join( outputDir, html ), `<html><body><div>${ header }<main><div data-blocks-engine-capture-geometry-id="wrapper"><section data-blocks-engine-capture-geometry-id="target"><h1>Route ${ i }</h1><a href="#copyright">Copyright</a></section></div></main>${ footer }</div></body></html>` );
 			writeFileSync( join( outputDir, 'layout-geometry', `${ slug }.desktop.json` ), JSON.stringify( {
-				schema: 'data-liberation/layout-geometry-capture/v1', omissions: {}, observations: [ {
+				schema: 'blocks-engine-capture/layout-geometry-capture/v1', omissions: {}, observations: [ {
 					wrapperIdentity: 'wrapper', targetIdentity: 'target', viewport: 1440, state: 'default',
 					wrapper: { x: 0, y: 0, width: 100, height: 24 }, target: { x: 0, y: 0, width: 100, height: 24 }, simulated: { x: 0, y: 0, width: 100, height: 24 },
 					facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 }, invariants: { runtime: true, semantics: true },
@@ -81,7 +83,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( receipt!.routes.map( route => [ route.path, route.path.replace( /^website\//, '' ) ] ) ) ).pass ).toBe( true );
 	} );
 	it( 'keeps uncaptured query-only navigation pointing at the source when no base route was captured', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-query-only-home-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-query-only-home-' ) );
 		dirs.push( outputDir );
 		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
 		writeFileSync( join( outputDir, 'html/home.html' ), '<h1>English</h1><a href="?lang=de">German</a>' );
@@ -93,7 +95,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports query collections with their own content and correctly targeted portable links', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-query-collections-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-query-collections-' ) );
 		dirs.push( outputDir );
 		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
 		const urls = [ 'https://example.test/', 'https://example.test/catalog/', 'https://example.test/catalog/?tag=red', 'https://example.test/catalog/?tag=blue%26green' ];
@@ -127,7 +129,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'reports captured first-party canvas motion whose executable script is intentionally removed', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-source-motion-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-source-motion-' ) );
 		dirs.push( outputDir );
 		for ( const directory of [ 'html', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
 		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><canvas id="stage"></canvas><p id="status">Waiting</p><script src="/motion.js"></script></body></html>' );
@@ -137,7 +139,7 @@ describe( 'exportWebsiteCapture', () => {
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		const report = JSON.parse( readFileSync( join( outputDir, 'source-interactivity.json' ), 'utf8' ) );
-		expect( receipt.sourceInteractivity ).toMatchObject( { schema: 'data-liberation/source-interactivity/v1', unreproduced_route_count: 1 } );
+		expect( receipt.sourceInteractivity ).toMatchObject( { schema: 'blocks-engine-capture/source-interactivity/v1', unreproduced_route_count: 1 } );
 		expect( report.pages[ 0 ] ).toMatchObject( { status: 'unreproduced', signals: [ 'canvas-2d', 'pointer-input', 'animation-frame', 'timed-dom-update', 'click-input' ] } );
 		expect( report.pages[ 0 ].scripts[ 0 ].sha256 ).toMatch( /^[a-f0-9]{64}$/ );
 		expect( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) ).not.toContain( '<script src="/motion.js"' );
@@ -156,7 +158,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports structurally shared header IDs without rewriting independent page content', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-header-identity-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-header-identity-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		for ( const [ slug, id ] of [ [ 'homepage', '111' ], [ 'about', '222' ] ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><body><header><div id="yui_3_17_2_1_${ id }_3"><div id="yui_3_17_2_1_${ id }_4">Brand</div></div><nav><a href="/">Home</a></nav></header><main><h1>${ slug }</h1></main></body></html>` );
@@ -169,7 +171,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'preserves the 360 Chiropractic BlogPosting as standard document JSON-LD', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-publication-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-publication-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -213,7 +215,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'preserves arbitrary Article JSON-LD without enabling source scripts', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-json-ld-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -245,7 +247,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'bounds inert JSON-LD before parsing and preserves only accepted objects', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-bounds-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-json-ld-bounds-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -283,7 +285,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'retains no more than sixteen inert JSON-LD scripts', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-count-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-json-ld-count-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -308,7 +310,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( JSON.parse( jsonLd.last().text() ) ).toEqual( { index: 15 } );
 	} );
 	it( 'writes responsive section evidence as a neutral sidecar', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-semantic-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -363,7 +365,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'retains the HTML-only fallback when section evidence is invalid', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-invalid-semantic-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-invalid-semantic-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -392,7 +394,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'measures UTF-8 semantic evidence shards at the exact file limit', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-byte-limit-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-semantic-byte-limit-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Home</main>' );
@@ -425,13 +427,13 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports hash-bound geometry proof without runtime capture markers', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-geometry-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-geometry-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'layout-geometry' ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><div data-dla-geometry-id="wrapper-0"><section data-dla-geometry-id="target-0">Copy</section></div></main></body></html>'
+			'<html><body><main><div data-blocks-engine-capture-geometry-id="wrapper-0"><section data-blocks-engine-capture-geometry-id="target-0">Copy</section></div></main></body></html>'
 		);
 		const observation = ( viewport: number ) => ( {
 			wrapperIdentity: 'wrapper-0',
@@ -451,7 +453,7 @@ describe( 'exportWebsiteCapture', () => {
 			writeFileSync(
 				join( outputDir, 'layout-geometry', `homepage.${ viewport }.json` ),
 				JSON.stringify( {
-					schema: 'data-liberation/layout-geometry-capture/v1',
+					schema: 'blocks-engine-capture/layout-geometry-capture/v1',
 					observations: [ observation( width ) ],
 					omissions: {},
 				} )
@@ -474,7 +476,7 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
 		expect( proof ).toMatchObject( {
-			schema: 'data-liberation/layout-geometry-proof/v1',
+			schema: 'blocks-engine-capture/layout-geometry-proof/v1',
 			nodes: [
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1)' },
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1) > section:nth-of-type(1)' },
@@ -484,18 +486,18 @@ describe( 'exportWebsiteCapture', () => {
 			],
 		} );
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).not.toContain(
-			'data-dla-geometry-id'
+			'data-blocks-engine-capture-geometry-id'
 		);
 	} );
 
 	it( 'points a captured phone menu panel at the phone document section targets', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-panel-anchor-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-panel-anchor-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><nav><a href="https://example.com/#services" data-dla-anchor-fragment="services">Services</a></nav><span id="services" data-dla-anchor-target="services" data-dla-anchor-source-id="services-section"></span><section id="services-section">Desktop services</section></body></html>'
+			'<html><body><nav><a href="https://example.com/#services" data-blocks-engine-capture-anchor-fragment="services">Services</a></nav><span id="services" data-blocks-engine-capture-anchor-target="services" data-blocks-engine-capture-anchor-source-id="services-section"></span><section id="services-section">Desktop services</section></body></html>'
 		);
 		// The phone header only has a menu button; its links live in the dialog
 		// the capture recorded, which carries source-origin hrefs.
@@ -513,7 +515,7 @@ describe( 'exportWebsiteCapture', () => {
 						slug: 'homepage',
 						html: 'html/homepage.html',
 						interactions: {
-							schema: 'data-liberation/interaction-states/v2',
+							schema: 'blocks-engine-capture/interaction-states/v2',
 							sourceUrl: 'https://example.com/',
 							viewport: { width: 390, height: 844 },
 							capturedAt: '2026-09-26T00:00:00.000Z',
@@ -539,17 +541,17 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-		const panelLinks = $( '.data-liberation-mobile-document [data-dla-dialog-panel] a' );
+		const panelLinks = $( '.data-blocks-engine-capture-mobile-document [data-blocks-engine-capture-dialog-panel] a' );
 		expect( panelLinks ).toHaveLength( 2 );
-		expect( $( '#services--dla-mobile' ) ).toHaveLength( 1 );
-		expect( panelLinks.eq( 0 ).attr( 'href' ) ).toBe( '/index.html#services--dla-mobile' );
+		expect( $( '#services--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
+		expect( panelLinks.eq( 0 ).attr( 'href' ) ).toBe( '/index.html#services--data-blocks-engine-capture-mobile' );
 		// A fragment with no phone target is left as the route rebased it.
 		expect( panelLinks.eq( 1 ).attr( 'href' ) ).toBe( '/index.html#unknown' );
-		expect( $( '.data-liberation-desktop-document a' ).first().attr( 'href' ) ).toBe( '/index.html#services' );
+		expect( $( '.data-blocks-engine-capture-desktop-document a' ).first().attr( 'href' ) ).toBe( '/index.html#services' );
 	} );
 
 	it( 'resolves cross-page legacy anchor aliases to the visible responsive target', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-named-alias-' ) ); dirs.push( outputDir );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-named-alias-' ) ); dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const css = '<style>body{margin:0}body:not(.phone){--desktop:1}</style><link rel="stylesheet" href="https://example.com/aliases.css">';
 		writeFileSync( join( outputDir, 'resources', 'aliases.css' ), '#comments{margin-top:1100px;height:500px;color:rgb(11,22,33)}a[name="comments"]{display:block;height:7px}' );
@@ -573,10 +575,10 @@ describe( 'exportWebsiteCapture', () => {
 			for ( const width of [ 390, 768, 1440 ] ) {
 				const page = await browser.newPage( { viewport: { width, height: 900 } } );
 				await page.goto( server.url ); await page.getByRole( 'link', { name: 'Comments' } ).click();
-				const expected = width < 768 ? '#comments--dla-mobile' : '#comments';
+				const expected = width < 768 ? '#comments--data-blocks-engine-capture-mobile' : '#comments';
 				await page.waitForFunction( target => Math.abs( document.querySelector( target )!.getBoundingClientRect().top ) < 2, expected );
 				expect( await page.locator( expected ).count() ).toBe( 1 );
-				expect( await page.locator( `${ expected } a[data-dla-anchor-alias]` ).evaluate( node => node.getBoundingClientRect().height ) ).toBe( 7 );
+				expect( await page.locator( `${ expected } a[data-blocks-engine-capture-anchor-alias]` ).evaluate( node => node.getBoundingClientRect().height ) ).toBe( 7 );
 				await page.goto( page.url().split( '#' )[ 0 ] + '#comments' );
 				await page.waitForFunction( target => Math.abs( document.querySelector( target )!.getBoundingClientRect().top ) < 2, expected );
 				await page.close();
@@ -585,7 +587,7 @@ describe( 'exportWebsiteCapture', () => {
 	}, 30_000 );
 
 	it( 'keeps ordinary responsive fragment targets unique with author CSS and ARIA associations', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-authored-responsive-anchor-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-authored-responsive-anchor-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const css = '<style>body{margin:0}#main{padding-top:700px;color:rgb(11,22,33)}#main p{height:600px}</style>';
@@ -596,8 +598,8 @@ describe( 'exportWebsiteCapture', () => {
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '#main' ) ).toHaveLength( 1 );
-		expect( $( '#main--dla-mobile' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-mobile-document a' ).attr( 'aria-controls' ) ).toBe( 'main--dla-mobile' );
+		expect( $( '#main--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document a' ).attr( 'aria-controls' ) ).toBe( 'main--data-blocks-engine-capture-mobile' );
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( [ [ '/', 'index.html' ] ] ) ).findings ).toEqual( [] );
 		const browser = await chromium.launch();
 		const server = await startStaticServer( join( outputDir, 'website' ) );
@@ -606,7 +608,7 @@ describe( 'exportWebsiteCapture', () => {
 				const page = await browser.newPage( { viewport: { width, height: 900 } } );
 				await page.goto( server.url );
 				await page.getByRole( 'link', { name: 'Skip' } ).click();
-				const target = width < 768 ? '#main--dla-mobile' : '#main';
+				const target = width < 768 ? '#main--data-blocks-engine-capture-mobile' : '#main';
 				expect( await page.locator( target ).evaluate( el => getComputedStyle( el ).color ) ).toBe( 'rgb(11, 22, 33)' );
 				expect( await page.locator( target ).evaluate( el => getComputedStyle( el ).paddingTop ) ).toBe( '700px' );
 				expect( new URL( page.url() ).hash ).toBe( target );
@@ -619,17 +621,17 @@ describe( 'exportWebsiteCapture', () => {
 	}, 30_000 );
 
 	it( 'keeps responsive runtime anchor targets unique and diagnoses unresolved fragments', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-anchor-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-anchor-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><a href="https://example.com/#features" data-dla-anchor-fragment="features">Features</a><a href="https://example.com/#missing" data-dla-anchor-fragment="missing" data-dla-anchor-unresolved="runtime scroll did not resolve to a section boundary">Missing</a><span id="features" data-dla-anchor-target="features" data-dla-anchor-source-id="feature-section"></span><section id="feature-section">Desktop features</section></body></html>'
+			'<html><body><a href="https://example.com/#features" data-blocks-engine-capture-anchor-fragment="features">Features</a><a href="https://example.com/#missing" data-blocks-engine-capture-anchor-fragment="missing" data-blocks-engine-capture-anchor-unresolved="runtime scroll did not resolve to a section boundary">Missing</a><span id="features" data-blocks-engine-capture-anchor-target="features" data-blocks-engine-capture-anchor-source-id="feature-section"></span><section id="feature-section">Desktop features</section></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><a href="https://example.com/#features" data-dla-anchor-fragment="features">Features</a><a href="https://example.com/#testimonial" data-dla-anchor-fragment="testimonial">Testimonial</a><article id="testimonial">Mobile testimonial</article><section id="feature-section">Mobile features</section></body></html>'
+			'<html><body><a href="https://example.com/#features" data-blocks-engine-capture-anchor-fragment="features">Features</a><a href="https://example.com/#testimonial" data-blocks-engine-capture-anchor-fragment="testimonial">Testimonial</a><article id="testimonial">Mobile testimonial</article><section id="feature-section">Mobile features</section></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -649,16 +651,16 @@ describe( 'exportWebsiteCapture', () => {
 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '#features' ) ).toHaveLength( 1 );
-		expect( $( '#features--dla-mobile' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-desktop-document a' ).first().attr( 'href' ) ).toBe(
+		expect( $( '#features--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-desktop-document a' ).first().attr( 'href' ) ).toBe(
 			'/index.html#features'
 		);
-		expect( $( '.data-liberation-mobile-document a' ).first().attr( 'href' ) ).toBe(
-			'/index.html#features--dla-mobile'
+		expect( $( '.data-blocks-engine-capture-mobile-document a' ).first().attr( 'href' ) ).toBe(
+			'/index.html#features--data-blocks-engine-capture-mobile'
 		);
-		expect( $( '#testimonial--dla-mobile' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-mobile-document a' ).eq( 1 ).attr( 'href' ) ).toBe(
-			'/index.html#testimonial--dla-mobile'
+		expect( $( '#testimonial--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document a' ).eq( 1 ).attr( 'href' ) ).toBe(
+			'/index.html#testimonial--data-blocks-engine-capture-mobile'
 		);
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
@@ -675,11 +677,11 @@ describe( 'exportWebsiteCapture', () => {
 	it( 'diagnoses an ordinary authored same-page anchor with no matching target', () => {
 		// Regression for a truncated SPA capture: a nav link like
 		// `<a href="#releases">` ships unmarked by any adapter (no
-		// `data-dla-anchor-fragment`) — this is what an entire dropped section
+		// `data-blocks-engine-capture-anchor-fragment`) — this is what an entire dropped section
 		// looks like when the deferred content never rendered before the
 		// snapshot. The receipt must surface it instead of reporting a clean
 		// capture.
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-bare-anchor-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-bare-anchor-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -713,7 +715,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not flag a resolvable same-page anchor or a captured cross-route fragment link', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-ok-anchor-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-ok-anchor-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -753,19 +755,19 @@ describe( 'exportWebsiteCapture', () => {
 		// Regression for the Wix portfolio menu: from a project page the
 		// "Expertise" link carried its target only in `data-anchor` and exported
 		// as a bare `/index.html`, landing readers at the top of the home page.
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-cross-page-anchor-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-cross-page-anchor-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'home.html' ),
-			'<html><body><main>Home</main><span id="dataItem-home-section" data-dla-anchor-target="dataItem-home-section"></span></body></html>'
+			'<html><body><main>Home</main><span id="dataItem-home-section" data-blocks-engine-capture-anchor-target="dataItem-home-section"></span></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'html', 'project.html' ),
 			'<html><body><nav>' +
-				'<a href="https://example.com/#dataItem-home-section" data-dla-anchor-fragment="dataItem-home-section">Expertise</a>' +
-				'<a href="https://example.com/#dataItem-absent" data-dla-anchor-fragment="dataItem-absent">Missing</a>' +
+				'<a href="https://example.com/#dataItem-home-section" data-blocks-engine-capture-anchor-fragment="dataItem-home-section">Expertise</a>' +
+				'<a href="https://example.com/#dataItem-absent" data-blocks-engine-capture-anchor-fragment="dataItem-absent">Missing</a>' +
 				'</nav></body></html>'
 		);
 		writeFileSync(
@@ -813,7 +815,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'names same-origin anchors whose target route was never captured', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-uncaptured-route-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-uncaptured-route-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -862,7 +864,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'declares responsive editing counterparts from stable source component slots', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-counterparts-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-counterparts-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -892,24 +894,24 @@ describe( 'exportWebsiteCapture', () => {
 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		for ( const selector of [ 'h1', 'a' ] ) {
-			const desktop = $( `.data-liberation-desktop-document ${ selector }` );
-			const mobile = $( `.data-liberation-mobile-document ${ selector }` );
+			const desktop = $( `.data-blocks-engine-capture-desktop-document ${ selector }` );
+			const mobile = $( `.data-blocks-engine-capture-mobile-document ${ selector }` );
 			const desktopToken = ( desktop.attr( 'class' ) ?? '' )
 				.split( /\s+/ )
-				.find( ( name ) => name.startsWith( 'data-liberation-responsive-counterpart-' ) );
-			expect( desktopToken ).toMatch( /^data-liberation-responsive-counterpart-[a-f0-9]{12}$/ );
+				.find( ( name ) => name.startsWith( 'data-blocks-engine-capture-responsive-counterpart-' ) );
+			expect( desktopToken ).toMatch( /^data-blocks-engine-capture-responsive-counterpart-[a-f0-9]{12}$/ );
 			expect( mobile.hasClass( desktopToken! ) ).toBe( true );
-			expect( mobile.attr( 'data-dla-responsive-source' ) ).toBe(
-				desktop.attr( 'data-dla-responsive-source' )
+			expect( mobile.attr( 'data-blocks-engine-capture-responsive-source' ) ).toBe(
+				desktop.attr( 'data-blocks-engine-capture-responsive-source' )
 			);
 		}
-		expect( $( '.data-liberation-desktop-document main > p, .data-liberation-mobile-document main > p' ) ).toHaveLength( 2 );
+		expect( $( '.data-blocks-engine-capture-desktop-document main > p, .data-blocks-engine-capture-mobile-document main > p' ) ).toHaveLength( 2 );
 		expect( $( 'main > p[class*="responsive-counterpart"]' ) ).toHaveLength( 0 );
 		expect( $( '#duplicate p[class*="responsive-counterpart"]' ) ).toHaveLength( 0 );
 	} );
 
 	it( 'switches documents at the width the source stops adapting at, not a hardcoded one', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-detected-switch-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-detected-switch-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -962,7 +964,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).toContain( '<style media="(min-width:981px)">.desktop{color:blue}</style>' );
 		const sourceVisibilityOverride = html.indexOf( 'display:revert!important' );
 		const authoritativeSwitch = html.lastIndexOf(
-			'.data-liberation-mobile-document{display:none!important}'
+			'.data-blocks-engine-capture-mobile-document{display:none!important}'
 		);
 		expect( sourceVisibilityOverride ).toBeGreaterThanOrEqual( 0 );
 		expect( authoritativeSwitch ).toBeGreaterThan( sourceVisibilityOverride );
@@ -971,7 +973,7 @@ describe( 'exportWebsiteCapture', () => {
 
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( {
-			schema: 'data-liberation/source-profile/v1',
+			schema: 'blocks-engine-capture/source-profile/v1',
 			variants: 'per-device',
 			geometry: 'mixed',
 			switchWidth: 980,
@@ -987,7 +989,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'falls back to the default switch width when nothing was detected', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-switch-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-switch-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1021,14 +1023,14 @@ describe( 'exportWebsiteCapture', () => {
 		// 768px; the mobile document was only ever sampled at phone width.
 		expect( html ).toContain( '@media(max-width:767px)' );
 		expect( html ).toContain( '<style media="(min-width:768px)">.desktop{color:blue}</style>' );
-		expect( html ).toContain( '<style media="(max-width:767px)">:where(.data-liberation-mobile-document) .mobile{color:red}</style>' );
+		expect( html ).toContain( '<style media="(max-width:767px)">:where(.data-blocks-engine-capture-mobile-document) .mobile{color:red}</style>' );
 		expect( html ).not.toContain( 'max-width:768px' );
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( { switchWidth: null, switchWidthSource: 'default' } );
 	} );
 
 	it( 'binds viewport-scoped geometry identities to the exact marker-free responsive output', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-geometry-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-geometry-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [
 			'html',
@@ -1040,11 +1042,11 @@ describe( 'exportWebsiteCapture', () => {
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example/"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.desktop{display:block}</style></head><body class="responsive desktop-body" style="margin:3px;padding:4px"><main><div data-dla-geometry-id="desktop-wrapper-0" onclick="discard()"><section data-dla-geometry-id="desktop-target-0">Desktop<a href="javascript:discard()">Unsafe</a><form action="https://evil.example/"><button formaction="javascript:discard()">Send</button></form><iframe src="https://evil.example/"></iframe></section></div><script>discard()</script></main></body></html>'
+			'<html><head><base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example/"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.desktop{display:block}</style></head><body class="responsive desktop-body" style="margin:3px;padding:4px"><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" onclick="discard()"><section data-blocks-engine-capture-geometry-id="desktop-target-0">Desktop<a href="javascript:discard()">Unsafe</a><form action="https://evil.example/"><button formaction="javascript:discard()">Send</button></form><iframe src="https://evil.example/"></iframe></section></div><script>discard()</script></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{display:block}</style></head><body class="responsive mobile-body" style="margin:5px;padding:6px"><main><div data-dla-geometry-id="mobile-wrapper-0"><section data-dla-geometry-id="mobile-target-0">Mobile</section></div></main></body></html>'
+			'<html><head><style>.mobile{display:block}</style></head><body class="responsive mobile-body" style="margin:5px;padding:6px"><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><section data-blocks-engine-capture-geometry-id="mobile-target-0">Mobile</section></div></main></body></html>'
 		);
 		const observation = ( viewport: number, identity: string ) => ( {
 			wrapperIdentity: `${ identity }-wrapper-0`,
@@ -1060,7 +1062,7 @@ describe( 'exportWebsiteCapture', () => {
 		writeFileSync(
 			join( outputDir, 'layout-geometry', 'homepage.desktop.json' ),
 			JSON.stringify( {
-				schema: 'data-liberation/layout-geometry-capture/v1',
+				schema: 'blocks-engine-capture/layout-geometry-capture/v1',
 				observations: [ observation( 1440, 'desktop' ) ],
 				omissions: {},
 			} )
@@ -1068,7 +1070,7 @@ describe( 'exportWebsiteCapture', () => {
 		writeFileSync(
 			join( outputDir, 'layout-geometry', 'homepage.mobile.json' ),
 			JSON.stringify( {
-				schema: 'data-liberation/layout-geometry-capture/v1',
+				schema: 'blocks-engine-capture/layout-geometry-capture/v1',
 				observations: [ observation( 390, 'mobile' ) ],
 				omissions: {},
 			} )
@@ -1104,7 +1106,7 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
-		expect( html ).not.toContain( 'data-dla-geometry-id' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-geometry-id' );
 		expect( html ).not.toContain( 'onclick=' );
 		expect( html ).not.toContain( '<script' );
 		expect( html ).not.toContain( '<iframe' );
@@ -1114,10 +1116,10 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).not.toContain( 'action="https://evil.example/' );
 		expect( html ).toContain( '<body class="responsive">' );
 		expect( html ).toContain(
-			'class="data-liberation-desktop-document responsive desktop-body" style="margin:3px;padding:4px"'
+			'class="data-blocks-engine-capture-desktop-document responsive desktop-body" style="margin:3px;padding:4px"'
 		);
 		expect( html ).toContain(
-			'class="data-liberation-mobile-document responsive mobile-body" style="margin:5px;padding:6px"'
+			'class="data-blocks-engine-capture-mobile-document responsive mobile-body" style="margin:5px;padding:6px"'
 		);
 		expect( html ).toContain( 'href="/cdn/site.css"' );
 		expect( proof.reductions ).toHaveLength( 2 );
@@ -1138,9 +1140,9 @@ describe( 'exportWebsiteCapture', () => {
 
 	it( 'treats capture correspondence attributes as equivalence, not difference', () => {
 		const desktop =
-			'<html><body><main><div data-dla-geometry-id="desktop-wrapper-0" class="page" style="width:940px"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
+			'<html><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" class="page" style="width:940px"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
 		const mobile =
-			'<html><body><main><div data-dla-geometry-id="mobile-wrapper-0" class="page mobile-page" style="width:100%"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
+			'<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0" class="page mobile-page" style="width:100%"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
 		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
 		expect(
 			documentsDiffer(
@@ -1246,14 +1248,14 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses a contact page whose only mobile gap is embed iframes, keeping the desktop map', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-iframe-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-iframe-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
 			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
-				'<iframe class="map" src="https://source.example/wrong" data-dla-visual-iframe-src="https://maps.example/embed" data-dla-visual-iframe-width="1280" data-dla-visual-iframe-height="350"></iframe>' +
+				'<iframe class="map" src="https://source.example/wrong" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
 				'</main></body></html>'
 		);
 		writeFileSync(
@@ -1278,8 +1280,8 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( 'form' ) ).toHaveLength( 1 );
 		expect( $( 'iframe' ).attr( 'src' ) ).toBe( 'https://maps.example/embed' );
 		const receipt = JSON.parse(
@@ -1292,7 +1294,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses before viewport peeling so hidden-chrome snapshots stay one document', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-before-peel-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-before-peel-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1323,8 +1325,8 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).not.toContain( 'data-liberation-desktop-document' );
-		expect( html ).not.toContain( 'data-liberation-mobile-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
 			variants: 1,
@@ -1333,18 +1335,18 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses structurally equivalent responsive variants into one document and records why', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-equivalent-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-equivalent-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		const sharedStyles = '<style>.wrap{margin:0 auto}.wrap img{max-width:100%}</style>';
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page"><main><div data-dla-geometry-id="desktop-wrapper-0" style="width:940px"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
+			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page"><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" style="width:940px"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page mobile"><main><div data-dla-geometry-id="mobile-wrapper-0" style="width:100%"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
+			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page mobile"><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0" style="width:100%"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -1364,8 +1366,8 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( 'h1' ) ).toHaveLength( 1 );
 		expect( $( 'img' ) ).toHaveLength( 1 );
 		// The source's own stylesheet keeps applying at every width.
@@ -1376,7 +1378,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( wrap.attr( 'style' ) ).toBe( 'width:940px' );
 		const hook = ( wrap.attr( 'class' ) ?? '' )
 			.split( /\s+/ )
-			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+			.find( ( token ) => token.startsWith( 'data-blocks-engine-capture-responsive-' ) );
 		expect( hook ).toBeDefined();
 		expect( html ).toContain( `.${ hook }{width:100%!important}` );
 		const receipt = JSON.parse(
@@ -1393,17 +1395,17 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses equivalent variants while preserving viewport-specific styles as CSS', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-scoped-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-scoped-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><style>.hero{color:red}</style></head><body><main><div data-dla-geometry-id="desktop-wrapper-0"><h1>About</h1></div></main></body></html>'
+			'<html><head><style>.hero{color:red}</style></head><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0"><h1>About</h1></div></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.hero{color:blue}</style></head><body><main><div data-dla-geometry-id="mobile-wrapper-0"><h1>About</h1></div></main></body></html>'
+			'<html><head><style>.hero{color:blue}</style></head><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About</h1></div></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -1423,8 +1425,8 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( 'h1' ) ).toHaveLength( 1 );
 		// Each breakpoint keeps its own stylesheet through media scoping.
 		expect( html ).toContain( 'media="(min-width:768px)"' );
@@ -1447,7 +1449,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not project equivalent variants whose inline styles already match', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-identical-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-identical-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1481,7 +1483,7 @@ describe( 'exportWebsiteCapture', () => {
 		const $ = cheerio.load( html );
 		expect( $( 'section' ).attr( 'style' ) ).toBe( 'padding:8px' );
 		// Matching inline presentation needs no projection hooks or extra rules.
-		expect( html ).not.toContain( 'data-liberation-responsive-' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-responsive-' );
 		const receipt = JSON.parse(
 			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
 		);
@@ -1495,7 +1497,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'renders projected equivalent geometry at both captured viewports', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-equivalent-geometry-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-equivalent-geometry-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1538,8 +1540,8 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( 'section' ) ).toHaveLength( 1 );
 		expect( $( 'h1' ) ).toHaveLength( 1 );
 		// Author CSS keeps applying unscoped at every width.
@@ -1550,7 +1552,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( section.attr( 'style' ) ).toBe( 'padding-top:189px' );
 		const sectionHook = ( section.attr( 'class' ) ?? '' )
 			.split( /\s+/ )
-			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+			.find( ( token ) => token.startsWith( 'data-blocks-engine-capture-responsive-' ) );
 		expect( sectionHook ).toBeDefined();
 		expect( html ).toContain( `.${ sectionHook }{padding-top:145px!important}` );
 		// The box drops its desktop centering on phones, so keeping the inline
@@ -1559,7 +1561,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( feature.attr( 'style' ) ).toBeUndefined();
 		const featureHook = ( feature.attr( 'class' ) ?? '' )
 			.split( /\s+/ )
-			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+			.find( ( token ) => token.startsWith( 'data-blocks-engine-capture-responsive-' ) );
 		expect( featureHook ).toBeDefined();
 		expect( featureHook ).not.toBe( sectionHook );
 		expect( html ).toContain( `.${ featureHook }{margin:0 auto!important;width:980px!important}` );
@@ -1607,17 +1609,17 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'ships both variants when the mobile document genuinely differs, and says so', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-structural-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-structural-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><div data-dla-geometry-id="desktop-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section></div></main></body></html>'
+			'<html><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section></div></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><div data-dla-geometry-id="mobile-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section><aside id="mobile-menu">Mobile only</aside></div></main></body></html>'
+			'<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section><aside id="mobile-menu">Mobile only</aside></div></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -1637,8 +1639,8 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 1 );
 		expect( $( '#mobile-menu' ) ).toHaveLength( 1 );
 		const receipt = JSON.parse(
 			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
@@ -1651,7 +1653,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses a mobile document that reconciles with desktop by element identity', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-identity-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-identity-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1687,19 +1689,19 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( '#comp-hero' ) ).toHaveLength( 1 );
 		expect( $( '#comp-desktop-map' ) ).toHaveLength( 1 );
 		expect( $( '#comp-mobile-menu' ) ).toHaveLength( 1 );
-		expect( $( '#comp-mobile-menu' ).hasClass( 'data-liberation-mobile-only' ) ).toBe( true );
-		expect( $( '#comp-desktop-map' ).hasClass( 'data-liberation-desktop-only' ) ).toBe( true );
+		expect( $( '#comp-mobile-menu' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
+		expect( $( '#comp-desktop-map' ).hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( true );
 		// Width-scoped visibility: each side's unique elements render only where its capture did.
 		expect( html ).toContain(
-			'@media(min-width:768px){.data-liberation-mobile-only{display:none!important}}'
+			'@media(min-width:768px){.data-blocks-engine-capture-mobile-only{display:none!important}}'
 		);
 		expect( html ).toContain(
-			'@media(max-width:767px){.data-liberation-desktop-only{display:none!important}}'
+			'@media(max-width:767px){.data-blocks-engine-capture-desktop-only{display:none!important}}'
 		);
 		// Per-width CSS survives as media-scoped stylesheets.
 		const styles = [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ];
@@ -1724,7 +1726,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps mobile-only layout classes viewport-scoped in a single identity-merged tree', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-class-scope-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-class-scope-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1741,7 +1743,7 @@ describe( 'exportWebsiteCapture', () => {
 		const $ = cheerio.load( html );
 		expect( $( '#comp-article' ) ).toHaveLength( 1 );
 		expect( $( '#comp-article' ).hasClass( 'phone-layout' ) ).toBe( false );
-		expect( html ).toContain( 'data-liberation-responsive-class-' );
+		expect( html ).toContain( 'data-blocks-engine-capture-responsive-class-' );
 		const browser = await chromium.launch( { headless: true } );
 		try {
 			const page = await browser.newPage();
@@ -1772,7 +1774,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'scopes mobile CSS against body classes carried by the document wrapper', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-root-class-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-root-class-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1832,7 +1834,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'reconciles a nested mobile-only subtree and a desktop-only wrapper around shared components', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-nested-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-nested-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1868,12 +1870,12 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( '#comp-header #comp-phone-menu #comp-phone-overlay' ) ).toHaveLength( 1 );
-		expect( $( '#comp-phone-menu' ).hasClass( 'data-liberation-mobile-only' ) ).toBe( true );
+		expect( $( '#comp-phone-menu' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
 		// The wrapper stays visible on mobile so the shared background inside it renders.
 		expect( $( '#comp-transition #comp-background' ) ).toHaveLength( 1 );
-		expect( $( '#comp-transition' ).hasClass( 'data-liberation-desktop-only' ) ).toBe( false );
+		expect( $( '#comp-transition' ).hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( false );
 		const receipt = JSON.parse(
 			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
 		);
@@ -1886,7 +1888,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'projects per-viewport presentation of shared components into width-scoped rules', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-projection-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-projection-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1930,11 +1932,11 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		// A mobile-only body flag is privately named so unscoped desktop rules
 		// cannot match it; the mobile stylesheet uses that alias below the switch.
 		expect( $( 'body' ).hasClass( 'device-mobile-optimized' ) ).toBe( false );
-		expect( $( 'body' ).attr( 'class' ) ).toContain( 'data-liberation-responsive-class-' );
+		expect( $( 'body' ).attr( 'class' ) ).toContain( 'data-blocks-engine-capture-responsive-class-' );
 		// The mobile-only component lands inside the id-less grid container.
 		expect( $( '[data-mesh-id="root-grid"] > #comp-phone-only' ) ).toHaveLength( 1 );
 		// Desktop inline presentation stays for the reference viewport when mobile
@@ -1943,7 +1945,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( span.attr( 'style' ) ).toBe( 'font-size:30px' );
 		const hook = ( span.attr( 'class' ) ?? '' )
 			.split( /\s+/ )
-			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+			.find( ( token ) => token.startsWith( 'data-blocks-engine-capture-responsive-' ) );
 		expect( hook ).toBeDefined();
 		expect( html ).toContain( `@media(max-width:767px){` );
 		expect( html ).toContain( `.${ hook }{font-size:21px!important}` );
@@ -1960,7 +1962,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps a responsive hero and split section wide when a phone-only body flag gates desktop layout', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-body-width-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-body-width-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2007,7 +2009,7 @@ describe( 'exportWebsiteCapture', () => {
 		// Phone-only body classes must retain separate documents when they gate
 		// desktop CSS. The hidden first child and duplicate navigation links
 		// exercise the redundant-hidden-navigation cleanup heuristic.
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-gated-dual-prune-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-gated-dual-prune-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2033,11 +2035,11 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-mobile-document #sprite' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-mobile-document nav a' ).first().text() ).toBe( 'About' );
-		expect( $( '.data-liberation-mobile-document #mobile-menu' ).text() ).toBe( 'Phone menu' );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document #sprite' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document nav a' ).first().text() ).toBe( 'About' );
+		expect( $( '.data-blocks-engine-capture-mobile-document #mobile-menu' ).text() ).toBe( 'Phone menu' );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
 			variants: 2,
@@ -2067,7 +2069,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps receipt and assembly aligned when a phone-only body class gates structurally equivalent documents', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-gated-equivalent-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-gated-equivalent-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2085,8 +2087,8 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document main h1' ).text() ).toBe( 'Shared page' );
-		expect( $( '.data-liberation-mobile-document main h1' ).text() ).toBe( 'Shared page' );
+		expect( $( '.data-blocks-engine-capture-desktop-document main h1' ).text() ).toBe( 'Shared page' );
+		expect( $( '.data-blocks-engine-capture-mobile-document main h1' ).text() ).toBe( 'Shared page' );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
 			variants: 2,
@@ -2102,7 +2104,7 @@ describe( 'exportWebsiteCapture', () => {
 			'collapsed-identity-subset',
 		],
 	] )( 'reconciles %s as expected', ( _label, desktopBody, mobileBody, outcome ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-shape-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-shape-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2131,13 +2133,13 @@ describe( 'exportWebsiteCapture', () => {
 		expect( receipt.routes[ 0 ].responsiveVariants.outcome ).toBe( outcome );
 		if ( outcome === 'collapsed-identity-subset' ) {
 			const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-			expect( $( 'body > #section-anchor.data-liberation-mobile-only' ) ).toHaveLength( 1 );
+			expect( $( 'body > #section-anchor.data-blocks-engine-capture-mobile-only' ) ).toHaveLength( 1 );
 			expect( $( '#comp-a #icon, #comp-b #icon' ) ).toHaveLength( 2 );
 		}
 	} );
 
 	const exportDualCapture = ( desktopBody: string, mobileBody: string ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-component-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-component-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2164,18 +2166,18 @@ describe( 'exportWebsiteCapture', () => {
 			header + section + '<form id="comp-form"><div class="grid"><div class="cell"><label for="field-a">A</label><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b" aria-describedby="hint-b"><span id="hint-b">Hint</span></div></div></form>'
 		);
 		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( { variants: 1, outcome: 'collapsed-identity-subset', divergedComponents: 1 } );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( 'header#comp-header' ) ).toHaveLength( 1 );
 		expect( $( 'a[href="#about"]' ) ).toHaveLength( 1 );
 		expect( $( '#about' ) ).toHaveLength( 1 );
 		// Each viewport renders its own form, and the phone copy's ids and the
 		// references inside it move together.
-		expect( $( '#comp-form.data-liberation-desktop-only .grid' ) ).toHaveLength( 1 );
-		const phone = $( '#comp-form--dla-mobile.data-liberation-mobile-only' );
+		expect( $( '#comp-form.data-blocks-engine-capture-desktop-only .grid' ) ).toHaveLength( 1 );
+		const phone = $( '#comp-form--data-blocks-engine-capture-mobile.data-blocks-engine-capture-mobile-only' );
 		expect( phone ).toHaveLength( 1 );
 		expect( phone.find( '.grid' ) ).toHaveLength( 2 );
-		expect( phone.find( 'label' ).attr( 'for' ) ).toBe( 'field-a--dla-mobile' );
-		expect( phone.find( '#field-b--dla-mobile' ).attr( 'aria-describedby' ) ).toBe( 'hint-b--dla-mobile' );
+		expect( phone.find( 'label' ).attr( 'for' ) ).toBe( 'field-a--data-blocks-engine-capture-mobile' );
+		expect( phone.find( '#field-b--data-blocks-engine-capture-mobile' ).attr( 'aria-describedby' ) ).toBe( 'hint-b--data-blocks-engine-capture-mobile' );
 		expect( $( '#comp-form' ).next().is( phone ) ).toBe( true );
 		const ids = $( '[id]' ).toArray().map( ( node ) => $( node ).attr( 'id' ) );
 		expect( new Set( ids ).size ).toBe( ids.length );
@@ -2191,7 +2193,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps dual documents when mobile text has no mapped parent to reconcile into', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-unmapped-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-unmapped-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2227,8 +2229,8 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 1 );
-		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 1 );
 		expect( $( '#comp-mobile-menu' ) ).toHaveLength( 1 );
 		const receipt = JSON.parse(
 			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
@@ -2240,17 +2242,17 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'preserves only capture-attested bounded HTTPS iframe surfaces', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-visual-iframe-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-visual-iframe-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
 			'<html><body><main>' +
-				'<iframe class="map" title="Map" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-dla-visual-iframe-src="https://maps.example/embed" data-dla-visual-iframe-width="1280" data-dla-visual-iframe-height="350"></iframe>' +
+				'<iframe class="map" title="Map" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
 				'<iframe src="https://hidden.example/embed" width="500" height="300"></iframe>' +
-				'<iframe src="javascript:steal()" data-dla-visual-iframe-src="javascript:steal()" data-dla-visual-iframe-width="500" data-dla-visual-iframe-height="300"></iframe>' +
-				'<iframe src="https://zero.example/embed" data-dla-visual-iframe-src="https://zero.example/embed" data-dla-visual-iframe-width="0" data-dla-visual-iframe-height="300"></iframe>' +
+				'<iframe src="javascript:steal()" data-blocks-engine-capture-visual-iframe-src="javascript:steal()" data-blocks-engine-capture-visual-iframe-width="500" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
+				'<iframe src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-width="0" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
 			'</main></body></html>'
 		);
 		writeFileSync(
@@ -2278,7 +2280,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'iframe' ).attr( 'frameborder' ) ).toBeUndefined();
 		expect( $( 'iframe' ).attr( 'onclick' ) ).toBeUndefined();
 		expect( $( 'iframe' ).attr( 'srcdoc' ) ).toBeUndefined();
-		expect( $.html() ).not.toContain( 'data-dla-visual-iframe-' );
+		expect( $.html() ).not.toContain( 'data-blocks-engine-capture-visual-iframe-' );
 	} );
 
 	it( 'rejects unsafe shared-style media attributes', () => {
@@ -2290,7 +2292,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'preserves validated HubSpot form descriptors across raced desktop and mobile captures', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-form-embed-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-form-embed-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2331,7 +2333,7 @@ describe( 'exportWebsiteCapture', () => {
 			'https://js-eu1.hsforms.net/forms/embed/v2/?portalId=145288931&formId=d320b12e-97d4-4fc0-91be-27d99192f4e9&region=eu1'
 		);
 		expect( $( 'iframe' ) ).toHaveLength( 1 );
-		expect( html ).not.toContain( 'data-liberation-desktop-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
 		expect( html ).not.toMatch( /<(?:script|noscript|object|embed|base)\b/i );
 		expect( html ).not.toMatch( /\s(?:onload|srcdoc)=/i );
 		expect( html ).not.toContain( 'javascript:' );
@@ -2339,7 +2341,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'bounds declarative form synthesis deterministically on desktop and mobile', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-bounded-form-embed-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-bounded-form-embed-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2378,7 +2380,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'removes a multiline media srcset URL containing an apostrophe without leaving a malformed reference', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-quoted-media-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-quoted-media-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -2413,7 +2415,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes a same-origin srcset whose candidate URLs contain commas', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-comma-srcset-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-comma-srcset-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -2502,7 +2504,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes images named inside captured interaction states, including renditions that were never downloaded', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-interaction-media-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-interaction-media-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2519,7 +2521,7 @@ describe( 'exportWebsiteCapture', () => {
 					'https://example.com/': {
 						html: 'html/homepage.html',
 						interactions: {
-							schema: 'data-liberation/interaction-states/v2',
+							schema: 'blocks-engine-capture/interaction-states/v2',
 							sourceUrl: 'https://example.com/',
 							viewport: { width: 1440, height: 900 },
 							capturedAt: '2026-08-22T00:00:00.000Z',
@@ -2566,7 +2568,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes large media referenced only by gallery frames', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-gallery-frame-media-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-gallery-frame-media-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const frameUrl = 'https://example.com/photos/large-frame.jpg';
@@ -2580,7 +2582,7 @@ describe( 'exportWebsiteCapture', () => {
 			entries: { [ pageUrl ]: {
 				html: 'html/homepage.html',
 				interactions: {
-					schema: 'data-liberation/interaction-states/v2', sourceUrl: pageUrl,
+					schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: pageUrl,
 					viewport: { width: 1440, height: 900 }, capturedAt: '2026-10-09T00:00:00.000Z',
 					states: [ { status: 'captured', kind: 'gallery', trigger: { selector: '#carousel', tag: 'section', ariaHaspopup: '', dataBindings: {} }, gallery: { inline: {
 						selector: '#carousel', stage: ':scope > div', next: '#next', previous: '#previous', viewport: { width: 1440, height: 900 }, order: [ frameUrl ], initial: 0,
@@ -2601,7 +2603,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps htmlBytes equal to the html length after localizing interaction-state images', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-interaction-bytes-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-interaction-bytes-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2628,7 +2630,7 @@ describe( 'exportWebsiteCapture', () => {
 					'https://example.com/': {
 						html: 'html/homepage.html',
 						interactions: {
-							schema: 'data-liberation/interaction-states/v2',
+							schema: 'blocks-engine-capture/interaction-states/v2',
 							sourceUrl: 'https://example.com/',
 							viewport: { width: 1440, height: 900 },
 							capturedAt: '2026-08-22T00:00:00.000Z',
@@ -2658,7 +2660,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps a lazy image whose bare original was never fetched on its localized srcset renditions', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-original-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-lazy-original-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2719,7 +2721,7 @@ describe( 'exportWebsiteCapture', () => {
 		// Blanking the uncaptured `rs=w:1160` used to splice every `rs=w:1160,…`
 		// sibling too, so the painted desktop rendition was dropped and only the
 		// mobile crop survived (#398: gray hero at desktop, fine at phone).
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-rendition-prefix-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-rendition-prefix-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'resources', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2809,7 +2811,7 @@ describe( 'exportWebsiteCapture', () => {
 
 
 	it( 'binds an image whose src is a density list to the localized file instead of the placeholder', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-srcset-src-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-src-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2856,7 +2858,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not read a lazy data-src as the src of an image that never loaded', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-data-src-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-lazy-data-src-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2895,7 +2897,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes deduplicated captured width renditions before returning early', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-image-resource-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-lazy-image-resource-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'resources/media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2948,7 +2950,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'writes one successful asset outcome with every captured route reference', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -3002,7 +3004,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'writes failed asset outcomes with every captured route reference', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-failed-asset-evidence-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-failed-asset-evidence-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const imageUrl = 'https://cdn.example/missing.png';
@@ -3042,7 +3044,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'traces retained mobile documents and reachable CSS dependencies back to each route', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-css-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-css-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'resources/css', 'resources/media', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -3095,7 +3097,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'groups two deduplicated source URLs by one portable asset ID', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-dedup-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-dedup-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const first = 'https://cdn.example/one.png';
@@ -3120,7 +3122,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'serializes many deduplicated source URLs without repeated alias arrays', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-linear-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-linear-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const sourceUrls = Array.from( { length: 200 }, ( _, index ) => `https://cdn.example/shared/${ index }.png` );
@@ -3147,7 +3149,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not call a stale successful cache entry a successful portable transfer', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-stale-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-stale-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const imageUrl = 'https://cdn.example/missing-local.png';
@@ -3164,7 +3166,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'counts every retained reference while bounding emitted reference locations', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-bounds-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-bounds-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const imageUrl = 'https://cdn.example/shared.png';
@@ -3206,7 +3208,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports captured routes and localized media as a website directory', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -3238,7 +3240,7 @@ describe( 'exportWebsiteCapture', () => {
 					'https://example.com/shop/': {
 						html: 'html/homepage.html',
 						interactions: {
-							schema: 'data-liberation/interaction-states/v2',
+							schema: 'blocks-engine-capture/interaction-states/v2',
 							sourceUrl: 'https://example.com/shop/',
 							viewport: { width: 1440, height: 900 },
 							capturedAt: '2026-08-22T00:00:00.000Z',
@@ -3358,7 +3360,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' ) )
 		).toMatchObject( {
-			schema: 'data-liberation/layout-geometry-proof/v1',
+			schema: 'blocks-engine-capture/layout-geometry-proof/v1',
 			capture_omissions: { capture_missing: 4 },
 		} );
 		expect( receipt ).toMatchObject( {
@@ -3442,10 +3444,10 @@ describe( 'exportWebsiteCapture', () => {
 			'images/blank.png'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'class="data-liberation-desktop-document"'
+			'class="data-blocks-engine-capture-desktop-document"'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'class="data-liberation-mobile-document device-mobile-optimized"'
+			'class="data-blocks-engine-capture-mobile-document device-mobile-optimized"'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'Mobile Home'
@@ -3454,10 +3456,10 @@ describe( 'exportWebsiteCapture', () => {
 			'@media(max-width:767px)'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			':where(.data-liberation-mobile-document) .mobile{color:red}'
+			':where(.data-blocks-engine-capture-mobile-document) .mobile{color:red}'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			':where(.data-liberation-mobile-document):not(.device-mobile-optimized) .desktop-only{display:flex}'
+			':where(.data-blocks-engine-capture-mobile-document):not(.device-mobile-optimized) .desktop-only{display:flex}'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'<style media="(min-width:768px)">.desktop{color:blue}</style>'
@@ -3466,7 +3468,7 @@ describe( 'exportWebsiteCapture', () => {
 			'<p>$100.00</p>'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'<details class="dla-disclosure dla-initial-dialog" open="">'
+			'<details class="data-blocks-engine-capture-disclosure data-blocks-engine-capture-initial-dialog" open="">'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="https://example.com/shop/about?from=home#team"'
@@ -3487,7 +3489,7 @@ describe( 'exportWebsiteCapture', () => {
 		try {
 			const page = await browser.newPage();
 			await page.setContent( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-			const menu = page.locator( '[data-dla-dialog-panel]' ).first();
+			const menu = page.locator( '[data-blocks-engine-capture-dialog-panel]' ).first();
 			await page.locator( '#contact' ).evaluate( ( trigger ) => ( trigger as HTMLElement ).click() );
 			expect( await menu.evaluate( ( panel ) => ( panel as HTMLElement ).hidden ) ).toBe( false );
 			const menuLinks = menu.locator( 'a' );
@@ -3538,7 +3540,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports many large responsive routes within a constrained heap', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-large-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-large-capture-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -3598,7 +3600,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	}, 70_000 );
 
 	it( 'indexes structured semantic evidence into two bounded shards', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-compact-semantic-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-compact-semantic-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -3670,7 +3672,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves the rendered authoring tree when section reconstruction lacks visual proof', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -3780,15 +3782,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( 'Mobile duplicate' );
 		expect( html ).toContain( 'src="/media/hero.jpg"' );
 		expect( html ).not.toContain( '<!-- wp:' );
-		expect( html ).toContain( 'data-liberation-desktop-document' );
-		expect( html ).toContain( 'data-liberation-mobile-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-mobile-document' );
 		expect( receipt.assets ).not.toContainEqual(
 			expect.objectContaining( { sourceUrl: expect.stringContaining( '#generated-icon-' ) } )
 		);
 	} );
 
 	it( 'keeps captured responsive HTML when section evidence is invalid', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -3826,12 +3828,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'Desktop capture' );
 		expect( html ).toContain( 'Mobile capture' );
-		expect( html ).toContain( 'data-liberation-desktop-document' );
-		expect( html ).toContain( 'data-liberation-mobile-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-mobile-document' );
 	} );
 
 	it( 'keeps one authoring body when responsive captures differ only in presentation', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -3860,22 +3862,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).not.toContain( 'data-liberation-desktop-document' );
-		expect( html ).not.toContain( 'data-liberation-mobile-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
 		// One authoring body: the desktop class stays, the mobile one never
 		// joins it, and the per-viewport width difference is projected into a
 		// width-scoped rule under a private hook class.
 		const mainClass = ( cheerio.load( html )( 'main' ).attr( 'class' ) ?? '' ).split( /\s+/ );
 		expect( mainClass ).toContain( 'desktop' );
 		expect( mainClass ).not.toContain( 'mobile' );
-		const hook = mainClass.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+		const hook = mainClass.find( ( token ) => token.startsWith( 'data-blocks-engine-capture-responsive-' ) );
 		expect( hook ).toBeDefined();
 		expect( html ).toContain( `@media(max-width:767px){.${ hook }{width:390px!important}}` );
 		expect( html ).toContain( '<canvas id="canvas" width="1440" height="900"></canvas>' );
 	} );
 
 	it( 'preserves mobile styles when matching responsive bodies style themselves differently', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -3904,8 +3906,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).not.toContain( 'data-liberation-desktop-document' );
-		expect( html ).not.toContain( 'data-liberation-mobile-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
 		expect( html ).toContain( '<style media="(min-width:768px)">main{color:blue}</style>' );
 		expect( html ).toContain(
 			'<style media="(min-width:768px) and (print)">main{margin:0}</style>'
@@ -3915,7 +3917,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps shared styles unwrapped when matching responsive bodies style themselves identically', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -3940,15 +3942,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).not.toContain( 'data-liberation-desktop-document' );
-		expect( html ).not.toContain( 'data-liberation-mobile-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
 		expect( html ).toContain( '<style>main{color:blue}</style>' );
 		expect( html ).not.toContain( '(min-width:768px)' );
 		expect( html ).not.toContain( '(max-width:767px)' );
 	} );
 
 	it( 'shares identical responsive styles when both authoring bodies are required', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -3990,16 +3992,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).toContain( 'data-liberation-desktop-document' );
-		expect( html ).toContain( 'data-liberation-mobile-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-mobile-document' );
 		expect( html.match( /capture-[a-f0-9]{64}\.css/g ) ).toHaveLength( 2 );
 		expect( html ).toContain( 'media="screen and (min-width: 1px)"' );
-		expect( html ).not.toContain( ':where(.data-liberation-mobile-document) .layout' );
+		expect( html ).not.toContain( ':where(.data-blocks-engine-capture-mobile-document) .layout' );
 		expect( html ).toContain( '/assets/css/capture-' );
 	} );
 
 	it( 'keeps a stylesheet the mobile capture also contains applying below the switch width', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -4029,18 +4031,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).toContain( 'data-liberation-desktop-document' );
-		expect( html ).toContain( 'data-liberation-mobile-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-desktop-document' );
+		expect( html ).toContain( 'data-blocks-engine-capture-mobile-document' );
 		// Present in both captures: must apply at every width, not be gated to desktop.
 		expect( html ).toContain( '<style>.shared{color:green}</style>' );
 		expect( html ).not.toContain( '<style media="(min-width:768px)">.shared{color:green}</style>' );
 		// Unique to one capture: stays scoped to the branch that produced it.
 		expect( html ).toContain( '<style media="(min-width:768px)">.desktop-only{color:blue}</style>' );
-		expect( html ).toContain( ':where(.data-liberation-mobile-document) .mobile-only{color:red}' );
+		expect( html ).toContain( ':where(.data-blocks-engine-capture-mobile-document) .mobile-only{color:red}' );
 	} );
 
 	it.each( [ false, true ] )( 'preserves mobile linked styles and their cascade when dual documents are %s', async ( dual ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-linked-css-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-linked-css-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'resources/css' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -4093,7 +4095,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists byte-identical safe styles across 186 documents without deleting local occurrences', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const entries: Record< string, { html: string } > = {
@@ -4119,14 +4121,14 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists shared styles whose only extra attributes are inert runtime identifiers', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-inert-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-inert-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		// The attribute shapes a Wix page puts on its component style tags.
 		const styles =
 			'<style id="css_masterPage" data-href="https://static.example/main.css" rel="stylesheet">.a{color:red}</style>' +
 			'<style data-ricos-style-hash="h1" type="text/css" media="screen" class="ricos">.b{color:blue}</style>' +
-			'<style data-dla-disclosure="true">.marker{color:green}</style>';
+			'<style data-blocks-engine-capture-disclosure="true">.marker{color:green}</style>';
 		for ( const slug of [ 'homepage', 'about' ] )
 			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body><p class="a b">${ slug }</p></body></html>` );
 		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
@@ -4143,14 +4145,14 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css">/g ) ).toHaveLength( 1 );
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css" media="screen">/g ) ).toHaveLength( 1 );
 		expect( html ).not.toContain( 'css_masterPage' );
-		expect( html ).toContain( '<style data-dla-disclosure="true">.marker{' );
+		expect( html ).toContain( '<style data-blocks-engine-capture-disclosure="true">.marker{' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.styleHoist.hoistedStylesheets ).toBe( 2 );
 		expect( diagnostics.styleHoist.diagnosticCounts ).toEqual( { unsafe_attributes: 2 } );
 	} );
 
 	it( 'keeps unsafe and base-dependent styles inline with emitted diagnostics', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-diagnostics-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-diagnostics-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const css = '<style>.hero{background:url("image.png")}</style><style nonce="runtime">.runtime{color:red}</style><style></style><style>.broken{background:url()}</style>';
@@ -4179,7 +4181,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'bounds unhoistable style diagnostics while retaining aggregate reasons', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-bounded-diagnostics-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-bounded-diagnostics-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const styles = Array.from(
@@ -4206,7 +4208,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains base- and CSP-bearing document styles inline with their original attributes', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-policy-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-policy-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const baseDocument = '<html><head><base href="https://cdn.example/theme/"><style>.base{color:red}</style></head><body><p class="base">Base</p></body></html>';
@@ -4240,7 +4242,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists styles when base markup cannot change URL resolution', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-inert-base-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-inert-base-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const bases = [ '<base>', '<base target="_blank">', '<base href="">', '<base href="   ">', '<base href= >', '<base href=\'\t\'>', '<basefont href="https://example.com/">' ];
@@ -4262,7 +4264,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps styles inline for non-empty quoted and unquoted base href values', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-effective-base-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-effective-base-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const bases = [ '<base href=\'https://cdn.example/\'>', '<base href=https://cdn.example/>' ];
@@ -4284,7 +4286,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists only CSS URLs whose new stylesheet base preserves their semantics', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-url-kinds-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-url-kinds-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const css = '<style>.safe{background:url("https://cdn.example/image.png"),url("/image.png"),url("data:image/gif;base64,AA==")}</style><style>.fragment{filter:url("#filter")}</style>';
@@ -4312,7 +4314,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// The sentinel is base-independent like data: and absolute URLs. Classifying
 		// it as an unknown scheme would silently disable hoisting for every document
 		// that lost an asset.
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-sentinel-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-sentinel-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const css = '<style>.safe{background:url("https://cdn.example/missing.png")}</style>';
@@ -4336,7 +4338,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves computed cascade when shared styles are replaced in place', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-browser-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-browser-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const source = '<!doctype html><html><head><style>.target{color:red}</style><style>.target{color:blue}</style></head><body><p class="target">Text</p></body></html>';
@@ -4374,7 +4376,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains repeated relative CSS inline in the browser', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-relative-browser-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-relative-browser-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const source = '<!doctype html><html><head><style>.target{color:green;background-image:url("image.png")}</style></head><body><p class="target">Text</p></body></html>';
@@ -4403,7 +4405,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'does not treat JavaScript url calls as CSS dependencies', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4434,7 +4436,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'does not treat fragment-only CSS urls as dependencies', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4463,7 +4465,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves a self-contained data: image src instead of treating it as an unresolved dependency', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4497,7 +4499,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'removes fixed provider acquisition chrome and its matching body reservation', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4527,7 +4529,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'drops inert shell mounts and hidden detached navigation replicas', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4559,7 +4561,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps an in-flow empty footer landmark while dropping detached footer chrome', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4595,7 +4597,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'collapses responsive forms whose only difference is a generated target id', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
@@ -4624,12 +4626,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).not.toContain( 'data-liberation-desktop-document' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
 		expect( html.match( /<form/g ) ).toHaveLength( 1 );
 	} );
 
 	it( 'exports referenced same-origin runtime dependencies and diagnoses missing ones', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4772,7 +4774,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves percent-encoded route segments in artifact paths and links', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4811,7 +4813,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'rejects encoded route paths that escape the website directory', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4843,7 +4845,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'uses a route whose canonical URL identifies it as the source homepage', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4905,7 +4907,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// while routes.length silently dropped, and nothing named which route
 		// or why. The manifest reflects that outcome directly: the failed
 		// route has no `html` key, exactly like a real timed-out capture.
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -4968,7 +4970,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'names a discovered HTTP 404 as route_not_found instead of a capture failure', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5022,7 +5024,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ 404, 410, 'rendered 404' ] )( 'reports a source-absent %s link without failing capture or cleanup completeness', ( absence ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-source-absence-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-source-absence-' ) );
 		dirs.push( outputDir );
 		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
 		const sourceUrl = 'https://example.com/';
@@ -5051,7 +5053,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ 'missing policy', 'missing reports', 'failure', 'residual', 'different policy' ] )( 'still fails cleanup for an exported page with %s', ( problem ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-retained-cleanup-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-retained-cleanup-' ) );
 		dirs.push( outputDir );
 		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
 		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
@@ -5077,7 +5079,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ 'https://example.com/sitemap-only', 'https://example.com/gone?view=current' ] )( 'keeps missing cleanup evidence blocking for unlinked route %s', ( missingUrl ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-missing-capture-cleanup-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-missing-capture-cleanup-' ) );
 		dirs.push( outputDir );
 		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
 		const sourceUrl = 'https://example.com/';
@@ -5100,7 +5102,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ 'HTTP 500', 'Timeout exceeded', 'mixed 404 and timeout', 'unattempted' ] )( 'does not call an uncaptured %s route absent at source', ( error ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-unproven-absence-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-unproven-absence-' ) );
 		dirs.push( outputDir );
 		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
 		const sourceUrl = 'https://example.com/';
@@ -5128,7 +5130,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// template -- <h1>404</h1> plus a couple of short lines -- parameterized
 		// only by the route name the visitor asked for. A real thin route (here,
 		// an "Access Denied" gate) must survive untouched.
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5201,7 +5203,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'names a route whose HTML file went missing on disk after capture claimed success', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5245,7 +5247,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// rather than adding a second, parallel reporting mechanism: both discovery-time
 		// and capture-time route losses are reported through the same {code,url,reason}
 		// list in the receipt and diagnostics.json.
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5284,7 +5286,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'uses rendered Open Graph metadata when the manifest metadata is absent', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5325,7 +5327,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'resolves relative manifest Open Graph canonical URLs and rewrites their aliases', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5369,7 +5371,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'roots the export at a discovered origin even when the entry is a deep link', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5424,7 +5426,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'rebases relative links in documents captured under a subpath', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5500,7 +5502,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'resolves relative rendered Open Graph canonical URLs and rewrites their aliases', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5542,7 +5544,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it( 'ignores malformed and unsupported canonical metadata while retaining different documents', () => {
 		for ( const canonicalUrl of [ '', 'mailto:hello@example.com', 'https://[invalid' ] ) {
-			const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 			dirs.push( outputDir );
 			mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 			mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5584,7 +5586,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'prefers the exact source route over stale canonical metadata on another route', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5626,7 +5628,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps one route when an alternate address declares the claimed route as canonical', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5692,7 +5694,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		{ directory: '/docs/', explicitSource: false, reversed: true, reservedDirectory: false },
 		{ directory: '/', explicitSource: false, reversed: true, reservedDirectory: true },
 	] )( 'preserves distinct default-document captures: %j', ( { directory, explicitSource, reversed, reservedDirectory } ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-' ) );
 		dirs.push( outputDir );
 		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
 		const directoryUrl = `https://example.com${ directory }`;
@@ -5703,7 +5705,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const menu = '<button id="menu" aria-haspopup="dialog">Menu</button>';
 		const dialogHtml = `<nav><a href="index.html?from=menu#document">Document</a><a href="${ directory }#directory">Directory</a></nav>`;
 		const interactions = ( sourceUrl: string ) => ( {
-			schema: 'data-liberation/interaction-states/v2', sourceUrl,
+			schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl,
 			viewport: { width: 1440, height: 900 }, capturedAt: '2026-09-21T00:00:00Z',
 			states: [ {
 				status: 'captured',
@@ -5736,11 +5738,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( receipt.entrypoint ).toBe( 'website/index.html' );
 		for ( const file of [ 'index.html', reservedPath, 'index-3.html' ] ) {
 			const $ = cheerio.load( readFileSync( join( outputDir, 'website', file ), 'utf8' ) );
-			expect( $( 'a' ).not( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+			expect( $( 'a' ).not( '.data-blocks-engine-capture-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
 				`/${ directoryPath }#directory`, `${ documentUrl }?from=nav#document`, `/${ reservedPath }#reserved`,
 			] );
 			if ( file !== reservedPath ) {
-				expect( $( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+				expect( $( '.data-blocks-engine-capture-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
 					`${ documentUrl }?from=menu#document`, `/${ directoryPath }#directory`,
 				] );
 			}
@@ -5753,7 +5755,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it.each( [ 'https:', 'http:' ] )( 'resolves a server redirect to a captured %s target instead of failing it', ( protocol ) => {
 		const target = `${ protocol }//example.com/new`;
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-alias-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-redirect-alias-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5809,7 +5811,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'accepts a proven unscheduled external redirect but keeps genuinely missing HTML blocking', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-unscheduled-anchor-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-unscheduled-anchor-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5838,7 +5840,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'records an html alias of a directory route in website/_redirects', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-html-alias-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-redirect-html-alias-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5875,7 +5877,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'pairs a query-bearing entry URL with its default-document capture by normalized URL, deduping identical content', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-query-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-query-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5912,7 +5914,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'pairs a fragment-bearing entry URL with its default-document capture the same way', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-fragment-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-fragment-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5948,7 +5950,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps a query-bearing entry URL and its default-document capture distinct when their content differs', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-query-distinct-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-query-distinct-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -5987,7 +5989,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'rewrites a literal canonical link that names a captured route to its local path', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -6027,7 +6029,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves captured and uncaptured document relations when their documents move', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-document-relations-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-document-relations-' ) );
 		dirs.push( outputDir );
 		for ( const directory of [ 'html', 'screenshots', 'resources' ] )
 			mkdirSync( join( outputDir, directory ), { recursive: true } );
@@ -6070,7 +6072,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains independent slash documents without inferring a canonical alias', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -6108,7 +6110,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'localizes external lazy, responsive, preload, icon, and recursive CSS render dependencies', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-portable-render-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-portable-render-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'resources/cdn/css', 'resources/cdn/media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6179,7 +6181,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'localizes compact cross-origin CSS imports and nested font faces with their media and stylesheet bases', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-nested-fonts-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-nested-fonts-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6249,7 +6251,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'omits failed @font-face src sentinels so captured woff and ttf can load', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-font-face-src-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-font-face-src-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6313,7 +6315,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves downloaded backgrounds with HTML-escaped CDN queries in the portable page', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-css-media-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-css-media-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6356,7 +6358,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'localizes downloaded media and browser resources before hoisting shared CSS', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-shared-css-media-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-shared-css-media-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media', 'resources/cdn' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6410,7 +6412,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			expectedUrl: 'about:blank',
 		},
 	] )( '$name', ( { mediaStatus, browserResource, expectedUrl } ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-stylesheet-media-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-stylesheet-media-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media', 'resources/css', 'resources/images' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6479,7 +6481,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'drops leftover remote asset requests while keeping editorial links', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-self-contain-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-self-contain-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -6511,7 +6513,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'does not treat the source root as a global media replacement', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-root-media-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-root-media-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media', 'resources/cdn' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6563,7 +6565,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'uses a captured browser image when the primary media download failed', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-browser-media-fallback-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-browser-media-fallback-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'resources/external' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6613,7 +6615,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'serves a captured browser image whose on-disk transform path contains literal percent signs', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-percent-resource-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-percent-resource-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'resources/external/crop' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6656,7 +6658,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps portable media within the artifact capacity left after routes and resources', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-budget-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-budget-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6698,7 +6700,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps generated reports beside the portable website', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-report-budget-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-report-budget-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6732,7 +6734,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains every route beyond a former compiler file boundary', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-file-boundary-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-file-boundary-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const entries: Record< string, { html: string } > = {};
@@ -6755,7 +6757,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	}, 180_000 );
 
 	it( 'reserves repeated hoisted stylesheets before allocating constrained artifact media', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-style-budget-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-style-budget-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6791,7 +6793,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists repeated 80 KiB safe styles without an artifact budget', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-net-style-budget-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-net-style-budget-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const sharedCss = `.shared{content:"${ 'x'.repeat( 80 * 1024 ) }"}`;
@@ -6826,7 +6828,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains routes when capture reports exceed a former compiler cap', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-report-preflight-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-report-preflight-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const entries: Record< string, { html: string } > = {};
@@ -6852,7 +6854,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'does not treat empty img src as page-URL media or rewrite every slash', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-empty-src-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-empty-src-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6904,7 +6906,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves document syntax when a replacement map includes a bare slash', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-degenerate-slash-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-degenerate-slash-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -6950,7 +6952,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'selects raw punctuation, comma, entity, and percent references that are not DOM src values', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-exact-media-spellings-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-exact-media-spellings-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media' ] )
 			mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -7011,7 +7013,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it( 'keeps the smaller eligible family when homepage priority ties, independent of stub order', () => {
 		for ( const order of [ 'large-first', 'small-first' ] as const ) {
-			const outputDir = mkdtempSync( join( tmpdir(), `dla-media-budget-bytes-${ order }-` ) );
+			const outputDir = mkdtempSync( join( tmpdir(), `liberation-media-budget-bytes-${ order }-` ) );
 			dirs.push( outputDir );
 			for ( const path of [ 'html', 'screenshots', 'media' ] )
 				mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -7060,7 +7062,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it( 'keeps the homepage family over a smaller other-page family, independent of stub order', () => {
 		for ( const order of [ 'other-first', 'home-first' ] as const ) {
-			const outputDir = mkdtempSync( join( tmpdir(), `dla-media-budget-home-${ order }-` ) );
+			const outputDir = mkdtempSync( join( tmpdir(), `liberation-media-budget-home-${ order }-` ) );
 			dirs.push( outputDir );
 			for ( const path of [ 'html', 'screenshots', 'media' ] )
 				mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -7111,7 +7113,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 describe( 'exportWebsiteCapture entrypoint failures', () => {
 	it( 'reports why the source URL produced no page instead of a missing homepage', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-entrypoint-failure-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-entrypoint-failure-' ) );
 		dirs.push( outputDir );
 		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
 		writeFileSync( join( outputDir, 'html/about.html' ), '<html><body><main><h1>About</h1></main></body></html>' );
@@ -7125,5 +7127,170 @@ describe( 'exportWebsiteCapture entrypoint failures', () => {
 		];
 		expect( () => exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures } ) )
 			.toThrow( 'Source homepage https://example.test/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
+	} );
+
+	// One pass saved the page and another was redirected. Capture fails such a
+	// route and never schedules the redirect target, so export must report the
+	// recorded failure, not "redirects to <target>, which was not captured".
+	const disagreeingRedirect = () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-redirect-disagreement-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><main><h1>Home</h1><a href="/club">Club</a></main></body></html>' );
+		writeFileSync( join( outputDir, 'html/club.html' ), '<html><body><main><h1>Club</h1></main></body></html>' );
+		writeFileSync( join( outputDir, 'html/about.html' ), '<html><body><main><h1>About</h1></main></body></html>' );
+		return outputDir;
+	};
+	const disagreement = ( url: string ) => ( { url, viewport: 'mobile', stage: 'goto', error: 'Source redirect aliases disagree across viewports' } );
+
+	it( 'reports a homepage whose passes disagreed about a redirect as not captured, with the recorded reason', () => {
+		const outputDir = disagreeingRedirect();
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.test/': { slug: 'homepage', html: 'html/homepage.html', redirectedTo: 'https://example.test/home?lang=fr' },
+			'https://example.test/about/': { html: 'html/about.html', slug: 'about' },
+		} } ) );
+		expect( () => exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/' ) ],
+		} ) ).toThrow( 'Source homepage https://example.test/ was not captured: mobile/goto: Source redirect aliases disagree across viewports' );
+	} );
+
+	it( 'reports any route whose passes disagreed about a redirect as a failed capture, not a redirect alias', () => {
+		const outputDir = disagreeingRedirect();
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.test/': { slug: 'homepage', html: 'html/homepage.html' },
+			'https://example.test/club': { slug: 'club', html: 'html/club.html', redirectedTo: 'https://example.test/club?lang=fr' },
+		} } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/club' ) ],
+		} ), 'utf8' ) );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ 'https://example.test/' ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ {
+			code: 'route_capture_failed',
+			url: 'https://example.test/club',
+			reason: 'mobile/goto: Source redirect aliases disagree across viewports',
+		} ] );
+		expect( receipt.duplicateRoutes ?? [] ).toEqual( [] );
+		expect( existsSync( join( outputDir, 'website', '_redirects' ) ) ).toBe( false );
+	} );
+} );
+
+describe( 'exportWebsiteCapture per-route containment', () => {
+	const fixture = ( pages: Record< string, { desktop: string; mobile?: string; failures?: string[]; url?: string; blockLosses?: unknown[] } > ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-route-containment-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const entries: Record< string, unknown > = {};
+		const failures: Array< { url: string; viewport: string; stage: string; error: string } > = [];
+		for ( const [ slug, page ] of Object.entries( pages ) ) {
+			writeFileSync( join( outputDir, `html/${ slug }.html` ), page.desktop );
+			if ( page.mobile ) writeFileSync( join( outputDir, `html-mobile/${ slug }.html` ), page.mobile );
+			const url = page.url ?? ( slug === 'home' ? 'https://example.test/' : `https://example.test/${ slug }/` );
+			entries[ url ] = { html: `html/${ slug }.html`, slug, ...( page.blockLosses ? { blockLosses: page.blockLosses } : {} ) };
+			for ( const error of page.failures ?? [] ) failures.push( { url, viewport: 'mobile', stage: 'screenshot-scrolled', error } );
+		}
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const summary = { routesDiscovered: Object.keys( pages ).length, routesCaptured: Object.keys( pages ).length, routesSkipped: 0, routesFailed: 0 };
+		return { outputDir, options: { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary, failures } };
+	};
+	const page = ( title: string ) => `<html><body><main><h1>${ title }</h1></main></body></html>`;
+	const fail = ( title: string ) => ( documents: Record< string, string > ) => {
+		if ( documents.desktop?.includes( title ) ) throw new Error( `cannot export ${ title }` );
+		return undefined;
+	};
+
+	it( 'drops a route whose export throws a non-integrity error and exports the rest', () => {
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ) }, about: { desktop: page( 'About' ) } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { ...options, resolveDocumentSelection: fail( 'About' ) } ), 'utf8' ) );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ 'https://example.test/' ] );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( {
+			code: 'route_export_failed', url: 'https://example.test/about/', reason: 'cannot export About', unit: 'route', severity: 'error',
+		} );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [ { url: 'https://example.test/about/', code: 'route_export_failed', reason: 'cannot export About' } ] );
+		// The dropped route moves from captured to failed; the invariant holds.
+		expect( receipt.summary ).toMatchObject( { routesDiscovered: 2, routesCaptured: 1, routesFailed: 1, complete: false } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'drops a route whose website path collides with an earlier claimant and counts it as failed', () => {
+		const { outputDir, options } = fixture( {
+			home: { desktop: page( 'Home' ) },
+			docs: { desktop: page( 'Docs' ), url: 'https://example.test/docs.html' },
+			guide: { desktop: page( 'Guide' ), url: 'https://example.test/docs.html/guide/', failures: [ 'scrolled screenshot timed out' ] },
+		} );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ 'https://example.test/', 'https://example.test/docs.html' ] );
+		const reason = 'website/docs.html/guide/index.html needs website/docs.html as a directory, which is the page of https://example.test/docs.html';
+		// The dropped route keeps only its collision row, like a route_export_failed route.
+		expect( receipt.discoveryDiagnostics.filter( ( row: { url: string } ) => row.url === 'https://example.test/docs.html/guide/' ) ).toEqual( [ {
+			code: 'route_path_collision', url: 'https://example.test/docs.html/guide/', reason, unit: 'route', severity: 'error', path: 'website/docs.html/guide/index.html',
+		} ] );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [ { url: 'https://example.test/docs.html/guide/', code: 'route_path_collision', reason } ] );
+		expect( receipt.summary ).toMatchObject( { routesDiscovered: 3, routesCaptured: 2, routesFailed: 1, complete: false } );
+		expect( readFileSync( join( outputDir, 'website/docs.html' ), 'utf8' ) ).toContain( 'Docs' );
+	} );
+
+	it( 'reports evidence blocks capture lost on a saved page as block findings and keeps the page', () => {
+		const loss = { code: 'disclosure_unrestored', reason: 'Disclosure baseline restoration unproven: no unique panel', unit: 'block', severity: 'error', profile: 'desktop' };
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), blockLosses: [ loss ] } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ { ...loss, url: 'https://example.test/' } ] );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0 } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'fails closed on an integrity error', () => {
+		const { options } = fixture( { home: { desktop: page( 'Home' ) }, about: { desktop: page( 'About' ) } } );
+		const resolveDocumentSelection = () => { throw new IntegrityError( 'identity mismatch' ); };
+		expect( () => exportWebsiteCapture( { ...options, resolveDocumentSelection } ) ).toThrow( 'identity mismatch' );
+		const programmerError = () => { throw new TypeError( 'undefined is not a function' ); };
+		expect( () => exportWebsiteCapture( { ...options, resolveDocumentSelection: programmerError } ) ).toThrow( TypeError );
+	} );
+
+	it( 'still fails the capture when the entrypoint route cannot be exported', () => {
+		const { options } = fixture( { home: { desktop: page( 'Home' ) }, about: { desktop: page( 'About' ) } } );
+		expect( () => exportWebsiteCapture( { ...options, resolveDocumentSelection: fail( 'Home' ) } ) )
+			.toThrow( 'Source homepage https://example.test/ was not captured: cannot export Home' );
+	} );
+
+	it( 'records stage failures on a route with saved HTML as route_capture_degraded and keeps the page', () => {
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), mobile: page( 'Home phone' ), failures: [ 'scrolled screenshot timed out' ] } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.routes ).toHaveLength( 1 );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( {
+			code: 'route_capture_degraded', url: 'https://example.test/', reason: 'mobile/screenshot-scrolled: scrolled screenshot timed out',
+			unit: 'route', severity: 'warning', metrics: { failedStages: 1 },
+		} );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0, complete: true } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'keeps a declared profile without its document as an incomplete profile finding, not a failed route', () => {
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Home' ), failures: [ 'HTTP 403' ] } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ {
+			code: 'route_profile_uncaptured', url: 'https://example.test/', reason: 'mobile/screenshot-scrolled: HTTP 403', unit: 'profile', severity: 'error', profile: 'mobile',
+		} ] );
+		expect( missingRoutes( receipt.discoveryDiagnostics ) ).toEqual( [] );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0, complete: false } );
+		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'leaves an unparseable author stylesheet unprojected and still exports the page', () => {
+		const broken = '#nav{color:red}}';
+		const { outputDir, options } = fixture( { home: {
+			desktop: '<html><head><style>.shell{margin:0}</style></head><body><nav id="nav">Menu</nav><main><h1>Desktop</h1></main></body></html>',
+			mobile: `<html><head><style>.shell{margin:0}</style><style>${ broken }</style></head><body><header><p>Phone header</p></header><main><h1>Phone</h1></main></body></html>`,
+		} } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
+			code: 'stylesheet_unparseable', url: 'https://example.test/', unit: 'stylesheet', severity: 'warning',
+		} ) );
+		expect( receipt.discoveryDiagnostics.some( ( row: { code: string } ) => row.code === 'route_export_failed' ) ).toBe( false );
+		const html = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
+		expect( html ).toContain( 'Phone' );
+		expect( html ).not.toContain( broken );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0 } );
 	} );
 } );

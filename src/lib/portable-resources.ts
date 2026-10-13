@@ -1,9 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
 import { isInlineUrl } from './self-contain.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { fileHash, pathWithin, portableResourcePath, portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
+import { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
 import { dependencyReferences, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSource, removeDanglingResourceReference, type PortableDependency } from './portable-references.js';
 
 export interface PortableResourceOptions {
@@ -16,6 +17,8 @@ export interface PortableResourceOptions {
 	assetHashesByPath: ReadonlyMap< string, string >;
 	portablePathsBySource: ReadonlyMap< string, string >;
 	embeddedSources: ReadonlySet< string >;
+	/** Captured files larger than this are not written; they resolve like uncaptured dependencies. Default: `DEFAULT_MAX_FILE_BYTES`. */
+	maxFileBytes?: number;
 	projectEmbeddedHtml: ( html: string ) => string;
 }
 
@@ -26,6 +29,8 @@ export interface PortableResourceResult {
 	portablePathsBySource: Map< string, string >;
 	unresolvedDependencies: Array< { url: string; sourceUrl: string; error: string } >;
 	rejectedReplacementKeys: Set< string >;
+	/** Captured dependencies over `maxFileBytes`, one per URL. */
+	oversizedResources: Array< { url: string; bytes: number } >;
 }
 
 /** Materialize captured dependencies into the private portable generation.
@@ -46,6 +51,8 @@ export function materializePortableResources( options: PortableResourceOptions )
 	const copiedResources = new Set< string >();
 	const copyingResources = new Set< string >();
 	const resourceReplacements = new Map< string, string >();
+	const oversizedResources = new Map< string, number >();
+	const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
 	const promoteCapturedMediaReplacement = ( dependencyUrl: string, documentUrl: string ) => {
 		const portablePath = resourceReplacements.get( dependencyUrl );
 		if ( ! portablePath ) return;
@@ -75,6 +82,16 @@ export function materializePortableResources( options: PortableResourceOptions )
 				url: dependency.url,
 				sourceUrl,
 				error: 'captured dependency file is unavailable',
+			} );
+			return false;
+		}
+		const bytes = statSync( source ).size;
+		if ( bytes > maxFileBytes ) {
+			oversizedResources.set( dependency.url, bytes );
+			unresolvedDependencies.push( {
+				url: dependency.url,
+				sourceUrl,
+				error: `captured dependency is ${ bytes } bytes, over the ${ maxFileBytes }-byte per-file export limit`,
 			} );
 			return false;
 		}
@@ -206,5 +223,8 @@ export function materializePortableResources( options: PortableResourceOptions )
 		if ( html !== originalHtml ) writeFileSync( entry.htmlPath, html );
 	}
 
-	return { assets, mediaReplacements, resourceReplacements, portablePathsBySource, unresolvedDependencies, rejectedReplacementKeys };
+	return {
+		assets, mediaReplacements, resourceReplacements, portablePathsBySource, unresolvedDependencies, rejectedReplacementKeys,
+		oversizedResources: [ ...oversizedResources ].map( ( [ url, bytes ] ) => ( { url, bytes } ) ),
+	};
 }

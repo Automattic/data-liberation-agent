@@ -50,11 +50,14 @@ The JSON result is versioned and destination-neutral. It samples the entry route
 | `--output <dir>` | Output base. Default `~/data-liberation`, or `DLA_OUTPUT_DIR` |
 | `--resume` | Reuse what is already on disk instead of recapturing |
 | `--acquisition http` | Acquire and export an explicitly unverified HTTP review candidate; browser capture remains the default |
-| `--route-limit <n>` | Bound HTTP route requests while retaining the full discovered inventory in diagnostics |
+| `--route-limit <n\|all>` | Route budget, shared by browser and HTTP acquisition: capture at most n routes, homepage included, counting linked pages. The homepage is always kept and the rest is an even, deterministic spread over the discovered inventory. Default: 50 for browser capture, `all` for HTTP. Omitted routes are diagnosed and counted in `routesOmitted`, never as failures. See [route budget](#route-budget) |
+| `--route-selection <mode>` | How the route budget picks routes: `discovery-order` (default, the even spread) or `template-coverage` (one route per template group first; writes `template-groups.json`). See [template coverage](#template-coverage-selection) |
 | `--runtime-route-limit <n>` | Observe declared runtime regions on at most 0–50 HTTP routes (default 0) |
 | `--screenshots` | Also write full-page desktop and mobile PNGs |
 | `--serve` | Keep a local server running until interrupted |
 | `--no-learn-fluid` | Freeze the layout at one width instead of learning how it reflows |
+| `--device-mode <mode>` | `auto` (default) checks the homepage once before capture. When the adapter declares no per-device documents and phones receive the same server HTML (nonces, CSRF tokens and timestamps ignored), each route first gets a cheap phone check (images, media and fonts blocked, a few seconds). A route whose server HTML, element structure or body classes differ at phone width is captured in both profiles; every other route is captured once at desktop and the copied CSS supplies its phone layout. Otherwise every route is captured in both profiles. A phone-width probe of the homepage keeps controls that only appear on phones, such as a hamburger menu. The receipt's `deviceMode` records the decisions, the dual routes and why. `dual` always captures both profiles; `reflow-only` always captures desktop only |
+| `--reference-sample <n\|all>` | Freeze baseline reference evidence for the homepage plus n-1 sampled routes; unsampled routes skip reference navigation and compare reports them as uncompared scope. Default: 1 (homepage only). Use `all` for full-route parity |
 
 Fluid learning is on by default. The capture sweeps widths with the source's own runtime alive, fits how each element is sized, and emits that as ordinary CSS — so the copy keeps reflowing after the runtime is stripped, instead of being pinned to the width it was captured at.
 
@@ -156,6 +159,69 @@ not script strings, and resolve virtual paths relative to the website root. It
 does not require client-side fetching. DLA retains no expanded authoring copies.
 See [runtime serving and limits](docs/runtime-api.md#shared-parts-and-serving).
 
+### Route budget
+
+Browser capture renders every route in several profiles, so a store-sized inventory cannot finish inside a typical hosted deadline. One measured source inventoried 3,689 routes and reached about 180 of them in an hour. Capture therefore takes at most `routeLimit` routes (CLI `--route-limit`, MCP `routeLimit`, `captureWebsite({ routeLimit })`):
+
+- **Default:** 50 for browser capture, about 17 minutes at that worst observed throughput. HTTP review acquisition is unbounded by default: it fetches documents without rendering them, so the same inventory finishes in minutes. Pass `all` to capture every route in either mode.
+- **Selection:** the entrypoint, then an even spread over the remaining inventory (the same rule as `referenceSample`). The same inventory always yields the same selection. The budget counts the entrypoint.
+- **Linked pages:** linked-page discovery keeps its own `maxPages`, but its admissions draw from the same budget, so the total stays bounded. A redirect target continues a route already admitted and does not spend budget.
+- **Omitted routes:** each is a `route_omitted_by_budget` entry in `discoveryDiagnostics` and counts in `summary.routesOmitted`. Omitted routes are never attempted, so they are not in `routesDiscovered`, `routesFailed` or `missingRoutes`. Links to them stay unresolved anchors with reason `target route was omitted by the route budget`.
+
+The budget is the caller's chosen scope, so omission does not make a capture incomplete: `complete` means every route inside the budget was captured. A caller that needs the whole source checks `summary.routesOmitted === 0` or passes `routeLimit: 'all'`.
+
+### Template coverage selection
+
+An even spread can spend the whole budget inside one template (a few hundred posts) and never reach the one-off templates: the contact form, a landing page with its own CSS, the shop. `routeSelection: 'template-coverage'` (CLI `--route-selection template-coverage`, MCP `routeSelection`) spends the budget by template instead:
+
+1. After discovery and before any browser starts, capture fetches each discovered route's server HTML. The pass is bounded: at most 1,000 routes (an even spread of a larger inventory), 6 requests at a time on the entry origin, 15 s per request, 8 MiB per document, 256 MiB and 120 s in total (a tenth of `timeBudgetMs` when that is smaller). If the source throttles (429 or 503), the pass waits for `Retry-After`, continues one request at a time, and stops at the next refusal, so it never spends the rate limit the browser capture needs. Routes it does not fingerprint belong to no group.
+2. Each document gets a template fingerprint: a hash of the body's skeleton (tag, stable class names and `role`; text and inline elements ignored; classes with digits, CSS-in-JS prefixes, taxonomy or author terms such as `category-news`, and state words such as `active` or `current-menu-item` dropped; repeated siblings collapsed; classless prose blocks and the inside of content containers such as `article` or `.entry-content` treated as content) plus a divergence fingerprint compared exactly: the page's own `<style>` text, its stylesheet and script URLs, executable inline scripts, forms and interactive controls (tabs, disclosures, `details`, dialogs), each by tag and stable classes, and embeds (`iframe`, `video`, `audio`, `canvas`, `object`, `embed`). Routes with the same fingerprint form a group; its representative is its first member in inventory order.
+3. When the budget truncates the inventory, the entrypoint comes first, then one representative per group (larger groups first), then the even spread over the remaining routes. When the inventory fits the budget, every route is captured as before.
+
+The pass only chooses routes; captured pages are produced exactly as in `discovery-order`. It writes `template-groups.json` next to `website/` (never inside it, so importers do not see it) and adds a `templateGroups` count summary to `capture-receipt.json`. Grouping never fails a capture: if the pass itself fails, routes are selected in discovery order and the capture records one `template_grouping_unavailable` discovery diagnostic, which is not a loss.
+
+`template-groups.json` (schema `data-liberation-agent/template-groups/v1`) is static and deterministic for the same responses: no timings.
+
+| Field | |
+|---|---|
+| `sourceUrl` | Entry URL |
+| `fingerprint` | `{ version, maxSkeletonDepth }` of the rules above |
+| `limits` | The pass bounds that applied |
+| `coverage` | `{ routes, fingerprinted, unfingerprinted, groups, singletons }` over the deduplicated inventory |
+| `groups[]` | `{ id, key, skeleton, divergence, representative, size, members }`, ordered by first member; `id` is `t1`, `t2`, … |
+| `unfingerprinted[]` | `{ url, reason, httpStatus? }`; `reason` is `not_sampled`, `time_budget`, `byte_budget`, `rate_limited`, `http_status`, `not_html`, `redirected`, `too_large` or `fetch_failed` |
+| `selection` | `{ mode, limit, selected, groupsRepresented, groupsOmitted }` for the routes the budget kept |
+
+### Capture time budget
+
+A caller with a hard deadline sets `timeBudgetMs` (CLI `--time-budget 14m`, MCP `timeBudgetMs`, `captureWebsite({ timeBudgetMs })`; browser capture only). It is the time from the start of the capture until export must begin, so a deadline yields a partial site instead of nothing. Default: no budget, and capture behaves exactly as before.
+
+- **Admission:** the entrypoint starts first and is always captured. Other routes start until the budget minus a grace window (25% of the budget, at most 60 s); after that no new route or linked-page wave starts.
+- **Deadline:** routes still running at the budget are abandoned: the browser closes and they get at most 5 s to unwind. The entrypoint is never abandoned: if it is still running, capture waits for it (its own navigation and stage timeouts bound it). Section media stops downloading at the deadline, and the live-source behavior discovery that normally follows export is skipped once the budget is spent.
+- **Result:** export, the homepage preview and the fidelity reference run on what was captured. Each route left out is a `route_capture_skipped_budget` finding (`unit: 'route'`, `severity: 'error'`, `metrics.timeBudgetMs`). It is a missing route, counted in `routesFailed`, so `complete` is `false` and `usable` follows `isUsableCapture`. The findings reach `website/source-findings.json`, in Static Site Importer's neutral schema.
+
+**Recommended value:** the caller's deadline minus the post-capture headroom. Measured on a 10-route capture of `wordpress.org/news` (macOS, Node 24): export 4.0–5.2 s, homepage preview 5.2–5.3 s, reference finalization under 0.1 s. A 90 s budget finished in 99.5 s of wall time, process start and exit included. Export grows with the route count, about 0.5 s per route in that run, so for the default 50-route limit use **`timeBudgetMs = deadline − 60 s`**. That covers the 5 s abandonment drain, export, the preview and a margin. Leave more headroom when the entrypoint itself is slow, because the budget always waits for it.
+
+### Per-file export limit
+
+Export writes no file larger than `maxFileBytes` into `website/` (CLI `--max-file-bytes`, MCP `maxFileBytes`, `captureWebsite({ maxFileBytes })`). The default is 50 MiB (`DEFAULT_MAX_FILE_BYTES`, 52,428,800 bytes). It matches Static Site Importer's per-file intake limit for staged archives, which refuses larger files, so change the two together. Capture itself keeps accepting larger media (videos up to 100 MiB).
+
+- **Assets over the limit** are not written. References to them resolve like any uncaptured asset: an image becomes the transparent placeholder, and other dependencies keep their source URL or are removed. Each asset is an `asset_exceeds_file_limit` finding (`unit: 'asset'`, `metrics: { bytes, limit }`). The page still exports, and the capture's completeness does not change.
+- **Page documents over the limit** fail that route through per-route export containment (`route_export_failed`). A page document over the limit at the entrypoint fails the capture.
+
+### Usable partial captures
+
+A capture is `complete: true` only when every route inside the [route budget](#route-budget) was captured with a document for each declared capture profile and no link points at a missing route. Links to budget-omitted routes are not missing. A partial site is still written and returned with `complete: false` (`strict: true` rejects instead). One failed route should not sink an import, so the result carries what a caller needs to decide:
+
+| Field | |
+|---|---|
+| `entrypointCaptured` | The entrypoint route is in the capture (also in `summary`). Always `true` on a resolved result: when the entrypoint is not rendered, capture rejects with the recorded cause, whatever happened to other routes. |
+| `missingRoutes` | `{ url, code: 'route_capture_failed' \| 'route_capture_skipped_budget' \| 'route_export_failed' \| 'route_path_collision', reason }` for each route with no usable page (deadline, engine error, the [capture time budget](#capture-time-budget), uncaptured redirect target, a non-integrity error while exporting that route, or a website path another route already claimed; the entrypoint always keeps its path). A route whose HTML was saved counts as captured even when a stage failed on it. A declared capture profile that produced no document stays a `route_profile_uncaptured` finding (`unit: 'profile'`, named in `profile`) and makes the capture incomplete; other stage failures are a `route_capture_degraded` finding, an unparseable author stylesheet left unprojected is `stylesheet_unparseable`, and a native timeline or disclosure probe that failed on a page that was still saved is `native_timeline_unproven` or `disclosure_unrestored` (`unit: 'block'`), all in `discoveryDiagnostics`. Routes the source itself lacks (`route_not_found`), redirects off-site (`route_external_redirect`) or lists off the entry origin (`route_off_origin`) are not listed; they remain in the receipt's `discoveryDiagnostics`. |
+| `summary.routesOmitted` | Discovered routes the [route budget](#route-budget) left out, one `route_omitted_by_budget` diagnostic each. Never counted as failed or missing. |
+| `unresolvedAnchors` | Links to missing routes stay unresolved anchors. Links to budget-omitted routes carry reason `target route was omitted by the route budget`. |
+
+Recommended default policy (`USABLE_PARTIAL_CAPTURE_POLICY`, version 1; `isUsableCapture(result)`; surfaced as `usable` by `liberate` and the MCP tool): a capture is usable when the entrypoint was captured and it is either complete or its `missingRoutes` are at most `max(1, 10%)` of `summary.routesDiscovered` (the attempted routes; budget-omitted routes count in neither). A capture whose entrypoint failed is never usable. Import a usable partial capture and report `missingRoutes` instead of failing. Capture itself never applies the policy.
+
 ## Using it from an agent
 
 The `liberate` skill drives the CLI. It is the only skill: a URL becomes a verified, portable site, and optionally a live URL.
@@ -201,6 +267,8 @@ The server exposes the same four verbs as tools — `inspect`, `liberate`, `comp
 
 - [Platform API — custom platforms](/docs/platform-api.md)
 - [Wix authenticated content endpoints](/docs/wix-content-endpoints.md) — the load-bearing content endpoints behind Wix's editor and dashboard auth
+- [Loss ledger contract](/docs/contracts/loss-ledger.md) — how capture, compile and import report degraded units, and the one caller-side acceptance policy
+- [Capture evidence names](/docs/contracts/capture-evidence.md) — the producer-neutral attribute, class and schema names capture writes, owned by Blocks Engine
 
 ## Related
 

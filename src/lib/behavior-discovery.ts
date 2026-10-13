@@ -62,7 +62,7 @@ export async function discoverCapturedBehavior( directory: string ): Promise< vo
 	const receipt = existsSync( join( directory, 'portable-motion.json' ) ) ? JSON.parse( readFileSync( join( directory, 'portable-motion.json' ), 'utf8' ) ) as { unsupported?: Record< string, unknown[] > } : null;
 	const residual = Object.values( receipt?.unsupported ?? {} ).some( ( rows ) => rows.length );
 	writeFileSync( join( directory, 'source-behavior.json' ), JSON.stringify( {
-		schema: 'data-liberation/source-behavior-report/v1', observed: observations.length,
+		schema: 'blocks-engine-capture/source-behavior-report/v1', observed: observations.length,
 		total: pages.length, omitted: Math.max( 0, pages.length - 4 ), observations, failures,
 		promotion: promotion && { promoted: promotion.promoted, failures: promotion.failures, evidence: promotion.evidence, attempts },
 		status: promotion?.promoted ? ( residual ? 'partially_translated' : 'translated' ) : 'observed_untranslated',

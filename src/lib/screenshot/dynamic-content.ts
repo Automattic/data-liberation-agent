@@ -64,6 +64,9 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         return toggleLabels.some((label) => text === label || text.startsWith(label));
       };
       const safeToActivate = (element: Element) => {
+        // An authored chooser role overrides the native button's semantics.
+        // Choices belong to post-baseline interaction capture, not hydration.
+        if (element.matches('[role="listbox"],[role="combobox"],[role="menu"],[role="menuitem"],[role="option"]')) return false;
         if (element.hasAttribute('aria-haspopup')) return false;
         if (element.closest('nav,[role="navigation"]')) return false;
         const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
@@ -278,9 +281,12 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * as "content survived" and skip the write-back, letting the pending unmount
  * delete the panel's only copy of its content.
  *
- * Runs after the visual reference so hydration cannot change screenshot
- * geometry, and BEFORE `page.content()` is serialized, so the captured static
- * HTML contains the restored panels directly (no post-hoc wiring needed).
+ * Runs in the baseline serialization transaction so the captured static HTML
+ * contains the restored panels directly. Authored chooser roles belong to the
+ * later interaction pass; they do not need editorial-content hydration. An
+ * unassociated local mount must restore the observed baseline before its copy
+ * is retained. An unverified mutation throws into the viewport failure lifecycle
+ * instead of letting the screenshot/HTML transaction serialize the altered page.
  *
  * The same candidate pass also includes visible "show more" / "read more"
  * toggles. Those are not left open by `expandCollapsedContent`: the opened
@@ -335,6 +341,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       };
       const safeToActivate = (element: Element) => {
+        if (element.matches('[role="listbox"],[role="combobox"],[role="menu"],[role="menuitem"],[role="option"]')) return false;
         if (element.hasAttribute('aria-haspopup')) return false;
         if (element.closest('nav,[role="navigation"]')) return false;
         const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
@@ -429,6 +436,22 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           const { trigger, target } = candidate;
           if (candidate.mounted) {
             handledToggles.add(describe(trigger).selector);
+            // This unassociated button is admitted by a local mount/close proof.
+            // A closed trigger alone does not prove its siblings survived. Read
+            // the resting state before activation and verify it before retaining
+            // a hidden panel; never manufacture a replacement baseline DOM.
+            const restingState = () => JSON.stringify({
+              text: document.body.innerText,
+              route: currentRoute(),
+              x: scrollX, y: scrollY,
+              trigger: trigger.getBoundingClientRect().toJSON(),
+              owner: target.getBoundingClientRect().toJSON(),
+              controls: Array.from(document.querySelectorAll('input,select,textarea'), node => ({
+                value: (node as HTMLInputElement).value,
+                checked: node instanceof HTMLInputElement ? node.checked : undefined,
+              })),
+            });
+            const resting = restingState();
             const before = new Set(Array.from(target.children));
             const closedIcons = Array.from(trigger.querySelectorAll('svg')).map(icon => ({className: icon.getAttribute('class') ?? '', style: icon.getAttribute('style') ?? ''}));
             const route = currentRoute();
@@ -440,29 +463,38 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
               await wait(50);
             }
             const panel = panels.length === 1 && currentRoute() === route && trigger.getAttribute('aria-expanded') === 'true' ? panels[0] : undefined;
-            const copy = panel?.cloneNode(true) as HTMLElement | undefined;
+            // An observed popup is interaction evidence, even when its opener
+            // omitted aria-haspopup. Do not relabel a menu as an editorial region.
+            const popup = panel?.matches('[role="menu"],[role="listbox"],[role="dialog"],[role="alertdialog"],[popover]');
+            const copy = !popup ? panel?.cloneNode(true) as HTMLElement | undefined : undefined;
             const openIcons = Array.from(trigger.querySelectorAll('svg')).map(icon => ({className: icon.getAttribute('class') ?? '', style: icon.getAttribute('style') ?? ''}));
             if (trigger.getAttribute('aria-expanded') === 'true') trigger.click();
             const deadline = Date.now() + settleMs;
             while (Date.now() < deadline && (trigger.getAttribute('aria-expanded') !== 'false' || panel?.isConnected)) await wait(25);
-            if (copy && trigger.getAttribute('aria-expanded') === 'false' && !panel?.isConnected) {
+            if (copy && trigger.getAttribute('aria-expanded') === 'false' && !panel?.isConnected && restingState() === resting) {
               const icons = Array.from(trigger.querySelectorAll('svg'));
               if (icons.length === closedIcons.length && icons.length === openIcons.length) icons.forEach((icon,index) => {
                 const closed = closedIcons[index]!, open = openIcons[index]!;
                 if ((icon.getAttribute('class') ?? '') !== closed.className || (icon.getAttribute('style') ?? '') !== closed.style) return;
                 if (closed.className !== open.className) {
-                  icon.setAttribute('data-dla-disclosure-open-class',open.className);
-                  icon.setAttribute('data-dla-disclosure-closed-class',closed.className);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-open-class',open.className);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-closed-class',closed.className);
                 }
                 if (closed.style !== open.style) {
-                  icon.setAttribute('data-dla-disclosure-open-style',open.style);
-                  icon.setAttribute('data-dla-disclosure-closed-style',closed.style);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-open-style',open.style);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-closed-style',closed.style);
                 }
               });
               mountedPanels.push({ trigger, parent: target, panel: copy });
               hydrated++;
             } else {
-              records.push({ status: 'no-dialog', trigger: describeTrigger(trigger), target: describe(target), error: 'No unique locally mounted panel with verified collapsed restoration.' });
+              // Serialization cannot treat an unsuccessful live probe as an
+              // unchanged baseline. The caller owns the existing viewport
+              // failure lifecycle; abort before later probes or write-back.
+              if (trigger.getAttribute('aria-expanded') !== 'false' || restingState() !== resting) {
+                throw new Error(`${describe(trigger).selector}: no unique locally mounted panel with verified baseline restoration`);
+              }
+              records.push({ status: 'no-dialog', trigger: describeTrigger(trigger), target: describe(target), error: 'No unique locally mounted panel; baseline restoration verified.' });
             }
             continue;
           }
@@ -564,7 +596,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         }
         for (const { target, content, trigger } of observed) {
           if (!hasContent(target)) target.innerHTML = content;
-          target.dataset.dlaHydratedDisclosure = 'true';
+          target.dataset.blocksEngineCaptureHydratedDisclosure = 'true';
           records.push({
             status: 'captured',
             trigger: describeTrigger(trigger),
@@ -601,14 +633,14 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
       for (const { trigger, parent, panel } of mountedPanels) {
         if (!trigger.isConnected || !parent.isConnected) continue;
         let index = 0;
-        while (document.getElementById(`dla-disclosure-panel-${index}`)) index++;
-        panel.id = `dla-disclosure-panel-${index}`;
+        while (document.getElementById(`data-blocks-engine-capture-disclosure-panel-${index}`)) index++;
+        panel.id = `data-blocks-engine-capture-disclosure-panel-${index}`;
         panel.hidden = true;
         panel.setAttribute('role', 'region');
-        panel.dataset.dlaHydratedDisclosure = 'true';
-        panel.dataset.dlaLocalDisclosure = 'true';
+        panel.dataset.blocksEngineCaptureHydratedDisclosure = 'true';
+        panel.dataset.blocksEngineCaptureLocalDisclosure = 'true';
         const group = parent.parentElement;
-        if (group && exclusiveGroups.has(group)) group.dataset.dlaExclusiveDisclosures = 'true';
+        if (group && exclusiveGroups.has(group)) group.dataset.blocksEngineCaptureExclusiveDisclosures = 'true';
         trigger.setAttribute('aria-controls', panel.id);
         parent.append(panel);
         records.push({ status: 'captured', trigger: describeTrigger(trigger), target: describe(panel), html: panel.outerHTML });
@@ -667,7 +699,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         if (populated.length >= limit - hydrated || !visible(trigger) || !safeToActivate(trigger) || isExpandToggle(trigger)) continue;
         const panel = panelForTrigger(trigger);
         if (!panel || panel.getAttribute('role') !== 'region' || !hasContent(panel) || !trigger.parentElement?.contains(panel)) continue;
-        if (panel.dataset.dlaLocalDisclosure || panel.dataset.dlaHydratedDisclosure) continue;
+        if (panel.dataset.blocksEngineCaptureLocalDisclosure || panel.dataset.blocksEngineCaptureHydratedDisclosure) continue;
         populated.push({ trigger, panel });
       }
       const eligible = populated.filter((pair) => {
@@ -829,10 +861,10 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         entry.trigger.setAttribute('aria-expanded', entry.snap.expanded ? 'true' : 'false');
         entry.panel.hidden = !entry.snap.expanded;
         if (entry.snap.ariaHidden !== null) entry.panel.setAttribute('aria-hidden', entry.snap.expanded ? 'false' : 'true');
-        entry.panel.dataset.dlaLocalDisclosure = 'true';
-        entry.panel.dataset.dlaHydratedDisclosure = 'true';
+        entry.panel.dataset.blocksEngineCaptureLocalDisclosure = 'true';
+        entry.panel.dataset.blocksEngineCaptureHydratedDisclosure = 'true';
         const cluster = clusterOf(entry.trigger);
-        if (cluster && exclusiveClusters.has(cluster)) cluster.dataset.dlaExclusiveDisclosures = 'true';
+        if (cluster && exclusiveClusters.has(cluster)) cluster.dataset.blocksEngineCaptureExclusiveDisclosures = 'true';
       };
       for (const entry of observedPopulated) applyNormalized(entry);
       await wait(450);
@@ -847,8 +879,8 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
       return records;
     }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES, rootSelector });
     raw = Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
-  } catch {
-    raw = [];
+  } catch (error) {
+    throw new Error(`Disclosure baseline restoration unproven: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 
   return raw.map((record): CapturedDialogInteraction => {

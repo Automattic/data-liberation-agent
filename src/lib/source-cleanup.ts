@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
+import { documentRequestUrl } from './url/route-key.js';
 
-export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v8';
+export const CLEANUP_SCHEMA = 'blocks-engine-capture/source-cleanup/v8';
 export const CLEANUP_CATEGORIES = ['advertisement', 'source-attribution', 'provider-service'] as const;
 export type CleanupCategory = typeof CLEANUP_CATEGORIES[number];
 export interface CleanupRule {
@@ -237,7 +238,7 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
     if (!reclaimed.length) return undefined;
     if (!reclaimedSheet) {
       reclaimedSheet = document.createElement('style');
-      reclaimedSheet.setAttribute('data-dla-reclaimed-space', '');
+      reclaimedSheet.setAttribute('data-blocks-engine-capture-reclaimed-space', '');
       (document.head ?? document.documentElement).append(reclaimedSheet);
     }
     reclaimedSheet.textContent = `:root{${[...reclaimedSpace].map((name) => `${name}:0px!important`).join(';')}}`;
@@ -441,9 +442,26 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
   return report;
 }
 
+/** Same-document reloads one install waits through; baseline capture replays at most this many. */
+const INSTALL_RELOADS = 4;
+
+/**
+ * Install the policy on the page's current document. A source that reloads its
+ * own document (baseline capture replays same-document reloads) can commit the
+ * new document while the install is still queued; the install then waits for
+ * that document to load and installs there. A different document still fails.
+ */
 export async function applySourceCleanup(page: Page, policy: CleanupPolicy, opts: { recovered?: boolean } = {}): Promise<CleanupReport> {
   validateCleanupPolicy(policy);
-  return page.evaluate(installCleanupInPage, { policy, ...(opts.recovered ? { recovered: true } : {}) });
+  const address = documentRequestUrl(page.url());
+  for (let reloads = 0; ; reloads++) {
+    try {
+      return await page.evaluate(installCleanupInPage, { policy, ...(opts.recovered ? { recovered: true } : {}) });
+    } catch (error) {
+      if (reloads >= INSTALL_RELOADS || !/Execution context was destroyed/i.test(String(error)) || documentRequestUrl(page.url()) !== address) throw error;
+      await page.waitForLoadState('load');
+    }
+  }
 }
 
 /**

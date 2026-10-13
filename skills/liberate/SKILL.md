@@ -38,6 +38,7 @@ The run directory is that path with `website` removed — pass it to `compare` a
 - `--output <dir>` chooses where the run lands. Default is `~/data-liberation/<host-slug>`.
 - `--resume` reuses what is already on disk and reports it as `reused`. Add it when re-running against a site you have already liberated; without it the run captures the source again.
 - `--screenshots` adds desktop and mobile PNGs when the operator wants visual evidence.
+- Browser capture takes at most 50 routes by default: the homepage plus an even spread of the rest. The summary line reports `N omitted by route budget` when the inventory was larger. Pass `--route-limit <n>` to choose the budget, or `--route-limit all` when the operator wants every route and the run has time for it. Add `--route-selection template-coverage` to spend the budget on one route per template first (it fetches each route's server HTML and writes `template-groups.json`).
 - Leave fluid learning on. It is what keeps the copy reflowing like the source instead of freezing at one width.
 
 ## Step 2 — Verify

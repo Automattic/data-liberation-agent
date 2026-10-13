@@ -1,5 +1,5 @@
 {
-  "schema": "data-liberation/shopify-http-proof/v4",
+  "schema": "blocks-engine-capture/shopify-http-proof/v4",
   "revision": "fbda520f0b9d99d70dc83b7657363e65c2834b5f",
   "generatedAt": "2026-10-07T18:40:27.806Z",
   "root": ".tmp-test/shopify-responsive-current-reviewed",

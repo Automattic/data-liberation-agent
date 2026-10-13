@@ -34,8 +34,8 @@ entrance is emitted only when the source reset/re-entry was witnessed.
 
 ## Evidence and limits
 
-`data-dla-viewport-entrance` carries the action/terminal-state evidence and exact
-native CSS signatures. `data-dla-viewport-entrance-loss` names unavailable source
+`data-blocks-engine-capture-viewport-entrance` carries the action/terminal-state evidence and exact
+native CSS signatures. `data-blocks-engine-capture-viewport-entrance-loss` names unavailable source
 or replay proof: missing terminal switches, cancellations, ambiguous observers,
 unobserved startup contexts, changed keyframes/timing, or unsupported phases.
 Visible losses fail the motion check even when animation-name coverage passes.

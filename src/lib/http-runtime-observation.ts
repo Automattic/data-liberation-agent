@@ -56,7 +56,7 @@ export async function observeHttpCaptureRegions( options: {
 			options.progress( { phase: 'capturing', current: index + 1, total: documents.length, unit: 'documents', url: document.url } );
 		}
 	} finally { await withTimeout( browser.close(), 10_000, 'runtime browser close' ).catch( () => {} ); }
-	writeFileSync( join( options.outputDir, 'runtime-observations.json' ), JSON.stringify( { schema: 'data-liberation/runtime-observations/v1', routeLimit: options.routeLimit, selectedRoutes: [ ...selected ], attachments, failures, sourceResponses: documents.map( document => ( { url: document.url, variant: document.variant, rawSha256: document.rawSha256 } ) ) }, null, 2 ) + '\n' );
+	writeFileSync( join( options.outputDir, 'runtime-observations.json' ), JSON.stringify( { schema: 'blocks-engine-capture/runtime-observations/v1', routeLimit: options.routeLimit, selectedRoutes: [ ...selected ], attachments, failures, sourceResponses: documents.map( document => ( { url: document.url, variant: document.variant, rawSha256: document.rawSha256 } ) ) }, null, 2 ) + '\n' );
 	if ( ! attachments.length ) return { attachments: 0, observations: 0, failures };
 	const path = await stageRuntimeRegions( { outputDir: options.outputDir, attachments } );
 	const staged = JSON.parse( readFileSync( path, 'utf8' ) );

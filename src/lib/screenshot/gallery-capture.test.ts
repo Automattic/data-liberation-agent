@@ -97,7 +97,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		await page.setContent(fixture.replace("large=(large+1)%3;show", "document.querySelector('[aria-label=\"Previous slide\"]').style.cssText='position:fixed;top:-200vh';large=(large+1)%3;show"));
 		const states = await captureGalleries(page);
 		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete',restoration:'verified'},closed:true},dialog:{htmlTruncated:false}});
-		expect(wireCapturedDialogs(fixture,states)).toContain('data-dla-dialog-panel');
+		expect(wireCapturedDialogs(fixture,states)).toContain('data-blocks-engine-capture-dialog-panel');
 	}, 20_000,
 );
 
@@ -210,7 +210,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				await offline.route('**/*', (route) => route.abort());
 				await offline.setContent(portable);
 				expect(await offline.locator('#stage img').count()).toBe(3);
-				expect(await offline.locator('[data-dla-dialog-panel] img').count()).toBe(3);
+				expect(await offline.locator('[data-blocks-engine-capture-dialog-panel] img').count()).toBe(3);
 				for (const expected of ['2 / 3', '3 / 3', '1 / 3']) {
 					await offline.getByRole('button', { name: 'Next image', exact: true }).click();
 					expect(await offline.locator('#count').textContent()).toBe(expected);
@@ -220,18 +220,18 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				await offline.getByRole('button', { name: 'Previous image', exact: true }).click();
 				expect(await offline.locator('#count').textContent()).toBe('3 / 3');
 				await offline.locator('#stage img:visible').click();
-				expect(await offline.locator('[data-dla-dialog-panel]').isVisible()).toBe(true);
-				expect(await offline.locator('[data-dla-dialog-panel]').evaluate(el=>{const rect=el.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};})).toEqual({x:0,y:0,width,height:900});
+				expect(await offline.locator('[data-blocks-engine-capture-dialog-panel]').isVisible()).toBe(true);
+				expect(await offline.locator('[data-blocks-engine-capture-dialog-panel]').evaluate(el=>{const rect=el.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};})).toEqual({x:0,y:0,width,height:900});
 				expect(await offline.locator('#large-count').textContent()).toBe('3 / 3');
-				expect(await offline.locator('[data-dla-dialog-panel] img:visible').count()).toBe(1);
+				expect(await offline.locator('[data-blocks-engine-capture-dialog-panel] img:visible').count()).toBe(1);
 				await offline.getByRole('button', { name: 'Next slide', exact: true }).click();
 				expect(await offline.locator('#large-count').textContent()).toBe('1 / 3');
-				expect(await offline.locator('[data-dla-dialog-panel] img:visible').count()).toBe(1);
-				expect(await offline.locator('[data-dla-dialog-panel] img:visible').getAttribute('src')).toBe(image(0,true));
+				expect(await offline.locator('[data-blocks-engine-capture-dialog-panel] img:visible').count()).toBe(1);
+				expect(await offline.locator('[data-blocks-engine-capture-dialog-panel] img:visible').getAttribute('src')).toBe(image(0,true));
 				await offline.getByRole('button', { name: 'Previous slide', exact: true }).click();
 				expect(await offline.locator('#large-count').textContent()).toBe('3 / 3');
 				await offline.getByRole('button', { name: 'Close gallery', exact: true }).click();
-				expect(await offline.locator('[data-dla-dialog-panel]').isVisible()).toBe(false);
+				expect(await offline.locator('[data-blocks-engine-capture-dialog-panel]').isVisible()).toBe(false);
 				await page.close();
 				await offline.close();
 			}
@@ -257,7 +257,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 			});
 			expect(
 				wireCapturedDialogs(baseline.replace(/<script>[\s\S]*?<\/script>/g, ''), states),
-			).not.toContain('data-dla-gallery-runtime');
+			).not.toContain('data-blocks-engine-capture-gallery-runtime');
 		} finally {
 			await browser.close();
 		}
@@ -296,11 +296,11 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 			await page.getByRole('button',{name:'Next image',exact:true}).click();
 			expect(await page.locator('#count').textContent()).toBe('3 / 3');
 			await page.locator('#stage img:visible').click();
-			expect(await page.locator('[data-dla-dialog-panel]').isVisible()).toBe(true);
+			expect(await page.locator('[data-blocks-engine-capture-dialog-panel]').isVisible()).toBe(true);
 			await page.getByRole('button',{name:'Next slide',exact:true}).click();
 			expect(await page.locator('#large-count').textContent()).toBe('1 / 3');
 			await page.getByRole('button',{name:'Close gallery',exact:true}).click();
-			expect(await page.locator('[data-dla-dialog-panel]').isVisible()).toBe(false);
+			expect(await page.locator('[data-blocks-engine-capture-dialog-panel]').isVisible()).toBe(false);
 			await page.close();
 		}
 	}finally{await browser.close();await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
@@ -324,7 +324,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				expect(await page.locator('#count').textContent()).toBe(`${ordinal} / 3`);
 				expect(await page.locator('#stage img:visible').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(200);
 			}
-			expect(wireCapturedDialogs(html,states).match(/data-dla-gallery-runtime/g)).toHaveLength(1);
+			expect(wireCapturedDialogs(html,states).match(/data-blocks-engine-capture-gallery-runtime/g)).toHaveLength(1);
 		} finally { await browser.close(); }
 	}, 20_000,
 );

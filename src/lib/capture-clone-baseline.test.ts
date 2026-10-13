@@ -81,7 +81,7 @@ it( 'SDK capture preserves replacement clone roles with patched main-world Array
 			expect( actual.hit ).toBe( true );
 		}
 		const html = await copy.content();
-		expect( html ).not.toContain( 'data-dla-fluid-id' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-fluid-id' );
 		await copy.close();
 	} finally {
 		await browser.close();

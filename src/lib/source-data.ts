@@ -20,5 +20,5 @@ export function sourceEvidenceScript(source: string, key: string): SourceDataScr
 }
 
 export function renderSourceData(scripts: readonly SourceDataScript[]): string {
-	return scripts.map(script => `<script type="${script.type}"${script.key ? ` data-dla-source-evidence="${script.key}"` : ''}>${script.json}</script>`).join('');
+	return scripts.map(script => `<script type="${script.type}"${script.key ? ` data-blocks-engine-capture-source-evidence="${script.key}"` : ''}>${script.json}</script>`).join('');
 }

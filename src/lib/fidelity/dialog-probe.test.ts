@@ -15,16 +15,16 @@ describe( 'probeDialogs', () => {
 		const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
 		await page.setContent( `
 			<style>
-				details.dla-disclosure:not([open]) > .dla-dialog { display: none; }
-				details.dla-disclosure[open] > .dla-dialog {
+				details.data-blocks-engine-capture-disclosure:not([open]) > .data-blocks-engine-capture-dialog { display: none; }
+				details.data-blocks-engine-capture-disclosure[open] > .data-blocks-engine-capture-dialog {
 					display: block; position: fixed; inset: 0; background: #fff;
 				}
 			</style>
-			<details class="dla-disclosure">
-				<summary data-dla-disclosure-label="Open Menu Close Menu">
+			<details class="data-blocks-engine-capture-disclosure">
+				<summary data-blocks-engine-capture-disclosure-label="Open Menu Close Menu">
 					<span class="burger" aria-hidden="true"></span>
 				</summary>
-				<div class="dla-dialog" role="dialog" aria-modal="true">
+				<div class="data-blocks-engine-capture-dialog" role="dialog" aria-modal="true">
 					<nav><a href="#home">Home</a></nav>
 				</div>
 			</details>
@@ -42,7 +42,7 @@ describe( 'probeDialogs', () => {
 		const browser = await chromium.launch();
 		try {
 			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
-			await page.setContent( `<details><summary data-dla-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
+			await page.setContent( `<details><summary data-blocks-engine-capture-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
 				<script>document.querySelector('summary').addEventListener('click', (event) => {
 					if (!event.isTrusted) event.preventDefault();
 				});</script>` );
@@ -57,7 +57,7 @@ describe( 'probeDialogs', () => {
 		const browser = await chromium.launch();
 		try {
 			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
-			await page.setContent( `<details><summary data-dla-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
+			await page.setContent( `<details><summary data-blocks-engine-capture-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
 				<script>document.querySelector('summary').addEventListener('click', (event) => event.preventDefault());</script>` );
 			expect( await probeDialogs( page ) ).toEqual( [ { label: 'Menu', opened: false } ] );
 			await page.close();

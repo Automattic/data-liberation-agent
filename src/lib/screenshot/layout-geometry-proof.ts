@@ -4,7 +4,7 @@ import type { AnyNode } from 'domhandler';
 import { parseLocatedStructure } from '../site-includes.js';
 
 export const LAYOUT_GEOMETRY_PROOF_SCHEMA =
-	'data-liberation/layout-geometry-proof/v1';
+	'blocks-engine-capture/layout-geometry-proof/v1';
 
 const MAX_CANDIDATES = 64;
 const MAX_VIEWPORTS = 8;
@@ -29,7 +29,7 @@ export interface GeometryObservation {
 }
 
 export interface GeometryCapture {
-	schema: 'data-liberation/layout-geometry-capture/v1';
+	schema: 'blocks-engine-capture/layout-geometry-capture/v1';
 	observations: GeometryObservation[];
 	omissions: Record< string, number >;
 }
@@ -72,7 +72,7 @@ function stableId( sourcePath: string, selector: string ): string {
 
 function selectorForIdentity( $: CheerioAPI, identity: string ): string | undefined {
 	try {
-		const node = $( `[data-dla-geometry-id~="${ identity }"]` );
+		const node = $( `[data-blocks-engine-capture-geometry-id~="${ identity }"]` );
 		if ( node.length !== 1 ) return undefined;
 		const parts: string[] = [];
 		let current: AnyNode | null = node[ 0 ];

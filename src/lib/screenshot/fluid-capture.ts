@@ -10,6 +10,7 @@
 import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
 import {
 	breakpointsFrom,
+	interpolateSamples,
 	learnFluidModel,
 	learnSegmentedFluidModel,
 	learnWidestFluidModel,
@@ -19,18 +20,18 @@ import {
 } from './fluid-model.js';
 import type { Page } from 'playwright';
 import { captureFluidBaseline } from './fluid-baseline.js';
-import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments } from './fluid-runtime-sheets.js';
+import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetSeries, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
-const ID_ATTRIBUTE = 'data-dla-fluid-id';
+const ID_ATTRIBUTE = 'data-blocks-engine-capture-fluid-id';
 /** Keys segmented stylesheet rules to their element; survives serialization. */
-const SEGMENT_ATTRIBUTE = 'data-dla-fluid-segment';
+const SEGMENT_ATTRIBUTE = 'data-blocks-engine-capture-fluid-segment';
 /** How far a container percentage may miss the size it replaced at the capture width. */
 const CONTAINER_VERIFY_TOLERANCE_PX = 2;
 /** Marks the stylesheet block carrying segmented rules as capture-owned. */
-export const SEGMENT_STYLE_ATTRIBUTE = 'data-dla-fluid-rules';
+export const SEGMENT_STYLE_ATTRIBUTE = 'data-blocks-engine-capture-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
-export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-dla-fluid-rules\b/i;
+export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-blocks-engine-capture-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
 const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left' ] as const;
 
@@ -39,7 +40,10 @@ export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'lef
 export interface FluidSweepOptions {
 	/** Distinguishes rule identities when responsive documents share a stylesheet. */
 	document?: 'desktop' | 'mobile';
-	/** Widths to observe. More widths cost time but sharpen the fit. */
+	/**
+	 * Widths to observe, sampled exactly as given. Omitted: the coarse widths,
+	 * refined within DEFAULT_SWEEP_WIDTHS where the observations need it.
+	 */
 	widths?: number[];
 	/** Minimum observation window after resize, overlapping lazy work and rest. */
 	settleMs?: number;
@@ -64,6 +68,8 @@ export interface FluidLearningResult {
 	 */
 	canvasFloor: number | null;
 	byKind: Record< string, number >;
+	/** Widths the sweep sampled, ascending; empty when it never resized. Its length is the sweep's cost. */
+	sampledWidths: number[];
 }
 
 /** Default ladder: mobile, canvas, and wide, spanning common real viewports.
@@ -71,8 +77,110 @@ export interface FluidLearningResult {
  * The mobile widths matter: a source that obeys one rule above its mobile
  * breakpoint and another below it (container share changes, different clamp)
  * is unmodelled — or worse, mis-modelled — when every sample sits above the
- * switch. */
+ * switch. The dense 767–801 run locates a narrow tablet transition.
+ *
+ * This is the resolution the default sweep can reach, not what it samples:
+ * see COARSE_SWEEP_WIDTHS and refinementWidths. */
 export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
+
+/**
+ * Widths every varying default sweep samples; the ladder refines between them.
+ *
+ * Each sits on the far side of a common CSS switch, so every interval holds
+ * the switches the ladder was built around: phone (390) and large phone (600)
+ * below the 767/768 switch, tablet (768) on its far side, desktop (1024) past
+ * the 800/801 and 991/992 tablet switches, a common desktop canvas (1440) past
+ * 1200/1280, and the widest viewport (1920) past 1536/1600. The first three are
+ * the probe that stops a sweep whose geometry is constant.
+ */
+export const COARSE_SWEEP_WIDTHS = [ 390, 600, 768, 1024, 1440, 1920 ];
+const PROBE_WIDTHS = [ 390, 768, 1920 ];
+const COLLINEAR_TOLERANCE_PX = 0.5;
+
+/**
+ * Ladder widths to sample next: one per interval the observations leave unexplained.
+ *
+ * An interval between adjacent sampled widths is explained when every series
+ * is one straight line across it and a neighbouring sample: a straight run
+ * (constant, proportional, affine) predicts every ladder width inside, which
+ * interpolateSamples then supplies to the fitters. Anything else (a kink, a
+ * jump, a clamp, or a series that appears, vanishes, or stops being pixels
+ * there) refines the interval with the ladder width nearest its midpoint,
+ * until the change sits between adjacent ladder widths: the same place the
+ * full ladder locates it.
+ *
+ * A clamp is refined rather than explained by its clamped line: interpolating
+ * across the knee would invent values, and in a segmented series the boundary
+ * is the first ladder width past the knee.
+ */
+export function refinementWidths( series: Iterable< readonly GeometrySample[] >, sampled: readonly number[], ladder: readonly number[] = DEFAULT_SWEEP_WIDTHS ): number[] {
+	const widths = [ ...new Set( sampled ) ].sort( ( a, b ) => a - b );
+	const intervals = widths.slice( 0, -1 ).map( ( low, index ) => ( { index, inside: ladder.filter( width => width > low && width < widths[ index + 1 ]! ) } ) )
+		.filter( interval => interval.inside.length > 0 );
+	const refined = new Set< number >();
+	for ( const samples of series ) {
+		if ( refined.size === intervals.length ) break;
+		const at = new Map( samples.map( sample => [ sample.viewport, sample.value ] ) );
+		const value = ( index: number ) => {
+			const found = at.get( widths[ index ]! );
+			return found !== undefined && Number.isFinite( found ) ? found : null;
+		};
+		const straight = ( first: number ) => {
+			if ( first < 0 || first + 2 >= widths.length ) return false;
+			const [ a, b, c ] = [ value( first ), value( first + 1 ), value( first + 2 ) ];
+			if ( a === null || b === null || c === null ) return false;
+			const [ wa, wb, wc ] = [ widths[ first ]!, widths[ first + 1 ]!, widths[ first + 2 ]! ];
+			return Math.abs( b - ( a + ( c - a ) * ( wb - wa ) / ( wc - wa ) ) ) <= COLLINEAR_TOLERANCE_PX;
+		};
+		let chosen: number | null = null;
+		for ( const { index } of intervals ) {
+			// Absent (or non-pixel) at both ends: nothing here for this series to learn.
+			if ( value( index ) === null && value( index + 1 ) === null ) continue;
+			if ( straight( index - 1 ) || straight( index ) ) continue;
+			// One change leaves both intervals beside it without a straight window
+			// when one of them is the sweep's last. Refining the first can explain
+			// the second; if not, it is refined next round at the same width.
+			if ( chosen === index - 1 ) continue;
+			refined.add( index );
+			chosen = index;
+		}
+	}
+	return intervals.filter( ( { index } ) => refined.has( index ) ).map( ( { index, inside } ) => {
+		const middle = ( widths[ index ]! + widths[ index + 1 ]! ) / 2;
+		return inside.reduce( ( best, width ) => Math.abs( width - middle ) < Math.abs( best - middle ) ? width : best );
+	} );
+}
+
+/**
+ * The series refinement must explain before skipped widths can be interpolated.
+ *
+ * Perpetually animated elements never rest, so their samples are not evidence
+ * of a switch. A varying value may fit its container, so the container is
+ * interpolated evidence too; a constant value never consults it.
+ */
+export function refinementSeries( observations: ReadonlyMap< string, readonly GeometrySample[] >, perpetual: ReadonlySet< string > ): Array< readonly GeometrySample[] > {
+	return [ ...observations ].filter( ( [ key ] ) => ! perpetual.has( key.slice( 0, key.indexOf( ':' ) ) ) ).flatMap( ( [ , samples ] ) => {
+		const values = samples.map( sample => sample.value );
+		const varying = Math.max( ...values ) - Math.min( ...values ) > CONTAINER_VERIFY_TOLERANCE_PX;
+		const containers = samples.flatMap( sample => typeof sample.container === 'number' ? [ { viewport: sample.viewport, value: sample.container } ] : [] );
+		return varying && containers.length ? [ samples, containers ] : [ samples ];
+	} );
+}
+
+/**
+ * Whether every observed series, outside perpetually animated elements, holds
+ * one finite value at each of `samples` widths: nothing the sweep could learn
+ * varies with width.
+ */
+export function constantAcross( observations: ReadonlyMap< string, readonly GeometrySample[] >, samples: number, perpetual: ReadonlySet< string > ): boolean {
+	for ( const [ key, series ] of observations ) {
+		if ( perpetual.has( key.slice( 0, key.indexOf( ':' ) ) ) ) continue;
+		if ( series.length !== samples ) return false;
+		const first = series[ 0 ]!.value;
+		if ( ! Number.isFinite( first ) || series.some( sample => sample.value !== first ) ) return false;
+	}
+	return true;
+}
 
 /**
  * Observe inline geometry across widths, fit a model per element and property,
@@ -115,6 +223,9 @@ async function learnFluidGeometry(
 	options: FluidSweepOptions,
 	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>
 ): Promise<FluidLearningResult> {
+	// An explicit ladder is sampled as given; the default samples its coarse
+	// widths and refines the ladder only on evidence (see refinementWidths).
+	const adaptive = options.widths === undefined;
 	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
@@ -124,8 +235,8 @@ async function learnFluidGeometry(
 		( state, { attribute, properties, prefix } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
-				const ignorePadding = element.hasAttribute( 'data-dla-fluid-ignore-padding' );
-				element.removeAttribute( 'data-dla-fluid-ignore-padding' );
+				const ignorePadding = element.hasAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' );
+				element.removeAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' );
 				// Match the declarations the measurement pass can actually learn.
 				// A substring match also tagged min-height/max-width and percentages,
 				// which produced no observations but still paid for the whole sweep.
@@ -165,7 +276,7 @@ async function learnFluidGeometry(
 		await baseline.evaluate( ( state, attribute ) => {
 			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
-		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
+		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] };
 	}
 	await baseline.evaluate( state => state.bind() );
 	await bindRuntimeSheets( page );
@@ -176,7 +287,10 @@ async function learnFluidGeometry(
 		state.elements().filter( element => state.readGeometry( element ).position !== 'relative' )
 			.map( element => element.getAttribute( attribute )! ), ID_ATTRIBUTE ) : [] );
 
-	for ( const width of widths ) {
+	// Widths in the order they were sampled; runtime-sheet observations align to it.
+	const sampledWidths: number[] = [];
+	const sample = async ( width: number ) => {
+		sampledWidths.push( width );
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
 		await waitForRestGeometry( page, baseline, settleMs, true, properties );
 		await options.prepareViewport?.( page );
@@ -258,7 +372,35 @@ async function learnFluidGeometry(
 			}
 		}
 		options.onProgress?.( width, measured.length );
+	};
+	const perpetual = async () => new Set( await baseline.evaluate( state =>
+		[ ...( ( state as unknown as { perpetual?: Set< string > } ).perpetual ?? [] ) ] ) );
+	if ( ! adaptive ) {
+		for ( const width of widths ) await sample( width );
+	} else {
+		// The probe widths come first. When every tagged series is identical
+		// across them (perpetual movers excluded) and no runtime stylesheet
+		// varied, every learned rule would be `constant` — the frozen copy
+		// already carries it — so the rest of the sweep is skipped.
+		for ( const width of PROBE_WIDTHS ) await sample( width );
+		if ( await runtimeSheetsObserved( page ) || ! constantAcross( observations, PROBE_WIDTHS.length, await perpetual() ) ) {
+			for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
+			// Refine only intervals some series leaves unexplained.
+			for ( ;; ) {
+				const series = refinementSeries( observations, await perpetual() );
+				const next = refinementWidths( [ ...series, ...await runtimeSheetSeries( page, sampledWidths ) ], sampledWidths, widths );
+				if ( next.length === 0 ) break;
+				for ( const width of next ) await sample( width );
+			}
+		}
+		// Every skipped ladder width now sits inside a straight interval of every
+		// series, so the fitters receive the full ladder's observations.
+		const moving = await perpetual();
+		for ( const [ key, samples ] of observations ) {
+			if ( ! moving.has( key.slice( 0, key.indexOf( ':' ) ) ) ) observations.set( key, interpolateSamples( samples, sampledWidths, widths ) );
+		}
 	}
+	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
 
 	const learned: Array< {
 		id: string;
@@ -595,7 +737,7 @@ async function learnFluidGeometry(
 	} );
 	// The runtime has rewritten its own sheets for the capture width by now;
 	// learned rules are validated against exactly that geometry.
-	const runtimeSheets = await applyRuntimeSheetRules( page, widths );
+	const runtimeSheets = await applyRuntimeSheetRules( page, sampledWidths, adaptive ? widths : sampledWidths );
 	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
 
 	if ( reverted > 0 ) {
@@ -618,6 +760,7 @@ async function learnFluidGeometry(
 		breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ),
 		canvasFloor,
 		byKind,
+		sampledWidths: [ ...sampledWidths ].sort( ( a, b ) => a - b ),
 	};
 }
 
@@ -639,24 +782,51 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
 		const started = Date.now();
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
-		const snapshot = () => JSON.stringify(
-			state.elements().map( element => {
+		// One serialized geometry record per tagged element, keyed by its id, so
+		// rest can be judged per element (see `perpetual` below).
+		const snapshot = () => new Map( state.elements().map( element => {
 				const geometry = state.readGeometry( element );
 				const style = geometry.style;
 				const pixel = state.pixel;
 				const custom = [ ...style ].filter( property => property.startsWith( '--' ) )
 					.map( property => [ property, pixel( style.getPropertyValue( property ) ) ] )
 					.filter( ( [ , value ] ) => value !== null );
-				return [ element.getAttribute( attribute ),
+				const id = element.getAttribute( attribute ) ?? '';
+				return [ id, JSON.stringify( [ id,
 					properties.map( property => pixel( style.getPropertyValue( property ) ) ), custom,
 					// Keep the whole transform, not just X: scale/rotation must invalidate
 					// rest even when the translation component stays unchanged.
 					style.transform, style.transform ? getComputedStyle( element ).transform : null,
 					style.inset, geometry.position,
 					pixel( style.width ) === null ? null : geometry.parent?.clientWidth,
-					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ];
-			} )
-		);
+					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ] ) ] as const;
+			} ) );
+		// An element whose geometry changes on every observation for
+		// PERPETUAL_TICKS in a row is running a perpetual animation (a script
+		// writing transforms each frame), not settling. It can never be quiet, so
+		// it is excluded from rest for the rest of this wait; every other element
+		// must still be quiet. A finite transition shorter than the window settles
+		// before it is classified.
+		// Classified movers persist on this learning run's baseline state for its
+		// later widths: they are the same tagged elements, so each width only
+		// needs its own quiet window rather than re-proving the animation. A new
+		// run tags afresh and starts with no movers.
+		const PERPETUAL_TICKS = 8;
+		const streaks = new Map< string, number >();
+		const perpetual = ( state as unknown as { perpetual?: Set< string > } ).perpetual ??= new Set< string >();
+		const unchanged = ( before: Map< string, string >, after: Map< string, string > ) => {
+			let same = true;
+			for ( const [ id, record ] of after ) {
+				if ( perpetual.has( id ) ) continue;
+				if ( before.get( id ) === record ) { streaks.delete( id ); continue; }
+				const streak = ( streaks.get( id ) ?? 0 ) + 1;
+				streaks.set( id, streak );
+				if ( streak >= PERPETUAL_TICKS ) perpetual.add( id );
+				else same = false;
+			}
+			for ( const id of before.keys() ) if ( ! after.has( id ) && ! perpetual.has( id ) ) same = false;
+			return same;
+		};
 		const content = () => ( {
 			rendered: new Map( [ ...document.images ].map( image => [ image, image.getClientRects().length > 0 ] ) ),
 			sources: new Map( [ ...document.images ].map( image =>
@@ -679,7 +849,11 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 				await new Promise( resolve => setTimeout( resolve, 60 ) );
 			}
 			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
-			window.dispatchEvent( new Event( 'scroll' ) );
+			// Source libraries (e.g. MooTools) replace window.Event; the document's
+			// native factory still builds a real event.
+			const scrolled = document.createEvent( 'Event' );
+			scrolled.initEvent( 'scroll', false, false );
+			window.dispatchEvent( scrolled );
 		};
 		let sweptContent = content();
 		if ( lazy ) await sweep();
@@ -715,7 +889,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 				continue;
 			}
 			const current = snapshot();
-			quiet = current === previous ? quiet + 1 : 0;
+			quiet = unchanged( previous, current ) ? quiet + 1 : 0;
 			previous = current;
 			// A display:none device variant cannot be reached by scrolling. Its
 			// pending native lazy images do not describe this width's geometry;
