@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.25.0] - 2026-10-13
+
+### Added
+- record rendered glyph colour as data-dla-glyph-color
+- export partial output under a capture time budget and cap exported file size
+
+### Changed
+- regenerate plugin bundles
+
 ## [0.24.0] - 2026-10-13
 
 ### Added
