@@ -483,6 +483,52 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
+		'keeps a captured menu when a later probe reveals a panel the source removes before it settles',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				// The second control briefly reveals content that unmounts on its own,
+				// like a menu item still animating out when the next probe clicks.
+				await page.setContent( `<!doctype html><body>
+					<header><button type="button" aria-label="Open menu">Menu</button></header>
+					<main><button type="button" id="flash">Flash</button></main>
+					<script>
+						document.querySelector('header button').addEventListener('click', () => {
+							const nav = document.createElement('nav');
+							nav.id = 'drawer';
+							nav.style.cssText = 'position:fixed;inset:0;background:white';
+							nav.innerHTML = '<a href="/about">About</a>';
+							document.body.append(nav);
+							addEventListener('keydown', () => nav.remove(), { once: true });
+						});
+						document.getElementById('flash').addEventListener('click', () => {
+							const note = document.createElement('div');
+							note.innerHTML = '<a href="/gone">Gone</a>';
+							document.querySelector('main').append(note);
+							// Animate until it unmounts, as an exit transition does.
+							let frame = 0;
+							const tick = setInterval(() => { note.style.opacity = String(1 - ++frame / 10); }, 50);
+							setTimeout(() => { clearInterval(tick); note.remove(); }, 500);
+						});
+					</script>
+				</body>` );
+
+				const started = Date.now();
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [
+					{ status: 'captured', trigger: { label: 'Open menu' }, dialog: { id: 'drawer' } },
+					{ status: 'no-dialog', trigger: { label: 'Flash' } },
+				] );
+				expect( Date.now() - started ).toBeLessThan( 15_000 );
+			} finally {
+				await browser.close();
+			}
+		},
+		60_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'captures a menu trigger whose hit point is covered by an ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
