@@ -138,7 +138,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			const menu = home.interactions?.states.find( state => state.trigger.label === 'Menu' );
 			expect( menu ).toMatchObject( { status: 'captured', dialog: { id: 'drawer' } } );
 			expect( menu!.dialog!.html ).toContain( 'About' );
-			expect( JSON.stringify( home.interactions ) ).not.toContain( 'data-dla-desktop-control' );
+			expect( JSON.stringify( home.interactions ) ).not.toContain( 'data-lib-desktop-control' );
 		} );
 
 		it( 'exports a single document that reflows at 390 px and opens the captured menu', async () => {

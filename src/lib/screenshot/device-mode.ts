@@ -24,7 +24,7 @@ export const SERVER_HTML_IGNORED = [
 ] as const;
 
 /** Elements left out of the rendered structure comparison. */
-export const STRUCTURE_IGNORED = [ 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-dla-* or data-lib-* attributes' ] as const;
+export const STRUCTURE_IGNORED = [ 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-lib-* probe markers or capture evidence attributes' ] as const;
 
 export interface DeviceModeDecision {
 	mode: DeviceMode;
@@ -107,7 +107,7 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 		// structure. Responsive content hidden by CSS sits inside layout containers.
 		const hiddenFrame = ( element: Element ) => ( element.tagName === 'IFRAME' || element.tagName === 'IMG' ) && element.parentElement === document.body &&
 			( ( rect => rect.width <= 1 || rect.height <= 1 )( element.getBoundingClientRect() ) || getComputedStyle( element ).visibility === 'hidden' );
-		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:dla|lib)-/.test( attribute.name ) && attribute.name !== mark?.attribute );
+		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) && attribute.name !== mark?.attribute );
 		const marked = mark ? new Set( mark.paths ) : undefined;
 		const paths: string[] = [];
 		const walk = ( element: Element, prefix: string ) => {
@@ -147,7 +147,7 @@ export async function visibleControlPaths( page: Page ): Promise< string[] > {
 		// structure. Responsive content hidden by CSS sits inside layout containers.
 		const hiddenFrame = ( element: Element ) => ( element.tagName === 'IFRAME' || element.tagName === 'IMG' ) && element.parentElement === document.body &&
 			( ( rect => rect.width <= 1 || rect.height <= 1 )( element.getBoundingClientRect() ) || getComputedStyle( element ).visibility === 'hidden' );
-		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:dla|lib)-/.test( attribute.name ) );
+		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) );
 		const control = 'button,[role="button"],[role="combobox"],[aria-haspopup],summary';
 		const visible = ( element: Element ) => {
 			const rect = element.getBoundingClientRect();

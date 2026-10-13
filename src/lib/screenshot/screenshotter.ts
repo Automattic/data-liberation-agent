@@ -1584,7 +1584,7 @@ function hasSingleUrlAggregate( outputDir: string ): boolean {
 }
 
 /** Marks phone-page controls the desktop pass already probes; removed from evidence. */
-const DESKTOP_CONTROL_ATTRIBUTE = 'data-dla-desktop-control';
+const DESKTOP_CONTROL_ATTRIBUTE = 'data-lib-desktop-control';
 
 interface DeviceComparisonArgs {
 	browser: Browser;
