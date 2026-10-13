@@ -52,6 +52,7 @@ import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
+import { recordGlyphColors } from './glyph-color.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
 import { RouteTimeBudget } from '../capture-time-budget.js';
@@ -1107,6 +1108,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 
 	if ( args.rendererCrashed() ) return;
+	// Record the rendered colour of single-colour icon glyphs as
+	// `data-dla-glyph-color`, so compile never has to decode image bytes (#769).
+	// Bounded; a miss loses only that evidence.
+	if ( plan.captureHtml || plan.captureMobileHtml ) {
+		args.phases?.enter( 'glyph-colors' );
+		await recordGlyphColors( page ).catch( () => undefined );
+		if ( args.rendererCrashed() ) return;
+	}
 	// The cleanup observer may have exhausted its budget before the page
 	// re-rendered a credit or ad; the saved document must be swept. A source
 	// that re-initialized its document after install has no state left to
