@@ -177,8 +177,8 @@ export function preserveWixCollections(html: string): string {
 	const evidence = wixCollectionsFromHtml(html);
 	if (!evidence) return html;
 	const $ = cheerio.load(html);
-	$('script[data-dla-source-evidence="collections"]').remove();
+	$('script[data-blocks-engine-capture-source-evidence="collections"]').remove();
 	const json = JSON.stringify(evidence).replace(/</g, '\\u003c');
-	$('head').append(`<script type="application/json" data-dla-source-evidence="collections">${json}</script>`);
+	$('head').append(`<script type="application/json" data-blocks-engine-capture-source-evidence="collections">${json}</script>`);
 	return $.html();
 }

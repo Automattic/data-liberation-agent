@@ -13,8 +13,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace heade
 			const page = await browser.newPage();
 			await page.setContent( '<div data-test="header-menu" style="padding-top:178px"></div><div style="padding-top:30px"></div>' );
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
-			expect( await page.locator( '[data-test="header-menu"]' ).getAttribute( 'data-dla-fluid-ignore-padding' ) ).toBe( '' );
-			expect( await page.locator( 'body > div:not([data-test])' ).getAttribute( 'data-dla-fluid-ignore-padding' ) ).toBeNull();
+			expect( await page.locator( '[data-test="header-menu"]' ).getAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' ) ).toBe( '' );
+			expect( await page.locator( 'body > div:not([data-test])' ).getAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' ) ).toBeNull();
 		} finally {
 			await browser.close();
 		}
@@ -30,7 +30,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace heade
 			</style><header id="header" data-test="header"><img alt="site logo" width="80" height="80"></header>` );
 			expect( ( await page.locator( 'header' ).boundingBox() )?.y ).toBe( -120 );
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
-			expect( await page.locator( 'style[data-dla-squarespace-header-style]' ).textContent() ).toContain( ':is(#dla-squarespace-header-visible,header[data-test="header"]){transition:none!important;transform:none!important}' );
+			expect( await page.locator( 'style[data-blocks-engine-capture-squarespace-header-style]' ).textContent() ).toContain( ':is(#data-blocks-engine-capture-squarespace-header-visible,header[data-test="header"]){transition:none!important;transform:none!important}' );
 			expect( ( await page.locator( 'header' ).boundingBox() )?.y ).toBe( 0 );
 		} finally {
 			await browser.close();
@@ -97,7 +97,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace video
 				[ ...document.querySelectorAll( 'video' ) ].map( ( video ) => [
 					video.id,
 					video.getAttribute( 'poster' ),
-					[ ...video.attributes ].some( ( attribute ) => attribute.name.startsWith( 'data-dla-' ) ),
+					[ ...video.attributes ].some( ( attribute ) => attribute.name.startsWith( 'data-blocks-engine-capture-' ) ),
 				] )
 			);
 			expect( posters ).toEqual( [

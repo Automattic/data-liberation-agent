@@ -11,7 +11,7 @@ describe( 'validateOutputDir', () => {
 	} );
 
 	it( 'accepts an absolute path outside cwd (no longer cwd-pinned)', () => {
-		expect( () => validateOutputDir( join( tmpdir(), 'dla-out' ) ) ).not.toThrow();
+		expect( () => validateOutputDir( join( tmpdir(), 'liberation-out' ) ) ).not.toThrow();
 	} );
 
 	it( "rejects '..' traversal", () => {

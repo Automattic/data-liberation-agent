@@ -81,17 +81,17 @@ describe( 'stripShowcaseMarkup', () => {
 		);
 		expect( html ).toContain( 'alt="One"' );
 		expect( html ).toContain( 'alt="Two"' );
-		expect( html ).toContain( 'class="dla-slideshow"' );
-		expect( html ).toMatch( /^<div class="dla-slideshow">/ );
+		expect( html ).toContain( 'class="data-blocks-engine-capture-slideshow"' );
+		expect( html ).toMatch( /^<div class="data-blocks-engine-capture-slideshow">/ );
 		expect( html ).not.toContain( '<iframe' );
 		expect( html ).not.toMatch( /style="[^"]*(?:width|height):\d+px/ );
 		expect( css ).toContain(
-			'.dla-slideshow{overflow:hidden;width:100%;height:100%;position:relative}'
+			'.data-blocks-engine-capture-slideshow{overflow:hidden;width:100%;height:100%;position:relative}'
 		);
 		expect( css ).toContain(
-			'.dla-slideshow-track{display:flex;height:100%;animation:dla-slideshow'
+			'.data-blocks-engine-capture-slideshow-track{display:flex;height:100%;animation:data-blocks-engine-capture-slideshow'
 		);
-		expect( css ).toContain( '@keyframes dla-slideshow' );
+		expect( css ).toContain( '@keyframes data-blocks-engine-capture-slideshow' );
 	} );
 } );
 
@@ -131,14 +131,14 @@ describe( 'preserveWixSlideshowSlides', () => {
 				],
 			} );
 
-			const slides = dom.window.document.querySelectorAll( '[data-dla-captured-slide]' );
+			const slides = dom.window.document.querySelectorAll( '[data-blocks-engine-capture-captured-slide]' );
 			expect( slides ).toHaveLength( 2 );
 			expect( slides[ 0 ]?.textContent ).toContain( 'First complete testimonial.' );
 			expect( slides[ 1 ]?.textContent ).toContain( 'Second complete testimonial.' );
 			expect( slides[ 1 ]?.querySelector( 'img' )?.getAttribute( 'src' ) ).toBe( 'second.jpg' );
 			expect( slides[ 0 ]?.getAttribute( 'role' ) ).toBe( 'region' );
-			expect( dom.window.document.querySelector( '.wixui-slideshow' )?.getAttribute( 'data-dla-captured-slideshow' ) ).toBe( 'true' );
-			expect( dom.window.document.querySelector( '#dla-wix-captured-slideshow-css' )?.textContent ).toContain( 'display:none!important' );
+			expect( dom.window.document.querySelector( '.wixui-slideshow' )?.getAttribute( 'data-blocks-engine-capture-captured-slideshow' ) ).toBe( 'true' );
+			expect( dom.window.document.querySelector( '#data-blocks-engine-capture-wix-captured-slideshow-css' )?.textContent ).toContain( 'display:none!important' );
 		} finally {
 			Object.defineProperty( globalThis, 'document', { configurable: true, value: originalDocument } );
 		}
@@ -178,8 +178,8 @@ describe( 'collectWixSlideshowSlides', () => {
 			await collectWixSlideshowSlides( page as never );
 
 			const slideshow = dom.window.document.querySelector( '.wixui-slideshow' )!;
-			expect( slideshow.getAttribute( 'data-dla-captured-slideshow' ) ).toBe( 'true' );
-			expect( slideshow.querySelectorAll( '[data-dla-captured-slide]' ) ).toHaveLength( 2 );
+			expect( slideshow.getAttribute( 'data-blocks-engine-capture-captured-slideshow' ) ).toBe( 'true' );
+			expect( slideshow.querySelectorAll( '[data-blocks-engine-capture-captured-slide]' ) ).toHaveLength( 2 );
 		} finally {
 			Object.defineProperty( globalThis, 'document', { configurable: true, value: originalDocument } );
 		}
@@ -219,8 +219,8 @@ describe( 'collectWixSlideshowSlides', () => {
 			await collectWixSlideshowSlides( page as never );
 
 			const slideshow = dom.window.document.querySelector( '.wixui-slideshow' )!;
-			expect( slideshow.getAttribute( 'data-dla-captured-slideshow' ) ).toBe( 'true' );
-			expect( slideshow.querySelectorAll( '[data-dla-captured-slide]' ) ).toHaveLength( 2 );
+			expect( slideshow.getAttribute( 'data-blocks-engine-capture-captured-slideshow' ) ).toBe( 'true' );
+			expect( slideshow.querySelectorAll( '[data-blocks-engine-capture-captured-slide]' ) ).toHaveLength( 2 );
 			expect( slideshow.textContent ).toContain( 'First review' );
 			expect( slideshow.textContent ).toContain( 'Second review' );
 		} finally {

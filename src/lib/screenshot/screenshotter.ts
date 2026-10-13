@@ -4,7 +4,7 @@ import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
-import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
+import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -42,18 +42,22 @@ import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
-import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
+import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
-import { enforceSameOrigin } from './same-origin.js';
+import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
+import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
+import { recordGlyphColors } from './glyph-color.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
+import { RouteTimeBudget } from '../capture-time-budget.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
+import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
@@ -65,6 +69,8 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { anchorChromeStates, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /**
@@ -180,6 +186,8 @@ interface CapturePerViewportArgs {
 	observeSource?: ScreenshotOpts['observeSource'];
 	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	canonicalizeHtml?: ( html: string ) => string;
+	/** The entrypoint's one-time chrome probe for this profile; see chrome-reuse.ts. */
+	sharedChrome?: SharedChromeProbe;
 	viewport: Viewport;
 	plan: ArtifactPlan;
 	url: string;
@@ -188,6 +196,8 @@ interface CapturePerViewportArgs {
 	screenshotTimeoutMs: number;
 	evaluateTimeoutMs: number;
 	failures: FailureEntry[];
+	/** Non-fatal observations about this profile's capture, recorded on its manifest profile. */
+	diagnostics?: ProfileDiagnostic[];
 	entry: ManifestEntry;
 	aggregator: SiteAnalysisAggregator;
 	shouldAnalyze: boolean;
@@ -222,9 +232,9 @@ function navBackoffMs( attempt: number, retryAfter?: string ): number {
 
 export async function capturePageHtml( page: Page ): Promise< string > {
 	const iframeEvidenceAttributes = {
-		src: 'data-dla-visual-iframe-src',
-		width: 'data-dla-visual-iframe-width',
-		height: 'data-dla-visual-iframe-height',
+		src: 'data-blocks-engine-capture-visual-iframe-src',
+		width: 'data-blocks-engine-capture-visual-iframe-width',
+		height: 'data-blocks-engine-capture-visual-iframe-height',
 	};
 	const hydrateMediaSources = () => page.evaluate( ( evidenceAttributes ) => {
 		let pendingVideoSource = false;
@@ -326,7 +336,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 					continue;
 				}
 				const style = document.createElement( 'style' );
-				style.setAttribute( 'data-dla-constructed-stylesheet', '' );
+				style.setAttribute( 'data-blocks-engine-capture-constructed-stylesheet', '' );
 				style.textContent = cssText;
 				document.head.appendChild( style );
 			}
@@ -593,10 +603,10 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 				return true;
 			};
 			const markIdentity = ( node: Element, identity: string ) => {
-				const identities = node.getAttribute( 'data-dla-geometry-id' )?.split( /\s+/ ) ?? [];
+				const identities = node.getAttribute( 'data-blocks-engine-capture-geometry-id' )?.split( /\s+/ ) ?? [];
 				if ( ! identities.includes( identity ) ) {
 					identities.push( identity );
-					node.setAttribute( 'data-dla-geometry-id', identities.join( ' ' ) );
+					node.setAttribute( 'data-blocks-engine-capture-geometry-id', identities.join( ' ' ) );
 				}
 			};
 			const omissions: Record< string, number > = {};
@@ -696,7 +706,7 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 			await new Promise< void >( ( resolve ) =>
 				requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) )
 			);
-			return { schema: 'data-liberation/layout-geometry-capture/v1', observations, omissions };
+			return { schema: 'blocks-engine-capture/layout-geometry-capture/v1', observations, omissions };
 		},
 		{ width: viewport.width, viewportId: viewport.id }
 	);
@@ -817,6 +827,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				fail( 'goto', notHtml, attempt );
 				return;
 			}
+			// The document arrived; capture's own bounded readiness takes over
+			// from here, so a pending subresource is evidence, not a failure.
+			if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ SOURCE_NAVIGATION_LIMITS.timeoutMs }ms navigation budget; subresources were still pending` } );
 			navigated = true;
 			break;
 		} catch ( err ) {
@@ -943,7 +956,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			capture = await captureLayoutGeometry( page, viewport );
 		} catch {
 			capture = {
-				schema: 'data-liberation/layout-geometry-capture/v1',
+				schema: 'blocks-engine-capture/layout-geometry-capture/v1',
 				observations: [],
 				omissions: { capture_failed: 1 },
 			};
@@ -983,7 +996,25 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	await args.observeSource?.( page, url, viewport.id, sourceErrors, args.browserProfile, viewport );
 	if ( args.rendererCrashed() ) return;
+	// A failed native timeline or disclosure probe loses that block of evidence,
+	// not the page: record the loss and keep serializing once the page answers
+	// again at its capture viewport and at-top pose. A page that no longer
+	// answers (a stalled main thread) cannot be serialized, so the route fails.
+	const captureViewport = page.viewportSize();
+	const loseBlock = async ( stage: FailureEntry['stage'], loss: Omit< NonNullable< ManifestEntry['blockLosses'] >[ number ], 'unit' | 'profile' > ): Promise< boolean > => {
+		try {
+			if ( ! ( await pageResponds( page, evaluateTimeoutMs ) ) ) throw new Error( `no answer to an evaluate within ${ evaluateTimeoutMs }ms` );
+			if ( captureViewport ) await withEvaluateTimeout( page.setViewportSize( captureViewport ), evaluateTimeoutMs );
+			await withEvaluateTimeout( page.evaluate( () => window.scrollTo( { top: 0, left: 0, behavior: 'instant' } ) ), evaluateTimeoutMs );
+		} catch ( error ) {
+			fail( stage, `${ loss.reason }; the page did not return to its capture pose: ${ error instanceof Error ? error.message : String( error ) }` );
+			return false;
+		}
+		( entry.blockLosses ??= [] ).push( { ...loss, unit: 'block', profile: viewport.id } );
+		return true;
+	};
 	if ( plan.captureHtml || plan.captureMobileHtml ) {
+		let unproven: string | undefined;
 		try {
 			const native = await captureNativeViewTimelines( page, viewport.id, evaluateTimeoutMs );
 			if ( native.samples.length || native.status === 'unproven' ) {
@@ -993,14 +1024,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				entry.nativeViewTimelines ??= {};
 				entry.nativeViewTimelines[ viewport.id ] = { path: `native-view-timelines/${ viewport.id }/${ slug }.json`, preserved: native.preserved, losses: native.losses, status: native.status, failures: native.failures };
 			}
-			if ( native.status === 'unproven' ) {
-				fail( 'evaluate', `native timeline source capture unproven: ${ native.failures.join( '; ' ) }` );
-				return;
-			}
+			if ( native.status === 'unproven' ) unproven = `native timeline source capture unproven: ${ native.failures.join( '; ' ) }`;
 		} catch ( error ) {
-			fail( 'evaluate', `native timeline capture failed: ${ String( error ) }` );
-			return;
+			unproven = `native timeline capture failed: ${ String( error ) }`;
 		}
+		// Unproven timelines carry no effects into the page; the evidence record above keeps the loss.
+		if ( unproven !== undefined && ! ( await loseBlock( 'evaluate', { code: 'native_timeline_unproven', reason: unproven, severity: 'warning' } ) ) ) return;
 	}
 
 	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
@@ -1017,11 +1046,15 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				breakpoints: learned.breakpoints,
 				canvasFloor: learned.canvasFloor,
 				byKind: learned.byKind,
+				sampledWidths: learned.sampledWidths,
 			};
 		} catch ( error ) {
 			// Never fail a capture over the optimization: a frozen copy still
 			// beats no copy, and the diagnostics record that it stayed frozen.
-			fail( 'content', `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }` );
+			entry[ isDesktop ? 'fluid' : 'fluidMobile' ] = {
+				applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {},
+				diagnostic: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
+			};
 		}
 	}
 	if ( args.rendererCrashed() ) return;
@@ -1045,7 +1078,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// and width learning can rerender their source items, discarding injected
 	// answers or mistaking the new controls for another interactive component.
 	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
-		disclosureStates = await hydrateDisclosureContent(page);
+		try {
+			disclosureStates = await hydrateDisclosureContent(page);
+		} catch (error) {
+			// No hydrated panel is kept. The probe could not prove the baseline it
+			// left, so the finding is an error on the saved page, not a warning.
+			const reason = error instanceof Error ? error.message : String( error );
+			if ( ! ( await loseBlock( 'content', { code: 'disclosure_unrestored', reason, severity: 'error' } ) ) ) return;
+		}
 	}
 	// Gallery cycles are part of this viewport's serialization transaction, not
 	// a later drive after the baseline HTML has already been saved.
@@ -1073,6 +1113,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 
 	if ( args.rendererCrashed() ) return;
+	// Record the rendered colour of single-colour icon glyphs as
+	// `data-blocks-engine-capture-glyph-color`, so compile never has to decode image bytes (#769).
+	// Bounded; a miss loses only that evidence.
+	if ( plan.captureHtml || plan.captureMobileHtml ) {
+		args.phases?.enter( 'glyph-colors' );
+		await recordGlyphColors( page ).catch( () => undefined );
+		if ( args.rendererCrashed() ) return;
+	}
 	// The cleanup observer may have exhausted its budget before the page
 	// re-rendered a credit or ad; the saved document must be swept. A source
 	// that re-initialized its document after install has no state left to
@@ -1280,7 +1328,24 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.phases?.enter( 'dialogs' );
 		await restoreTopScrollState( page );
 		await dismissOverlays( page );
-		const interactions = await captureTriggeredDialogs( page, url );
+		// Shared chrome the entrypoint already probed is not clicked again: its
+		// rebased, verified states join this route's report instead.
+		let chrome: ChromeReuse | undefined;
+		if ( args.sharedChrome ) {
+			args.phases?.enter( 'shared-chrome' );
+			chrome = await reuseSharedChrome( page, args.sharedChrome ).catch( ( error: unknown ) => ( {
+				decision: { chromeReused: false, reason: `chrome reuse failed: ${ error instanceof Error ? error.message : String( error ) }` }, states: [],
+			} ) );
+			entry.sharedChrome = chrome.decision;
+			args.phases?.enter( 'dialogs' );
+		}
+		let interactions: InteractionStatesReport;
+		try {
+			interactions = chrome?.skip ? await captureTriggeredDialogs( page, url, { skip: chrome.skip } ) : await captureTriggeredDialogs( page, url );
+		} finally {
+			if ( chrome?.skip ) await clearChromeMarks( page );
+		}
+		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
 		// Route-tab observation is evidence, not a baseline artifact: its failure
 		// must not discard the dialog states captured before it.
 		try {
@@ -1539,6 +1604,312 @@ function hasSingleUrlAggregate( outputDir: string ): boolean {
 	return true;
 }
 
+/** Marks phone-page controls the desktop pass already probes; removed from evidence. */
+const DESKTOP_CONTROL_ATTRIBUTE = 'data-lib-desktop-control';
+
+interface DeviceComparisonArgs {
+	browser: Browser;
+	url: string;
+	desktop: BrowserContextOptions;
+	phone: BrowserContextOptions;
+	publicUrlsOnly: boolean;
+	routeScope?: ScreenshotOpts['routeScope'];
+	cleanupPolicy?: CleanupPolicy;
+	removeSelectors?: string[];
+	prepareCapture?: ScreenshotOpts['prepareCapture'];
+}
+
+interface DeviceModeProbeArgs extends DeviceComparisonArgs {
+	requested: DeviceModeRequest;
+	/** Adapter hooks that declare per-device documents. */
+	deviceDocuments: string[];
+	canonicalizeHtml?: ( html: string ) => string;
+	/** Also run the one-time shared-chrome probe on the loaded entrypoint pages. */
+	sharedChrome?: boolean;
+}
+
+/** Resource types a structure check does without: no decode, little memory. */
+const CHECK_BLOCKED_RESOURCES = new Set( [ 'image', 'media', 'font' ] );
+const CHECK_LOAD_WAIT_MS = 2_000;
+/** Extra wait before a differing route is read a second time. */
+const CHECK_RECHECK_MS = 1_500;
+
+/**
+ * Load one identity of a route for a desktop/phone comparison and read its
+ * server HTML, element paths and body classes. `check` is the cheap per-route
+ * form: images, media and fonts are blocked and settling is bounded. The
+ * entrypoint probe loads everything, because its phone page also runs the
+ * phone-only control probe. Both identities of one comparison always load the
+ * same way, so their signatures are comparable.
+ */
+async function loadForComparison( args: DeviceComparisonArgs, options: BrowserContextOptions, viewport: 'desktop' | 'mobile', mode: 'probe' | 'check', contexts: BrowserContext[] ) {
+	const context = await args.browser.newContext( options );
+	contexts.push( context );
+	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
+	const page = await context.newPage();
+	if ( args.publicUrlsOnly || mode === 'check' ) {
+		await page.route( '**/*', async ( route ) => {
+			const request = route.request();
+			// Embedded documents load whole third-party pages; their <iframe> element stays.
+			if ( mode === 'check' && ( CHECK_BLOCKED_RESOURCES.has( request.resourceType() ) || ( request.resourceType() === 'document' && request.frame() !== page.mainFrame() ) ) ) { await route.abort( 'blockedbyclient' ); return; }
+			if ( args.publicUrlsOnly ) {
+				try { assertPublicHttpUrl( request.url() ); }
+				catch { await route.abort( 'blockedbyclient' ); return; }
+			}
+			await route.fallback();
+		} );
+	}
+	let target = args.url;
+	const navigationOptions = { publicUrlsOnly: args.publicUrlsOnly, routeScope: args.routeScope, ...( mode === 'check' ? { loadWaitMs: CHECK_LOAD_WAIT_MS } : {} ) };
+	let navigation = await navigateSourceDocument( page, target, navigationOptions );
+	// A route is captured under its redirect target; compare that document.
+	if ( navigation.redirectedTo ) {
+		target = navigation.redirectedTo;
+		navigation = await navigateSourceDocument( page, target, navigationOptions );
+	}
+	// failure-class: operational
+	if ( navigation.boundary || navigation.redirectedTo ) throw new Error( `the ${ viewport } document left its route` );
+	const status = navigation.response?.status() ?? 0;
+	// failure-class: operational
+	if ( status >= 400 || status === 0 ) throw new Error( `the ${ viewport } document answered HTTP ${ status }` );
+	const html = await navigation.response?.text().catch( () => undefined );
+	await applySourceCleanup( page, args.cleanupPolicy ?? cleanupPolicy() );
+	if ( mode === 'check' ) {
+		// Bounded after the document is parsed: up to CHECK_LOAD_WAIT_MS for
+		// `load`, up to 0.5 s of network quiet, the short scroll, then up to 1 s
+		// of DOM quiet. Both identities are bounded alike.
+		await Promise.race( [ page.waitForLoadState( 'networkidle' ).catch( () => {} ), new Promise( resolve => setTimeout( resolve, 500 ) ) ] );
+		await withEvaluateTimeout( shortScroll( page ), 5_000 );
+		await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
+	} else {
+		await waitForStable( page );
+		await withEvaluateTimeout( shortScroll( page ), 10_000 );
+		await waitForStable( page, 2_000 );
+	}
+	await applyCaptureRemovals( page, { removeSelectors: args.removeSelectors, prepare: args.prepareCapture, ctx: { url: target, viewport } } );
+	return { page, html, target, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+}
+
+/** Neither or one identity produced a comparable document. `same`: both failed the same way. */
+class ComparisonUnavailable extends Error {
+	constructor( message: string, readonly same: boolean ) { super( message ); }
+}
+
+/** Compare the desktop and phone identities of one route, loaded the same way. */
+async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'check', contexts: BrowserContext[] ) {
+	const [ desktopLoad, phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts ), loadForComparison( args, args.phone, 'mobile', mode, contexts ) ] );
+	if ( desktopLoad.status === 'rejected' || phoneLoad.status === 'rejected' ) {
+		const reason = ( result: PromiseSettledResult< unknown > ) => result.status === 'rejected' ? String( result.reason instanceof Error ? result.reason.message : result.reason ).replace( /^the (desktop|mobile) /, 'the ' ) : undefined;
+		// failure-class: operational
+		throw new ComparisonUnavailable( reason( desktopLoad ) ?? reason( phoneLoad )!, desktopLoad.status === 'rejected' && phoneLoad.status === 'rejected' && reason( desktopLoad ) === reason( phoneLoad ) );
+	}
+	const desktop = desktopLoad.value;
+	const phone = phoneLoad.value;
+	// failure-class: operational
+	if ( phone.target !== desktop.target ) throw new Error( 'the desktop and phone documents redirect to different routes' );
+	const serverHtml: NonNullable< DeviceModeDecision['serverHtml'] > = desktop.html === undefined || phone.html === undefined ? 'unavailable' : compareServerHtml( desktop.html, phone.html );
+	return { desktop, phone, url: desktop.target, serverHtml, structure: compareStructure( desktop.paths, phone.paths ), bodyClasses: compareBodyClasses( desktop.bodyClasses, phone.bodyClasses ) };
+}
+
+/**
+ * The cheap per-route phone check under a `reflow-only` site. It loads the
+ * route in both identities with images, media and fonts blocked and settles
+ * for a few seconds. No fluid sweep, lazy-load sweep, interaction probe or
+ * reference capture runs, and its contexts close before the route's capture
+ * starts, so only one capture renderer is ever alive for the route.
+ */
+async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
+	const startedAt = Date.now();
+	const contexts: BrowserContext[] = [];
+	try {
+		const compared = await compareIdentities( args, 'check', contexts );
+		let { structure, bodyClasses } = compared;
+		const differs = () => structure.differingPaths > 0 || bodyClasses.desktopOnly.length > 0 || bodyClasses.phoneOnly.length > 0;
+		let rechecked = false;
+		// Two loads race third-party scripts (an embed swapping its placeholder
+		// for an iframe, say). Read a difference once more after both pages
+		// settle again: a race converges, an identity-driven document does not.
+		if ( compared.serverHtml !== 'different' && differs() ) {
+			rechecked = true;
+			const reread = async ( page: Page ) => {
+				await new Promise( resolve => setTimeout( resolve, CHECK_RECHECK_MS ) );
+				await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
+				return { paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+			};
+			const [ desktop, phone ] = await Promise.all( [ reread( compared.desktop.page ), reread( compared.phone.page ) ] );
+			structure = compareStructure( desktop.paths, phone.paths );
+			bodyClasses = compareBodyClasses( desktop.bodyClasses, phone.bodyClasses );
+		}
+		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, bodyClasses: differs() ? bodyClasses : undefined } );
+		return { ...decided, structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt };
+	} catch ( error ) {
+		// Both identities failed alike (an absent route, an off-site redirect):
+		// there is no phone document to keep, and capture records the outcome once.
+		if ( error instanceof ComparisonUnavailable && error.same ) return { mode: 'reflow-only', reason: `no document in either identity: ${ error.message }`, checkMs: Date.now() - startedAt };
+		return { ...decideRouteMode( { error: error instanceof Error ? error.message : String( error ) } ), checkMs: Date.now() - startedAt };
+	} finally {
+		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+	}
+}
+
+/**
+ * Decide once, on the entrypoint, whether this site can be captured with
+ * desktop-only routes at all (see `device-mode.ts`): adapter device documents,
+ * different server HTML or a failed probe keep the whole capture `dual`.
+ * Rendered structure is decided per route by `checkRouteDeviceMode`.
+ *
+ * In a `reflow-only` site the probe's fully loaded phone page also runs one
+ * interaction probe limited to controls that are not visible at desktop width,
+ * such as a hamburger menu, so their states are not lost with the phone pass.
+ * Its report merges into the entrypoint route like a phone pass's report would.
+ */
+async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision: DeviceModeDecision; phoneInteractions?: InteractionStatesReport; url: string; sharedChrome?: Map< string, SharedChromeProbe > } > {
+	const startedAt = Date.now();
+	const { requested } = args;
+	const ignored = { serverHtml: SERVER_HTML_IGNORED, structure: STRUCTURE_IGNORED };
+	const deviceDocuments = args.deviceDocuments.join( ', ' );
+	if ( requested === 'dual' || ( requested === 'auto' && deviceDocuments ) ) {
+		return { url: args.url, decision: { ...decideSiteMode( { requested, deviceDocuments } ), requested, durationMs: Date.now() - startedAt } };
+	}
+	const contexts: BrowserContext[] = [];
+	let url = args.url;
+	let serverHtml: DeviceModeDecision['serverHtml'];
+	let structure: DeviceModeDecision['structure'];
+	try {
+		const compared = await compareIdentities( args, 'probe', contexts );
+		const { desktop, phone, bodyClasses } = compared;
+		url = compared.url;
+		serverHtml = compared.serverHtml;
+		structure = compared.structure;
+		const decided = decideSiteMode( { requested, serverHtml } );
+		const decision: DeviceModeDecision = { ...decided, requested, url, serverHtml, structure, ...( bodyClasses.desktopOnly.length || bodyClasses.phoneOnly.length ? { bodyClasses } : {} ), ignored };
+		let phoneInteractions: InteractionStatesReport | undefined;
+		if ( decided.mode === 'reflow-only' && structure.differingPaths > 0 ) {
+			// The entrypoint's own check then keeps it dual, and its phone pass probes these controls.
+			decision.phoneProbe = { status: 'skipped', triggers: 0, captured: 0, reason: 'phone structure differs, so desktop-visible controls cannot be mapped' };
+		} else if ( decided.mode === 'reflow-only' ) {
+			try {
+				// Controls visible at desktop width are the desktop pass's to probe.
+				const desktopControls = await withEvaluateTimeout( visibleControlPaths( desktop.page ), 10_000 );
+				await renderedElementPaths( phone.page, { attribute: DESKTOP_CONTROL_ATTRIBUTE, paths: desktopControls } );
+				// Order as in a phone pass: disclosures are restored in place first, so
+				// the dialog probe sees what that pass saw. The desktop pass restores
+				// the same disclosures in the shared document, so these states are not kept.
+				await hydrateDisclosureContent( phone.page ).catch( () => [] );
+				await restoreTopScrollState( phone.page );
+				await dismissOverlays( phone.page );
+				const release = await lockMainFrameNavigation( phone.page );
+				let report: InteractionStatesReport;
+				try {
+					report = await captureTriggeredDialogs( phone.page, url, { skip: `[${ DESKTOP_CONTROL_ATTRIBUTE }]` } );
+				} finally {
+					await release();
+				}
+				const marker = new RegExp( `\\s${ DESKTOP_CONTROL_ATTRIBUTE }(?:="")?`, 'g' );
+				report = canonicalizeInteractionReport( report, html => html.replace( marker, '' ) );
+				if ( args.canonicalizeHtml ) report = canonicalizeInteractionReport( report, args.canonicalizeHtml );
+				// Initially visible dialogs are not phone-only; the desktop pass owns them.
+				const { initialDialogs: _initial, routeNavigation: _routes, ...phoneReport } = report;
+				const captured = phoneReport.states.filter( state => state.status === 'captured' ).length;
+				decision.phoneProbe = { status: captured ? 'captured' : 'none', triggers: phoneReport.states.length, captured };
+				if ( captured ) phoneInteractions = phoneReport;
+			} catch ( error ) {
+				decision.phoneProbe = { status: 'failed', triggers: 0, captured: 0, reason: error instanceof Error ? error.message : String( error ) };
+			}
+		}
+		decision.durationMs = Date.now() - startedAt;
+		// The loaded entrypoint pages also serve the one-time shared-chrome probe,
+		// so it costs no extra load. A reflow-only site captures desktop only, and
+		// its phone-only states join the desktop evidence; a dual site probes each
+		// identity's own, untouched page.
+		let sharedChrome: Map< string, SharedChromeProbe > | undefined;
+		if ( args.sharedChrome ) {
+			const chromeOptions = { ...( args.canonicalizeHtml ? { canonicalizeHtml: args.canonicalizeHtml } : {} ) };
+			const [ desktopChrome, phoneChrome ] = await Promise.all( [
+				boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( desktop.page, url, { ...chromeOptions, ...( phoneInteractions ? { additionalStates: phoneInteractions.states } : {} ) } ) ),
+				decided.mode === 'dual' ? boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( phone.page, url, chromeOptions ) ) : undefined,
+			] );
+			sharedChrome = new Map( [ [ 'desktop', desktopChrome ], ...( phoneChrome ? [ [ 'mobile', phoneChrome ] as const ] : [] ) ] );
+		}
+		return { url, phoneInteractions, decision, ...( sharedChrome ? { sharedChrome } : {} ) };
+	} catch ( error ) {
+		const probeError = error instanceof Error ? error.message : String( error );
+		return { url, decision: { ...decideSiteMode( { requested, probeError } ), requested, url, ...( serverHtml ? { serverHtml } : {} ), ...( structure ? { structure } : {} ), ignored, durationMs: Date.now() - startedAt } };
+	} finally {
+		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+	}
+}
+
+/** Bound on the one-time chrome probe of one profile; routes then probe their chrome in place. */
+const SHARED_CHROME_PROBE_MS = 120_000;
+
+/**
+ * Probe the shared chrome of a loaded, prepared entrypoint page: only controls
+ * inside chrome landmarks are clicked, and each recorded state is anchored to
+ * its chrome root so routes can rebase and verify it (see chrome-reuse.ts).
+ * `additionalStates` were recorded by another probe of a structurally
+ * identical page (the reflow-only phone-only probe) and are anchored here too.
+ */
+async function probeChromeOnPage(
+	page: Page,
+	url: string,
+	options: { canonicalizeHtml?: ( html: string ) => string; additionalStates?: CapturedDialogInteraction[] }
+): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
+	// Prepared as a route is before its probe: disclosures restored in place,
+	// resting scroll, overlays dismissed.
+	await hydrateDisclosureContent( page ).catch( () => [] );
+	await restoreTopScrollState( page );
+	await dismissOverlays( page );
+	const landmarks = await readChromeLandmarks( page, true );
+	let states: CapturedDialogInteraction[] = [];
+	if ( landmarks.length ) {
+		const release = await lockMainFrameNavigation( page );
+		try {
+			states = ( await captureTriggeredDialogs( page, url, { skip: OUTSIDE_CHROME } ) ).states;
+		} finally {
+			await release();
+			await clearChromeMarks( page );
+		}
+	}
+	const anchored = await anchorChromeStates( page, landmarks, [ ...states, ...( options.additionalStates ?? [] ) ] );
+	const canonicalize = options.canonicalizeHtml;
+	return {
+		status: 'captured',
+		evidence: {
+			url, landmarks, unanchored: anchored.unanchored,
+			states: canonicalize ? anchored.states.map( item => ( { ...item, state: canonicalizeInteractionReport( item.state, canonicalize ) } ) ) : anchored.states,
+		},
+	};
+}
+
+async function boundSharedChromeProbe( startedAt: number, probe: () => Promise< Omit< SharedChromeProbe, 'durationMs' > > ): Promise< SharedChromeProbe > {
+	let timer: ReturnType< typeof setTimeout > | undefined;
+	try {
+		const result = await Promise.race( [ probe(), new Promise< never >( ( _, reject ) => {
+			// failure-class: operational
+			timer = setTimeout( () => reject( new Error( `timed out after ${ SHARED_CHROME_PROBE_MS }ms` ) ), SHARED_CHROME_PROBE_MS );
+		} ) ] );
+		return { ...result, durationMs: Date.now() - startedAt };
+	} catch ( error ) {
+		return { status: 'failed', reason: error instanceof Error ? error.message : String( error ), durationMs: Date.now() - startedAt };
+	} finally {
+		clearTimeout( timer );
+	}
+}
+
+/** Load the entrypoint in one capture profile, as the device-mode probe does, and probe its shared chrome. */
+async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile'; canonicalizeHtml?: ( html: string ) => string } ): Promise< SharedChromeProbe > {
+	const contexts: BrowserContext[] = [];
+	try {
+		return await boundSharedChromeProbe( Date.now(), async () => {
+			const { page, target } = await loadForComparison( { ...args, desktop: args.options, phone: args.options }, args.options, args.viewport, 'probe', contexts );
+			return probeChromeOnPage( page, target, args.canonicalizeHtml ? { canonicalizeHtml: args.canonicalizeHtml } : {} );
+		} );
+	} finally {
+		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+	}
+}
+
 /**
  * Capture per-viewport screenshots + html + site metadata for a list of URLs.
  * Resumable via manifest.json / failures.json; same-origin enforced; output
@@ -1555,6 +1926,29 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const viewports = opts.viewports ?? defaultViewports(IPHONE_17_CONTEXT.viewport);
 	for ( const viewport of viewports ) validateCaptureProfile( viewport );
 	if ( new Set( viewports.map( viewport => viewport.id ) ).size !== viewports.length ) throw new Error( 'Duplicate source capture profile' );
+	// Each profile loads as a real browser: builders can select viewport
+	// metadata, navigation, and layout from the identity, and anti-bot
+	// challenges refuse Playwright's default HeadlessChrome one.
+	// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every desktop
+	// screenshot while the layout pass stays at the logical viewport (so CSS
+	// media queries hit their real desktop branch); see types.ts.
+	const profileContextOptions = ( viewport: Viewport, sessionContext: BrowserContextOptions ): BrowserContextOptions => {
+		const device = viewport.device ? devices[ viewport.device ] : undefined;
+		if ( viewport.device && ! device ) throw new Error( `Unknown source device profile: ${ viewport.device }` );
+		const { defaultBrowserType: _deviceType, ...deviceContext } = device ?? {};
+		return {
+			...( viewport.id === 'mobile'
+				? { ...sessionContext, ...IPHONE_17_CONTEXT }
+				: sessionContext ),
+			deviceScaleFactor:
+				viewport.id === 'desktop'
+					? SCREENSHOT_DEVICE_SCALE_FACTOR
+					: viewport.id === 'mobile' ? IPHONE_17_CONTEXT.deviceScaleFactor : 1,
+			ignoreHTTPSErrors: true,
+			...deviceContext, ...viewport.context,
+			viewport: { width: viewport.width, height: viewport.height },
+		};
+	};
 	const rawConcurrency = opts.concurrency ?? 6;
 	const concurrency = Math.max( 1, Math.floor( Math.min( 10, rawConcurrency ) ) || 1 );
 	// Node reports the process group's memory constraint, including Chromium's
@@ -1566,12 +1960,23 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Some runtimes report an unlimited uint64 sentinel rather than zero.
 	// Only a representable byte budget is evidence of a usable constraint.
 	const memoryAdmission = Number.isSafeInteger( memoryLimit ) && memoryLimit > 0 && typeof process.availableMemory === 'function';
+	// Admission reserves memory per route, so it needs a per-route estimate:
+	// group growth above the idle floor (Node, Chromium and retained resources
+	// with no route running), divided across the routes active when sampled.
+	// The whole-group peak would count that floor and every concurrent route
+	// against each new route, throttling harder the more routes overlap.
 	let observedWorkingSet = 0;
+	let idleFloor: number | undefined;
+	let routeWorkingSet = 0;
+	let activeRoutes = 0;
 	let calibrated = false;
 	const sampleMemory = (): number => {
 		const available = process.availableMemory();
 		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
-		observedWorkingSet = Math.max( observedWorkingSet, memoryLimit - available );
+		const used = memoryLimit - available;
+		observedWorkingSet = Math.max( observedWorkingSet, used );
+		if ( activeRoutes === 0 ) idleFloor = used;
+		else if ( idleFloor !== undefined ) routeWorkingSet = Math.max( routeWorkingSet, ( used - idleFloor ) / activeRoutes );
 		return available;
 	};
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
@@ -1580,25 +1985,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const settleMs = opts.settleMs ?? 1_000;
 	const force = opts.force ?? false;
 	const server = opts.server;
-
-	if (opts.routeScope) validateRouteScope(opts.routeScope);
-	if (opts.primaryUrl && !routeInScope(opts.primaryUrl, opts.routeScope)) throw new Error('Source URL is outside its adapter route scope');
-	let urls = opts.urls.filter(url => routeInScope(url, opts.routeScope));
-	if ( opts.types && opts.types.length > 0 ) {
-		const allowed = new Set( opts.types );
-		urls = urls.filter( ( u ) => allowed.has( classifyUrl( u ) ) );
-	}
-	if ( typeof opts.limit === 'number' && opts.limit >= 0 ) {
-		urls = sampleUrlsByType( urls, opts.limit );
-	}
-	const frontier = opts.linkedPages ? new LinkedFrontier( {
-		...opts.linkedPages,
-		...(opts.limit !== undefined && opts.limit > 0
-			? { maxPages: Math.min(opts.limit, opts.linkedPages.maxPages ?? 256) }
-			: {}),
-	}, startTime, opts.routeScope ) : undefined;
-	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0));
-	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
 
 	// --- same-origin ---------------------------------------------------------
 	// Normalize `primaryUrl` to include a protocol — callers sometimes pass
@@ -1609,7 +1995,38 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			? opts.primaryUrl
 			: `https://${ opts.primaryUrl }`
 		: null;
-	enforceSameOrigin( primaryRef, urls );
+	// The first route is the entry route: off its origin the capture is not of
+	// this site, so it fails closed (SameOriginViolation is an IntegrityError).
+	// Any other discovered URL off that origin is dropped before it can take a
+	// route budget slot, as a `route_off_origin` finding.
+	enforceSameOrigin( primaryRef, opts.urls.slice( 0, 1 ) );
+	const offOrigin = offOriginUrls( primaryRef, opts.urls );
+	const routeDiagnostics: RouteDiagnostic[] = offOrigin.violations.map( url => ( {
+		code: 'route_off_origin', url, reason: `discovered URL is outside the entry origin ${ offOrigin.expected }`, unit: 'route', severity: 'warning',
+	} ) );
+
+	if (opts.routeScope) validateRouteScope(opts.routeScope);
+	if (opts.primaryUrl && !routeInScope(opts.primaryUrl, opts.routeScope)) throw new Error('Source URL is outside its adapter route scope');
+	const offOriginRoutes = new Set( offOrigin.violations );
+	let urls = opts.urls.filter(url => ! offOriginRoutes.has( url ) && routeInScope(url, opts.routeScope));
+	if ( opts.types && opts.types.length > 0 ) {
+		const allowed = new Set( opts.types );
+		urls = urls.filter( ( u ) => allowed.has( classifyUrl( u ) ) );
+	}
+	if ( typeof opts.limit === 'number' && opts.limit >= 0 ) {
+		urls = sampleUrlsByType( urls, opts.limit );
+	}
+	const frontier = opts.linkedPages ? new LinkedFrontier( {
+		...opts.linkedPages,
+		capturePageLimit: opts.limit !== undefined && opts.limit >= 0 ? opts.limit : undefined,
+	}, startTime, opts.routeScope ) : undefined;
+	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0, startTime, 'inventory'));
+	// Under a time budget the entrypoint starts first, so the budget never skips it.
+	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
+	if ( budgetEntrypoint !== undefined ) urls = [ budgetEntrypoint, ...urls.filter( url => url !== budgetEntrypoint ) ];
+	const routeBudget = opts.timeBudget && budgetEntrypoint !== undefined ? new RouteTimeBudget( opts.timeBudget, budgetEntrypoint ) : undefined;
+	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
+
 	// The URL a session (if any) is harvested from — see sourceContextOptions
 	// call below. Falls back to the first route when no primaryUrl was given
 	// (e.g. a direct captureScreenshots() call), which just reproduces the
@@ -1684,6 +2101,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let crashRelaunches = 0;
 	const replaceCrashedBrowser = ( crashed: Browser ): Promise< boolean > => {
 		if ( browser !== crashed ) return Promise.resolve( true );
+		// The time budget closed this browser on purpose.
+		if ( routeBudget?.abandoning ) return Promise.resolve( false );
 		if ( ! crashRelaunch ) {
 			if ( crashRelaunches >= MAX_CRASH_RELAUNCHES ) return Promise.resolve( false );
 			crashRelaunches++;
@@ -1705,32 +2124,106 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		return crashRelaunch;
 	};
 
+	// --- device mode ---------------------------------------------------------
+	// The entrypoint gates the site before any route (device-mode.ts). Under a
+	// reflow-only site each route is then captured at desktop only unless its
+	// own cheap phone check finds a different document.
+	let deviceMode: DeviceModeDecision | undefined;
+	/** Desktop-only profiles for a reflow route; undefined when every route is dual. */
+	let reflowViewports: Viewport[] | undefined;
+	let routeComparison: Omit< DeviceComparisonArgs, 'browser' | 'url' > | undefined;
+	const routeDecisions: Array< { url: string } & RouteDeviceDecision > = [];
+	let phoneInteractions: { url: string; report: InteractionStatesReport } | undefined;
+	const desktopProfile = viewports.find( viewport => viewport.id === 'desktop' );
+	const phoneProfile = viewports.find( viewport => viewport.id === 'mobile' );
+	const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ];
+	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) && ( urls.length > 1 || frontier ) );
+	const sharedChromeResults = new Map< string, SharedChromeProbe >();
+	if ( ! opts.viewports && desktopProfile && phoneProfile && entrypoint ) {
+		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
+		const requested = opts.deviceMode ?? 'dual';
+		const comparison = {
+			desktop: profileContextOptions( desktopProfile, sessionContext ),
+			phone: profileContextOptions( phoneProfile, sessionContext ),
+			publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
+			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+		};
+		const probed = await probeDeviceMode( {
+			...comparison, browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
+			deviceDocuments: [
+				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
+				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
+				...( opts.collectResponsiveImages ? [ 'responsiveImages' ] : [] ),
+			],
+		} );
+		deviceMode = probed.decision;
+		if ( probed.phoneInteractions ) phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+		for ( const [ profile, result ] of probed.sharedChrome ?? [] ) sharedChromeResults.set( profile, result );
+		if ( deviceMode.mode === 'reflow-only' ) {
+			// A reflow route's desktop document also freezes the phone-width reference cell.
+			reflowViewports = viewports.filter( viewport => viewport !== phoneProfile ).map( viewport => viewport === desktopProfile
+				? { ...viewport, referenceWidths: viewport.referenceWidths ?? opts.referenceWidths ?? [ 390, 768, 1440 ] }
+				: viewport );
+			// A forced reflow-only capture (a testing override) checks no route.
+			if ( requested === 'auto' ) routeComparison = comparison;
+		}
+		const message = `[device-mode] ${ deviceMode.mode } (${ deviceMode.durationMs }ms): ${ deviceMode.reason }${ deviceMode.phoneProbe ? `; phone-only controls: ${ deviceMode.phoneProbe.status } (${ deviceMode.phoneProbe.captured }/${ deviceMode.phoneProbe.triggers } captured)` : '' }`;
+		sendLog( server, message );
+		process.stderr.write( `${ message }\n` );
+	}
+
+	// --- shared chrome -------------------------------------------------------
+	// The entrypoint's chrome is probed once per built-in profile before any
+	// route, on the device-mode probe's pages when it loaded them, and reused by
+	// every route whose chrome matches (chrome-reuse.ts). A single-route capture
+	// has nothing to share.
+	const sharedChromeDecisions: Array< { url: string; profile: string } & SharedChromeRouteDecision > = [];
+	if ( sharedChromeEnabled ) {
+		const profiles = ( reflowViewports ?? viewports ).filter( viewport => ( viewport.id === 'desktop' || viewport.id === 'mobile' ) && ! sharedChromeResults.has( viewport.id ) );
+		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) : undefined;
+		await Promise.all( profiles.map( async viewport => {
+			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
+				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
+				publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
+				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+				...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
+			} ) );
+		} ) );
+		for ( const [ profile, result ] of sharedChromeResults ) {
+			const message = `[shared-chrome] ${ profile } ${ result.status } (${ result.durationMs }ms)${ result.evidence
+				? `: ${ result.evidence.landmarks.length } chrome landmarks, ${ result.evidence.states.length } states (${ result.evidence.unanchored } outside chrome)`
+				: `: ${ result.reason }` }`;
+			sendLog( server, message );
+			process.stderr.write( `${ message }\n` );
+		}
+	}
+	const sharedChromeFor = ( viewport: Viewport ): SharedChromeProbe | undefined => {
+		if ( ! sharedChromeEnabled || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
+		return sharedChromeResults.get( viewport.id ) ?? { status: 'skipped', reason: `the entrypoint chrome was not probed for the ${ viewport.id } profile`, durationMs: 0 };
+	};
+
 	let captured = 0;
 	let skipped = 0;
 	let completed = 0;
 	// A redirect alias's target joins the queue unless its route is already in
 	// it, so each route is captured once however many URLs redirect to it.
 	const queuedRoutes = new Set( urls.map( documentRequestUrl ) );
-	const enqueue = (target: string, depth: number): void => {
+	const enqueue = (target: string, depth: number, ownership: 'linked' | 'alias' = 'linked'): void => {
 		if (!routeInScope(target, opts.routeScope)) return;
 		const key = documentRequestUrl(target);
 		if (queuedRoutes.has(key)) return;
-		if (frontier && !frontier.admit(key, depth)) return;
+		if (frontier && !frontier.admit(key, depth, Date.now(), ownership)) return;
 		queuedRoutes.add(key);
 		if (frontier) target = key;
 		urls.push(target);
 	};
-	const allFailures: FailureEntry[] = [];
+	// Routes, not failure records: failures.json keeps one record per
+	// viewport × stage × attempt, the summary counts each failed URL once.
+	const failedRoutes = new Set< string >();
 
 	const capturedAt = () => new Date().toISOString();
 
 	const processUrl = async ( url: string ): Promise< void > => {
-		if (frontier?.expired()) {
-			frontier.recordTimeout(url);
-			skipped++; completed++;
-			opts.onProgress?.(completed, urls.length, url);
-			return;
-		}
 		const routeStartedAt = Date.now();
 		const base = slugify( url );
 		// On resume the URL may already have an entry — reuse its slug so the
@@ -1748,7 +2241,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;
 		const desktopPlan = shouldAnalyzeUrl ? { ...plan.desktop, needsLoad: true } : plan.desktop;
 		const effectivePlan = { ...plan, desktop: desktopPlan };
-		const routeProfiles: Viewport[] = viewports.map( profile => ( { ...publicCaptureProfile( profile ),
+		// Under a reflow-only site, decide this route: a recorded decision on
+		// resume, otherwise the cheap phone check (before, never during, capture).
+		let routeDevice: RouteDeviceDecision | undefined;
+		if ( reflowViewports ) {
+			if ( ! force && existing?.deviceMode ) routeDevice = existing.deviceMode;
+			else if ( routeComparison ) routeDevice = await checkRouteDeviceMode( { ...routeComparison, browser, url } );
+			else routeDevice = { mode: 'reflow-only', reason: 'reflow-only capture was requested' };
+			routeDecisions.push( { url, ...routeDevice } );
+			if ( routeDevice.mode === 'dual' ) {
+				const message = `[device-mode] ${ url } dual${ routeDevice.checkMs === undefined ? '' : ` (check ${ routeDevice.checkMs }ms)` }: ${ routeDevice.reason }`;
+				sendLog( server, message );
+				process.stderr.write( `${ message }\n` );
+			}
+		}
+		const routeViewports = routeDevice?.mode === 'reflow-only' ? reflowViewports! : viewports;
+		const routeProfiles: Viewport[] = routeViewports.map( profile => ( { ...publicCaptureProfile( profile ),
 			referenceWidths: profile.referenceWidths ?? opts.referenceWidths ?? ( profile.id === 'mobile' ? [ 390 ] : profile.id === 'desktop' ? [ 768, 1440 ] : [ profile.width ] ),
 		} ) );
 		let additionalDeclared = false;
@@ -1769,6 +2277,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
 
 		if ( routeProfiles.every( profile => ! profilePlan( profile ).needsLoad ) ) {
+			if ( routeBudget && ! routeBudget.commit( url ) ) return;
 			skipped++;
 			sendLog( server, `[skip] ${ url } (artifacts exist)` );
 			completed++;
@@ -1778,7 +2287,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined,
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined, deviceMode: routeDevice,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
 		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
@@ -1786,6 +2295,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const previousCleanup = entry.cleanup;
 			const previousDocuments = entry.documents;
 			const previousNativeViewTimelines = entry.nativeViewTimelines;
+			const previousBlockLosses = entry.blockLosses ?? [];
 			const previousRedirect = entry.redirectedTo;
 			const previousOutcomes = entry.sourceOutcomes ?? [];
 			const previousLocal = Boolean( entry.html || entry.mobileHtml );
@@ -1805,6 +2315,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 			if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
 			entry.documents = { ...previousDocuments, ...profileEntry.documents };
+			const blockLosses = [ ...previousBlockLosses, ...( profileEntry.blockLosses ?? [] ) ];
+			entry.blockLosses = blockLosses.length ? blockLosses : undefined;
 			if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
 			if ( ! additional ) {
 				const latest = profileEntry.interactions;
@@ -1833,40 +2345,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
 				const phases = createPhaseLedger();
+				const profileDiagnostics: ProfileDiagnostic[] = [];
 				phases.enter( 'context' );
 				try {
-					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
-					// screenshot while keeping the rendered layout identical to a
-					// standard desktop session — the browser still does its layout
-					// pass at the logical viewport (so CSS media queries hit their
-					// real desktop branch), but emits a smaller PNG. Mobile stays at
-					// scale 1 because its viewport is already small enough that
-					// further reduction loses layout detail. See types.ts for the
-					// rationale.
-					// Each viewport loads as a real browser: builders can select viewport
-					// metadata, navigation, and layout from the identity, and anti-bot
-					// challenges refuse Playwright's default HeadlessChrome one.
-					//
 					// entryUrl (not `url`) is what gets navigated to harvest a session:
 					// some sources gate every route/asset behind a session only the
 					// tokenized ENTRY url establishes. Keyed by origin, so this navigates
 					// once per run — every worker and viewport for every route reuses it.
-					const sessionContext = await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
-					const device = viewport.device ? devices[ viewport.device ] : undefined;
-					if ( viewport.device && ! device ) throw new Error( `Unknown source device profile: ${ viewport.device }` );
-					const { defaultBrowserType: _deviceType, ...deviceContext } = device ?? {};
-					contextOptions = {
-						...( viewport.id === 'mobile'
-							? { ...sessionContext, ...IPHONE_17_CONTEXT }
-							: sessionContext ),
-						deviceScaleFactor:
-							viewport.id === 'desktop'
-								? SCREENSHOT_DEVICE_SCALE_FACTOR
-								: viewport.id === 'mobile' ? IPHONE_17_CONTEXT.deviceScaleFactor : 1,
-						ignoreHTTPSErrors: true,
-						...deviceContext, ...viewport.context,
-						viewport: { width: viewport.width, height: viewport.height },
-					};
+					contextOptions = profileContextOptions( viewport, await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
 					identity = replayBrowserIdentity( contextOptions );
 					context = await attemptBrowser.newContext( contextOptions );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
@@ -1897,6 +2383,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							screenshotTimeoutMs,
 							evaluateTimeoutMs,
 							failures: profileFailures,
+							diagnostics: profileDiagnostics,
 							entry: profileEntry,
 							aggregator,
 							shouldAnalyze: viewport.id === 'desktop' && shouldAnalyzeUrl,
@@ -1914,6 +2401,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.learnFluid ? { learnFluid: true } : {} ),
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 							prepareCapture: opts.prepareCapture,
+							sharedChrome: sharedChromeFor( viewport ),
 							resolveClientRedirect: opts.resolveClientRedirect,
 							beforeSerialize: opts.beforeSerialize,
 							observeSource: opts.observeSource,
@@ -1934,7 +2422,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
 								nativeViewTimelines: profileEntry.nativeViewTimelines,
 								interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
+								...( profileEntry.sharedChrome ? { sharedChrome: profileEntry.sharedChrome } : {} ),
+								...( profileDiagnostics.length ? { diagnostics: profileDiagnostics } : {} ),
 							} };
+							for ( const diagnostic of profileDiagnostics ) sendLog( server, `[${ diagnostic.code }] ${ url } (${ viewport.id }): ${ diagnostic.reason }` );
 						}
 						if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 					}
@@ -1989,6 +2480,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				profileFailures.length = failuresBefore;
+				profileEntry.blockLosses = undefined;
 			}
 			return { profileEntry, failures: profileFailures, additional };
 		};
@@ -2006,6 +2498,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const viewport = builtInProfiles[ index ]!;
 			const result = builtInResults[ index ];
 			if ( ! result ) continue;
+			if ( result.profileEntry.sharedChrome ) sharedChromeDecisions.push( { url, profile: viewport.id, ...result.profileEntry.sharedChrome } );
 			urlFailures.push( ...result.failures );
 			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
 				url, viewport: viewport.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
@@ -2025,6 +2518,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			} );
 		}
 
+		// Reflow-only: phone-only control states from the device-mode probe join
+		// the entrypoint's report, as a phone pass's report would have.
+		if ( phoneInteractions && routeDevice?.mode !== 'dual' && entry.html && ! entry.redirectedTo && documentRequestUrl( url ) === documentRequestUrl( phoneInteractions.url ) ) {
+			entry.interactions = mergeInteractionReports( entry.interactions, phoneInteractions.report );
+			phoneInteractions = undefined;
+		}
+
 		if (entry.sourceOutcomes?.length) {
 			if (urlFailures.length || entry.html || entry.mobileHtml || entry.redirectedTo || entry.sourceOutcomes.length !== routeProfiles.length ||
 				new Set(entry.sourceOutcomes.map(boundaryIdentity)).size !== 1) {
@@ -2035,6 +2535,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				entry.html = undefined; entry.mobileHtml = undefined; entry.desktop = undefined; entry.mobile = undefined; entry.cleanup = undefined;
 			}
 		}
+		// A route abandoned at the time budget's deadline records nothing.
+		if ( routeBudget && ! routeBudget.commit( url ) ) return;
 		for ( const f of urlFailures ) {
 			await manifest.recordFailure( f );
 		}
@@ -2048,7 +2550,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( entry.redirectedTo && !urlFailures.length ) {
 			const target = entry.redirectedTo;
-			enqueue(target, frontier?.depths.get(url) ?? 0);
+			enqueue(target, frontier?.depths.get(url) ?? 0, 'alias');
 			skipped++;
 			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
 			completed++;
@@ -2075,15 +2577,26 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( urlFailures.length === 0 ) {
 			captured++;
 			// Reused artifacts, absent documents and redirect aliases do not
-			// calibrate the memory cost of a fresh successful capture.
-			if ( memoryAdmission && ! entry.redirectedTo ) { sampleMemory(); calibrated = true; }
+			// calibrate the memory cost of a fresh successful capture. A bounded
+			// reference sample leaves most routes without fresh reference pages;
+			// calibrating on one of those would under-estimate the working set,
+			// so calibration waits for a route that produced them (the entrypoint
+			// is always sampled and is captured first).
+			const producedReferencePages = ! opts.referenceSampleUrls || opts.referenceSampleUrls.includes( url );
+			if ( memoryAdmission && ! entry.redirectedTo && producedReferencePages ) { sampleMemory(); calibrated = true; }
 			sendLog( server, `[ok] ${ url }` );
 		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
 			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});
 			skipped++;
 			sendLog( server, `[skip] ${ url } (${ absentFailures[ 0 ].error })` );
+		} else if ( entry.html && ! entry.redirectedTo ) {
+			// Saved HTML is a captured route. The failed stages are findings on it
+			// (`route_capture_degraded`, projected by export from failures.json),
+			// not a failed route.
+			captured++;
+			sendLog( server, `[degraded] ${ url } (${ urlFailures.length } stage failures; HTML saved)` );
 		} else {
-			allFailures.push( ...captureFailures );
+			failedRoutes.add( url );
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
@@ -2100,9 +2613,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// browser is restarted only between segments to bound memory, preserving the
 		// restart-every-N invariant while keeping each worker on a stable browser.
 		let segStart = 0;
-		while (segStart < urls.length) {
+		while (segStart < urls.length && ! routeBudget?.closed()) {
 			const waveEnd = urls.length;
-			while ( segStart < waveEnd ) {
+			while ( segStart < waveEnd && ! routeBudget?.closed() ) {
 				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
 					await browser.close().catch( () => {} );
@@ -2116,9 +2629,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					: waveEnd;
 				let cursor = segStart;
 				const running = new Set< Promise<void> >();
-				// Reserve the observed whole-group working set for routes whose peak
-				// may still be ahead. Even one unseen route can exceed the budget;
-				// this admits overlap, rather than enforcing a per-source byte cap.
+				// Reserve one observed per-route working set for every running route
+				// whose peak may still be ahead, plus the route being admitted. Even
+				// one unseen route can exceed the budget; this admits overlap, rather
+				// than enforcing a per-source byte cap.
 				const admit = (): boolean => {
 					if ( ! memoryAdmission ) return true;
 					const available = sampleMemory();
@@ -2126,31 +2640,41 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						if ( available === 0 ) throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` );
 						return true;
 					}
-					return calibrated && available >= ( running.size + 1 ) * observedWorkingSet;
+					return calibrated && available >= ( running.size + 1 ) * routeWorkingSet;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
+				const budgetAdmits = (): boolean => ! routeBudget || routeBudget.admits( urls[ cursor ]! );
 				try {
-					while ( cursor < segEnd || running.size ) {
-						while ( cursor < segEnd && running.size < concurrency && admit() ) {
+					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
+						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admit() ) {
 							const url = urls[ cursor++ ];
-							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, activeRoutes: running.size + 1, calibrated, url } ) }\n` );
-							const pending = processUrl( url ).then( () => {
+							routeBudget?.start( url );
+							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: Math.round( routeWorkingSet ), activeRoutes: running.size + 1, calibrated, url } ) }\n` );
+							activeRoutes++;
+							const pending = processUrl( url ).finally( () => { activeRoutes--; routeBudget?.finish( url ); } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
 							running.add( pending );
 							// The race observes fatal rejection before browser cleanup.
 							void pending.then( () => running.delete( pending ), () => {} );
 						}
-						if ( running.size ) await Promise.race( running );
+						if ( ! running.size ) continue;
+						if ( ! routeBudget ) await Promise.race( running );
+						else {
+							await routeBudget.wait( running );
+							if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( () => {} ) ) ) break;
+						}
 					}
 				} finally {
 					if ( timer ) clearInterval( timer );
 					// Drain existing context cleanup without suppressing fatal errors.
-					await Promise.allSettled( running );
+					await ( routeBudget ? routeBudget.drain( running ) : Promise.allSettled( running ) );
 				}
 				urlsSinceRestart += segEnd - segStart;
 				segStart = segEnd;
 			}
+			// Past the time budget no new work is discovered either.
+			if ( routeBudget?.closed() ) break;
 			// Expand a breadth-first wave from actual rendered artifacts. The normal
 			// navigation/capture contract proves local documents and external boundaries;
 			// successful HTML is never reduced to a classification-only probe.
@@ -2161,7 +2685,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const entry = manifest.getEntry( url );
 				if ( ! entry?.html ) continue;
 				const documents: Array<{ path: string; document?: { url?: string; baseUrl?: string } }> = [ { path: join( opts.outputDir, entry.html ), document: entry.documents?.desktop } ];
-				if ( frontier ) documents.push( { path: join( opts.outputDir, entry.mobileHtml ?? join( 'html-mobile', `${ entry.slug }.html` ) ), document: entry.documents?.mobile } );
+				if ( frontier && ( ! reflowViewports || entry.mobileHtml ) ) documents.push( { path: join( opts.outputDir, entry.mobileHtml ?? join( 'html-mobile', `${ entry.slug }.html` ) ), document: entry.documents?.mobile } );
 				for ( const { path: htmlPath, document } of documents ) {
 					if ( ! existsSync( htmlPath ) ) continue;
 					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
@@ -2180,13 +2704,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let context: BrowserContext | undefined;
 				try {
 					context = await browser.newContext( await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
-					for ( const url of [ ...candidates ].slice(0, 32) ) {
+					// Inspecting an action URL performs the action; export names it instead.
+					for ( const url of [ ...candidates ].filter( url => ! stateChangingAction( url ) ).slice(0, 32) ) {
 						try {
 							// A plain rerun must not trust a prior probe when the source changed.
 							const prior = manifest.getEntry( url );
 							if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
 							const inspected = await inspectSourceDocument(url, async (current, timeout) => {
-								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout});
+								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout: Math.min(SOURCE_LINK_PROBE_REQUEST_MS, timeout)});
 								try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
 								finally { await response.dispose(); }
 							}, opts.publicUrlsOnly, SOURCE_NAVIGATION_LIMITS.timeoutMs, opts.routeScope);
@@ -2262,15 +2787,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	}
 
 
+	// Routes the time budget left uncaptured are missing routes: counted as failed.
+	const budgetDiagnostics = routeBudget?.diagnostics( urls ) ?? [];
+	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
+	routeDiagnostics.push( ...budgetDiagnostics );
 	return {
 		captured,
 		skipped,
-		failed: allFailures.length,
+		failed: failedRoutes.size + budgetDiagnostics.length,
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,
 		urls,
 		...(frontier ? {linkedPageCoverage: frontier.coverage()} : {}),
+		...(routeDiagnostics.length ? {routeDiagnostics} : {}),
+		...(deviceMode ? {deviceMode: reflowViewports ? {...deviceMode, routes: summarizeRouteDecisions(routeDecisions)} : deviceMode} : {}),
+		...(entrypoint && sharedChromeResults.size ? {sharedChrome: summarizeSharedChrome(entrypoint, sharedChromeResults, sharedChromeDecisions)} : {}),
 	};
 }
 

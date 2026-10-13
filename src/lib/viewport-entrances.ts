@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import * as cheerio from 'cheerio';
 import { withEvaluateTimeout } from './screenshot/page-helpers.js';
 
-export const VIEWPORT_ENTRANCE_ATTRIBUTE = 'data-dla-viewport-entrance';
+export const VIEWPORT_ENTRANCE_ATTRIBUTE = 'data-blocks-engine-capture-viewport-entrance';
 
 interface EntranceState {
 	attributes: Record<string, { before: string | null; after: string | null }>;
@@ -52,7 +52,7 @@ export function observeViewportEntrances(): void {
 	addEventListener( 'resize', () => { if ( outerWidth !== initialOuter.width || outerHeight !== initialOuter.height ) navigationalPose = false; } );
 	const attributes = ( element: Element ) => Object.fromEntries(
 		Array.from( element.attributes ).filter( attribute =>
-			/^(class|style|data-.+)$/.test( attribute.name ) && ! attribute.name.startsWith( 'data-dla-' )
+			/^(class|style|data-.+)$/.test( attribute.name ) && ! attribute.name.startsWith( 'data-blocks-engine-capture-' )
 		).map( attribute => [ attribute.name, attribute.value ] )
 	);
 	window.IntersectionObserver = class extends native {
@@ -183,15 +183,15 @@ export function observeViewportEntrances(): void {
 				if ( ! element.isConnected ) continue;
 				captureState( element );
 				if ( target.loss || target.cssCandidate && ! target.cssComplete ) {
-					element.setAttribute( 'data-dla-viewport-entrance-loss', target.loss ?? ( target.cssStarted ? 'CSS entrance has no observed terminal attribute switch' : 'CSS viewport lifecycle was not observed' ) );
+					element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', target.loss ?? ( target.cssStarted ? 'CSS entrance has no observed terminal attribute switch' : 'CSS viewport lifecycle was not observed' ) );
 					continue;
 				}
-				const previousLoss = element.getAttribute( 'data-dla-viewport-entrance-loss' );
-				if ( previousLoss === 'CSS viewport lifecycle was not observed' || previousLoss === 'CSS entrance has no observed terminal attribute switch' ) element.removeAttribute( 'data-dla-viewport-entrance-loss' );
+				const previousLoss = element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' );
+				if ( previousLoss === 'CSS viewport lifecycle was not observed' || previousLoss === 'CSS entrance has no observed terminal attribute switch' ) element.removeAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' );
 				else if ( previousLoss ) continue;
 				if ( target.state.cssAnimations ) target.state.startupContexts = scope.__dlaEntrances?.startupContexts?.[ element.id ] ?? [ { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, started: target.startup } ];
 				// Custom scroll roots remain measured losses until their identity is portable.
-				if ( element.isConnected && target.confirmed && target.supported ) element.setAttribute( 'data-dla-viewport-entrance', JSON.stringify( target.state ) );
+				if ( element.isConnected && target.confirmed && target.supported ) element.setAttribute( 'data-blocks-engine-capture-viewport-entrance', JSON.stringify( target.state ) );
 			}
 		},
 	};
@@ -220,7 +220,7 @@ export async function collectViewportEntranceStartup( source: Page, capture: Pag
 			const poses = contexts[ state.id ] ??= [];
 			const previous = poses.find( pose => pose.width === snapshot.width && pose.height === snapshot.height );
 			if ( previous && previous.started !== state.started ) {
-				document.getElementById( state.id )?.setAttribute( 'data-dla-viewport-entrance-loss', 'Source startup context has conflicting observations' );
+				document.getElementById( state.id )?.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'Source startup context has conflicting observations' );
 				continue;
 			}
 			if ( ! previous ) poses.push( { width: snapshot.width, height: snapshot.height, started: state.started } );
@@ -233,9 +233,9 @@ function replayViewportEntrances(): void {
 	const named = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
 	named.__name ??= fn => fn;
 	const reduced = matchMedia( '(prefers-reduced-motion: reduce)' );
-	for ( const element of document.querySelectorAll( '[data-dla-viewport-entrance]' ) ) {
-		const state = JSON.parse( element.getAttribute( 'data-dla-viewport-entrance' )! ) as EntranceState;
-		if ( element.closest( '[data-dla-device-document]' ) && ! element.getClientRects().length ) continue;
+	for ( const element of document.querySelectorAll( '[data-blocks-engine-capture-viewport-entrance]' ) ) {
+		const state = JSON.parse( element.getAttribute( 'data-blocks-engine-capture-viewport-entrance' )! ) as EntranceState;
+		if ( element.closest( '[data-blocks-engine-capture-device-document]' ) && ! element.getClientRects().length ) continue;
 		const apply = ( pose: 'before' | 'after' ) => {
 			for ( const [ name, values ] of Object.entries( state.attributes ) ) {
 				const value = values[ pose ];
@@ -264,14 +264,14 @@ function replayViewportEntrances(): void {
 			const signatures = effects.map( effect => JSON.stringify( { name: effect.animationName, timing: effect.effect?.getTiming(), frames: ( effect.effect as KeyframeEffect ).getKeyframes() } ) ).sort();
 			if ( JSON.stringify( signatures ) !== JSON.stringify( state.cssAnimations!.map( binding => JSON.stringify( binding ) ).sort() ) ||
 				effects.some( effect => effect.playState !== 'paused' || effect.currentTime !== 0 ) ) {
-				element.setAttribute( 'data-dla-viewport-entrance-loss', 'authored paused CSS animation binding changed' ); return;
+				element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'authored paused CSS animation binding changed' ); return;
 			}
 			running = true;
 			effects.forEach( effect => effect.play() );
 			void Promise.all( effects.map( effect => effect.finished ) ).then( () => {
 				apply( 'after' ); complete = true; running = false;
 				if ( ! state.repeat ) observer.unobserve( element );
-			}, () => { running = false; element.setAttribute( 'data-dla-viewport-entrance-loss', 'CSS entrance completion was interrupted' ); } );
+			}, () => { running = false; element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'CSS entrance completion was interrupted' ); } );
 		};
 		const observer = new IntersectionObserver( entries => {
 			for ( const entry of entries ) {
@@ -285,7 +285,7 @@ function replayViewportEntrances(): void {
 		if ( state.cssAnimations && state.startupContexts ) {
 			const startup = state.startupContexts.find( pose => pose.width === document.documentElement.clientWidth && pose.height === document.documentElement.clientHeight );
 			if ( startup?.started ) start();
-			else if ( ! startup ) element.setAttribute( 'data-dla-viewport-entrance-loss', 'CSS startup context was not observed' );
+			else if ( ! startup ) element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'CSS startup context was not observed' );
 		}
 		reduced.addEventListener( 'change', event => {
 			if ( event.matches ) { observer.disconnect(); apply( 'after' ); }
@@ -308,7 +308,7 @@ export function withViewportEntrances( html: string ): string {
 					state.cssAnimations.some( binding => ! binding || typeof binding.name !== 'string' || ! binding.name || ! binding.timing || ! Array.isArray( binding.frames ) ) ) ) ||
 				( state.startupContexts !== undefined && ( ! Array.isArray( state.startupContexts ) || state.startupContexts.some( pose => ! pose || ! Number.isFinite( pose.width ) || ! Number.isFinite( pose.height ) || typeof pose.started !== 'boolean' ) ) ) ||
 				Object.entries( state.attributes ).some( ( [ name, values ] ) =>
-					! /^(class|style|data-[a-z0-9_.:-]+)$/.test( name ) || name.startsWith( 'data-dla-' ) ||
+					! /^(class|style|data-[a-z0-9_.:-]+)$/.test( name ) || name.startsWith( 'data-blocks-engine-capture-' ) ||
 					! values || [ values.before, values.after ].some( value => value !== null && ( typeof value !== 'string' ||
 						( name === 'style' && /expression\s*\(|-moz-binding|url\s*\(\s*["']?\s*(?:javascript|vbscript|data:text\/html)/i.test( value ) ) ) )
 				) ) throw new Error( 'Invalid viewport entrance evidence' );
@@ -317,9 +317,9 @@ export function withViewportEntrances( html: string ): string {
 				if ( values.after === null ) node.removeAttr( name );
 				else node.attr( name, values.after );
 			}
-		} catch { node.removeAttr( VIEWPORT_ENTRANCE_ATTRIBUTE ); node.attr( 'data-dla-viewport-entrance-loss', 'Invalid viewport entrance evidence' ); }
+		} catch { node.removeAttr( VIEWPORT_ENTRANCE_ATTRIBUTE ); node.attr( 'data-blocks-engine-capture-viewport-entrance-loss', 'Invalid viewport entrance evidence' ); }
 	} );
-	$( 'script[data-dla-viewport-entrances]' ).remove();
-	if ( count ) $( 'body' ).append( `<script data-dla-viewport-entrances>(${ replayViewportEntrances.toString() })();</script>` );
+	$( 'script[data-blocks-engine-capture-viewport-entrances]' ).remove();
+	if ( count ) $( 'body' ).append( `<script data-blocks-engine-capture-viewport-entrances>(${ replayViewportEntrances.toString() })();</script>` );
 	return $.html();
 }

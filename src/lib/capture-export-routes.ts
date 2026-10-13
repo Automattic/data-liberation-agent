@@ -70,10 +70,22 @@ function declaresCanonicalRoute( entry: RouteEntry, claimed: RouteEntry ): boole
 	return documentRequestUrl( entry.canonicalUrl ) === claimedCanonical;
 }
 
+/**
+ * One finding about a route. `unit` names what was lost or degraded (the whole
+ * route, one declared capture profile of it, one stylesheet in it, or one block
+ * of its evidence); a row without `unit` describes the route.
+ */
 export interface RouteDiagnostic {
 	code: string;
 	url: string;
 	reason: string;
+	unit?: 'route' | 'profile' | 'stylesheet' | 'block' | 'asset';
+	severity?: 'warning' | 'error';
+	/** The declared capture profile a `profile` finding is about. */
+	profile?: string;
+	/** The exported file the finding is about. */
+	path?: string;
+	metrics?: Record< string, number >;
 }
 
 function documentIdentity( url: string ): string | undefined {
@@ -120,6 +132,12 @@ export interface RouteStage<T extends RouteEntry> {
 	missingRedirectTargets: Array< { code: string; url: string; reason: string } >;
 	/** Inert metadata carried by collapsed aliases is applied to the retained document. */
 	duplicateSourceData: Array< { claimed: T; sourceData: SourceDataScript[] } >;
+	/**
+	 * Routes dropped because the website path they need is already claimed by
+	 * another route (`route_path_collision`). The first claimant keeps the path;
+	 * the entrypoint always claims first.
+	 */
+	pathCollisions: RouteDiagnostic[];
 }
 
 export function allocateCaptureRoutes<T extends RouteEntry>(
@@ -162,9 +180,11 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	};
 	// Reserve authored paths first. Every independently captured document gets a
 	// confined, deterministic path; comparison-key equality is not alias proof.
-	const allocateCollisionPath = ( path: string, query: boolean ): string => {
-		if ( [ ...reservedPaths ].some( reserved => path.startsWith( `${ reserved }/` ) ) )
-			throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
+	// A path inside a directory another route claims as a file has no free
+	// sibling: undefined leaves the route on the contested path, where the claim
+	// below drops it as a path collision.
+	const allocateCollisionPath = ( path: string, query: boolean ): string | undefined => {
+		if ( [ ...reservedPaths ].some( reserved => path.startsWith( `${ reserved }/` ) ) ) return undefined;
 		const extension = extname( path );
 		const stem = extension ? path.slice( 0, -extension.length ) : path;
 		let suffix = query ? 1 : 2;
@@ -230,38 +250,69 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		for ( const [ index, entry ] of representatives.entries() ) {
 			if ( entry === preferred ) continue;
 			const allocated = allocateCollisionPath( path, !!new URL(entry.url).search );
+			if ( allocated === undefined ) continue;
 			for ( const alias of clusters[ index ] ) allocatedPaths.set( alias.url, allocated );
 		}
 	}
-	const retainedEntries: T[] = [];
+	const retained = new Set< T >();
 	const duplicateRoutes: RouteStage<T>[ 'duplicateRoutes' ] = [];
 	const canonicalRouteAliases = new Map< string, string >();
 	const duplicateSourceData: RouteStage<T>[ 'duplicateSourceData' ] = [];
+	const pathCollisions: RouteDiagnostic[] = [];
+	const collided = new Map< string, RouteDiagnostic >();
 	const claimedRoutes = new Map< string, T >();
+	// A claimed file path's parent directories, each with a route inside it: a
+	// file there would replace a directory that route needs.
+	const claimedDirectories = new Map< string, T >();
+	const parentDirectories = ( path: string ) => path.split( '/' ).slice( 0, -1 ).map( ( _, index, parts ) => parts.slice( 0, index + 1 ).join( '/' ) );
+	const collide = ( entry: T, routePath: string, reason: string ) => {
+		const collision: RouteDiagnostic = { code: 'route_path_collision', url: entry.url, reason, unit: 'route', severity: 'error', path: `website/${ routePath }` };
+		pathCollisions.push( collision );
+		collided.set( entry.url, collision );
+	};
+	// The entrypoint claims first; the rest claim in URL order, base documents
+	// before query renditions, so the first claimant does not depend on capture order.
 	for ( const entry of [
 		...capturedEntries.filter( ( { url } ) => url === entrypointUrl ),
 		...capturedEntries.filter( ( { url } ) => url !== entrypointUrl ).sort( ( left, right ) =>
-			Number( !! new URL( left.url ).search ) - Number( !! new URL( right.url ).search ) ),
+			Number( !! new URL( left.url ).search ) - Number( !! new URL( right.url ).search ) || left.url.localeCompare( right.url ) ),
 	] ) {
 		const routePath = routePathOf( entry.url );
 		const claimed = claimedRoutes.get( routePath );
 		if ( ! claimed ) {
-			claimedRoutes.set( routePath, entry );
-			retainedEntries.push( entry );
+			const inside = claimedDirectories.get( routePath );
+			const fileParent = parentDirectories( routePath ).find( directory => claimedRoutes.has( directory ) );
+			if ( inside ) collide( entry, routePath, `website/${ routePath } is a directory holding the page of ${ inside.url } (website/${ routePathOf( inside.url ) })` );
+			else if ( fileParent ) collide( entry, routePath, `website/${ routePath } needs website/${ fileParent } as a directory, which is the page of ${ claimedRoutes.get( fileParent )!.url }` );
+			else {
+				claimedRoutes.set( routePath, entry );
+				for ( const directory of parentDirectories( routePath ) ) if ( ! claimedDirectories.has( directory ) ) claimedDirectories.set( directory, entry );
+				retained.add( entry );
+			}
 			continue;
 		}
-		if ( ! declaresCanonicalRoute( entry, claimed ) && ! declaresCanonicalRoute( claimed, entry ) && contentAliasPartners.get( entry.url ) !== claimed.url )
-			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
+		if ( ! declaresCanonicalRoute( entry, claimed ) && ! declaresCanonicalRoute( claimed, entry ) && contentAliasPartners.get( entry.url ) !== claimed.url ) {
+			collide( entry, routePath, `website/${ routePath } is already claimed by ${ claimed.url }` );
+			continue;
+		}
 		if ( entry.sourceData.length > 0 ) duplicateSourceData.push( { claimed, sourceData: entry.sourceData } );
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( documentRequestUrl( entry.url ), routePath );
 	}
+	// Retained pages keep capture order, entrypoint first.
+	const retainedEntries = [
+		...capturedEntries.filter( ( { url } ) => url === entrypointUrl ),
+		...capturedEntries.filter( entry => entry.url !== entrypointUrl && retained.has( entry ) ),
+	];
 	const portableRedirects: RouteStage<T>[ 'portableRedirects' ] = [];
 	const missingRedirectTargets: RouteStage<T>[ 'missingRedirectTargets' ] = [];
 	for ( const { url, target } of redirectAliases ) {
 		const targetEntry = entryForAddress( target );
-		if ( ! targetEntry ) {
-			missingRedirectTargets.push( { code: 'route_capture_failed', url, reason: `redirects to ${ target }, which was not captured` } );
+		const dropped = targetEntry && collided.get( targetEntry.url );
+		if ( ! targetEntry || dropped ) {
+			missingRedirectTargets.push( { code: 'route_capture_failed', url, reason: dropped
+				? `redirects to ${ target }, which was dropped: ${ dropped.reason }`
+				: `redirects to ${ target }, which was not captured` } );
 			continue;
 		}
 		const routePath = routePathOf( targetEntry.url );
@@ -273,5 +324,5 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		// Path-only static redirect rules cannot distinguish query renditions.
 		if ( ! new URL( url ).search && from && from !== to ) portableRedirects.push( { from, to } );
 	}
-	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData };
+	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData, pathCollisions };
 }

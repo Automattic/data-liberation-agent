@@ -79,7 +79,7 @@ is present and passes every check in that contract.
 
 ## Finite bootstrap contract
 
-Schema: `data-liberation/finite-bootstrap/v1`.
+Schema: `blocks-engine-capture/finite-bootstrap/v1`.
 
 Portable only when the source itself issued a query-independent response, that
 response declared `hasNext: false` with `count` equal to a sibling array of
@@ -92,7 +92,7 @@ Exact fixture fields:
 
 ```json
 {
-  "schema": "data-liberation/finite-bootstrap/v1",
+  "schema": "blocks-engine-capture/finite-bootstrap/v1",
   "mode": "category-or-global-search",
   "queryIndependent": true,
   "completeness": "declared-finite",
@@ -145,7 +145,7 @@ raw evidence HTML must not be inserted afterward.
 Native collection projection (blocks-engine #2417) must keep rejecting a record
 whose `network.dataRequests` is `blocked` unless the existing Ward verifier
 passes. It may project this mode only when `finiteBootstrap.schema` is
-`data-liberation/finite-bootstrap/v1` and every field above matches, including
+`blocks-engine-capture/finite-bootstrap/v1` and every field above matches, including
 `declaredCount === items.length`. Global search filters every item and hides
 category controls. Empty query shows `initialCategory` membership. Do not
 recompute `finiteBootstrap.probes.global` as a category intersection or a set.
@@ -159,12 +159,12 @@ and unverified restoration.
 ## Collection status
 
 Optional `finiteBootstrap.status`. Absent means no positive status was proven.
-Present must be `schema: data-liberation/collection-status/v1` and is consumed
-strictly. A parent record stays `data-liberation/finite-bootstrap/v1`.
+Present must be `schema: blocks-engine-capture/collection-status/v1` and is consumed
+strictly. A parent record stays `blocks-engine-capture/finite-bootstrap/v1`.
 
 ```json
 {
-  "schema": "data-liberation/collection-status/v1",
+  "schema": "blocks-engine-capture/collection-status/v1",
   "nodes": [
     {
       "html": "<div role=\"status\" class=\"count\">{count} entries shown</div>",
@@ -200,7 +200,7 @@ node is absent at zero. The renderer hides the node instead of repeating the
 zero message. An empty query hides every status node.
 
 The exporter inserts the observed markup once per responsive collection copy,
-hidden at rest, with `data-dla-status-template` on the text node. The runtime
+hidden at rest, with `data-blocks-engine-capture-status-template` on the text node. The runtime
 writes `textContent` from that attribute, so an editor can change the fallback
 without a second widget. The resting text may remain the source template while
 the node is hidden. A present status whose schema, tokens, or binds do not match

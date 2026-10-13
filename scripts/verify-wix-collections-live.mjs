@@ -44,7 +44,7 @@ const expectedIds = Object.keys(sourceBinding.dataStore.recordsByCollectionId.Ma
 const capture = await runtime.captureWebsite({ url: source, outputDir, captureImages: true });
 await writeFile(path.join(outputDir, 'source-scope.json'), JSON.stringify({ source, runtimeSha256, baseline, scope: 'one declared collection listing route', sourceRecordIds: expectedIds, capture }, null, 2));
 const html = await readFile(path.join(outputDir, 'website/index.html'), 'utf8');
-const scripts = [...html.matchAll(/<script\b(?=[^>]*data-dla-source-evidence="collections")(?=[^>]*type="application\/json")[^>]*>([\s\S]*?)<\/script>/g)];
+const scripts = [...html.matchAll(/<script\b(?=[^>]*data-blocks-engine-capture-source-evidence="collections")(?=[^>]*type="application\/json")[^>]*>([\s\S]*?)<\/script>/g)];
 assert.equal(scripts.length, baseline ? 0 : 1, 'Canonical portable HTML must reflect the selected before/after source evidence behavior');
 if (!baseline) {
   const evidence = JSON.parse(scripts[0][1]);

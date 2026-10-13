@@ -19,7 +19,7 @@ export function loadHttpExportInput( outputDir: string, sourceUrl: string, input
 	const receiptPath = join( root, 'http-acquisition.json' );
 	const bytes = readFileSync( receiptPath );
 	const receipt = JSON.parse( bytes.toString( 'utf8' ) ) as { schema: string; sourceUrl: string; documents: AcquiredHttpDocument[] };
-	if ( receipt.schema !== 'data-liberation/http-acquisition/v1' || receipt.sourceUrl !== sourceUrl || ! Array.isArray( receipt.documents ) ) throw new Error( 'Invalid HTTP acquisition receipt or source identity' );
+	if ( receipt.schema !== 'blocks-engine-capture/http-acquisition/v1' || receipt.sourceUrl !== sourceUrl || ! Array.isArray( receipt.documents ) ) throw new Error( 'Invalid HTTP acquisition receipt or source identity' );
 	const entries: Record<string, { slug: string; html?: string; mobileHtml?: string }> = {};
 	const diagnostics: Array<{ code: string; url: string; reason: string }> = [];
 	const seen = new Set<string>();

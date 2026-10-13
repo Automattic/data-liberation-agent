@@ -13,7 +13,7 @@ it( 'localizes and deduplicates shared CSS while preserving media, source restri
 		const css = '.tile{background:url("https://cdn.test/image.png")}';
 		const localized = '.tile{background:url("/media/image.png")}';
 		const hash = createHash( 'sha256' ).update( localized ).digest( 'hex' );
-		const source = `<html><head><style id="runtime">${ css }</style><style media="print">${ css }</style><style>.relative{background:url('./image.png')}</style><style data-dla-geometry>.geometry{width:50vw}</style></head><body><main>Content</main></body></html>`;
+		const source = `<html><head><style id="runtime">${ css }</style><style media="print">${ css }</style><style>.relative{background:url('./image.png')}</style><style data-blocks-engine-capture-geometry>.geometry{width:50vw}</style></head><body><main>Content</main></body></html>`;
 		const staged = source.replace( "url('./image.png')", "url('/media/image.png')" );
 		const sourcePath = join( root, 'source.html' ); writeFileSync( sourcePath, source );
 		const entries = [ 'a', 'b' ].map( name => {
@@ -33,7 +33,7 @@ it( 'localizes and deduplicates shared CSS while preserving media, source restri
 			expect( $( 'link' ).eq( 0 ).attr( 'media' ) ).toBeUndefined();
 			expect( $( 'link' ).eq( 1 ).attr( 'media' ) ).toBe( 'print' );
 			expect( $( 'style' ).eq( 0 ).html() ).toBe( ".relative{background:url('/media/image.png')}" );
-			expect( $( 'style[data-dla-geometry]' ).html() ).toBe( '.geometry{width:50vw}' );
+			expect( $( 'style[data-blocks-engine-capture-geometry]' ).html() ).toBe( '.geometry{width:50vw}' );
 		}
 		expect( result.diagnostics.diagnosticCounts ).toEqual( { relative_css_url: 2, unsafe_attributes: 2 } );
 		expect( result.diagnostics.hoistedStylesheets ).toBe( 1 );

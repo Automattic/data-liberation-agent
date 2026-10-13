@@ -11,7 +11,7 @@ afterEach( () => {
 } );
 
 function liberatedRun(): string {
-	const dir = mkdtempSync( join( tmpdir(), 'dla-publish-ui-' ) );
+	const dir = mkdtempSync( join( tmpdir(), 'liberation-publish-ui-' ) );
 	dirs.push( dir );
 	mkdirSync( join( dir, 'website' ), { recursive: true } );
 	writeFileSync( join( dir, 'website', 'index.html' ), '<h1>Home</h1>' );

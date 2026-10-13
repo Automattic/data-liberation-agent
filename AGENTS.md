@@ -86,7 +86,11 @@ Three things the gate has been wrong about before, all worth remembering:
 
 A copy is only faithful at the width it was captured at, because platform runtimes write inline pixel geometry that survives serialization while the runtime that computed it does not. Rather than freezing one width, capture sweeps widths with the source's runtime alive, fits a model per element (constant, proportional, floored, or a genuine breakpoint), and emits the result as ordinary CSS that needs no runtime.
 
-Some runtimes regenerate their own `<style>` element instead of writing inline pixels. A top-level rule whose pixel offset changes across the sweep is runtime-owned by that observation; its learned media rules ship in a `data-dla-fluid-sheet-rules` sibling of the owning sheet, so device-document scoping and cascade order follow the source sheet. Each rule must reproduce the capture-width geometry before it is kept.
+Some runtimes regenerate their own `<style>` element instead of writing inline pixels. A top-level rule whose pixel offset changes across the sweep is runtime-owned by that observation; its learned media rules ship in a `data-blocks-engine-capture-fluid-sheet-rules` sibling of the owning sheet, so device-document scoping and cascade order follow the source sheet. Each rule must reproduce the capture-width geometry before it is kept.
+
+Capture decides per route whether the phone profile needs its own document (`src/lib/screenshot/device-mode.ts`). The entrypoint gates the site: per-device adapter documents, different server HTML or a failed probe keep every route `dual`. Under a `reflow-only` site, each route first gets a cheap phone check: both identities load with images, media and fonts blocked, settle briefly, and compare server HTML, element structure and body classes. A route that differs is captured in both profiles; every other route at desktop only, because the desktop fluid sweep already spans phone widths. One phone-width probe of the entrypoint keeps controls that only appear on phones. The receipt's `deviceMode` records the site decision, the dual routes and their reasons.
+
+Shared chrome is probed once per capture (`src/lib/screenshot/chrome-reuse.ts`). Before any route, the entrypoint's outermost landmarks (`header`, `nav`, `footer` and the banner, navigation and contentinfo roles) are probed for popup controls, on the device-mode probe's pages when it loaded them. Each state is anchored to its landmark. On a route, a landmark whose signature (relative element paths, identity attributes, text) matches the entrypoint's reuses those states: selectors are rebased from the entrypoint root's prefix to the route's, kept only when every one names the corresponding node, recorded with `reusedFrom`, and their triggers are not clicked. Unmatched chrome is probed in place. Reflow-only phone-only states join the desktop evidence, so every matching route keeps its phone menu. Each manifest entry and profile records `sharedChrome: { chromeReused, reason }`; the receipt's `sharedChrome` summarizes the probe and the routes that probed in place.
 
 Elements that fit badly fall back to frozen values rather than adopting a confident wrong formula. `source-profile.json` records what was measured: one document or per-device, declarative or runtime-written geometry, the detected switch width, and how many elements were learned versus frozen.
 
@@ -115,12 +119,21 @@ Reuse is opt-in: a plain re-run recaptures, and `--resume` is what reports `reus
 - Liberation writes the site and exits. `--serve` opts into a server that holds the process until interrupted. Anything automated should not pass it.
 - Guidance goes to stderr; stdout stays the machine-readable result.
 - `validateOutputDir` rejects paths containing `..` or outside `process.cwd()`. Tests use a cwd-local `.tmp-test/` directory rather than `os.tmpdir()`.
-- Same-origin enforcement: every captured URL must share an origin with the `url` argument, or throw `SameOriginViolation`.
+- Same-origin enforcement: an entry URL off the `url` argument's origin throws `SameOriginViolation` (an `IntegrityError`); any other discovered URL off that origin is dropped before capture as a `route_off_origin` finding.
 - Media filename collisions use numeric suffixes (`-2`, `-3`), not hashes.
 - `detect-platform` uses domain-level URL patterns and HTTP fingerprinting — no path-based detection. Sites detecting as `unknown` resolve to the `default` adapter via `resolveAdapter`, so "No adapter available" is unreachable.
 - Scrolled-state screenshots are skipped silently when a page is too short to have a distinct scrolled state.
 - Screenshot capture restarts the browser every 100 URLs at batch boundaries to bound memory.
 - Cross-origin stylesheets are skipped when aggregating design tokens — their `.cssRules` throw.
+
+## Failure classes
+
+A problem confined to one unit degrades that unit and records a finding; only integrity violations fail a capture closed (#761). Every `throw`, `Promise.reject(…)` and `reject(…)` in a `new Promise` executor on the capture → export path (`src/lib/**` and `src/adapters/**`, except the `compare`, `publish` and `inspect` verbs and the `--serve` preview) declares its class in one of two ways:
+
+- Throw `IntegrityError` (`src/lib/failure-class.ts`) or a subclass. The guard also maps built-in programmer errors (`TypeError`, `RangeError`, …) to `programmer`, and `TimeoutError` and `BodyTooLargeError` to `operational`.
+- Otherwise, annotate the throw line or the line above: `// failure-class: integrity`, `operational`, `programmer`, or `representability:<unit>`. The unit is required and is one of `item`, `block`, `page`, `route`, `asset`, `stylesheet` or `profile`. A representability site should become a dropped unit plus a finding, not a throw.
+
+The annotation is a declaration; runtime containment still follows `isIntegrityError`. `src/lib/failure-class-guard.test.ts` enforces this. Sites that were unclassified when the guard landed are listed in `src/lib/failure-class-baseline.json`, keyed by file and normalized site text. That baseline only shrinks: the test fails on a new unclassified site and on an entry whose site is gone. When you classify or remove a baselined site, lower or delete its entry.
 
 ## Verifying a change
 

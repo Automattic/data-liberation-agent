@@ -6,7 +6,7 @@ import type { CapturedResourceStore } from './resource-capture.js';
 // have no source URL, and the copy must never reference the session-only
 // `blob:` URL they were taken from.
 const FRAME_PATH = '/_dla/video-frames/';
-const FRAME_MARKER = 'data-dla-video-frame';
+const FRAME_MARKER = 'data-blocks-engine-capture-video-frame';
 const MAX_FRAME_WIDTH = 1920;
 const FRAME_QUALITY = 0.85;
 

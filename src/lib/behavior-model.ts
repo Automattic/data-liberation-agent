@@ -56,7 +56,7 @@ export function learnTextReveals( trace: BehaviorTrace ): LearnedTextReveal[] {
 /** Explicit evidence/model separation: a canvas trace is not a translated canvas algorithm. */
 export function modelSourceBehavior( observed: SourceBehavior ) {
 	return {
-		schema: 'data-liberation/behavior-model/v1',
+		schema: 'blocks-engine-capture/behavior-model/v1',
 		url: observed.url,
 		startup: learnTextReveals( observed.startup ),
 		replays: observed.replays.map( ( replay ) => ( { trigger: replay.selector, textReveals: learnTextReveals( replay.trace ) } ) ),
