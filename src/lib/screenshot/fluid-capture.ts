@@ -10,6 +10,7 @@
 import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
 import {
 	breakpointsFrom,
+	interpolateSamples,
 	learnFluidModel,
 	learnSegmentedFluidModel,
 	learnWidestFluidModel,
@@ -19,7 +20,7 @@ import {
 } from './fluid-model.js';
 import type { Page } from 'playwright';
 import { captureFluidBaseline } from './fluid-baseline.js';
-import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
+import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetSeries, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-blocks-engine-capture-fluid-id';
@@ -39,7 +40,10 @@ export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'lef
 export interface FluidSweepOptions {
 	/** Distinguishes rule identities when responsive documents share a stylesheet. */
 	document?: 'desktop' | 'mobile';
-	/** Widths to observe. More widths cost time but sharpen the fit. */
+	/**
+	 * Widths to observe, sampled exactly as given. Omitted: the coarse widths,
+	 * refined within DEFAULT_SWEEP_WIDTHS where the observations need it.
+	 */
 	widths?: number[];
 	/** Minimum observation window after resize, overlapping lazy work and rest. */
 	settleMs?: number;
@@ -64,6 +68,8 @@ export interface FluidLearningResult {
 	 */
 	canvasFloor: number | null;
 	byKind: Record< string, number >;
+	/** Widths the sweep sampled, ascending; empty when it never resized. Its length is the sweep's cost. */
+	sampledWidths: number[];
 }
 
 /** Default ladder: mobile, canvas, and wide, spanning common real viewports.
@@ -71,22 +77,96 @@ export interface FluidLearningResult {
  * The mobile widths matter: a source that obeys one rule above its mobile
  * breakpoint and another below it (container share changes, different clamp)
  * is unmodelled — or worse, mis-modelled — when every sample sits above the
- * switch. */
+ * switch. The dense 767–801 run locates a narrow tablet transition.
+ *
+ * This is the resolution the default sweep can reach, not what it samples:
+ * see COARSE_SWEEP_WIDTHS and refinementWidths. */
 export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
 
 /**
- * Interior tablet widths sampled only when the band's edges show a change.
+ * Widths every varying default sweep samples; the ladder refines between them.
  *
- * The dense 767–801 ladder locates a narrow tablet transition. Its edges
- * (767/768 and 800/801) stay in every sweep: when every observation is
- * collinear across them and no runtime stylesheet was rewritten, the band holds
- * one linear relationship and interior samples add no information to the fit.
+ * Each sits on the far side of a common CSS switch, so every interval holds
+ * the switches the ladder was built around: phone (390) and large phone (600)
+ * below the 767/768 switch, tablet (768) on its far side, desktop (1024) past
+ * the 800/801 and 991/992 tablet switches, a common desktop canvas (1440) past
+ * 1200/1280, and the widest viewport (1920) past 1536/1600. The first three are
+ * the probe that stops a sweep whose geometry is constant.
  */
-export const TABLET_REFINEMENT_WIDTHS = [ 769, 775, 783, 791, 799 ];
-const TABLET_BAND = [ 767, 768, 800, 801 ] as const;
+export const COARSE_SWEEP_WIDTHS = [ 390, 600, 768, 1024, 1440, 1920 ];
+const PROBE_WIDTHS = [ 390, 768, 1920 ];
 const COLLINEAR_TOLERANCE_PX = 0.5;
 
-/** Whether any observed series is not one line across the tablet band edges. */
+/**
+ * Ladder widths to sample next: one per interval the observations leave unexplained.
+ *
+ * An interval between adjacent sampled widths is explained when every series
+ * is one straight line across it and a neighbouring sample: a straight run
+ * (constant, proportional, affine) predicts every ladder width inside, which
+ * interpolateSamples then supplies to the fitters. Anything else (a kink, a
+ * jump, a clamp, or a series that appears, vanishes, or stops being pixels
+ * there) refines the interval with the ladder width nearest its midpoint,
+ * until the change sits between adjacent ladder widths: the same place the
+ * full ladder locates it.
+ *
+ * A clamp is refined rather than explained by its clamped line: interpolating
+ * across the knee would invent values, and in a segmented series the boundary
+ * is the first ladder width past the knee.
+ */
+export function refinementWidths( series: Iterable< readonly GeometrySample[] >, sampled: readonly number[], ladder: readonly number[] = DEFAULT_SWEEP_WIDTHS ): number[] {
+	const widths = [ ...new Set( sampled ) ].sort( ( a, b ) => a - b );
+	const intervals = widths.slice( 0, -1 ).map( ( low, index ) => ( { index, inside: ladder.filter( width => width > low && width < widths[ index + 1 ]! ) } ) )
+		.filter( interval => interval.inside.length > 0 );
+	const refined = new Set< number >();
+	for ( const samples of series ) {
+		if ( refined.size === intervals.length ) break;
+		const at = new Map( samples.map( sample => [ sample.viewport, sample.value ] ) );
+		const value = ( index: number ) => {
+			const found = at.get( widths[ index ]! );
+			return found !== undefined && Number.isFinite( found ) ? found : null;
+		};
+		const straight = ( first: number ) => {
+			if ( first < 0 || first + 2 >= widths.length ) return false;
+			const [ a, b, c ] = [ value( first ), value( first + 1 ), value( first + 2 ) ];
+			if ( a === null || b === null || c === null ) return false;
+			const [ wa, wb, wc ] = [ widths[ first ]!, widths[ first + 1 ]!, widths[ first + 2 ]! ];
+			return Math.abs( b - ( a + ( c - a ) * ( wb - wa ) / ( wc - wa ) ) ) <= COLLINEAR_TOLERANCE_PX;
+		};
+		let chosen: number | null = null;
+		for ( const { index } of intervals ) {
+			// Absent (or non-pixel) at both ends: nothing here for this series to learn.
+			if ( value( index ) === null && value( index + 1 ) === null ) continue;
+			if ( straight( index - 1 ) || straight( index ) ) continue;
+			// One change leaves both intervals beside it without a straight window
+			// when one of them is the sweep's last. Refining the first can explain
+			// the second; if not, it is refined next round at the same width.
+			if ( chosen === index - 1 ) continue;
+			refined.add( index );
+			chosen = index;
+		}
+	}
+	return intervals.filter( ( { index } ) => refined.has( index ) ).map( ( { index, inside } ) => {
+		const middle = ( widths[ index ]! + widths[ index + 1 ]! ) / 2;
+		return inside.reduce( ( best, width ) => Math.abs( width - middle ) < Math.abs( best - middle ) ? width : best );
+	} );
+}
+
+/**
+ * The series refinement must explain before skipped widths can be interpolated.
+ *
+ * Perpetually animated elements never rest, so their samples are not evidence
+ * of a switch. A varying value may fit its container, so the container is
+ * interpolated evidence too; a constant value never consults it.
+ */
+export function refinementSeries( observations: ReadonlyMap< string, readonly GeometrySample[] >, perpetual: ReadonlySet< string > ): Array< readonly GeometrySample[] > {
+	return [ ...observations ].filter( ( [ key ] ) => ! perpetual.has( key.slice( 0, key.indexOf( ':' ) ) ) ).flatMap( ( [ , samples ] ) => {
+		const values = samples.map( sample => sample.value );
+		const varying = Math.max( ...values ) - Math.min( ...values ) > CONTAINER_VERIFY_TOLERANCE_PX;
+		const containers = samples.flatMap( sample => typeof sample.container === 'number' ? [ { viewport: sample.viewport, value: sample.container } ] : [] );
+		return varying && containers.length ? [ samples, containers ] : [ samples ];
+	} );
+}
+
 /**
  * Whether every observed series, outside perpetually animated elements, holds
  * one finite value at each of `samples` widths: nothing the sweep could learn
@@ -100,19 +180,6 @@ export function constantAcross( observations: ReadonlyMap< string, readonly Geom
 		if ( ! Number.isFinite( first ) || series.some( sample => sample.value !== first ) ) return false;
 	}
 	return true;
-}
-
-export function tabletBandNeedsRefinement( series: Iterable< readonly GeometrySample[] > ): boolean {
-	for ( const samples of series ) {
-		const at = TABLET_BAND.map( width => samples.find( sample => sample.viewport === width ) );
-		const present = at.filter( sample => sample !== undefined );
-		if ( present.length === 0 ) continue;
-		if ( present.length !== at.length || present.some( sample => ! Number.isFinite( sample!.value ) ) ) return true;
-		const [ a, b, c, d ] = at as GeometrySample[];
-		const line = ( viewport: number ) => a!.value + ( d!.value - a!.value ) * ( viewport - a!.viewport ) / ( d!.viewport - a!.viewport );
-		if ( Math.abs( b!.value - line( b!.viewport ) ) > COLLINEAR_TOLERANCE_PX || Math.abs( c!.value - line( c!.viewport ) ) > COLLINEAR_TOLERANCE_PX ) return true;
-	}
-	return false;
 }
 
 /**
@@ -156,10 +223,10 @@ async function learnFluidGeometry(
 	options: FluidSweepOptions,
 	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>
 ): Promise<FluidLearningResult> {
-	// An explicit ladder is sampled as given; the default refines its tablet band
-	// only on evidence (see TABLET_REFINEMENT_WIDTHS).
+	// An explicit ladder is sampled as given; the default samples its coarse
+	// widths and refines the ladder only on evidence (see refinementWidths).
 	const adaptive = options.widths === undefined;
-	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) );
+	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
 	const properties = options.learnRelativeOffsets ? [ ...LEARNABLE_PROPERTIES, 'left' ] : [ ...LEARNABLE_PROPERTIES ];
@@ -209,7 +276,7 @@ async function learnFluidGeometry(
 		await baseline.evaluate( ( state, attribute ) => {
 			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
-		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
+		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] };
 	}
 	await baseline.evaluate( state => state.bind() );
 	await bindRuntimeSheets( page );
@@ -306,20 +373,31 @@ async function learnFluidGeometry(
 		}
 		options.onProgress?.( width, measured.length );
 	};
-	// The default ladder probes its narrowest, tablet and widest widths first.
-	// When every tagged series is identical across them (perpetual movers
-	// excluded) and no runtime stylesheet varied, every learned rule would be
-	// `constant` — the frozen copy already carries it — so the rest of the
-	// sweep is skipped. Probe widths are ordinary samples, never repeated.
-	const probe = adaptive ? [ ...new Set( [ Math.min( ...widths ), 768, Math.max( ...widths ) ] ) ].filter( width => widths.includes( width ) ) : [];
-	for ( const width of probe ) await sample( width );
-	const probedConstant = probe.length > 1 && ! await runtimeSheetsObserved( page ) &&
-		constantAcross( observations, probe.length, new Set( await baseline.evaluate( state =>
-			[ ...( ( state as unknown as { perpetual?: Set< string > } ).perpetual ?? [] ) ] ) ) );
-	if ( ! probedConstant ) {
-		for ( const width of widths ) if ( ! probe.includes( width ) ) await sample( width );
-		if ( adaptive && ( await runtimeSheetsObserved( page ) || tabletBandNeedsRefinement( observations.values() ) ) ) {
-			for ( const width of TABLET_REFINEMENT_WIDTHS ) await sample( width );
+	const perpetual = async () => new Set( await baseline.evaluate( state =>
+		[ ...( ( state as unknown as { perpetual?: Set< string > } ).perpetual ?? [] ) ] ) );
+	if ( ! adaptive ) {
+		for ( const width of widths ) await sample( width );
+	} else {
+		// The probe widths come first. When every tagged series is identical
+		// across them (perpetual movers excluded) and no runtime stylesheet
+		// varied, every learned rule would be `constant` — the frozen copy
+		// already carries it — so the rest of the sweep is skipped.
+		for ( const width of PROBE_WIDTHS ) await sample( width );
+		if ( await runtimeSheetsObserved( page ) || ! constantAcross( observations, PROBE_WIDTHS.length, await perpetual() ) ) {
+			for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
+			// Refine only intervals some series leaves unexplained.
+			for ( ;; ) {
+				const series = refinementSeries( observations, await perpetual() );
+				const next = refinementWidths( [ ...series, ...await runtimeSheetSeries( page, sampledWidths ) ], sampledWidths, widths );
+				if ( next.length === 0 ) break;
+				for ( const width of next ) await sample( width );
+			}
+		}
+		// Every skipped ladder width now sits inside a straight interval of every
+		// series, so the fitters receive the full ladder's observations.
+		const moving = await perpetual();
+		for ( const [ key, samples ] of observations ) {
+			if ( ! moving.has( key.slice( 0, key.indexOf( ':' ) ) ) ) observations.set( key, interpolateSamples( samples, sampledWidths, widths ) );
 		}
 	}
 	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
@@ -659,7 +737,7 @@ async function learnFluidGeometry(
 	} );
 	// The runtime has rewritten its own sheets for the capture width by now;
 	// learned rules are validated against exactly that geometry.
-	const runtimeSheets = await applyRuntimeSheetRules( page, sampledWidths );
+	const runtimeSheets = await applyRuntimeSheetRules( page, sampledWidths, adaptive ? widths : sampledWidths );
 	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
 
 	if ( reverted > 0 ) {
@@ -682,6 +760,7 @@ async function learnFluidGeometry(
 		breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ),
 		canvasFloor,
 		byKind,
+		sampledWidths: [ ...sampledWidths ].sort( ( a, b ) => a - b ),
 	};
 }
 

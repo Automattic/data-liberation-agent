@@ -20,6 +20,8 @@ export interface CaptureFluidEvidence {
 	breakpoints: number[];
 	canvasFloor?: number | null;
 	byKind: Record< string, number >;
+	/** Widths the sweep sampled, ascending; empty when it never resized. */
+	sampledWidths?: number[];
 	/** Learning threw; the document stayed frozen. */
 	diagnostic?: string;
 }

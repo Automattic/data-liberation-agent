@@ -64,6 +64,8 @@ export interface ManifestEntry {
     /** Width below which this document stops adapting; geometry, not device selection. */
     canvasFloor?: number | null;
     byKind: Record<string, number>;
+    /** Widths the sweep sampled, ascending; empty when it never resized. */
+    sampledWidths?: number[];
     /** Learning threw; the document stayed frozen. Not a capture failure. */
     diagnostic?: string;
   };
