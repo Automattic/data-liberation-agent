@@ -1046,6 +1046,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				breakpoints: learned.breakpoints,
 				canvasFloor: learned.canvasFloor,
 				byKind: learned.byKind,
+				sampledWidths: learned.sampledWidths,
 			};
 		} catch ( error ) {
 			// Never fail a capture over the optimization: a frozen copy still

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { RUNTIME_SHEET_RULES_ATTRIBUTE } from './fluid-runtime-sheets.js';
 
 // A canvas with a 980px floor whose runtime regenerates an id-keyed stylesheet
@@ -58,6 +58,36 @@ describe( 'runtime-written stylesheet offsets', () => {
 			}
 		} finally { await page.close(); await reference.close(); await copy.close(); }
 	}, 40_000 );
+
+	it( 'refines an adaptive sweep where only a runtime sheet changes and learns the full ladder\'s rules', async () => {
+		// Inline geometry is one line at every width; only the sheet switches,
+		// inside the tablet band. Its offset series must drive refinement.
+		const source = `<style>body{margin:0}#wrap{position:relative;height:200px}.item{width:40px;height:40px}</style>
+			<div id="wrap" style="width:720px"><div id="first" class="item"></div></div>
+			<script>
+			const sheet=document.createElement('style');document.head.appendChild(sheet);
+			const update=()=>{
+				document.getElementById('wrap').style.width=innerWidth/2+'px';
+				sheet.textContent='#wrap #first {position: absolute; top: 0; left: '+(innerWidth>=783?100:20)+'px;}';
+			};
+			addEventListener('resize',update);update();
+			</script>`;
+		const learn = async ( widths?: number[] ) => {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			try {
+				await page.setContent( source );
+				const result = await learnAndApplyFluidGeometry( page, { settleMs: 30, ...( widths ? { widths } : {} ) } );
+				const rules = await page.evaluate( attribute => [ ...document.querySelectorAll( `[${ attribute }]` ) ].map( node => node.textContent ?? '' ), RUNTIME_SHEET_RULES_ATTRIBUTE );
+				return { result, rules };
+			} finally { await page.close(); }
+		};
+		const full = await learn( DEFAULT_SWEEP_WIDTHS );
+		const adaptive = await learn();
+		expect( full.rules.join( '\n' ) ).toContain( '(min-width:783px)' );
+		expect( adaptive.rules ).toEqual( full.rules );
+		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
+		expect( adaptive.result.sampledWidths ).toEqual( [ 390, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
+	}, 60_000 );
 
 	it( 'leaves authored stylesheets and width-independent runtime rules untouched', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );

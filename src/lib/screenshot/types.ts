@@ -89,7 +89,7 @@ export interface ScreenshotOpts {
 	 * tablet and desktop widths so each document can reflow wherever it is served.
 	 */
 	learnFluid?: boolean;
-	/** Widths to observe when learning. Defaults to DEFAULT_SWEEP_WIDTHS. */
+	/** Exact widths to observe when learning. Defaults to an adaptive sample of DEFAULT_SWEEP_WIDTHS. */
 	fluidWidths?: number[];
 	/**
 	 * Adapter hook returning the viewport-specific image variants a platform's
