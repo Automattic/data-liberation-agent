@@ -476,16 +476,18 @@ export async function captureTriggeredDialogs(
 			// as a menu item still animating out of a panel an earlier probe closed.
 			// Content that removed itself is not a dialog this trigger opened, and an
 			// unbounded wait for it would discard every state this page captured.
-			const baselineSelector = await page.locator( dialog.selector ).first().evaluate( element =>
+			// Both reads are bounded; either one finding the panel gone means it was.
+			const snapshot = await snapshotDialog( page, dialog.selector );
+			const baselineSelector = snapshot && await page.locator( dialog.selector ).first().evaluate( element =>
 				( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors?.get( element ) ?? null,
 			undefined, { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
-			if ( baselineSelector === undefined ) {
+			if ( ! snapshot || baselineSelector === undefined ) {
 				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
 				await page.keyboard.press( 'Escape' ).catch( () => undefined );
 				if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 				continue;
 			}
-			dialog = ( await snapshotDialog( page, dialog.selector ) ) ?? dialog;
+			dialog = snapshot;
 			if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
 
 			const bounded = boundHtml( dialog.html );
@@ -1062,7 +1064,7 @@ async function snapshotDialog(
 					: {} ),
 				html: clone.outerHTML,
 			};
-		}, selector )
+		}, selector, { timeout: DIALOG_WAIT_MS } )
 		.catch( () => undefined );
 }
 
