@@ -173,6 +173,8 @@ export interface CaptureResult {
 	provenance: { provider: string; platform: string };
 	/** Browser capture: the device-mode decision and the evidence behind it. */
 	deviceMode?: import('./screenshot/device-mode.js').DeviceModeDecision;
+	/** Browser capture: the entrypoint's one-time chrome probe and the routes that reused it. */
+	sharedChrome?: import('./screenshot/chrome-reuse.js').SharedChromeSummary;
 }
 
 export interface CaptureDependencies {
@@ -474,6 +476,7 @@ export async function captureWebsite(
 	receipt.preview = preview;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	if ( screenshotResult.deviceMode ) receipt.deviceMode = screenshotResult.deviceMode;
+	if ( screenshotResult.sharedChrome ) receipt.sharedChrome = screenshotResult.sharedChrome;
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
 	process.stderr.write( `[timing] homepage-preview ${ Date.now() - previewStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
@@ -508,6 +511,7 @@ export async function captureWebsite(
 		unresolvedAnchors,
 		provenance: { provider: 'data-liberation/browser-capture', platform: detection.platform },
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode } : {} ),
+		...( screenshotResult.sharedChrome ? { sharedChrome: screenshotResult.sharedChrome } : {} ),
 	};
 	// Inside website/, so the findings travel with the artifact and the
 	// fidelity reference hashes them with the rest of the capture.

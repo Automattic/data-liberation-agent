@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
-import { DEFAULT_SWEEP_WIDTHS, TABLET_REFINEMENT_WIDTHS, learnAndApplyFluidGeometry, tabletBandNeedsRefinement } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 	let browser: Browser;
@@ -23,7 +23,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const resize = vi.spyOn( page, 'setViewportSize' );
 			const result = await learner( page, { settleMs: 10 } );
 			expect( resize ).not.toHaveBeenCalled();
-			expect( result ).toEqual( { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} } );
+			expect( result ).toEqual( { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] } );
 			expect( await page.locator( '#priority' ).getAttribute( 'style' ) ).toBe( original );
 			expect( await page.locator( '[data-blocks-engine-capture-fluid-id],[data-blocks-engine-capture-fluid-segment]' ).count() ).toBe( 0 );
 			if ( process.env.DLA_FLUID_EVIDENCE ) {
@@ -97,15 +97,15 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const learningEvaluations = rendererEvaluations;
 			const snapshots = await rest.evaluate( state => state.read() );
 			await rest.evaluate( state => state.cleanup() ); await rest.dispose();
-			// The probe widths come first; the fixture varies across them, so the
-			// rest of the coarse ladder follows, and the tablet band is refined:
-			// every default width is observed once, interior widths last.
-			const coarse = DEFAULT_SWEEP_WIDTHS.filter( width => ! TABLET_REFINEMENT_WIDTHS.includes( width ) );
-			const probe = [ 390, 768, 1920 ];
-			const ladder = [ ...probe, ...coarse.filter( width => ! probe.includes( width ) ), ...TABLET_REFINEMENT_WIDTHS ];
-			expect( widths ).toEqual( ladder );
-			expect( measurements ).toHaveLength( 17 );
-			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...ladder, 1440 ] );
+			// The probe widths come first, then the rest of the coarse widths; each
+			// later round bisects the intervals some series leaves unexplained:
+			// the tablet-band switches and the font-size clamp past 1440. 767 and
+			// 1280 sit inside straight runs of every series and are skipped.
+			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 801, 1536, 783, 1840, 775, 791, 769, 799, 800 ];
+			expect( widths ).toEqual( LADDER_ORDER );
+			expect( result.sampledWidths ).toEqual( [ ...LADDER_ORDER ].sort( ( a, b ) => a - b ) );
+			expect( measurements ).toHaveLength( LADDER_ORDER.length );
+			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...LADDER_ORDER, 1440 ] );
 			const first = measurements[ 0 ] as Array<{ id: string; values: Record<string, number | null> }>;
 			expect( first.find( entry => entry.id === 'desktop-2' )!.values ).toMatchObject( { width: null, height: 12, 'font-size': null, 'transform-x': null, 'inset-top': null, '--literal': 4 } );
 			expect( first.find( entry => entry.id === 'desktop-5' )!.values ).toMatchObject( { width: 195, 'inset-top': null, 'inset-left': null } );
@@ -1086,21 +1086,77 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			await page.close();
 		}
 	} );
-	describe( 'tablet band refinement', () => {
+	describe( 'adaptive refinement', () => {
 		const series = ( values: Record< number, number > ) => Object.entries( values ).map( ( [ viewport, value ] ) => ( { viewport: Number( viewport ), value } ) );
-		it( 'skips interior widths when every series is one line across the band edges', () => {
-			expect( tabletBandNeedsRefinement( [
-				series( { 600: 10, 767: 10, 768: 10, 800: 10, 801: 10, 1024: 10 } ),
-				series( { 767: 383.5, 768: 384, 800: 400, 801: 400.5 } ),
-				series( { 1024: 4, 1280: 8 } ),
-			] ) ).toBe( false );
+		const coarse = [ 390, 600, 768, 1024, 1440, 1920 ];
+		const sampled = ( rule: ( width: number ) => number, widths = coarse ) => series( Object.fromEntries( widths.map( width => [ width, rule( width ) ] ) ) );
+		it( 'refines nothing when every series is one line with a neighbour across each interval', () => {
+			expect( refinementWidths( [
+				sampled( () => 10 ),
+				sampled( width => width / 2 ),
+				sampled( width => width * 0.12 + 37.5 ),
+				// A straight side explains an interval: this clamp's knee sits on a sample.
+				sampled( width => Math.min( 512, width / 2 ) ),
+			], coarse ) ).toEqual( [] );
 		} );
-		it( 'refines a change inside the band, at its edge, or a series that appears or vanishes there', () => {
-			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 200, 800: 200, 801: 200 } ) ] ) ).toBe( true );
-			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 100, 800: 100, 801: 300 } ) ] ) ).toBe( true );
-			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 140, 800: 100, 801: 100 } ) ] ) ).toBe( true );
-			expect( tabletBandNeedsRefinement( [ series( { 767: 100, 768: 100, 801: 100 } ) ] ) ).toBe( true );
-			expect( tabletBandNeedsRefinement( [ series( { 767: 1, 768: Number.NaN, 800: 1, 801: 1 } ) ] ) ).toBe( true );
+		it( 'bisects an unexplained interval with the ladder width nearest its midpoint', () => {
+			// 768–1024 (midpoint 896) refines at 801; 1024–1440 (1232) at 1280; 1440–1920 (1680) at 1536.
+			expect( refinementWidths( [ sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 801 ] );
+			expect( refinementWidths( [ sampled( width => Math.min( 1000, width * 0.85 ) ) ], coarse ) ).toEqual( [ 1280 ] );
+			expect( refinementWidths( [ sampled( width => Math.min( 1000, width * 0.6 ) ) ], coarse ) ).toEqual( [ 1536 ] );
+			// Separate changes refine in the same round; an interval beside one being
+			// refined waits, since that sample may give it a straight window.
+			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ) ], coarse ) ).toEqual( [ 767, 1280 ] );
+			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ), sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 767, 801, 1280 ] );
+		} );
+		it( 'refines a series that appears, vanishes or stops being pixels inside an interval', () => {
+			expect( refinementWidths( [ series( { 390: 1, 600: 1, 768: 1, 1024: 1, 1440: 1 } ) ], coarse ) ).toEqual( [ 1536 ] );
+			expect( refinementWidths( [ series( { 390: Number.NaN, 600: Number.NaN, 768: Number.NaN, 1024: 4, 1440: 4, 1920: 4 } ) ], coarse ) ).toEqual( [ 801 ] );
+			// Absent at both ends of an interval: nothing there to learn.
+			expect( refinementWidths( [ series( { 1024: 4, 1440: 4, 1920: 4 } ) ], coarse ) ).toEqual( [ 801 ] );
+			expect( refinementWidths( [ series( { 1440: 4, 1920: 4 } ) ], coarse ) ).toEqual( [ 1280 ] );
+		} );
+		it( 'samples each common rule shape with a handful of widths', () => {
+			// The whole sweep: coarse widths, then rounds until nothing is unexplained.
+			const sweep = ( rule: ( width: number ) => number ) => {
+				const widths = [ ...coarse ];
+				for ( let next = refinementWidths( [ sampled( rule, widths ) ], widths ); next.length; next = refinementWidths( [ sampled( rule, widths ) ], widths ) ) widths.push( ...next );
+				return widths.length;
+			};
+			expect( {
+				proportional: sweep( width => width / 2 ),
+				affine: sweep( width => width * 0.12 + 37.5 ),
+				'mobile switch': sweep( width => width < 768 ? width - 20 : width / 2 ),
+				'tablet-only regime': sweep( width => width >= 768 && width <= 800 ? 500 : width / 2 ),
+				'desktop switch': sweep( width => width < 992 ? width * 0.9 : width * 0.5 + 40 ),
+				'capped in the tablet gap': sweep( width => Math.min( 600, width * 0.6 ) ),
+				'capped on the desktop': sweep( width => Math.min( 900, width * 0.75 ) ),
+				'floored and capped': sweep( width => Math.max( 200, Math.min( 600, width * 0.5 ) ) ),
+				'switch inside the tablet band': sweep( width => width >= 783 ? 600 : 300 ),
+				'no relationship': sweep( width => Math.round( 400000 / width ) ),
+			} ).toEqual( {
+				proportional: 6, affine: 6, 'mobile switch': 7, 'tablet-only regime': 13, 'desktop switch': 7,
+				'capped in the tablet gap': 7, 'capped on the desktop': 7, 'floored and capped': 7,
+				'switch inside the tablet band': 9, 'no relationship': 10,
+			} );
+		} );
+		it( 'explains a varying value\'s container too, never a perpetual mover', () => {
+			const tracked = [ 390, 768, 1024 ].map( viewport => ( { viewport, value: viewport / 2, container: viewport } ) );
+			const fixed = [ 390, 768 ].map( viewport => ( { viewport, value: 40, container: viewport } ) );
+			const observations = new Map( [ [ 'desktop-0:width', tracked ], [ 'desktop-1:height', fixed ], [ 'desktop-2:width', tracked ] ] );
+			expect( refinementSeries( observations, new Set( [ 'desktop-2' ] ) ) ).toEqual( [
+				tracked, tracked.map( ( { viewport, container } ) => ( { viewport, value: container } ) ), fixed,
+			] );
+			// A parent that bends where its child is straight is refined (1024–1440
+			// waits beside 768–1024, whose sample may explain it).
+			const bending = [ 390, 600, 768, 1024, 1440, 1920 ].map( viewport => ( { viewport, value: viewport / 2, container: viewport === 1024 ? 900 : viewport } ) );
+			expect( refinementWidths( refinementSeries( new Map( [ [ 'desktop-0:width', bending ] ] ), new Set() ), coarse ) ).toEqual( [ 801, 1536 ] );
+		} );
+		it( 'stops once a change sits between adjacent ladder widths', () => {
+			const rule = ( width: number ) => width >= 783 ? 600 : 300;
+			expect( refinementWidths( [ sampled( rule, [ ...coarse, 775, 783, 801 ] ) ], [ ...coarse, 775, 783, 801 ] ) ).toEqual( [] );
+			// An explicit ladder bounds refinement the same way.
+			expect( refinementWidths( [ sampled( rule, [ 390, 1920 ] ) ], [ 390, 1920 ], [ 390, 1920 ] ) ).toEqual( [] );
 		} );
 	} );
 } );

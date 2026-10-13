@@ -29,6 +29,8 @@ export interface ManifestEntry {
     nativeViewTimelines?: ManifestEntry['nativeViewTimelines'];
     interactions?: InteractionStatesReport;
     scrollStates?: ScrollStatesReport;
+    /** Whether this profile reused the entrypoint's shared-chrome evidence, and why. */
+    sharedChrome?: import('./chrome-reuse.js').SharedChromeRouteDecision;
     /** Wall-clock phases of this profile's capture, in order; see phase-ledger.ts. */
     phases?: import('./phase-ledger.js').CapturePhase[];
     /** How each named readiness wait ended (quiet or spent bound); see settleDocument. */
@@ -64,11 +66,15 @@ export interface ManifestEntry {
     /** Width below which this document stops adapting; geometry, not device selection. */
     canvasFloor?: number | null;
     byKind: Record<string, number>;
+    /** Widths the sweep sampled, ascending; empty when it never resized. */
+    sampledWidths?: number[];
     /** Learning threw; the document stayed frozen. Not a capture failure. */
     diagnostic?: string;
   };
   /** Phone-document learning, whose canvas floor does not select the desktop document. */
   fluidMobile?: ManifestEntry['fluid'];
+  /** Whether the route's primary (desktop) profile reused the entrypoint's shared-chrome evidence; per profile under `profiles`. */
+  sharedChrome?: import('./chrome-reuse.js').SharedChromeRouteDecision;
   /** Reflow-only site: whether this route was captured desktop only or in both profiles, and why. */
   deviceMode?: import('./device-mode.js').RouteDeviceDecision;
   capturedAt: string;

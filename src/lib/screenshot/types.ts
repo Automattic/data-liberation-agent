@@ -44,6 +44,12 @@ export interface ScreenshotOpts {
 	deviceMode?: import('./device-mode.js').DeviceModeRequest;
 	/** The adapter selects among per-device documents at export, so `auto` keeps both profiles. */
 	deviceDocumentSelection?: boolean;
+	/**
+	 * Probe the entrypoint's shared chrome (header, navigation, footer) once per
+	 * profile and reuse that evidence on every route whose chrome matches (see
+	 * `chrome-reuse.ts`). Default: on unless `viewports` is given.
+	 */
+	sharedChrome?: boolean;
 	additionalProfiles?: import('../../adapters/page-actions.js').LiberationHooks['additionalProfiles'];
 	referenceWidths?: number[];
 	/** Declare required cells before navigating, so failed profiles stay pending. */
@@ -83,7 +89,7 @@ export interface ScreenshotOpts {
 	 * tablet and desktop widths so each document can reflow wherever it is served.
 	 */
 	learnFluid?: boolean;
-	/** Widths to observe when learning. Defaults to DEFAULT_SWEEP_WIDTHS. */
+	/** Exact widths to observe when learning. Defaults to an adaptive sample of DEFAULT_SWEEP_WIDTHS. */
 	fluidWidths?: number[];
 	/**
 	 * Adapter hook returning the viewport-specific image variants a platform's
@@ -141,4 +147,6 @@ export interface ScreenshotResult {
 	routeDiagnostics?: import('../capture-export-routes.js').RouteDiagnostic[];
 	/** The device-mode decision, when `deviceMode` applied (no explicit `viewports`). */
 	deviceMode?: import('./device-mode.js').DeviceModeDecision;
+	/** The entrypoint's one-time chrome probe per profile and which routes reused it. */
+	sharedChrome?: import('./chrome-reuse.js').SharedChromeSummary;
 }
