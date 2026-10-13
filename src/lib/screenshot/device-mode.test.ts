@@ -6,7 +6,7 @@ import { chromium, devices } from 'playwright';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideFromEvidence, normalizeServerHtml } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -27,27 +27,38 @@ describe( 'device-mode evidence', () => {
 		} );
 	} );
 
-	it( 'keeps both captures unless every check proves reflow', () => {
+	it( 'gates the site on adapter documents and server HTML, and each route on its own structure', () => {
+		expect( decideSiteMode( { requested: 'auto', serverHtml: 'identical' } ).mode ).toBe( 'reflow-only' );
+		expect( decideSiteMode( { requested: 'auto', serverHtml: 'identical-after-normalization' } ).mode ).toBe( 'reflow-only' );
+		expect( decideSiteMode( { requested: 'auto', deviceDocuments: 'documentSelection', serverHtml: 'identical' } ).mode ).toBe( 'dual' );
+		expect( decideSiteMode( { requested: 'auto', serverHtml: 'different' } ).mode ).toBe( 'dual' );
+		expect( decideSiteMode( { requested: 'auto', serverHtml: 'unavailable' } ).mode ).toBe( 'dual' );
+		expect( decideSiteMode( { requested: 'auto', probeError: 'timeout' } ).mode ).toBe( 'dual' );
+		expect( decideSiteMode( { requested: 'dual', serverHtml: 'identical' } ).mode ).toBe( 'dual' );
+		expect( decideSiteMode( { requested: 'reflow-only', serverHtml: 'different' } ).mode ).toBe( 'reflow-only' );
 		const same = { desktopElements: 3, phoneElements: 3, differingPaths: 0 };
-		expect( decideFromEvidence( { requested: 'auto', serverHtml: 'identical', structure: same } ).mode ).toBe( 'reflow-only' );
-		expect( decideFromEvidence( { requested: 'auto', deviceDocuments: 'documentSelection', serverHtml: 'identical', structure: same } ).mode ).toBe( 'dual' );
-		expect( decideFromEvidence( { requested: 'auto', serverHtml: 'unavailable', structure: same } ).mode ).toBe( 'dual' );
+		expect( decideRouteMode( { serverHtml: 'identical', structure: same } ).mode ).toBe( 'reflow-only' );
+		expect( decideRouteMode( { serverHtml: 'identical', structure: { ...same, phoneElements: 4, differingPaths: 1 } } ).mode ).toBe( 'dual' );
+		expect( decideRouteMode( { serverHtml: 'different', structure: same } ).mode ).toBe( 'dual' );
+		expect( decideRouteMode( { error: 'HTTP 401' } ) ).toEqual( { mode: 'dual', reason: 'the phone check failed: HTTP 401' } );
 		// A phone-only body flag can gate the source's whole layout, as the responsive assembly treats it.
-		expect( decideFromEvidence( { requested: 'auto', serverHtml: 'identical', structure: same, bodyClasses: compareBodyClasses( [ 'home' ], [ 'home', 'phone' ] ) } ) ).toEqual( { mode: 'dual', reason: 'the phone identity renders different body classes (+phone)' } );
-		expect( decideFromEvidence( { requested: 'auto', probeError: 'timeout' } ).mode ).toBe( 'dual' );
-		expect( decideFromEvidence( { requested: 'dual', serverHtml: 'identical', structure: same } ).mode ).toBe( 'dual' );
-		expect( decideFromEvidence( { requested: 'reflow-only', serverHtml: 'different' } ).mode ).toBe( 'reflow-only' );
+		expect( decideRouteMode( { serverHtml: 'identical', structure: same, bodyClasses: compareBodyClasses( [ 'home' ], [ 'home', 'phone' ] ) } ) ).toEqual( { mode: 'dual', reason: 'the phone identity renders different body classes (+phone)' } );
+		expect( summarizeRouteDecisions( [
+			{ url: 'a', mode: 'reflow-only', reason: 'same', checkMs: 30 },
+			{ url: 'b', mode: 'dual', reason: 'differs', checkMs: 10 },
+			{ url: 'c', mode: 'reflow-only', reason: 'same', checkMs: 20 },
+		] ) ).toEqual( { checked: 3, reflowOnly: 2, dual: [ { url: 'b', reason: 'differs' } ], checkMs: { total: 60, median: 20, max: 30 } } );
 	} );
 } );
 
 /**
  * One page per fixture. `responsive` reflows through media queries and hides a
  * hamburger menu at desktop width; `by-agent` serves phones different HTML;
- * `by-script` builds a phone-only element at narrow widths.
+ * `mixed/promo` builds a phone-only element at narrow widths; `mixed/` reflows.
  */
 function page( fixture: string, userAgent: string, path: string ): string {
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
-	const script = fixture === 'by-script' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
+	const script = fixture === 'mixed' && path === 'promo' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reflow ${ path }</title><style>
 body{margin:0;font:16px Arial}header{display:flex;justify-content:space-between;padding:0;height:60px}
 .links a{margin-right:12px}.burger,.more{display:none;width:44px;height:44px}
@@ -103,6 +114,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			expect( run.result.deviceMode ).toMatchObject( {
 				mode: 'reflow-only', requested: 'auto', serverHtml: 'identical',
 				structure: { differingPaths: 0 },
+				routes: { checked: 2, reflowOnly: 2, dual: [] },
 			} );
 			expect( run.result.deviceMode!.structure!.desktopElements ).toBeGreaterThan( 10 );
 			expect( run.result.captured ).toBe( 2 );
@@ -111,6 +123,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				expect( entry.mobileHtml ).toBeUndefined();
 				// The desktop document also freezes the phone-width reference cell.
 				expect( entry.profiles!.desktop!.recipe.referenceWidths ).toEqual( [ 390, 768, 1440 ] );
+				expect( entry.deviceMode ).toMatchObject( { mode: 'reflow-only', structure: { differingPaths: 0 } } );
+				// The check blocks images, media and fonts and settles briefly.
+				expect( entry.deviceMode!.checkMs ).toBeLessThan( 8_000 );
 			}
 		} );
 
@@ -162,11 +177,27 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( readFileSync( join( run.outputDir, entry.mobileHtml! ), 'utf8' ) ).toContain( 'Download our app' );
 	}, 120_000 );
 
-	it( 'keeps both captures when a script builds a different DOM at phone width', async () => {
-		const run = await capture( 'by-script' );
-		expect( run.result.deviceMode ).toMatchObject( { mode: 'dual', serverHtml: 'identical', structure: { differingPaths: 1 } } );
-		expect( run.result.deviceMode!.structure!.firstDifference ).toContain( 'aside' );
-		expect( Object.keys( Object.values( run.entries )[ 0 ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
+	it( 'captures only the route whose script builds a different phone DOM in both profiles', async () => {
+		const run = await capture( 'mixed', { routes: [ 'promo' ] } );
+		const home = `${ origin }/mixed/`;
+		const promo = `${ origin }/mixed/promo`;
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 2, reflowOnly: 1, dual: [ { url: promo } ] } } );
+		expect( run.result.deviceMode!.routes!.dual[ 0 ]!.reason ).toContain( 'aside' );
+		expect( run.entries[ home ]!.deviceMode ).toMatchObject( { mode: 'reflow-only' } );
+		expect( run.entries[ promo ]!.deviceMode ).toMatchObject( { mode: 'dual', structure: { differingPaths: 1 } } );
+		expect( Object.keys( run.entries[ home ]!.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
+		expect( run.entries[ home ]!.mobileHtml ).toBeUndefined();
+		expect( Object.keys( run.entries[ promo ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
+		// The dual route keeps the main-branch phone reference cell; the reflow route freezes it at desktop.
+		expect( run.entries[ promo ]!.profiles!.desktop!.recipe.referenceWidths ).toEqual( [ 768, 1440 ] );
+		expect( readFileSync( join( run.outputDir, run.entries[ promo ]!.mobileHtml! ), 'utf8' ) ).toContain( 'Phone promo' );
+		// Export reads the phone document of the dual route only.
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: home, platform: 'neutral', summary: {}, failures: [], deviceMode: 'reflow-only' } ), 'utf8' ) );
+		const route = ( url: string ) => receipt.routes.find( ( row: { url: string } ) => row.url === url );
+		expect( route( home ).responsiveVariants ).toBeUndefined();
+		expect( route( promo ).responsiveVariants ).toBeDefined();
+		expect( readFileSync( join( run.outputDir, 'website', 'promo', 'index.html' ), 'utf8' ) ).toContain( 'Phone promo' );
+		expect( readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' ) ).not.toContain( 'Phone promo' );
 	}, 120_000 );
 
 	it( 'keeps both captures whenever the adapter selects among device documents', async () => {

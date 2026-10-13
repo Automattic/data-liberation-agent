@@ -24,7 +24,7 @@ export const SERVER_HTML_IGNORED = [
 ] as const;
 
 /** Elements left out of the rendered structure comparison. */
-export const STRUCTURE_IGNORED = [ 'script', 'style', 'noscript', 'template', 'elements carrying data-dla-* or data-lib-* attributes' ] as const;
+export const STRUCTURE_IGNORED = [ 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-dla-* or data-lib-* attributes' ] as const;
 
 export interface DeviceModeDecision {
 	mode: DeviceMode;
@@ -38,6 +38,8 @@ export interface DeviceModeDecision {
 	/** Body class tokens only one identity rendered; source CSS can gate a whole layout on them. */
 	bodyClasses?: { desktopOnly: string[]; phoneOnly: string[] };
 	ignored?: { serverHtml: readonly string[]; structure: readonly string[] };
+	/** Reflow-only site: the per-route phone checks and the routes they kept dual. */
+	routes?: RouteDeviceSummary;
 	/** Reflow-only: the phone-width interaction probe on the entrypoint. */
 	phoneProbe?: { status: 'captured' | 'none' | 'skipped' | 'failed'; triggers: number; captured: number; reason?: string };
 	durationMs?: number;
@@ -100,13 +102,18 @@ export function compareStructure( desktop: readonly string[], phone: readonly st
 export async function renderedElementPaths( page: Page, mark?: { attribute: string; paths: readonly string[] } ): Promise< string[] > {
 	return page.evaluate( ( mark ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
+		// Invisible frames and pixels appended to <body> are tracking and messaging
+		// channels that third-party scripts inject on their own schedule, not page
+		// structure. Responsive content hidden by CSS sits inside layout containers.
+		const hiddenFrame = ( element: Element ) => ( element.tagName === 'IFRAME' || element.tagName === 'IMG' ) && element.parentElement === document.body &&
+			( ( rect => rect.width <= 1 || rect.height <= 1 )( element.getBoundingClientRect() ) || getComputedStyle( element ).visibility === 'hidden' );
 		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:dla|lib)-/.test( attribute.name ) && attribute.name !== mark?.attribute );
 		const marked = mark ? new Set( mark.paths ) : undefined;
 		const paths: string[] = [];
 		const walk = ( element: Element, prefix: string ) => {
 			const seen = new Map< string, number >();
 			for ( const child of Array.from( element.children ) ) {
-				if ( skipped.has( child.tagName ) || owned( child ) ) continue;
+				if ( skipped.has( child.tagName ) || owned( child ) || hiddenFrame( child ) ) continue;
 				const tag = child.tagName.toLowerCase();
 				const position = ( seen.get( tag ) ?? 0 ) + 1;
 				seen.set( tag, position );
@@ -135,6 +142,11 @@ export async function renderedBodyClasses( page: Page ): Promise< string[] > {
 export async function visibleControlPaths( page: Page ): Promise< string[] > {
 	return page.evaluate( () => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
+		// Invisible frames and pixels appended to <body> are tracking and messaging
+		// channels that third-party scripts inject on their own schedule, not page
+		// structure. Responsive content hidden by CSS sits inside layout containers.
+		const hiddenFrame = ( element: Element ) => ( element.tagName === 'IFRAME' || element.tagName === 'IMG' ) && element.parentElement === document.body &&
+			( ( rect => rect.width <= 1 || rect.height <= 1 )( element.getBoundingClientRect() ) || getComputedStyle( element ).visibility === 'hidden' );
 		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:dla|lib)-/.test( attribute.name ) );
 		const control = 'button,[role="button"],[role="combobox"],[aria-haspopup],summary';
 		const visible = ( element: Element ) => {
@@ -146,7 +158,7 @@ export async function visibleControlPaths( page: Page ): Promise< string[] > {
 		const walk = ( element: Element, prefix: string ) => {
 			const seen = new Map< string, number >();
 			for ( const child of Array.from( element.children ) ) {
-				if ( skipped.has( child.tagName ) || owned( child ) ) continue;
+				if ( skipped.has( child.tagName ) || owned( child ) || hiddenFrame( child ) ) continue;
 				const tag = child.tagName.toLowerCase();
 				const position = ( seen.get( tag ) ?? 0 ) + 1;
 				seen.set( tag, position );
@@ -175,24 +187,68 @@ export async function shortScroll( page: Page ): Promise< void > {
 	} );
 }
 
-/** The pure decision over the three checks; the browser work lives in the screenshotter. */
-export function decideFromEvidence( input: {
+/**
+ * The site-level gate, decided on the entrypoint. It never looks at rendered
+ * structure: each route's structure is checked before that route is captured
+ * (`decideRouteMode`). Only per-device adapter documents, different server
+ * HTML or a failed probe keep the whole capture `dual`.
+ */
+export function decideSiteMode( input: {
 	requested: DeviceModeRequest;
 	deviceDocuments?: string;
 	serverHtml?: DeviceModeDecision['serverHtml'];
-	structure?: StructureComparison;
-	bodyClasses?: { desktopOnly: string[]; phoneOnly: string[] };
 	probeError?: string;
 } ): Pick< DeviceModeDecision, 'mode' | 'reason' > {
 	if ( input.requested === 'dual' ) return { mode: 'dual', reason: 'dual capture was requested' };
-	if ( input.requested === 'reflow-only' ) return { mode: 'reflow-only', reason: 'reflow-only capture was requested' };
+	if ( input.requested === 'reflow-only' ) return { mode: 'reflow-only', reason: 'reflow-only capture was requested; routes are not checked' };
 	if ( input.deviceDocuments ) return { mode: 'dual', reason: `the adapter declares per-device documents (${ input.deviceDocuments })` };
 	if ( input.probeError ) return { mode: 'dual', reason: `the entrypoint probe failed: ${ input.probeError }` };
 	if ( input.serverHtml === 'different' ) return { mode: 'dual', reason: 'the entrypoint serves different HTML to the desktop and phone identities' };
 	if ( input.serverHtml !== 'identical' && input.serverHtml !== 'identical-after-normalization' ) return { mode: 'dual', reason: 'the entrypoint server HTML could not be compared' };
+	return { mode: 'reflow-only', reason: 'the entrypoint serves the same HTML to the desktop and phone identities; each route is captured at desktop only unless its phone check finds a different document' };
+}
+
+/** One route's decision under a `reflow-only` site, from its cheap phone check. */
+export function decideRouteMode( input: {
+	serverHtml?: DeviceModeDecision['serverHtml'];
+	structure?: StructureComparison;
+	bodyClasses?: { desktopOnly: string[]; phoneOnly: string[] };
+	error?: string;
+} ): Pick< DeviceModeDecision, 'mode' | 'reason' > {
+	if ( input.error ) return { mode: 'dual', reason: `the phone check failed: ${ input.error }` };
+	if ( input.serverHtml === 'different' ) return { mode: 'dual', reason: 'the route serves different HTML to the desktop and phone identities' };
+	if ( input.serverHtml !== 'identical' && input.serverHtml !== 'identical-after-normalization' ) return { mode: 'dual', reason: 'the route server HTML could not be compared' };
 	if ( ! input.structure ) return { mode: 'dual', reason: 'the rendered structure could not be compared' };
 	const classes = input.bodyClasses ? [ ...input.bodyClasses.desktopOnly.map( token => `-${ token }` ), ...input.bodyClasses.phoneOnly.map( token => `+${ token }` ) ] : [];
 	if ( classes.length ) return { mode: 'dual', reason: `the phone identity renders different body classes (${ classes.join( ' ' ) })` };
-	if ( input.structure.differingPaths > 0 ) return { mode: 'dual', reason: `the phone profile renders a different DOM (${ input.structure.differingPaths } differing element paths)` };
-	return { mode: 'reflow-only', reason: `the phone profile receives the same HTML and renders the same ${ input.structure.desktopElements }-element DOM, so its layout is CSS reflow` };
+	if ( input.structure.differingPaths > 0 ) return { mode: 'dual', reason: `the phone profile renders a different DOM (${ input.structure.differingPaths } differing element paths${ input.structure.firstDifference ? `; first: ${ input.structure.firstDifference }` : '' })` };
+	return { mode: 'reflow-only', reason: `same HTML and the same ${ input.structure.desktopElements }-element DOM at phone width` };
+}
+
+/** Per-route outcome recorded on the manifest entry and summarized in the receipt. */
+export interface RouteDeviceDecision {
+	mode: DeviceMode;
+	reason: string;
+	/** Wall time of the cheap phone check (both identities, in parallel). */
+	checkMs?: number;
+	structure?: StructureComparison;
+	/** The first reading differed, so both pages were read again after settling. */
+	rechecked?: boolean;
+}
+
+export interface RouteDeviceSummary {
+	checked: number;
+	reflowOnly: number;
+	dual: Array< { url: string; reason: string } >;
+	checkMs: { total: number; median: number; max: number };
+}
+
+export function summarizeRouteDecisions( decisions: ReadonlyArray< { url: string } & RouteDeviceDecision > ): RouteDeviceSummary {
+	const times = decisions.map( decision => decision.checkMs ?? 0 ).sort( ( a, b ) => a - b );
+	return {
+		checked: decisions.length,
+		reflowOnly: decisions.filter( decision => decision.mode === 'reflow-only' ).length,
+		dual: decisions.filter( decision => decision.mode === 'dual' ).map( ( { url, reason } ) => ( { url, reason } ) ),
+		checkMs: { total: times.reduce( ( a, b ) => a + b, 0 ), median: times.length ? times[ Math.floor( ( times.length - 1 ) / 2 ) ]! : 0, max: times.at( -1 ) ?? 0 },
+	};
 }

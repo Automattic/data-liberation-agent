@@ -47,7 +47,7 @@ import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -69,7 +69,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideFromEvidence, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /**
@@ -1586,12 +1586,9 @@ function hasSingleUrlAggregate( outputDir: string ): boolean {
 /** Marks phone-page controls the desktop pass already probes; removed from evidence. */
 const DESKTOP_CONTROL_ATTRIBUTE = 'data-dla-desktop-control';
 
-interface DeviceModeProbeArgs {
+interface DeviceComparisonArgs {
 	browser: Browser;
 	url: string;
-	requested: DeviceModeRequest;
-	/** Adapter hooks that declare per-device documents. */
-	deviceDocuments: string[];
 	desktop: BrowserContextOptions;
 	phone: BrowserContextOptions;
 	publicUrlsOnly: boolean;
@@ -1599,19 +1596,149 @@ interface DeviceModeProbeArgs {
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
 	prepareCapture?: ScreenshotOpts['prepareCapture'];
+}
+
+interface DeviceModeProbeArgs extends DeviceComparisonArgs {
+	requested: DeviceModeRequest;
+	/** Adapter hooks that declare per-device documents. */
+	deviceDocuments: string[];
 	canonicalizeHtml?: ( html: string ) => string;
 }
 
+/** Resource types a structure check does without: no decode, little memory. */
+const CHECK_BLOCKED_RESOURCES = new Set( [ 'image', 'media', 'font' ] );
+const CHECK_LOAD_WAIT_MS = 2_000;
+/** Extra wait before a differing route is read a second time. */
+const CHECK_RECHECK_MS = 1_500;
+
 /**
- * Decide once, on the entrypoint, whether the phone profile needs a document of
- * its own (see `device-mode.ts`). Loads the entrypoint in the desktop and phone
- * identities side by side, compares their server HTML and rendered element
- * structure, and falls back to `dual` on any doubt or failure.
+ * Load one identity of a route for a desktop/phone comparison and read its
+ * server HTML, element paths and body classes. `check` is the cheap per-route
+ * form: images, media and fonts are blocked and settling is bounded. The
+ * entrypoint probe loads everything, because its phone page also runs the
+ * phone-only control probe. Both identities of one comparison always load the
+ * same way, so their signatures are comparable.
+ */
+async function loadForComparison( args: DeviceComparisonArgs, options: BrowserContextOptions, viewport: 'desktop' | 'mobile', mode: 'probe' | 'check', contexts: BrowserContext[] ) {
+	const context = await args.browser.newContext( options );
+	contexts.push( context );
+	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
+	const page = await context.newPage();
+	if ( args.publicUrlsOnly || mode === 'check' ) {
+		await page.route( '**/*', async ( route ) => {
+			const request = route.request();
+			// Embedded documents load whole third-party pages; their <iframe> element stays.
+			if ( mode === 'check' && ( CHECK_BLOCKED_RESOURCES.has( request.resourceType() ) || ( request.resourceType() === 'document' && request.frame() !== page.mainFrame() ) ) ) { await route.abort( 'blockedbyclient' ); return; }
+			if ( args.publicUrlsOnly ) {
+				try { assertPublicHttpUrl( request.url() ); }
+				catch { await route.abort( 'blockedbyclient' ); return; }
+			}
+			await route.fallback();
+		} );
+	}
+	let target = args.url;
+	const navigationOptions = { publicUrlsOnly: args.publicUrlsOnly, routeScope: args.routeScope, ...( mode === 'check' ? { loadWaitMs: CHECK_LOAD_WAIT_MS } : {} ) };
+	let navigation = await navigateSourceDocument( page, target, navigationOptions );
+	// A route is captured under its redirect target; compare that document.
+	if ( navigation.redirectedTo ) {
+		target = navigation.redirectedTo;
+		navigation = await navigateSourceDocument( page, target, navigationOptions );
+	}
+	// failure-class: operational
+	if ( navigation.boundary || navigation.redirectedTo ) throw new Error( `the ${ viewport } document left its route` );
+	const status = navigation.response?.status() ?? 0;
+	// failure-class: operational
+	if ( status >= 400 || status === 0 ) throw new Error( `the ${ viewport } document answered HTTP ${ status }` );
+	const html = await navigation.response?.text().catch( () => undefined );
+	await applySourceCleanup( page, args.cleanupPolicy ?? cleanupPolicy() );
+	if ( mode === 'check' ) {
+		// Bounded after the document is parsed: up to CHECK_LOAD_WAIT_MS for
+		// `load`, up to 0.5 s of network quiet, the short scroll, then up to 1 s
+		// of DOM quiet. Both identities are bounded alike.
+		await Promise.race( [ page.waitForLoadState( 'networkidle' ).catch( () => {} ), new Promise( resolve => setTimeout( resolve, 500 ) ) ] );
+		await withEvaluateTimeout( shortScroll( page ), 5_000 );
+		await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
+	} else {
+		await waitForStable( page );
+		await withEvaluateTimeout( shortScroll( page ), 10_000 );
+		await waitForStable( page, 2_000 );
+	}
+	await applyCaptureRemovals( page, { removeSelectors: args.removeSelectors, prepare: args.prepareCapture, ctx: { url: target, viewport } } );
+	return { page, html, target, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+}
+
+/** Neither or one identity produced a comparable document. `same`: both failed the same way. */
+class ComparisonUnavailable extends Error {
+	constructor( message: string, readonly same: boolean ) { super( message ); }
+}
+
+/** Compare the desktop and phone identities of one route, loaded the same way. */
+async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'check', contexts: BrowserContext[] ) {
+	const [ desktopLoad, phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts ), loadForComparison( args, args.phone, 'mobile', mode, contexts ) ] );
+	if ( desktopLoad.status === 'rejected' || phoneLoad.status === 'rejected' ) {
+		const reason = ( result: PromiseSettledResult< unknown > ) => result.status === 'rejected' ? String( result.reason instanceof Error ? result.reason.message : result.reason ).replace( /^the (desktop|mobile) /, 'the ' ) : undefined;
+		// failure-class: operational
+		throw new ComparisonUnavailable( reason( desktopLoad ) ?? reason( phoneLoad )!, desktopLoad.status === 'rejected' && phoneLoad.status === 'rejected' && reason( desktopLoad ) === reason( phoneLoad ) );
+	}
+	const desktop = desktopLoad.value;
+	const phone = phoneLoad.value;
+	// failure-class: operational
+	if ( phone.target !== desktop.target ) throw new Error( 'the desktop and phone documents redirect to different routes' );
+	const serverHtml: NonNullable< DeviceModeDecision['serverHtml'] > = desktop.html === undefined || phone.html === undefined ? 'unavailable' : compareServerHtml( desktop.html, phone.html );
+	return { desktop, phone, url: desktop.target, serverHtml, structure: compareStructure( desktop.paths, phone.paths ), bodyClasses: compareBodyClasses( desktop.bodyClasses, phone.bodyClasses ) };
+}
+
+/**
+ * The cheap per-route phone check under a `reflow-only` site. It loads the
+ * route in both identities with images, media and fonts blocked and settles
+ * for a few seconds. No fluid sweep, lazy-load sweep, interaction probe or
+ * reference capture runs, and its contexts close before the route's capture
+ * starts, so only one capture renderer is ever alive for the route.
+ */
+async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
+	const startedAt = Date.now();
+	const contexts: BrowserContext[] = [];
+	try {
+		const compared = await compareIdentities( args, 'check', contexts );
+		let { structure, bodyClasses } = compared;
+		const differs = () => structure.differingPaths > 0 || bodyClasses.desktopOnly.length > 0 || bodyClasses.phoneOnly.length > 0;
+		let rechecked = false;
+		// Two loads race third-party scripts (an embed swapping its placeholder
+		// for an iframe, say). Read a difference once more after both pages
+		// settle again: a race converges, an identity-driven document does not.
+		if ( compared.serverHtml !== 'different' && differs() ) {
+			rechecked = true;
+			const reread = async ( page: Page ) => {
+				await new Promise( resolve => setTimeout( resolve, CHECK_RECHECK_MS ) );
+				await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
+				return { paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+			};
+			const [ desktop, phone ] = await Promise.all( [ reread( compared.desktop.page ), reread( compared.phone.page ) ] );
+			structure = compareStructure( desktop.paths, phone.paths );
+			bodyClasses = compareBodyClasses( desktop.bodyClasses, phone.bodyClasses );
+		}
+		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, bodyClasses: differs() ? bodyClasses : undefined } );
+		return { ...decided, structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt };
+	} catch ( error ) {
+		// Both identities failed alike (an absent route, an off-site redirect):
+		// there is no phone document to keep, and capture records the outcome once.
+		if ( error instanceof ComparisonUnavailable && error.same ) return { mode: 'reflow-only', reason: `no document in either identity: ${ error.message }`, checkMs: Date.now() - startedAt };
+		return { ...decideRouteMode( { error: error instanceof Error ? error.message : String( error ) } ), checkMs: Date.now() - startedAt };
+	} finally {
+		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+	}
+}
+
+/**
+ * Decide once, on the entrypoint, whether this site can be captured with
+ * desktop-only routes at all (see `device-mode.ts`): adapter device documents,
+ * different server HTML or a failed probe keep the whole capture `dual`.
+ * Rendered structure is decided per route by `checkRouteDeviceMode`.
  *
- * In `reflow-only` mode the already-loaded phone page also runs one interaction
- * probe limited to controls that are not visible at desktop width, such as a
- * hamburger menu, so their states are not lost with the phone pass. Its report
- * merges into the entrypoint route like a phone pass's report would.
+ * In a `reflow-only` site the probe's fully loaded phone page also runs one
+ * interaction probe limited to controls that are not visible at desktop width,
+ * such as a hamburger menu, so their states are not lost with the phone pass.
+ * Its report merges into the entrypoint route like a phone pass's report would.
  */
 async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision: DeviceModeDecision; phoneInteractions?: InteractionStatesReport; url: string } > {
 	const startedAt = Date.now();
@@ -1619,57 +1746,23 @@ async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision
 	const ignored = { serverHtml: SERVER_HTML_IGNORED, structure: STRUCTURE_IGNORED };
 	const deviceDocuments = args.deviceDocuments.join( ', ' );
 	if ( requested === 'dual' || ( requested === 'auto' && deviceDocuments ) ) {
-		return { url: args.url, decision: { ...decideFromEvidence( { requested, deviceDocuments } ), requested, durationMs: Date.now() - startedAt } };
+		return { url: args.url, decision: { ...decideSiteMode( { requested, deviceDocuments } ), requested, durationMs: Date.now() - startedAt } };
 	}
 	const contexts: BrowserContext[] = [];
 	let url = args.url;
 	let serverHtml: DeviceModeDecision['serverHtml'];
 	let structure: DeviceModeDecision['structure'];
 	try {
-		const load = async ( options: BrowserContextOptions, viewport: 'desktop' | 'mobile' ) => {
-			const context = await args.browser.newContext( options );
-			contexts.push( context );
-			await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
-			const page = await context.newPage();
-			if ( args.publicUrlsOnly ) {
-				await page.route( '**/*', async ( route ) => {
-					try { assertPublicHttpUrl( route.request().url() ); }
-					catch { await route.abort( 'blockedbyclient' ); return; }
-					await route.fallback();
-				} );
-			}
-			let target = args.url;
-			let navigation = await navigateSourceDocument( page, target, { publicUrlsOnly: args.publicUrlsOnly, routeScope: args.routeScope } );
-			// The entrypoint is captured under its redirect target; probe that document.
-			if ( navigation.redirectedTo ) {
-				target = navigation.redirectedTo;
-				navigation = await navigateSourceDocument( page, target, { publicUrlsOnly: args.publicUrlsOnly, routeScope: args.routeScope } );
-			}
-			// failure-class: operational
-			if ( navigation.boundary || navigation.redirectedTo ) throw new Error( `the ${ viewport } entrypoint left its route` );
-			const status = navigation.response?.status() ?? 0;
-			// failure-class: operational
-			if ( status >= 400 || status === 0 ) throw new Error( `the ${ viewport } entrypoint answered HTTP ${ status }` );
-			const html = await navigation.response?.text().catch( () => undefined );
-			const policy = args.cleanupPolicy ?? cleanupPolicy();
-			await applySourceCleanup( page, policy );
-			await waitForStable( page );
-			await withEvaluateTimeout( shortScroll( page ), 10_000 );
-			await waitForStable( page, 2_000 );
-			await applyCaptureRemovals( page, { removeSelectors: args.removeSelectors, prepare: args.prepareCapture, ctx: { url: target, viewport } } );
-			return { page, html, target, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
-		};
-		const [ desktop, phone ] = await Promise.all( [ load( args.desktop, 'desktop' ), load( args.phone, 'mobile' ) ] );
-		url = desktop.target;
-		// failure-class: operational
-		if ( phone.target !== desktop.target ) throw new Error( 'the desktop and phone entrypoints redirect to different routes' );
-		serverHtml = desktop.html === undefined || phone.html === undefined ? 'unavailable' : compareServerHtml( desktop.html, phone.html );
-		structure = compareStructure( desktop.paths, phone.paths );
-		const bodyClasses = compareBodyClasses( desktop.bodyClasses, phone.bodyClasses );
-		const decided = decideFromEvidence( { requested, serverHtml, structure, bodyClasses } );
+		const compared = await compareIdentities( args, 'probe', contexts );
+		const { desktop, phone, bodyClasses } = compared;
+		url = compared.url;
+		serverHtml = compared.serverHtml;
+		structure = compared.structure;
+		const decided = decideSiteMode( { requested, serverHtml } );
 		const decision: DeviceModeDecision = { ...decided, requested, url, serverHtml, structure, ...( bodyClasses.desktopOnly.length || bodyClasses.phoneOnly.length ? { bodyClasses } : {} ), ignored };
 		if ( decided.mode !== 'reflow-only' ) return { url, decision: { ...decision, durationMs: Date.now() - startedAt } };
 		if ( structure.differingPaths > 0 ) {
+			// The entrypoint's own check then keeps it dual, and its phone pass probes these controls.
 			decision.phoneProbe = { status: 'skipped', triggers: 0, captured: 0, reason: 'phone structure differs, so desktop-visible controls cannot be mapped' };
 			return { url, decision: { ...decision, durationMs: Date.now() - startedAt } };
 		}
@@ -1705,7 +1798,7 @@ async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision
 		return { url, phoneInteractions, decision: { ...decision, durationMs: Date.now() - startedAt } };
 	} catch ( error ) {
 		const probeError = error instanceof Error ? error.message : String( error );
-		return { url, decision: { ...decideFromEvidence( { requested, probeError } ), requested, url, ...( serverHtml ? { serverHtml } : {} ), ...( structure ? { structure } : {} ), ignored, durationMs: Date.now() - startedAt } };
+		return { url, decision: { ...decideSiteMode( { requested, probeError } ), requested, url, ...( serverHtml ? { serverHtml } : {} ), ...( structure ? { structure } : {} ), ignored, durationMs: Date.now() - startedAt } };
 	} finally {
 		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
 	}
@@ -1724,7 +1817,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 	const { devices } = await import('playwright');
 	const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices['iPhone 17'];
-	let viewports = opts.viewports ?? defaultViewports(IPHONE_17_CONTEXT.viewport);
+	const viewports = opts.viewports ?? defaultViewports(IPHONE_17_CONTEXT.viewport);
 	for ( const viewport of viewports ) validateCaptureProfile( viewport );
 	if ( new Set( viewports.map( viewport => viewport.id ) ).size !== viewports.length ) throw new Error( 'Duplicate source capture profile' );
 	// Each profile loads as a real browser: builders can select viewport
@@ -1926,40 +2019,49 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	};
 
 	// --- device mode ---------------------------------------------------------
-	// Decided once on the entrypoint, before any route: a phone view that is
-	// CSS reflow of the same document needs no phone capture (device-mode.ts).
+	// The entrypoint gates the site before any route (device-mode.ts). Under a
+	// reflow-only site each route is then captured at desktop only unless its
+	// own cheap phone check finds a different document.
 	let deviceMode: DeviceModeDecision | undefined;
+	/** Desktop-only profiles for a reflow route; undefined when every route is dual. */
+	let reflowViewports: Viewport[] | undefined;
+	let routeComparison: Omit< DeviceComparisonArgs, 'browser' | 'url' > | undefined;
+	const routeDecisions: Array< { url: string } & RouteDeviceDecision > = [];
 	let phoneInteractions: { url: string; report: InteractionStatesReport } | undefined;
 	const desktopProfile = viewports.find( viewport => viewport.id === 'desktop' );
 	const phoneProfile = viewports.find( viewport => viewport.id === 'mobile' );
 	if ( ! opts.viewports && desktopProfile && phoneProfile && urls.length ) {
 		const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ]!;
 		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
+		const requested = opts.deviceMode ?? 'dual';
+		const comparison = {
+			desktop: profileContextOptions( desktopProfile, sessionContext ),
+			phone: profileContextOptions( phoneProfile, sessionContext ),
+			publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
+			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+		};
 		const probed = await probeDeviceMode( {
-			browser, url: entrypoint, requested: opts.deviceMode ?? 'dual',
+			...comparison, browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml,
 			deviceDocuments: [
 				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
 				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
 				...( opts.collectResponsiveImages ? [ 'responsiveImages' ] : [] ),
 			],
-			desktop: profileContextOptions( desktopProfile, sessionContext ),
-			phone: profileContextOptions( phoneProfile, sessionContext ),
-			publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
-			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, canonicalizeHtml: opts.canonicalizeHtml,
 		} );
 		deviceMode = probed.decision;
 		if ( probed.phoneInteractions ) phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
 		if ( deviceMode.mode === 'reflow-only' ) {
-			// The desktop document also freezes the phone-width reference cell.
-			viewports = viewports.filter( viewport => viewport !== phoneProfile ).map( viewport => viewport === desktopProfile
+			// A reflow route's desktop document also freezes the phone-width reference cell.
+			reflowViewports = viewports.filter( viewport => viewport !== phoneProfile ).map( viewport => viewport === desktopProfile
 				? { ...viewport, referenceWidths: viewport.referenceWidths ?? opts.referenceWidths ?? [ 390, 768, 1440 ] }
 				: viewport );
+			// A forced reflow-only capture (a testing override) checks no route.
+			if ( requested === 'auto' ) routeComparison = comparison;
 		}
 		const message = `[device-mode] ${ deviceMode.mode } (${ deviceMode.durationMs }ms): ${ deviceMode.reason }${ deviceMode.phoneProbe ? `; phone-only controls: ${ deviceMode.phoneProbe.status } (${ deviceMode.phoneProbe.captured }/${ deviceMode.phoneProbe.triggers } captured)` : '' }`;
 		sendLog( server, message );
 		process.stderr.write( `${ message }\n` );
 	}
-	const capturesPhoneDocument = viewports.some( viewport => viewport.id === 'mobile' );
 
 	let captured = 0;
 	let skipped = 0;
@@ -2000,7 +2102,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;
 		const desktopPlan = shouldAnalyzeUrl ? { ...plan.desktop, needsLoad: true } : plan.desktop;
 		const effectivePlan = { ...plan, desktop: desktopPlan };
-		const routeProfiles: Viewport[] = viewports.map( profile => ( { ...publicCaptureProfile( profile ),
+		// Under a reflow-only site, decide this route: a recorded decision on
+		// resume, otherwise the cheap phone check (before, never during, capture).
+		let routeDevice: RouteDeviceDecision | undefined;
+		if ( reflowViewports ) {
+			if ( ! force && existing?.deviceMode ) routeDevice = existing.deviceMode;
+			else if ( routeComparison ) routeDevice = await checkRouteDeviceMode( { ...routeComparison, browser, url } );
+			else routeDevice = { mode: 'reflow-only', reason: 'reflow-only capture was requested' };
+			routeDecisions.push( { url, ...routeDevice } );
+			if ( routeDevice.mode === 'dual' ) {
+				const message = `[device-mode] ${ url } dual${ routeDevice.checkMs === undefined ? '' : ` (check ${ routeDevice.checkMs }ms)` }: ${ routeDevice.reason }`;
+				sendLog( server, message );
+				process.stderr.write( `${ message }\n` );
+			}
+		}
+		const routeViewports = routeDevice?.mode === 'reflow-only' ? reflowViewports! : viewports;
+		const routeProfiles: Viewport[] = routeViewports.map( profile => ( { ...publicCaptureProfile( profile ),
 			referenceWidths: profile.referenceWidths ?? opts.referenceWidths ?? ( profile.id === 'mobile' ? [ 390 ] : profile.id === 'desktop' ? [ 768, 1440 ] : [ profile.width ] ),
 		} ) );
 		let additionalDeclared = false;
@@ -2031,7 +2148,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined,
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined, deviceMode: routeDevice,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
 		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
@@ -2261,7 +2378,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// Reflow-only: phone-only control states from the device-mode probe join
 		// the entrypoint's report, as a phone pass's report would have.
-		if ( phoneInteractions && entry.html && ! entry.redirectedTo && documentRequestUrl( url ) === documentRequestUrl( phoneInteractions.url ) ) {
+		if ( phoneInteractions && routeDevice?.mode !== 'dual' && entry.html && ! entry.redirectedTo && documentRequestUrl( url ) === documentRequestUrl( phoneInteractions.url ) ) {
 			entry.interactions = mergeInteractionReports( entry.interactions, phoneInteractions.report );
 			phoneInteractions = undefined;
 		}
@@ -2426,7 +2543,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const entry = manifest.getEntry( url );
 				if ( ! entry?.html ) continue;
 				const documents: Array<{ path: string; document?: { url?: string; baseUrl?: string } }> = [ { path: join( opts.outputDir, entry.html ), document: entry.documents?.desktop } ];
-				if ( frontier && capturesPhoneDocument ) documents.push( { path: join( opts.outputDir, entry.mobileHtml ?? join( 'html-mobile', `${ entry.slug }.html` ) ), document: entry.documents?.mobile } );
+				if ( frontier && ( ! reflowViewports || entry.mobileHtml ) ) documents.push( { path: join( opts.outputDir, entry.mobileHtml ?? join( 'html-mobile', `${ entry.slug }.html` ) ), document: entry.documents?.mobile } );
 				for ( const { path: htmlPath, document } of documents ) {
 					if ( ! existsSync( htmlPath ) ) continue;
 					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
@@ -2542,7 +2659,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		urls,
 		...(frontier ? {linkedPageCoverage: frontier.coverage()} : {}),
 		...(routeDiagnostics.length ? {routeDiagnostics} : {}),
-		...(deviceMode ? {deviceMode} : {}),
+		...(deviceMode ? {deviceMode: reflowViewports ? {...deviceMode, routes: summarizeRouteDecisions(routeDecisions)} : deviceMode} : {}),
 	};
 }
 

@@ -115,15 +115,18 @@ export interface CaptureOptions {
 	 */
 	maxFileBytes?: number;
 	/**
-	 * Whether each route is also captured in the phone profile (browser
-	 * acquisition only). `'auto'` (default) decides once on the entrypoint:
-	 * `'reflow-only'` when the adapter declares no per-device documents, the
+	 * Whether routes are also captured in the phone profile (browser
+	 * acquisition only). `'auto'` (default) gates the site on the entrypoint:
+	 * `'reflow-only'` when the adapter declares no per-device documents and the
 	 * desktop and phone identities receive the same server HTML (per-request
-	 * nonces, CSRF tokens and timestamps ignored) and the phone profile renders
-	 * the same element structure and body classes; `'dual'` otherwise. Reflow-only captures the
-	 * desktop profile alone, and the copied CSS produces the phone layout. Pass
-	 * `'dual'` or `'reflow-only'` to force a mode. The decision and its reason
-	 * are `summary.deviceMode` and the receipt's `deviceMode` record.
+	 * nonces, CSRF tokens and timestamps ignored); `'dual'` otherwise. Under a
+	 * reflow-only site each route first gets a cheap phone check (images, media
+	 * and fonts blocked, bounded settle). A route whose server HTML, element
+	 * structure or body classes differ between the identities is captured in
+	 * both profiles; every other route in the desktop profile alone, and the
+	 * copied CSS produces its phone layout. Pass `'dual'` or `'reflow-only'` to
+	 * force a mode for every route. The decisions are `summary.deviceMode`,
+	 * `summary.dualRoutes` and the receipt's `deviceMode` record.
 	 */
 	deviceMode?: import('./screenshot/device-mode.js').DeviceModeRequest;
 	onProgress?: ( progress: CaptureProgress ) => void;
@@ -150,8 +153,10 @@ export interface CaptureResult {
 		durationMs: number;
 		complete: boolean;
 		entrypointCaptured: boolean;
-		/** Browser capture: whether routes were captured in both profiles or desktop only. */
+		/** Browser capture: the site-level device mode. */
 		deviceMode?: import('./screenshot/device-mode.js').DeviceMode;
+		/** Reflow-only site: routes whose phone check kept them in both profiles. */
+		dualRoutes?: number;
 	};
 	complete: boolean;
 	/**
@@ -438,6 +443,7 @@ export async function captureWebsite(
 		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
 		durationMs: screenshotResult.durationMs,
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
+		...( screenshotResult.deviceMode?.routes ? { dualRoutes: screenshotResult.deviceMode.routes.dual.length } : {} ),
 	};
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
 	const captureReceiptPath = exportWebsiteCapture( {

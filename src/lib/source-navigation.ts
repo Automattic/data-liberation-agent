@@ -221,7 +221,7 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * within what remains of the same budget, and `loadIncomplete` reports a
  * delivered document whose subresources were still pending when it ran out.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
@@ -319,7 +319,7 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 		}
 		// A same-document reload the source starts before `load` settles here,
 		// through the guard, exactly as it did while navigation awaited `load`.
-		const loaded = await page.waitForLoadState('load', {timeout: Math.max(1, deadline - Date.now())}).then(() => true, () => false);
+		const loaded = await page.waitForLoadState('load', {timeout: Math.max(1, Math.min(deadline - Date.now(), options.loadWaitMs ?? Infinity))}).then(() => true, () => false);
 		if (failure) throw failure;
 		return {response, ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {})};
 	} catch (error) {
