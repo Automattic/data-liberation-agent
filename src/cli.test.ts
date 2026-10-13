@@ -53,6 +53,18 @@ describe('cli', () => {
     expect(limit.stderr).toContain('--max-file-bytes requires a positive integer');
   }, 30_000);
 
+  it('documents the total export budget and rejects invalid values before any request', async () => {
+    const help = (await runCli(['--help'])).stdout;
+    expect(help).toContain('--max-total-bytes <n>');
+    expect(help).toContain('--max-files <n>');
+    const bytes = await runCli(['https://example.invalid/', '--max-total-bytes', '-1']);
+    expect(bytes.code).not.toBe(0);
+    expect(bytes.stderr).toContain('--max-total-bytes requires a positive integer');
+    const files = await runCli(['https://example.invalid/', '--max-files', 'many']);
+    expect(files.code).not.toBe(0);
+    expect(files.stderr).toContain('--max-files requires a positive integer');
+  }, 30_000);
+
   it('documents the device mode and rejects an unknown one before any request', async () => {
     expect((await runCli(['--help'])).stdout).toContain('--device-mode <mode>');
     const result = await runCli(['https://example.invalid/', '--device-mode', 'phone']);

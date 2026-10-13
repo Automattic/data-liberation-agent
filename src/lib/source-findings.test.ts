@@ -44,6 +44,8 @@ describe( 'source findings (static-site-importer/source-findings/v1)', () => {
 			route_profile_uncaptured: { loss_class: 'omitted_unit', unit: 'profile' },
 			route_capture_skipped_budget: { loss_class: 'omitted_unit', unit: 'route' },
 			asset_exceeds_file_limit: { loss_class: 'omitted_unit', unit: 'asset' },
+			asset_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'asset' },
+			route_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'route' },
 			route_capture_degraded: { loss_class: 'degraded_unit', unit: 'route' },
 			stylesheet_unparseable: { loss_class: 'degraded_unit', unit: 'stylesheet' },
 			native_timeline_unproven: { loss_class: 'degraded_unit', unit: 'block' },

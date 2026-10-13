@@ -19,6 +19,8 @@ export interface PortableResourceOptions {
 	embeddedSources: ReadonlySet< string >;
 	/** Captured files larger than this are not written; they resolve like uncaptured dependencies. Default: `DEFAULT_MAX_FILE_BYTES`. */
 	maxFileBytes?: number;
+	/** Dependency URLs the total export budget dropped; they resolve like uncaptured dependencies. */
+	excludedResources?: ReadonlyMap< string, unknown >;
 	projectEmbeddedHtml: ( html: string ) => string;
 }
 
@@ -82,6 +84,14 @@ export function materializePortableResources( options: PortableResourceOptions )
 				url: dependency.url,
 				sourceUrl,
 				error: 'captured dependency file is unavailable',
+			} );
+			return false;
+		}
+		if ( options.excludedResources?.has( dependency.url ) ) {
+			unresolvedDependencies.push( {
+				url: dependency.url,
+				sourceUrl,
+				error: 'captured dependency dropped to keep the website within the total export budget',
 			} );
 			return false;
 		}

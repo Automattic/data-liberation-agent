@@ -46,7 +46,7 @@ item (declaration, link, glyph, form property)
 | `route` | DLA | — |
 | `profile` | DLA (`profile` names it) | — |
 | `stylesheet` | DLA | — |
-| `asset` | DLA (`asset_exceeds_file_limit`) | — |
+| `asset` | DLA (`asset_exceeds_file_limit`, `asset_exceeds_total_budget`) | — |
 | `block` | DLA (`profile` names the viewport) | — |
 | `page` | BE `page_compile_omitted` only; SSI stamps it on the same row | Other BE rows carry `source_path`, which is page-level |
 | item / file | nobody | BE `selector`, `value`, `src`; SSI intake `path` |
@@ -88,6 +88,8 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `route_path_collision` | route | error | Website path already claimed by another route; the route is dropped. The entrypoint keeps its path. | yes | #773 |
 | `route_capture_skipped_budget` | route | error | The capture time budget left the route uncaptured: not started before admission closed, or abandoned in flight at the deadline. `metrics.timeBudgetMs`. Never the entrypoint. | yes | #785 |
 | `asset_exceeds_file_limit` | asset | warning | Captured asset over the export `maxFileBytes` (default 50 MiB, SSI's per-file intake limit); not written, references left unresolved. `metrics.bytes`, `metrics.limit`. A page document over the limit is `route_export_failed` instead. | no | #785 |
+| `asset_exceeds_total_budget` | asset | warning | Captured asset the entrypoint does not need, dropped to keep `website/` within `maxTotalBytes` / `maxFiles` (defaults 250 MiB / 5000, SSI's staged-archive `max_total_uncompressed_bytes` / `max_entries`). Largest first, fonts last. Not written, references left unresolved. `metrics.bytes`, `metrics.limit`, `metrics.fileLimit`. | no | #761 |
+| `route_exceeds_total_budget` | route | error | Non-entry route dropped, last in route order first, once dropping assets could not bring `website/` within the total budget. Never the entrypoint. `metrics.bytes` (page plus files only it referenced), `metrics.limit`, `metrics.fileLimit`. | yes | #761 |
 | `route_capture_degraded` | route | warning | HTML saved, but some stages failed. `metrics.failedStages`. | no | #764 |
 | `route_profile_uncaptured` | profile | error | A declared capture profile produced no document. Makes `complete: false`. | no | #764 |
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
@@ -212,7 +214,7 @@ The capture receipt and `diagnostics.json` sit next to `website/`, outside the a
 }
 ```
 
-- **Rows.** The file has one row per receipt `discoveryDiagnostics` row that has a `unit`, plus a row for each missing-route code (`route_capture_failed`, `route_capture_skipped_budget`, `route_export_failed`, `route_path_collision`). Discovery evidence is left out: `sitemap_*`, `http_*`, `route_omitted_by_budget`, `route_not_found` and `route_external_redirect`. A missing-route row has `unit: route` and `severity: error`; other rows default to `warning`.
+- **Rows.** The file has one row per receipt `discoveryDiagnostics` row that has a `unit`, plus a row for each missing-route code (`route_capture_failed`, `route_capture_skipped_budget`, `route_export_failed`, `route_path_collision`, `route_exceeds_total_budget`). Discovery evidence is left out: `sitemap_*`, `http_*`, `route_omitted_by_budget`, `route_not_found` and `route_external_redirect`. A missing-route row has `unit: route` and `severity: error`; other rows default to `warning`.
 - **Order and bound.** Rows are de-duplicated and sorted by URL, code, unit, path, profile and message, so the same capture always writes the same bytes. At most 500 rows are kept, and `summary.omitted_findings` counts the rest. After those rows, every missing route the bound left out follows, so a missing route is always reported.
 - **Fields.**
   - `message` is the capture `reason`.
@@ -224,9 +226,9 @@ The capture receipt and `diagnostics.json` sit next to `website/`, outside the a
 
 | Code | `loss_class` | `unit` |
 |---|---|---|
-| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget` | `omitted_unit` | route |
+| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget`, `route_exceeds_total_budget` | `omitted_unit` | route |
 | `route_profile_uncaptured` | `omitted_unit` | profile |
-| `asset_exceeds_file_limit` | `omitted_unit` | asset |
+| `asset_exceeds_file_limit`, `asset_exceeds_total_budget` | `omitted_unit` | asset |
 | `route_capture_degraded` | `degraded_unit` | route |
 | `stylesheet_unparseable` | `degraded_unit` | stylesheet |
 | `native_timeline_unproven`, `disclosure_unrestored` | `degraded_unit` | block |

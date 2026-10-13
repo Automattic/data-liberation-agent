@@ -5,6 +5,7 @@ import type { CaptureOptions, CaptureProgress, CaptureResult } from './capture.j
 import { budgetOmittedRoutes, missingRoutes } from './capture-usability.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { writeSourceFindings } from './source-findings.js';
+import { captureExportLimits, recordFinalWebsiteSize } from './export-total-budget.js';
 import { acquireHttpDocuments } from './http-acquisition.js';
 import { materializeHttpDocuments } from './http-materialization.js';
 
@@ -48,7 +49,7 @@ export async function captureHttpWebsite( input: {
 		} ); } catch ( error ) { runtime = { attachments: 0, observations: 0, failures: [ { url: input.sourceUrl, error: `Runtime observation unavailable: ${ String( error ) }` } ] }; }
 	}
 	progress( { phase: 'finalizing', current: urls.length, total: urls.length, unit: 'routes' } );
-	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0, ...( options.maxFileBytes !== undefined ? { limits: { maxFileBytes: options.maxFileBytes } } : {} ) } );
+	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0, limits: captureExportLimits( options ) } );
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	const failures = acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => ( { url: document.url, error: `${ document.variant }: ${ document.error ?? document.status }` } ) );
 	if ( runtime ) failures.push( ...runtime.failures );
@@ -68,6 +69,7 @@ export async function captureHttpWebsite( input: {
 	writeFileSync( diagnosticPath, JSON.stringify( diagnostic, null, 2 ) + '\n' );
 	const result: CaptureResult = { captureReceiptPath, outputDir: options.outputDir, summary, complete: false, entrypointCaptured: true, missingRoutes: missingRoutes( diagnostics ), failures, discoveryDiagnostics: diagnostics, unresolvedAnchors: diagnostic.unresolvedAnchors ?? [], provenance: { provider: 'data-liberation/http-capture', platform: platform.id } };
 	writeSourceFindings( options.outputDir, result );
+	recordFinalWebsiteSize( options.outputDir, captureReceiptPath );
 	progress( { phase: 'complete', current: urls.length, total: urls.length, unit: 'routes' } );
 	return result;
 }

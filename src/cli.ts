@@ -71,6 +71,13 @@ const HELP = `
     --max-file-bytes <n> Largest file exported into the site (default 52428800,
                          50 MiB). Larger assets are not written and are reported
                          as asset_exceeds_file_limit.
+    --max-total-bytes <n> Most bytes exported into the site, every file counted
+                         (default 262144000, 250 MiB). Over it, assets the
+                         entrypoint does not need are dropped largest first,
+                         fonts last, then non-entry routes; reported as
+                         asset_exceeds_total_budget / route_exceeds_total_budget.
+    --max-files <n>      Most files exported into the site (default 5000),
+                         enforced like --max-total-bytes.
     --device-mode <mode> auto (default) captures each route once, at desktop,
                          when the homepage serves phones the same HTML and DOM
                          (the phone layout is CSS reflow); otherwise it also
@@ -272,6 +279,15 @@ if (args.includes('--help')) {
   if (deviceMode !== undefined && deviceMode !== 'auto' && deviceMode !== 'dual' && deviceMode !== 'reflow-only') {
     throw new Error('--device-mode requires auto, dual or reflow-only');
   }
+  const positiveIntegerArg = (name: string): number | undefined => {
+    const value = args.includes(name) ? getArg(name) : undefined;
+    if (value === undefined) return undefined;
+    const parsed = Number(value);
+    if (value === null || !Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} requires a positive integer`);
+    return parsed;
+  };
+  const maxTotalBytes = positiveIntegerArg('--max-total-bytes');
+  const maxFiles = positiveIntegerArg('--max-files');
   const result = await liberateSite({
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
     http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
@@ -285,6 +301,8 @@ if (args.includes('--help')) {
     referenceSample,
     timeBudgetMs,
     maxFileBytes,
+    maxTotalBytes,
+    maxFiles,
     deviceMode,
     portableMotion,
     serve: args.includes('--serve'),

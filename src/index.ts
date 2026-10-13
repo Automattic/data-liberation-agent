@@ -30,7 +30,7 @@ export type { Host, HostDetection, HostResidueRule, DetectedHost } from './platf
 
 export { detect as detectPlatform, detectFromUrl, detectFromHttp } from './lib/detect-platform/index.js';
 export { inspectSource, InspectError, INSPECTION_SCHEMA_VERSION } from './lib/inspect.js';
-export { captureWebsite, UnsupportedCapturePlatformError, IncompleteCaptureError, isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, DEFAULT_ROUTE_LIMIT, DEFAULT_MAX_FILE_BYTES } from './lib/capture.js';
+export { captureWebsite, UnsupportedCapturePlatformError, IncompleteCaptureError, isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, DEFAULT_ROUTE_LIMIT, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_TOTAL_BYTES, DEFAULT_MAX_FILES } from './lib/capture.js';
 export type { CaptureOptions, CaptureResult, CaptureProgress, CaptureDependencies, UnresolvedAnchor, MissingRoute, RouteLimit } from './lib/capture.js';
 export type { HttpCaptureOptions } from './lib/capture-http.js';
 export { acquireHttpDocuments } from './lib/http-acquisition.js';

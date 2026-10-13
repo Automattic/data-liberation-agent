@@ -19,10 +19,12 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
 import { writeSourceFindings } from './source-findings.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
+import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 export { DEFAULT_ROUTE_LIMIT, DEFAULT_ROUTE_SELECTION, ROUTE_SELECTIONS, type RouteLimit, type RouteSelection } from './route-budget.js';
 export { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
+export { DEFAULT_MAX_FILES, DEFAULT_MAX_TOTAL_BYTES } from './export-total-budget.js';
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -114,6 +116,24 @@ export interface CaptureOptions {
 	 * matching Static Site Importer's per-file intake limit.
 	 */
 	maxFileBytes?: number;
+	/**
+	 * Most bytes export writes into `website/`, every file counted, including the
+	 * homepage preview and `source-findings.json`. When the site would exceed it,
+	 * export drops units least-valuable first: assets the entrypoint does not
+	 * need (largest first, fonts last), then non-entry routes (last in route
+	 * order first). The entrypoint and the files it needs are never dropped.
+	 * Dropped assets resolve like any missing asset (`asset_exceeds_total_budget`);
+	 * dropped routes are missing routes (`route_exceeds_total_budget`).
+	 * Default: `DEFAULT_MAX_TOTAL_BYTES` (250 MiB), Static Site Importer's
+	 * staged-archive `max_total_uncompressed_bytes`.
+	 */
+	maxTotalBytes?: number;
+	/**
+	 * Most files export writes into `website/`, enforced like `maxTotalBytes`.
+	 * Default: `DEFAULT_MAX_FILES` (5000), Static Site Importer's staged-archive
+	 * `max_entries`.
+	 */
+	maxFiles?: number;
 	/**
 	 * Whether routes are also captured in the phone profile (browser
 	 * acquisition only). `'auto'` (default) gates the site on the entrypoint:
@@ -280,6 +300,8 @@ export async function captureWebsite(
 	validateTimeBudgetMs( options.timeBudgetMs );
 	if ( options.timeBudgetMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'timeBudgetMs applies to browser acquisition only' );
 	validateMaxFileBytes( options.maxFileBytes );
+	validateMaxTotalBytes( options.maxTotalBytes );
+	validateMaxFiles( options.maxFiles );
 	if ( options.deviceMode !== undefined ) {
 		const { DEVICE_MODE_REQUESTS } = await import( './screenshot/device-mode.js' );
 		if ( ! DEVICE_MODE_REQUESTS.includes( options.deviceMode ) ) throw new RangeError( `deviceMode must be one of ${ DEVICE_MODE_REQUESTS.join( ', ' ) }` );
@@ -459,7 +481,7 @@ export async function captureWebsite(
 		summary,
 		failures,
 		discoveryDiagnostics: captureDiagnostics,
-		...( options.maxFileBytes !== undefined ? { limits: { maxFileBytes: options.maxFileBytes } } : {} ),
+		limits: captureExportLimits( options ),
 	} );
 	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
 	const previewStartedAt = Date.now();
@@ -516,6 +538,7 @@ export async function captureWebsite(
 	// Inside website/, so the findings travel with the artifact and the
 	// fidelity reference hashes them with the rest of the capture.
 	writeSourceFindings( outputDir, { ...result, discoveryDiagnostics: receipt.discoveryDiagnostics ?? [] } );
+	recordFinalWebsiteSize( outputDir, captureReceiptPath );
 	const referenceStartedAt = Date.now();
 	reference.requireUrls(screenshotResult.linkedPageCoverage?.requiredUrls ?? screenshotResult.urls);
 	reference.finalize( captureReceiptPath );

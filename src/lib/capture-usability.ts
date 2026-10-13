@@ -1,7 +1,12 @@
 import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
+import { ROUTE_EXCEEDS_TOTAL_BUDGET } from './export-total-budget.js';
 
-/** Routes export dropped after capture saved their page: they count as failed, not captured. */
-const EXPORT_DROPPED_ROUTE_CODES = [ 'route_export_failed', 'route_path_collision' ] as const;
+/**
+ * Routes export dropped after capture saved their page: they count as failed,
+ * not captured. `route_exceeds_total_budget` is a route the total export budget
+ * (`maxTotalBytes`, `maxFiles`) left out.
+ */
+const EXPORT_DROPPED_ROUTE_CODES = [ 'route_export_failed', 'route_path_collision', ROUTE_EXCEEDS_TOTAL_BUDGET ] as const;
 
 /**
  * A route the capture time budget (`timeBudgetMs`) left uncaptured: not started
@@ -25,7 +30,7 @@ export const MISSING_ROUTE_CODES = [ 'route_capture_failed', ROUTE_CAPTURE_SKIPP
 export interface MissingRoute {
 	url: string;
 	code: typeof MISSING_ROUTE_CODES[ number ];
-	/** The cause as recorded by capture or export: deadline, engine error, time budget, uncaptured redirect target, export error, path collision. */
+	/** The cause as recorded by capture or export: deadline, engine error, time budget, uncaptured redirect target, export error, path collision, total export budget. */
 	reason: string;
 }
 
@@ -80,7 +85,7 @@ export function hasUncapturedProfiles( discoveryDiagnostics: ReadonlyArray< { co
 
 /**
  * Route counts once export has run. A route export dropped (`route_export_failed`,
- * `route_path_collision`) produced no page: it moves from captured to failed,
+ * `route_path_collision`, `route_exceeds_total_budget`) produced no page: it moves from captured to failed,
  * keeping captured + skipped + failed <= discovered.
  */
 export function withExportDroppedRoutes< S extends Record< string, unknown > >(

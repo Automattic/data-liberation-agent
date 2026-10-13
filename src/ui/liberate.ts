@@ -42,6 +42,10 @@ export interface LiberateOptions {
 	timeBudgetMs?: number;
 	/** Per-file export cap in bytes; see `CaptureOptions.maxFileBytes`. Default: 50 MiB. */
 	maxFileBytes?: number;
+	/** Total export budget in bytes; see `CaptureOptions.maxTotalBytes`. Default: 250 MiB. */
+	maxTotalBytes?: number;
+	/** Total export budget in files; see `CaptureOptions.maxFiles`. Default: 5000. */
+	maxFiles?: number;
 	/** Capture the phone profile per route (`dual`), skip it when the phone view is CSS reflow (`reflow-only`), or decide on the entrypoint (`auto`, default); see `CaptureOptions.deviceMode`. */
 	deviceMode?: CaptureOptions['deviceMode'];
 	/** Optional authored runtime; installed only after live source/portable behavior comparison passes. */
@@ -84,6 +88,8 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		referenceSample: options.referenceSample,
 		timeBudgetMs: options.timeBudgetMs,
 		maxFileBytes: options.maxFileBytes,
+		maxTotalBytes: options.maxTotalBytes,
+		maxFiles: options.maxFiles,
 		...( options.deviceMode !== undefined ? { deviceMode: options.deviceMode } : {} ),
 		onProgress: ( progress ) => {
 			if ( progress.phase === 'capturing' && progress.total ) {

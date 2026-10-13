@@ -829,23 +829,26 @@ describe( 'captureWebsite time budget', () => {
 	it( 'passes no budget and the default export limits when none is set', async () => {
 		await captureWebsite( { url: sourceUrl, outputDir: root }, adapter( [] ) );
 		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).not.toHaveProperty( 'timeBudget' );
-		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ] ).not.toHaveProperty( 'limits' );
+		// Default byte limits, with room kept for what capture writes into website/ after export.
+		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ].limits ).toEqual( { reservePostExport: true } );
 	} );
 
 	it( 'passes the budget window to capture and maxFileBytes to export', async () => {
 		const before = Date.now();
-		await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 600_000, maxFileBytes: 1024 }, adapter( [] ) );
+		await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 600_000, maxFileBytes: 1024, maxTotalBytes: 4096, maxFiles: 7 }, adapter( [] ) );
 		const { timeBudget } = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as unknown as { timeBudget: { timeBudgetMs: number; admitUntil: number; abandonAt: number } };
 		expect( timeBudget.timeBudgetMs ).toBe( 600_000 );
 		expect( timeBudget.abandonAt - timeBudget.admitUntil ).toBe( 60_000 );
 		expect( timeBudget.abandonAt ).toBeGreaterThanOrEqual( before + 600_000 );
-		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ] ).toMatchObject( { limits: { maxFileBytes: 1024 } } );
+		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ].limits ).toEqual( { maxFileBytes: 1024, maxTotalBytes: 4096, maxFiles: 7, reservePostExport: true } );
 	} );
 
 	it( 'rejects invalid budgets and HTTP acquisition before any capture starts', async () => {
 		for ( const timeBudgetMs of [ 0, 1.5 ] )
 			await expect( captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs }, adapter( [] ) ) ).rejects.toThrow( 'timeBudgetMs must be a positive integer' );
 		await expect( captureWebsite( { url: sourceUrl, outputDir: root, maxFileBytes: 0 }, adapter( [] ) ) ).rejects.toThrow( 'maxFileBytes must be a positive integer' );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, maxTotalBytes: 0 }, adapter( [] ) ) ).rejects.toThrow( 'maxTotalBytes must be a positive integer' );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, maxFiles: 1.5 }, adapter( [] ) ) ).rejects.toThrow( 'maxFiles must be a positive integer' );
 		await expect( captureWebsite( { url: sourceUrl, outputDir: root, acquisition: 'http', timeBudgetMs: 1_000 }, adapter( [] ) ) ).rejects.toThrow( 'timeBudgetMs applies to browser acquisition only' );
 		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
 	} );
