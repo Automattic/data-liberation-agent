@@ -70,6 +70,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { anchorChromeStates, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /**
@@ -185,6 +186,8 @@ interface CapturePerViewportArgs {
 	observeSource?: ScreenshotOpts['observeSource'];
 	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	canonicalizeHtml?: ( html: string ) => string;
+	/** The entrypoint's one-time chrome probe for this profile; see chrome-reuse.ts. */
+	sharedChrome?: SharedChromeProbe;
 	viewport: Viewport;
 	plan: ArtifactPlan;
 	url: string;
@@ -1324,7 +1327,24 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.phases?.enter( 'dialogs' );
 		await restoreTopScrollState( page );
 		await dismissOverlays( page );
-		const interactions = await captureTriggeredDialogs( page, url );
+		// Shared chrome the entrypoint already probed is not clicked again: its
+		// rebased, verified states join this route's report instead.
+		let chrome: ChromeReuse | undefined;
+		if ( args.sharedChrome ) {
+			args.phases?.enter( 'shared-chrome' );
+			chrome = await reuseSharedChrome( page, args.sharedChrome ).catch( ( error: unknown ) => ( {
+				decision: { chromeReused: false, reason: `chrome reuse failed: ${ error instanceof Error ? error.message : String( error ) }` }, states: [],
+			} ) );
+			entry.sharedChrome = chrome.decision;
+			args.phases?.enter( 'dialogs' );
+		}
+		let interactions: InteractionStatesReport;
+		try {
+			interactions = chrome?.skip ? await captureTriggeredDialogs( page, url, { skip: chrome.skip } ) : await captureTriggeredDialogs( page, url );
+		} finally {
+			if ( chrome?.skip ) await clearChromeMarks( page );
+		}
+		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
 		// Route-tab observation is evidence, not a baseline artifact: its failure
 		// must not discard the dialog states captured before it.
 		try {
@@ -1603,6 +1623,8 @@ interface DeviceModeProbeArgs extends DeviceComparisonArgs {
 	/** Adapter hooks that declare per-device documents. */
 	deviceDocuments: string[];
 	canonicalizeHtml?: ( html: string ) => string;
+	/** Also run the one-time shared-chrome probe on the loaded entrypoint pages. */
+	sharedChrome?: boolean;
 }
 
 /** Resource types a structure check does without: no decode, little memory. */
@@ -1740,7 +1762,7 @@ async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< Rout
  * such as a hamburger menu, so their states are not lost with the phone pass.
  * Its report merges into the entrypoint route like a phone pass's report would.
  */
-async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision: DeviceModeDecision; phoneInteractions?: InteractionStatesReport; url: string } > {
+async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision: DeviceModeDecision; phoneInteractions?: InteractionStatesReport; url: string; sharedChrome?: Map< string, SharedChromeProbe > } > {
 	const startedAt = Date.now();
 	const { requested } = args;
 	const ignored = { serverHtml: SERVER_HTML_IGNORED, structure: STRUCTURE_IGNORED };
@@ -1760,45 +1782,128 @@ async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision
 		structure = compared.structure;
 		const decided = decideSiteMode( { requested, serverHtml } );
 		const decision: DeviceModeDecision = { ...decided, requested, url, serverHtml, structure, ...( bodyClasses.desktopOnly.length || bodyClasses.phoneOnly.length ? { bodyClasses } : {} ), ignored };
-		if ( decided.mode !== 'reflow-only' ) return { url, decision: { ...decision, durationMs: Date.now() - startedAt } };
-		if ( structure.differingPaths > 0 ) {
+		let phoneInteractions: InteractionStatesReport | undefined;
+		if ( decided.mode === 'reflow-only' && structure.differingPaths > 0 ) {
 			// The entrypoint's own check then keeps it dual, and its phone pass probes these controls.
 			decision.phoneProbe = { status: 'skipped', triggers: 0, captured: 0, reason: 'phone structure differs, so desktop-visible controls cannot be mapped' };
-			return { url, decision: { ...decision, durationMs: Date.now() - startedAt } };
-		}
-		let phoneInteractions: InteractionStatesReport | undefined;
-		try {
-			// Controls visible at desktop width are the desktop pass's to probe.
-			const desktopControls = await withEvaluateTimeout( visibleControlPaths( desktop.page ), 10_000 );
-			await renderedElementPaths( phone.page, { attribute: DESKTOP_CONTROL_ATTRIBUTE, paths: desktopControls } );
-			// Order as in a phone pass: disclosures are restored in place first, so
-			// the dialog probe sees what that pass saw. The desktop pass restores
-			// the same disclosures in the shared document, so these states are not kept.
-			await hydrateDisclosureContent( phone.page ).catch( () => [] );
-			await restoreTopScrollState( phone.page );
-			await dismissOverlays( phone.page );
-			const release = await lockMainFrameNavigation( phone.page );
-			let report: InteractionStatesReport;
+		} else if ( decided.mode === 'reflow-only' ) {
 			try {
-				report = await captureTriggeredDialogs( phone.page, url, { skip: `[${ DESKTOP_CONTROL_ATTRIBUTE }]` } );
-			} finally {
-				await release();
+				// Controls visible at desktop width are the desktop pass's to probe.
+				const desktopControls = await withEvaluateTimeout( visibleControlPaths( desktop.page ), 10_000 );
+				await renderedElementPaths( phone.page, { attribute: DESKTOP_CONTROL_ATTRIBUTE, paths: desktopControls } );
+				// Order as in a phone pass: disclosures are restored in place first, so
+				// the dialog probe sees what that pass saw. The desktop pass restores
+				// the same disclosures in the shared document, so these states are not kept.
+				await hydrateDisclosureContent( phone.page ).catch( () => [] );
+				await restoreTopScrollState( phone.page );
+				await dismissOverlays( phone.page );
+				const release = await lockMainFrameNavigation( phone.page );
+				let report: InteractionStatesReport;
+				try {
+					report = await captureTriggeredDialogs( phone.page, url, { skip: `[${ DESKTOP_CONTROL_ATTRIBUTE }]` } );
+				} finally {
+					await release();
+				}
+				const marker = new RegExp( `\\s${ DESKTOP_CONTROL_ATTRIBUTE }(?:="")?`, 'g' );
+				report = canonicalizeInteractionReport( report, html => html.replace( marker, '' ) );
+				if ( args.canonicalizeHtml ) report = canonicalizeInteractionReport( report, args.canonicalizeHtml );
+				// Initially visible dialogs are not phone-only; the desktop pass owns them.
+				const { initialDialogs: _initial, routeNavigation: _routes, ...phoneReport } = report;
+				const captured = phoneReport.states.filter( state => state.status === 'captured' ).length;
+				decision.phoneProbe = { status: captured ? 'captured' : 'none', triggers: phoneReport.states.length, captured };
+				if ( captured ) phoneInteractions = phoneReport;
+			} catch ( error ) {
+				decision.phoneProbe = { status: 'failed', triggers: 0, captured: 0, reason: error instanceof Error ? error.message : String( error ) };
 			}
-			const marker = new RegExp( `\\s${ DESKTOP_CONTROL_ATTRIBUTE }(?:="")?`, 'g' );
-			report = canonicalizeInteractionReport( report, html => html.replace( marker, '' ) );
-			if ( args.canonicalizeHtml ) report = canonicalizeInteractionReport( report, args.canonicalizeHtml );
-			// Initially visible dialogs are not phone-only; the desktop pass owns them.
-			const { initialDialogs: _initial, routeNavigation: _routes, ...phoneReport } = report;
-			const captured = phoneReport.states.filter( state => state.status === 'captured' ).length;
-			decision.phoneProbe = { status: captured ? 'captured' : 'none', triggers: phoneReport.states.length, captured };
-			if ( captured ) phoneInteractions = phoneReport;
-		} catch ( error ) {
-			decision.phoneProbe = { status: 'failed', triggers: 0, captured: 0, reason: error instanceof Error ? error.message : String( error ) };
 		}
-		return { url, phoneInteractions, decision: { ...decision, durationMs: Date.now() - startedAt } };
+		decision.durationMs = Date.now() - startedAt;
+		// The loaded entrypoint pages also serve the one-time shared-chrome probe,
+		// so it costs no extra load. A reflow-only site captures desktop only, and
+		// its phone-only states join the desktop evidence; a dual site probes each
+		// identity's own, untouched page.
+		let sharedChrome: Map< string, SharedChromeProbe > | undefined;
+		if ( args.sharedChrome ) {
+			const chromeOptions = { ...( args.canonicalizeHtml ? { canonicalizeHtml: args.canonicalizeHtml } : {} ) };
+			const [ desktopChrome, phoneChrome ] = await Promise.all( [
+				boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( desktop.page, url, { ...chromeOptions, ...( phoneInteractions ? { additionalStates: phoneInteractions.states } : {} ) } ) ),
+				decided.mode === 'dual' ? boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( phone.page, url, chromeOptions ) ) : undefined,
+			] );
+			sharedChrome = new Map( [ [ 'desktop', desktopChrome ], ...( phoneChrome ? [ [ 'mobile', phoneChrome ] as const ] : [] ) ] );
+		}
+		return { url, phoneInteractions, decision, ...( sharedChrome ? { sharedChrome } : {} ) };
 	} catch ( error ) {
 		const probeError = error instanceof Error ? error.message : String( error );
 		return { url, decision: { ...decideSiteMode( { requested, probeError } ), requested, url, ...( serverHtml ? { serverHtml } : {} ), ...( structure ? { structure } : {} ), ignored, durationMs: Date.now() - startedAt } };
+	} finally {
+		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+	}
+}
+
+/** Bound on the one-time chrome probe of one profile; routes then probe their chrome in place. */
+const SHARED_CHROME_PROBE_MS = 120_000;
+
+/**
+ * Probe the shared chrome of a loaded, prepared entrypoint page: only controls
+ * inside chrome landmarks are clicked, and each recorded state is anchored to
+ * its chrome root so routes can rebase and verify it (see chrome-reuse.ts).
+ * `additionalStates` were recorded by another probe of a structurally
+ * identical page (the reflow-only phone-only probe) and are anchored here too.
+ */
+async function probeChromeOnPage(
+	page: Page,
+	url: string,
+	options: { canonicalizeHtml?: ( html: string ) => string; additionalStates?: CapturedDialogInteraction[] }
+): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
+	// Prepared as a route is before its probe: disclosures restored in place,
+	// resting scroll, overlays dismissed.
+	await hydrateDisclosureContent( page ).catch( () => [] );
+	await restoreTopScrollState( page );
+	await dismissOverlays( page );
+	const landmarks = await readChromeLandmarks( page, true );
+	let states: CapturedDialogInteraction[] = [];
+	if ( landmarks.length ) {
+		const release = await lockMainFrameNavigation( page );
+		try {
+			states = ( await captureTriggeredDialogs( page, url, { skip: OUTSIDE_CHROME } ) ).states;
+		} finally {
+			await release();
+			await clearChromeMarks( page );
+		}
+	}
+	const anchored = await anchorChromeStates( page, landmarks, [ ...states, ...( options.additionalStates ?? [] ) ] );
+	const canonicalize = options.canonicalizeHtml;
+	return {
+		status: 'captured',
+		evidence: {
+			url, landmarks, unanchored: anchored.unanchored,
+			states: canonicalize ? anchored.states.map( item => ( { ...item, state: canonicalizeInteractionReport( item.state, canonicalize ) } ) ) : anchored.states,
+		},
+	};
+}
+
+async function boundSharedChromeProbe( startedAt: number, probe: () => Promise< Omit< SharedChromeProbe, 'durationMs' > > ): Promise< SharedChromeProbe > {
+	let timer: ReturnType< typeof setTimeout > | undefined;
+	try {
+		const result = await Promise.race( [ probe(), new Promise< never >( ( _, reject ) => {
+			// failure-class: operational
+			timer = setTimeout( () => reject( new Error( `timed out after ${ SHARED_CHROME_PROBE_MS }ms` ) ), SHARED_CHROME_PROBE_MS );
+		} ) ] );
+		return { ...result, durationMs: Date.now() - startedAt };
+	} catch ( error ) {
+		return { status: 'failed', reason: error instanceof Error ? error.message : String( error ), durationMs: Date.now() - startedAt };
+	} finally {
+		clearTimeout( timer );
+	}
+}
+
+/** Load the entrypoint in one capture profile, as the device-mode probe does, and probe its shared chrome. */
+async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile'; canonicalizeHtml?: ( html: string ) => string } ): Promise< SharedChromeProbe > {
+	const contexts: BrowserContext[] = [];
+	try {
+		return await boundSharedChromeProbe( Date.now(), async () => {
+			const { page, target } = await loadForComparison( { ...args, desktop: args.options, phone: args.options }, args.options, args.viewport, 'probe', contexts );
+			return probeChromeOnPage( page, target, args.canonicalizeHtml ? { canonicalizeHtml: args.canonicalizeHtml } : {} );
+		} );
 	} finally {
 		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
 	}
@@ -2030,8 +2135,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let phoneInteractions: { url: string; report: InteractionStatesReport } | undefined;
 	const desktopProfile = viewports.find( viewport => viewport.id === 'desktop' );
 	const phoneProfile = viewports.find( viewport => viewport.id === 'mobile' );
-	if ( ! opts.viewports && desktopProfile && phoneProfile && urls.length ) {
-		const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ]!;
+	const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ];
+	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) && ( urls.length > 1 || frontier ) );
+	const sharedChromeResults = new Map< string, SharedChromeProbe >();
+	if ( ! opts.viewports && desktopProfile && phoneProfile && entrypoint ) {
 		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
 		const requested = opts.deviceMode ?? 'dual';
 		const comparison = {
@@ -2041,7 +2148,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
 		};
 		const probed = await probeDeviceMode( {
-			...comparison, browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml,
+			...comparison, browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
 			deviceDocuments: [
 				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
 				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
@@ -2050,6 +2157,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		} );
 		deviceMode = probed.decision;
 		if ( probed.phoneInteractions ) phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+		for ( const [ profile, result ] of probed.sharedChrome ?? [] ) sharedChromeResults.set( profile, result );
 		if ( deviceMode.mode === 'reflow-only' ) {
 			// A reflow route's desktop document also freezes the phone-width reference cell.
 			reflowViewports = viewports.filter( viewport => viewport !== phoneProfile ).map( viewport => viewport === desktopProfile
@@ -2062,6 +2170,36 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		sendLog( server, message );
 		process.stderr.write( `${ message }\n` );
 	}
+
+	// --- shared chrome -------------------------------------------------------
+	// The entrypoint's chrome is probed once per built-in profile before any
+	// route, on the device-mode probe's pages when it loaded them, and reused by
+	// every route whose chrome matches (chrome-reuse.ts). A single-route capture
+	// has nothing to share.
+	const sharedChromeDecisions: Array< { url: string; profile: string } & SharedChromeRouteDecision > = [];
+	if ( sharedChromeEnabled ) {
+		const profiles = ( reflowViewports ?? viewports ).filter( viewport => ( viewport.id === 'desktop' || viewport.id === 'mobile' ) && ! sharedChromeResults.has( viewport.id ) );
+		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) : undefined;
+		await Promise.all( profiles.map( async viewport => {
+			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
+				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
+				publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
+				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+				...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
+			} ) );
+		} ) );
+		for ( const [ profile, result ] of sharedChromeResults ) {
+			const message = `[shared-chrome] ${ profile } ${ result.status } (${ result.durationMs }ms)${ result.evidence
+				? `: ${ result.evidence.landmarks.length } chrome landmarks, ${ result.evidence.states.length } states (${ result.evidence.unanchored } outside chrome)`
+				: `: ${ result.reason }` }`;
+			sendLog( server, message );
+			process.stderr.write( `${ message }\n` );
+		}
+	}
+	const sharedChromeFor = ( viewport: Viewport ): SharedChromeProbe | undefined => {
+		if ( ! sharedChromeEnabled || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
+		return sharedChromeResults.get( viewport.id ) ?? { status: 'skipped', reason: `the entrypoint chrome was not probed for the ${ viewport.id } profile`, durationMs: 0 };
+	};
 
 	let captured = 0;
 	let skipped = 0;
@@ -2262,6 +2400,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.learnFluid ? { learnFluid: true } : {} ),
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 							prepareCapture: opts.prepareCapture,
+							sharedChrome: sharedChromeFor( viewport ),
 							resolveClientRedirect: opts.resolveClientRedirect,
 							beforeSerialize: opts.beforeSerialize,
 							observeSource: opts.observeSource,
@@ -2282,6 +2421,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
 								nativeViewTimelines: profileEntry.nativeViewTimelines,
 								interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
+								...( profileEntry.sharedChrome ? { sharedChrome: profileEntry.sharedChrome } : {} ),
 								...( profileDiagnostics.length ? { diagnostics: profileDiagnostics } : {} ),
 							} };
 							for ( const diagnostic of profileDiagnostics ) sendLog( server, `[${ diagnostic.code }] ${ url } (${ viewport.id }): ${ diagnostic.reason }` );
@@ -2357,6 +2497,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const viewport = builtInProfiles[ index ]!;
 			const result = builtInResults[ index ];
 			if ( ! result ) continue;
+			if ( result.profileEntry.sharedChrome ) sharedChromeDecisions.push( { url, profile: viewport.id, ...result.profileEntry.sharedChrome } );
 			urlFailures.push( ...result.failures );
 			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
 				url, viewport: viewport.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
@@ -2660,6 +2801,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		...(frontier ? {linkedPageCoverage: frontier.coverage()} : {}),
 		...(routeDiagnostics.length ? {routeDiagnostics} : {}),
 		...(deviceMode ? {deviceMode: reflowViewports ? {...deviceMode, routes: summarizeRouteDecisions(routeDecisions)} : deviceMode} : {}),
+		...(entrypoint && sharedChromeResults.size ? {sharedChrome: summarizeSharedChrome(entrypoint, sharedChromeResults, sharedChromeDecisions)} : {}),
 	};
 }
 

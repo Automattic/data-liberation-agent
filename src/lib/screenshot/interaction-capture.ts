@@ -174,6 +174,11 @@ export interface CapturedDialogInteraction {
 		coverage: 'complete' | 'partial';
 	};
 	error?: string;
+	/**
+	 * The entrypoint whose shared-chrome probe recorded this state; its selectors
+	 * were rebased onto this route and verified here (see `chrome-reuse.ts`).
+	 */
+	reusedFrom?: string;
 }
 
 export interface CapturedInitialDialog {
@@ -919,6 +924,9 @@ async function firstNewVisibleDialog(
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
 			: '[data-lib-interaction-dialog="captured"]';
+		// The marker names this trigger's panel only: an earlier trigger's id-less
+		// panel would otherwise be the first match and be recorded again.
+		for ( const previous of Array.from( document.querySelectorAll( '[data-lib-interaction-dialog]' ) ) ) previous.removeAttribute( 'data-lib-interaction-dialog' );
 		if ( ! dialog.id ) dialog.setAttribute( 'data-lib-interaction-dialog', 'captured' );
 		const clone = dialog.cloneNode( true ) as HTMLElement;
 		clone.removeAttribute( 'data-lib-interaction-dialog' );

@@ -162,6 +162,9 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'source session (real Chromiu
         primaryUrl: entryUrl,
         concurrency: 3,
         captureImages: false,
+        // This counts route-capture navigations; the one-time shared-chrome
+        // probe would add its own entry loads.
+        sharedChrome: false,
       } );
       expect( result.failed ).toBe( 0 );
       const manifest = JSON.parse(
