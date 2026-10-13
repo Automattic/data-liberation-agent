@@ -26,12 +26,12 @@ import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
  * capture receipt's `document_scope_classes` list rather than hardcoded
  * downstream.
  */
-export const DESKTOP_DOCUMENT_CLASS = 'data-liberation-desktop-document';
-export const MOBILE_DOCUMENT_CLASS = 'data-liberation-mobile-document';
+export const DESKTOP_DOCUMENT_CLASS = 'data-blocks-engine-capture-desktop-document';
+export const MOBILE_DOCUMENT_CLASS = 'data-blocks-engine-capture-mobile-document';
 
 const RESPONSIVE_DOCUMENT_CSS = `html,body{margin:0;padding:0}.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
 
-const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-liberation-responsive-counterpart-';
+const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-blocks-engine-capture-responsive-counterpart-';
 const RESPONSIVE_COUNTERPART_TAGS = 'p,h1,h2,h3,h4,h5,h6,a,button';
 const RESPONSIVE_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
 
@@ -42,10 +42,10 @@ const RESPONSIVE_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
  * or below it. Both are declared with the visibility stylesheet that collapse
  * emits, so no consumer needs to know the naming.
  */
-const RESPONSIVE_MOBILE_ONLY_CLASS = 'data-liberation-mobile-only';
-const RESPONSIVE_DESKTOP_ONLY_CLASS = 'data-liberation-desktop-only';
+const RESPONSIVE_MOBILE_ONLY_CLASS = 'data-blocks-engine-capture-mobile-only';
+const RESPONSIVE_DESKTOP_ONLY_CLASS = 'data-blocks-engine-capture-desktop-only';
 /** Hook class for an id-less element whose per-viewport inline style is projected into width-scoped rules. */
-const RESPONSIVE_PROJECTION_CLASS_PREFIX = 'data-liberation-responsive-';
+const RESPONSIVE_PROJECTION_CLASS_PREFIX = 'data-blocks-engine-capture-responsive-';
 
 /** Switches which captured document is shown, at the detected width. */
 function documentSwitchCss( switchWidth: number ): string {
@@ -130,7 +130,7 @@ function learnedTransformSelectors( html: string ): string[] {
 }
 
 function hasLearnedTransform( selectors: string[], segment: string | undefined ): boolean {
-	return !!segment && selectors.some( selector => selector.includes( `[data-dla-fluid-segment="${ segment }"]` ) );
+	return !!segment && selectors.some( selector => selector.includes( `[data-blocks-engine-capture-fluid-segment="${ segment }"]` ) );
 }
 
 function withoutTransform( style: string ): string {
@@ -147,7 +147,7 @@ function withoutTransform( style: string ): string {
  * encode correspondence, never difference, so structural equivalence must
  * not read them as one.
  */
-const CORRESPONDENCE_ATTRIBUTES = [ 'data-dla-geometry-id', 'data-dla-responsive-source' ];
+const CORRESPONDENCE_ATTRIBUTES = [ 'data-blocks-engine-capture-geometry-id', 'data-blocks-engine-capture-responsive-source' ];
 const STRUCTURAL_SIGNATURE_ATTRIBUTES = new Set( [ 'id', 'href', 'name', 'type', 'for', 'action' ] );
 const CAPTURE_GEOMETRY_ID = /^(?:desktop|mobile)-(?:target|wrapper)-\d+/i;
 const UUID_ID =
@@ -604,7 +604,7 @@ function identitySubsetMerge(
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
-			const desktopSegment = d.attr( 'data-dla-fluid-segment' );
+			const desktopSegment = d.attr( 'data-blocks-engine-capture-fluid-segment' );
 			const projectedMobileStyle = hasLearnedTransform( learnedTransforms, desktopSegment )
 				? withoutTransform( mobileStyle )
 				: mobileStyle;
@@ -844,7 +844,7 @@ function equivalentInlineProjection(
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
-			const desktopSegment = d.attr( 'data-dla-fluid-segment' );
+			const desktopSegment = d.attr( 'data-blocks-engine-capture-fluid-segment' );
 			const projectedMobileStyle = hasLearnedTransform( learnedTransforms, desktopSegment )
 				? withoutTransform( mobileStyle )
 				: mobileStyle;
@@ -940,7 +940,7 @@ const ID_REFERENCE_ATTRIBUTES = [ 'for', 'aria-labelledby', 'aria-describedby', 
  * Ship each re-parented shared component once per viewport: the desktop
  * rendering stays in place and is hidden at phone width, and the phone
  * rendering follows it, hidden above the switch. The phone copy's ids take the
- * `--dla-mobile` suffix, like a phone document's, and its references within
+ * `--data-blocks-engine-capture-mobile` suffix, like a phone document's, and its references within
  * the copy follow them. Nested diverged components travel with their outermost
  * one. A component whose ids a link or anchor targets cannot be renamed
  * without moving that target, so the whole page stays dual instead.
@@ -977,14 +977,14 @@ function splitDivergedComponents(
 		const mobile = $m( mobileElement ).clone();
 		const idsIn = ( node: cheerio.Cheerio< Element >, $: cheerio.CheerioAPI ) => [ node, ...node.find( '[id]' ).toArray().map( ( child ) => $( child ) ) ].map( ( n ) => n.attr( 'id' ) ?? '' ).filter( Boolean );
 		const targeted = ( node: cheerio.Cheerio< Element >, $: cheerio.CheerioAPI ) =>
-			node.is( '[data-dla-anchor-target]' ) || node.find( '[data-dla-anchor-target]' ).length > 0 || idsIn( node, $ ).some( ( value ) => linkedFragments.has( value ) );
+			node.is( '[data-blocks-engine-capture-anchor-target]' ) || node.find( '[data-blocks-engine-capture-anchor-target]' ).length > 0 || idsIn( node, $ ).some( ( value ) => linkedFragments.has( value ) );
 		if ( targeted( desktop, $d ) || targeted( $m( mobileElement ), $m ) ) return undefined;
 		const renamed = new Map< string, string >();
 		for ( const node of [ mobile, ...mobile.find( '[id]' ).toArray().map( ( child ) => $m( child ) ) ] ) {
 			const value = node.attr( 'id' );
 			if ( ! value ) continue;
-			renamed.set( value, `${ value }--dla-mobile` );
-			node.attr( 'id', `${ value }--dla-mobile` );
+			renamed.set( value, `${ value }--data-blocks-engine-capture-mobile` );
+			node.attr( 'id', `${ value }--data-blocks-engine-capture-mobile` );
 		}
 		for ( const node of [ mobile, ...mobile.find( '*' ).toArray().map( ( child ) => $m( child ) ) ] ) {
 			for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
@@ -1241,7 +1241,7 @@ function markResponsiveCounterparts(
 		] as const ) {
 			const node = $( candidate.node );
 			node.addClass( token );
-			node.attr( 'data-dla-responsive-source', candidate.source );
+			node.attr( 'data-blocks-engine-capture-responsive-source', candidate.source );
 		}
 	}
 	return {
@@ -1259,7 +1259,7 @@ function markResponsiveCounterparts(
  */
 const RESPONSIVE_FRAGMENT_RUNTIME = `(function(){
 function resolve(){var fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}
-var targets=Array.prototype.filter.call(document.querySelectorAll('[data-dla-responsive-fragment]'),function(el){return el.getAttribute('data-dla-responsive-fragment')===fragment&&el.getClientRects().length;});
+var targets=Array.prototype.filter.call(document.querySelectorAll('[data-blocks-engine-capture-responsive-fragment]'),function(el){return el.getAttribute('data-blocks-engine-capture-responsive-fragment')===fragment&&el.getClientRects().length;});
 if(targets.length===1)targets[0].scrollIntoView();}
 function schedule(){requestAnimationFrame(resolve);}
 window.addEventListener('hashchange',schedule);
@@ -1281,7 +1281,7 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 		const selectors = selectorParser().astSync( rule.selector );
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
 		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value ) { const alias = id.clone(); alias.value = value; replacements.push( { node: id, alias } ); } } );
-		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-dla-anchor-alias'; replacements.push( { node: attribute, alias } ); } } );
+		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-blocks-engine-capture-anchor-alias'; replacements.push( { node: attribute, alias } ); } } );
 		for ( const { node, alias } of replacements ) node.replaceWith( selectorParser.pseudo( { value: ':is', nodes: [
 			selectorParser.selector( { value: '', nodes: [ node.clone() ] } ), selectorParser.selector( { value: '', nodes: [ alias ] } ),
 		] } ) );
@@ -1297,9 +1297,9 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 	const $ = cheerio.load( html );
 	const mobile = $( `.${ MOBILE_DOCUMENT_CLASS }` ).first();
 	const sourceIds = new Map< string, string >();
-	$( `.${ DESKTOP_DOCUMENT_CLASS } [data-dla-anchor-target][data-dla-anchor-source-id]` ).each( ( _index, element ) => {
-		const fragment = $( element ).attr( 'data-dla-anchor-target' );
-		const sourceId = $( element ).attr( 'data-dla-anchor-source-id' );
+	$( `.${ DESKTOP_DOCUMENT_CLASS } [data-blocks-engine-capture-anchor-target][data-blocks-engine-capture-anchor-source-id]` ).each( ( _index, element ) => {
+		const fragment = $( element ).attr( 'data-blocks-engine-capture-anchor-target' );
+		const sourceId = $( element ).attr( 'data-blocks-engine-capture-anchor-source-id' );
 		if ( fragment && sourceId ) sourceIds.set( fragment, sourceId );
 	} );
 	let changed = false;
@@ -1312,12 +1312,12 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		const node = $( element );
 		const name = node.attr( 'name' )!;
 		if ( ! name || node.parents( '[id]' ).filter( ( _i, parent ) => $( parent ).attr( 'id' ) === name ).length === 0 ) return;
-		node.attr( 'data-dla-anchor-alias', name ).removeAttr( 'name' );
+		node.attr( 'data-blocks-engine-capture-anchor-alias', name ).removeAttr( 'name' );
 		aliases.add( name );
 		changed = true;
 	} );
 	const phoneTarget = ( fragment: string ): boolean => {
-		const phoneId = `${ fragment }--dla-mobile`;
+		const phoneId = `${ fragment }--data-blocks-engine-capture-mobile`;
 		if ( mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === phoneId ).length === 0 ) {
 			// Ordinary authored fragments have no adapter marker. Their mobile
 			// target still carries the original id and collides with the desktop
@@ -1334,7 +1334,7 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 				: $();
 			if ( counterpart.length !== 1 ) return false;
 			if ( authored.length !== 1 ) counterpart.before(
-				`<span id="${ escapeHtmlAttr( phoneId ) }" data-dla-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
+				`<span id="${ escapeHtmlAttr( phoneId ) }" data-blocks-engine-capture-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
 			);
 		}
 		return true;
@@ -1344,8 +1344,8 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		const desktopTarget = $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
 		const mobileTarget = mobile.find( '[id]' ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
 		if ( desktopTarget.length !== 1 || mobileTarget.length !== 1 || ! phoneTarget( fragment ) ) continue;
-		desktopTarget.attr( 'data-dla-responsive-fragment', fragment );
-		mobileTarget.attr( 'data-dla-responsive-fragment', fragment );
+		desktopTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
+		mobileTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
 		responsiveAliases = true;
 	}
 	mobile.find( 'a[href]' ).each( ( _index, element ) => {
@@ -1357,8 +1357,8 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		if ( path !== '' && path.split( '?' )[ 0 ] !== documentPath ) return;
 		let fragment: string;
 		try { fragment = decodeURIComponent( href.slice( hash + 1 ) ); } catch { return; }
-		if ( ! fragment || fragment.endsWith( '--dla-mobile' ) || ! phoneTarget( fragment ) ) return;
-		link.attr( 'href', `${ path }#${ encodeURIComponent( fragment ) }--dla-mobile` );
+		if ( ! fragment || fragment.endsWith( '--data-blocks-engine-capture-mobile' ) || ! phoneTarget( fragment ) ) return;
+		link.attr( 'href', `${ path }#${ encodeURIComponent( fragment ) }--data-blocks-engine-capture-mobile` );
 		changed = true;
 	} );
 	if ( renamed.size > 0 || aliases.size > 0 ) {
@@ -1377,7 +1377,7 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		} );
 		if ( identities ) { for ( const [ key, value ] of renamed ) identities.ids.set( key, value ); identities.namedAliases ||= aliases.size > 0; }
 	}
-	if ( responsiveAliases ) $( 'body' ).append( `<script data-dla-responsive-fragments>${ RESPONSIVE_FRAGMENT_RUNTIME }</script>` );
+	if ( responsiveAliases ) $( 'body' ).append( `<script data-blocks-engine-capture-responsive-fragments>${ RESPONSIVE_FRAGMENT_RUNTIME }</script>` );
 	return changed ? $.html() : html;
 }
 
@@ -1476,44 +1476,44 @@ function assembleResponsiveHtml(
 	// collide on a shared id. Namespace the mobile copy and repoint its own links.
 	const desktop = cheerio.load( `<body>${ desktopBody }</body>` );
 	const desktopTargets = new Map< string, string >();
-	desktop( '[data-dla-anchor-target][data-dla-anchor-source-id]' ).each( ( _index, element ) => {
+	desktop( '[data-blocks-engine-capture-anchor-target][data-blocks-engine-capture-anchor-source-id]' ).each( ( _index, element ) => {
 		const target = desktop( element );
-		const fragment = target.attr( 'data-dla-anchor-target' );
-		const sourceId = target.attr( 'data-dla-anchor-source-id' );
+		const fragment = target.attr( 'data-blocks-engine-capture-anchor-target' );
+		const sourceId = target.attr( 'data-blocks-engine-capture-anchor-source-id' );
 		if ( fragment && sourceId ) desktopTargets.set( fragment, sourceId );
 	} );
 	const mobile = cheerio.load( `<body>${ mobileBody }</body>` );
-	mobile( 'a[data-dla-anchor-fragment]' ).each( ( _index, element ) => {
-		const fragment = mobile( element ).attr( 'data-dla-anchor-fragment' );
+	mobile( 'a[data-blocks-engine-capture-anchor-fragment]' ).each( ( _index, element ) => {
+		const fragment = mobile( element ).attr( 'data-blocks-engine-capture-anchor-fragment' );
 		const sourceId = fragment ? desktopTargets.get( fragment ) : undefined;
-		if ( ! fragment || mobile( `[data-dla-anchor-target="${ fragment }"]` ).length > 0 ) return;
+		if ( ! fragment || mobile( `[data-blocks-engine-capture-anchor-target="${ fragment }"]` ).length > 0 ) return;
 		if ( sourceId ) {
 			const counterpart = mobile( '[id]' )
 				.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === sourceId )
 				.first();
 			if ( counterpart.length === 1 ) {
-				counterpart.attr( 'data-dla-anchor-target', fragment );
+				counterpart.attr( 'data-blocks-engine-capture-anchor-target', fragment );
 				return;
 			}
 		}
 		const localTarget = mobile( '[id]' )
 			.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === fragment )
 			.first();
-		if ( localTarget.length === 1 ) localTarget.attr( 'data-dla-anchor-target', fragment );
+		if ( localTarget.length === 1 ) localTarget.attr( 'data-blocks-engine-capture-anchor-target', fragment );
 	} );
-	mobile( '[data-dla-anchor-target]' ).each( ( _index, element ) => {
+	mobile( '[data-blocks-engine-capture-anchor-target]' ).each( ( _index, element ) => {
 		const node = mobile( element );
-		const fragment = node.attr( 'data-dla-anchor-target' );
-		if ( fragment ) node.attr( 'id', `${ fragment }--dla-mobile` );
+		const fragment = node.attr( 'data-blocks-engine-capture-anchor-target' );
+		if ( fragment ) node.attr( 'id', `${ fragment }--data-blocks-engine-capture-mobile` );
 	} );
-	mobile( 'a[data-dla-anchor-fragment][href]' ).each( ( _index, element ) => {
+	mobile( 'a[data-blocks-engine-capture-anchor-fragment][href]' ).each( ( _index, element ) => {
 		const node = mobile( element );
-		const fragment = node.attr( 'data-dla-anchor-fragment' );
+		const fragment = node.attr( 'data-blocks-engine-capture-anchor-fragment' );
 		const href = node.attr( 'href' );
 		if ( fragment && href )
 			node.attr(
 				'href',
-				`${ href.replace( /#.*$/, '' ) }#${ encodeURIComponent( fragment ) }--dla-mobile`
+				`${ href.replace( /#.*$/, '' ) }#${ encodeURIComponent( fragment ) }--data-blocks-engine-capture-mobile`
 			);
 	} );
 	mobileBody = mobile( 'body' ).html() ?? mobileBody;
@@ -1542,10 +1542,10 @@ function assembleResponsiveHtml(
 	const responsiveBody = `<div ${ wrapperAttributes(
 		DESKTOP_DOCUMENT_CLASS,
 		desktopBodyMatch?.attributes ?? ''
-	) } data-dla-document-scope>${ desktopBody }</div><div ${ wrapperAttributes(
+	) } data-blocks-engine-capture-document-scope>${ desktopBody }</div><div ${ wrapperAttributes(
 		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.attributes ?? ''
-	) } data-dla-document-scope>${ mobileBody }</div>`;
+	) } data-blocks-engine-capture-document-scope>${ mobileBody }</div>`;
 	const sharedStyles = styleBlocks( desktopHtml );
 	const evidence = dualStructuralEvidence( gatedByMobileClass );
 	if (
@@ -1681,7 +1681,7 @@ function resolveResponsivePair(
 	}
 	// Native effects bind target and subject within one source document. A tree
 	// collapse must not discard one profile's effects or redirect its subjects.
-	if ( /data-dla-native-effects=/.test( desktopHtml + mobileHtml ) ) {
+	if ( /data-blocks-engine-capture-native-effects=/.test( desktopHtml + mobileHtml ) ) {
 		return { role, missingBody: false, dual: true, evidence: { ...dualStructuralEvidence( undefined ), reason: 'Native view timelines retain profile-scoped target and subject identities.' } };
 	}
 	if ( requiresNativeInlineCascade( desktopHtml, mobileHtml ) ) {

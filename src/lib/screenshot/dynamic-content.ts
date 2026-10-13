@@ -477,12 +477,12 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
                 const closed = closedIcons[index]!, open = openIcons[index]!;
                 if ((icon.getAttribute('class') ?? '') !== closed.className || (icon.getAttribute('style') ?? '') !== closed.style) return;
                 if (closed.className !== open.className) {
-                  icon.setAttribute('data-dla-disclosure-open-class',open.className);
-                  icon.setAttribute('data-dla-disclosure-closed-class',closed.className);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-open-class',open.className);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-closed-class',closed.className);
                 }
                 if (closed.style !== open.style) {
-                  icon.setAttribute('data-dla-disclosure-open-style',open.style);
-                  icon.setAttribute('data-dla-disclosure-closed-style',closed.style);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-open-style',open.style);
+                  icon.setAttribute('data-blocks-engine-capture-disclosure-closed-style',closed.style);
                 }
               });
               mountedPanels.push({ trigger, parent: target, panel: copy });
@@ -596,7 +596,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         }
         for (const { target, content, trigger } of observed) {
           if (!hasContent(target)) target.innerHTML = content;
-          target.dataset.dlaHydratedDisclosure = 'true';
+          target.dataset.blocksEngineCaptureHydratedDisclosure = 'true';
           records.push({
             status: 'captured',
             trigger: describeTrigger(trigger),
@@ -633,14 +633,14 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
       for (const { trigger, parent, panel } of mountedPanels) {
         if (!trigger.isConnected || !parent.isConnected) continue;
         let index = 0;
-        while (document.getElementById(`dla-disclosure-panel-${index}`)) index++;
-        panel.id = `dla-disclosure-panel-${index}`;
+        while (document.getElementById(`data-blocks-engine-capture-disclosure-panel-${index}`)) index++;
+        panel.id = `data-blocks-engine-capture-disclosure-panel-${index}`;
         panel.hidden = true;
         panel.setAttribute('role', 'region');
-        panel.dataset.dlaHydratedDisclosure = 'true';
-        panel.dataset.dlaLocalDisclosure = 'true';
+        panel.dataset.blocksEngineCaptureHydratedDisclosure = 'true';
+        panel.dataset.blocksEngineCaptureLocalDisclosure = 'true';
         const group = parent.parentElement;
-        if (group && exclusiveGroups.has(group)) group.dataset.dlaExclusiveDisclosures = 'true';
+        if (group && exclusiveGroups.has(group)) group.dataset.blocksEngineCaptureExclusiveDisclosures = 'true';
         trigger.setAttribute('aria-controls', panel.id);
         parent.append(panel);
         records.push({ status: 'captured', trigger: describeTrigger(trigger), target: describe(panel), html: panel.outerHTML });
@@ -699,7 +699,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         if (populated.length >= limit - hydrated || !visible(trigger) || !safeToActivate(trigger) || isExpandToggle(trigger)) continue;
         const panel = panelForTrigger(trigger);
         if (!panel || panel.getAttribute('role') !== 'region' || !hasContent(panel) || !trigger.parentElement?.contains(panel)) continue;
-        if (panel.dataset.dlaLocalDisclosure || panel.dataset.dlaHydratedDisclosure) continue;
+        if (panel.dataset.blocksEngineCaptureLocalDisclosure || panel.dataset.blocksEngineCaptureHydratedDisclosure) continue;
         populated.push({ trigger, panel });
       }
       const eligible = populated.filter((pair) => {
@@ -861,10 +861,10 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         entry.trigger.setAttribute('aria-expanded', entry.snap.expanded ? 'true' : 'false');
         entry.panel.hidden = !entry.snap.expanded;
         if (entry.snap.ariaHidden !== null) entry.panel.setAttribute('aria-hidden', entry.snap.expanded ? 'false' : 'true');
-        entry.panel.dataset.dlaLocalDisclosure = 'true';
-        entry.panel.dataset.dlaHydratedDisclosure = 'true';
+        entry.panel.dataset.blocksEngineCaptureLocalDisclosure = 'true';
+        entry.panel.dataset.blocksEngineCaptureHydratedDisclosure = 'true';
         const cluster = clusterOf(entry.trigger);
-        if (cluster && exclusiveClusters.has(cluster)) cluster.dataset.dlaExclusiveDisclosures = 'true';
+        if (cluster && exclusiveClusters.has(cluster)) cluster.dataset.blocksEngineCaptureExclusiveDisclosures = 'true';
       };
       for (const entry of observedPopulated) applyNormalized(entry);
       await wait(450);

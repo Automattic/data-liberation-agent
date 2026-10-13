@@ -19,14 +19,14 @@ it( 'reconciles a single-document named alias while preserving linked author CSS
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
 		expect( $( '[id="comments"],a[name="comments"]' ) ).toHaveLength( 1 );
-		expect( $( 'a[data-dla-anchor-alias="comments"]' ) ).toHaveLength( 1 );
+		expect( $( 'a[data-blocks-engine-capture-anchor-alias="comments"]' ) ).toHaveLength( 1 );
 		expect( $( 'a[name="standalone"]' ) ).toHaveLength( 1 );
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( [ [ '/', 'index.html' ] ] ) ).findings.filter( finding => finding.kind === 'anchor-ambiguous' ) ).toEqual( [] );
 		const server = await serveCapture( outputDir );
 		const browser = await chromium.launch();
 		try {
 			const page = await browser.newPage(); await page.goto( server.url, { waitUntil: 'load' } );
-			expect( await page.locator( 'a[data-dla-anchor-alias="comments"]' ).evaluate( element => getComputedStyle( element ).color ) ).toBe( 'rgb(255, 0, 0)' );
+			expect( await page.locator( 'a[data-blocks-engine-capture-anchor-alias="comments"]' ).evaluate( element => getComputedStyle( element ).color ) ).toBe( 'rgb(255, 0, 0)' );
 		} finally { await browser.close(); await server.close(); }
 	} finally { rmSync( outputDir, { recursive: true, force: true } ); }
 } );

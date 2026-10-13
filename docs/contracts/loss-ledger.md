@@ -115,7 +115,7 @@ Other `discoveryDiagnostics` codes are discovery evidence rather than unit losse
 | `wordpress_site_plan_unresolved_navigation_link` | item (`value`) | warning | Local link or relative form action with no artifact page, rewritten to the source URL or to `#`. Covers links to omitted pages. | — (extended in #2714, #2715) |
 | `html_include_budget_exceeded` | page (`context.source_path`) | warning | Document over the include count; its includes were left unexpanded. Entry documents still throw. | #2715 |
 | `html_include_directive_ignored` | page (`context.source_path`) | warning | Non-standard or unresolvable include directive; left unexpanded. | #2715 |
-| `glyph_color_undecodable` | item (`src`, `mime_type`) | warning | Social icon glyph could not be decoded; core default icon colors apply. Capture now records the rendered colour as `data-dla-glyph-color` ([glyph-color.md](glyph-color.md)); BE does not read it yet. | #2716 |
+| `glyph_color_undecodable` | item (`src`, `mime_type`) | warning | Social icon glyph could not be decoded; core default icon colors apply. Capture now records the rendered colour as `data-blocks-engine-capture-glyph-color` ([glyph-color.md](glyph-color.md)); BE does not read it yet. | #2716 |
 
 Emit sites:
 
@@ -175,7 +175,7 @@ DLA captureWebsite()
   rows: RouteDiagnostic[] → receipt.discoveryDiagnostics (capture receipt + diagnostics.json)
   result: complete, entrypointCaptured, missingRoutes, summary{routesDiscovered, routesCaptured,
           routesFailed, routesOmitted}, unresolvedAnchors
-  artifact: website/ files + website/capture-findings.json (loss rows, section 5.1)
+  artifact: website/ files + website/source-findings.json (loss rows, section 5.1)
         │
         ▼
 BE ArtifactCompiler::compile() / compose()
@@ -192,45 +192,47 @@ SSI Receipt_Projection::compose()
 ```
 
 - **DLA.** Diagnostics are collected at `src/lib/capture.ts:342` and `:362`. `complete` is computed at `:386-395` and the result built at `:396-405`. The receipt is written at `src/lib/capture-export-evidence.ts:625` and `:640`. `complete` is false when `routesFailed > 0`, when a profile is uncaptured, when a document selection is missing, when there is a non-budget linked-page diagnostic, or when an anchor targets an uncaptured route. Budget omission never makes a capture incomplete.
-- **BE.** Merging and the omitted-page path are described in `php-transformer/docs/contracts/omitted-page-receipt.md`. BE never sees `capture-findings.json`: SSI removes it at intake.
+- **BE.** Merging and the omitted-page path are described in `php-transformer/docs/contracts/omitted-page-receipt.md`. BE never sees `source-findings.json`: SSI removes it at intake.
 
-### 5.1 Capture findings in the artifact
+### 5.1 Source findings in the artifact
 
-The capture receipt and `diagnostics.json` sit next to `website/`, outside the artifact an importer receives. So that capture losses travel with the site, capture writes one small static file at the website root, `website/capture-findings.json` (`src/lib/capture-findings.ts`). Browser and HTTP capture both write it once the result is known; browser capture writes it before the fidelity reference hashes `website/`.
+The capture receipt and `diagnostics.json` sit next to `website/`, outside the artifact an importer receives. So that capture losses travel with the site, capture writes one small static file at the website root: `website/source-findings.json` (`src/lib/source-findings.ts`). It uses Static Site Importer's producer-neutral input schema, `static-site-importer/source-findings/v1` ([#787](https://github.com/Automattic/data-liberation-agent/issues/787)). Every row describes itself: what was lost (`unit`), how (`loss_class`), where (`location`) and which layer owns it (`owning_layer`). SSI therefore carries no registry of this producer's codes. Browser and HTTP capture both write the file once the result is known. Browser capture writes it before the fidelity reference hashes `website/`.
 
 ```json
 {
-  "schema": "data-liberation-agent/capture-findings/v1",
+  "schema": "static-site-importer/source-findings/v1",
   "entrypoint": "index.html",
   "complete": false,
   "usable": true,
-  "summary": { "routes_discovered": 3, "routes_captured": 2, "routes_failed": 1, "routes_omitted": 0, "unresolved_anchors": 0 },
+  "summary": { "routes_discovered": 3, "routes_captured": 2, "routes_failed": 1, "routes_omitted": 0, "unresolved_anchors": 0, "omitted_findings": 0 },
   "findings": [
-    { "code": "route_capture_degraded", "severity": "warning", "unit": "route", "url": "https://example.test/about/", "path": "about/index.html", "reason": "mobile/screenshot-scrolled: screenshot timeout", "metrics": { "failedStages": 1 } },
-    { "code": "route_export_failed", "severity": "error", "unit": "route", "url": "https://example.test/pricing/", "reason": "cannot export Pricing" }
-  ],
-  "omitted_findings": 0,
-  "missing_routes": [ { "url": "https://example.test/pricing/", "code": "route_export_failed", "reason": "cannot export Pricing" } ]
+    { "code": "route_capture_degraded", "severity": "warning", "unit": "route", "loss_class": "degraded_unit", "location": { "url": "https://example.test/about/", "path": "about/index.html" }, "message": "mobile/screenshot-scrolled: screenshot timeout", "metrics": { "failedStages": 1 }, "owning_layer": "data-liberation-agent" },
+    { "code": "route_export_failed", "severity": "error", "unit": "route", "loss_class": "omitted_unit", "location": { "url": "https://example.test/pricing/" }, "message": "cannot export Pricing", "owning_layer": "data-liberation-agent" }
+  ]
 }
 ```
 
-- `findings`: every receipt `discoveryDiagnostics` row with a `unit`, plus the missing-route codes (`route_capture_failed`, `route_capture_skipped_budget`, `route_export_failed`, `route_path_collision`). Discovery evidence (`sitemap_*`, `http_*`, `route_omitted_by_budget`, `route_not_found`, `route_external_redirect`) is left out. `unit` defaults to `route` and `severity` to `error` for missing-route rows and `warning` otherwise. `path` and `entrypoint` are relative to the website root. `profile` and `metrics` appear when the row has them.
-- Rows are de-duplicated and sorted by `url`, `code`, `unit`, `path`, `profile` and `reason`, so the same capture writes the same bytes. At most 500 rows are written; `omitted_findings` counts the rest.
-- `missing_routes` is `missingRoutes()` over the receipt rows, sorted by URL. It is never bounded.
-- `complete` is the capture result's `complete`; `usable` is `isUsableCapture()` under `USABLE_PARTIAL_CAPTURE_POLICY`.
-- The file is JSON, so it passes SSI's static-content policy. A new field is additive within `v1`; a changed meaning needs `v2`.
+- **Rows.** The file has one row per receipt `discoveryDiagnostics` row that has a `unit`, plus a row for each missing-route code (`route_capture_failed`, `route_capture_skipped_budget`, `route_export_failed`, `route_path_collision`). Discovery evidence is left out: `sitemap_*`, `http_*`, `route_omitted_by_budget`, `route_not_found` and `route_external_redirect`. A missing-route row has `unit: route` and `severity: error`; other rows default to `warning`.
+- **Order and bound.** Rows are de-duplicated and sorted by URL, code, unit, path, profile and message, so the same capture always writes the same bytes. At most 500 rows are kept, and `summary.omitted_findings` counts the rest. After those rows, every missing route the bound left out follows, so a missing route is always reported.
+- **Fields.**
+  - `message` is the capture `reason`.
+  - `location.url` is the source URL. `location.path` is the exported file, relative to the website root. `location.profile` is the capture profile, when the row names one.
+  - `metrics` appears when the row has it.
+  - `owning_layer` is always `data-liberation-agent`.
+- **Status.** `complete` is the capture result's `complete`. `usable` is `isUsableCapture()` under `USABLE_PARTIAL_CAPTURE_POLICY`.
+- **Loss class.** DLA owns the mapping, in `SOURCE_FINDING_LOSS_CLASSES`. It equals SSI's registry for these codes before #787:
 
-SSI reads the file at intake when it is present (Automattic/static-site-importer `includes/class-static-site-importer-capture-findings.php`). It validates `schema` and the `findings` and `missing_routes` lists, removes the file from the artifact, and adds one report row per finding, plus one per missing route that has no finding row with the same code and URL. Rows carry the canonical finding fields: `code`, `severity`, `unit`, `location` (`website/<path>`, else the URL), `message` from `reason`, the code as `reason_code`, numeric `metrics`, `owning_layer: data-liberation-agent`, `loss_class` and `acceptability`; `url` and `context.profile` are kept too. SSI classifies capture codes by code in its reported-loss registry:
-
-| Code | SSI loss class | Unit |
+| Code | `loss_class` | `unit` |
 |---|---|---|
-| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin` | `omitted_unit` | route |
+| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget` | `omitted_unit` | route |
 | `route_profile_uncaptured` | `omitted_unit` | profile |
+| `asset_exceeds_file_limit` | `omitted_unit` | asset |
 | `route_capture_degraded` | `degraded_unit` | route |
 | `stylesheet_unparseable` | `degraded_unit` | stylesheet |
 | `native_timeline_unproven`, `disclosure_unrestored` | `degraded_unit` | block |
+| any other capture code with a `unit` | `degraded_unit` | the row's unit |
 
-Each has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary's `loss_class_summary`, `loss_count` and `loss_counts`. A capture code SSI does not know yet is stamped `degraded_unit`, so a new DLA code is still counted as a loss. `route_capture_skipped_budget` (an omitted route) and `asset_exceeds_file_limit` (a degraded asset) are not in SSI's registry yet, so both are counted as `degraded_unit` until it adds them. A capture without the file imports as before. A file that cannot be read or fails validation adds one `capture_findings_unreadable` warning and never fails the import.
+SSI reads the file at intake when it is present, removes it from the artifact, and turns each row into a canonical loss row. That row uses the row's own loss class, unit, severity and owning layer. Each class above has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary. A capture without the file imports as before. A malformed file adds one `source_findings_unreadable` warning and never fails the import. The file replaces `website/capture-findings.json` (`data-liberation-agent/capture-findings/v1`), which capture no longer writes.
 - **SSI.** `compose()` is at `includes/class-static-site-importer-receipt-projection.php:50-103`. Compact summary fields (`diagnostic-projection.php:1374-1416`):
   - `status` (`completed`/`failed` from `fail_import`)
   - `quality_pass`, `fail_import`, `failure_reasons`
@@ -254,7 +256,7 @@ Each has acceptability `accepted_reported_loss`: the import completes, and the r
 3. **Compile:** proceed unless `status === 'failed'`.
 4. **Import:** accept when `compact_summary.status === 'completed'`.
 5. **Report, never gate** on the rest:
-   - capture: `missingRoutes`, `summary.routesOmitted`, and `discoveryDiagnostics` rows that have a `unit` (the same rows reach the import report through `capture-findings.json`)
+   - capture: `missingRoutes`, `summary.routesOmitted`, and `discoveryDiagnostics` rows that have a `unit` (the same rows reach the import report through `source-findings.json`)
    - import: `loss_class_summary`, the `page_compile_omitted` count, `omitted_file_count`, `unresolved_link_count`
 
    Present them as one list keyed by `code` and `unit`.
@@ -264,13 +266,13 @@ A stricter caller tightens step 2 (for example `complete && summary.routesOmitte
 ## 7. Open gaps
 
 - **Caller policy not adopted.** The hosted runner still fails on any `complete: false` capture instead of `isUsableCapture()` (#761, "Caller policy").
-- **Unresolved anchors cross only as a count.** `capture-findings.json` carries capture loss rows and missing routes into the import report (section 5.1), but only `summary.unresolved_anchors` for `unresolvedAnchors`. Routes and pages still share no key except the exported path.
+- **Unresolved anchors cross only as a count.** `source-findings.json` carries capture loss rows, including missing routes, into the import report (section 5.1), but only `summary.unresolved_anchors` for `unresolvedAnchors`. Routes and pages still share no key except the exported path.
 - **Field names differ.**
   - Human text: DLA `reason` is free text; BE and SSI use `message`, with `reason_code` as the machine reason.
   - BE `reason` is overloaded: it is `'truncated'` on overflow rows and the raw error in `context.reason`.
   - Location: `url` (DLA), `path` (DLA file, SSI intake) and `source_path` (BE, SSI).
   - BE puts `source_path` at the top level on some rows and in `context` on others (editability, include codes).
-- **`unit`, `owning_layer` and `loss_class` are sparse.** DLA has no `owning_layer` or `loss_class`. BE sets `unit` on one code. SSI stamps `unit` and `owning_layer` only on `page_compile_omitted` and on capture rows from `capture-findings.json`.
+- **`unit`, `owning_layer` and `loss_class` are sparse.** DLA carries `owning_layer` and `loss_class` only in `source-findings.json` (section 5.1), not on receipt rows. BE sets `unit` on one code. SSI stamps `unit` and `owning_layer` only on `page_compile_omitted` and on capture rows from `capture-findings.json`.
 - **`severity` means different things.** DLA `severity` is optional and absent on `route_capture_failed`. DLA `error` does not imply incompleteness: `disclosure_unrestored` is `error`, but the page counts and `complete` is unaffected. BE `error` means the compile failed.
 - **Losses classed as acceptable.** New degrade codes with no specific `pattern_family` fall through BE's default repair bucket `review_generic_mapping` (`src/Contract/ConversionFindingContract.php:353-355`), so SSI classes them `editable_approximation` / `acceptable_conversion` rather than as a loss. This covers `editability_policy_degraded`, `html_include_*`, `glyph_color_undecodable`, `*_link_declaration`, `*_navigation_link` and `static_site_importer_non_static_file_skipped`. Separately, `runtime_form_graph_rejected` maps to `importer_materialization_bug` (`materialize_form_provider`).
 - **Unmapped repair buckets.** BE emits `restore_compiled_document_identity` and `restore_projected_selector_binding`, which SSI's map does not list (`loss-classes.php:123-160`). They are recorded as drift and fall back to the heuristic.
@@ -279,4 +281,4 @@ A stricter caller tightens step 2 (for example `complete && summary.routesOmitte
 - **The partial-site rule is inconsistent.** An omitted page imports, but an omitted artifact file refuses the whole import.
 - **Not every loss is a finding row.** #2712's form-style drops are recorded as `style_value_unrepresentable:<property>` strings inside the form presentation graph's `diagnostics` list, not as rows.
 - **No classification guard.** No repository yet requires every throw site on the compile and import path to be classified (#761, "Classification guard"). Remaining conversions: Automattic/blocks-engine#2713 items 4-8, Automattic/static-site-importer#2054, and #762.
-- **Glyph colour still decoded at compile.** Capture records `data-dla-glyph-color` (#769, [glyph-color.md](glyph-color.md)), but BE's `MonochromeGlyphColor` / `SocialLinksPattern::glyphColor` still decode image bytes and do not prefer the attribute yet.
+- **Glyph colour still decoded at compile.** Capture records `data-blocks-engine-capture-glyph-color` (#769, [glyph-color.md](glyph-color.md)), but BE's `MonochromeGlyphColor` / `SocialLinksPattern::glyphColor` still decode image bytes and do not prefer the attribute yet.

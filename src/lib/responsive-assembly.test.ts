@@ -189,7 +189,7 @@ describe( 'assembleResponsiveCapture', () => {
 			// The source's tablet pose is observed from the live responsive runtime,
 			// not extrapolated from the phone and desktop endpoint snapshots.
 			expect( sourceTabletX ).toBe( 757 );
-			expect( capturedDesktop ).toContain( 'data-dla-fluid-rules' );
+			expect( capturedDesktop ).toContain( 'data-blocks-engine-capture-fluid-rules' );
 			for ( const width of [ 390, 402, 768, 1440 ] ) {
 				await copy.setViewportSize( { width, height: 900 } );
 				const copyBox = ( await copy.locator( '#inactive' ).boundingBox() )!;
@@ -254,7 +254,7 @@ describe( 'assembleResponsiveCapture', () => {
 			mobileOnlyElements: 1,
 		} );
 		const $ = cheerio.load( assembly.html );
-		expect( $( '#comp-phone.data-liberation-mobile-only' ) ).toHaveLength( 1 );
+		expect( $( '#comp-phone.data-blocks-engine-capture-mobile-only' ) ).toHaveLength( 1 );
 		expect( assembly.portableNormalization ).toBe( 'pending' );
 	} );
 
@@ -351,7 +351,7 @@ describe( 'assembleResponsiveCapture', () => {
 
 describe( 'exportWebsiteCapture responsive assembly', () => {
 	function exportPair( desktop: string, mobile?: string ): { html: string; receipt: { routes: Array< { responsiveVariants?: { outcome: string; variants: number } } > }; profile: { variants: string; documentsPerRoute: number } } {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-assembly-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-assembly-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );

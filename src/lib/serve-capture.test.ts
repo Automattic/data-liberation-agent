@@ -6,7 +6,7 @@ import { serveCapture } from '../index.js';
 
 describe( 'public capture preview', () => {
 	it( 'serves owned nested routes and assets and closes its HTTP lifecycle', async () => {
-		const root = mkdtempSync( join( tmpdir(), 'dla-public-preview-' ) );
+		const root = mkdtempSync( join( tmpdir(), 'liberation-public-preview-' ) );
 		mkdirSync( join( root, 'website', 'about' ), { recursive: true } );
 		writeFileSync( join( root, 'capture-receipt.json' ), JSON.stringify( { websiteRoot: 'website', source: { url: 'https://fixture.example/' }, routes: [ { url: 'https://fixture.example/', path: 'website/index.html' }, { url: 'https://fixture.example/about/', path: 'website/about/index.html' } ] } ) );
 		writeFileSync( join( root, 'website', 'index.html' ), '<h1>Owned home</h1>' );

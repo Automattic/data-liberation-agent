@@ -62,13 +62,13 @@ it( 'exports native motion with real scroll/resize parity and authored CSS, reta
 		expect( report.preserved ).toBe( 5 );
 		expect( report.losses ).toEqual( expect.arrayContaining( [ { target: expect.any( String ), reason: 'range relationship is not fixed or independently validated cover extent' }, { target: expect.any( String ), reason: 'timeline inset is not publicly readable or independently verified as default' }, { target: expect.any( String ), reason: 'animation phase is not independently verified as native range alignment' } ] ) );
 		expect( report.losses ).toHaveLength( 4 );
-		expect( await source.locator( '#nearOffset' ).getAttribute( 'data-dla-native-effects' ) ).toBeNull();
+		expect( await source.locator( '#nearOffset' ).getAttribute( 'data-blocks-engine-capture-native-effects' ) ).toBeNull();
 		const html = await capturePageHtml( source );
 		writeFileSync( join( artifact, 'html', 'homepage.html' ), html );
 		writeFileSync( join( artifact, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://neutral.example/': { html: 'html/homepage.html' } } } ) );
 		exportWebsiteCapture( { outputDir: artifact, sourceUrl: 'https://neutral.example/', platform: 'generic', summary: {}, failures: [] } );
 		const portable = readFileSync( join( artifact, 'website', 'index.html' ), 'utf8' );
-		expect( portable ).toContain( 'data-dla-native-view-timeline-runtime' );
+		expect( portable ).toContain( 'data-blocks-engine-capture-native-view-timeline-runtime' );
 		expect( portable ).not.toContain( 'const subject=document' );
 		await copy.setContent( sanitizeFrozenHtml( html ) );
 		await copy.waitForTimeout( 100 );
@@ -91,7 +91,7 @@ it( 'exports native motion with real scroll/resize parity and authored CSS, reta
 				}
 			}
 		}
-		expect( await copy.locator( '[data-dla-native-runtime-loss]' ).count() ).toBe( 0 );
+		expect( await copy.locator( '[data-blocks-engine-capture-native-runtime-loss]' ).count() ).toBe( 0 );
 		expect( await copy.locator( '#authored' ).evaluate( node => node.getAnimations().map( animation => animation.constructor.name ) ) ).toEqual( [ 'CSSAnimation' ] );
 		const authoredBefore = await copy.locator( '#authored' ).evaluate( node => getComputedStyle( node ).transform );
 		await copy.waitForTimeout( 100 );
@@ -102,14 +102,14 @@ it( 'exports native motion with real scroll/resize parity and authored CSS, reta
 		expect( assembled.hasMobileDocument ).toBe( true );
 		await copy.goto( `data:text/html,${ encodeURIComponent( wireNativeViewTimelines( assembled.html ) ) }` );
 		await copy.waitForTimeout( 100 );
-		expect( await copy.locator( '[data-dla-native-runtime-loss]' ).count() ).toBe( 0 );
+		expect( await copy.locator( '[data-blocks-engine-capture-native-runtime-loss]' ).count() ).toBe( 0 );
 		for ( const width of [ 1000, 390, 1000 ] ) {
 			await source.setViewportSize( { width, height: 900 } );
 			await source.goto( `data:text/html,${ encodeURIComponent( width > 767 ? FIXTURE : FIXTURE.replace( /translateX\(8%\)/g, 'translateX(4%)' ) ) }` );
 			await copy.setViewportSize( { width, height: 900 } );
 			await copy.evaluate( () => scrollTo( 0, 0 ) );
 			await copy.waitForTimeout( 150 );
-			const scope = width > 767 ? '.data-liberation-desktop-document' : '.data-liberation-mobile-document';
+			const scope = width > 767 ? '.data-blocks-engine-capture-desktop-document' : '.data-blocks-engine-capture-mobile-document';
 			const translation = await copy.locator( `${ scope } [id="translate"]` ).evaluate( node => {
 				const transform = getComputedStyle( node ).transform;
 				return { x: new DOMMatrix( transform ).m41, width: ( node as HTMLElement ).offsetWidth };
@@ -144,8 +144,8 @@ it( 'routes public-API motion capture through the owning browser pipeline and re
 		exportWebsiteCapture( { outputDir, sourceUrl: url, platform: 'generic', summary: {}, failures: [] } );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.nativeViewTimelines.pages ).toEqual( [ { url, profiles: manifest.entries[ url ].nativeViewTimelines } ] );
-		expect( receipt.nativeViewTimelines.binding.documentScopeAttribute ).toBe( 'data-dla-document-scope' );
-		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'data-dla-native-view-timeline-runtime' );
+		expect( receipt.nativeViewTimelines.binding.documentScopeAttribute ).toBe( 'data-blocks-engine-capture-document-scope' );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'data-blocks-engine-capture-native-view-timeline-runtime' );
 	} finally {
 		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
 	}
@@ -218,7 +218,7 @@ it( 'keeps the page when native timeline restoration is unproven on a page that 
 			reason: expect.stringMatching( /^native timeline source capture unproven: .*scroll restore refused/ ),
 		} ] );
 		// No native effects are carried into the saved page.
-		expect( readFileSync( join( outputDir, entry.html ), 'utf8' ) ).not.toContain( 'data-dla-native-effects' );
+		expect( readFileSync( join( outputDir, entry.html ), 'utf8' ) ).not.toContain( 'data-blocks-engine-capture-native-effects' );
 		exportWebsiteCapture( { outputDir, sourceUrl: url, platform: 'generic', summary: {}, failures: [] } );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( { ...entry.blockLosses[ 0 ], url } );
@@ -231,17 +231,17 @@ it( 'binds duplicate node tokens within generic device document scopes and repor
 	try {
 		const page = await browser.newPage( { viewport: { width: 1000, height: 900 } } );
 		const config = ( subject: string ) => JSON.stringify( [ { subject, source: 'root', axis: 'block', inset: 'auto', frames: [ { transform: 'translateX(0px)' }, { transform: 'translateX(80px)' } ], timing: { duration: 'auto', fill: 'both' }, composite: 'replace', rangeStart: { value: 'cover 0%' }, rangeEnd: { value: 'cover 100%' } } ] ).replace( /"/g, '&quot;' );
-		const device = ( profile: string, subject = 'n1' ) => `<div data-dla-device-document="${ profile }" data-dla-document-scope><section data-dla-native-node="n1" style="height:400px"><div data-dla-native-node="n2" data-dla-native-profile="${ profile }" data-dla-native-effects="${ config( subject ) }" style="height:30px;width:200px"></div></section></div>`;
-		const desktop = device( 'desktop' ).replace( '</section>', '<span data-dla-native-node="foreign" hidden></span></section>' );
+		const device = ( profile: string, subject = 'n1' ) => `<div data-blocks-engine-capture-device-document="${ profile }" data-blocks-engine-capture-document-scope><section data-blocks-engine-capture-native-node="n1" style="height:400px"><div data-blocks-engine-capture-native-node="n2" data-blocks-engine-capture-native-profile="${ profile }" data-blocks-engine-capture-native-effects="${ config( subject ) }" style="height:30px;width:200px"></div></section></div>`;
+		const desktop = device( 'desktop' ).replace( '</section>', '<span data-blocks-engine-capture-native-node="foreign" hidden></span></section>' );
 		await page.setContent( wireNativeViewTimelines( `<!doctype html><html><head></head><body>${ desktop }${ device( 'phone' ) }${ device( 'missing', 'foreign' ) }</body></html>` ) );
 		await page.waitForTimeout( 150 );
 		for ( const profile of [ 'desktop', 'phone' ] ) {
-			const facts = await page.locator( `[data-dla-native-profile="${ profile }"]` ).evaluate( target => {
+			const facts = await page.locator( `[data-blocks-engine-capture-native-profile="${ profile }"]` ).evaluate( target => {
 				const animation = target.getAnimations()[ 0 ] as Animation & { timeline: AnimationTimeline & { subject: Element } };
-				return { count: target.getAnimations().length, ownSubject: animation.timeline.subject === target.parentElement, loss: target.getAttribute( 'data-dla-native-runtime-loss' ) };
+				return { count: target.getAnimations().length, ownSubject: animation.timeline.subject === target.parentElement, loss: target.getAttribute( 'data-blocks-engine-capture-native-runtime-loss' ) };
 			} );
 			expect( facts ).toEqual( { count: 1, ownSubject: true, loss: null } );
 		}
-		expect( await page.locator( '[data-dla-native-profile="missing"]' ).getAttribute( 'data-dla-native-runtime-loss' ) ).toBe( 'subject or source binding missing or ambiguous' );
+		expect( await page.locator( '[data-blocks-engine-capture-native-profile="missing"]' ).getAttribute( 'data-blocks-engine-capture-native-runtime-loss' ) ).toBe( 'subject or source binding missing or ambiguous' );
 	} finally { await browser.close(); }
 } );

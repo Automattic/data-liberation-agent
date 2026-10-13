@@ -77,7 +77,7 @@ export function stripShowcaseMarkup(
 			return `<img src="${ escapeAttr( wixStaticMediaUrl( item.uri, { width, height } ) ) }" alt="${ alt }">`;
 		} )
 		.join( '' );
-	const html = `<div class="dla-slideshow"><div class="dla-slideshow-track">${ imgs }</div></div>`;
+	const html = `<div class="data-blocks-engine-capture-slideshow"><div class="data-blocks-engine-capture-slideshow-track">${ imgs }</div></div>`;
 	const step = 100 / count;
 	const hold = step * 0.8;
 	let frames = '';
@@ -88,11 +88,11 @@ export function stripShowcaseMarkup(
 	}
 	frames += '100%{transform:translateX(0)}';
 	const css =
-		'.dla-slideshow{overflow:hidden;width:100%;height:100%;position:relative}' +
-		`.dla-slideshow-track{display:flex;height:100%;animation:dla-slideshow ${ count * 2 }s infinite}` +
-		'.dla-slideshow-track img{flex:0 0 100%;width:100%;height:100%;object-fit:cover}' +
-		`@keyframes dla-slideshow{${ frames }}` +
-		'@media (prefers-reduced-motion:reduce){.dla-slideshow{overflow-x:auto;scroll-snap-type:x mandatory}.dla-slideshow-track{animation:none}.dla-slideshow-track img{scroll-snap-align:start}}';
+		'.data-blocks-engine-capture-slideshow{overflow:hidden;width:100%;height:100%;position:relative}' +
+		`.data-blocks-engine-capture-slideshow-track{display:flex;height:100%;animation:data-blocks-engine-capture-slideshow ${ count * 2 }s infinite}` +
+		'.data-blocks-engine-capture-slideshow-track img{flex:0 0 100%;width:100%;height:100%;object-fit:cover}' +
+		`@keyframes data-blocks-engine-capture-slideshow{${ frames }}` +
+		'@media (prefers-reduced-motion:reduce){.data-blocks-engine-capture-slideshow{overflow-x:auto;scroll-snap-type:x mandatory}.data-blocks-engine-capture-slideshow-track{animation:none}.data-blocks-engine-capture-slideshow-track img{scroll-snap-align:start}}';
 	return { html, css };
 }
 
@@ -132,19 +132,19 @@ export function preserveWixSlideshowSlides(
 		template.innerHTML = html;
 		const slide = template.content.firstElementChild;
 		if ( ! slide ) continue;
-		slide.setAttribute( 'data-dla-captured-slide', String( index ) );
+		slide.setAttribute( 'data-blocks-engine-capture-captured-slide', String( index ) );
 		fragment.append( slide );
 	}
 	if ( fragment.childElementCount < 2 ) return;
 
 	wrapper.replaceChildren( fragment );
-	slideshow.dataset.dlaCapturedSlideshow = 'true';
-	if ( ! document.getElementById( 'dla-wix-captured-slideshow-css' ) ) {
+	slideshow.dataset.blocksEngineCaptureCapturedSlideshow = 'true';
+	if ( ! document.getElementById( 'data-blocks-engine-capture-wix-captured-slideshow-css' ) ) {
 		const style = document.createElement( 'style' );
-		style.id = 'dla-wix-captured-slideshow-css';
+		style.id = 'data-blocks-engine-capture-wix-captured-slideshow-css';
 		style.textContent =
-			'.wixui-slideshow[data-dla-captured-slideshow="true"] [data-testid="slidesWrapper"]>[data-dla-captured-slide]{display:none!important}' +
-			'.wixui-slideshow[data-dla-captured-slideshow="true"] [data-testid="slidesWrapper"]>[data-dla-captured-slide="0"]{display:block!important}';
+			'.wixui-slideshow[data-blocks-engine-capture-captured-slideshow="true"] [data-testid="slidesWrapper"]>[data-blocks-engine-capture-captured-slide]{display:none!important}' +
+			'.wixui-slideshow[data-blocks-engine-capture-captured-slideshow="true"] [data-testid="slidesWrapper"]>[data-blocks-engine-capture-captured-slide="0"]{display:block!important}';
 		document.head.append( style );
 	}
 }
@@ -246,10 +246,10 @@ export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
 		await page.evaluate( ( { index, message, observed, expectedStates } ) => {
 			const slideshow = document.querySelectorAll< HTMLElement >( '.wixui-slideshow' )[ index ];
 			if ( ! slideshow ) return;
-			slideshow.dataset.dlaCapturedSlideshow = 'false';
-			slideshow.dataset.dlaCapturedSlideCount = String( observed );
-			if ( expectedStates !== null ) slideshow.dataset.dlaExpectedSlideCount = String( expectedStates );
-			slideshow.dataset.dlaCaptureError = message || 'fewer than two distinct slideshow states observed';
+			slideshow.dataset.blocksEngineCaptureCapturedSlideshow = 'false';
+			slideshow.dataset.blocksEngineCaptureCapturedSlideCount = String( observed );
+			if ( expectedStates !== null ) slideshow.dataset.blocksEngineCaptureExpectedSlideCount = String( expectedStates );
+			slideshow.dataset.blocksEngineCaptureCaptureError = message || 'fewer than two distinct slideshow states observed';
 		}, { index: slideshowIndex, message: failure, observed: slides.length, expectedStates: expected } );
 	}
 }
@@ -264,7 +264,7 @@ async function openCollapsedMenu( page: Page ): Promise< boolean > {
 		try {
 			await candidate.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
 			await page.waitForFunction(
-				() => [ ...document.querySelectorAll< HTMLElement >( 'a[data-dla-anchor-fragment]' ) ].some(
+				() => [ ...document.querySelectorAll< HTMLElement >( 'a[data-blocks-engine-capture-anchor-fragment]' ) ].some(
 					( link ) => link.getBoundingClientRect().width > 0 && link.getBoundingClientRect().height > 0
 				),
 				undefined,
@@ -473,7 +473,7 @@ export const capture: LiberationHooks = {
 				// eslint-disable-next-line no-control-regex -- fragment IDs must not carry controls.
 				if ( ! fragment || fragment.length > 128 || /[\u0000-\u001f\u007f]/.test( fragment ) )
 					continue;
-				link.dataset.dlaAnchorFragment = fragment;
+				link.dataset.blocksEngineCaptureAnchorFragment = fragment;
 				if ( target.pathname !== location.pathname ) {
 					// The declared section lives on another captured route, where
 					// this page's runtime cannot resolve it. Keep the intent in
@@ -517,10 +517,10 @@ export const capture: LiberationHooks = {
 					}
 				};
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
-					`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
+					`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ].filter( samePage );
 				const markUnresolved = ( reason: string ) => {
-					for ( const link of links ) link.dataset.dlaAnchorUnresolved = reason;
+					for ( const link of links ) link.dataset.blocksEngineCaptureAnchorUnresolved = reason;
 				};
 				if ( index >= 32 ) {
 					markUnresolved( 'runtime fragment target limit reached' );
@@ -532,7 +532,7 @@ export const capture: LiberationHooks = {
 					( element ) => element.id === fragment || element.getAttribute( 'name' ) === fragment
 				);
 				if ( authoredTargets.length === 1 ) {
-					authoredTargets[ 0 ]!.dataset.dlaAnchorTarget = fragment;
+					authoredTargets[ 0 ]!.dataset.blocksEngineCaptureAnchorTarget = fragment;
 					for ( const link of links ) link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
 					return null;
 				}
@@ -564,12 +564,12 @@ export const capture: LiberationHooks = {
 						return null;
 					}
 					return {
-						index: [ ...document.querySelectorAll( 'a[data-dla-anchor-fragment]' ) ].indexOf( menuLink ),
+						index: [ ...document.querySelectorAll( 'a[data-blocks-engine-capture-anchor-fragment]' ) ].indexOf( menuLink ),
 						menu: true,
 					};
 				}
 				return {
-					index: [ ...document.querySelectorAll( 'a[data-dla-anchor-fragment]' ) ].indexOf( trigger ),
+					index: [ ...document.querySelectorAll( 'a[data-blocks-engine-capture-anchor-fragment]' ) ].indexOf( trigger ),
 					menu: false,
 				};
 			}, { fragment, index } );
@@ -577,7 +577,7 @@ export const capture: LiberationHooks = {
 
 			// Use Playwright's trusted input: Wix ignores synthetic `.click()` for
 			// this navigation on some desktop pages.
-			let link = page.locator( 'a[data-dla-anchor-fragment]' ).nth( trigger.index );
+			let link = page.locator( 'a[data-blocks-engine-capture-anchor-fragment]' ).nth( trigger.index );
 			// On a phone layout the menu's links render only once its collapsed
 			// menu opens, exactly as a visitor sees them: tap the menu button and
 			// follow the same destination from the opened menu, which renders its
@@ -587,9 +587,9 @@ export const capture: LiberationHooks = {
 			} else if ( trigger.menu ) {
 				await page.evaluate( ( fragment ) => {
 					for ( const anchor of document.querySelectorAll< HTMLAnchorElement >(
-						`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
+						`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 					) ) {
-						anchor.dataset.dlaAnchorUnresolved = 'no rendered fragment trigger';
+						anchor.dataset.blocksEngineCaptureAnchorUnresolved = 'no rendered fragment trigger';
 					}
 				}, fragment );
 				continue;
@@ -607,16 +607,16 @@ export const capture: LiberationHooks = {
 				if ( trigger.menu ) await closeOpenedMenu( page );
 				await page.evaluate( ( fragment ) => {
 					for ( const anchor of document.querySelectorAll< HTMLAnchorElement >(
-						`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
+						`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 					) ) {
-						anchor.dataset.dlaAnchorUnresolved = 'runtime trigger click failed';
+						anchor.dataset.blocksEngineCaptureAnchorUnresolved = 'runtime trigger click failed';
 					}
 				}, fragment );
 				continue;
 			}
 			await page.evaluate( async ( { fragment, maxWait, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
-					`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
+					`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ].filter( ( link ) => {
 					try {
 						return new URL( link.href, location.href ).pathname === location.pathname;
@@ -625,7 +625,7 @@ export const capture: LiberationHooks = {
 					}
 				} );
 				const markUnresolved = ( reason: string ) => {
-					for ( const link of links ) link.dataset.dlaAnchorUnresolved = reason;
+					for ( const link of links ) link.dataset.blocksEngineCaptureAnchorUnresolved = reason;
 				};
 				let previous = scrollY;
 				let moved = false;
@@ -670,8 +670,8 @@ export const capture: LiberationHooks = {
 				// section clear of pinned chrome) is replayed as scroll-margin.
 				const marker = document.createElement( 'span' );
 				marker.id = fragment;
-				marker.dataset.dlaAnchorTarget = fragment;
-				if ( resolved.element.id ) marker.dataset.dlaAnchorSourceId = resolved.element.id;
+				marker.dataset.blocksEngineCaptureAnchorTarget = fragment;
+				if ( resolved.element.id ) marker.dataset.blocksEngineCaptureAnchorSourceId = resolved.element.id;
 				marker.setAttribute( 'aria-hidden', 'true' );
 				// Absolutely positioned without offsets, the marker sits at its
 				// static position, the section's start, and stays out of the
@@ -750,9 +750,9 @@ export const capture: LiberationHooks = {
 				( { compId, markup, stylesheet } ) => {
 					const host = document.getElementById( compId );
 					if ( ! host ) return;
-					if ( ! document.getElementById( 'dla-slideshow-css' ) ) {
+					if ( ! document.getElementById( 'data-blocks-engine-capture-slideshow-css' ) ) {
 						const style = document.createElement( 'style' );
-						style.id = 'dla-slideshow-css';
+						style.id = 'data-blocks-engine-capture-slideshow-css';
 						style.textContent = stylesheet;
 						document.head.append( style );
 					}

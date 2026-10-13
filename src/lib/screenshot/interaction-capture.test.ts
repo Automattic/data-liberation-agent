@@ -62,7 +62,7 @@ it.skipIf( skipBrowserTests )( 'replays a dropdown in its observed flow slot wit
 		await page.setContent( wireCapturedDialogs( baseline, report.states ) );
 		await page.locator( '#toggle' ).click();
 		expect( await measure() ).toEqual( opened );
-		expect( await page.locator( '#header > [data-dla-dialog-panel] + #tail' ).count() ).toBe( 1 );
+		expect( await page.locator( '#header > [data-blocks-engine-capture-dialog-panel] + #tail' ).count() ).toBe( 1 );
 		await page.keyboard.press( 'Escape' );
 		expect( await measure() ).toEqual( closed );
 		expect( await page.locator( '#toggle' ).evaluate( element => element === document.activeElement ) ).toBe( true );
@@ -166,14 +166,14 @@ describe( 'captureTriggeredDialogs', () => {
 					report.states,
 					report.initialDialogs
 				);
-				expect( portable ).toContain( '<script data-dla-disclosure-runtime="true">' );
+				expect( portable ).toContain( '<script data-blocks-engine-capture-disclosure-runtime="true">' );
 				await page.setContent( portable );
-				expect( await page.locator( 'details.dla-initial-dialog[open]' ).count() ).toBe( 8 );
+				expect( await page.locator( 'details.data-blocks-engine-capture-initial-dialog[open]' ).count() ).toBe( 8 );
 				expect( await page.getByText( 'Automatic popup 7' ).isVisible() ).toBe( true );
-				await page.locator( 'details.dla-initial-dialog' ).last().locator( 'summary' ).click();
+				await page.locator( 'details.data-blocks-engine-capture-initial-dialog' ).last().locator( 'summary' ).click();
 				expect(
 					await page
-						.locator( 'details.dla-initial-dialog' )
+						.locator( 'details.data-blocks-engine-capture-initial-dialog' )
 						.last()
 						.evaluate( ( details ) => ( details as HTMLDetailsElement ).open )
 				).toBe( false );
@@ -262,7 +262,7 @@ describe( 'captureTriggeredDialogs', () => {
 				const markup = await page.evaluate( () => document.documentElement.outerHTML );
 				const wired = wireCapturedDialogs( markup, report.states );
 				expect( wired ).toMatch( /<button[^>]*aria-haspopup="menu"[^>]*>Shop/ );
-				expect( wired ).toContain( 'dla-dropdown' );
+				expect( wired ).toContain( 'data-blocks-engine-capture-dropdown' );
 			} finally {
 				await browser.close();
 			}
@@ -437,7 +437,7 @@ describe( 'captureTriggeredDialogs', () => {
 				await page.locator( '#site-menu' ).click();
 				expect(
 					await page
-						.locator( '[data-dla-dialog-panel]:not([hidden]) a[href="/about"]' )
+						.locator( '[data-blocks-engine-capture-dialog-panel]:not([hidden]) a[href="/about"]' )
 						.isVisible()
 				).toBe( true );
 				await page.keyboard.press( 'Escape' );
@@ -727,13 +727,13 @@ describe( 'captureTriggeredDialogs', () => {
 
 				const wired = wireCapturedDialogs( '<header><button aria-label="Toggle menu">Menu</button></header>', report.states );
 				expect( report.states[ 0 ].dialog?.css ).toContain( '.mobile-panel > * + * { margin-top: 16px; }' );
-				expect( wired ).toContain( 'class="dla-dialog dla-dropdown"' );
+				expect( wired ).toContain( 'class="data-blocks-engine-capture-dialog data-blocks-engine-capture-dropdown"' );
 				expect( wired ).toContain( '<button aria-label="Toggle menu"' );
-				expect( wired ).toContain( '<style data-dla-dialog-css="true">.mobile-panel > * + * { margin-top: 16px; }</style>' );
+				expect( wired ).toContain( '<style data-blocks-engine-capture-dialog-css="true">.mobile-panel > * + * { margin-top: 16px; }</style>' );
 				expect( report.states[ 0 ].dialog?.ancestorState?.status ).toBe( 'unverified' );
 				await page.setContent( wired );
 				await page.getByRole( 'button', { name: 'Toggle menu', exact: true } ).click();
-				expect( await page.locator( '[data-dla-dialog-panel]' ).evaluate( element => getComputedStyle( element ).position ) ).toBe( 'absolute' );
+				expect( await page.locator( '[data-blocks-engine-capture-dialog-panel]' ).evaluate( element => getComputedStyle( element ).position ) ).toBe( 'absolute' );
 			} finally {
 				await browser.close();
 			}
@@ -777,7 +777,7 @@ describe( 'captureTriggeredDialogs', () => {
 					document.querySelector( '#site-menu' )?.getAttribute( 'aria-label' ) === 'Close Menu'
 				);
 				expect( await trigger.getAttribute( 'aria-label' ) ).toBe( 'Close Menu' );
-				await page.locator( '[data-dla-dialog-close]' ).click();
+				await page.locator( '[data-blocks-engine-capture-dialog-close]' ).click();
 				expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'false' );
 				expect( await page.evaluate( () => document.activeElement?.id ) ).toBe( 'site-menu' );
 
@@ -1010,16 +1010,16 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( portable ).toContain( '<nav id="desktop-nav">' );
 				await page.setContent( portable );
 				const desktopGuides = page.locator( '#desktop-nav a[href="/guides"]' );
-				expect( await desktopGuides.evaluate( ( link ) => link.closest( '[data-dla-dialog-panel]' ) === null ) ).toBe( true );
+				expect( await desktopGuides.evaluate( ( link ) => link.closest( '[data-blocks-engine-capture-dialog-panel]' ) === null ) ).toBe( true );
 				expect( await desktopGuides.isVisible() ).toBe( true );
 
 				const trigger = page.locator( '#menu-toggle' );
 				await trigger.click();
-				const menuGuides = page.locator( '[data-dla-dialog-panel]:not([hidden]) a[href="/guides"]' );
-				const menuContact = page.locator( '[data-dla-dialog-panel]:not([hidden]) a[href="/contact"]' );
+				const menuGuides = page.locator( '[data-blocks-engine-capture-dialog-panel]:not([hidden]) a[href="/guides"]' );
+				const menuContact = page.locator( '[data-blocks-engine-capture-dialog-panel]:not([hidden]) a[href="/contact"]' );
 				expect( await menuGuides.isVisible() ).toBe( true );
 				expect( await menuContact.isVisible() ).toBe( true );
-				await page.locator( '[data-dla-dialog-close]' ).click();
+				await page.locator( '[data-blocks-engine-capture-dialog-close]' ).click();
 				expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'false' );
 				expect( await menuGuides.isVisible() ).toBe( false );
 				await trigger.click();
@@ -1073,18 +1073,18 @@ describe( 'captureTriggeredDialogs', () => {
 				const portable = wireCapturedDialogs( markup.replace( /<script>[\s\S]*?<\/script>/, '' ), report.states );
 				await page.setContent( portable );
 				const trigger = page.locator( 'header button' );
-				expect( await page.locator( '[data-dla-dialog-panel]' ).count() ).toBe( 1 );
-				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
+				expect( await page.locator( '[data-blocks-engine-capture-dialog-panel]' ).count() ).toBe( 1 );
+				expect( await page.locator( '.data-blocks-engine-capture-dialog a:visible' ).count() ).toBe( 0 );
 				await trigger.click();
-				expect( await page.locator( '.dla-dialog a:visible' ).allTextContents() ).toEqual( [ 'Home', 'About', 'Contact' ] );
-				expect( await page.locator( '.dla-dialog a[aria-current="page"]' ).getAttribute( 'href' ) ).toBe( '/about' );
+				expect( await page.locator( '.data-blocks-engine-capture-dialog a:visible' ).allTextContents() ).toEqual( [ 'Home', 'About', 'Contact' ] );
+				expect( await page.locator( '.data-blocks-engine-capture-dialog a[aria-current="page"]' ).getAttribute( 'href' ) ).toBe( '/about' );
 				await trigger.click();
-				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
+				expect( await page.locator( '.data-blocks-engine-capture-dialog a:visible' ).count() ).toBe( 0 );
 				await trigger.focus();
 				await page.keyboard.press( 'Enter' );
-				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 3 );
+				expect( await page.locator( '.data-blocks-engine-capture-dialog a:visible' ).count() ).toBe( 3 );
 				await page.keyboard.press( 'Escape' );
-				expect( await page.locator( '[data-dla-dialog-panel]' ).evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( true );
+				expect( await page.locator( '[data-blocks-engine-capture-dialog-panel]' ).evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( true );
 			} finally {
 				await browser.close();
 			}

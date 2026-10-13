@@ -58,7 +58,7 @@ the modal's own mount.
 
 Portable wiring binds verified evidence to matching local owners before
 emitting replay. A later owner edit or missing source slot leaves an explicit
-`data-dla-dialog-ancestor-unverified` marker. Source-placed panels keep their
+`data-blocks-engine-capture-dialog-ancestor-unverified` marker. Source-placed panels keep their
 observed root and layout rather than gaining a synthetic absolute-positioned
 wrapper. Closing one control preserves an ancestor still owned by another open
 control; closing the last owner restores the recorded closed state.

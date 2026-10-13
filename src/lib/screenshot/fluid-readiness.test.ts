@@ -36,7 +36,7 @@ describe( 'responsive readiness contract', () => {
 			expect( prepared ).toEqual( [ 390, 768, 1440 ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( await page.locator( '#slide' ).evaluate( element => element.getBoundingClientRect().x ) ).toBeCloseTo( 144, 0 );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 20_000 );
 
@@ -140,7 +140,7 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.locator( '#box' ).evaluate( element => getComputedStyle( element ).paddingTop ) ).toBe( '20px' );
 			expect( await page.locator( '#lazy img' ).evaluate( image => ( image as HTMLImageElement ).complete ) ).toBe( true );
 			expect( await page.locator( '#lazy img' ).evaluate( image => ( image as HTMLImageElement ).naturalWidth ) ).toBe( 40 );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
 
@@ -205,7 +205,7 @@ describe( 'responsive readiness contract', () => {
 			// The 600ms transform write must settle before the restored matrix is checked.
 			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768 ], settleMs: 700 } );
 			expect( await page.locator( '#box' ).evaluate( element => getComputedStyle( element ).transform ) ).toBe( 'matrix(2, 0, 0, 2, 144, 0)' );
-			expect( await page.locator( '#box' ).getAttribute( 'data-dla-fluid-id' ) ).toBeNull();
+			expect( await page.locator( '#box' ).getAttribute( 'data-blocks-engine-capture-fluid-id' ) ).toBeNull();
 		} finally { await page.close(); }
 	}, 20_000 );
 	const railFixture = ( reachableDelayMs: number | null ) => `<style>body{margin:0}.rail{display:flex;overflow-x:scroll;overflow-y:hidden;width:100%}.rail img{flex:none;width:100px;height:100px}</style>

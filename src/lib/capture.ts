@@ -16,7 +16,7 @@ import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
 import { DEFAULT_ROUTE_LIMIT, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
-import { writeCaptureFindings } from './capture-findings.js';
+import { writeSourceFindings } from './source-findings.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 
@@ -478,7 +478,7 @@ export async function captureWebsite(
 	};
 	// Inside website/, so the findings travel with the artifact and the
 	// fidelity reference hashes them with the rest of the capture.
-	writeCaptureFindings( outputDir, { ...result, discoveryDiagnostics: receipt.discoveryDiagnostics ?? [] } );
+	writeSourceFindings( outputDir, { ...result, discoveryDiagnostics: receipt.discoveryDiagnostics ?? [] } );
 	const referenceStartedAt = Date.now();
 	reference.requireUrls(screenshotResult.linkedPageCoverage?.requiredUrls ?? screenshotResult.urls);
 	reference.finalize( captureReceiptPath );

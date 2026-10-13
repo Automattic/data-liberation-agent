@@ -489,7 +489,7 @@ export function segmentedCss(
 			// still declare the same property with a more specific selector (often
 			// one carrying a runtime variable). Give the measured rule enough
 			// specificity to replace that stale fallback at every sampled regime.
-			const declaration = `:is(#dla-fluid-specificity, ${ selector }) { ${ property }: ${ segment.model.css } !important; }`;
+			const declaration = `:is(#data-blocks-engine-capture-fluid-specificity, ${ selector }) { ${ property }: ${ segment.model.css } !important; }`;
 			if ( conditions.length === 0 ) return declaration;
 			return `@media ${ conditions.join( ' and ' ) } {\n${ declaration }\n}`;
 		} )

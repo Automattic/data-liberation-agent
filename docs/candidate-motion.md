@@ -54,12 +54,12 @@ An author may also include a separately implemented, self-contained runtime in
 the HTML artifact, without restoring the captured site's scripts. Pass
 `--portable-motion <recipe.json>` to the normal liberation command, or call
 `authorPortableMotion(runDirectory, recipe)` after capturing an existing run.
-The recipe is a versioned `data-liberation/portable-motion/v1` object with the
+The recipe is a versioned `blocks-engine-capture/portable-motion/v1` object with the
 same `contract` shown above and a `routes` map:
 
 ```json
 {
-  "schema": "data-liberation/portable-motion/v1",
+  "schema": "blocks-engine-capture/portable-motion/v1",
   "contract": { "widths": [390, 768, 1440], "routes": { "/": { "ready": { "source": "body:not(.loading)", "candidate": "[data-motion-ready=true]" }, "text": ["#status"], "canvases": ["#drawing"], "clicks": [{"trigger":"#replay", "target":"#status"}] } } },
   "routes": {
     "/": {

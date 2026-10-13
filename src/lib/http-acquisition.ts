@@ -154,7 +154,7 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 		resources = { manifestPath: 'resources/manifest.json', captured: Object.keys( manifest.resources ).length, failures: manifest.failures.length };
 	}
 	const receipt = {
-		schema: 'data-liberation/http-acquisition/v1', sourceUrl: options.url, profile: options.profile.id,
+		schema: 'blocks-engine-capture/http-acquisition/v1', sourceUrl: options.url, profile: options.profile.id,
 		coverage: { routes: urls.length, requiredDocuments: tasks.length, acquired: documents.filter( document => document.status === 'acquired' ).length,
 			browserRequired: documents.filter( document => document.status === 'browser_required' ).length, failed: documents.filter( document => document.status === 'failed' ).length },
 		durationMs: performance.now() - started,

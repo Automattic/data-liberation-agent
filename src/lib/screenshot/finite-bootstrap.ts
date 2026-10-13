@@ -4,11 +4,11 @@ import { hydrateDisclosureContent } from './dynamic-content.js';
 import { dismissOverlays } from './page-helpers.js';
 import type { CapturedCollectionFilter } from './typed-search-capture.js';
 
-export const FINITE_BOOTSTRAP_SCHEMA = 'data-liberation/finite-bootstrap/v1' as const;
-export const COLLECTION_STATUS_SCHEMA = 'data-liberation/collection-status/v1' as const;
-export const BOOTSTRAP_PROBE = 'dla-finite-probe-7f39b2';
-const NO_MATCH = 'dla-no-match-7f39b2';
-const NO_MATCH_AGAIN = 'dla-no-match-2c81e4';
+export const FINITE_BOOTSTRAP_SCHEMA = 'blocks-engine-capture/finite-bootstrap/v1' as const;
+export const COLLECTION_STATUS_SCHEMA = 'blocks-engine-capture/collection-status/v1' as const;
+export const BOOTSTRAP_PROBE = 'data-blocks-engine-capture-finite-probe-7f39b2';
+const NO_MATCH = 'data-blocks-engine-capture-no-match-7f39b2';
+const NO_MATCH_AGAIN = 'data-blocks-engine-capture-no-match-2c81e4';
 const MAX_BODY_BYTES = 256 * 1024;
 
 export type CollectionCompleteness = 'declared-finite' | 'paginated' | 'undeclared';
@@ -207,7 +207,7 @@ export function deriveObservedStatus(
 			if ( template.includes( '{count}' ) ) binds.push( 'count' );
 			if ( template.includes( '{query}' ) ) binds.push( 'query' );
 			if ( ! binds.length || ( binds.includes( 'count' ) && counts.size < 2 ) || ( binds.includes( 'query' ) && ! hasCase ) ) continue;
-			if ( template.includes( 'dla-no-match' ) || template.includes( 'dla-finite-probe' ) ) continue;
+			if ( template.includes( 'data-blocks-engine-capture-no-match' ) || template.includes( 'data-blocks-engine-capture-finite-probe' ) ) continue;
 			const rendered = positive.map( ( item, index ) => templatizeStatusHtml( present[ index ]!.html, template, item.query, item.count ) );
 			if ( rendered.some( item => ! item ) || new Set( rendered ).size !== 1 ) continue;
 			explained = { html: rendered[ 0 ]!, text: template, binds };
@@ -565,7 +565,7 @@ export async function captureFiniteBootstrap(
 		await readStatus( '', restoredCategory.length );
 		const status = deriveObservedStatus( statusObservations, { emptyHtml: evidence.emptyHtml, universe: evidence.items.length, answerQuery: answerOnly } );
 		const blockedBeforeSentinel = blocked;
-		await page.evaluate( () => fetch( 'https://fixture.invalid/dla-finite-follow-up', { method: 'POST', body: '{"dla":"follow-up"}' } ).catch( () => null ) );
+		await page.evaluate( () => fetch( 'https://fixture.invalid/data-blocks-engine-capture-finite-follow-up', { method: 'POST', body: '{"dla":"follow-up"}' } ).catch( () => null ) );
 		await settle();
 		if ( blocked <= blockedBeforeSentinel ) throw new Error( 'Unmatched data request was not blocked' );
 		const sourceFollowUpsBlocked = blockedBeforeSentinel;

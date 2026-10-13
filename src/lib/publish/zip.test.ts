@@ -16,7 +16,7 @@ afterEach( () => {
  * which would test that tool's age instead of this writer.
  */
 function extractWithPythonZipfile( archive: Buffer ): string {
-	const dir = mkdtempSync( join( tmpdir(), 'dla-zip-' ) );
+	const dir = mkdtempSync( join( tmpdir(), 'liberation-zip-' ) );
 	dirs.push( dir );
 	const archivePath = join( dir, 'archive.zip' );
 	writeFileSync( archivePath, archive );

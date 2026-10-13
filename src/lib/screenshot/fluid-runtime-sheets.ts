@@ -15,7 +15,7 @@ import type { Page } from 'playwright';
 import { learnFluidModel, learnSegmentedFluidModel, segmentedCss, type FluidModelSegment, type GeometrySample } from './fluid-model.js';
 
 /** Marks the learned sibling of a runtime-owned stylesheet. It is source-owned CSS, scoped per document. */
-export const RUNTIME_SHEET_RULES_ATTRIBUTE = 'data-dla-fluid-sheet-rules';
+export const RUNTIME_SHEET_RULES_ATTRIBUTE = 'data-blocks-engine-capture-fluid-sheet-rules';
 /** Offsets a runtime plausibly derives from viewport width; sizes stay with inline learning. */
 const OFFSET_PROPERTIES = [ 'left', 'right', 'top', 'bottom', 'inset-inline-start', 'inset-inline-end', 'inset-block-start', 'inset-block-end' ];
 const STATE_KEY = '__dlaFluidRuntimeSheets';
@@ -46,7 +46,7 @@ export async function bindRuntimeSheets( page: Page ): Promise< void > {
 		const styles = document.querySelectorAll( 'style' );
 		for ( let index = 0; index < styles.length; index++ ) {
 			const style = styles[ index ]!;
-			if ( ! style.getAttributeNames().some( name => name.startsWith( 'data-dla-' ) ) ) baselines.set( style, style.textContent ?? '' );
+			if ( ! style.getAttributeNames().some( name => name.startsWith( 'data-blocks-engine-capture-' ) ) ) baselines.set( style, style.textContent ?? '' );
 		}
 		( window as unknown as Record< string, unknown > )[ key ] = { baselines, widths: [] as Array< Map< Element, Record< string, string[] > > > };
 	}, { key: STATE_KEY } );

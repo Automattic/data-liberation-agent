@@ -18,35 +18,35 @@ import type {
 // rules therefore live in their own layer, declared first in <head> so it is
 // the lowest-priority layer too (see wireCapturedDialogs).
 const DISCLOSURE_BASE_CSS =
-	'@layer dla-disclosure-base{' +
-	':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}' +
-	':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}' +
+	'@layer data-blocks-engine-capture-disclosure-base{' +
+	':where(details.data-blocks-engine-capture-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}' +
+	':where(details.data-blocks-engine-capture-disclosure>summary)::-webkit-details-marker{display:none}' +
 	'}';
 // State-driven dialog rules stay unlayered and keep their specificity so
 // open/closed behavior cannot be overridden. Triggered dialogs keep the
 // authored control and only position the sibling panel. Initial dialogs stay
 // native details because they are not a layout child of the source page.
 const DISCLOSURE_CSS =
-	'details.dla-disclosure[hidden]{display:none!important}' +
-	'details.dla-disclosure:not([open])>.dla-dialog{display:none!important}' +
-	'details.dla-disclosure:not(.dla-dropdown)[open]>.dla-dialog{display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
-	'details.dla-disclosure.dla-dropdown{position:static}' +
-	'details.dla-disclosure.dla-dropdown[open]>.dla-dialog{display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
-	'details.dla-disclosure[open]>.dla-dialog>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
-	'details.dla-initial-dialog>summary{position:fixed;z-index:2147483647;right:1rem;top:1rem}' +
-	'details.dla-initial-dialog:not([open])>summary{display:none!important}' +
-	'[data-dla-dialog-panel][hidden]:not([data-dla-resting-panel]),[data-dla-dialog-close][hidden]{display:none!important}' +
-	'[data-dla-dialog-panel]:not(.dla-dropdown):not([hidden]){display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
-	'[data-dla-dialog-panel].dla-dropdown:not([data-dla-existing-panel]):not([data-dla-observed-placement]):not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
-	'[data-dla-dialog-panel]:not([data-dla-resting-panel]):not([data-dla-observed-placement]):not([hidden])>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
-	'[data-dla-dialog-close]:not([hidden]){position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}';
+	'details.data-blocks-engine-capture-disclosure[hidden]{display:none!important}' +
+	'details.data-blocks-engine-capture-disclosure:not([open])>.data-blocks-engine-capture-dialog{display:none!important}' +
+	'details.data-blocks-engine-capture-disclosure:not(.data-blocks-engine-capture-dropdown)[open]>.data-blocks-engine-capture-dialog{display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
+	'details.data-blocks-engine-capture-disclosure.data-blocks-engine-capture-dropdown{position:static}' +
+	'details.data-blocks-engine-capture-disclosure.data-blocks-engine-capture-dropdown[open]>.data-blocks-engine-capture-dialog{display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
+	'details.data-blocks-engine-capture-disclosure[open]>.data-blocks-engine-capture-dialog>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
+	'details.data-blocks-engine-capture-initial-dialog>summary{position:fixed;z-index:2147483647;right:1rem;top:1rem}' +
+	'details.data-blocks-engine-capture-initial-dialog:not([open])>summary{display:none!important}' +
+	'[data-blocks-engine-capture-dialog-panel][hidden]:not([data-blocks-engine-capture-resting-panel]),[data-blocks-engine-capture-dialog-close][hidden]{display:none!important}' +
+	'[data-blocks-engine-capture-dialog-panel]:not(.data-blocks-engine-capture-dropdown):not([hidden]){display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
+	'[data-blocks-engine-capture-dialog-panel].data-blocks-engine-capture-dropdown:not([data-blocks-engine-capture-existing-panel]):not([data-blocks-engine-capture-observed-placement]):not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
+	'[data-blocks-engine-capture-dialog-panel]:not([data-blocks-engine-capture-resting-panel]):not([data-blocks-engine-capture-observed-placement]):not([hidden])>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
+	'[data-blocks-engine-capture-dialog-close]:not([hidden]){position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}';
 
 const DISCLOSURE_RUNTIME = `(function(){
-function triggers(){return document.querySelectorAll('[data-dla-dialog-trigger]');}
+function triggers(){return document.querySelectorAll('[data-blocks-engine-capture-dialog-trigger]');}
 function panel(trigger){var id=trigger.getAttribute('aria-controls');return id?document.getElementById(id):null;}
-function closeFor(trigger){var id=trigger.getAttribute('aria-controls');return id?document.querySelector('[data-dla-dialog-close="'+id+'"]'):null;}
+function closeFor(trigger){var id=trigger.getAttribute('aria-controls');return id?document.querySelector('[data-blocks-engine-capture-dialog-close="'+id+'"]'):null;}
 function concealed(trigger){var style=getComputedStyle(trigger);if(style.display==='none'||style.visibility==='hidden')return true;var rect=trigger.getBoundingClientRect();return rect.width===0||rect.height===0;}
-function ancestorBindings(trigger){try{return JSON.parse(trigger.getAttribute('data-dla-dialog-ancestor-state')||'[]');}catch(error){return [];}}
+function ancestorBindings(trigger){try{return JSON.parse(trigger.getAttribute('data-blocks-engine-capture-dialog-ancestor-state')||'[]');}catch(error){return [];}}
 function classTokens(value){return (value||'').split(/\\s+/).filter(Boolean);}
 function ancestorAt(trigger,depth){var node=trigger;while(depth--&&node)node=node.parentElement;return node;}
 function applyAncestors(trigger,open){ancestorBindings(trigger).forEach(function(binding){var node=ancestorAt(trigger,binding.depth);if(!node)return;
@@ -61,42 +61,42 @@ function apply(trigger){
   var inactive=concealed(trigger),open=trigger.getAttribute('aria-expanded')==='true'&&!inactive;
   applyAncestors(trigger,open);
   if(!open&&Array.prototype.some.call(triggers(),function(other){return other!==trigger&&panel(other)===target&&!concealed(other)&&other.getAttribute('aria-expanded')==='true';}))return;
-  var captured=trigger.getAttribute('data-dla-dialog-panel-state');
+  var captured=trigger.getAttribute('data-blocks-engine-capture-dialog-panel-state');
   var opened=captured?JSON.parse(captured):null;
   if(open&&opened&&target.__dlaDialogState!==captured){target.innerHTML=opened.html;target.__dlaDialogState=captured;}
-  var existing=target.getAttribute('data-dla-existing-panel');
+  var existing=target.getAttribute('data-blocks-engine-capture-existing-panel');
   if(existing){
     var states=JSON.parse(existing),state=inactive?states.resting:(opened||states.opened);
     ['style','class'].forEach(function(name){if(state[name]===null)target.removeAttribute(name);else target.setAttribute(name,state[name]);});
-    target.toggleAttribute('data-dla-resting-panel',inactive);
+    target.toggleAttribute('data-blocks-engine-capture-resting-panel',inactive);
     target.hidden=inactive?states.resting.hidden:!open;
   }else target.hidden=!open;
   var close=closeFor(trigger);if(close)close.hidden=!open;
 }
-function set(trigger,open){if(open&&concealed(trigger))open=false;if(open)triggers().forEach(function(other){if(other!==trigger&&panel(other)===panel(trigger)&&other.getAttribute('aria-expanded')==='true')set(other,false);});trigger.setAttribute('aria-expanded',open?'true':'false');var label=trigger.getAttribute('data-dla-disclosure-label');if(label)trigger.setAttribute('aria-label',open?'Close '+label:label);apply(trigger);}
+function set(trigger,open){if(open&&concealed(trigger))open=false;if(open)triggers().forEach(function(other){if(other!==trigger&&panel(other)===panel(trigger)&&other.getAttribute('aria-expanded')==='true')set(other,false);});trigger.setAttribute('aria-expanded',open?'true':'false');var label=trigger.getAttribute('data-blocks-engine-capture-disclosure-label');if(label)trigger.setAttribute('aria-label',open?'Close '+label:label);apply(trigger);}
 function toggle(trigger){set(trigger,trigger.getAttribute('aria-expanded')!=='true');}
-function onClick(event){var close=event.target.closest&&event.target.closest('[data-dla-dialog-close]');if(close){event.preventDefault();var id=close.getAttribute('data-dla-dialog-close');var owner=id&&document.querySelector('[data-dla-dialog-trigger][aria-controls="'+id+'"]');if(owner){set(owner,false);owner.focus();}return;}var trigger=event.target.closest&&event.target.closest('[data-dla-dialog-trigger]');if(!trigger||!panel(trigger))return;var nested=event.target.closest('a,button');if(nested&&nested!==trigger)return;event.preventDefault();var was=trigger.getAttribute('aria-expanded')==='true';toggle(trigger);if(was)trigger.focus();}
-function onKey(event){if(event.key==='Escape'){var open=Array.prototype.slice.call(triggers()).filter(function(item){var target=panel(item);return !concealed(item)&&item.getAttribute('aria-expanded')==='true'&&target&&!target.hidden;}).pop();if(open){event.preventDefault();set(open,false);open.focus();return;}var details=Array.prototype.slice.call(document.querySelectorAll('details.dla-initial-dialog[open]')).pop();if(!details)return;event.preventDefault();details.open=false;var summary=details.querySelector(':scope > summary');if(summary)summary.focus();return;}if(event.key!=='Enter'&&event.key!==' ')return;var trigger=event.target.closest&&event.target.closest('[data-dla-dialog-trigger]');if(!trigger||!panel(trigger))return;if(trigger.tagName==='BUTTON'||(trigger.tagName==='A'&&event.key==='Enter'))return;event.preventDefault();toggle(trigger);}
+function onClick(event){var close=event.target.closest&&event.target.closest('[data-blocks-engine-capture-dialog-close]');if(close){event.preventDefault();var id=close.getAttribute('data-blocks-engine-capture-dialog-close');var owner=id&&document.querySelector('[data-blocks-engine-capture-dialog-trigger][aria-controls="'+id+'"]');if(owner){set(owner,false);owner.focus();}return;}var trigger=event.target.closest&&event.target.closest('[data-blocks-engine-capture-dialog-trigger]');if(!trigger||!panel(trigger))return;var nested=event.target.closest('a,button');if(nested&&nested!==trigger)return;event.preventDefault();var was=trigger.getAttribute('aria-expanded')==='true';toggle(trigger);if(was)trigger.focus();}
+function onKey(event){if(event.key==='Escape'){var open=Array.prototype.slice.call(triggers()).filter(function(item){var target=panel(item);return !concealed(item)&&item.getAttribute('aria-expanded')==='true'&&target&&!target.hidden;}).pop();if(open){event.preventDefault();set(open,false);open.focus();return;}var details=Array.prototype.slice.call(document.querySelectorAll('details.data-blocks-engine-capture-initial-dialog[open]')).pop();if(!details)return;event.preventDefault();details.open=false;var summary=details.querySelector(':scope > summary');if(summary)summary.focus();return;}if(event.key!=='Enter'&&event.key!==' ')return;var trigger=event.target.closest&&event.target.closest('[data-blocks-engine-capture-dialog-trigger]');if(!trigger||!panel(trigger))return;if(trigger.tagName==='BUTTON'||(trigger.tagName==='A'&&event.key==='Enter'))return;event.preventDefault();toggle(trigger);}
 function ready(){document.addEventListener('click',onClick);document.addEventListener('keydown',onKey);window.addEventListener('resize',function(){triggers().forEach(apply);});triggers().forEach(apply);}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();
 })();`;
-const LISTBOX_RUNTIME = `(function(){function all(selector,root){return Array.prototype.slice.call((root||document).querySelectorAll(selector));}function panel(trigger){var key=trigger.getAttribute('data-dla-listbox-trigger');return key===null?null:document.querySelector('[data-dla-listbox-panel="'+key+'"]');}function options(surface){return surface?all('[role="option"]',surface):[];}function close(trigger){var surface=panel(trigger);if(!surface)return;surface.hidden=true;trigger.setAttribute('aria-expanded','false');}function open(trigger){var surface=panel(trigger);if(!surface)return;surface.hidden=false;trigger.setAttribute('aria-expanded','true');}function select(trigger,option){var surface=panel(trigger);if(!surface)return;options(surface).forEach(function(item){item.setAttribute('aria-selected',item===option?'true':'false');});var label=option.getAttribute('aria-label')||option.textContent||'';trigger.textContent=label.trim();if(option.id)trigger.setAttribute('aria-activedescendant',option.id);close(trigger);trigger.focus();}function move(trigger,option,delta){var surface=panel(trigger),items=options(surface);if(!surface||!items.length)return;var index=items.indexOf(option);var next=items[Math.max(0,Math.min(items.length-1,index+delta))]||items[0];items.forEach(function(item){item.tabIndex=item===next?0:-1;});next.focus();}function ready(){all('[data-dla-listbox-trigger]').forEach(function(trigger){var surface=panel(trigger);if(!surface)return;trigger.setAttribute('type','button');options(surface).forEach(function(option){option.tabIndex=-1;option.addEventListener('click',function(){select(trigger,option);});option.addEventListener('keydown',function(event){if(event.key==='Escape'){event.preventDefault();close(trigger);trigger.focus();}else if(event.key==='ArrowDown'){event.preventDefault();move(trigger,option,1);}else if(event.key==='ArrowUp'){event.preventDefault();move(trigger,option,-1);}else if(event.key==='Enter'||event.key===' '){event.preventDefault();select(trigger,option);}});});trigger.addEventListener('click',function(){if(trigger.getAttribute('aria-expanded')==='true')close(trigger);else open(trigger);});trigger.addEventListener('keydown',function(event){if(event.key==='Escape'){if(trigger.getAttribute('aria-expanded')==='true'){event.preventDefault();close(trigger);}return;}if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();open(trigger);move(trigger,options(panel(trigger))[0],event.key==='ArrowDown'?1:-1);}else if(event.key==='Enter'||event.key===' '){event.preventDefault();if(trigger.getAttribute('aria-expanded')!=='true')open(trigger);}});});}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();})();`;
+const LISTBOX_RUNTIME = `(function(){function all(selector,root){return Array.prototype.slice.call((root||document).querySelectorAll(selector));}function panel(trigger){var key=trigger.getAttribute('data-blocks-engine-capture-listbox-trigger');return key===null?null:document.querySelector('[data-blocks-engine-capture-listbox-panel="'+key+'"]');}function options(surface){return surface?all('[role="option"]',surface):[];}function close(trigger){var surface=panel(trigger);if(!surface)return;surface.hidden=true;trigger.setAttribute('aria-expanded','false');}function open(trigger){var surface=panel(trigger);if(!surface)return;surface.hidden=false;trigger.setAttribute('aria-expanded','true');}function select(trigger,option){var surface=panel(trigger);if(!surface)return;options(surface).forEach(function(item){item.setAttribute('aria-selected',item===option?'true':'false');});var label=option.getAttribute('aria-label')||option.textContent||'';trigger.textContent=label.trim();if(option.id)trigger.setAttribute('aria-activedescendant',option.id);close(trigger);trigger.focus();}function move(trigger,option,delta){var surface=panel(trigger),items=options(surface);if(!surface||!items.length)return;var index=items.indexOf(option);var next=items[Math.max(0,Math.min(items.length-1,index+delta))]||items[0];items.forEach(function(item){item.tabIndex=item===next?0:-1;});next.focus();}function ready(){all('[data-blocks-engine-capture-listbox-trigger]').forEach(function(trigger){var surface=panel(trigger);if(!surface)return;trigger.setAttribute('type','button');options(surface).forEach(function(option){option.tabIndex=-1;option.addEventListener('click',function(){select(trigger,option);});option.addEventListener('keydown',function(event){if(event.key==='Escape'){event.preventDefault();close(trigger);trigger.focus();}else if(event.key==='ArrowDown'){event.preventDefault();move(trigger,option,1);}else if(event.key==='ArrowUp'){event.preventDefault();move(trigger,option,-1);}else if(event.key==='Enter'||event.key===' '){event.preventDefault();select(trigger,option);}});});trigger.addEventListener('click',function(){if(trigger.getAttribute('aria-expanded')==='true')close(trigger);else open(trigger);});trigger.addEventListener('keydown',function(event){if(event.key==='Escape'){if(trigger.getAttribute('aria-expanded')==='true'){event.preventDefault();close(trigger);}return;}if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();open(trigger);move(trigger,options(panel(trigger))[0],event.key==='ArrowDown'?1:-1);}else if(event.key==='Enter'||event.key===' '){event.preventDefault();if(trigger.getAttribute('aria-expanded')!=='true')open(trigger);}});});}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();})();`;
 
-const CHOICE_GROUP_RUNTIME = `(function(){var configs=__DLA_CHOICE_CONFIG__;function configFor(group){return configs[group.getAttribute('data-dla-choice-group')]||null;}function replay(group,index){var config=configFor(group),html=config&&config.transitions[String(index)];if(!html)return;var holder=document.createElement('div');holder.innerHTML=html;var replacement=holder.firstElementChild;if(!replacement)return;var key=group.getAttribute('data-dla-choice-group');replacement.setAttribute('data-dla-choice-group',key);group.replaceWith(replacement);var next=replacement.querySelector('[data-dla-choice-index="'+index+'"]');if(next&&typeof next.focus==='function')next.focus();}function activate(event){var target=event.target;if(!(target instanceof Element))return;var choice=target.closest('[data-dla-choice-index]');var group=choice&&choice.closest('[data-dla-choice-group]');if(!choice||!group)return;var index=choice.getAttribute('data-dla-choice-index');if(index===null)return;if(event.type==='keydown'){if(event.key!=='Enter'&&event.key!==' ')return;event.preventDefault();}replay(group,index);}function ready(){document.addEventListener('click',activate);document.addEventListener('keydown',activate);}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();})();`;
+const CHOICE_GROUP_RUNTIME = `(function(){var configs=__DLA_CHOICE_CONFIG__;function configFor(group){return configs[group.getAttribute('data-blocks-engine-capture-choice-group')]||null;}function replay(group,index){var config=configFor(group),html=config&&config.transitions[String(index)];if(!html)return;var holder=document.createElement('div');holder.innerHTML=html;var replacement=holder.firstElementChild;if(!replacement)return;var key=group.getAttribute('data-blocks-engine-capture-choice-group');replacement.setAttribute('data-blocks-engine-capture-choice-group',key);group.replaceWith(replacement);var next=replacement.querySelector('[data-blocks-engine-capture-choice-index="'+index+'"]');if(next&&typeof next.focus==='function')next.focus();}function activate(event){var target=event.target;if(!(target instanceof Element))return;var choice=target.closest('[data-blocks-engine-capture-choice-index]');var group=choice&&choice.closest('[data-blocks-engine-capture-choice-group]');if(!choice||!group)return;var index=choice.getAttribute('data-blocks-engine-capture-choice-index');if(index===null)return;if(event.type==='keydown'){if(event.key!=='Enter'&&event.key!==' ')return;event.preventDefault();}replay(group,index);}function ready(){document.addEventListener('click',activate);document.addEventListener('keydown',activate);}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();})();`;
 
 // Delegated activation survives collection replacement and keeps answer content
 // in the authoring tree. The source probe marks single-open groups explicitly.
 const LOCAL_DISCLOSURE_RUNTIME = `(function(){
 function panelFor(trigger){
   var parent=trigger.parentElement,id=trigger.getAttribute('aria-controls');
-  return parent&&Array.prototype.find.call(parent.querySelectorAll('[data-dla-local-disclosure]'),function(panel){return panel.id===id;});
+  return parent&&Array.prototype.find.call(parent.querySelectorAll('[data-blocks-engine-capture-local-disclosure]'),function(panel){return panel.id===id;});
 }
-function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hidden=!open;trigger.setAttribute('aria-expanded',String(open));trigger.querySelectorAll('[data-dla-disclosure-open-class],[data-dla-disclosure-open-style]').forEach(function(icon){['class','style'].forEach(function(name){var value=icon.getAttribute('data-dla-disclosure-'+(open?'open':'closed')+'-'+name);if(value!==null)icon.setAttribute(name,value);});});}
+function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hidden=!open;trigger.setAttribute('aria-expanded',String(open));trigger.querySelectorAll('[data-blocks-engine-capture-disclosure-open-class],[data-blocks-engine-capture-disclosure-open-style]').forEach(function(icon){['class','style'].forEach(function(name){var value=icon.getAttribute('data-blocks-engine-capture-disclosure-'+(open?'open':'closed')+'-'+name);if(value!==null)icon.setAttribute(name,value);});});}
 function activate(event){
   var trigger=event.target.closest&&event.target.closest('[aria-controls]');
   if(!trigger||!panelFor(trigger))return;
   if(event.type==='keydown'){if(trigger.tagName==='BUTTON'||(event.key!=='Enter'&&event.key!==' '))return;event.preventDefault();}
-  var open=trigger.getAttribute('aria-expanded')!=='true',group=trigger.closest('[data-dla-exclusive-disclosures]');
+  var open=trigger.getAttribute('aria-expanded')!=='true',group=trigger.closest('[data-blocks-engine-capture-exclusive-disclosures]');
   if(open&&group)group.querySelectorAll('[aria-controls][aria-expanded="true"]').forEach(function(other){set(other,false);});
   set(trigger,open);
 }
@@ -137,7 +137,7 @@ export function wireCapturedDialogs(
 			state.choiceGroup.coverage === 'complete' &&
 			! state.choiceGroup.transition.htmlTruncated
 	);
-	const localDisclosures = html.includes('data-dla-local-disclosure');
+	const localDisclosures = html.includes('data-blocks-engine-capture-local-disclosure');
 	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 && !localDisclosures ) return html;
 	const $ = cheerio.load( html );
 	let wired = 0;
@@ -160,14 +160,14 @@ export function wireCapturedDialogs(
 		const roots = selectByCapturedSelector( $, descriptor.group.selector, descriptor.group.tag );
 		roots.each( ( _, element ) => {
 			const root = $( element );
-			root.attr( 'data-dla-choice-group', key );
+			root.attr( 'data-blocks-engine-capture-choice-group', key );
 			const choices = descriptor.choices;
 			const candidates = root
 				.find( choices[ 0 ]?.tag || '*' )
 				.filter( ( __, candidate ) => ( $( candidate ).attr( 'role' ) || '' ) === ( choices[ 0 ]?.role || '' ) )
 				.toArray();
 			candidates.slice( 0, choices.length ).forEach( ( candidate, index ) =>
-				$( candidate ).attr( 'data-dla-choice-index', String( index ) )
+				$( candidate ).attr( 'data-blocks-engine-capture-choice-index', String( index ) )
 			);
 		} );
 		if ( roots.length > 0 && Object.keys( transitions ).length > 0 ) choiceConfigs.push( { transitions } );
@@ -175,63 +175,63 @@ export function wireCapturedDialogs(
 	for ( const state of captured ) {
 		const sharedPanelId = reusedPanels.get( state.dialog!.selector );
 		const existingPanel = selectByCapturedSelector( $, state.dialog?.selector, state.dialog?.tag )
-			.not( '[data-dla-dialog-panel], [data-dla-dialog-panel] *' );
+			.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' );
 		const reusePanel = state.dialog?.presentation === 'dropdown' && existingPanel.length === 1;
 		if ( !reusePanel && !sharedPanelId ) removeCapturedDialog( $, state.dialog?.selector );
 		// An earlier exported panel contains a captured snapshot, not another
 		// instance of the observed source control whose ID it happens to copy.
 		const triggers = findTriggers( $, state.trigger )
-			.not( '[data-dla-dialog-panel], [data-dla-dialog-panel] *' );
+			.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );
 			if (state.gallery) {
-				const width = trigger.closest('[data-dla-gallery-capture-width]').attr('data-dla-gallery-capture-width');
+				const width = trigger.closest('[data-blocks-engine-capture-gallery-capture-width]').attr('data-blocks-engine-capture-gallery-capture-width');
 				if (width && Number(width) !== state.gallery.inline.viewport.width) return;
 				const existing = trigger.attr('aria-controls');
-				if (trigger.attr('data-dla-dialog-trigger') && existing) {
+				if (trigger.attr('data-blocks-engine-capture-dialog-trigger') && existing) {
 					const surface = gallerySurface($, trigger), panel = $('#' + cssEscape(existing));
-					const key = trigger.attr('data-dla-dialog-trigger');
-					surface.find('[data-dla-dialog-close]').filter((_, close) => $(close).attr('data-dla-dialog-close') === key && !$(close).closest('[data-dla-dialog-panel]').length).remove();
-					panel.attr('data-dla-dialog-panel', existing);
-					panel.find('[data-dla-dialog-close]').attr('data-dla-dialog-close', existing);
-					trigger.attr('data-dla-dialog-trigger', existing);
+					const key = trigger.attr('data-blocks-engine-capture-dialog-trigger');
+					surface.find('[data-blocks-engine-capture-dialog-close]').filter((_, close) => $(close).attr('data-blocks-engine-capture-dialog-close') === key && !$(close).closest('[data-blocks-engine-capture-dialog-panel]').length).remove();
+					panel.attr('data-blocks-engine-capture-dialog-panel', existing);
+					panel.find('[data-blocks-engine-capture-dialog-close]').attr('data-blocks-engine-capture-dialog-close', existing);
+					trigger.attr('data-blocks-engine-capture-dialog-trigger', existing);
 					surface.append(panel);
 					return;
 				}
 			}
 			if (
-				trigger.closest( 'details.dla-disclosure' ).length ||
-				trigger.attr( 'data-dla-listbox-trigger' ) ||
-				trigger.attr( 'data-dla-dialog-trigger' )
+				trigger.closest( 'details.data-blocks-engine-capture-disclosure' ).length ||
+				trigger.attr( 'data-blocks-engine-capture-listbox-trigger' ) ||
+				trigger.attr( 'data-blocks-engine-capture-dialog-trigger' )
 			) return;
 			if ( state.dialog?.role?.toLowerCase() === 'listbox' || state.trigger.ariaHaspopup.toLowerCase() === 'listbox' ) {
 				const key = String( listboxes++ );
 				const panel = $( '<div hidden></div>' );
-				panel.attr( 'data-dla-listbox-panel', key ).html( state.dialog!.html );
-				trigger.attr( 'data-dla-listbox-trigger', key ).attr( 'type', 'button' ).after( panel );
+				panel.attr( 'data-blocks-engine-capture-listbox-panel', key ).html( state.dialog!.html );
+				trigger.attr( 'data-blocks-engine-capture-listbox-trigger', key ).attr( 'type', 'button' ).after( panel );
 				trigger.attr( 'aria-expanded', 'false' );
 				return;
 			}
 			const label = trigger.attr( 'aria-label' ) || normalizedText( trigger.text() );
 			const dropdown = state.dialog?.presentation === 'dropdown';
 			const observed = resolveObservedAncestors( $, trigger, state.dialog?.ancestorState, dropdown );
-			if ( state.dialog?.ancestorState && !observed ) trigger.attr( 'data-dla-dialog-ancestor-unverified', state.dialog.ancestorState.reason ?? 'portable-owner-mismatch' );
-			if ( observed ) trigger.attr( 'data-dla-dialog-ancestor-state', JSON.stringify( observed.state.ancestors ) );
+			if ( state.dialog?.ancestorState && !observed ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-unverified', state.dialog.ancestorState.reason ?? 'portable-owner-mismatch' );
+			if ( observed ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( observed.state.ancestors ) );
 			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
 			// A source can reuse one dropdown root for different trigger contents.
 			// Retain its single DOM identity while replaying each observed state,
 			// rather than binding every trigger to the first captured contents.
 			if ( dropdown && ( reusePanel || reusedPanelId ) ) {
 				const snapshot = $( state.dialog!.html ).first();
-				trigger.attr( 'data-dla-dialog-panel-state', JSON.stringify( {
+				trigger.attr( 'data-blocks-engine-capture-dialog-panel-state', JSON.stringify( {
 					html: snapshot.html() ?? '',
 					style: ( snapshot.attr( 'style' ) ?? '' ).replace( /(display\s*:[^;!]+)\s*!important/gi, '$1' ),
-					class: `${ snapshot.attr( 'class' ) ?? '' } dla-dropdown`.trim(),
+					class: `${ snapshot.attr( 'class' ) ?? '' } data-blocks-engine-capture-dropdown`.trim(),
 				} ) );
 			}
 			if ( reusedPanelId ) {
-				trigger.attr( 'data-dla-dialog-trigger', reusedPanelId ).attr( 'aria-controls', reusedPanelId ).attr( 'aria-expanded', 'false' );
-				if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
+				trigger.attr( 'data-blocks-engine-capture-dialog-trigger', reusedPanelId ).attr( 'aria-controls', reusedPanelId ).attr( 'aria-expanded', 'false' );
+				if ( label ) trigger.attr( 'data-blocks-engine-capture-disclosure-label', label );
 				if ( !trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', 'menu' );
 				return;
 			}
@@ -239,35 +239,35 @@ export function wireCapturedDialogs(
 			const sourcePlaced = Boolean( observed?.parent );
 			// Modality follows the observed source presentation: a dropdown leaves
 			// the page interactive, so it does not claim aria-modal.
-			const panel = reusePanel || sourcePlaced ? $( state.dialog!.html ).first() : $( `<div class="dla-dialog" role="dialog"${ dropdown ? '' : ' aria-modal="true"' } hidden></div>` );
-			if ( sourcePlaced ) panel.addClass( 'dla-dialog' );
+			const panel = reusePanel || sourcePlaced ? $( state.dialog!.html ).first() : $( `<div class="data-blocks-engine-capture-dialog" role="dialog"${ dropdown ? '' : ' aria-modal="true"' } hidden></div>` );
+			if ( sourcePlaced ) panel.addClass( 'data-blocks-engine-capture-dialog' );
 			if ( reusePanel || sourcePlaced ) {
 				// Snapshot display overrides the source's closed-state rule, but must
 				// still yield to our hidden-state rule on the same (reused) root.
 				panel.attr( 'style', ( panel.attr( 'style' ) ?? '' ).replace( /(display\s*:[^;!]+)\s*!important/gi, '$1' ) );
 				// A shared responsive document can show this same panel without its
 				// phone toggle. In that state, authored CSS and inline styles own it.
-				if ( reusePanel ) panel.attr( 'data-dla-existing-panel', JSON.stringify( {
+				if ( reusePanel ) panel.attr( 'data-blocks-engine-capture-existing-panel', JSON.stringify( {
 					resting: {
 						style: existingPanel.attr( 'style' ) ?? null,
-						class: `${ existingPanel.attr( 'class' ) ?? '' } dla-dropdown`.trim(),
+						class: `${ existingPanel.attr( 'class' ) ?? '' } data-blocks-engine-capture-dropdown`.trim(),
 						hidden: existingPanel.attr( 'hidden' ) !== undefined,
 					},
 					opened: {
 						style: panel.attr( 'style' ) ?? null,
-						class: `${ panel.attr( 'class' ) ?? '' } dla-dropdown`.trim(),
+						class: `${ panel.attr( 'class' ) ?? '' } data-blocks-engine-capture-dropdown`.trim(),
 					},
 				} ) ).attr( 'hidden', '' );
-				if ( sourcePlaced ) panel.attr( 'data-dla-observed-placement', 'true' ).attr( 'hidden', '' );
+				if ( sourcePlaced ) panel.attr( 'data-blocks-engine-capture-observed-placement', 'true' ).attr( 'hidden', '' );
 			}
-			panel.attr( 'id', panelId ).attr( 'data-dla-dialog-panel', panelId );
-			if ( dropdown ) panel.addClass( 'dla-dropdown' );
+			panel.attr( 'id', panelId ).attr( 'data-blocks-engine-capture-dialog-panel', panelId );
+			if ( dropdown ) panel.addClass( 'data-blocks-engine-capture-dropdown' );
 			if ( state.dialog?.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
 			if ( !reusePanel && !sourcePlaced ) panel.html( state.gallery?.lightbox
 				? wireGalleryDialog( state.dialog!.html, state.gallery.lightbox, panelId )
 				: state.dialog!.html );
-			if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
-			trigger.attr( 'data-dla-dialog-trigger', panelId );
+			if ( label ) trigger.attr( 'data-blocks-engine-capture-disclosure-label', label );
+			trigger.attr( 'data-blocks-engine-capture-dialog-trigger', panelId );
 			trigger.attr( 'aria-controls', panelId );
 			trigger.attr( 'aria-expanded', 'false' );
 			if ( ! trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', dropdown ? 'menu' : 'dialog' );
@@ -285,24 +285,24 @@ export function wireCapturedDialogs(
 			else trigger.after( panel );
 			if ( ! dropdown && !state.gallery ) {
 				const close = $( '<button type="button" hidden>Close</button>' );
-				close.attr( 'data-dla-dialog-close', panelId );
+				close.attr( 'data-blocks-engine-capture-dialog-close', panelId );
 				close.attr( 'aria-label', label ? `Close ${ label }` : 'Close' );
 				panel.after( close );
 			}
 			wired++;
 		} );
 	}
-	if ( listboxes > 0 && $( 'script[data-dla-listbox-runtime]' ).length === 0 )
-		$( 'head' ).append( `<script data-dla-listbox-runtime="true">${ LISTBOX_RUNTIME }</script>` );
-	if ( choiceConfigs.length > 0 && $( 'script[data-dla-choice-runtime]' ).length === 0 ) {
+	if ( listboxes > 0 && $( 'script[data-blocks-engine-capture-listbox-runtime]' ).length === 0 )
+		$( 'head' ).append( `<script data-blocks-engine-capture-listbox-runtime="true">${ LISTBOX_RUNTIME }</script>` );
+	if ( choiceConfigs.length > 0 && $( 'script[data-blocks-engine-capture-choice-runtime]' ).length === 0 ) {
 		const config = JSON.stringify( choiceConfigs ).replace( /</g, '\\u003c' );
 		$( 'head' ).append(
-			`<script data-dla-choice-runtime="true">${ CHOICE_GROUP_RUNTIME.replace( '__DLA_CHOICE_CONFIG__', config ) }</script>`
+			`<script data-blocks-engine-capture-choice-runtime="true">${ CHOICE_GROUP_RUNTIME.replace( '__DLA_CHOICE_CONFIG__', config ) }</script>`
 		);
 	}
 	for ( const state of initialDialogs ) {
 		if ( state.status !== 'captured' || !state.dismissal?.verified || state.dialog.htmlTruncated ) continue;
-		const panel = $( '<div class="dla-dialog" role="dialog" aria-modal="true"></div>' );
+		const panel = $( '<div class="data-blocks-engine-capture-dialog" role="dialog" aria-modal="true"></div>' );
 		if ( state.dialog.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
 		panel.html( state.dialog.html );
 		const close = findCloseControl( $, panel as cheerio.Cheerio< Element >, state.dismissal.control );
@@ -313,34 +313,34 @@ export function wireCapturedDialogs(
 		}
 		summary.html( close.html() ?? state.dismissal.control.label ?? 'Close' );
 		close.remove();
-		const details = $( '<details class="dla-disclosure dla-initial-dialog" open></details>' );
+		const details = $( '<details class="data-blocks-engine-capture-disclosure data-blocks-engine-capture-initial-dialog" open></details>' );
 		details.append( summary, panel );
 		$( 'body' ).append( details );
 		wired++;
 	}
-	if ( wired > 0 || $('[data-dla-dialog-trigger]').length > 0 ) {
+	if ( wired > 0 || $('[data-blocks-engine-capture-dialog-trigger]').length > 0 ) {
 		// Styles the source added only once a panel opened (for example utility
 		// classes compiled on demand) travel with the panel they style.
 		const panelCss = [ ...new Set( captured.map( ( state ) => state.dialog?.css ?? '' ).filter( Boolean ) ) ].join( '\n' );
-		if ( panelCss && $( 'style[data-dla-dialog-css]' ).length === 0 ) {
-			$( 'head' ).append( `<style data-dla-dialog-css="true">${ panelCss.replace( /<\/style/gi, '<\\/style' ) }</style>` );
+		if ( panelCss && $( 'style[data-blocks-engine-capture-dialog-css]' ).length === 0 ) {
+			$( 'head' ).append( `<style data-blocks-engine-capture-dialog-css="true">${ panelCss.replace( /<\/style/gi, '<\\/style' ) }</style>` );
 		}
-		if ( $( 'style[data-dla-disclosure]' ).length === 0 ) {
-			$( 'head' ).append( `<style data-dla-disclosure="true">${ DISCLOSURE_CSS }</style>` );
+		if ( $( 'style[data-blocks-engine-capture-disclosure]' ).length === 0 ) {
+			$( 'head' ).append( `<style data-blocks-engine-capture-disclosure="true">${ DISCLOSURE_CSS }</style>` );
 		}
-		if ( $( 'style[data-dla-disclosure-base]' ).length === 0 ) {
+		if ( $( 'style[data-blocks-engine-capture-disclosure-base]' ).length === 0 ) {
 			// First in <head>: a layer's priority is fixed where it is first
 			// declared, so this must precede any author `@layer` statement.
-			$( 'head' ).prepend( `<style data-dla-disclosure-base="true">${ DISCLOSURE_BASE_CSS }</style>` );
+			$( 'head' ).prepend( `<style data-blocks-engine-capture-disclosure-base="true">${ DISCLOSURE_BASE_CSS }</style>` );
 		}
-		if ( $( 'script[data-dla-disclosure-runtime]' ).length === 0 ) {
+		if ( $( 'script[data-blocks-engine-capture-disclosure-runtime]' ).length === 0 ) {
 			$( 'head' ).append(
-				`<script data-dla-disclosure-runtime="true">${ DISCLOSURE_RUNTIME }</script>`
+				`<script data-blocks-engine-capture-disclosure-runtime="true">${ DISCLOSURE_RUNTIME }</script>`
 			);
 		}
 	}
-	if (localDisclosures && $('script[data-dla-local-disclosure-runtime]').length === 0) {
-		$('head').append(`<script data-dla-local-disclosure-runtime="true">${LOCAL_DISCLOSURE_RUNTIME}</script>`);
+	if (localDisclosures && $('script[data-blocks-engine-capture-local-disclosure-runtime]').length === 0) {
+		$('head').append(`<script data-blocks-engine-capture-local-disclosure-runtime="true">${LOCAL_DISCLOSURE_RUNTIME}</script>`);
 	}
 	return $.html();
 }
@@ -387,12 +387,12 @@ export function wireCapturedRouteNavigation( html: string, routes: CapturedRoute
 
 function nextDialogId( $: cheerio.CheerioAPI ): string {
 	let index = 0;
-	while ( $( `#dla-dialog-${ index }` ).length ) index++;
-	return `dla-dialog-${ index }`;
+	while ( $( `#data-blocks-engine-capture-dialog-${ index }` ).length ) index++;
+	return `data-blocks-engine-capture-dialog-${ index }`;
 }
 
 function gallerySurface($: cheerio.CheerioAPI, trigger: cheerio.Cheerio<AnyNode>) {
-	const document = trigger.closest('.data-liberation-desktop-document,.data-liberation-mobile-document,[class*="site-document-variant-"]');
+	const document = trigger.closest('.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document,[class*="site-document-variant-"]');
 	return document.length ? document : $('body');
 }
 
@@ -444,7 +444,7 @@ function resolveObservedAncestors(
 function removeCapturedDialog( $: cheerio.CheerioAPI, selector: string | undefined ): void {
 	if ( ! selector ) return;
 	try {
-		$( selector ).not( 'details.dla-disclosure *, [data-dla-dialog-panel], [data-dla-dialog-panel] *' ).remove();
+		$( selector ).not( 'details.data-blocks-engine-capture-disclosure *, [data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' ).remove();
 	} catch {
 		// Invalid source selectors cannot safely identify a node to remove.
 	}

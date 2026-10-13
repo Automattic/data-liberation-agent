@@ -10,7 +10,7 @@ import type { DialogProbe } from './score.js';
 /**
  * Probe every plausibly-dialog-opening control in document order.
  *
- * Label resolution reads `data-dla-disclosure-label` — the export marks its
+ * Label resolution reads `data-blocks-engine-capture-disclosure-label` — the export marks its
  * static disclosure summaries with the trigger's captured label — because a
  * summary wrapping an icon-only control has no text and only gains an
  * aria-label after its first toggle.
@@ -28,8 +28,8 @@ export async function probeDialogs( page: Page ): Promise< DialogProbe[] > {
 					index,
 					shown: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
 					disabled: element.getAttribute( 'aria-disabled' ) === 'true',
-					label: ( element.getAttribute( 'aria-label' ) || element.getAttribute( 'data-dla-disclosure-label' ) ||
-						element.querySelector( '[data-dla-disclosure-label]' )?.getAttribute( 'data-dla-disclosure-label' ) ||
+					label: ( element.getAttribute( 'aria-label' ) || element.getAttribute( 'data-blocks-engine-capture-disclosure-label' ) ||
+						element.querySelector( '[data-blocks-engine-capture-disclosure-label]' )?.getAttribute( 'data-blocks-engine-capture-disclosure-label' ) ||
 						element.innerText || 'dialog' ).replace( /\s+/g, ' ' ).trim().slice( 0, 40 ),
 				};
 			} )
@@ -81,7 +81,7 @@ export async function probeDialogs( page: Page ): Promise< DialogProbe[] > {
 				.slice(0, 8);
 			const probes = [];
 			for (const trigger of triggers) {
-				const label = (trigger.getAttribute('aria-label') || trigger.getAttribute('data-dla-disclosure-label') || trigger.innerText || 'dialog').replace(/\\s+/g, ' ').trim().slice(0, 40);
+				const label = (trigger.getAttribute('aria-label') || trigger.getAttribute('data-blocks-engine-capture-disclosure-label') || trigger.innerText || 'dialog').replace(/\\s+/g, ' ').trim().slice(0, 40);
 				const before = openCount();
 				const expanded = trigger.getAttribute('aria-expanded') === 'true';
 				const bodyClass = document.body.className;

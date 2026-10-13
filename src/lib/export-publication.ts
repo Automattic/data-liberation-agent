@@ -37,7 +37,7 @@ export const EXPORT_PUBLICATION_OWNED = [
 	{ path: 'capture-receipt.json', kind: 'file', required: true, commit: true },
 ] as const;
 
-export const EXPORT_PUBLICATION_LOCK_SCHEMA = 'data-liberation/export-publication-lock/v1';
+export const EXPORT_PUBLICATION_LOCK_SCHEMA = 'blocks-engine-capture/export-publication-lock/v1';
 export const EXPORT_PUBLICATION_SCRATCH = '.capture-export-html';
 export const EXPORT_PUBLICATION_KILL = 'DLA_EXPORT_PUBLICATION_KILL';
 export const EXPORT_PUBLICATION_HOLD = 'DLA_EXPORT_PUBLICATION_HOLD';

@@ -61,9 +61,9 @@ describe('Wix source collections', () => {
 		const projected = preserveWixCollections(preserveWixCollections(html));
 		const $ = cheerio.load(projected);
 		expect($('body').text()).toBe('Agencies');
-		expect($('script[data-dla-source-evidence="collections"]')).toHaveLength(1);
+		expect($('script[data-blocks-engine-capture-source-evidence="collections"]')).toHaveLength(1);
 		expect($('script').filter((_, script) => !$(script).attr('type'))).toHaveLength(0);
-		expect(JSON.parse($('script[data-dla-source-evidence="collections"]').text()).collections[0].records[0].values.title).toBe('</script><script>globalThis.executed=true</script>');
+		expect(JSON.parse($('script[data-blocks-engine-capture-source-evidence="collections"]').text()).collections[0].records[0].values.title).toBe('</script><script>globalThis.executed=true</script>');
 	});
 
 	it('leaves non-CMS capture unchanged and never manufactures collections from rendered cards', () => {

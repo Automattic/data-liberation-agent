@@ -32,8 +32,8 @@ describe( 'authored portable motion after capture', () => {
 		for ( const directory of directories ) rmSync( directory, { recursive: true, force: true } );
 	} );
 	function capture(): { directory: string; script: string; recipe: PortableMotionRecipe } {
-		const directory = mkdtempSync( join( tmpdir(), 'dla-authored-portable-' ) );
-		const external = mkdtempSync( join( tmpdir(), 'dla-independent-runtime-' ) );
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-authored-portable-' ) );
+		const external = mkdtempSync( join( tmpdir(), 'liberation-independent-runtime-' ) );
 		directories.push( directory, external );
 		for ( const subdir of [ 'html', 'screenshots' ] ) mkdirSync( join( directory, subdir ) );
 		writeFileSync( join( directory, 'html/homepage.html' ), `<!doctype html><html><head><meta charset="utf-8"><title>Animation</title></head><body class="loading"><button id="replay">Replay</button><p id="status">Ready</p><b id="lamp" style="display:block">●</b><canvas id="draw" width="390" height="200"></canvas><script>${ sourceScript }</script></body></html>` );

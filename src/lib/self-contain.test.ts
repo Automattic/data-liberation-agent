@@ -193,7 +193,7 @@ describe( 'self-contain', () => {
 	} );
 
 	it( 'rewrites leftover remotes already written into a website tree', () => {
-		const websiteDir = mkdtempSync( join( tmpdir(), 'dla-self-contain-' ) );
+		const websiteDir = mkdtempSync( join( tmpdir(), 'liberation-self-contain-' ) );
 		mkdirSync( join( websiteDir, 'assets', 'css' ), { recursive: true } );
 		writeFileSync(
 			join( websiteDir, 'index.html' ),

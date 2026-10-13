@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { documentRequestUrl } from './url/route-key.js';
 
-export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v8';
+export const CLEANUP_SCHEMA = 'blocks-engine-capture/source-cleanup/v8';
 export const CLEANUP_CATEGORIES = ['advertisement', 'source-attribution', 'provider-service'] as const;
 export type CleanupCategory = typeof CLEANUP_CATEGORIES[number];
 export interface CleanupRule {
@@ -238,7 +238,7 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
     if (!reclaimed.length) return undefined;
     if (!reclaimedSheet) {
       reclaimedSheet = document.createElement('style');
-      reclaimedSheet.setAttribute('data-dla-reclaimed-space', '');
+      reclaimedSheet.setAttribute('data-blocks-engine-capture-reclaimed-space', '');
       (document.head ?? document.documentElement).append(reclaimedSheet);
     }
     reclaimedSheet.textContent = `:root{${[...reclaimedSpace].map((name) => `${name}:0px!important`).join(';')}}`;
