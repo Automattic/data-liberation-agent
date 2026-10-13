@@ -47,10 +47,12 @@ function panel(trigger){var id=trigger.getAttribute('aria-controls');return id?d
 function closeFor(trigger){var id=trigger.getAttribute('aria-controls');return id?document.querySelector('[data-dla-dialog-close="'+id+'"]'):null;}
 function concealed(trigger){var style=getComputedStyle(trigger);if(style.display==='none'||style.visibility==='hidden')return true;var rect=trigger.getBoundingClientRect();return rect.width===0||rect.height===0;}
 function ancestorBindings(trigger){try{return JSON.parse(trigger.getAttribute('data-dla-dialog-ancestor-state')||'[]');}catch(error){return [];}}
+function classTokens(value){return (value||'').split(/\\s+/).filter(Boolean);}
 function ancestorAt(trigger,depth){var node=trigger;while(depth--&&node)node=node.parentElement;return node;}
 function applyAncestors(trigger,open){ancestorBindings(trigger).forEach(function(binding){var node=ancestorAt(trigger,binding.depth);if(!node)return;
   Object.keys(binding.closed).forEach(function(name){var value=open?binding.opened[name]:binding.closed[name];
     if(!open){var owner=Array.prototype.find.call(triggers(),function(other){return other!==trigger&&!concealed(other)&&other.getAttribute('aria-expanded')==='true'&&ancestorBindings(other).some(function(row){return ancestorAt(other,row.depth)===node&&Object.prototype.hasOwnProperty.call(row.opened,name);});});if(owner){var row=ancestorBindings(owner).find(function(row){return ancestorAt(owner,row.depth)===node&&Object.prototype.hasOwnProperty.call(row.opened,name);});value=row.opened[name];}}
+    if(name==='class'){var target=classTokens(value);classTokens(open?binding.closed[name]:binding.opened[name]).forEach(function(token){if(target.indexOf(token)<0)node.classList.remove(token);});target.forEach(function(token){node.classList.add(token);});if(value===null&&!node.classList.length)node.removeAttribute(name);return;}
     if(value===null)node.removeAttribute(name);else node.setAttribute(name,value);
   });
 });}
@@ -212,7 +214,7 @@ export function wireCapturedDialogs(
 			}
 			const label = trigger.attr( 'aria-label' ) || normalizedText( trigger.text() );
 			const dropdown = state.dialog?.presentation === 'dropdown';
-			const observed = dropdown ? resolveDropdownAncestors( $, trigger, state.dialog?.ancestorState ) : undefined;
+			const observed = resolveObservedAncestors( $, trigger, state.dialog?.ancestorState, dropdown );
 			if ( state.dialog?.ancestorState && !observed ) trigger.attr( 'data-dla-dialog-ancestor-unverified', state.dialog.ancestorState.reason ?? 'portable-owner-mismatch' );
 			if ( observed ) trigger.attr( 'data-dla-dialog-ancestor-state', JSON.stringify( observed.state.ancestors ) );
 			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
@@ -234,7 +236,7 @@ export function wireCapturedDialogs(
 				return;
 			}
 			const panelId = reusePanel && state.dialog?.id ? state.dialog.id : nextDialogId( $ );
-			const sourcePlaced = Boolean( observed );
+			const sourcePlaced = Boolean( observed?.parent );
 			// Modality follows the observed source presentation: a dropdown leaves
 			// the page interactive, so it does not claim aria-modal.
 			const panel = reusePanel || sourcePlaced ? $( state.dialog!.html ).first() : $( `<div class="dla-dialog" role="dialog"${ dropdown ? '' : ' aria-modal="true"' } hidden></div>` );
@@ -276,7 +278,7 @@ export function wireCapturedDialogs(
 				existingPanel.replaceWith( panel );
 				reusedPanels.set( state.dialog!.selector, panelId );
 			}
-			else if ( observed ) {
+			else if ( observed?.parent ) {
 				if ( observed.before ) $( observed.before ).before( panel );
 				else $( observed.parent ).append( panel );
 			}
@@ -394,17 +396,24 @@ function gallerySurface($: cheerio.CheerioAPI, trigger: cheerio.Cheerio<AnyNode>
 	return document.length ? document : $('body');
 }
 
-/** Bind verified source evidence only to the unchanged local portable owner. */
-function resolveDropdownAncestors(
+function classTokens( value: string | null ): string[] {
+	return ( value ?? '' ).split( /\s+/ ).filter( Boolean );
+}
+
+/**
+ * Bind verified source evidence only to the unchanged local portable owner.
+ * A dropdown also needs its proven source slot; a modal keeps its own mount
+ * and replays only the ancestor changes.
+ */
+function resolveObservedAncestors(
 	$: cheerio.CheerioAPI,
 	trigger: cheerio.Cheerio< AnyNode >,
-	state: CapturedDropdownAncestorState | undefined
-): { state: CapturedDropdownAncestorState; parent: Element; before?: Element } | undefined {
-	if ( state?.status !== 'verified' || !state.placement || !Array.isArray( state.ancestors ) || state.ancestors.length > 8 || JSON.stringify( state ).length > 32768 ) return undefined;
+	state: CapturedDropdownAncestorState | undefined,
+	dropdown: boolean
+): { state: CapturedDropdownAncestorState; parent?: Element; before?: Element } | undefined {
+	if ( state?.status !== 'verified' || dropdown && !state.placement || !Array.isArray( state.ancestors ) || state.ancestors.length > 8 || JSON.stringify( state ).length > 32768 ) return undefined;
+	if ( !dropdown && state.ancestors.length === 0 ) return undefined;
 	const parents = trigger.parents().toArray();
-	const parent = parents[ state.placement.parentDepth - 1 ];
-	if ( !parent || !selectByCapturedSelector( $, state.placement.parentSelector, parent.tagName ).toArray().includes( parent ) ) return undefined;
-	if ( ![ 'static', 'relative', 'absolute', 'fixed', 'sticky' ].includes( state.placement.position ) ) return undefined;
 	for ( const row of state.ancestors ) {
 		if ( !row || !row.closed || !row.opened ) return undefined;
 		if ( !Number.isInteger( row.depth ) || row.depth < 1 || row.depth > 8 ) return undefined;
@@ -415,10 +424,18 @@ function resolveDropdownAncestors(
 		for ( const name of names ) {
 			if ( !DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN.test( name ) ) return undefined;
 			const closed = row.closed[ name ], opened = row.opened[ name ];
-			if ( [ closed, opened ].some( value => value !== null && ( typeof value !== 'string' || Buffer.byteLength( value ) > 4096 ) ) ) return undefined;
-			if ( closed !== opened && ( $( node ).attr( name ) ?? null ) !== closed ) return undefined;
+			if ( [ closed, opened ].some( value => value !== null && ( typeof value !== 'string' || Buffer.byteLength( value ) > 2048 ) ) ) return undefined;
+			if ( closed === opened ) continue;
+			// Class is replayed as tokens: the portable owner must still carry the
+			// closed tokens (all of them, when the full list was recorded).
+			const current = $( node ).attr( name ) ?? null;
+			if ( name === 'class' ? !classTokens( closed ).every( token => classTokens( current ).includes( token ) ) : current !== closed ) return undefined;
 		}
 	}
+	if ( !dropdown || !state.placement ) return { state };
+	const parent = parents[ state.placement.parentDepth - 1 ];
+	if ( !parent || !selectByCapturedSelector( $, state.placement.parentSelector, parent.tagName ).toArray().includes( parent ) ) return undefined;
+	if ( ![ 'static', 'relative', 'absolute', 'fixed', 'sticky' ].includes( state.placement.position ) ) return undefined;
 	const beforeNodes = state.placement.beforeSelector ? selectByCapturedSelector( $, state.placement.beforeSelector, undefined ).toArray().filter( ( node ): node is Element => node.type === 'tag' && node.parent === parent ) : [];
 	if ( state.placement.beforeSelector && beforeNodes.length !== 1 ) return undefined;
 	return { state, parent, ...( beforeNodes[ 0 ] ? { before: beforeNodes[ 0 ] } : {} ) };

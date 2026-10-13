@@ -492,7 +492,12 @@ export async function captureTriggeredDialogs(
 
 			const bounded = boundHtml( dialog.html );
 			const addedCss = await rulesAddedSinceActivation( page );
-			const ancestorState = dialog.presentation === 'dropdown' ? await observeDropdownAncestors( page, dialog.selector ) : undefined;
+			// A modal can be shown by a class its runtime adds to an ancestor, such
+			// as an open-menu class on the body. Record that only when opening it
+			// changed an ancestor; a dropdown always reports its evidence.
+			const dropdown = dialog.presentation === 'dropdown';
+			const observedAncestors = await observeDropdownAncestors( page, dialog.selector, dropdown );
+			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 ? observedAncestors : undefined;
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			states.push( {
@@ -968,7 +973,18 @@ async function firstNewVisibleDialog(
 async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string ): Promise< void > {
 	await page.keyboard.press( 'Escape' ).catch( () => undefined );
 	await page.waitForTimeout( 100 );
-	if ( ! ( await panelIntersectsViewport( page, selector ) ) ) return;
+	// Escape can start a closing transition (a fading overlay stays visible for
+	// its duration). Clicking a toggle trigger during it would reopen the panel.
+	// A panel Escape unmounted is closed; return without waiting on a locator.
+	const present = await page.evaluate( async ( { selector, limitMs } ) => {
+		const panel = document.querySelector( selector );
+		if ( ! panel ) return false;
+		await Promise.all( panel.getAnimations( { subtree: true } )
+			.filter( animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity )
+			.map( animation => Promise.race( [ animation.finished.catch( () => undefined ), new Promise( resolve => setTimeout( resolve, limitMs ) ) ] ) ) );
+		return true;
+	}, { selector, limitMs: DIALOG_WAIT_MS } ).catch( () => true );
+	if ( ! present || ! ( await panelIntersectsViewport( page, selector ) ) ) return;
 	const close = page
 		.locator( selector )
 		.first()
