@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findAdapter } from '../adapters/index.js';
 import type { PlatformAdapter } from '../types.js';
@@ -14,14 +14,14 @@ import { actionUrlExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
-import { DEFAULT_ROUTE_LIMIT, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, type RouteLimit } from './route-budget.js';
+import { DEFAULT_ROUTE_LIMIT, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { writeCaptureFindings } from './capture-findings.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
-export { DEFAULT_ROUTE_LIMIT, type RouteLimit } from './route-budget.js';
+export { DEFAULT_ROUTE_LIMIT, DEFAULT_ROUTE_SELECTION, ROUTE_SELECTIONS, type RouteLimit, type RouteSelection } from './route-budget.js';
 export { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
 
 export interface CaptureProgress {
@@ -56,6 +56,18 @@ export interface CaptureOptions {
 	 * `'all'`. Pass `'all'` to capture the whole inventory.
 	 */
 	routeLimit?: RouteLimit;
+	/**
+	 * How the route budget picks routes when it truncates the inventory.
+	 * `'discovery-order'` (default): the entrypoint plus an even spread.
+	 * `'template-coverage'`: fetch each discovered route's server HTML (bounded
+	 * by `TEMPLATE_GROUPING_LIMITS`), group routes by template fingerprint, keep
+	 * one representative per group after the entrypoint, then fill the rest with
+	 * the even spread. It writes `template-groups.json` next to `website/` and
+	 * adds `templateGroups` counts to the receipt. Grouping problems never fail
+	 * the capture: the selection falls back to `'discovery-order'` with one
+	 * `template_grouping_unavailable` discovery diagnostic.
+	 */
+	routeSelection?: import('./route-budget.js').RouteSelection;
 	url: string;
 	outputDir: string;
 	resume?: boolean;
@@ -241,6 +253,7 @@ export async function captureWebsite(
 	if ( options.referenceSample !== undefined && options.referenceSample !== 'all' && ( ! Number.isInteger( options.referenceSample ) || options.referenceSample < 1 ) ) throw new Error( "referenceSample must be a positive integer or 'all'" );
 	const referenceSample = options.referenceSample === 'all' ? undefined : options.referenceSample ?? DEFAULT_REFERENCE_SAMPLE;
 	validateRouteLimit( options.routeLimit );
+	validateRouteSelection( options.routeSelection );
 	validateTimeBudgetMs( options.timeBudgetMs );
 	if ( options.timeBudgetMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'timeBudgetMs applies to browser acquisition only' );
 	validateMaxFileBytes( options.maxFileBytes );
@@ -290,7 +303,7 @@ export async function captureWebsite(
 	// Action URLs leave the inventory before the budget sees it, so they never
 	// spend, and never appear as omitted, failed or missing routes.
 	const excludedActions = new Map< string, { code: string; url: string; reason: string } >();
-	const { selected: urls, omitted } = selectRouteBudget( [
+	const inventoryUrls = dedupeRouteInventory( [
 		sourceUrl,
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
@@ -300,10 +313,16 @@ export async function captureWebsite(
 				if ( action ) excludedActions.set( action.url, action );
 				return ! action;
 			} ),
-	], routeLimit );
+	] );
+	const templateGrouping = options.routeSelection === 'template-coverage'
+		? await groupInventoryTemplates( { sourceUrl, urls: inventoryUrls, routeScope, outputDir, timeBudgetMs: options.timeBudgetMs } )
+		: undefined;
+	const { selected: urls, omitted } = selectRouteBudget( inventoryUrls, routeLimit, templateGrouping?.representatives );
+	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
 		...excludedActions.values(),
+		...( templateGrouping?.diagnostic ? [ templateGrouping.diagnostic ] : [] ),
 		// Request identity, as the linked frontier records it, so a link to an
 		// omitted route is the same diagnostic rather than a second one.
 		...omitted.map( url => ( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: routeBudgetReason( routeLimit! ) } ) ),
@@ -311,7 +330,7 @@ export async function captureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups } );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
 	}
@@ -422,6 +441,7 @@ export async function captureWebsite(
 	}
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	receipt.preview = preview;
+	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
 	process.stderr.write( `[timing] homepage-preview ${ Date.now() - previewStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
@@ -466,6 +486,46 @@ export async function captureWebsite(
 	progress( { phase: 'complete', current: urls.length, total: urls.length } );
 	if ( options.strict && ! complete ) throw new IncompleteCaptureError( result );
 	return result;
+}
+
+/**
+ * Template grouping for `routeSelection: 'template-coverage'`. Advisory: any
+ * failure yields one `template_grouping_unavailable` discovery diagnostic and
+ * no representatives, so the budget falls back to discovery order.
+ */
+async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; outputDir: string; timeBudgetMs?: number } ): Promise< {
+	report?: import('./template-groups.js').TemplateGroupsReport;
+	representatives?: string[];
+	diagnostic?: { code: string; url: string; reason: string };
+} > {
+	const startedAt = Date.now();
+	try {
+		const { buildTemplateGroups, templateRepresentatives, TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
+		// Grouping spends at most a tenth of a capture time budget.
+		const timeBudgetMs = input.timeBudgetMs === undefined ? TEMPLATE_GROUPING_LIMITS.timeBudgetMs : Math.min( TEMPLATE_GROUPING_LIMITS.timeBudgetMs, Math.max( 1, Math.floor( input.timeBudgetMs / 10 ) ) );
+		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: { timeBudgetMs } } );
+		const { coverage } = report;
+		process.stderr.write( `[template-groups] ${ coverage.routes } routes: ${ coverage.fingerprinted } fingerprinted into ${ coverage.groups } groups (${ coverage.singletons } singletons), ${ coverage.unfingerprinted } unfingerprinted, ${ Date.now() - startedAt }ms\n` );
+		return { report, representatives: templateRepresentatives( report ) };
+	} catch ( error ) {
+		const reason = `Template grouping unavailable; routes were selected in discovery order: ${ error instanceof Error ? error.message : String( error ) }`;
+		process.stderr.write( `[template-groups] ${ reason }\n` );
+		return { diagnostic: { code: 'template_grouping_unavailable', url: documentRequestUrl( input.sourceUrl ), reason } };
+	}
+}
+
+/** Record the budget's selection in the report, write it, and return the receipt summary. */
+async function recordTemplateSelection( outputDir: string, report: import('./template-groups.js').TemplateGroupsReport, selected: string[], limit: number | undefined ) {
+	const { templateGroupsSummary, templateSelectionCoverage, writeTemplateGroups } = await import( './template-groups.js' );
+	report.selection = templateSelectionCoverage( report, selected, 'template-coverage', limit );
+	try {
+		mkdirSync( outputDir, { recursive: true } );
+		writeTemplateGroups( outputDir, report );
+	} catch ( error ) {
+		process.stderr.write( `[template-groups] report not written: ${ error instanceof Error ? error.message : String( error ) }\n` );
+	}
+	process.stderr.write( `[template-groups] route selection template-coverage: ${ report.selection.groupsRepresented } of ${ report.groups.length } groups represented in ${ selected.length } routes\n` );
+	return templateGroupsSummary( report );
 }
 
 function readUnresolvedAnchors( outputDir: string ): UnresolvedAnchor[] {

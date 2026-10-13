@@ -46,6 +46,10 @@ const HELP = `
                          homepage plus an even spread of the rest, linked pages
                          counted (browser default 50; http default all). Omitted
                          routes are diagnosed and counted, never failed.
+    --route-selection <mode> How the route budget picks routes: discovery-order
+                         (default, the even spread) or template-coverage (fetch
+                         each route's server HTML, keep one route per template
+                         group first; writes template-groups.json).
     --runtime-route-limit <n> Observe HTTP runtime regions on at most n routes (0-50)
     --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
@@ -240,6 +244,10 @@ if (args.includes('--help')) {
   if (routeLimitArg !== undefined && routeLimit !== 'all' && (routeLimitArg === null || !Number.isSafeInteger(routeLimit) || (routeLimit as number) < 1)) {
     throw new Error('--route-limit requires a positive integer or "all"');
   }
+  const routeSelection = args.includes('--route-selection') ? getArg('--route-selection') : undefined;
+  if (routeSelection !== undefined && routeSelection !== 'discovery-order' && routeSelection !== 'template-coverage') {
+    throw new Error('--route-selection requires discovery-order or template-coverage');
+  }
   const runtimeRouteLimit = httpNumber('--runtime-route-limit');
   const referenceSampleArg = args.includes('--reference-sample') ? getArg('--reference-sample') : undefined;
   const referenceSample = referenceSampleArg === undefined ? undefined : referenceSampleArg === 'all' ? 'all' as const : Number(referenceSampleArg);
@@ -259,6 +267,7 @@ if (args.includes('--help')) {
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
     http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
     routeLimit,
+    routeSelection,
     url,
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),
