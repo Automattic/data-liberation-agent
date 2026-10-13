@@ -7086,6 +7086,50 @@ describe( 'exportWebsiteCapture entrypoint failures', () => {
 		expect( () => exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures } ) )
 			.toThrow( 'Source homepage https://example.test/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
 	} );
+
+	// One pass saved the page and another was redirected. Capture fails such a
+	// route and never schedules the redirect target, so export must report the
+	// recorded failure, not "redirects to <target>, which was not captured".
+	const disagreeingRedirect = () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-redirect-disagreement-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><main><h1>Home</h1><a href="/club">Club</a></main></body></html>' );
+		writeFileSync( join( outputDir, 'html/club.html' ), '<html><body><main><h1>Club</h1></main></body></html>' );
+		writeFileSync( join( outputDir, 'html/about.html' ), '<html><body><main><h1>About</h1></main></body></html>' );
+		return outputDir;
+	};
+	const disagreement = ( url: string ) => ( { url, viewport: 'mobile', stage: 'goto', error: 'Source redirect aliases disagree across viewports' } );
+
+	it( 'reports a homepage whose passes disagreed about a redirect as not captured, with the recorded reason', () => {
+		const outputDir = disagreeingRedirect();
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.test/': { slug: 'homepage', html: 'html/homepage.html', redirectedTo: 'https://example.test/home?lang=fr' },
+			'https://example.test/about/': { html: 'html/about.html', slug: 'about' },
+		} } ) );
+		expect( () => exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/' ) ],
+		} ) ).toThrow( 'Source homepage https://example.test/ was not captured: mobile/goto: Source redirect aliases disagree across viewports' );
+	} );
+
+	it( 'reports any route whose passes disagreed about a redirect as a failed capture, not a redirect alias', () => {
+		const outputDir = disagreeingRedirect();
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.test/': { slug: 'homepage', html: 'html/homepage.html' },
+			'https://example.test/club': { slug: 'club', html: 'html/club.html', redirectedTo: 'https://example.test/club?lang=fr' },
+		} } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/club' ) ],
+		} ), 'utf8' ) );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ 'https://example.test/' ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ {
+			code: 'route_capture_failed',
+			url: 'https://example.test/club',
+			reason: 'mobile/goto: Source redirect aliases disagree across viewports',
+		} ] );
+		expect( receipt.duplicateRoutes ?? [] ).toEqual( [] );
+		expect( existsSync( join( outputDir, 'website', '_redirects' ) ) ).toBe( false );
+	} );
 } );
 
 describe( 'exportWebsiteCapture per-route containment', () => {

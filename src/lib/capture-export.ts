@@ -1216,7 +1216,12 @@ function buildExportCapture(
 				excludedRoutes.push( url );
 				continue;
 			}
-			if ( entry.redirectedTo ) {
+			// Capture treats a redirect as an alias, and schedules its target, only
+			// when the route recorded no failure. A route whose passes disagreed
+			// (one saved the page, another was redirected) is a failed capture:
+			// it is reported with its recorded reasons below, like any route
+			// without HTML, not as a redirect to a target nobody scheduled.
+			if ( entry.redirectedTo && ! routeFailureReasons.has( url ) ) {
 				if ( !routeInScope( entry.redirectedTo, options.routeScope ) ) {
 					excludedRoutes.push( url );
 					routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source redirect outside the adapter-owned site route scope' } );
@@ -1240,7 +1245,7 @@ function buildExportCapture(
 				routeCaptureDiagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
 				continue;
 			}
-			if ( ! entry.html ) {
+			if ( ! entry.html || entry.redirectedTo ) {
 				const reason = routeFailureReasons.get( url )?.map( failure => failure.reason ).join( '; ' )
 					?? 'capture completed without producing page HTML';
 				if ( failuresAreAbsentDocument( options.failures, url ) ) {
