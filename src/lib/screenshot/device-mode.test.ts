@@ -139,6 +139,11 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			expect( menu ).toMatchObject( { status: 'captured', dialog: { id: 'drawer' } } );
 			expect( menu!.dialog!.html ).toContain( 'About' );
 			expect( JSON.stringify( home.interactions ) ).not.toContain( 'data-lib-desktop-control' );
+			// The shared header carries the phone-only menu to every route whose header matches.
+			const about = run.entries[ `${ origin }/responsive/about` ]!;
+			expect( about.sharedChrome ).toMatchObject( { chromeReused: true } );
+			expect( about.interactions?.states.find( state => state.trigger.label === 'Menu' ) ).toMatchObject( { status: 'captured', dialog: { id: 'drawer' }, reusedFrom: `${ origin }/responsive/` } );
+			expect( run.result.sharedChrome?.routes ).toMatchObject( { checked: 2, reused: 2, probedInPlace: [] } );
 		} );
 
 		it( 'exports a single document that reflows at 390 px and opens the captured menu', async () => {
@@ -155,6 +160,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				await phone.goto( site.url );
 				expect( await phone.evaluate( () => [ ...document.querySelectorAll( '.col' ) ].map( col => col.getBoundingClientRect().width ) ) ).toEqual( [ 390, 390 ] );
 				expect( await phone.locator( '.links' ).isVisible() ).toBe( false );
+				await phone.getByRole( 'button', { name: 'Menu' } ).click();
+				await expect.poll( () => phone.getByRole( 'dialog', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
+				// A route other than the entrypoint opens the same menu.
+				await phone.goto( new URL( 'about/', site.url ).href );
 				await phone.getByRole( 'button', { name: 'Menu' } ).click();
 				await expect.poll( () => phone.getByRole( 'dialog', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
 				const desktop = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
