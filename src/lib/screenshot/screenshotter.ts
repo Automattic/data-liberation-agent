@@ -4,7 +4,7 @@ import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
-import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
+import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -790,16 +790,25 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// (and transient 503s). Without backoff one throttle cascades into wholesale
 	// failure (see DISCOVERIES 2026-06-04 — getsnooz's 168-op cascade). Retry the
 	// retryable statuses + transient nav errors, honoring Retry-After, before
-	// recording the failure. Non-retryable 4xx fail immediately.
+	// recording the failure. Non-retryable 4xx fail immediately. A timeout is
+	// different: repeating the same budget against a slow origin only repeats
+	// the same timeout, so it gets exactly one retry with a longer budget, and
+	// that slow retry is the last attempt whatever its outcome.
 	const RETRYABLE_STATUS = new Set( [ 429, 503 ] );
 	const MAX_NAV_ATTEMPTS = 4;
+	let budgetMs: number = SOURCE_NAVIGATION_LIMITS.timeoutMs;
+	let timedOut: { budgetMs: number; error: string } | undefined;
 	let navigated = false;
+	let attempt = 0;
+	const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut;
 	let redirectedTo: string | undefined;
 	let navigationUrl = url;
-	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
+	while ( ++attempt <= MAX_NAV_ATTEMPTS ) {
 		try {
 			args.phases?.enter( 'navigate' );
-			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope});
+			const started = Date.now();
+			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope, timeoutMs: budgetMs});
+			const answeredMs = Date.now() - started;
 			if (navigation.boundary) {
 				const boundary = storeExternalBoundary(outputDir, navigation.boundary, viewport.width, args.browserProfile ?? {isMobile: false, hasTouch: false});
 				entry.sourceOutcomes = [...(entry.sourceOutcomes ?? []), boundary];
@@ -815,7 +824,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				: undefined);
 			const status = response ? response.status() : 0;
 			if ( status >= 400 ) {
-				if ( RETRYABLE_STATUS.has( status ) && attempt < MAX_NAV_ATTEMPTS ) {
+				if ( RETRYABLE_STATUS.has( status ) && mayRetry() ) {
 					await navSleep( navBackoffMs( attempt, response?.headers()[ 'retry-after' ] ) );
 					continue;
 				}
@@ -829,11 +838,22 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			}
 			// The document arrived; capture's own bounded readiness takes over
 			// from here, so a pending subresource is evidence, not a failure.
-			if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ SOURCE_NAVIGATION_LIMITS.timeoutMs }ms navigation budget; subresources were still pending` } );
+			if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ budgetMs }ms navigation budget; subresources were still pending` } );
+			if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 			navigated = true;
 			break;
 		} catch ( err ) {
-			if ( attempt < MAX_NAV_ATTEMPTS && !(err instanceof SourceNavigationError) ) {
+			if ( isNavigationTimeout( err ) ) {
+				if ( mayRetry() ) {
+					timedOut = { budgetMs, error: err instanceof Error ? err.message.split( '\n' )[ 0 ]! : String( err ) };
+					budgetMs = maxSourceNavigationBudgetMs();
+					await navSleep( navBackoffMs( attempt ) );
+					continue;
+				}
+				fail( 'goto', err, attempt );
+				return;
+			}
+			if ( mayRetry() && !(err instanceof SourceNavigationError) ) {
 				await navSleep( navBackoffMs( attempt ) );
 				continue;
 			}
@@ -1695,13 +1715,24 @@ class ComparisonUnavailable extends Error {
 	constructor( message: string, readonly same: boolean ) { super( message ); }
 }
 
+/**
+ * Both identities of a comparison failed alike, so the route has no phone
+ * document to keep. A timeout never counts: the check navigates once at the
+ * base budget, while capture retries a slow source with a longer one, so a
+ * slow route can still deliver both documents.
+ */
+export function comparisonFailedAlike( desktop: unknown, phone: unknown ): boolean {
+	const message = ( reason: unknown ) => String( reason instanceof Error ? reason.message : reason ).replace( /^the (desktop|mobile) /, 'the ' );
+	return ! isNavigationTimeout( desktop ) && ! isNavigationTimeout( phone ) && message( desktop ) === message( phone );
+}
+
 /** Compare the desktop and phone identities of one route, loaded the same way. */
 async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'check', contexts: BrowserContext[] ) {
 	const [ desktopLoad, phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts ), loadForComparison( args, args.phone, 'mobile', mode, contexts ) ] );
 	if ( desktopLoad.status === 'rejected' || phoneLoad.status === 'rejected' ) {
 		const reason = ( result: PromiseSettledResult< unknown > ) => result.status === 'rejected' ? String( result.reason instanceof Error ? result.reason.message : result.reason ).replace( /^the (desktop|mobile) /, 'the ' ) : undefined;
 		// failure-class: operational
-		throw new ComparisonUnavailable( reason( desktopLoad ) ?? reason( phoneLoad )!, desktopLoad.status === 'rejected' && phoneLoad.status === 'rejected' && reason( desktopLoad ) === reason( phoneLoad ) );
+		throw new ComparisonUnavailable( reason( desktopLoad ) ?? reason( phoneLoad )!, desktopLoad.status === 'rejected' && phoneLoad.status === 'rejected' && comparisonFailedAlike( desktopLoad.reason, phoneLoad.reason ) );
 	}
 	const desktop = desktopLoad.value;
 	const phone = phoneLoad.value;
