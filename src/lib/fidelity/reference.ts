@@ -56,7 +56,7 @@ export interface ReferenceEntry {
 	document?: ReferenceArtifact;
 }
 export interface FidelityReference {
-	schema: 'data-liberation/fidelity-reference/v1';
+	schema: 'blocks-engine-capture/fidelity-reference/v1';
 	captureId: string;
 	sourceUrl: string;
 	createdAt: string;
@@ -255,7 +255,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			const unfrozenRoutes = scopeSourceUrls.filter( url => ! sampledUrls.has( url ) ).length;
 			if ( sampleLimit !== undefined && unfrozenRoutes > 0 ) unknowns.push( `${ unfrozenRoutes } of ${ scopeSourceUrls.length } routes have no frozen reference because the caller bounded the reference sample.` );
 			const manifest: FidelityReference = {
-				schema: 'data-liberation/fidelity-reference/v1', captureId, sourceUrl, createdAt: new Date().toISOString(),
+				schema: 'blocks-engine-capture/fidelity-reference/v1', captureId, sourceUrl, createdAt: new Date().toISOString(),
 				receipt: { path: relative( directory, receiptPath ), sha256: digest( receiptBytes ) }, capture: files,
 				scope: { sourceUrls: scopeSourceUrls, widths: cells.size ? [ ...new Set( [ ...cells.values() ].map( cell => cell.viewport ) ) ].sort( ( a, b ) => a - b ) : [ ...REFERENCE_WIDTHS ], states: [ 'baseline' ], cells: [ ...cells.values() ],
 					...( sampleLimit !== undefined ? { referenceSample: sampleLimit } : {} ), unknowns },

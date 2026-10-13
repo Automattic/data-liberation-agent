@@ -22,15 +22,15 @@ import { captureFluidBaseline } from './fluid-baseline.js';
 import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
-const ID_ATTRIBUTE = 'data-dla-fluid-id';
+const ID_ATTRIBUTE = 'data-blocks-engine-capture-fluid-id';
 /** Keys segmented stylesheet rules to their element; survives serialization. */
-const SEGMENT_ATTRIBUTE = 'data-dla-fluid-segment';
+const SEGMENT_ATTRIBUTE = 'data-blocks-engine-capture-fluid-segment';
 /** How far a container percentage may miss the size it replaced at the capture width. */
 const CONTAINER_VERIFY_TOLERANCE_PX = 2;
 /** Marks the stylesheet block carrying segmented rules as capture-owned. */
-export const SEGMENT_STYLE_ATTRIBUTE = 'data-dla-fluid-rules';
+export const SEGMENT_STYLE_ATTRIBUTE = 'data-blocks-engine-capture-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
-export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-dla-fluid-rules\b/i;
+export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-blocks-engine-capture-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
 const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left' ] as const;
 
@@ -168,8 +168,8 @@ async function learnFluidGeometry(
 		( state, { attribute, properties, prefix } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
-				const ignorePadding = element.hasAttribute( 'data-dla-fluid-ignore-padding' );
-				element.removeAttribute( 'data-dla-fluid-ignore-padding' );
+				const ignorePadding = element.hasAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' );
+				element.removeAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' );
 				// Match the declarations the measurement pass can actually learn.
 				// A substring match also tagged min-height/max-width and percentages,
 				// which produced no observations but still paid for the whole sweep.

@@ -857,8 +857,8 @@ export async function observePage(
 				animations,
 				responsiveAnimations,
 				entranceTransitions: ( window as typeof window & { __dlaEntrances?: { transitions: string[] } } ).__dlaEntrances?.transitions ?? [],
-				entranceLosses: Array.from( document.querySelectorAll( '[data-dla-viewport-entrance-loss]' ) ).filter( element => element.getClientRects().length )
-					.map( element => `${ element.id || 'anonymous target' }: ${ element.getAttribute( 'data-dla-viewport-entrance-loss' ) }` ),
+				entranceLosses: Array.from( document.querySelectorAll( '[data-blocks-engine-capture-viewport-entrance-loss]' ) ).filter( element => element.getClientRects().length )
+					.map( element => `${ element.id || 'anonymous target' }: ${ element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) }` ),
 				docWidth: document.documentElement.scrollWidth,
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
 				hashTargets,
@@ -1011,7 +1011,7 @@ async function verifyCapturedRouteTabs(
 				if (!siblings.every(sibling => names.includes(sibling))) continue;
 				const link = members.find(member => member.tagName === 'A' && member.hasAttribute('href') && name(member) === label && visible(member));
 				if (!link) continue;
-				link.setAttribute('data-dla-check-route-tab', '');
+				link.setAttribute('data-blocks-engine-capture-check-route-tab', '');
 				return link.href;
 			}
 			return null;
@@ -1035,7 +1035,7 @@ async function verifyCapturedRouteTabs(
 			continue;
 		}
 		try {
-			await page.locator( '[data-dla-check-route-tab]' ).click( { timeout: 2_000 } );
+			await page.locator( '[data-blocks-engine-capture-check-route-tab]' ).click( { timeout: 2_000 } );
 			if ( canonicalRoutePath( new URL( page.url() ).pathname ) !== target.route )
 				failures.push( `route tab ${ label } @ ${ width }px landed on ${ new URL( page.url() ).pathname }, expected ${ target.route }` );
 		} catch {
@@ -1054,7 +1054,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	const log = options.log ?? ( () => {} );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
-	const motionPages = receipt.sourceInteractivity?.schema === 'data-liberation/source-interactivity/v1'
+	const motionPages = receipt.sourceInteractivity?.schema === 'blocks-engine-capture/source-interactivity/v1'
 		&& receipt.sourceInteractivity.path === 'source-interactivity.json'
 		? JSON.parse( readFileSync( join( dirname( receiptPath ), receipt.sourceInteractivity.path ), 'utf8' ) ) as { pages?: Array< { url: string; status: string; signals: string[] } > }
 		: undefined;
@@ -1375,10 +1375,10 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		// to support, and a missing file cannot say that.
 		writeFileSync(
 			join(evidenceDir, 'overlay-evidence.json'),
-			JSON.stringify({ schema: 'data-liberation/compare-overlays/v1', completed: comparisonCompleted, kinds: COMPARED_OVERLAY_KINDS, observations: overlays }, null, 2)
+			JSON.stringify({ schema: 'blocks-engine-capture/compare-overlays/v1', completed: comparisonCompleted, kinds: COMPARED_OVERLAY_KINDS, observations: overlays }, null, 2)
 		);
 		if ( motionContract ) writeFileSync( join( evidenceDir, 'candidate-motion-evidence.json' ),
-			JSON.stringify( { schema: 'data-liberation/candidate-motion/v1', completed: comparisonCompleted, observations: motionEvidence }, null, 2 ) );
+			JSON.stringify( { schema: 'blocks-engine-capture/candidate-motion/v1', completed: comparisonCompleted, observations: motionEvidence }, null, 2 ) );
 	}
 
 	const summary = scoreReport( scores );
@@ -1434,7 +1434,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	let invalid: string | undefined;
 	try {
 		manifest = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
-		if ( manifest.schema !== 'data-liberation/fidelity-reference/v1' || manifest.sourceUrl !== receipt.source?.url || ! manifest.captureId ) throw new Error( 'Invalid reference schema or source identity' );
+		if ( manifest.schema !== 'blocks-engine-capture/fidelity-reference/v1' || manifest.sourceUrl !== receipt.source?.url || ! manifest.captureId ) throw new Error( 'Invalid reference schema or source identity' );
 		if ( manifest.scope.cells ) {
 			const keys = new Set<string>();
 			for ( const cell of manifest.scope.cells ) {

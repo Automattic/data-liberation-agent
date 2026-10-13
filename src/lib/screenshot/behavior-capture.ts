@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 
-export const SOURCE_BEHAVIOR_SCHEMA = 'data-liberation/source-behavior/v1';
+export const SOURCE_BEHAVIOR_SCHEMA = 'blocks-engine-capture/source-behavior/v1';
 
 export interface BehaviorTrace {
 	text: Record< string, Array< { at: number; text: string } > >;

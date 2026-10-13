@@ -10,7 +10,7 @@ import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
  * added under a new vocabulary version; removing or repurposing one is a
  * breaking change, because someone's acceptance policy is keyed on it.
  */
-export const SOURCE_CAPABILITY_VOCABULARY = 'data-liberation/source-capability-vocabulary/v1';
+export const SOURCE_CAPABILITY_VOCABULARY = 'blocks-engine-capture/source-capability-vocabulary/v1';
 export const SOURCE_CAPABILITIES = ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'] as const;
 /**
  * HTML document ceiling for inspect. Page-builder homepages routinely exceed

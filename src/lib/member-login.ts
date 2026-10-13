@@ -13,7 +13,7 @@
  * So capture does not invent a target, and does not change the element: a
  * button stays a button (focusable, styled, with its icon and label). It only
  * records which controls are member sign-in entry points, as a class
- * (`dla-member-login-<provider>`) plus a `data-dla-member-login="<provider>"`
+ * (`data-blocks-engine-capture-member-login-<provider>`) plus a `data-blocks-engine-capture-member-login="<provider>"`
  * attribute. The class is the durable marker: block conversion keeps classes
  * on buttons and links where it drops data attributes. A destination that has
  * a login (WordPress: `wp_login_url()`) points every marked control at it; one
@@ -21,9 +21,9 @@
  */
 
 /** Marks a member sign-in entry point; the value names the provider. */
-export const MEMBER_LOGIN_ATTRIBUTE = 'data-dla-member-login';
+export const MEMBER_LOGIN_ATTRIBUTE = 'data-blocks-engine-capture-member-login';
 /** Class prefix for the same marker; the provider id is appended. */
-export const MEMBER_LOGIN_CLASS_PREFIX = 'dla-member-login-';
+export const MEMBER_LOGIN_CLASS_PREFIX = 'data-blocks-engine-capture-member-login-';
 
 export interface MemberLoginControls {
 	/** Lower-case provider id written into the marker, such as `wix`. */

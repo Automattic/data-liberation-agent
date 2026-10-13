@@ -131,7 +131,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			const page = await browser.newPage();
 			await wixEmbedPage( page, { mapHasLocation: true } );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
-			const notes = page.locator( '[data-dla-unported-embed="wix"]' );
+			const notes = page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' );
 			expect( await notes.count() ).toBe( 1 );
 			expect( await notes.first().textContent() ).toBe( wixEmbedNote( 'PDF File Viewer' ) );
 			expect( await notes.first().evaluate( ( note ) => [ note.getBoundingClientRect().width, note.getBoundingClientRect().height ] ) ).toEqual( [ 180, 180 ] );
@@ -152,7 +152,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			await wixEmbedPage( page, { mapHasLocation: false } );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
 			expect( await page.locator( 'iframe[title="Google Maps"]' ).count() ).toBe( 0 );
-			expect( await page.locator( '.wixui-google-map [data-dla-unported-embed="wix"]' ).textContent() ).toBe(
+			expect( await page.locator( '.wixui-google-map [data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe(
 				wixEmbedNote( 'Google Maps' )
 			);
 		} finally {

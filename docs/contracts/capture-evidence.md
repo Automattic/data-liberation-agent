@@ -1,73 +1,84 @@
-# Capture evidence names: producer-neutral emission
+# Capture evidence names
 
-Capture writes evidence into the exported HTML: dialog wiring, device documents, collections, galleries, glyph colour and more. Blocks Engine and Static Site Importer read it. Under [#787](https://github.com/Automattic/data-liberation-agent/issues/787) (part of [#761](https://github.com/Automattic/data-liberation-agent/issues/761)) each consumer owns its input contract, so Blocks Engine owns these names in its own namespace and any capture producer can write them.
+Capture writes evidence into the exported site and its sidecars: dialog wiring, device documents, collections, galleries, glyph colour and more. Blocks Engine and Static Site Importer read it. Under [#787](https://github.com/Automattic/data-liberation-agent/issues/787) (part of [#761](https://github.com/Automattic/data-liberation-agent/issues/761)), the consumers own their input contracts. Blocks Engine publishes this vocabulary as its producer-neutral capture-evidence contract: Automattic/blocks-engine `php-transformer/docs/contracts/capture-evidence.md`, with the constants in `Contract\CaptureEvidence`. Any capture producer can write it, and this producer writes only these names.
 
-## Rule
+## Namespace
 
-One lexical rule maps every producer name onto the consumer name. Values and semantics are unchanged.
+| What | Form |
+|---|---|
+| Attributes | `data-blocks-engine-capture-<name>` |
+| Classes | `data-blocks-engine-capture-<name>` |
+| Element ids and probe tokens | `data-blocks-engine-capture-<name>` |
+| Id suffix of a non-default document variant's copy of a shared source id | `<id>--data-blocks-engine-capture-<variant>` |
+| Sidecar schemas | `blocks-engine-capture/<name>/v<n>` |
 
-| Producer name | Consumer name | Applies to |
+Classes use the attribute prefix on purpose. Blocks Engine treats `blocks-engine-*` classes as classes the engine generated: conversion strips them from source identity, skips them for naming, and does not project their styles. A capture class therefore has to stay outside that namespace.
+
+## One table
+
+`src/lib/capture-vocabulary.ts` holds the vocabulary:
+
+- `CAPTURE_EVIDENCE_PREFIX`, `CAPTURE_EVIDENCE_ID_SUFFIX` and `CAPTURE_SCHEMA_NAMESPACE`.
+- `CAPTURE_EVIDENCE_NAMES`: every name, grouped by family and marked attribute, class, id or token.
+- `CAPTURE_EVIDENCE_FAMILIES`: the names whose tail is generated.
+- `CAPTURE_SCHEMAS`: every sidecar schema.
+- `CAPTURE_RUNTIME_SHA256`: the runtime digests below.
+
+Emitters spell the full names, because many of them sit inside runtime script and stylesheet strings. Live-page code may also use the `dataset.blocksEngineCapture<Name>` form of an attribute. `src/lib/capture-vocabulary.test.ts` keeps the table and the source identical:
+- every name the source spells is in the table;
+- every name in the table is spelled by the source;
+- every schema the source writes is listed;
+- every name Blocks Engine publishes, and every name Static Site Importer reads, is covered.
+
+| Family | Names (after `data-blocks-engine-capture-`) |
+|---|---|
+| Dialogs | attributes `dialog-trigger`, `dialog-panel`, `dialog-close`, `dialog-panel-state`, `dialog-ancestor-state`, `dialog-ancestor-unverified`, `dialog-css`, `existing-panel`, `observed-placement`, `resting-panel`; classes `dialog`, `dropdown`, `initial-dialog`; ids `dialog-<n>` |
+| Disclosures | `disclosure`, `disclosure-base` (attribute and cascade layer), `disclosure-label`, `disclosure-runtime`, `disclosure-open-<svg attribute>`, `disclosure-closed-<svg attribute>`, `local-disclosure`, `local-disclosure-runtime`, `exclusive-disclosures`, `hydrated-disclosure`; class `disclosure`; ids `disclosure-panel-<n>` |
+| Listbox, choice groups | `listbox-trigger`, `listbox-panel`, `listbox-runtime`, `choice-group`, `choice-index`, `choice-runtime` |
+| Documents | attributes `document-scope`, `device-document`, `device-style`, `device-body`, `device-selection`, `device-visibility`, `device-unavailable`, `document-unavailable`, `selected-document`, `selected-viewport`, `source-media`; classes `desktop-document`, `mobile-document`, `<profile>-document`, `desktop-only`, `mobile-only`; id suffix `--data-blocks-engine-capture-mobile` |
+| Responsive assembly | `responsive-source`, `responsive-fragment`, `responsive-fragments`, `embedded-responsive`, `embedded-document`, `anchor-fragment`, `anchor-target`, `anchor-source-id`, `anchor-alias`, `anchor-unresolved`, `fluid-id`, `fluid-segment`, `fluid-rules`, `fluid-sheet-rules`, `fluid-ignore-padding`, `geometry-id`, `visual-iframe-src`, `visual-iframe-width`, `visual-iframe-height`; classes `responsive-<hash>`, `responsive-class-<hash>`, `responsive-counterpart-<n>`, `embedded-<digest>-<document>`, `shared-<hash>`; id `fluid-specificity` |
+| Collections | `collection`, `collection-item`, `collection-members`, `collection-category`, `collection-category-control`, `collection-index`, `collection-mode`, `collection-field`, `collection-empty`, `collection-status`, `collection-runtime`, `collection-visibility`, `status-template`, `status-hide-zero`; tokens `no-match`, `no-match-7f39b2`, `no-match-2c81e4`, `finite-probe`, `finite-probe-7f39b2`, `finite-follow-up` |
+| Galleries, slideshows | `gallery`, `gallery-direction`, `gallery-index`, `gallery-initial`, `gallery-sequence`, `gallery-slot`, `gallery-stage`, `gallery-source`, `gallery-frame`, `gallery-image`, `gallery-full-image`, `gallery-text`, `gallery-display`, `gallery-close`, `gallery-capture-width`, `gallery-runtime`, `gallery-visibility`, `captured-slide`, `captured-slideshow`, `captured-slide-count`, `advertised-slide-count`, `expected-slide-count`, `capture-error`, `pager-stage`, `pager-control`, `video-frame`, `squarespace-video`; classes `slideshow` (also the keyframes name), `slideshow-track`; ids `gallery-<n>`, `slideshow-css`, `captured-slideshow-css`, `wix-captured-slideshow-css` |
+| Presentation, motion | `glyph-color` ([glyph-color.md](glyph-color.md)), `glyph-probe`, `glyph-probe-style`, `native-control-state`, `native-control-runtime`, `native-effects`, `native-node`, `native-profile`, `native-losses`, `native-runtime-loss`, `native-view-timeline-runtime`, `viewport-entrance`, `viewport-entrances`, `viewport-entrance-loss`, `source-canvas`; classes `replica`, `content-desktop`, `content-mobile`, `content-mobile-inner`, `page-<slug>` |
+| Platform evidence | `access-gate`, `member-login` (attribute; class `member-login-<provider>`), `source-evidence`, `reclaimed-space`, `constructed-stylesheet`, `ported-embed`, `unported-embed`, `squarespace-header-style`, `check-route-tab`; id `squarespace-header-visible` |
+
+Some names never reach `website/`:
+- capture strips `geometry-id`, `glyph-probe`, `glyph-probe-style`, `visual-iframe-*` and `embedded-document` before export;
+- `fidelity check` sets `check-route-tab` on its live comparison page;
+- DLA runtime scripts set `resting-panel`, `native-runtime-loss` and `document-unavailable` in the browser.
+
+They share the namespace anyway, so no capture name falls outside it.
+
+## Sidecar schemas
+
+Every sidecar schema is `blocks-engine-capture/<name>/v<n>`. The full list is `CAPTURE_SCHEMAS`. Blocks Engine reads five of them:
+
+- `captured-interactions/v1` (`interaction-states.json`)
+- `capture-receipt/v1`
+- `source-interactivity/v1`
+- `finite-bootstrap/v1`
+- `collection-status/v1`
+
+`website/source-findings.json` uses Static Site Importer's own schema, `static-site-importer/source-findings/v1` ([loss-ledger.md](loss-ledger.md) section 5.1).
+
+## Recognized capture runtimes
+
+A consumer retires or tolerates a capture helper script only when the sha256 of its trimmed body matches a digest the consumer recognizes. The export test hashes the emitted bodies and asserts these values:
+
+| Runtime | sha256 | Status |
 |---|---|---|
-| `data-dla-<name>` | `data-blocks-engine-capture-<name>` | attributes and class tokens |
-| `data-liberation-<name>` | `data-blocks-engine-capture-<name>` | attributes and class tokens |
-| `dla-<name>` | `blocks-engine-capture-<name>` | class tokens |
+| Disclosure interpreter (`script[data-blocks-engine-capture-disclosure-runtime]`) | `3d350f5508bed44c931291f9f38e5d8d7c361d5d3ea729c51f1fe11b70ce75dc` | Equal to Blocks Engine `CaptureEvidence::DISCLOSURE_RUNTIME_SHA256`, and byte-identical to its `tests/fixtures/capture-disclosure-runtime.js`. |
+| Gallery helper (`script[data-blocks-engine-capture-gallery-runtime]`) | `456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b` | This producer's current helper, which includes the src-swap sequence cycle from #711. Blocks Engine's `capture-gallery-runtime.js` (`0a6bf62a…`) is the renamed pre-#711 helper. Before #787, Blocks Engine's digest `1321b380…` was also the pre-#711 body, so the two never matched after #711. To recognize the current helper, Blocks Engine should publish this body and digest. |
 
-`data-liberation-<name>` appears only as class tokens today (`data-liberation-desktop-document`, `data-liberation-mobile-document`, ...). The rule maps the token as written, so the class `data-liberation-mobile-document` gains the class `data-blocks-engine-capture-mobile-document`. Capture emits no bare `data-liberation` attribute. The rule lives in `CAPTURE_VOCABULARY_RULES` (`src/lib/capture-vocabulary.ts`).
+## Migration
 
-## Capture-evidence emission
+This producer previously wrote these names. Consumers read only the new ones. Producer and consumers were released in lockstep (#787 option A), so there is no compatibility path in either direction.
 
-Emitters keep writing the producer names. One pass, `mirrorCaptureVocabulary()`, writes the consumer name beside each one:
-
-- **Attributes.** The consumer attribute is spliced in directly after the producer attribute, with the producer's value text copied verbatim, quoting and character references included. Both values are therefore identical.
-- **Classes.** Consumer tokens are appended to the same `class` value.
-- **Everything else is byte-for-byte unchanged.** The pass locates start-tag attributes with a source-located parse and rewrites only those ranges. Text, `<script>` and `<style>` bodies, comments and selector strings are not touched. Markup that HTML tree construction discards, such as a stray `<tr>` outside a table, and `<noscript>` content, which the parse keeps as text, carry no start-tag location and are left as they are.
-- **Idempotent.** A consumer name that is already present is not written again.
-
-The pass runs at three points:
-
-| Where | What |
+| Previous | Now |
 |---|---|
-| `exportWebsiteCapture()`, after the last HTML write and before evidence (`mirrorWebsiteCaptureVocabulary`) | Every `*.html` file under `website/`: route pages, embedded documents and their responsive copies. `parts/` are cut from mirrored pages, so they carry both names. |
-| `exportWebsiteCapture()`, when interaction states are localized | HTML strings in `interaction-states.json` (dialog, listbox, gallery frame, choice transition and collection fragments). `htmlBytes` is recomputed for every region whose length matched before. |
-| `promoteLearnedMotion()` | The source-canvas sandbox script tag it adds to an exported page after export. |
-
-The pass works on whatever reaches those files, so a new emitter's names are mirrored without further change.
-
-### Names in exported HTML
-
-The names below reach `website/` HTML or `interaction-states.json`. The inventory comes from the emitters in `src/` and from the names the full test suite's exports carried. Each gains its consumer name.
-
-| Family | Producer names |
-|---|---|
-| Dialogs and disclosures | `data-dla-dialog-trigger`, `-panel`, `-close`, `-panel-state`, `-ancestor-state`, `-ancestor-unverified`, `-css`; `data-dla-existing-panel`, `data-dla-observed-placement`; `data-dla-disclosure`, `-base`, `-label`, `-runtime`, `-open-class`, `-closed-class`, `-open-style`, `-closed-style`; `data-dla-local-disclosure`, `-runtime`; `data-dla-exclusive-disclosures`; classes `dla-dialog`, `dla-disclosure`, `dla-dropdown`, `dla-initial-dialog` |
-| Listbox and choice groups | `data-dla-listbox-trigger`, `-panel`, `-runtime`; `data-dla-choice-group`, `-index`, `-runtime` |
-| Device documents and document scope | `data-dla-device-document`, `-style`, `-body`, `-selection`, `-visibility`, `-unavailable`; `data-dla-document-scope`; `data-dla-selected-document`, `data-dla-selected-viewport`; `data-dla-source-media`; classes `data-liberation-desktop-document`, `data-liberation-mobile-document`, `data-liberation-<profile>-document` |
-| Responsive assembly | `data-dla-responsive-source`, `-fragment`, `-fragments`; `data-dla-anchor-fragment`, `-target`, `-source-id`, `-alias`, `-unresolved`; `data-dla-fluid-segment`, `data-dla-fluid-rules`; `data-dla-embedded-responsive`; classes `data-liberation-desktop-only`, `data-liberation-mobile-only`, `data-liberation-responsive-<hash>`, `data-liberation-responsive-class-<hash>`, `data-liberation-responsive-counterpart-<n>`, `dla-embedded-<digest>-<document>` |
-| Collections and status templates | `data-dla-collection`, `-item`, `-members`, `-category`, `-category-control`, `-index`, `-mode`, `-field`, `-empty`, `-status`, `-runtime`, `-visibility`; `data-dla-status-template`, `data-dla-status-hide-zero` |
-| Galleries and slideshows | `data-dla-gallery`, `-direction`, `-index`, `-initial`, `-sequence`, `-slot`, `-stage`, `-source`, `-frame`, `-image`, `-full-image`, `-text`, `-display`, `-close`, `-capture-width`, `-runtime`, `-visibility`; `data-dla-captured-slide`, `data-dla-captured-slideshow`, `data-dla-pager-stage`, `data-dla-pager-control` |
-| Glyph colour | `data-dla-glyph-color` ([glyph-color.md](glyph-color.md)) |
-| Native state and motion | `data-dla-native-control-state`, `-control-runtime`, `-effects`, `-node`, `-profile`, `-losses`, `-view-timeline-runtime`; `data-dla-viewport-entrance`, `-entrances`, `-entrance-loss`; `data-dla-source-canvas` |
-| Platform and source evidence | `data-dla-access-gate`, `data-dla-member-login` (and class `dla-member-login-<provider>`), `data-dla-source-evidence`, `data-dla-reclaimed-space`, `data-dla-constructed-stylesheet`, `data-dla-ported-embed`, `data-dla-unported-embed`, `data-dla-squarespace-header-style` |
-
-### Names that stay out of exported HTML
-
-These never reach `website/`, so nothing mirrors them:
-
-| Name | Why |
-|---|---|
-| `data-dla-geometry-id` | Layout identity for evidence. Export strips it from website pages (`withoutGeometryIdentities`); only the private identity copy keeps it. |
-| `data-dla-glyph-probe`, `data-dla-glyph-probe-style` | Glyph colour sampling marks, removed before serialization. |
-| `data-dla-check-route-tab` | Set by `fidelity check` on the live comparison page. |
-| `data-dla-visual-iframe-src`, `-width`, `-height`, `data-dla-embedded-document` | Read and consumed by export when it rewrites the frame. |
-| `data-dla-fluid-id`, `data-dla-fluid-ignore-padding`, `data-dla-fluid-sheet-rules`, `data-dla-video-frame`, `data-dla-squarespace-video` | Capture-time measurement and media markers. |
-| `data-dla-resting-panel`, `data-dla-native-runtime-loss`, `data-dla-document-unavailable` | Set in the browser by DLA runtime scripts, never in the static markup. `data-dla-viewport-entrance-loss` is in both: export also writes it for invalid entrance evidence. |
-
-If any of these reaches `website/` after a future change, the pass mirrors it like every other name.
-
-Class-like `dla-*` strings that are not class tokens are out of scope: element ids (`main--dla-mobile`), CSS cascade layer and keyframe names inside DLA stylesheets, and temporary directory prefixes.
-
-## Rollout
-
-1. **This release writes both names** in exported HTML and interaction states, and both findings files (`capture-findings.json`, `source-findings.json`; [loss-ledger.md](loss-ledger.md) section 5.2). Merge and release this first.
-2. **Blocks Engine and Static Site Importer read only the consumer names** and delete their readers of the producer names. They merge after step 1 is in production.
-3. **This repository stops writing the producer names.** In `mirroredMarkup()` the splice that inserts the consumer name after the producer attribute becomes a replacement of the producer name, and the class splice replaces the producer token. DLA's own runtime scripts and stylesheets in the exported page still select the producer names (`[data-dla-dialog-trigger]`, `.dla-dialog`, `[data-dla-collection]`, `[data-dla-device-document]`, ...), and so do the selector strings in `interaction-states.json`. Step 3 moves those literals to the consumer names in the same change, using the same rule. The `data-liberation/...` schema identifiers of sidecar JSON files are a separate contract and are not covered by this rule.
+| attribute `data-dla-<name>` | `data-blocks-engine-capture-<name>` |
+| class `data-liberation-<name>` | `data-blocks-engine-capture-<name>` |
+| class, id or token `dla-<name>` | `data-blocks-engine-capture-<name>` |
+| id suffix `--dla-<variant>` | `--data-blocks-engine-capture-<variant>` |
+| schema `data-liberation/<name>/v<n>` | `blocks-engine-capture/<name>/v<n>` |
+| `website/capture-findings.json` (`data-liberation-agent/capture-findings/v1`) | `website/source-findings.json` (`static-site-importer/source-findings/v1`) |

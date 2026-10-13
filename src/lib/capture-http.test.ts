@@ -150,17 +150,9 @@ describe('orchestrated HTTP review capture', () => {
 		expect(existsSync(join(outputDir, 'fidelity-reference.json'))).toBe(false);
 		expect(existsSync(join(outputDir, 'screenshots/manifest.json'))).toBe(false);
 		expect(browserCapture).not.toHaveBeenCalled();
-		const findings = JSON.parse(readFileSync(join(outputDir, 'website/capture-findings.json'), 'utf8'));
-		expect(findings).toMatchObject({
-			schema: 'data-liberation-agent/capture-findings/v1',
-			entrypoint: 'index.html',
-			complete: false,
-			usable: true,
-			summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0 },
-		});
-		expect(findings.missing_routes).toEqual(result.missingRoutes);
 		const sourceFindings = JSON.parse(readFileSync(join(outputDir, 'website/source-findings.json'), 'utf8'));
-		expect(sourceFindings).toMatchObject({ schema: 'static-site-importer/source-findings/v1', complete: false, usable: true });
+		expect(sourceFindings).toMatchObject({ schema: 'static-site-importer/source-findings/v1', entrypoint: 'index.html', complete: false, usable: true, summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0 } });
+		expect(existsSync(join(outputDir, 'website/capture-findings.json'))).toBe(false);
 		for (const route of result.missingRoutes) {
 			expect(sourceFindings.findings).toContainEqual(expect.objectContaining({ code: route.code, location: { url: route.url }, unit: 'route', loss_class: 'omitted_unit', owning_layer: 'data-liberation-agent' }));
 		}

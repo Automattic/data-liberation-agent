@@ -32,7 +32,7 @@ afterEach( () => {
 
 describe( 'CapturedResourceStore', () => {
 	it( 'localizes declared JSON-LD logos and relative manifest icons without visible images', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-native-branding-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-native-branding-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -72,7 +72,7 @@ describe( 'CapturedResourceStore', () => {
 		[ 'docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'PK\x03\x04word document fixture' ],
 		[ 'PDF', 'application/pdf', '%PDF-1.7\npdf document fixture' ],
 	] )( 'exports a linked %s as portable bytes beside a missing HTML route', async ( extension, contentType, content ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-docx-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-linked-docx-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -112,7 +112,7 @@ describe( 'CapturedResourceStore', () => {
 	it( 'replays only fresh static responses with response semantics intact', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime( new Date( '2026-08-29T00:00:00Z' ) );
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
@@ -171,7 +171,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'captures same-origin runtime dependencies and records failed responses', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const fetchMedia = vi.fn( async ( url: string ) => ( {
@@ -264,7 +264,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'derives the local path and manifest key from the originally-requested url when a same-origin response redirects to a variant path', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-redirect-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resource-redirect-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -339,7 +339,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'captures an external SVG sprite referenced by <use> and keeps each fragment when localizing it', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-svg-use-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resource-svg-use-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -393,7 +393,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'does not let a same-origin redirect response block the DOM-dependency capture that follows for the same url', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-redirect-poster-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resource-redirect-poster-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -457,7 +457,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'records media fetches that exceed the capture bound', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async () => {
@@ -487,7 +487,7 @@ describe( 'CapturedResourceStore', () => {
 
 	it( 'records browser response bodies that do not settle', async () => {
 		vi.useFakeTimers();
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
@@ -518,7 +518,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'captures external passive render resources but excludes provider runtime scripts', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
@@ -561,7 +561,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'keeps query-string variants in distinct deterministic files', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
@@ -593,7 +593,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'uses the response image format when a CDN transcodes a misleading URL extension', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
@@ -620,7 +620,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'stores a text/css response under a .css name when its URL extension is not .css and rewrites every reference', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -671,7 +671,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'keeps distinct responses apart when the declared format gives them the same file name', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const page = new EventEmitter();
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
@@ -704,7 +704,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'fetches lazy DOM dependencies and compact cross-origin nested CSS font imports missed by responses', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const transformedImage =
 			'https://cdn.example/image.jpg/v1/fill/w_567,h_740,al_b,q_90/image.jpg';
@@ -743,7 +743,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'captures and localizes linked audio without fetching ordinary page links', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-audio-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-linked-audio-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -802,7 +802,7 @@ describe( 'CapturedResourceStore', () => {
 	it.each( [ 'HTTP 404', 'response body exceeds max 10485760 bytes' ] )(
 		'retains failed linked-audio evidence when capture reports %s',
 		async ( error ) => {
-			const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-audio-failure-' ) );
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-linked-audio-failure-' ) );
 			dirs.push( outputDir );
 			mkdirSync( join( outputDir, 'html' ) );
 			mkdirSync( join( outputDir, 'screenshots' ) );
@@ -840,7 +840,7 @@ describe( 'CapturedResourceStore', () => {
 	);
 
 	it( 'captures and localizes a video src, a child source, and its poster', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-video-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-video-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
@@ -909,7 +909,7 @@ describe( 'CapturedResourceStore', () => {
 	it.each( [ 'HTTP 403', 'response body exceeds max 10485760 bytes' ] )(
 		'retains a video src and a child source as their resolved url instead of stripping them when capture reports %s',
 		async ( error ) => {
-			const outputDir = mkdtempSync( join( tmpdir(), 'dla-video-failure-' ) );
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-video-failure-' ) );
 			dirs.push( outputDir );
 			mkdirSync( join( outputDir, 'html' ) );
 			mkdirSync( join( outputDir, 'screenshots' ) );
@@ -959,7 +959,7 @@ describe( 'CapturedResourceStore', () => {
 	);
 
 	it( 'keeps script expressions and bare woff2 responses out of capture diagnostics', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-diagnostics-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resource-diagnostics-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
@@ -1016,7 +1016,7 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( join( outputDir, 'website', fontPath ), 'utf8' ) ).toBe( 'font' );
 	} );
 	it( 'resolves escaped CSS URLs against their actual origin', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-css-escaped-resource-' ) ); dirs.push( outputDir );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-css-escaped-resource-' ) ); dirs.push( outputDir );
 		const fetchMedia = vi.fn( async ( url: string ) => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: Buffer.from( 'neutral-image' ) } ) );
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', fetchMedia );
 		await store.captureDomDependencies( String.raw`<style>.hero{background:url(https\:\/\/cdn.example\/photo.png)}</style>`, 'https://example.com/article/' );
@@ -1027,7 +1027,7 @@ describe( 'CapturedResourceStore', () => {
 		expect( manifest.failures ).toEqual( [] );
 	} );
 	it( 'retains a zero-byte stylesheet as a valid source dependency', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-empty-css-' ) ); dirs.push( outputDir );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resource-empty-css-' ) ); dirs.push( outputDir );
 		const cssUrl = 'https://cdn.example/empty.css';
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async url => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ), body: Buffer.alloc( 0 ) } ) );
 		await store.captureDomDependencies( `<link rel="stylesheet" href="${ cssUrl }">`, 'https://example.com/' ); await store.flush();
@@ -1036,7 +1036,7 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( join( outputDir, manifest.resources[ cssUrl ].path ) ).length ).toBe( 0 );
 	} );
 	it( 'records a zero-byte font response as a failed dependency', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-empty-font-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resource-empty-font-' ) );
 		dirs.push( outputDir );
 		const fontUrl = 'https://fonts.example/font.woff2';
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async ( url ) => ( {
@@ -1065,7 +1065,7 @@ describe( 'CapturedResourceStore', () => {
 
 	describe( 'video/audio resource limits', () => {
 		it( 'captures video far larger than the old flat 10 MB per-resource cap, and shrinks the per-resource ceiling as the aggregate budget is consumed', async () => {
-			const outputDir = mkdtempSync( join( tmpdir(), 'dla-video-budget-' ) );
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-video-budget-' ) );
 			dirs.push( outputDir );
 			mkdirSync( join( outputDir, 'html' ) );
 			mkdirSync( join( outputDir, 'screenshots' ) );
@@ -1181,7 +1181,7 @@ describe( 'CapturedResourceStore', () => {
 			// ASKED for, but `reserveBytes` is the backstop that still catches an
 			// aggregate overrun if a fetch (real or, here, a test double) ever
 			// returns more than it was asked for.
-			const outputDir = mkdtempSync( join( tmpdir(), 'dla-video-overrun-' ) );
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-video-overrun-' ) );
 			dirs.push( outputDir );
 			const url = 'https://example.com/media/big.mp4';
 			const store = new CapturedResourceStore( outputDir, 'https://example.com/', async () => ( {
@@ -1206,7 +1206,7 @@ describe( 'CapturedResourceStore', () => {
 
 		it( 'scales the resource body read timeout with the declared size, and still terminates', async () => {
 			vi.useFakeTimers();
-			const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 			dirs.push( outputDir );
 			const page = new EventEmitter();
 			const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
@@ -1272,7 +1272,7 @@ describe( 'CapturedResourceStore', () => {
 	} );
 
 	it( 'stores and counts identical bytes once, whatever url they arrive under', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-dedupe-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resource-dedupe-' ) );
 		dirs.push( outputDir );
 		const sourceUrl = 'https://example.com/';
 		// A CDN answering a size variant with the original's exact bytes.

@@ -78,7 +78,7 @@ describe( 'rendered glyph colour', () => {
 		// The probe leaves nothing behind but the recorded colour.
 		const html = await capturePageHtml( page );
 		expect( html ).toContain( `${ GLYPH_COLOR_ATTRIBUTE }="${ BLUE }"` );
-		expect( html ).not.toContain( 'data-dla-glyph-probe' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-glyph-probe' );
 		expect( await page.locator( 'footer a' ).first().evaluate( ( node ) => getComputedStyle( node ).visibility ) ).toBe( 'visible' );
 		expect( await page.locator( '#background' ).evaluate( ( node ) => getComputedStyle( node ).backgroundColor ) ).toBe( 'rgb(255, 255, 255)' );
 		expect( await page.locator( '#faded' ).evaluate( ( node ) => getComputedStyle( node.parentElement! ).opacity ) ).toBe( '0.6' );
@@ -92,7 +92,7 @@ describe( 'rendered glyph colour', () => {
 			<a href="/b"><img id="large" src="/icons/glyph.png" width="96" height="96" alt="B"></a>
 			<img id="unlinked" src="/icons/glyph.png" width="32" height="32" alt="C">
 			<a href="/c"><span id="labelled" style="display:block;width:32px;height:32px;background:url(/icons/glyph.png)">Label</span></a>
-			<a href="/d"><img id="spoofed" src="/icons/multicolor.png" width="200" height="40" data-dla-glyph-color="#123456" alt="D"></a>
+			<a href="/d"><img id="spoofed" src="/icons/multicolor.png" width="200" height="40" data-blocks-engine-capture-glyph-color="#123456" alt="D"></a>
 			<a href="/e" style="opacity:0"><img id="transparent" src="/icons/glyph.png" width="32" height="32" alt="E"></a>`
 		);
 		expect( await recordGlyphColors( page ) ).toEqual( { candidates: 1, sampled: 1, recorded: 0 } );
@@ -150,7 +150,7 @@ describe( 'rendered glyph colour', () => {
 			for ( const path of [ entry.html, entry.mobileHtml ] ) {
 				const html = readFileSync( join( outputDir, path! ), 'utf8' );
 				expect( html ).toMatch( new RegExp( `<img[^>]*${ GLYPH_COLOR_ATTRIBUTE }="${ BLUE }"` ) );
-				expect( html ).not.toContain( 'data-dla-glyph-probe' );
+				expect( html ).not.toContain( 'data-blocks-engine-capture-glyph-probe' );
 			}
 		} finally {
 			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
@@ -159,7 +159,7 @@ describe( 'rendered glyph colour', () => {
 	}, 60_000 );
 
 	it( 'keeps the recorded colour through website export', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-glyph-color-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-glyph-color-export-' ) );
 		try {
 			for ( const path of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 			const page = ( width: number ) =>

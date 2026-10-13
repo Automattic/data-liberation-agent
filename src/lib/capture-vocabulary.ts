@@ -1,151 +1,130 @@
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import type { AnyNode, Element } from 'domhandler';
-import { parseLocatedStructure } from './site-includes.js';
+/**
+ * Capture evidence vocabulary: the one table of names capture writes into the
+ * exported site and its sidecars (#787 option A, part of #761).
+ *
+ * Blocks Engine owns this vocabulary as its producer-neutral capture-evidence
+ * input contract (Automattic/blocks-engine `php-transformer/docs/contracts/
+ * capture-evidence.md`, `Contract\CaptureEvidence`). Static Site Importer reads
+ * names from the same namespace. Every attribute, class, id, id suffix and
+ * probe token starts with `CAPTURE_EVIDENCE_PREFIX`; sidecar schemas live
+ * under `CAPTURE_SCHEMA_NAMESPACE`. Classes deliberately share the attribute
+ * prefix: Blocks Engine treats `blocks-engine-*` classes as its own generated
+ * classes, so capture classes stay outside that namespace.
+ *
+ * Emitters spell the full names (many live inside runtime script and
+ * stylesheet strings), or the `dataset.blocksEngineCapture<Name>` form of an
+ * attribute. `capture-vocabulary.test.ts` keeps this table and the
+ * source identical: every name the source spells is listed here, and every
+ * name listed here is spelled by the source. See docs/contracts/capture-evidence.md.
+ */
+export const CAPTURE_EVIDENCE_PREFIX = 'data-blocks-engine-capture-';
+
+/** Id suffix for a non-default document variant's copy of a shared source id: `<id>--data-blocks-engine-capture-<variant>`. */
+export const CAPTURE_EVIDENCE_ID_SUFFIX = `--${ CAPTURE_EVIDENCE_PREFIX }`;
+
+/** Sidecar schema namespace: `blocks-engine-capture/<name>/v<n>`. */
+export const CAPTURE_SCHEMA_NAMESPACE = 'blocks-engine-capture/';
 
 /**
- * Producer-neutral capture-evidence vocabulary (#787, part of #761).
- *
- * Blocks Engine owns the capture-evidence names it reads, in its own
- * namespace. This producer's names map onto them by one mechanical rule, with
- * values and semantics unchanged. The rule is lexical, so it applies the same
- * way to an attribute name and to a class token:
- *
- *   data-dla-<name>        -> data-blocks-engine-capture-<name>
- *   data-liberation-<name> -> data-blocks-engine-capture-<name>
- *   dla-<name>             -> blocks-engine-capture-<name>   (class tokens only)
- *
- * Rollout step 1 writes both the producer and the neutral names, so consumers
- * can switch readers without a mismatched release pair. Step 3 replaces the
- * producer name instead of mirroring it: the splice in `mirroredMarkup()` is the
- * single point that changes. See docs/contracts/capture-evidence.md.
+ * Names after `CAPTURE_EVIDENCE_PREFIX`, grouped by family. Kind: `a` attribute,
+ * `c` class, `i` element id, `t` probe or request token.
  */
-export const CAPTURE_VOCABULARY_RULES = [
-	{ producer: 'data-dla-', neutral: 'data-blocks-engine-capture-', attribute: true },
-	{ producer: 'data-liberation-', neutral: 'data-blocks-engine-capture-', attribute: true },
-	{ producer: 'dla-', neutral: 'blocks-engine-capture-', attribute: false },
+export const CAPTURE_EVIDENCE_NAMES = {
+	dialogs: {
+		'dialog-trigger': 'a', 'dialog-panel': 'a', 'dialog-close': 'a', 'dialog-panel-state': 'a', 'dialog-ancestor-state': 'a',
+		'dialog-ancestor-unverified': 'a', 'dialog-css': 'a', 'existing-panel': 'a', 'observed-placement': 'a', 'resting-panel': 'a',
+		dialog: 'c', dropdown: 'c', 'initial-dialog': 'c',
+	},
+	disclosures: {
+		disclosure: 'a', 'disclosure-base': 'a', 'disclosure-label': 'a', 'disclosure-runtime': 'a',
+		'disclosure-open-class': 'a', 'disclosure-closed-class': 'a', 'disclosure-open-style': 'a', 'disclosure-closed-style': 'a',
+		'local-disclosure': 'a', 'local-disclosure-runtime': 'a', 'exclusive-disclosures': 'a', 'hydrated-disclosure': 'a',
+	},
+	listboxAndChoices: {
+		'listbox-trigger': 'a', 'listbox-panel': 'a', 'listbox-runtime': 'a', 'choice-group': 'a', 'choice-index': 'a', 'choice-runtime': 'a',
+	},
+	documents: {
+		'document-scope': 'a', 'device-document': 'a', 'device-style': 'a', 'device-body': 'a', 'device-selection': 'a',
+		'device-visibility': 'a', 'device-unavailable': 'a', 'document-unavailable': 'a', 'selected-document': 'a',
+		'selected-viewport': 'a', 'source-media': 'a',
+		'desktop-document': 'c', 'mobile-document': 'c', 'desktop-only': 'c', 'mobile-only': 'c',
+		/** Id suffix of the mobile copy (`<id>--data-blocks-engine-capture-mobile`). */
+		mobile: 'i',
+	},
+	responsive: {
+		'responsive-source': 'a', 'responsive-fragment': 'a', 'responsive-fragments': 'a', 'embedded-responsive': 'a', 'embedded-document': 'a',
+		'anchor-fragment': 'a', 'anchor-target': 'a', 'anchor-source-id': 'a', 'anchor-alias': 'a', 'anchor-unresolved': 'a',
+		'fluid-id': 'a', 'fluid-segment': 'a', 'fluid-rules': 'a', 'fluid-sheet-rules': 'a', 'fluid-ignore-padding': 'a', 'fluid-specificity': 'i',
+		'geometry-id': 'a', 'visual-iframe-src': 'a', 'visual-iframe-width': 'a', 'visual-iframe-height': 'a',
+	},
+	collections: {
+		collection: 'a', 'collection-item': 'a', 'collection-members': 'a', 'collection-category': 'a', 'collection-category-control': 'a',
+		'collection-index': 'a', 'collection-mode': 'a', 'collection-field': 'a', 'collection-empty': 'a', 'collection-status': 'a',
+		'collection-runtime': 'a', 'collection-visibility': 'a', 'status-template': 'a', 'status-hide-zero': 'a',
+		'no-match': 't', 'no-match-7f39b2': 't', 'no-match-2c81e4': 't', 'finite-probe': 't', 'finite-probe-7f39b2': 't', 'finite-follow-up': 't',
+	},
+	galleries: {
+		gallery: 'a', 'gallery-direction': 'a', 'gallery-index': 'a', 'gallery-initial': 'a', 'gallery-sequence': 'a', 'gallery-slot': 'a',
+		'gallery-stage': 'a', 'gallery-source': 'a', 'gallery-frame': 'a', 'gallery-image': 'a', 'gallery-full-image': 'a', 'gallery-text': 'a',
+		'gallery-display': 'a', 'gallery-close': 'a', 'gallery-capture-width': 'a', 'gallery-runtime': 'a', 'gallery-visibility': 'a',
+		'captured-slide': 'a', 'captured-slideshow': 'a', 'captured-slide-count': 'a', 'advertised-slide-count': 'a', 'expected-slide-count': 'a',
+		'capture-error': 'a', 'pager-stage': 'a', 'pager-control': 'a', 'video-frame': 'a', 'squarespace-video': 'a',
+		slideshow: 'c', 'slideshow-track': 'c', 'slideshow-css': 'i', 'captured-slideshow-css': 'i', 'wix-captured-slideshow-css': 'i',
+	},
+	presentation: {
+		'glyph-color': 'a', 'glyph-probe': 'a', 'glyph-probe-style': 'a',
+		'native-control-state': 'a', 'native-control-runtime': 'a', 'native-effects': 'a', 'native-node': 'a', 'native-profile': 'a',
+		'native-losses': 'a', 'native-runtime-loss': 'a', 'native-view-timeline-runtime': 'a',
+		'viewport-entrance': 'a', 'viewport-entrances': 'a', 'viewport-entrance-loss': 'a', 'source-canvas': 'a',
+		replica: 'c', 'content-desktop': 'c', 'content-mobile': 'c', 'content-mobile-inner': 'c',
+	},
+	platform: {
+		'access-gate': 'a', 'member-login': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'constructed-stylesheet': 'a',
+		'ported-embed': 'a', 'unported-embed': 'a', 'squarespace-header-style': 'a', 'squarespace-header-visible': 'i', 'check-route-tab': 'a',
+	},
+} as const;
+
+/**
+ * Name families whose tail is generated (after `CAPTURE_EVIDENCE_PREFIX`).
+ * `<key>` marks the generated part.
+ */
+export const CAPTURE_EVIDENCE_FAMILIES = {
+	'<profile>-document': 'c',
+	'responsive-<hash>': 'c',
+	'responsive-class-<hash>': 'c',
+	'responsive-counterpart-<n>': 'c',
+	'page-<slug>': 'c',
+	'shared-<hash>': 'c',
+	'embedded-<digest>-<document>': 'c',
+	'member-login-<provider>': 'c',
+	'disclosure-open-<svg attribute>': 'a',
+	'disclosure-closed-<svg attribute>': 'a',
+	'dialog-<n>': 'i',
+	'disclosure-panel-<n>': 'i',
+	'gallery-<n>': 'i',
+} as const;
+
+/** Sidecar schemas, under `CAPTURE_SCHEMA_NAMESPACE`. */
+export const CAPTURE_SCHEMAS = [
+	'asset-evidence/v1', 'behavior-model/v1', 'candidate-motion/v1', 'capture-diagnostics/v1', 'capture-receipt/v1',
+	'captured-interactions/v1', 'captured-scroll-states/v1', 'captured-semantic-evidence/v2',
+	'collection-status/v1', 'compare-overlays/v1', 'embedded-documents/v1', 'export-publication-lock/v1', 'fidelity-reference/v1',
+	'finite-bootstrap/v1', 'http-acquisition/v1', 'interaction-states/v1', 'interaction-states/v2', 'layout-geometry-capture/v1',
+	'layout-geometry-proof/v1', 'learned-motion/v1', 'native-view-timelines/v1', 'portable-motion/v1', 'runtime-observations/v1',
+	'runtime-regions/v1', 'scroll-states/v1', 'shopify-http-proof/v4', 'source-behavior/v1', 'source-behavior-report/v1',
+	'source-capability-vocabulary/v1', 'source-cleanup/v8', 'source-interactivity/v1', 'source-outcome/v1', 'source-profile/v1',
 ] as const;
 
 /**
- * Neutral name for a producer attribute name or class token, if the rule names
- * one. Attribute names are case-insensitive and come back lowercase; class
- * tokens are case-sensitive, so their suffix is kept as written.
+ * sha256 of the trimmed bodies of capture runtimes a consumer recognizes by
+ * identity. Blocks Engine retires the disclosure interpreter only when its
+ * body hashes to `disclosure` (`CaptureEvidence::DISCLOSURE_RUNTIME_SHA256`,
+ * published as php-transformer `tests/fixtures/capture-disclosure-runtime.js`;
+ * contract: php-transformer docs/contracts/capture-evidence.md, "Recognized
+ * capture runtimes"). `gallery` is the digest of this producer's gallery
+ * helper; see docs/contracts/capture-evidence.md for its status upstream.
  */
-export function neutralCaptureName( name: string, kind: 'attribute' | 'class' ): string | undefined {
-	const candidate = kind === 'attribute' ? name.toLowerCase() : name;
-	for ( const rule of CAPTURE_VOCABULARY_RULES ) {
-		if ( kind === 'attribute' && ! rule.attribute ) continue;
-		if ( candidate.startsWith( rule.producer ) && candidate.length > rule.producer.length ) {
-			return `${ rule.neutral }${ candidate.slice( rule.producer.length ) }`;
-		}
-	}
-	return undefined;
-}
-
-// Cheap gate: most strings (and many documents) hold no producer name at all.
-const PRODUCER_NAME = /(?:data-dla-|data-liberation-|\bdla-)/i;
-
-interface AttributeLocation { startOffset: number; endOffset: number }
-
-function startTagAttributes( node: Element ): Record< string, AttributeLocation > | undefined {
-	return ( node as Element & { sourceCodeLocation?: { startTag?: { attrs?: Record< string, AttributeLocation > } } } )
-		.sourceCodeLocation?.startTag?.attrs;
-}
-
-/**
- * Write the neutral name beside every producer attribute and class token in
- * an HTML document or fragment.
- *
- * Every other byte is preserved: the parse only locates start-tag attributes,
- * and the neutral attribute is spliced in directly after its producer
- * attribute, copying the producer's own value text (quoting and entities
- * included) so the two values are identical. Neutral class tokens are appended
- * to the same `class` value. Markup that HTML tree construction discards (a
- * stray `<tr>` outside a table) or keeps as text (`<noscript>` content) has no
- * start-tag location and is left as is.
- * Idempotent: a neutral name already present is not written again.
- */
-export function mirrorCaptureVocabulary( html: string ): string {
-	if ( ! PRODUCER_NAME.test( html ) ) return html;
-	const $ = parseLocatedStructure( html );
-	const splices: Array< { at: number; end: number; text: string } > = [];
-	// Iterative walk: captured documents can nest deeper than the call stack.
-	const pending: AnyNode[] = $.root().contents().toArray();
-	for ( let node = pending.pop(); node; node = pending.pop() ) {
-		if ( node.type === 'tag' || node.type === 'script' || node.type === 'style' ) {
-			const element = node as Element;
-			const locations = startTagAttributes( element );
-			if ( locations ) for ( const splice of mirroredMarkup( html, element, locations ) ) splices.push( splice );
-		}
-		if ( 'children' in node ) for ( const child of node.children ) pending.push( child );
-	}
-	if ( ! splices.length ) return html;
-	// Splices never overlap: each covers its own attribute. Join once.
-	splices.sort( ( a, b ) => a.at - b.at );
-	const parts: string[] = [];
-	let cursor = 0;
-	for ( const splice of splices ) {
-		parts.push( html.slice( cursor, splice.at ), splice.text );
-		cursor = splice.end;
-	}
-	parts.push( html.slice( cursor ) );
-	return parts.join( '' );
-}
-
-function mirroredMarkup( html: string, element: Element, locations: Record< string, AttributeLocation > ): Array< { at: number; end: number; text: string } > {
-	const splices: Array< { at: number; end: number; text: string } > = [];
-	const present = new Set( Object.keys( element.attribs ) );
-	for ( const [ name, location ] of Object.entries( locations ) ) {
-		if ( name === 'class' ) {
-			const splice = mirroredClassValue( html, element.attribs.class ?? '', location );
-			if ( splice ) splices.push( splice );
-			continue;
-		}
-		const neutral = neutralCaptureName( name, 'attribute' );
-		if ( ! neutral || present.has( neutral ) ) continue;
-		present.add( neutral );
-		// `name`, `name=value`, `name="value"` or `name='value'`: keep the value text verbatim.
-		const source = html.slice( location.startOffset, location.endOffset );
-		splices.push( { at: location.endOffset, end: location.endOffset, text: ` ${ neutral }${ source.slice( name.length ) }` } );
-	}
-	return splices;
-}
-
-function mirroredClassValue( html: string, value: string, location: AttributeLocation ): { at: number; end: number; text: string } | undefined {
-	const tokens = value.split( /[\t\n\f\r ]+/ ).filter( Boolean );
-	const present = new Set( tokens );
-	const added: string[] = [];
-	for ( const token of tokens ) {
-		const neutral = neutralCaptureName( token, 'class' );
-		if ( ! neutral || present.has( neutral ) ) continue;
-		present.add( neutral );
-		added.push( neutral );
-	}
-	if ( ! added.length ) return undefined;
-	const source = html.slice( location.startOffset, location.endOffset );
-	const quote = source.at( -1 );
-	// A quoted value gains the tokens before its closing quote; an unquoted
-	// value (no whitespace by definition) is rewritten as a quoted one.
-	if ( ( quote === '"' || quote === "'" ) && /=\s*["']/.test( source ) ) {
-		return { at: location.endOffset - 1, end: location.endOffset - 1, text: ` ${ added.join( ' ' ) }` };
-	}
-	const separator = tokens.length ? ' ' : '';
-	return { at: location.startOffset, end: location.endOffset, text: `class="${ escapeAttribute( value.trim() ) }${ separator }${ added.join( ' ' ) }"` };
-}
-
-function escapeAttribute( value: string ): string {
-	return value.replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' );
-}
-
-/** Mirror the vocabulary in every HTML document under an exported website directory. */
-export function mirrorWebsiteCaptureVocabulary( websiteDir: string ): void {
-	for ( const entry of readdirSync( websiteDir, { withFileTypes: true } ) ) {
-		const path = join( websiteDir, entry.name );
-		if ( entry.isDirectory() ) mirrorWebsiteCaptureVocabulary( path );
-		else if ( entry.isFile() && /\.html?$/i.test( entry.name ) ) {
-			const html = readFileSync( path, 'utf8' );
-			const mirrored = mirrorCaptureVocabulary( html );
-			if ( mirrored !== html ) writeFileSync( path, mirrored );
-		}
-	}
-}
+export const CAPTURE_RUNTIME_SHA256 = {
+	disclosure: '3d350f5508bed44c931291f9f38e5d8d7c361d5d3ea729c51f1fe11b70ce75dc',
+	gallery: '456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b',
+} as const;

@@ -3,7 +3,6 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
-import { mirrorCaptureVocabulary } from './capture-vocabulary.js';
 import type { Browser } from 'playwright';
 import { verifyCandidateMotion, type MotionContract, type MotionEvidence } from './fidelity/candidate-motion.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
@@ -82,7 +81,7 @@ export async function promoteLearnedMotion( directory: string, routes: Array< { 
 	const bytes = Buffer.from( MOTION_RUNTIME );
 	const digest = createHash( 'sha256' ).update( bytes ).digest( 'hex' );
 	const scriptPath = `motion/${ digest.slice( 0, 12 ) }-learned-motion.js`;
-	const stage = mkdtempSync( join( tmpdir(), 'dla-learned-motion-' ) );
+	const stage = mkdtempSync( join( tmpdir(), 'liberation-learned-motion-' ) );
 	let server: Awaited< ReturnType< typeof startStaticServer > > | null = null;
 	try {
 		cpSync( websiteDir, stage, { recursive: true, force: true } );
@@ -124,7 +123,7 @@ export async function promoteLearnedMotion( directory: string, routes: Array< { 
 				const sandboxDigest = createHash( 'sha256' ).update( sandbox ).digest( 'hex' );
 				const sandboxPath = `motion/${ sandboxDigest.slice( 0, 12 ) }-source-canvas.js`;
 				sandboxFiles.set( sandboxPath, sandbox );
-				$( 'body' ).append( mirrorCaptureVocabulary( `<script defer src="/${ sandboxPath }" data-dla-source-canvas="sandboxed"></script>` ) );
+				$( 'body' ).append( `<script defer src="/${ sandboxPath }" data-blocks-engine-capture-source-canvas="sandboxed"></script>` );
 				scripts.push( { path: sandboxPath, sha256: sandboxDigest } );
 			}
 			writeFileSync( pagePath, $.html() );

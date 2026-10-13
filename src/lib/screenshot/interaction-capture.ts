@@ -4,8 +4,8 @@ import { settleDocument } from './page-helpers.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 
-export const INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v2';
-export const LEGACY_INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v1';
+export const INTERACTION_STATES_SCHEMA = 'blocks-engine-capture/interaction-states/v2';
+export const LEGACY_INTERACTION_STATES_SCHEMA = 'blocks-engine-capture/interaction-states/v1';
 
 const MAX_TRIGGERS = 8;
 /** Plain buttons with no popup semantics that may still open a dialog; probed last. */

@@ -7,7 +7,7 @@
  * has already decoded and painted every icon, so capture records the rendered
  * colour instead: for small images, inline SVGs and background-image glyphs
  * inside links and buttons, the dominant opaque colour of the painted box,
- * sampled from rendered pixels. It is written as `data-dla-glyph-color` on the
+ * sampled from rendered pixels. It is written as `data-blocks-engine-capture-glyph-color` on the
  * glyph element, so it travels with the captured HTML.
  *
  * Each glyph is sampled from a clip screenshot taken while only the glyphs are
@@ -21,11 +21,11 @@ import type { Page } from 'playwright';
 import { PNG } from 'pngjs';
 import { withEvaluateTimeout } from './page-helpers.js';
 
-export const GLYPH_COLOR_ATTRIBUTE = 'data-dla-glyph-color';
+export const GLYPH_COLOR_ATTRIBUTE = 'data-blocks-engine-capture-glyph-color';
 
 /** Temporary capture-time markers; never serialized. */
-const PROBE_ATTRIBUTE = 'data-dla-glyph-probe';
-const PROBE_STYLE_ATTRIBUTE = 'data-dla-glyph-probe-style';
+const PROBE_ATTRIBUTE = 'data-blocks-engine-capture-glyph-probe';
+const PROBE_STYLE_ATTRIBUTE = 'data-blocks-engine-capture-glyph-probe-style';
 
 export const GLYPH_COLOR_LIMITS = {
 	/** Largest rendered box edge, in CSS px, that counts as an icon glyph. */
@@ -100,7 +100,7 @@ export interface GlyphColorCapture {
 	candidates: number;
 	/** Glyphs sampled (bounded by `maxGlyphs` and `budgetMs`). */
 	sampled: number;
-	/** Glyphs that received `data-dla-glyph-color`. */
+	/** Glyphs that received `data-blocks-engine-capture-glyph-color`. */
 	recorded: number;
 }
 
@@ -175,7 +175,7 @@ function restoreGlyphs( args: { colors: Record< string, string >; attribute: str
 
 /**
  * Sample the rendered colour of icon glyphs in the current document and record
- * monochrome ones as `data-dla-glyph-color="#rrggbb"`. Bounded by
+ * monochrome ones as `data-blocks-engine-capture-glyph-color="#rrggbb"`. Bounded by
  * `GLYPH_COLOR_LIMITS`. The probe markers are always removed, so a failure
  * loses only the colour evidence.
  */

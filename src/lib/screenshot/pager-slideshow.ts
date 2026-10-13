@@ -76,9 +76,9 @@ export function markPagerSlideshows( limit: number ): { index: number; controls:
 		}
 		if ( ! stage ) continue;
 
-		( stage as HTMLElement ).dataset.dlaPagerStage = String( index );
+		( stage as HTMLElement ).dataset.blocksEngineCapturePagerStage = String( index );
 		members.forEach( ( control, position ) => {
-			control.dataset.dlaPagerControl = `${ index }:${ position }`;
+			control.dataset.blocksEngineCapturePagerControl = `${ index }:${ position }`;
 		} );
 		marked.push( { index, controls: members.length } );
 		index++;
@@ -93,7 +93,7 @@ export function markPagerSlideshows( limit: number ): { index: number; controls:
  * rather than the frame it was frozen on.
  */
 export function preserveCapturedSlides( { index, slides }: { index: number; slides: string[] } ): void {
-	const stage = document.querySelector< HTMLElement >( `[data-dla-pager-stage="${ index }"]` );
+	const stage = document.querySelector< HTMLElement >( `[data-blocks-engine-capture-pager-stage="${ index }"]` );
 	if ( ! stage || slides.length < 2 ) return;
 
 	const fragment = document.createDocumentFragment();
@@ -105,7 +105,7 @@ export function preserveCapturedSlides( { index, slides }: { index: number; slid
 		template.innerHTML = html;
 		const slide = template.content.firstElementChild;
 		if ( ! slide ) continue;
-		slide.setAttribute( 'data-dla-captured-slide', String( position ) );
+		slide.setAttribute( 'data-blocks-engine-capture-captured-slide', String( position ) );
 		if ( slide instanceof HTMLElement ) slide.style.removeProperty( 'display' );
 		fragment.append( slide );
 	}
@@ -115,21 +115,21 @@ export function preserveCapturedSlides( { index, slides }: { index: number; slid
 	if ( captured < 2 ) return;
 
 	stage.replaceChildren( fragment );
-	stage.dataset.dlaCapturedSlideshow = 'true';
-	stage.dataset.dlaCapturedSlideCount = String( captured );
-	if ( ! document.getElementById( 'dla-captured-slideshow-css' ) ) {
+	stage.dataset.blocksEngineCaptureCapturedSlideshow = 'true';
+	stage.dataset.blocksEngineCaptureCapturedSlideCount = String( captured );
+	if ( ! document.getElementById( 'data-blocks-engine-capture-captured-slideshow-css' ) ) {
 		const style = document.createElement( 'style' );
-		style.id = 'dla-captured-slideshow-css';
+		style.id = 'data-blocks-engine-capture-captured-slideshow-css';
 		style.textContent =
-			'[data-dla-pager-stage]>[data-dla-captured-slide]{display:none!important}' +
-			'[data-dla-pager-stage]>[data-dla-captured-slide="0"]{display:block!important}';
+			'[data-blocks-engine-capture-pager-stage]>[data-blocks-engine-capture-captured-slide]{display:none!important}' +
+			'[data-blocks-engine-capture-pager-stage]>[data-blocks-engine-capture-captured-slide="0"]{display:block!important}';
 		document.head.append( style );
 	}
 }
 
 function snapshotStage( page: Page, index: number ): Promise< { html: string; key: string } | null > {
 	return page.evaluate( ( stageIndex ) => {
-		const stage = document.querySelector< HTMLElement >( `[data-dla-pager-stage="${ stageIndex }"]` );
+		const stage = document.querySelector< HTMLElement >( `[data-blocks-engine-capture-pager-stage="${ stageIndex }"]` );
 		if ( ! stage ) return null;
 		const children = [ ...stage.children ];
 		const slide =
@@ -182,7 +182,7 @@ export async function collectPagerSlideshowStates( page: Page ): Promise< PagerS
 		const seen = new Set( [ initial.key ] );
 		let failure = '';
 		for ( let position = 0; position < Math.min( controls, STATE_LIMIT ); position++ ) {
-			const control = page.locator( `[data-dla-pager-control="${ index }:${ position }"]` );
+			const control = page.locator( `[data-blocks-engine-capture-pager-control="${ index }:${ position }"]` );
 			try {
 				await control.scrollIntoViewIfNeeded();
 				await control.click( { timeout: 5_000 } );
@@ -229,12 +229,12 @@ export async function applyPagerSlideshowStates(
 		await page.evaluate(
 			( { stageIndex, observed, declared, message } ) => {
 				const stage = document.querySelector< HTMLElement >(
-					`[data-dla-pager-stage="${ stageIndex }"]`
+					`[data-blocks-engine-capture-pager-stage="${ stageIndex }"]`
 				);
 				if ( ! stage ) return;
-				stage.dataset.dlaCapturedSlideCount = String( observed );
-				stage.dataset.dlaAdvertisedSlideCount = String( declared );
-				if ( message ) stage.dataset.dlaCaptureError = message;
+				stage.dataset.blocksEngineCaptureCapturedSlideCount = String( observed );
+				stage.dataset.blocksEngineCaptureAdvertisedSlideCount = String( declared );
+				if ( message ) stage.dataset.blocksEngineCaptureCaptureError = message;
 			},
 			{ stageIndex: index, observed: states.length, declared: advertised, message: error }
 		);

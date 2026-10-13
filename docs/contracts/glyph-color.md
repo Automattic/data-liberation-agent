@@ -1,19 +1,18 @@
-# Rendered glyph colour: `data-dla-glyph-color`
+# Rendered glyph colour: `data-blocks-engine-capture-glyph-color`
 
 Capture records the rendered colour of single-colour icon glyphs on the glyph element in the captured document ([#769](https://github.com/Automattic/data-liberation-agent/issues/769), part of [#761](https://github.com/Automattic/data-liberation-agent/issues/761)). A compiler reads the colour from the HTML and does not decode image bytes, so the result is the same on every import host and for every image format the browser can paint (AVIF, WebP, PNG, SVG and others).
 
 ## Contract
 
 ```html
-<a href="https://social.example/brand"><img src="icons/brand.avif" alt="Brand" data-dla-glyph-color="#1877f2"></a>
+<a href="https://social.example/brand"><img src="icons/brand.avif" alt="Brand" data-blocks-engine-capture-glyph-color="#1877f2"></a>
 ```
 
 - **Value.** Lowercase `#rrggbb`. Near-white snaps to `#ffffff` and near-black to `#000000`.
 - **Element.** The glyph itself: an `<img>` (for `<picture>`, the inner `<img>`), an outermost inline `<svg>`, or an element with no text and no media children whose own `background-image` paints the glyph. The attribute is never placed on the enclosing link or button.
 - **Presence means evidence.** The attribute is present only when the rendered glyph is monochrome. Its absence means "no evidence": the glyph was multicolour, outside the bounds below, or sampling did not finish. A consumer then falls back to its own handling.
-- **Provenance.** Capture removes any `data-dla-glyph-color` the source authored before sampling, so every value in a captured document was measured by capture.
+- **Provenance.** Capture removes any `data-blocks-engine-capture-glyph-color` the source authored before sampling, so every value in a captured document was measured by capture.
 - **Lifetime.** The attribute is written into the desktop and mobile documents before serialization and kept by export in `website/` HTML. It is inert: no CSS or script reads it.
-- **Neutral name.** Export also writes the same value as `data-blocks-engine-capture-glyph-color`, the consumer-owned name ([capture-evidence.md](capture-evidence.md), #787).
 
 ## What is sampled
 
@@ -43,4 +42,4 @@ The clip's pixels go through the same monochrome test as Blocks Engine's `Monoch
 
 ## Consumer guidance
 
-A compiler should prefer `data-dla-glyph-color` and decode image bytes only when the attribute is absent. With the attribute present, a host that cannot decode the format (for example AVIF without libavif) still produces the authored colour, and no `glyph_color_undecodable` finding is needed for that glyph.
+A compiler should prefer `data-blocks-engine-capture-glyph-color` and decode image bytes only when the attribute is absent. With the attribute present, a host that cannot decode the format (for example AVIF without libavif) still produces the authored colour, and no `glyph_color_undecodable` finding is needed for that glyph.

@@ -17,11 +17,11 @@ describe('scopeCss — selectors', () => {
 
   it('matches carried root classes on the scope element instead of a descendant', () => {
     const out = scopeCss('.x .title { font-size: 28px }', {
-      scope: '.data-liberation-mobile-document',
+      scope: '.data-blocks-engine-capture-mobile-document',
       rootClasses: ['x', 'x-fonts-lato'],
     });
-    expect(out).toContain(':where(.data-liberation-mobile-document).x .title');
-    expect(out).not.toContain(':where(.data-liberation-mobile-document) .x .title');
+    expect(out).toContain(':where(.data-blocks-engine-capture-mobile-document).x .title');
+    expect(out).not.toContain(':where(.data-blocks-engine-capture-mobile-document) .x .title');
   });
 
   it('folds html/body/:root onto the scope instead of nesting under it', () => {

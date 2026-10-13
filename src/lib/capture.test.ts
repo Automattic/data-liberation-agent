@@ -392,21 +392,6 @@ describe( 'captureWebsite completeness', () => {
 			[ 'route_capture_degraded', degraded ], [ 'route_export_failed', dropped ],
 		] );
 		// The findings travel inside the website artifact an importer receives.
-		const findings = JSON.parse( readFileSync( join( root, 'website', 'capture-findings.json' ), 'utf8' ) );
-		expect( findings ).toEqual( {
-			schema: 'data-liberation-agent/capture-findings/v1',
-			entrypoint: 'index.html',
-			complete: false,
-			usable: true,
-			summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0, unresolved_anchors: 0 },
-			findings: [
-				{ code: 'route_capture_degraded', severity: 'warning', unit: 'route', url: degraded, reason: expect.stringContaining( 'screenshot timeout' ), metrics: { failedStages: 1 } },
-				{ code: 'route_export_failed', severity: 'error', unit: 'route', url: dropped, reason: 'cannot export page' },
-			],
-			omitted_findings: 0,
-			missing_routes: [ { url: dropped, code: 'route_export_failed', reason: 'cannot export page' } ],
-		} );
-		// The same rows, in Static Site Importer's producer-neutral schema.
 		const sourceFindings = JSON.parse( readFileSync( join( root, 'website', 'source-findings.json' ), 'utf8' ) );
 		expect( sourceFindings ).toEqual( {
 			schema: 'static-site-importer/source-findings/v1',
@@ -415,12 +400,13 @@ describe( 'captureWebsite completeness', () => {
 			usable: true,
 			summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0, unresolved_anchors: 0, omitted_findings: 0 },
 			findings: [
-				{ code: 'route_capture_degraded', severity: 'warning', unit: 'route', loss_class: 'degraded_unit', location: { url: degraded }, message: findings.findings[ 0 ].reason, metrics: { failedStages: 1 }, owning_layer: 'data-liberation-agent' },
+				{ code: 'route_capture_degraded', severity: 'warning', unit: 'route', loss_class: 'degraded_unit', location: { url: degraded }, message: expect.stringContaining( 'screenshot timeout' ), metrics: { failedStages: 1 }, owning_layer: 'data-liberation-agent' },
 				{ code: 'route_export_failed', severity: 'error', unit: 'route', loss_class: 'omitted_unit', location: { url: dropped }, message: 'cannot export page', owning_layer: 'data-liberation-agent' },
 			],
 		} );
 		const reference = JSON.parse( readFileSync( join( root, 'fidelity-reference.json' ), 'utf8' ) );
-		expect( reference.capture.map( ( file: { path: string } ) => file.path ) ).toEqual( expect.arrayContaining( [ 'website/capture-findings.json', 'website/source-findings.json' ] ) );
+		expect( reference.capture.map( ( file: { path: string } ) => file.path ) ).toContain( 'website/source-findings.json' );
+		expect( existsSync( join( root, 'website', 'capture-findings.json' ) ) ).toBe( false );
 	} );
 
 	it( 'records off-origin inventory URLs the browser capture dropped without counting them as missing', async () => {
@@ -864,7 +850,7 @@ describe( 'captureWebsite time budget', () => {
 		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
 	} );
 
-	it( 'exports what was captured and reports budget-skipped routes as missing in the result and capture-findings.json', async () => {
+	it( 'exports what was captured and reports budget-skipped routes as missing in the result and source-findings.json', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
 		const others = Array.from( { length: 10 }, ( _, index ) => `https://example.com/p${ index }` );
@@ -886,12 +872,11 @@ describe( 'captureWebsite time budget', () => {
 		expect( result.summary ).toMatchObject( { routesDiscovered: 11, routesCaptured: 10, routesFailed: 1 } );
 		expect( result.missingRoutes ).toEqual( [ { url: skipped, code: 'route_capture_skipped_budget', reason: skippedRow.reason } ] );
 		expect( isUsableCapture( result ) ).toBe( true );
-		const findings = JSON.parse( readFileSync( join( root, 'website', 'capture-findings.json' ), 'utf8' ) );
+		const findings = JSON.parse( readFileSync( join( root, 'website', 'source-findings.json' ), 'utf8' ) );
 		expect( findings ).toMatchObject( {
 			complete: false, usable: true,
 			summary: { routes_discovered: 11, routes_captured: 10, routes_failed: 1 },
-			findings: [ skippedRow ],
-			missing_routes: [ { url: skipped, code: 'route_capture_skipped_budget' } ],
+			findings: [ { code: 'route_capture_skipped_budget', severity: 'error', unit: 'route', loss_class: 'omitted_unit', location: { url: skipped }, message: skippedRow.reason, metrics: skippedRow.metrics } ],
 		} );
 	} );
 } );

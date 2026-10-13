@@ -87,7 +87,7 @@ it.skipIf( skipBrowser )( 'does not overwrite an ancestor edited after its captu
 		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
 		const baseline = ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ).replace( 'id="header" class="closed"', 'id="header" class="owner-edited"' );
 		const portable = wireCapturedDialogs( baseline, report.states );
-		expect( portable ).toContain( 'data-dla-dialog-ancestor-unverified="portable-owner-mismatch"' );
+		expect( portable ).toContain( 'data-blocks-engine-capture-dialog-ancestor-unverified="portable-owner-mismatch"' );
 		await page.setContent( portable );
 		await page.locator( '#a' ).click();
 		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'owner-edited' );
@@ -108,7 +108,7 @@ it.skipIf( skipBrowser )( 'reports bounded and non-restored ancestor evidence wi
 			expect( state?.dialog?.ancestorState ).toMatchObject( { status: 'unverified', reason } );
 			expect( JSON.stringify( state?.dialog?.ancestorState ).length ).toBeLessThan( 32768 );
 			const portable = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), [ state! ] );
-			expect( portable ).not.toContain( 'data-dla-dialog-ancestor-state=' );
+			expect( portable ).not.toContain( 'data-blocks-engine-capture-dialog-ancestor-state=' );
 			await page.close();
 		}
 	} finally { await browser.close(); }

@@ -34,7 +34,7 @@ vi.mock( '../lib/capture-export.js', () => ( {
 		writeFileSync( join( outputDir, 'website', 'pricing', 'index.html' ), '<h1>Pricing</h1>' );
 		const path = join( outputDir, 'capture-receipt.json' );
 		writeFileSync( path, JSON.stringify( {
-			schema: 'data-liberation/capture-receipt/v1',
+			schema: 'blocks-engine-capture/capture-receipt/v1',
 			source: { url: sourceUrl },
 			websiteRoot: 'website',
 			routes: [

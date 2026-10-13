@@ -4,7 +4,7 @@ import type { Platform } from '../platform/types.js';
 import type { CaptureOptions, CaptureProgress, CaptureResult } from './capture.js';
 import { budgetOmittedRoutes, missingRoutes } from './capture-usability.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
-import { writeCaptureFindings } from './capture-findings.js';
+import { writeSourceFindings } from './source-findings.js';
 import { acquireHttpDocuments } from './http-acquisition.js';
 import { materializeHttpDocuments } from './http-materialization.js';
 
@@ -67,7 +67,7 @@ export async function captureHttpWebsite( input: {
 	diagnostic.discoveryDiagnostics = diagnostics; diagnostic.failures = failures;
 	writeFileSync( diagnosticPath, JSON.stringify( diagnostic, null, 2 ) + '\n' );
 	const result: CaptureResult = { captureReceiptPath, outputDir: options.outputDir, summary, complete: false, entrypointCaptured: true, missingRoutes: missingRoutes( diagnostics ), failures, discoveryDiagnostics: diagnostics, unresolvedAnchors: diagnostic.unresolvedAnchors ?? [], provenance: { provider: 'data-liberation/http-capture', platform: platform.id } };
-	writeCaptureFindings( options.outputDir, result );
+	writeSourceFindings( options.outputDir, result );
 	progress( { phase: 'complete', current: urls.length, total: urls.length, unit: 'routes' } );
 	return result;
 }

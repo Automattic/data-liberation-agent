@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportWebsiteCapture } from './capture-export.js';
-import { buildCaptureFindings } from './capture-findings.js';
+import { buildSourceFindings } from './source-findings.js';
 import { isUsableCapture, missingRoutes } from './capture-usability.js';
 import { DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -28,7 +28,7 @@ function websiteFiles( dir: string ): string[] {
  * HTML can be padded past a limit.
  */
 function fixture( aboutBytes = 0 ): string {
-	const outputDir = mkdtempSync( join( tmpdir(), 'dla-file-limit-' ) );
+	const outputDir = mkdtempSync( join( tmpdir(), 'liberation-file-limit-' ) );
 	dirs.push( outputDir );
 	for ( const path of [ 'html', 'resources/media', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 	writeFileSync( join( outputDir, 'html/homepage.html' ), `<!doctype html><html><head><title>Home</title></head><body><h1>Home</h1><video src="${ VIDEO }" muted></video><img src="${ POSTER }" alt="Poster"><a href="/about">About</a></body></html>` );
@@ -108,11 +108,11 @@ describe( 'export per-file limit (maxFileBytes)', () => {
 		// An asset loss neither drops a route nor makes the capture incomplete.
 		expect( receipt.summary ).toMatchObject( { routesCaptured: 2, routesFailed: 0, complete: true } );
 
-		const findings = buildCaptureFindings( { complete: true, entrypointCaptured: true, summary, unresolvedAnchors: [], discoveryDiagnostics: receipt.discoveryDiagnostics as never } );
+		const findings = buildSourceFindings( { complete: true, entrypointCaptured: true, summary, unresolvedAnchors: [], discoveryDiagnostics: receipt.discoveryDiagnostics as never } );
 		// Sorted by URL, so the same capture writes the same bytes.
 		expect( findings.findings.filter( finding => finding.code === 'asset_exceeds_file_limit' ) ).toEqual( [
-			expect.objectContaining( { url: POSTER, unit: 'asset', metrics: { bytes: 3072, limit } } ),
-			expect.objectContaining( { url: VIDEO, unit: 'asset', metrics: { bytes: 4096, limit } } ),
+			expect.objectContaining( { location: { url: POSTER }, unit: 'asset', loss_class: 'omitted_unit', metrics: { bytes: 3072, limit } } ),
+			expect.objectContaining( { location: { url: VIDEO }, unit: 'asset', loss_class: 'omitted_unit', metrics: { bytes: 4096, limit } } ),
 		] );
 		expect( findings.usable ).toBe( true );
 	} );

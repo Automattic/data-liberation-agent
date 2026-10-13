@@ -76,7 +76,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'profile acquisiti
 			expect( evidence.preserved ).toBe( 1 );
 			const report = JSON.parse( readFileSync( join( directory, evidence.path ), 'utf8' ) );
 			expect( JSON.stringify( report ) ).toContain( `motion-${ key }` );
-			expect( readFileSync( join( directory, profile.html! ), 'utf8' ) ).toContain( `data-dla-native-profile="${ key }"` );
+			expect( readFileSync( join( directory, profile.html! ), 'utf8' ) ).toContain( `data-blocks-engine-capture-native-profile="${ key }"` );
 			if ( key !== 'tablet' ) expect( route.nativeViewTimelines![ key ] ).toEqual( evidence );
 		}
 		expect( route.profiles!.desktop!.fluid ).toEqual( route.fluid );

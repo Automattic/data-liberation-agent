@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { exportWebsiteCapture } from '../capture-export.js';
-import { buildCaptureFindings } from '../capture-findings.js';
+import { buildSourceFindings } from '../source-findings.js';
 import { CAPTURE_BUDGET_DRAIN_MS } from '../capture-time-budget.js';
 import { isUsableCapture, missingRoutes } from '../capture-usability.js';
 import { captureScreenshots } from './screenshotter.js';
@@ -43,7 +43,7 @@ function exportCapture( outputDir: string, sourceUrl: string, result: Screenshot
 	const missing = missingRoutes( receipt.discoveryDiagnostics );
 	const complete = receipt.summary.complete as boolean;
 	const usable = isUsableCapture( { complete, entrypointCaptured: true, missingRoutes: missing, summary } );
-	const findings = buildCaptureFindings( { complete, entrypointCaptured: true, summary: { ...summary, ...receipt.summary }, unresolvedAnchors: [], discoveryDiagnostics: receipt.discoveryDiagnostics } );
+	const findings = buildSourceFindings( { complete, entrypointCaptured: true, summary: { ...summary, ...receipt.summary }, unresolvedAnchors: [], discoveryDiagnostics: receipt.discoveryDiagnostics } );
 	return { receipt, missing, complete, usable, findings, exportMs };
 }
 
@@ -113,7 +113,8 @@ it.skipIf( skipBrowser )( 'abandons a route still running at the deadline and ex
 		expect( complete ).toBe( false );
 		expect( missing ).toEqual( [ { url: `${ origin }/slow`, code: 'route_capture_skipped_budget', reason: expect.stringContaining( 'abandoned in flight' ) } ] );
 		expect( usable ).toBe( true );
-		expect( findings ).toMatchObject( { complete: false, usable: true, missing_routes: [ { code: 'route_capture_skipped_budget' } ] } );
+		expect( findings ).toMatchObject( { complete: false, usable: true } );
+		expect( findings.findings ).toContainEqual( expect.objectContaining( { code: 'route_capture_skipped_budget', loss_class: 'omitted_unit', unit: 'route' } ) );
 	} finally {
 		await close( server );
 		rmSync( outputDir, { recursive: true, force: true } );

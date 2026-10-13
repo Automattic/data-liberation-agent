@@ -8,8 +8,8 @@ it( 'restores unlearned replacement roles without replacing the returned learned
 	try {
 		const page = await browser.newPage();
 		await page.setContent( '<div id="learned" style="width:80px">Learned</div><div id="unlearned">Authored</div>' );
-		const baseline = await captureFluidBaseline( page, 'data-dla-fluid-id' );
-		await page.locator( '#learned' ).evaluate( node => node.setAttribute( 'data-dla-fluid-id', 'desktop-0' ) );
+		const baseline = await captureFluidBaseline( page, 'data-blocks-engine-capture-fluid-id' );
+		await page.locator( '#learned' ).evaluate( node => node.setAttribute( 'data-blocks-engine-capture-fluid-id', 'desktop-0' ) );
 		await baseline.evaluate( state => state.bind() );
 		await page.evaluate( () => {
 			( document.querySelector( '#learned' ) as HTMLElement ).style.width = '320px';
@@ -33,8 +33,8 @@ it.each( [
 	const browser = await chromium.launch();
 	try {
 		const page = await browser.newPage();
-		await page.setContent( `<script>${ patch }Array.from = function (value) { return Array.isArray(value) ? value.slice() : []; };</script><div class="active"><nav id="duplicate" class="menu" data-dla-fluid-id="mobile-0" style="width:400px">Active</nav></div><div class="spacer"><nav id="duplicate" class="menu" data-dla-fluid-id="mobile-1" style="width:80px;left:13px">Clone</nav></div>` );
-		const baseline = await captureFluidBaseline( page, 'data-dla-fluid-id' );
+		await page.setContent( `<script>${ patch }Array.from = function (value) { return Array.isArray(value) ? value.slice() : []; };</script><div class="active"><nav id="duplicate" class="menu" data-blocks-engine-capture-fluid-id="mobile-0" style="width:400px">Active</nav></div><div class="spacer"><nav id="duplicate" class="menu" data-blocks-engine-capture-fluid-id="mobile-1" style="width:80px;left:13px">Clone</nav></div>` );
+		const baseline = await captureFluidBaseline( page, 'data-blocks-engine-capture-fluid-id' );
 		await baseline.evaluate( state => state.bind() );
 		await page.evaluate( () => document.querySelector( '.spacer .menu' )!.replaceWith( document.querySelector( '.active .menu' )!.cloneNode( true ) ) );
 		await baseline.evaluate( state => state.reconcile() );
@@ -42,7 +42,7 @@ it.each( [
 		expect( ( await page.locator( '.spacer .menu' ).boundingBox() )!.width ).toBe( 80 );
 		expect( await page.locator( '.spacer .menu' ).evaluate( element => ( element as HTMLElement ).style.left ) ).toBe( '13px' );
 		await baseline.evaluate( state => state.cleanup() );
-		expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		await baseline.dispose();
 	} finally {
 		await browser.close();
@@ -54,15 +54,15 @@ it( 'keeps finalized clone geometry after cleanup while allowing source controls
 	try {
 		const page = await browser.newPage( { viewport: { width: 402, height: 900 } } );
 		await page.setContent( '<div class="active"><nav id="duplicate" class="menu" aria-hidden="true" style="width:402px;left:5px">Active</nav></div><div class="spacer"><nav id="duplicate" class="menu" aria-hidden="true" style="width:80px;left:13px">Clone</nav></div>' );
-		const baseline = await captureFluidBaseline( page, 'data-dla-fluid-id' );
-		await page.locator( '.active .menu' ).evaluate( element => element.setAttribute( 'data-dla-fluid-id', 'mobile-0' ) );
+		const baseline = await captureFluidBaseline( page, 'data-blocks-engine-capture-fluid-id' );
+		await page.locator( '.active .menu' ).evaluate( element => element.setAttribute( 'data-blocks-engine-capture-fluid-id', 'mobile-0' ) );
 		await baseline.evaluate( state => state.bind() );
-		await baseline.evaluate( state => state.activate( [ { id: 'mobile-0', property: 'width', css: '100vw', segmented: false } ], 'data-dla-fluid-segment', 402 ) );
+		await baseline.evaluate( state => state.activate( [ { id: 'mobile-0', property: 'width', css: '100vw', segmented: false } ], 'data-blocks-engine-capture-fluid-segment', 402 ) );
 		await baseline.evaluate( state => state.cleanup() );
 		await page.evaluate( () => document.querySelector( '.spacer .menu' )!.replaceWith( document.querySelector( '.active .menu' )!.cloneNode( true ) ) );
 		await page.waitForFunction( () => ( document.querySelector( '.spacer .menu' ) as HTMLElement ).style.width === '80px' );
 		expect( await page.locator( '.spacer .menu' ).evaluate( element => ( element as HTMLElement ).style.left ) ).toBe( '13px' );
-		expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		await page.locator( '.spacer .menu' ).evaluate( element => {
 			const opened = element.cloneNode( true ) as HTMLElement;
 			opened.setAttribute( 'aria-hidden', 'false' );
@@ -99,10 +99,10 @@ it( 'rebinds copied identities to the original clone role without borrowing acti
 	try {
 		const page = await browser.newPage();
 		await page.setContent( '<div class="active"><div id="duplicate" class="menu" style="width:400px;left:5px">Active</div></div><div class="spacer"><div id="duplicate" class="menu" style="width:80px;left:13px">Clone</div></div>' );
-		const baseline = await captureFluidBaseline( page, 'data-dla-fluid-id' );
+		const baseline = await captureFluidBaseline( page, 'data-blocks-engine-capture-fluid-id' );
 		await page.evaluate( () => {
-			document.querySelector( '.active .menu' )!.setAttribute( 'data-dla-fluid-id', 'mobile-0' );
-			document.querySelector( '.spacer .menu' )!.setAttribute( 'data-dla-fluid-id', 'mobile-1' );
+			document.querySelector( '.active .menu' )!.setAttribute( 'data-blocks-engine-capture-fluid-id', 'mobile-0' );
+			document.querySelector( '.spacer .menu' )!.setAttribute( 'data-blocks-engine-capture-fluid-id', 'mobile-1' );
 		} );
 		await baseline.evaluate( state => state.bind() );
 		await page.evaluate( () => {
@@ -110,7 +110,7 @@ it( 'rebinds copied identities to the original clone role without borrowing acti
 			document.querySelector( '.spacer .menu' )!.classList.add( 'runtime-state' );
 		} );
 		await baseline.evaluate( state => state.reconcile() );
-		expect( await page.locator( '.spacer .menu' ).getAttribute( 'data-dla-fluid-id' ) ).toBe( 'mobile-1' );
+		expect( await page.locator( '.spacer .menu' ).getAttribute( 'data-blocks-engine-capture-fluid-id' ) ).toBe( 'mobile-1' );
 		await baseline.evaluate( state => state.restore() );
 		expect( await page.locator( '.spacer .menu' ).evaluate( element => ( element as HTMLElement ).style.width ) ).toBe( '80px' );
 		expect( await page.locator( '.spacer .menu' ).evaluate( element => ( element as HTMLElement ).style.left ) ).toBe( '13px' );
@@ -119,9 +119,9 @@ it( 'rebinds copied identities to the original clone role without borrowing acti
 		await page.locator( '.spacer .menu' ).evaluate( element => { element.setAttribute( 'class', 'unrelated' ); ( element as HTMLElement ).style.width = '99px'; } );
 		await baseline.evaluate( state => state.restore() );
 		expect( await page.locator( '.unrelated' ).evaluate( element => ( element as HTMLElement ).style.width ) ).toBe( '99px' );
-		expect( await page.locator( '.unrelated' ).getAttribute( 'data-dla-fluid-id' ) ).toBeNull();
+		expect( await page.locator( '.unrelated' ).getAttribute( 'data-blocks-engine-capture-fluid-id' ) ).toBeNull();
 		await baseline.evaluate( state => state.cleanup() );
-		expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		await baseline.dispose();
 	} finally {
 		await browser.close();
@@ -142,7 +142,7 @@ it( 'restores viewport and removes copied temporary identities when a sweep fail
 		await expect( learnAndApplyFluidGeometry( page, { widths: [ 390, 768 ], settleMs: 10 } ) ).rejects.toThrow( 'interrupted source measurement' );
 		expect( page.viewportSize()!.width ).toBe( 402 );
 		expect( await page.locator( 'main' ).evaluate( element => ( element as HTMLElement ).style.width ) ).toBe( '402px' );
-		expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 	} finally {
 		await browser.close();
 	}

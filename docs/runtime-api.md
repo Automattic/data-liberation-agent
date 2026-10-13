@@ -73,7 +73,7 @@ Use a tested immutable DLA revision and provision browser dependencies during en
 
 ### Release asset
 
-Each GitHub Release attaches the package's `npm pack` tarball, **`data-liberation-<version>.tgz`**. It contains exactly the published package files, including `dist/capture-engine.bundle.mjs` and the `src/` runtime assets its modules resolve relative to themselves. Consumers pin a release by URL and digest instead of cloning a commit:
+Each GitHub Release attaches the package's `npm pack` tarball, **`data-blocks-engine-capture-<version>.tgz`**. It contains exactly the published package files, including `dist/capture-engine.bundle.mjs` and the `src/` runtime assets its modules resolve relative to themselves. Consumers pin a release by URL and digest instead of cloning a commit:
 
 - Resolve the newest stable release with `GET /repos/Automattic/data-liberation-agent/releases/latest` and select the `.tgz` asset. GitHub reports its SHA-256 in the asset's `digest` field (`sha256:<hex>`).
 - Download `browser_download_url`, verify it against that digest, and extract with `tar -xzf <asset> --strip-components=1` so `dist/capture-engine.bundle.mjs` lands at the root of the target directory.

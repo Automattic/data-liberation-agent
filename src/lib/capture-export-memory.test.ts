@@ -9,7 +9,7 @@ import { readResolvedPage } from './site-includes.js';
 // Run separately from concurrent browser suites: this exercises the shipped,
 // minified parser pipeline, not a mocked memory budget or a text-only document.
 it.runIf( process.env.DLA_EXPORT_MEMORY_REGRESSION === '1' )( 'exports and compacts all source-sized device routes within bounded heaps', async () => {
-	const root = mkdtempSync( join( process.env.DLA_EXPORT_MEMORY_ARTIFACT_ROOT ?? tmpdir(), 'dla-export-memory-' ) );
+	const root = mkdtempSync( join( process.env.DLA_EXPORT_MEMORY_ARTIFACT_ROOT ?? tmpdir(), 'liberation-export-memory-' ) );
 	console.log( `Export memory fixture: ${ root }` );
 	try {
 		for ( const directory of [ 'screenshots', 'html', 'html-mobile', 'html-tablet', 'resources' ] ) mkdirSync( join( root, directory ) );

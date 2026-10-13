@@ -25,7 +25,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( resize ).not.toHaveBeenCalled();
 			expect( result ).toEqual( { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} } );
 			expect( await page.locator( '#priority' ).getAttribute( 'style' ) ).toBe( original );
-			expect( await page.locator( '[data-dla-fluid-id],[data-dla-fluid-segment]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id],[data-blocks-engine-capture-fluid-segment]' ).count() ).toBe( 0 );
 			if ( process.env.DLA_FLUID_EVIDENCE ) {
 				mkdirSync( process.env.DLA_FLUID_EVIDENCE, { recursive: true } );
 				writeFileSync( `${ process.env.DLA_FLUID_EVIDENCE }/inset-only.json`, JSON.stringify( { result, style: original, resizes: resize.mock.calls.length, viewport: page.viewportSize() }, null, 2 ) );
@@ -117,9 +117,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( literalRest[ 1 ].slice( 0, 3 ) ).toEqual( [ 0.5, 12, 20 ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( handles ).toEqual( { created: 1, disposed: 1 } );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 			expect( await page.locator( '#item[data-replaced]' ).count() ).toBe( 1 );
-			const css = await page.locator( 'style[data-dla-fluid-rules]' ).allTextContents();
+			const css = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).allTextContents();
 			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
 			const html = await page.content(); await copy.setContent( html );
 			const geometry: unknown[] = [];
@@ -270,10 +270,10 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( order ).toEqual( reject ? [ 'prepare:390', 'sample:390', 'prepare:768' ] : [ 'prepare:390', 'sample:390', 'prepare:768', 'sample:768' ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( await page.locator( '#untagged' ).getAttribute( 'style' ) ).toBeNull();
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 			if ( reject ) {
 				expect( await declaredGeometry() ).toEqual( initialStyle );
-				expect( await page.locator( '[data-dla-fluid-segment],style[data-dla-fluid-rules]' ).count() ).toBe( 0 );
+				expect( await page.locator( '[data-blocks-engine-capture-fluid-segment],style[data-blocks-engine-capture-fluid-rules]' ).count() ).toBe( 0 );
 			}
 		} finally { await page.close(); }
 	}, 20_000 );
@@ -344,7 +344,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	it( 'never learns a top offset: anchor targets move with their section instead', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
-			<section id="feature-section" style="position:relative;height:400px"><span id="features" data-dla-anchor-target="features" data-dla-anchor-source-id="feature-section" style="position:absolute;width:0;height:0"></span></section>
+			<section id="feature-section" style="position:relative;height:400px"><span id="features" data-blocks-engine-capture-anchor-target="features" data-blocks-engine-capture-anchor-source-id="feature-section" style="position:absolute;width:0;height:0"></span></section>
 			<div id="ordinary" style="position:absolute;top:144px;width:100px;height:100px"></div>
 		` );
 
@@ -671,12 +671,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		// spans 88%, so no single vw expression reproduces both regimes. The
 		// rules live in a stylesheet keyed by a persistent attribute, and the
 		// runtime's inline pixels must not outrank them.
-		const style = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		const style = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent();
 		expect( style ).toContain( '@media (max-width:767px)' );
 		expect( style ).toContain( '21.42vw' );
 		expect( style ).toContain( '@media (min-width:768px)' );
 		expect( style ).toContain( '23.36vw' );
-		expect( await page.locator( '#portfolio' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeTruthy();
+		expect( await page.locator( '#portfolio' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeTruthy();
 		expect( await page.locator( '#portfolio' ).getAttribute( 'style' ) ).not.toContain( 'font-size' );
 
 		// A width the sweep sampled on the mobile regime: the source's own
@@ -723,7 +723,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			settleMs: 50,
 		} );
 
-		expect( await page.locator( 'style[data-dla-fluid-rules]' ).textContent() ).toContain( '21.42vw' );
+		expect( await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent() ).toContain( '21.42vw' );
 		// A late runtime write (viewport resize, re-layout) would put back
 		// inline pixels, which outrank the stylesheet at every width. The
 		// capture must strip them until serialization.
@@ -894,8 +894,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( page.viewportSize()?.width ).toBe( 390 );
 			expect( await page.locator( '#wrapper-last, #wrapper-restore' ).count() ).toBe( 0 );
 			expect( await page.locator( 'p' ).allTextContents() ).toEqual( [ 'Last-width text', 'Restored-width text' ] );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
-			expect( await page.locator( '#survivor' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeTruthy();
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '#survivor' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeTruthy();
 			expect( await page.locator( '#survivor' ).evaluate( element => getComputedStyle( element ).transform ) )
 				.toBe( 'matrix(1, 0, 0, 1, 78, 0)' );
 		} finally {
@@ -945,7 +945,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				[ 'restore-scale', 'matrix(2, 0, 0, 2, 754.776, 0)' ],
 			] ) {
 				expect( await page.locator( `#${ id }` ).evaluate( element => getComputedStyle( element ).transform ), `${ id } computed transform` ).toBe( matrix );
-				expect( await page.locator( `#${ id }` ).getAttribute( 'data-dla-fluid-segment' ), `${ id } must not get a learned segment` ).toBeNull();
+				expect( await page.locator( `#${ id }` ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ), `${ id } must not get a learned segment` ).toBeNull();
 			}
 		} finally {
 			await page.close();
@@ -991,12 +991,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			settleMs: 50,
 		} );
 
-		const style = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		const style = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent();
 		expect( style ).toContain( '@media (max-width:1023px)' );
 		expect( style ).toContain( 'calc(12vw + 37.5px)' );
 		expect( style ).toContain( '@media (min-width:1024px) and (max-width:1919px)' );
 		expect( style ).toContain( '@media (min-width:1920px)' );
-		expect( await page.locator( '#first-section' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeTruthy();
+		expect( await page.locator( '#first-section' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeTruthy();
 		expect( await page.locator( '#first-section' ).getAttribute( 'style' ) ).not.toContain( 'padding-top' );
 
 		// A late runtime write must not put inline pixels back above the rules.
@@ -1049,12 +1049,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			settleMs: 40,
 		} );
 
-		const rules = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		const rules = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent();
 		expect( rules ).toContain( 'padding-top' );
 		expect( rules ).toContain( '@media' );
 		expect( await page.locator( '#hero' ).getAttribute( 'style' ) ).not.toContain( 'padding-top' );
 		expect( await page.locator( '#closed-menu' ).getAttribute( 'style' ) ).toContain( 'padding-top:240px' );
-		expect( await page.locator( '#closed-menu' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeNull();
+		expect( await page.locator( '#closed-menu' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeNull();
 		await page.setViewportSize( { width: 768, height: 900 } );
 		await page.waitForTimeout( 60 );
 		expect( Number.parseFloat( await page.locator( '#hero' ).evaluate( element => getComputedStyle( element ).paddingTop ) ) ).toBeCloseTo( 242.156, 0 );
