@@ -23,7 +23,7 @@ export interface RuntimeRegionNode {
 }
 
 export interface RuntimeRegionObservation {
-	schema: 'data-liberation/runtime-regions/v1';
+	schema: 'blocks-engine-capture/runtime-regions/v1';
 	sourceUrl: string;
 	finalUrl: string;
 	viewport: { width: number; height: number } | null;
@@ -240,7 +240,7 @@ export async function observeRuntimeRegions(
 		document = { ...metadata, stylesSha256: hash(metadata.styles) };
 	}
 	return {
-		schema: 'data-liberation/runtime-regions/v1',
+		schema: 'blocks-engine-capture/runtime-regions/v1',
 		sourceUrl,
 		finalUrl: page.url(),
 		viewport: page.viewportSize(),

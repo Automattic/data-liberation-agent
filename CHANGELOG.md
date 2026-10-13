@@ -15,6 +15,164 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.27.3] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+- sample adaptively and refine only unexplained intervals
+- probe shared chrome once and reuse it on every route
+
+## [0.27.2] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+- decide the phone capture per route
+
+### Fixed
+- report a route whose passes disagreed about a redirect as failed
+
+## [0.27.1] - 2026-10-13
+
+### Changed
+- close the protocol-redirect fixture's unrequested sockets
+
+## [0.27.0] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+- write only the Blocks Engine capture vocabulary and source-findings.json
+
+## [0.26.1] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+- Record the ancestor state that shows a modal menu
+- Keep a page's dialog states when a probed panel unmounts itself
+
+## [0.26.0] - 2026-10-13
+
+### Added
+- template grouping report and template-coverage route selection
+
+### Changed
+- regenerate plugin bundles
+
+## [0.25.0] - 2026-10-13
+
+### Added
+- record rendered glyph colour as data-dla-glyph-color
+- export partial output under a capture time budget and cap exported file size
+
+### Changed
+- regenerate plugin bundles
+
+## [0.24.0] - 2026-10-13
+
+### Added
+- carry capture findings inside the website artifact
+
+### Changed
+- regenerate plugin bundles
+- exclude perpetual movers from rest and stop after a constant probe
+
+## [0.23.3] - 2026-10-12
+
+### Changed
+- regenerate plugin bundles
+- guard that capture/export throw and reject sites declare a failure class
+
+### Fixed
+- find head and body by real tags, not by text inside scripts
+
+## [0.23.2] - 2026-10-12
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- do not admit state-changing action URLs as routes
+- give each document hop the remaining navigation budget
+- drop colliding routes, off-origin URLs and lost evidence blocks instead of failing the capture
+
+## [0.23.1] - 2026-10-12
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- navigate on document readiness, not the full load event
+
+## [0.23.0] - 2026-10-11
+
+### Added
+- bound browser capture with a shared route budget
+
+### Changed
+- regenerate plugin bundles
+
+## [0.22.3] - 2026-10-11
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- count routes with saved HTML as captured and contain per-route export failures
+
+## [0.22.2] - 2026-10-11
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- count real body elements and keep fluid learning from failing routes
+
+## [0.22.1] - 2026-10-11
+
+### Changed
+- stand down when a newer merge supersedes the bundle push
+
+## [0.22.0] - 2026-10-11
+
+### Added
+- report a usable partial-capture contract
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- count failed routes, not failure records
+
+## [0.21.9] - 2026-10-11
+
+### Changed
+- regenerate plugin bundles
+- normalize each route document once
+
+### Fixed
+- share bounded source document admission
+- preserve disclosure hydration baselines
+- complete admitted inventory beyond discovery deadlines
+
+## [0.21.8] - 2026-10-11
+
+### Changed
+- regenerate plugin bundles
+- accept desktop and mobile requests in either order
+- freeze reference evidence for the entrypoint by default (route-sample option, 'all' for full parity)
+- refine the tablet sweep band only on observed change
+- admit routes against a per-route working set above the idle floor
+- compare sampled drift routes concurrently
+- bound observation settle by readiness instead of a fixed sleep
+- run viewport passes concurrently
+
+### Fixed
+- restore an abandoned sweep's pose and resolve served routes once
+- fetch rendered sample requests with a browser-like connection limit
+- name the network cause when a source request fails
+- settle a source's own same-document reload
+- skip non-HTML routes before the document byte budget
+- do not read image sitemap entries as page routes
+
 ## [0.21.7] - 2026-10-09
 
 ### Changed

@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Session } from 'node:inspector/promises';
 import { chromium, devices, type Page } from 'playwright';
 import * as cheerio from 'cheerio';
 import { exportWebsiteCapture } from './capture-export.js';
@@ -59,6 +60,39 @@ async function observation( page: Page ) {
 	} );
 }
 
+it.each( [ false, true ] )( 'normalizes each distinct captured document once for assembly and evidence (identical: %s)', async ( identical ) => {
+	const session = new Session(); session.connect();
+	try {
+		await session.post( 'Profiler.enable' );
+		await session.post( 'Profiler.startPreciseCoverage', { callCount: true, detailed: false } );
+		const dir = directory();
+		const html = exported( dir, true, document => ( identical ? fixture( 'desktop' ) : document ).replace(
+			'</main>', '</main><div data-note="HS-FORM-FRAME">Authored &amp; marker</div><div class="other-hs-form-frame">Not a form frame</div>'
+		) );
+		const coverage = await session.post( 'Profiler.takePreciseCoverage' );
+		await session.post( 'Profiler.stopPreciseCoverage' );
+		const normalization = coverage.result
+			.filter( script => script.url.endsWith( '/src/lib/capture-export.ts' ) )
+			.flatMap( script => script.functions )
+			.find( fn => fn.functionName === 'renderedHtml' );
+		expect( normalization ).toBeDefined();
+		// Measure the actual export owner, without replacing its parser or I/O.
+		// Desktop/mobile previously ran twice while tablet ran once.
+		expect( normalization!.ranges[ 0 ].count ).toBe( identical ? 1 : 3 );
+		const $ = cheerio.load( html );
+		expect( $( '[data-blocks-engine-capture-document-scope]' ).toArray().map( node => node.attribs['data-blocks-engine-capture-device-document'] ) ).toEqual( [ 'desktop', 'mobile', 'tablet' ] );
+		for ( const key of selection.documents ) expect( $( `[data-blocks-engine-capture-device-document="${ key }"]` ).text() ).toContain( `${ identical ? 'desktop' : key } document` );
+		expect( $( '[data-note="HS-FORM-FRAME"]' ) ).toHaveLength( 3 );
+		expect( $( '.other-hs-form-frame' ) ).toHaveLength( 3 );
+		expect( html ).toContain( 'Authored &amp; marker' );
+		expect( $( 'iframe[src*="hsforms"]' ) ).toHaveLength( 0 );
+		expect( $( 'html' ) ).toHaveLength( 1 );
+		expect( $( 'body' ) ).toHaveLength( 1 );
+		expect( html ).not.toContain( 'sourceOnly' );
+		expect( JSON.parse( readFileSync( join( dir, 'source-profile.json' ), 'utf8' ) ) ).toMatchObject( { documentsPerRoute: 3, documentSelection: { kind: 'device' } } );
+	} finally { session.disconnect(); }
+} );
+
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-owned document selection', () => {
 	it( 'preserves class-only body box styling on the real selected body', async () => {
 		const decorate = ( html: string, key: string ) => {
@@ -91,21 +125,21 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 
 	it( 'renders the default document where the selection runtime never runs', async () => {
 		const dir = directory(); const html = exported( dir );
-		const visibility = cheerio.load( html )( 'style[data-dla-device-visibility]' ).text();
-		expect( visibility ).toContain( `html:not([data-dla-selected-document]) [data-dla-device-document="${ selection.defaultDocument }"]{display:contents!important}` );
+		const visibility = cheerio.load( html )( 'style[data-blocks-engine-capture-device-visibility]' ).text();
+		expect( visibility ).toContain( `html:not([data-blocks-engine-capture-selected-document]) [data-blocks-engine-capture-device-document="${ selection.defaultDocument }"]{display:contents!important}` );
 		const site = await startStaticServer( join( dir, 'website' ) );
 		const browser = await chromium.launch();
 		try {
 			// The block editor canvas renders this markup without the selection
-			// runtime, so nothing ever sets data-dla-selected-document. Disabling
+			// runtime, so nothing ever sets data-blocks-engine-capture-selected-document. Disabling
 			// scripts reproduces that consumer without depending on WordPress.
 			const context = await browser.newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
 			const page = await context.newPage();
 			await page.goto( site.url );
 			const seen = await page.evaluate( () => ( {
-				selected: document.documentElement.getAttribute( 'data-dla-selected-document' ),
-				displays: Object.fromEntries( [ ...document.querySelectorAll<HTMLElement>( '[data-dla-device-document]' ) ]
-					.map( node => [ node.getAttribute( 'data-dla-device-document' ), getComputedStyle( node ).display ] ) ),
+				selected: document.documentElement.getAttribute( 'data-blocks-engine-capture-selected-document' ),
+				displays: Object.fromEntries( [ ...document.querySelectorAll<HTMLElement>( '[data-blocks-engine-capture-device-document]' ) ]
+					.map( node => [ node.getAttribute( 'data-blocks-engine-capture-device-document' ), getComputedStyle( node ).display ] ) ),
 				canvas: [ ...document.querySelectorAll<HTMLElement>( '.canvas' ) ].find( node => node.getClientRects().length )?.dataset.fixtureDocument,
 				painted: document.body.scrollHeight,
 			} ) );
@@ -122,19 +156,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 		const dir = directory(); const html = exported( dir );
 		const serialized = cheerio.load( html );
 		expect( serialized( 'meta[name="viewport"]' ) ).toHaveLength( 1 );
-		expect( serialized( 'meta[name="viewport"]' ).attr( 'data-dla-selected-viewport' ) ).toBeDefined();
-		const visibility = serialized( 'style[data-dla-device-visibility]' ).text();
-		for ( const key of selection.documents ) expect( visibility ).toContain( `html[data-dla-selected-document="${ key }"] [data-dla-device-document="${ key }"]{display:contents!important}` );
-		const selector = serialized( 'script[data-dla-device-selection]' ).text();
+		expect( serialized( 'meta[name="viewport"]' ).attr( 'data-blocks-engine-capture-selected-viewport' ) ).toBeDefined();
+		const visibility = serialized( 'style[data-blocks-engine-capture-device-visibility]' ).text();
+		for ( const key of selection.documents ) expect( visibility ).toContain( `html[data-blocks-engine-capture-selected-document="${ key }"] [data-blocks-engine-capture-device-document="${ key }"]{display:contents!important}` );
+		const selector = serialized( 'script[data-blocks-engine-capture-device-selection]' ).text();
 		expect( selector ).not.toMatch( /appendChild|insertBefore|createElement\(['"](?:meta|style|script)['"]\)|new\s+URL|\.src\s*=/ );
 		expect( html ).not.toContain( 'sourceOnly' );
-		expect( html ).not.toContain( '@media(max-width:980px){.data-liberation-desktop-document' );
+		expect( html ).not.toContain( '@media(max-width:980px){.data-blocks-engine-capture-desktop-document' );
 		const profile = JSON.parse( readFileSync( join( dir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( { documentsPerRoute: 3, switchWidth: null, switchWidthSource: 'not-applicable', documentSelection: { kind: 'device' } } );
-		expect( JSON.parse( readFileSync( join( dir, 'capture-receipt.json' ), 'utf8' ) ).document_scope_classes ).toContain( 'data-liberation-tablet-document' );
-		const scopes = cheerio.load( html )( '[data-dla-document-scope]' );
+		expect( JSON.parse( readFileSync( join( dir, 'capture-receipt.json' ), 'utf8' ) ).document_scope_classes ).toContain( 'data-blocks-engine-capture-tablet-document' );
+		const scopes = cheerio.load( html )( '[data-blocks-engine-capture-document-scope]' );
 		expect( scopes ).toHaveLength( 3 );
-		expect( scopes.toArray().map( node => node.attribs['data-dla-device-document'] ) ).toEqual( [ 'desktop', 'mobile', 'tablet' ] );
+		expect( scopes.toArray().map( node => node.attribs['data-blocks-engine-capture-device-document'] ) ).toEqual( [ 'desktop', 'mobile', 'tablet' ] );
 		const staticSite = await startStaticServer( join( dir, 'website' ) );
 		const source = createServer( ( req, res ) => {
 			if ( req.url === '/typography.css' ) { res.setHeader( 'content-type', 'text/css' ); res.end( linkedCss ); return; }
@@ -206,13 +240,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 			`--HostTheme:stable!important;isolation:isolate;--source-mode:stale;color:red;${ keys.map( key => `--${ key }-html-only:stale;` ).join( '' ) }` );
 		$( 'body' ).attr( 'class', `host-body source-body-shared ${ keys.join( ' ' ) }` ).attr( 'style',
 			`--host-surface:anchored!important;outline-offset:7px;--source-body-mode:stale;${ keys.map( key => `--${ key }-body-only:stale;` ).join( '' ) }` );
-		for ( const node of $( '[data-dla-device-style]' ).toArray() ) {
+		for ( const node of $( '[data-blocks-engine-capture-device-style]' ).toArray() ) {
 			expect( $( node ).attr( 'media' ) ).toBe( 'not all' );
-			expect( $( node ).attr( 'data-dla-source-media' ) ).toBe( node.name === 'link' ? 'screen and (min-width: 0px), print' : 'screen' );
+			expect( $( node ).attr( 'data-blocks-engine-capture-source-media' ) ).toBe( node.name === 'link' ? 'screen and (min-width: 0px), print' : 'screen' );
 		}
 		const snapshot = `<script data-neutral-embedding-proof>function embeddingSnapshot(){
 function root(node,kind){return {classes:Array.from(node.classList),host:node.style.getPropertyValue(kind==='html'?'--HostTheme':'--host-surface'),hostPriority:node.style.getPropertyPriority(kind==='html'?'--HostTheme':'--host-surface'),other:node.style.getPropertyValue(kind==='html'?'isolation':'outline-offset'),source:node.style.getPropertyValue(kind==='html'?'--source-mode':'--source-body-mode'),color:node.style.getPropertyValue('color'),colorPriority:node.style.getPropertyPriority('color'),exclusive:['desktop','mobile','tablet'].map(function(key){return node.style.getPropertyValue('--'+key+'-'+kind+'-only');})};}
-return {selected:document.documentElement.getAttribute('data-dla-selected-document'),html:root(document.documentElement,'html'),body:root(document.body,'body'),viewport:document.querySelector('meta[name="viewport"]').content,innerWidth:innerWidth,letterSpacing:getComputedStyle(document.querySelector('[data-dla-device-document="'+document.documentElement.getAttribute('data-dla-selected-document')+'"] h1')).letterSpacing};}
+return {selected:document.documentElement.getAttribute('data-blocks-engine-capture-selected-document'),html:root(document.documentElement,'html'),body:root(document.body,'body'),viewport:document.querySelector('meta[name="viewport"]').content,innerWidth:innerWidth,letterSpacing:getComputedStyle(document.querySelector('[data-blocks-engine-capture-device-document="'+document.documentElement.getAttribute('data-blocks-engine-capture-selected-document')+'"] h1')).letterSpacing};}
 window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];function frame(){window.embeddingFrames.push(embeddingSnapshot());if(window.embeddingFrames.length<3)requestAnimationFrame(frame);}requestAnimationFrame(frame);</script>`;
 		// A parser-time consumer probe, after the selected roots and trees exist;
 		// it neither supplies nor repairs selection/viewport/host state.
@@ -246,9 +280,9 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 				// The selected linked sheet blocks rendering, not later parser-time
 				// scripts: every painted frame carries its typography.
 				for ( const state of proof.frames ) expect( state.letterSpacing ).toBe( item.key === 'mobile' ? '4px' : '3px' );
-				const activeMedia = await page.locator( 'link[data-dla-source-media]:not([data-dla-device-style])' ).evaluateAll( nodes => nodes.map( node => ( { media: node.getAttribute( 'media' ), source: node.getAttribute( 'data-dla-source-media' ) } ) ) );
+				const activeMedia = await page.locator( 'link[data-blocks-engine-capture-source-media]:not([data-blocks-engine-capture-device-style])' ).evaluateAll( nodes => nodes.map( node => ( { media: node.getAttribute( 'media' ), source: node.getAttribute( 'data-blocks-engine-capture-source-media' ) } ) ) );
 				expect( activeMedia ).toEqual( [ { media: 'screen and (min-width: 0px), print', source: 'screen and (min-width: 0px), print' } ] );
-				expect( await page.locator( '[data-dla-document-scope]' ).count() ).toBe( 3 );
+				expect( await page.locator( '[data-blocks-engine-capture-document-scope]' ).count() ).toBe( 3 );
 				rows.push( { profile: item.key, ...proof, activeMedia } );
 				await page.context().close();
 			}
@@ -262,27 +296,27 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		writeFileSync( join( dir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://fixture.test/': { html: 'html/home.html' } } } ) );
 		exportWebsiteCapture( { outputDir: dir, sourceUrl: 'https://fixture.test/', platform: 'neutral', summary: {}, failures: [], resolveDocumentSelection: () => ( { ...selection, documents: [ 'desktop' ], rules: [] } ) } );
 		const $ = cheerio.load( readFileSync( join( dir, 'website/index.html' ), 'utf8' ) );
-		expect( $( '[data-dla-document-scope]' ) ).toHaveLength( 1 );
-		expect( $( '[data-dla-device-document]' ).attr( 'data-dla-device-document' ) ).toBe( 'desktop' );
-		expect( $( '[data-dla-device-unavailable]' ) ).toHaveLength( 0 );
+		expect( $( '[data-blocks-engine-capture-document-scope]' ) ).toHaveLength( 1 );
+		expect( $( '[data-blocks-engine-capture-device-document]' ).attr( 'data-blocks-engine-capture-device-document' ) ).toBe( 'desktop' );
+		expect( $( '[data-blocks-engine-capture-device-unavailable]' ) ).toHaveLength( 0 );
 	} );
 
 	it( 'emits the relocated declared stylesheet without constructing another asset reference', async () => {
 		const dir = directory(); const html = exported( dir ); const $ = cheerio.load( html );
 		mkdirSync( join( dir, 'website/relocated' ) );
 		writeFileSync( join( dir, 'website/relocated/source.css' ), linkedCss );
-		$( 'link[data-dla-device-style]' ).attr( 'href', '/relocated/source.css' );
+		$( 'link[data-blocks-engine-capture-device-style]' ).attr( 'href', '/relocated/source.css' );
 		writeFileSync( join( dir, 'website/index.html' ), $.html() );
 		const site = await startStaticServer( join( dir, 'website' ) ); const browser = await chromium.launch();
 		try {
 			const page = await browser.newPage( { userAgent: 'NeutralDesktop', viewport: { width: 768, height: 900 } } );
 			await page.goto( site.url );
 			expect( ( await observation( page ) ).letterSpacing ).toBe( '3px' );
-			const active = page.locator( 'link[data-dla-source-media]:not([data-dla-device-style])' );
+			const active = page.locator( 'link[data-blocks-engine-capture-source-media]:not([data-blocks-engine-capture-device-style])' );
 			expect( await active.count() ).toBe( 1 );
 			expect( await active.getAttribute( 'href' ) ).toBe( '/relocated/source.css' );
 			expect( await active.getAttribute( 'media' ) ).toBe( 'all' );
-			expect( await active.getAttribute( 'data-dla-source-media' ) ).toBe( 'all' );
+			expect( await active.getAttribute( 'data-blocks-engine-capture-source-media' ) ).toBe( 'all' );
 		} finally { await browser.close(); await site.close(); }
 	} );
 
@@ -294,8 +328,8 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		try {
 			const page = await browser.newPage( { userAgent: 'Neutral iPad' } ); await page.goto( site.url );
 			expect( ( await observation( page ) ).selected ).toBeUndefined();
-			expect( await page.locator( '[data-dla-device-unavailable]' ).isVisible() ).toBe( true );
-			expect( await page.locator( 'html' ).getAttribute( 'data-dla-document-unavailable' ) ).toBe( 'tablet' );
+			expect( await page.locator( '[data-blocks-engine-capture-device-unavailable]' ).isVisible() ).toBe( true );
+			expect( await page.locator( 'html' ).getAttribute( 'data-blocks-engine-capture-document-unavailable' ) ).toBe( 'tablet' );
 			expect( await page.locator( 'meta[name="viewport"]' ).count() ).toBe( 1 );
 			expect( await page.locator( 'meta[name="viewport"]' ).getAttribute( 'content' ) ).toBeNull();
 		} finally { await browser.close(); await site.close(); }
@@ -332,8 +366,8 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 
 		const counts = routes.map( route => {
 			const $ = cheerio.load( readFileSync( join( dir, 'website', route.path, 'index.html' ), 'utf8' ) );
-			return { route: route.file, deviceStyles: $( '[data-dla-device-style]' ).length, runtimes: $( 'script[data-dla-device-selection]' ).length,
-				activators: $( 'script[data-dla-device-styles]' ).length, documentWrites: $( 'script' ).toArray().filter( node => /document\.write/.test( $( node ).text() ) ).length };
+			return { route: route.file, deviceStyles: $( '[data-blocks-engine-capture-device-style]' ).length, runtimes: $( 'script[data-blocks-engine-capture-device-selection]' ).length,
+				activators: $( 'script[data-blocks-engine-capture-device-styles]' ).length, documentWrites: $( 'script' ).toArray().filter( node => /document\.write/.test( $( node ).text() ) ).length };
 		} );
 		writeFileSync( join( dir, 'device-style-counts.json' ), JSON.stringify( counts, null, 2 ) );
 		expect( counts ).toEqual( routes.map( route => ( { route: route.file, deviceStyles: keys.length * 6, runtimes: 1, activators: 0, documentWrites: 0 } ) ) );
@@ -380,8 +414,8 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 				await page.waitForFunction( () => ( window as unknown as { deviceStyleFrames: unknown[] } ).deviceStyleFrames.length >= 3 );
 				const actual = await settled();
 				const frames = await page.evaluate( () => ( window as unknown as { deviceStyleFrames: unknown[] } ).deviceStyleFrames );
-				const media = await page.evaluate( () => [ ...document.querySelectorAll( '[data-dla-source-media]' ) ].map( node => ( {
-					device: node.getAttribute( 'data-dla-device-style' ), media: node.getAttribute( 'media' ), source: node.getAttribute( 'data-dla-source-media' ) } ) ) );
+				const media = await page.evaluate( () => [ ...document.querySelectorAll( '[data-blocks-engine-capture-source-media]' ) ].map( node => ( {
+					device: node.getAttribute( 'data-blocks-engine-capture-device-style' ), media: node.getAttribute( 'media' ), source: node.getAttribute( 'data-blocks-engine-capture-source-media' ) } ) ) );
 				expect( actual ).toEqual( expected );
 				expect( ( actual as { selected: string } ).selected ).toBe( profile.key );
 				for ( const state of frames ) expect( state ).toEqual( actual );
@@ -398,9 +432,9 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 			for ( const route of routes ) {
 				await page.goto( siteUrl + route.path );
 				expect( await page.evaluate( () => ( {
-					inert: [ ...document.querySelectorAll( '[data-dla-device-style]' ) ].every( node => node.getAttribute( 'media' ) === 'not all' ),
-					activated: document.querySelectorAll( '[data-dla-source-media]:not([data-dla-device-style])' ).length,
-					color: getComputedStyle( document.querySelector( '[data-dla-device-document="desktop"] h1' )! ).color,
+					inert: [ ...document.querySelectorAll( '[data-blocks-engine-capture-device-style]' ) ].every( node => node.getAttribute( 'media' ) === 'not all' ),
+					activated: document.querySelectorAll( '[data-blocks-engine-capture-source-media]:not([data-blocks-engine-capture-device-style])' ).length,
+					color: getComputedStyle( document.querySelector( '[data-blocks-engine-capture-device-document="desktop"] h1' )! ).color,
 				} ) ) ).toEqual( { inert: true, activated: 0, color: 'rgb(0, 0, 0)' } );
 			}
 			await context.close();
@@ -436,7 +470,7 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 			const phoneUA = await browser.newPage( { userAgent: devices['iPhone 17'].userAgent, viewport: { width: 900, height: 900 } } );
 			await phoneUA.goto( site.url );
 			expect( ( await observation( phoneUA ) ).selected ).toBe( 'wide' );
-			expect( await phoneUA.locator( 'html' ).getAttribute( 'data-dla-selected-document' ) ).toBeNull();
+			expect( await phoneUA.locator( 'html' ).getAttribute( 'data-blocks-engine-capture-selected-document' ) ).toBeNull();
 		} finally { await browser.close(); await site.close(); await new Promise<void>( resolve => source.close( () => resolve() ) ); }
 	} );
 } );

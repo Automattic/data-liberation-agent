@@ -50,10 +50,10 @@ it.each( [ false, true ] )( 'replays actual finite CSS start and completion, scr
 		expect( await pose( source ) ).toMatchObject( { state: 'complete', opacity: '1', effects: [] } );
 		await source.evaluate( () => scrollTo( 0, 0 ) ); await source.waitForTimeout( 100 );
 		const portable = await exportSource( source, directory );
-		const binding = JSON.parse( ( await source.locator( '#entrance' ).getAttribute( 'data-dla-viewport-entrance' ) )! );
+		const binding = JSON.parse( ( await source.locator( '#entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' ) )! );
 		expect( binding.cssAnimations.map( ( effect: {name: string} ) => effect.name ) ).toEqual( [ 'neutralFade', 'neutralClip' ] );
 		expect( binding.repeat ).toBe( repeat );
-		expect( await source.locator( '.entrance' ).nth( 1 ).getAttribute( 'data-dla-viewport-entrance' ) ).toBeNull();
+		expect( await source.locator( '.entrance' ).nth( 1 ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' ) ).toBeNull();
 		const copy = await browser.newPage( { viewport: { width: 1000, height: 700 } } );
 		await copy.goto( `data:text/html,${ encodeURIComponent( portable ) }` );
 		await copy.waitForTimeout( 100 ); expect( await pose( copy ) ).toMatchObject( { state: 'pending', opacity: '0' } );
@@ -99,10 +99,10 @@ it( 'retains a real phone startup witness across transient viewport reflow and d
 		expect( ( await pose( copy ) ).effects.every( effect => effect.state === 'running' ) ).toBe( true );
 		expect( ( await pose( copy ) ).effects ).toHaveLength( 2 );
 		await copy.waitForTimeout( 1000 ); expect( await pose( copy ) ).toMatchObject( {state:'complete',opacity:'1',effects:[]} );
-		expect( await copy.locator( '#entrance' ).getAttribute( 'data-dla-viewport-entrance-loss' ) ).toBeNull();
+		expect( await copy.locator( '#entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ).toBeNull();
 		const unknown = await browser.newPage( { ...devices['iPhone 17'],viewport:{width:1200,height:900} } );
 		await unknown.goto( `data:text/html,${ encodeURIComponent( portable ) }` );
-		expect( await unknown.locator( '#entrance' ).getAttribute( 'data-dla-viewport-entrance-loss' ) ).toBe( 'CSS startup context was not observed' );
+		expect( await unknown.locator( '#entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ).toBe( 'CSS startup context was not observed' );
 		const measured = await observePage( unknown, `data:text/html,${ encodeURIComponent( portable ) }`,1200,100,null,undefined,undefined,false,true );
 		expect( checkMotion(measured,measured).failures?.[0] ).toContain( 'viewport animation lifecycle unproven' );
 	} finally {await browser.close();if(!process.env.DLA_KEEP_DEVICE_EVIDENCE)rmSync(directory,{recursive:true,force:true})}
@@ -121,7 +121,7 @@ it( 'rejects altered authored timing even when every named CSS animation is regi
 		await copy.evaluate(()=>scrollTo(0,1100));await copy.waitForTimeout(150);
 		expect((await pose(copy)).effects).toHaveLength(2);
 		expect((await pose(copy)).effects.every(effect=>effect.state==='paused')).toBe(true);
-		expect(await copy.locator('#entrance').getAttribute('data-dla-viewport-entrance-loss')).toBe('authored paused CSS animation binding changed');
+		expect(await copy.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance-loss')).toBe('authored paused CSS animation binding changed');
 	} finally {await browser.close();if(!process.env.DLA_KEEP_DEVICE_EVIDENCE)rmSync(directory,{recursive:true,force:true})}
 },15_000 );
 
@@ -131,12 +131,12 @@ it( 'keeps cancelled source motion and unwitnessed pending lifecycles explicitly
 		const page=await browser.newPage({viewport:{width:1000,height:700}});await page.addInitScript(observeViewportEntrances);
 		await page.goto(`data:text/html,${encodeURIComponent(fixture(false))}`);
 		await stampViewportEntrances(page);
-		expect(await page.locator('#entrance').getAttribute('data-dla-viewport-entrance-loss')).toBe('CSS viewport lifecycle was not observed');
+		expect(await page.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance-loss')).toBe('CSS viewport lifecycle was not observed');
 		await page.evaluate(()=>scrollTo(0,1100));await page.waitForTimeout(150);
 		await page.locator('#entrance').evaluate(e=>e.getAnimations().forEach(a=>a.cancel()));
 		await page.waitForTimeout(50);await stampViewportEntrances(page);
-		expect(await page.locator('#entrance').getAttribute('data-dla-viewport-entrance')).toBeNull();
-		expect(await page.locator('#entrance').getAttribute('data-dla-viewport-entrance-loss')).toBe('Source CSS animation was cancelled before completion');
+		expect(await page.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance')).toBeNull();
+		expect(await page.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance-loss')).toBe('Source CSS animation was cancelled before completion');
 	} finally {await browser.close()}
 },15_000 );
 
@@ -146,8 +146,8 @@ it( 'exposes missing terminal lifecycle evidence without manufacturing completio
 		const page = await browser.newPage( {viewport:{width:1000,height:700}} ); await page.addInitScript(observeViewportEntrances);
 		await page.goto(`data:text/html,${encodeURIComponent(fixture(false).replace("entry.target.dataset.state='complete';",''))}`);
 		await page.evaluate(()=>scrollTo(0,1100));await page.waitForTimeout(1200);await stampViewportEntrances(page);
-		expect(await page.locator('#entrance').getAttribute('data-dla-viewport-entrance')).toBeNull();
-		expect(await page.locator('#entrance').getAttribute('data-dla-viewport-entrance-loss')).toBe('CSS entrance has no observed terminal attribute switch');
+		expect(await page.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance')).toBeNull();
+		expect(await page.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance-loss')).toBe('CSS entrance has no observed terminal attribute switch');
 	} finally {await browser.close()}
 },15_000 );
 

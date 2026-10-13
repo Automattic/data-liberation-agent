@@ -3,7 +3,7 @@
 The Wix adapter retains source-proven CMS data as inert metadata inside portable HTML:
 
 ```html
-<script type="application/json" data-dla-source-evidence="collections">
+<script type="application/json" data-blocks-engine-capture-source-evidence="collections">
 {"schema":"source/collections/v1","source_url":"https://example.test/agencies","collections":[],"diagnostics":[]}
 </script>
 ```
@@ -16,7 +16,7 @@ Collection fields contain `id`, `label`, `source_type`, and `system`, with optio
 
 Bounds are 20 collections, 64 fields per collection, 200 records per collection, bounded nested values, 2 MB per source JSON document, and 256 KB per generated evidence document. Oversized output produces an explicit empty/unproven evidence envelope rather than a truncated complete claim. Ordinary rendered capture remains available.
 
-The generic HTML exporter preserves versioned inert `data-dla-source-evidence` scripts alongside JSON-LD, without retaining executable provider runtime. Each evidence script is bounded to 256 KB and a route retains at most eight scripts. Invalid or over-limit evidence is recorded as `source_evidence_unproven`. Collapsed canonical aliases carry their source metadata to the retained document through the same route-allocation stage.
+The generic HTML exporter preserves versioned inert `data-blocks-engine-capture-source-evidence` scripts alongside JSON-LD, without retaining executable provider runtime. Each evidence script is bounded to 256 KB and a route retains at most eight scripts. Invalid or over-limit evidence is recorded as `source_evidence_unproven`. Collapsed canonical aliases carry their source metadata to the retained document through the same route-allocation stage.
 
 ## Verification
 

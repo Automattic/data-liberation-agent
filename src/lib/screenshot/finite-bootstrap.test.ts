@@ -18,8 +18,8 @@ describe( 'finite bootstrap completeness', () => {
 		expect( isOrderedSubsequence( [ '0', '1', '2' ], [ '2', '0' ] ) ).toBe( false );
 		expect( collectionItemHasResource( '<article><h2>Question</h2><p>Answer text</p></article>' ) ).toBe( false );
 		expect( collectionItemHasResource( '<article><img src="https://cdn.example/photo.png" alt=""></article>' ) ).toBe( true );
-		expect( bindObservedEmpty( '<p>Showing results for dla-no-match-7f39b2</p>', 'dla-no-match-7f39b2', '<p>Showing results for zzzzmissing</p>', 'zzzzmissing' ) ).toEqual( { html: '<p>Showing results for __DLA_QUERY__</p>', bindsQuery: true } );
-		expect( bindObservedEmpty( '<p>No FAQs found</p>', 'dla-no-match-7f39b2', '<p>No FAQs found</p>', 'zzzzmissing' ).bindsQuery ).toBe( false );
+		expect( bindObservedEmpty( '<p>Showing results for data-blocks-engine-capture-no-match-7f39b2</p>', 'data-blocks-engine-capture-no-match-7f39b2', '<p>Showing results for zzzzmissing</p>', 'zzzzmissing' ) ).toEqual( { html: '<p>Showing results for __DLA_QUERY__</p>', bindsQuery: true } );
+		expect( bindObservedEmpty( '<p>No FAQs found</p>', 'data-blocks-engine-capture-no-match-7f39b2', '<p>No FAQs found</p>', 'zzzzmissing' ).bindsQuery ).toBe( false );
 	} );
 	it( 'wires each assembled copy when the capture selector no longer matches', () => {
 		const copy = `<section><input type="text" aria-label="Browse"><div role="tablist"><button role="tab">One</button><button role="tab">Two</button></div><div><article>Alpha question Alpha answer</article></div></section>`;
@@ -45,7 +45,7 @@ describe( 'finite bootstrap completeness', () => {
 			replay: 'verified' as const,
 			network: { dataRequests: 'observed-response-replay' as const, verification: 'intercepted-observed-responses' as const, blockedRequests: 1 },
 			finiteBootstrap: {
-				schema: 'data-liberation/finite-bootstrap/v1' as const,
+				schema: 'blocks-engine-capture/finite-bootstrap/v1' as const,
 				mode: 'category-or-global-search' as const,
 				queryIndependent: true as const,
 				completeness: 'declared-finite' as const,
@@ -67,8 +67,8 @@ describe( 'finite bootstrap completeness', () => {
 			},
 		};
 		const wired = wireCapturedCollections( html, [ { status: 'captured', kind: 'typed-search', trigger: { selector: 'input', tag: 'input', ariaHaspopup: '', dataBindings: {} }, collectionFilter: evidence } ] );
-		expect( wired.match( /data-dla-collection-item=/g ) ).toHaveLength( 4 );
-		expect( wired ).not.toContain( 'dla-no-match' );
+		expect( wired.match( /data-blocks-engine-capture-collection-item=/g ) ).toHaveLength( 4 );
+		expect( wired ).not.toContain( 'data-blocks-engine-capture-no-match' );
 	} );
 	it( 'reads repeated items through a single wrapper without treating the wrapper as the item', () => {
 		const wrapped = '<section><div><article><h2>One</h2><p>Apricot answer</p></article><article><h2>Two</h2><p>Berry answer</p></article></div></section>';
@@ -82,7 +82,7 @@ describe( 'finite bootstrap completeness', () => {
 			{ query: 'SESSION', count: 4, nodes: [ node( 'count', '4 matching results found', '<div role="status" class="count">4 matching results found</div>' ), node( 'query', 'Showing results for: SESSION', '<div class="query">Showing results for: SESSION</div>' ) ] },
 			{ query: 'session', count: 4, nodes: [ node( 'count', '4 matching results found', '<div role="status" class="count">4 matching results found</div>' ), node( 'query', 'Showing results for: session', '<div class="query">Showing results for: session</div>' ) ] },
 			{ query: 'book', count: 1, nodes: [ node( 'count', '1 matching results found', '<div role="status" class="count">1 matching results found</div>' ), node( 'query', 'Showing results for: book', '<div class="query">Showing results for: book</div>' ) ] },
-			{ query: 'dla-no-match-7f39b2', count: 0, nodes: [ node( 'count', '0 matching results found', '<div role="status" class="count">0 matching results found</div>' ) ] },
+			{ query: 'data-blocks-engine-capture-no-match-7f39b2', count: 0, nodes: [ node( 'count', '0 matching results found', '<div role="status" class="count">0 matching results found</div>' ) ] },
 			{ query: '', count: 5, nodes: [] },
 		];
 		const status = deriveObservedStatus( observations, { emptyHtml: '<p>0 matching results found</p><p>No FAQs found</p>', universe: 19, answerQuery: 'book' } );
@@ -97,7 +97,7 @@ describe( 'finite bootstrap completeness', () => {
 	it( 'keeps a partial page and a query-bearing request unsupported', () => {
 		expect( classifyCollectionResponse( JSON.stringify( { records: [ { id: 'a' } ], paging: { hasNext: true, count: 1 } } ) ) ).toEqual( { completeness: 'paginated', declaredCount: null } );
 		expect( classifyCollectionResponse( JSON.stringify( { records: [ { id: 'a' } ], paging: { hasNext: false, count: 4 } } ) ) ).toEqual( { completeness: 'undeclared', declaredCount: null } );
-		expect( requestCarriesQuery( 'https://fixture.invalid/collection', '{"query":"dla-finite-probe-7f39b2"}', 'dla-finite-probe-7f39b2' ) ).toBe( true );
-		expect( requestCarriesQuery( 'https://fixture.invalid/collection', '{"filter":{}}', 'dla-finite-probe-7f39b2' ) ).toBe( false );
+		expect( requestCarriesQuery( 'https://fixture.invalid/collection', '{"query":"data-blocks-engine-capture-finite-probe-7f39b2"}', 'data-blocks-engine-capture-finite-probe-7f39b2' ) ).toBe( true );
+		expect( requestCarriesQuery( 'https://fixture.invalid/collection', '{"filter":{}}', 'data-blocks-engine-capture-finite-probe-7f39b2' ) ).toBe( false );
 	} );
 } );

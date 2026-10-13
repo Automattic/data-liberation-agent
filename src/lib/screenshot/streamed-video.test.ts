@@ -156,7 +156,7 @@ describe( 'stream-backed (MSE) video capture', () => {
 		await store.flush();
 
 		expect( html ).not.toContain( 'blob:' );
-		expect( html ).not.toContain( 'data-dla-' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-' );
 		const poster = /\sposter="([^"]+)"/.exec( videoTag( html ) )?.[ 1 ];
 		expect( poster ).toMatch( /^https:\/\/streamed-video\.test\/_dla\/video-frames\/[0-9a-f]{16}\.jpg$/ );
 

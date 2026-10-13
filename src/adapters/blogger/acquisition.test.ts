@@ -88,7 +88,7 @@ describe('Blogger HTTP preparation', () => {
 		expect(iframe.attr('src')).toBe('https://www.blogger.com/followers.g');
 		expect(iframe.attr('width')).toBeUndefined();
 		expect(iframe.attr('height')).toBeUndefined();
-		expect(prepared.html).not.toContain('data-dla-visual-iframe');
+		expect(prepared.html).not.toContain('data-blocks-engine-capture-visual-iframe');
 	});
 
 	it('accepts an image-only post body', () => {

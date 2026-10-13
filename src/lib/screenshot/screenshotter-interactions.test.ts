@@ -99,7 +99,7 @@ describe( 'captureScreenshots interactions', () => {
 				if ( ( page as unknown ) === mobilePage ) {
 					triggerClicks++;
 					return {
-						schema: 'data-liberation/interaction-states/v1',
+						schema: 'blocks-engine-capture/interaction-states/v1',
 						sourceUrl,
 						viewport: { width: 402, height: 681 },
 						capturedAt: '2026-08-25T00:00:00.000Z',
@@ -126,7 +126,7 @@ describe( 'captureScreenshots interactions', () => {
 					};
 				}
 				return {
-					schema: 'data-liberation/interaction-states/v1',
+					schema: 'blocks-engine-capture/interaction-states/v1',
 					sourceUrl,
 					viewport: { width: 1440, height: 900 },
 					capturedAt: '2026-08-25T00:00:00.000Z',
@@ -215,7 +215,7 @@ describe( 'captureScreenshots interactions', () => {
 		const captureDialogs = vi.mocked( captureTriggeredDialogs );
 		captureDialogs.mockReset();
 		captureDialogs.mockImplementation( async ( page, sourceUrl ) => ( {
-			schema: 'data-liberation/interaction-states/v1',
+			schema: 'blocks-engine-capture/interaction-states/v1',
 			sourceUrl,
 			viewport:
 				( page as unknown ) === mobilePage ? { width: 390, height: 844 } : { width: 1440, height: 900 },
@@ -263,7 +263,7 @@ describe( 'captureScreenshots interactions', () => {
 			);
 			expect( wireCapturedDialogs(
 				'<html><head></head><body><button id="desktop-dialog">Desktop</button><button id="mobile-menu">Mobile</button></body></html>', states
-			).match( /data-dla-dialog-trigger=/g ) ).toHaveLength( 2 );
+			).match( /data-blocks-engine-capture-dialog-trigger=/g ) ).toHaveLength( 2 );
 		} finally {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}

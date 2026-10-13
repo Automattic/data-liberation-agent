@@ -9,6 +9,8 @@ import type { InteractionStatesReport } from './screenshot/interaction-capture.j
 import type { ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import { DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, type ResponsiveVariantEvidence } from './responsive-assembly.js';
 import { pathWithin } from './portable-assets.js';
+import type { RouteDiagnostic } from './capture-export-routes.js';
+import { hasUncapturedProfiles, withExportDroppedRoutes } from './capture-usability.js';
 import { dependencyReferences, type PortableDependency } from './portable-references.js';
 import { exportPublicationBoundary, EXPORT_PUBLICATION_BOUNDARIES } from './export-publication.js';
 
@@ -18,6 +20,10 @@ export interface CaptureFluidEvidence {
 	breakpoints: number[];
 	canvasFloor?: number | null;
 	byKind: Record< string, number >;
+	/** Widths the sweep sampled, ascending; empty when it never resized. */
+	sampledWidths?: number[];
+	/** Learning threw; the document stayed frozen. */
+	diagnostic?: string;
 }
 export interface CaptureDocumentFluidEvidence {
 	desktop?: CaptureFluidEvidence;
@@ -36,7 +42,7 @@ export interface CaptureEvidenceInput {
 		title?: string;
 		summary: Record< string, unknown >;
 		failures: ReadonlyArray< { url: unknown; error: unknown } >;
-		discoveryDiagnostics?: ReadonlyArray< { code: string; url: string; reason: string } >;
+		discoveryDiagnostics?: ReadonlyArray< RouteDiagnostic >;
 	};
 	capture: {
 		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' > > >;
@@ -80,7 +86,7 @@ export interface CaptureEvidenceInput {
 	};
 	semantic?: SemanticEvidenceArtifacts;
 	diagnostics: {
-		capture: ReadonlyArray< { code: string; url: string; reason: string } >;
+		capture: ReadonlyArray< RouteDiagnostic >;
 		dependencies: ReadonlyArray< { url: string; sourceUrl: string; error: string } >;
 		media: ReadonlyArray< { url: string; error: string } >;
 		anchors: ReadonlyArray< { sourceUrl: string; reason: string; fragment?: string; targetCount?: number; url?: string } >;
@@ -93,17 +99,17 @@ export interface CaptureEvidenceInput {
 		};
 	};
 }
-export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
-export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
-export const ASSET_EVIDENCE_SCHEMA = 'data-liberation/asset-evidence/v1';
+export const CAPTURE_RECEIPT_SCHEMA = 'blocks-engine-capture/capture-receipt/v1';
+export const SOURCE_PROFILE_SCHEMA = 'blocks-engine-capture/source-profile/v1';
+export const ASSET_EVIDENCE_SCHEMA = 'blocks-engine-capture/asset-evidence/v1';
 const MAX_ASSET_EVIDENCE_ASSETS = 10_000;
 const MAX_ASSET_EVIDENCE_REFERENCES = 100;
 const MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE = 10_000;
 
-export const CAPTURED_INTERACTIONS_SCHEMA = 'data-liberation/captured-interactions/v1';
-export const CAPTURED_SCROLL_STATES_SCHEMA = 'data-liberation/captured-scroll-states/v1';
+export const CAPTURED_INTERACTIONS_SCHEMA = 'blocks-engine-capture/captured-interactions/v1';
+export const CAPTURED_SCROLL_STATES_SCHEMA = 'blocks-engine-capture/captured-scroll-states/v1';
 /** Indexed semantic evidence sidecar schema. */
-export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v2';
+export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'blocks-engine-capture/captured-semantic-evidence/v2';
 const MAX_SEMANTIC_EVIDENCE_FILE_BYTES = 10 * 1024 * 1024;
 
 export type SemanticEvidencePage = {
@@ -364,7 +370,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				try {
 					const capture = JSON.parse( readFileSync( path, 'utf8' ) ) as GeometryCapture;
 					if (
-						capture.schema !== 'data-liberation/layout-geometry-capture/v1' ||
+						capture.schema !== 'blocks-engine-capture/layout-geometry-capture/v1' ||
 						! Array.isArray( capture.observations )
 					) {
 						throw new Error( 'schema_invalid' );
@@ -572,15 +578,16 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			page.reports?.length && page.reports.every((report) => report.failures.length === 0 && report.residual === 0)),
 	} : undefined;
 	if (cleanup) writeFileSync(join(stageDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
+	const summary = withExportDroppedRoutes( options.summary, routeCaptureDiagnostics );
 	const complete =
-		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
+		! httpInput && Number( summary.routesFailed ?? 0 ) === 0 && ! hasUncapturedProfiles( routeCaptureDiagnostics ) &&
 		! discoveryDiagnostics.some( diagnostic => diagnostic.code === 'linked_page_budget_exhausted' || diagnostic.code === 'linked_page_outcome_unproven' ) &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
 	const nativePages = Object.entries( capture.entries ).filter( ([ , entry ]) => entry.nativeViewTimelines ).map( ([ url, entry ]) => ({ url, profiles: entry.nativeViewTimelines }) );
 	const nativeViewTimelines = nativePages.length ? {
-		schema: 'data-liberation/native-view-timelines/v1',
+		schema: 'blocks-engine-capture/native-view-timelines/v1',
 		pages: nativePages,
-		binding: { targetEffectsAttribute: 'data-dla-native-effects', nodeIdentityAttribute: 'data-dla-native-node', profileAttribute: 'data-dla-native-profile', documentScopeAttribute: 'data-dla-document-scope' },
+		binding: { targetEffectsAttribute: 'data-blocks-engine-capture-native-effects', nodeIdentityAttribute: 'data-blocks-engine-capture-native-node', profileAttribute: 'data-blocks-engine-capture-native-profile', documentScopeAttribute: 'data-blocks-engine-capture-document-scope' },
 		verification: 'source-observed; portable motion parity requires browser verification',
 	} : undefined;
 
@@ -601,7 +608,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				// generic consumer can recognize them as a document-scope boundary
 				// without hardcoding this tool's naming convention.
 				document_scope_classes: [ ...new Set( [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS,
-					...deviceSelections.flatMap( row => row.documents.filter( key => ! row.missing.includes( key ) ).map( key => `data-liberation-${ key }-document` ) ),
+					...deviceSelections.flatMap( row => row.documents.filter( key => ! row.missing.includes( key ) ).map( key => `data-blocks-engine-capture-${ key }-document` ) ),
 				] ) ],
 				routes,
 				assets,
@@ -618,7 +625,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				duplicateRoutes,
 				...( linkedPageCoverage ? { linkedPageCoverage } : {} ),
 				discoveryDiagnostics,
-				summary: { ...options.summary, complete },
+				summary: { ...summary, complete },
 			},
 			null,
 			2
@@ -628,7 +635,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		join( stageDir, 'diagnostics.json' ),
 		`${ JSON.stringify(
 			{
-				schema: 'data-liberation/capture-diagnostics/v1',
+				schema: 'blocks-engine-capture/capture-diagnostics/v1',
 				complete,
 				...( linkedPageCoverage ? { linkedPageCoverage } : {} ),
 				failures: options.failures,

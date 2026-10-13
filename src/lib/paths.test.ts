@@ -40,8 +40,8 @@ describe('resolveOutputBase', () => {
     expect(resolveOutputBase()).toBe('/var/data/dla');
   });
   it('DLA_OUTPUT_DIR (relative) resolves against home, not cwd', () => {
-    process.env.DLA_OUTPUT_DIR = 'dla-out';
-    expect(resolveOutputBase()).toBe(join(homedir(), 'dla-out'));
+    process.env.DLA_OUTPUT_DIR = 'data-blocks-engine-capture-out';
+    expect(resolveOutputBase()).toBe(join(homedir(), 'data-blocks-engine-capture-out'));
   });
   it('empty DLA_OUTPUT_DIR is treated as unset', () => {
     process.env.DLA_OUTPUT_DIR = '   ';

@@ -23,7 +23,7 @@ function png( width: number, height: number, fill: [ number, number, number, num
 
 describe( 'writePixelEvidence', () => {
 	it( 'writes the pair and a diff, and scores identical shots as 1', () => {
-		const dir = mkdtempSync( join( tmpdir(), 'dla-evidence-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-evidence-' ) );
 		dirs.push( dir );
 		const shot = png( 8, 8, [ 0, 0, 0, 255 ] );
 		const result = writePixelEvidence( dir, shot, shot );
@@ -32,7 +32,7 @@ describe( 'writePixelEvidence', () => {
 	} );
 
 	it( 'scores a total mismatch below 1 without throwing', () => {
-		const dir = mkdtempSync( join( tmpdir(), 'dla-evidence-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-evidence-' ) );
 		dirs.push( dir );
 		const result = writePixelEvidence(
 			dir,

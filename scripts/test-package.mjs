@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const scratch = mkdtempSync(join(tmpdir(), 'data-liberation-package-'));
+const scratch = mkdtempSync(join(tmpdir(), 'liberation-package-'));
 const consumerDir = join(scratch, 'consumer');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const COMMAND_TIMEOUT_MS = 180_000;

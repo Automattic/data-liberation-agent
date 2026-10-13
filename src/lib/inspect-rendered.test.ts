@@ -40,7 +40,7 @@ it('reports where a capability was observed, and refuses to look decided when th
   const url = await source('<main><h1>Contact</h1><form id="enquiry" class="contact-form stacked"><input name="email"></form><iframe id="map" src="about:blank"></iframe></main>');
   const result = await inspectSource(url, { sampleLimit: 1 });
   expect(result.capabilityVocabulary).toEqual({
-    schema: 'data-liberation/source-capability-vocabulary/v1',
+    schema: 'blocks-engine-capture/source-capability-vocabulary/v1',
     capabilities: ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'],
   });
   const sample = result.rendered.samples[0];
@@ -251,6 +251,42 @@ it('samples JS-discovered navigation and reports backend requests as unknown, ne
   expect(result.complexity.band).toBe('unknown');
   expect(result.rendered.samples[0].unknowns).toContain('Non-GET requests were blocked');
   expect(posts).toBe(0);
+}, 30_000);
+
+it('fetches a rendered sample\'s assets with browser-like connection concurrency per origin', async () => {
+  // Every rendered request is fetched by Node, not by Chromium, so Chromium's
+  // own per-host connection limit never applies. A page with many stylesheets
+  // used to open one connection per stylesheet at once; servers with a
+  // per-client connection limit reset them and then refuse the client for
+  // minutes, which also failed the capture that runs after inspection.
+  const stylesheets = 24;
+  const links = Array.from({ length: stylesheets }, (_, index) => `<link rel="stylesheet" href="/style-${index}.css">`).join('');
+  const url = await source(`<!doctype html><head>${links}</head><main><h1>Many stylesheets</h1></main>`);
+  let open = 0;
+  let peak = 0;
+  let served = 0;
+  server.on('connection', (socket) => {
+    peak = Math.max(peak, ++open);
+    socket.on('close', () => { open--; });
+  });
+  server.removeAllListeners('request');
+  server.on('request', (req, res) => {
+    if (req.url?.endsWith('.css')) {
+      setTimeout(() => {
+        served++;
+        res.setHeader('content-type', 'text/css');
+        res.end('main{color:#111}');
+      }, 50);
+      return;
+    }
+    res.setHeader('content-type', req.url === '/sitemap.xml' ? 'application/xml' : 'text/html');
+    res.end(req.url === '/sitemap.xml' ? '<urlset/>' : `<!doctype html><head>${links}</head><main><h1>Many stylesheets</h1></main>`);
+  });
+  const result = await inspectSource(url, { sampleLimit: 1 });
+  expect(result.rendered.succeeded).toBe(1);
+  expect(served).toBe(stylesheets);
+  expect(peak).toBeGreaterThan(1);
+  expect(peak).toBeLessThanOrEqual(6);
 }, 30_000);
 
 it('closes timed-out browser samples and keeps missing evidence unknown', async () => {

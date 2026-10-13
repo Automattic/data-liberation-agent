@@ -104,7 +104,7 @@ describe( 'source-backed typed collection filtering', () => {
 				replay: 'verified', restoration: 'verified', mode: 'category-or-global-search',
 				network: { dataRequests: 'observed-response-replay', verification: 'intercepted-observed-responses' },
 				finiteBootstrap: {
-					schema: 'data-liberation/finite-bootstrap/v1', mode: 'category-or-global-search', queryIndependent: true,
+					schema: 'blocks-engine-capture/finite-bootstrap/v1', mode: 'category-or-global-search', queryIndependent: true,
 					completeness: 'declared-finite', declaredCount: 4, observedItemCount: 4, coverage: 'complete',
 					verification: 'intercepted-observed-responses', unmatchedProbeBlocked: true, categoryControlsDuringSearch: 'hidden',
 					emptyQueryRestoresCategory: true, answers: 'observed', answerOnly: 'verified',
@@ -129,7 +129,7 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( await page.locator( '[role="tab"]:visible' ).count() ).toBe( 0 );
 		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'recommendations' );
 		expect( await page.locator( 'article:visible' ).innerText() ).toContain( 'Question delta' );
-		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'dla-no-match-7f39b2' );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'data-blocks-engine-capture-no-match-7f39b2' );
 		expect( await page.getByText( 'No results found.', { exact: true } ).isVisible() ).toBe( true );
 		await page.locator( 'input[aria-label="Browse entries"]' ).fill( '' );
 		expect( await page.locator( 'article:visible' ).count() ).toBe( 2 );
@@ -146,26 +146,26 @@ describe( 'source-backed typed collection filtering', () => {
 		await installFinite( page, 'status' );
 		const states = await captureTypedSearchStates( page, await captureSelectableSetStates( page, { settleMs: 150 } ), { settleMs: 80 } );
 		const status = states[ 0 ]?.collectionFilter?.finiteBootstrap?.status;
-		expect( status ).toMatchObject( { schema: 'data-liberation/collection-status/v1' } );
+		expect( status ).toMatchObject( { schema: 'blocks-engine-capture/collection-status/v1' } );
 		expect( status?.nodes.map( node => node.template ) ).toEqual( [ '{count} entries shown', 'Shown for: {query}' ] );
 		expect( status?.nodes.every( node => node.hidesAtZero ) ).toBe( true );
 		expect( states[ 0 ]?.collectionFilter?.emptyHtml ).toContain( '0 entries shown' );
 		expect( states[ 0 ]?.collectionFilter?.emptyHtml ).toContain( 'No results found.' );
 		const html = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), states );
-		expect( html.match( / data-dla-collection="/g ) ).toHaveLength( 1 );
-		expect( html.match( / data-dla-collection-status="/g ) ).toHaveLength( 2 );
+		expect( html.match( / data-blocks-engine-capture-collection="/g ) ).toHaveLength( 1 );
+		expect( html.match( / data-blocks-engine-capture-collection-status="/g ) ).toHaveLength( 2 );
 		await page.setContent( html );
 		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'APRICOT' );
-		await expect.poll( () => page.locator( '[data-dla-collection-status]:visible' ).allInnerTexts() ).toEqual( [ '1 entries shown', 'Shown for: APRICOT' ] );
+		await expect.poll( () => page.locator( '[data-blocks-engine-capture-collection-status]:visible' ).allInnerTexts() ).toEqual( [ '1 entries shown', 'Shown for: APRICOT' ] );
 		await page.locator( 'article p' ).first().evaluate( element => { element.textContent = 'A detailed answer about apricot<img> fruit'; } );
 		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'apricot<img>' );
 		await expect.poll( () => page.locator( '.query-status' ).innerText() ).toBe( 'Shown for: apricot<img>' );
 		expect( await page.locator( '.query-status img' ).count() ).toBe( 0 );
-		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'dla-no-match-7f39b2' );
-		expect( await page.locator( '[data-dla-collection-status]:visible' ).count() ).toBe( 0 );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'data-blocks-engine-capture-no-match-7f39b2' );
+		expect( await page.locator( '[data-blocks-engine-capture-collection-status]:visible' ).count() ).toBe( 0 );
 		expect( await page.getByText( '0 entries shown', { exact: true } ).count() ).toBe( 1 );
 		await page.locator( 'input[aria-label="Browse entries"]' ).fill( '' );
-		expect( await page.locator( '[data-dla-collection-status]:visible' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-collection-status]:visible' ).count() ).toBe( 0 );
 		await page.close();
 	}, 60_000 );
 	it( 'keeps a reversed category order on the same nodes and rejects resource-bearing items', async () => {

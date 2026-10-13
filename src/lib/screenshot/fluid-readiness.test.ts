@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { COARSE_SWEEP_WIDTHS, DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { waitForImages } from './page-helpers.js';
 
 describe( 'responsive readiness contract', () => {
@@ -36,7 +36,7 @@ describe( 'responsive readiness contract', () => {
 			expect( prepared ).toEqual( [ 390, 768, 1440 ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( await page.locator( '#slide' ).evaluate( element => element.getBoundingClientRect().x ) ).toBeCloseTo( 144, 0 );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 20_000 );
 
@@ -140,7 +140,7 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.locator( '#box' ).evaluate( element => getComputedStyle( element ).paddingTop ) ).toBe( '20px' );
 			expect( await page.locator( '#lazy img' ).evaluate( image => ( image as HTMLImageElement ).complete ) ).toBe( true );
 			expect( await page.locator( '#lazy img' ).evaluate( image => ( image as HTMLImageElement ).naturalWidth ) ).toBe( 40 );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
 
@@ -205,7 +205,7 @@ describe( 'responsive readiness contract', () => {
 			// The 600ms transform write must settle before the restored matrix is checked.
 			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768 ], settleMs: 700 } );
 			expect( await page.locator( '#box' ).evaluate( element => getComputedStyle( element ).transform ) ).toBe( 'matrix(2, 0, 0, 2, 144, 0)' );
-			expect( await page.locator( '#box' ).getAttribute( 'data-dla-fluid-id' ) ).toBeNull();
+			expect( await page.locator( '#box' ).getAttribute( 'data-blocks-engine-capture-fluid-id' ) ).toBeNull();
 		} finally { await page.close(); }
 	}, 20_000 );
 	const railFixture = ( reachableDelayMs: number | null ) => `<style>body{margin:0}.rail{display:flex;overflow-x:scroll;overflow-y:hidden;width:100%}.rail img{flex:none;width:100px;height:100px}</style>
@@ -287,4 +287,107 @@ describe( 'responsive readiness contract', () => {
 			expect( elapsed ).toBeLessThan( 9_000 );
 		} finally { await page.close(); }
 	}, 40_000 );
+	const writer = ( rule: string ) => `<style>body{margin:0}</style><div id="box" style="width:720px;height:40px">Neutral text</div>
+		<script>const box = document.querySelector('#box'); function resize() { box.style.width = (${ rule }) + 'px'; } addEventListener('resize', resize); resize();</script>`;
+
+	it( 'samples only the coarse widths when every series is one line across them', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( writer( 'innerWidth / 2' ) );
+			const widths: number[] = [];
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => widths.push( width ) } );
+			expect( widths ).toEqual( [ 390, 768, 1920, 600, 1024, 1440 ] );
+			expect( result.sampledWidths ).toEqual( COARSE_SWEEP_WIDTHS );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+		} finally { await page.close(); }
+	}, 60_000 );
+
+	it( 'stops after the probe widths when script-written geometry is the same at each', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( writer( '640' ) );
+			const widths: number[] = [];
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => widths.push( width ) } );
+			expect( widths ).toEqual( [ 390, 768, 1920 ] );
+			expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 640, 0 );
+		} finally { await page.close(); }
+	}, 60_000 );
+
+	it( 'bisects toward a switch inside the tablet band and learns it at the full ladder\'s width', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( writer( 'innerWidth >= 783 ? 600 : 300' ) );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0 } );
+			// 801 bisects 768–1024, 783 bisects 768–801, 775 bisects 768–783;
+			// 775–783 holds no ladder width, so the switch is located exactly.
+			expect( result.sampledWidths ).toEqual( [ 390, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
+			expect( result.breakpoints ).toContain( 783 );
+		} finally { await page.close(); }
+	}, 60_000 );
+
+	it( 'samples the exact widths it is given', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( writer( 'innerWidth >= 783 ? 600 : 300' ) );
+			const widths: number[] = [];
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, widths: [ 1440, 390, 1024 ], onProgress: width => widths.push( width ) } );
+			expect( widths ).toEqual( [ 1440, 390, 1024 ] );
+			expect( result.sampledWidths ).toEqual( [ 390, 1024, 1440 ] );
+		} finally { await page.close(); }
+	}, 60_000 );
+
+	// One box per rule shape, each with its own parent, learned in one page so a
+	// single full and a single adaptive sweep cover every kind. Refinement is
+	// global, so this also proves one shape's samples do not disturb another's.
+	const shapes = [
+		[ 'smooth', 'innerWidth / 2', '' ],
+		[ 'mobile switch at 768', 'innerWidth < 768 ? innerWidth - 20 : innerWidth / 2', '' ],
+		[ 'tablet-only regime', 'innerWidth >= 768 && innerWidth <= 800 ? 500 : innerWidth / 2', '' ],
+		[ 'segmented affine past a desktop switch', 'innerWidth < 992 ? innerWidth * 0.9 : innerWidth * 0.5 + 40', '' ],
+		[ 'clamped outside the band', 'Math.min( 600, innerWidth * 0.6 )', '' ],
+		[ 'capped on the desktop', 'Math.min( 900, innerWidth * 0.75 )', '' ],
+		[ 'container with its own breakpoint', 'parent.clientWidth / 2', 'width:90vw' ],
+		[ 'no relationship', 'Math.round( 400000 / innerWidth )', '' ],
+	] as const;
+	const shapesSource = `<style>body{margin:0}@media (min-width:1100px){#parent-6{width:1000px!important}}</style>
+		${ shapes.map( ( [ , , parent ], index ) => `<div id="parent-${ index }" style="${ parent }"><div id="box-${ index }" style="width:720px;height:40px">Neutral text</div></div>` ).join( '' ) }
+		<script>
+		const rules = [ ${ shapes.map( ( [ , rule ] ) => `parent => ${ rule }` ).join( ', ' ) } ];
+		function resize() { rules.forEach( ( rule, index ) => { document.querySelector( '#box-' + index ).style.width = rule( document.querySelector( '#parent-' + index ) ) + 'px'; } ); }
+		addEventListener( 'resize', resize ); resize();
+		</script>`;
+
+	it( 'learns the same copy from the adaptive and full ladders', async () => {
+		const copyGeometry = async ( widths?: number[] ) => {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			try {
+				await page.setContent( shapesSource );
+				const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, ...( widths ? { widths } : {} ) } );
+				await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+				await copy.setContent( await page.content() );
+				const geometry: Record< string, number[] > = {};
+				// Widths neither ladder samples, across every regime.
+				for ( const width of [ 500, 700, 772, 786, 795, 900, 1100, 1300, 1700 ] ) {
+					await copy.setViewportSize( { width, height: 900 } );
+					const boxes = await copy.locator( '[id^=box-]' ).evaluateAll( nodes => nodes.map( node => Math.round( node.getBoundingClientRect().width ) ) );
+					boxes.forEach( ( box, index ) => ( geometry[ shapes[ index ]![ 0 ] ] ??= [] ).push( box ) );
+				}
+				return { result, geometry, css: await copy.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).allTextContents() };
+			} finally { await page.close(); await copy.close(); }
+		};
+		const full = await copyGeometry( DEFAULT_SWEEP_WIDTHS );
+		const adaptive = await copyGeometry();
+		// Every rule kind the issue names is learned by the full ladder.
+		for ( const kind of [ 'segmented', 'capped', 'container', 'breakpoint' ] ) expect( full.result.byKind[ kind ], kind ).toBeGreaterThan( 0 );
+		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
+		expect( adaptive.css ).toEqual( full.css );
+		expect( adaptive.geometry ).toEqual( full.geometry );
+		// One page sweeps for every shape's evidence at once, so only 769 is
+		// interpolated here; each shape's own cost is pinned without a browser in
+		// fluid-capture.test.ts.
+		expect( adaptive.result.sampledWidths ).toEqual( DEFAULT_SWEEP_WIDTHS.filter( width => width !== 769 ) );
+	}, 120_000 );
 } );

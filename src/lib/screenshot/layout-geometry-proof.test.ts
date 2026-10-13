@@ -3,8 +3,8 @@ import { buildLayoutGeometryProof } from './layout-geometry-proof.js';
 
 const html = '<main><div><section>Copy</section></div></main>';
 const identityHtml = html
-	.replace( '<div>', '<div data-dla-geometry-id="wrapper-0">' )
-	.replace( '<section>', '<section data-dla-geometry-id="target-0">' );
+	.replace( '<div>', '<div data-blocks-engine-capture-geometry-id="wrapper-0">' )
+	.replace( '<section>', '<section data-blocks-engine-capture-geometry-id="target-0">' );
 const observation = ( viewport: number ) => ( {
 	wrapperIdentity: 'wrapper-0',
 	targetIdentity: 'target-0',
@@ -23,8 +23,8 @@ function deepInput( sourcePath: string, candidates: number ) {
 		candidates
 	) }</main>`;
 	const identityHtml = `<main>${ wrappers
-		.map( ( identity ) => `<div data-dla-geometry-id="${ identity }">` )
-		.join( '' ) }<section data-dla-geometry-id="target">Copy</section>${ '</div>'.repeat(
+		.map( ( identity ) => `<div data-blocks-engine-capture-geometry-id="${ identity }">` )
+		.join( '' ) }<section data-blocks-engine-capture-geometry-id="target">Copy</section>${ '</div>'.repeat(
 		candidates
 	) }</main>`;
 	return {
@@ -60,8 +60,8 @@ describe( 'buildLayoutGeometryProof', () => {
 	it( 'identifies only article-contained image wells in reductions', () => {
 		const articleHtml = '<article><div><img src="photo.jpg"></div></article>';
 		const articleIdentityHtml = articleHtml
-			.replace( '<div>', '<div data-dla-geometry-id="wrapper-0">' )
-			.replace( '<img', '<img data-dla-geometry-id="target-0"' );
+			.replace( '<div>', '<div data-blocks-engine-capture-geometry-id="wrapper-0">' )
+			.replace( '<img', '<img data-blocks-engine-capture-geometry-id="target-0"' );
 		const imageObservation = {
 			...observation( 1440 ),
 			wrapper: { x: 0, y: 0, width: 100, height: 24 },
@@ -83,9 +83,9 @@ describe( 'buildLayoutGeometryProof', () => {
 		const nestedIdentityHtml = nestedHtml
 			.replace(
 				'<div><div>',
-				'<div data-dla-geometry-id="wrapper-0"><div data-dla-geometry-id="target-0 wrapper-1">'
+				'<div data-blocks-engine-capture-geometry-id="wrapper-0"><div data-blocks-engine-capture-geometry-id="target-0 wrapper-1">'
 			)
-			.replace( '<section>', '<section data-dla-geometry-id="target-1">' );
+			.replace( '<section>', '<section data-blocks-engine-capture-geometry-id="target-1">' );
 		const proof = buildLayoutGeometryProof( [
 			{
 				sourcePath: 'website/index.html',

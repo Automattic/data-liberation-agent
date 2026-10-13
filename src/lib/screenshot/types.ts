@@ -36,6 +36,20 @@ export interface ScreenshotOpts {
 	primaryUrl?: string; // reference for same-origin enforcement
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	viewports?: Viewport[];
+	/**
+	 * Whether the default phone profile is captured as its own document (see
+	 * `device-mode.ts`). `auto` decides once on the entrypoint before route
+	 * capture. Ignored when `viewports` is given. Default: `dual`.
+	 */
+	deviceMode?: import('./device-mode.js').DeviceModeRequest;
+	/** The adapter selects among per-device documents at export, so `auto` keeps both profiles. */
+	deviceDocumentSelection?: boolean;
+	/**
+	 * Probe the entrypoint's shared chrome (header, navigation, footer) once per
+	 * profile and reuse that evidence on every route whose chrome matches (see
+	 * `chrome-reuse.ts`). Default: on unless `viewports` is given.
+	 */
+	sharedChrome?: boolean;
 	additionalProfiles?: import('../../adapters/page-actions.js').LiberationHooks['additionalProfiles'];
 	referenceWidths?: number[];
 	/** Declare required cells before navigating, so failed profiles stay pending. */
@@ -47,6 +61,7 @@ export interface ScreenshotOpts {
 	cdpPort?: number;
 	force?: boolean;
 	types?: UrlType[];
+	/** Route budget for the whole capture: initial routes and linked admissions together. */
 	limit?: number;
 	/** Expand rendered same-origin links through the normal capture queue. */
 	linkedPages?: import('./linked-frontier.js').LinkedPageLimits;
@@ -74,7 +89,7 @@ export interface ScreenshotOpts {
 	 * tablet and desktop widths so each document can reflow wherever it is served.
 	 */
 	learnFluid?: boolean;
-	/** Widths to observe when learning. Defaults to DEFAULT_SWEEP_WIDTHS. */
+	/** Exact widths to observe when learning. Defaults to an adaptive sample of DEFAULT_SWEEP_WIDTHS. */
 	fluidWidths?: number[];
 	/**
 	 * Adapter hook returning the viewport-specific image variants a platform's
@@ -102,6 +117,20 @@ export interface ScreenshotOpts {
 	) => Promise< void >;
 	/** Product-owned evidence observer, after source cleanup and before geometry rewriting. */
 	observeSource?: ( page: import('playwright').Page, url: string, device: string, errors: readonly string[], browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }>, profile?: import('./capture-profiles.js').CaptureProfile, boundary?: import('../source-navigation.js').ExternalBoundary ) => Promise<void>;
+	/**
+	 * Routes that produced frozen reference pages. When given, memory admission
+	 * calibrates on one of these routes, because routes outside a bounded
+	 * reference sample complete without fresh reference pages and would
+	 * under-estimate the working set. Default: any fresh successful route.
+	 */
+	referenceSampleUrls?: readonly string[];
+	/**
+	 * Capture time budget window (see `capture-time-budget.ts`). The entrypoint
+	 * starts first; no other route starts after `admitUntil`; routes still
+	 * running at `abandonAt` are abandoned. Uncaptured routes are reported as
+	 * `route_capture_skipped_budget` and counted in `failed`. Default: none.
+	 */
+	timeBudget?: import('../capture-time-budget.js').CaptureTimeBudgetWindow;
 }
 
 export interface ScreenshotResult {
@@ -114,4 +143,10 @@ export interface ScreenshotResult {
 	/** Every URL processed, including redirect targets queued during capture. */
 	urls: string[];
 	linkedPageCoverage?: import('./linked-frontier.js').LinkedPageCoverage;
+	/** Findings about input routes dropped before capture (`route_off_origin`) or left by the time budget (`route_capture_skipped_budget`). */
+	routeDiagnostics?: import('../capture-export-routes.js').RouteDiagnostic[];
+	/** The device-mode decision, when `deviceMode` applied (no explicit `viewports`). */
+	deviceMode?: import('./device-mode.js').DeviceModeDecision;
+	/** The entrypoint's one-time chrome probe per profile and which routes reused it. */
+	sharedChrome?: import('./chrome-reuse.js').SharedChromeSummary;
 }

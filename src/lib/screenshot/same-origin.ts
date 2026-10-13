@@ -1,4 +1,7 @@
-export class SameOriginViolation extends Error {
+import { IntegrityError } from '../failure-class.js';
+
+/** A capture crossing its site boundary: it fails closed, never per route. */
+export class SameOriginViolation extends IntegrityError {
   constructor(public violations: string[], public expected: string) {
     super(`Same-origin violation — expected ${expected}, got: ${violations.join(', ')}`);
     this.name = 'SameOriginViolation';
@@ -42,13 +45,12 @@ export function sameHttpSite(left: string, right: string): boolean {
 }
 
 /**
- * Throws SameOriginViolation if any URL in `urls` has a different origin than
- * `primaryUrl`. If primaryUrl is null, the first URL in `urls` is used as the
- * reference. A leading `www.` is treated as origin-equivalent to the apex.
- * Matches the same-origin enforcement in fetchSitemap().
+ * The URLs in `urls` whose origin differs from `primaryUrl` (or, when it is
+ * null, from the first URL), with the canonical reference origin. A leading
+ * `www.` is treated as origin-equivalent to the apex.
  */
-export function enforceSameOrigin(primaryUrl: string | null, urls: string[]): void {
-  if (urls.length === 0) return;
+export function offOriginUrls(primaryUrl: string | null, urls: string[]): { violations: string[]; expected: string } {
+  if (urls.length === 0) return { violations: [], expected: '' };
   const reference = primaryUrl ?? urls[0];
   let refOrigin: string;
   try {
@@ -64,5 +66,16 @@ export function enforceSameOrigin(primaryUrl: string | null, urls: string[]): vo
       throw new Error(`enforceSameOrigin: invalid URL: ${u}`);
     }
   }
-  if (violations.length > 0) throw new SameOriginViolation(violations, refOrigin);
+  return { violations, expected: refOrigin };
+}
+
+/**
+ * Throws SameOriginViolation if any URL in `urls` has a different origin than
+ * `primaryUrl`. If primaryUrl is null, the first URL in `urls` is used as the
+ * reference. A leading `www.` is treated as origin-equivalent to the apex.
+ * Matches the same-origin enforcement in fetchSitemap().
+ */
+export function enforceSameOrigin(primaryUrl: string | null, urls: string[]): void {
+  const { violations, expected } = offOriginUrls(primaryUrl, urls);
+  if (violations.length > 0) throw new SameOriginViolation(violations, expected);
 }

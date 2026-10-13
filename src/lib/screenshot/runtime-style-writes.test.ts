@@ -37,7 +37,7 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 			expect( result ).toMatchObject( { applied: 0, unmodelled: 0 } );
 			expect( resizes() ).toBe( 0 );
 			expect( await page.locator( '#box' ).getAttribute( 'style' ) ).toBe( 'padding-top:18px;width:720px;height:40px' );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
 
@@ -88,7 +88,7 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 			// Narrowest, widest, and the return to the capture width.
 			expect( resizes() ).toBe( 3 );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
 	it( 'keeps the sweep when a debounced resize handler writes geometry late', async () => {
