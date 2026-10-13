@@ -2462,7 +2462,7 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps a ?tab= link on the captured route when the value names one of that page\'s tabs', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-tab-link-export-' ) );
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-tab-link-export-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<html><body><a id="good" href="https://example.com/treatments?tab=oral-habits">Oral</a><a id="unknown" href="https://example.com/treatments?tab=bogus">Bogus</a><a id="other" href="https://example.com/treatments?page=2">Other</a></body></html>' );
