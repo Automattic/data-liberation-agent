@@ -59,6 +59,14 @@ const HELP = `
                          only), or every route with "all" for full-route parity.
                          Unsampled routes skip reference navigation; compare
                          reports them as uncompared scope instead of failing them.
+    --time-budget <duration>  Stop starting routes and export what was captured
+                         when this much time has passed, e.g. 13m, 780s (bare
+                         numbers are ms). Routes left out are reported as
+                         route_capture_skipped_budget. Set it to your deadline
+                         minus post-capture headroom. Browser capture only.
+    --max-file-bytes <n> Largest file exported into the site (default 52428800,
+                         50 MiB). Larger assets are not written and are reported
+                         as asset_exceeds_file_limit.
     --portable-motion <json>  Author a portable runtime from pinned independent
                          scripts and verify it against the live source before export.
                          Learning is on by default: it keeps the copy reflowing
@@ -238,6 +246,15 @@ if (args.includes('--help')) {
   if (referenceSampleArg !== undefined && referenceSample !== 'all' && (referenceSampleArg === null || !Number.isInteger(referenceSample) || (referenceSample as number) < 1)) {
     throw new Error('--reference-sample requires a positive integer or "all"');
   }
+  const timeBudgetArg = args.includes('--time-budget') ? getArg('--time-budget') : undefined;
+  const { parseDurationMs } = await import('./lib/duration.js');
+  const timeBudgetMs = timeBudgetArg === undefined ? undefined : parseDurationMs(timeBudgetArg ?? '');
+  if (timeBudgetArg !== undefined && timeBudgetMs === undefined) throw new Error('--time-budget requires a positive duration such as 13m, 780s or 780000ms');
+  const maxFileBytesArg = args.includes('--max-file-bytes') ? getArg('--max-file-bytes') : undefined;
+  const maxFileBytes = maxFileBytesArg === undefined ? undefined : Number(maxFileBytesArg);
+  if (maxFileBytesArg !== undefined && (maxFileBytesArg === null || !Number.isSafeInteger(maxFileBytes) || (maxFileBytes as number) < 1)) {
+    throw new Error('--max-file-bytes requires a positive integer');
+  }
   const result = await liberateSite({
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
     http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
@@ -248,6 +265,8 @@ if (args.includes('--help')) {
     screenshots: args.includes('--screenshots'),
     learnFluid: !args.includes('--no-learn-fluid'),
     referenceSample,
+    timeBudgetMs,
+    maxFileBytes,
     portableMotion,
     serve: args.includes('--serve'),
     log: (message) => process.stderr.write(`${message}\n`),

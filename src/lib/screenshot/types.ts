@@ -110,6 +110,13 @@ export interface ScreenshotOpts {
 	 * under-estimate the working set. Default: any fresh successful route.
 	 */
 	referenceSampleUrls?: readonly string[];
+	/**
+	 * Capture time budget window (see `capture-time-budget.ts`). The entrypoint
+	 * starts first; no other route starts after `admitUntil`; routes still
+	 * running at `abandonAt` are abandoned. Uncaptured routes are reported as
+	 * `route_capture_skipped_budget` and counted in `failed`. Default: none.
+	 */
+	timeBudget?: import('../capture-time-budget.js').CaptureTimeBudgetWindow;
 }
 
 export interface ScreenshotResult {
@@ -122,6 +129,6 @@ export interface ScreenshotResult {
 	/** Every URL processed, including redirect targets queued during capture. */
 	urls: string[];
 	linkedPageCoverage?: import('./linked-frontier.js').LinkedPageCoverage;
-	/** Findings about input routes dropped before capture (`route_off_origin`). */
+	/** Findings about input routes dropped before capture (`route_off_origin`) or left by the time budget (`route_capture_skipped_budget`). */
 	routeDiagnostics?: import('../capture-export-routes.js').RouteDiagnostic[];
 }

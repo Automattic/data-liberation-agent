@@ -101,6 +101,13 @@ describe( 'downloadCaptureSectionMedia', () => {
 		} );
 	} );
 
+	it( 'starts no downloads past the time budget deadline and records nothing for them', async () => {
+		SectionSpecsStore.load( root ).set( sourceUrl, [ section( [ { url: 'https://cdn.example.com/desktop.jpg' } ] ) ], [] );
+		expect( await downloadCaptureSectionMedia( root, [ sourceUrl ], Date.now() - 1 ) ).toBe( 0 );
+		// Not marked failed, so a resumed capture still attempts it.
+		expect( Object.fromEntries( MediaStubStore.load( root ).list() ) ).toEqual( {} );
+	} );
+
 	it( 'does not download empty or self-referential page URLs as section media', async () => {
 		SectionSpecsStore.load( root ).set(
 			sourceUrl,
@@ -691,5 +698,75 @@ describe( 'isUsableCapture policy', () => {
 	it( 'is unusable without the entrypoint, whatever happened elsewhere', () => {
 		expect( isUsableCapture( capture( 0, 12, false ) ) ).toBe( false );
 		expect( isUsableCapture( { ...capture( 0, 12, false ), complete: true } ) ).toBe( false );
+	} );
+} );
+
+describe( 'captureWebsite time budget', () => {
+	const adapter = ( urls: string[] ) => ( {
+		findAdapter: () => ( {
+			id: 'generic', platform: 'generic',
+			discover: async () => ( { urls: urls.map( url => ( { url, type: 'page' } ) ) } ),
+			extract: async () => ( { title: '', content: '' } ),
+		} ),
+	} );
+	afterEach( () => {
+		captureScreenshotsMock.mockClear();
+		vi.mocked( exportWebsiteCapture ).mockClear();
+		rmSync( root, { recursive: true, force: true } );
+	} );
+
+	it( 'passes no budget and the default export limits when none is set', async () => {
+		await captureWebsite( { url: sourceUrl, outputDir: root }, adapter( [] ) );
+		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).not.toHaveProperty( 'timeBudget' );
+		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ] ).not.toHaveProperty( 'limits' );
+	} );
+
+	it( 'passes the budget window to capture and maxFileBytes to export', async () => {
+		const before = Date.now();
+		await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 600_000, maxFileBytes: 1024 }, adapter( [] ) );
+		const { timeBudget } = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as unknown as { timeBudget: { timeBudgetMs: number; admitUntil: number; abandonAt: number } };
+		expect( timeBudget.timeBudgetMs ).toBe( 600_000 );
+		expect( timeBudget.abandonAt - timeBudget.admitUntil ).toBe( 60_000 );
+		expect( timeBudget.abandonAt ).toBeGreaterThanOrEqual( before + 600_000 );
+		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ] ).toMatchObject( { limits: { maxFileBytes: 1024 } } );
+	} );
+
+	it( 'rejects invalid budgets and HTTP acquisition before any capture starts', async () => {
+		for ( const timeBudgetMs of [ 0, 1.5 ] )
+			await expect( captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs }, adapter( [] ) ) ).rejects.toThrow( 'timeBudgetMs must be a positive integer' );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, maxFileBytes: 0 }, adapter( [] ) ) ).rejects.toThrow( 'maxFileBytes must be a positive integer' );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, acquisition: 'http', timeBudgetMs: 1_000 }, adapter( [] ) ) ).rejects.toThrow( 'timeBudgetMs applies to browser acquisition only' );
+		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
+	} );
+
+	it( 'exports what was captured and reports budget-skipped routes as missing in the result and capture-findings.json', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		const others = Array.from( { length: 10 }, ( _, index ) => `https://example.com/p${ index }` );
+		const skipped = others[ 9 ]!;
+		const skippedRow = { code: 'route_capture_skipped_budget', url: skipped, reason: 'capture time budget 1ms: route admission closed 1ms into the capture, before this route started', unit: 'route' as const, severity: 'error' as const, metrics: { timeBudgetMs: 1 } };
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl, ...others ], captured: 10, skipped: 0, failed: 1, durationMs: 1, routeDiagnostics: [ skippedRow ] } as never );
+		mkdirSync( join( root, 'html' ), { recursive: true } );
+		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
+		const entries: Record< string, { html: string } > = {};
+		for ( const [ index, url ] of [ sourceUrl, ...others ].entries() ) {
+			if ( url === skipped ) continue;
+			writeFileSync( join( root, 'html', `page-${ index }.html` ), `<h1>Page ${ index }</h1>` );
+			entries[ url ] = { html: `html/page-${ index }.html` };
+		}
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 1 }, adapter( others ) );
+		expect( result.complete ).toBe( false );
+		expect( result.entrypointCaptured ).toBe( true );
+		expect( result.summary ).toMatchObject( { routesDiscovered: 11, routesCaptured: 10, routesFailed: 1 } );
+		expect( result.missingRoutes ).toEqual( [ { url: skipped, code: 'route_capture_skipped_budget', reason: skippedRow.reason } ] );
+		expect( isUsableCapture( result ) ).toBe( true );
+		const findings = JSON.parse( readFileSync( join( root, 'website', 'capture-findings.json' ), 'utf8' ) );
+		expect( findings ).toMatchObject( {
+			complete: false, usable: true,
+			summary: { routes_discovered: 11, routes_captured: 10, routes_failed: 1 },
+			findings: [ skippedRow ],
+			missing_routes: [ { url: skipped, code: 'route_capture_skipped_budget' } ],
+		} );
 	} );
 } );

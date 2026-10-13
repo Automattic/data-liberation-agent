@@ -1157,11 +1157,23 @@ describe( 'CapturedResourceStore', () => {
 			// The rejected video degrades the way PR #320 established: its
 			// resolved source url survives as external evidence rather than an
 			// emptied/broken attribute.
-			exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
-			const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			// An export limit that admits them localizes the captured videos.
+			exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [], limits: { maxFileBytes: MAX_CAPTURED_VIDEO_RESOURCE_BYTES } } );
+			let $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 			expect( $( '#a' ).attr( 'src' ) ).toMatch( /^\// );
 			expect( $( '#b' ).attr( 'src' ) ).toMatch( /^\// );
 			expect( $( '#c' ).attr( 'src' ) ).toBe( videoC );
+
+			// The default limit is the importer's 50 MiB per-file intake limit: the
+			// 100 MiB videos stay captured evidence, unresolved in the export like C.
+			exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+			$ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			expect( [ $( '#a' ).attr( 'src' ), $( '#b' ).attr( 'src' ), $( '#c' ).attr( 'src' ) ] ).toEqual( [ videoA, videoB, videoC ] );
+			const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+			expect( receipt.discoveryDiagnostics.filter( ( row: { code: string } ) => row.code === 'asset_exceeds_file_limit' ).map( ( row: { url: string; metrics: unknown } ) => [ row.url, row.metrics ] ) ).toEqual( [
+				[ videoA, { bytes: MAX_CAPTURED_VIDEO_RESOURCE_BYTES, limit: 50 * 1024 * 1024 } ],
+				[ videoB, { bytes: MAX_CAPTURED_VIDEO_RESOURCE_BYTES, limit: 50 * 1024 * 1024 } ],
+			] );
 		} );
 
 		it( 'rejects a resource beyond the aggregate budget even if a misbehaving fetch ignores its assigned ceiling', async () => {

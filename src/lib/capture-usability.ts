@@ -2,7 +2,17 @@ import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
 
 /** Routes export dropped after capture saved their page: they count as failed, not captured. */
 const EXPORT_DROPPED_ROUTE_CODES = [ 'route_export_failed', 'route_path_collision' ] as const;
-const MISSING_ROUTE_CODES = [ 'route_capture_failed', ...EXPORT_DROPPED_ROUTE_CODES ] as const;
+
+/**
+ * A route the capture time budget (`timeBudgetMs`) left uncaptured: not started
+ * before admission closed, or abandoned in flight at the deadline. Unlike the
+ * route budget (`route_omitted_by_budget`), the route was in the requested
+ * scope, so it counts as failed and missing.
+ */
+export const ROUTE_CAPTURE_SKIPPED_BUDGET = 'route_capture_skipped_budget';
+
+/** Codes of routes that were in scope and produced no page. */
+export const MISSING_ROUTE_CODES = [ 'route_capture_failed', ROUTE_CAPTURE_SKIPPED_BUDGET, ...EXPORT_DROPPED_ROUTE_CODES ] as const;
 
 /**
  * A route that was attempted (or advertised as a redirect target) and did not
@@ -15,7 +25,7 @@ const MISSING_ROUTE_CODES = [ 'route_capture_failed', ...EXPORT_DROPPED_ROUTE_CO
 export interface MissingRoute {
 	url: string;
 	code: typeof MISSING_ROUTE_CODES[ number ];
-	/** The cause as recorded by capture or export: deadline, engine error, uncaptured redirect target, export error, path collision. */
+	/** The cause as recorded by capture or export: deadline, engine error, time budget, uncaptured redirect target, export error, path collision. */
 	reason: string;
 }
 

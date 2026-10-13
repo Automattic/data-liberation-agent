@@ -54,6 +54,7 @@ import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
+import { RouteTimeBudget } from '../capture-time-budget.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
@@ -1660,6 +1661,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		capturePageLimit: opts.limit !== undefined && opts.limit >= 0 ? opts.limit : undefined,
 	}, startTime, opts.routeScope ) : undefined;
 	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0, startTime, 'inventory'));
+	// Under a time budget the entrypoint starts first, so the budget never skips it.
+	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
+	if ( budgetEntrypoint !== undefined ) urls = [ budgetEntrypoint, ...urls.filter( url => url !== budgetEntrypoint ) ];
+	const routeBudget = opts.timeBudget && budgetEntrypoint !== undefined ? new RouteTimeBudget( opts.timeBudget, budgetEntrypoint ) : undefined;
 	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
 
 	// The URL a session (if any) is harvested from — see sourceContextOptions
@@ -1736,6 +1741,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let crashRelaunches = 0;
 	const replaceCrashedBrowser = ( crashed: Browser ): Promise< boolean > => {
 		if ( browser !== crashed ) return Promise.resolve( true );
+		// The time budget closed this browser on purpose.
+		if ( routeBudget?.abandoning ) return Promise.resolve( false );
 		if ( ! crashRelaunch ) {
 			if ( crashRelaunches >= MAX_CRASH_RELAUNCHES ) return Promise.resolve( false );
 			crashRelaunches++;
@@ -1817,6 +1824,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
 
 		if ( routeProfiles.every( profile => ! profilePlan( profile ).needsLoad ) ) {
+			if ( routeBudget && ! routeBudget.commit( url ) ) return;
 			skipped++;
 			sendLog( server, `[skip] ${ url } (artifacts exist)` );
 			completed++;
@@ -2091,6 +2099,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				entry.html = undefined; entry.mobileHtml = undefined; entry.desktop = undefined; entry.mobile = undefined; entry.cleanup = undefined;
 			}
 		}
+		// A route abandoned at the time budget's deadline records nothing.
+		if ( routeBudget && ! routeBudget.commit( url ) ) return;
 		for ( const f of urlFailures ) {
 			await manifest.recordFailure( f );
 		}
@@ -2167,9 +2177,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// browser is restarted only between segments to bound memory, preserving the
 		// restart-every-N invariant while keeping each worker on a stable browser.
 		let segStart = 0;
-		while (segStart < urls.length) {
+		while (segStart < urls.length && ! routeBudget?.closed()) {
 			const waveEnd = urls.length;
-			while ( segStart < waveEnd ) {
+			while ( segStart < waveEnd && ! routeBudget?.closed() ) {
 				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
 					await browser.close().catch( () => {} );
@@ -2197,29 +2207,38 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					return calibrated && available >= ( running.size + 1 ) * routeWorkingSet;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
+				const budgetAdmits = (): boolean => ! routeBudget || routeBudget.admits( urls[ cursor ]! );
 				try {
-					while ( cursor < segEnd || running.size ) {
-						while ( cursor < segEnd && running.size < concurrency && admit() ) {
+					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
+						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admit() ) {
 							const url = urls[ cursor++ ];
+							routeBudget?.start( url );
 							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: Math.round( routeWorkingSet ), activeRoutes: running.size + 1, calibrated, url } ) }\n` );
 							activeRoutes++;
-							const pending = processUrl( url ).finally( () => { activeRoutes--; } ).then( () => {
+							const pending = processUrl( url ).finally( () => { activeRoutes--; routeBudget?.finish( url ); } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
 							running.add( pending );
 							// The race observes fatal rejection before browser cleanup.
 							void pending.then( () => running.delete( pending ), () => {} );
 						}
-						if ( running.size ) await Promise.race( running );
+						if ( ! running.size ) continue;
+						if ( ! routeBudget ) await Promise.race( running );
+						else {
+							await routeBudget.wait( running );
+							if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( () => {} ) ) ) break;
+						}
 					}
 				} finally {
 					if ( timer ) clearInterval( timer );
 					// Drain existing context cleanup without suppressing fatal errors.
-					await Promise.allSettled( running );
+					await ( routeBudget ? routeBudget.drain( running ) : Promise.allSettled( running ) );
 				}
 				urlsSinceRestart += segEnd - segStart;
 				segStart = segEnd;
 			}
+			// Past the time budget no new work is discovered either.
+			if ( routeBudget?.closed() ) break;
 			// Expand a breadth-first wave from actual rendered artifacts. The normal
 			// navigation/capture contract proves local documents and external boundaries;
 			// successful HTML is never reduced to a classification-only probe.
@@ -2332,10 +2351,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	}
 
 
+	// Routes the time budget left uncaptured are missing routes: counted as failed.
+	const budgetDiagnostics = routeBudget?.diagnostics( urls ) ?? [];
+	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
+	routeDiagnostics.push( ...budgetDiagnostics );
 	return {
 		captured,
 		skipped,
-		failed: failedRoutes.size,
+		failed: failedRoutes.size + budgetDiagnostics.length,
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,

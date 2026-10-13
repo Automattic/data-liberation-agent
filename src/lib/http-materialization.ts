@@ -9,7 +9,7 @@ export interface HttpMaterializationOptions {
 	mobileVariant?: string;
 	/** Include explicitly staged, hash-verified runtime child documents. */
 	embeddedDocuments?: boolean;
-	limits?: { portableMediaTotalBytes?: number };
+	limits?: import('./capture-export.js').ExportLimits;
 }
 
 /** Produce a localized review candidate; HTTP coverage is not rendered acceptance. */

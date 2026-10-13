@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RouteDiagnostic } from './capture-export-routes.js';
-import { isUsableCapture, missingRoutes, type MissingRoute } from './capture-usability.js';
+import { isUsableCapture, MISSING_ROUTE_CODES, missingRoutes, type MissingRoute } from './capture-usability.js';
 
 /**
  * Capture findings that travel inside the exported website artifact.
@@ -59,7 +59,7 @@ export interface CaptureFindingsInput {
 	discoveryDiagnostics: ReadonlyArray< RouteDiagnostic >;
 }
 
-const missingRouteCodes = new Set< string >( [ 'route_capture_failed', 'route_export_failed', 'route_path_collision' ] );
+const missingRouteCodes = new Set< string >( MISSING_ROUTE_CODES );
 
 const websiteRelative = ( path: string ): string => path.replace( /\\/g, '/' ).replace( /^website\//, '' );
 

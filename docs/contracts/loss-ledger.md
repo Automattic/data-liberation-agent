@@ -22,7 +22,7 @@ References are `path:line` at those revisions.
 
 How each layer draws the line today:
 
-- **DLA.** `IntegrityError` and `isIntegrityError()` (`src/lib/failure-class.ts:5-20`). Integrity is `IntegrityError` plus `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `EvalError` and non-`Error` throws; any other error is confined to the unit that threw it. Per-route export rethrows integrity errors and contains the rest as `route_export_failed` (`src/lib/capture-export.ts:1410-1415`). An entry route off the entry origin fails closed (`SameOriginViolation`, `src/lib/screenshot/screenshotter.ts:1637-1640`). A missing entrypoint rejects with the recorded cause (`src/lib/capture-export-routes.ts:158-172`). Operational: the route budget emits `route_omitted_by_budget`, which is never a loss (`src/lib/capture-usability.ts:47-60`); navigation deadlines surface as `route_capture_failed`.
+- **DLA.** `IntegrityError` and `isIntegrityError()` (`src/lib/failure-class.ts:5-20`). Integrity is `IntegrityError` plus `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `EvalError` and non-`Error` throws; any other error is confined to the unit that threw it. Per-route export rethrows integrity errors and contains the rest as `route_export_failed` (`src/lib/capture-export.ts:1410-1415`). An entry route off the entry origin fails closed (`SameOriginViolation`, `src/lib/screenshot/screenshotter.ts:1637-1640`). A missing entrypoint rejects with the recorded cause (`src/lib/capture-export-routes.ts:158-172`). Operational: the route budget emits `route_omitted_by_budget`, which is never a loss (`src/lib/capture-usability.ts`); navigation deadlines surface as `route_capture_failed`; the capture time budget (`timeBudgetMs`) degrades to a partial capture, reporting each uncaptured route as `route_capture_skipped_budget` (`src/lib/capture-time-budget.ts`).
 - **BE.** Representability is `InvalidArgumentException` thrown while converting one **non-entrypoint** page. `DocumentIdentityException`, `ValidationException`, `LogicException`, `RuntimeException`, `Error`, artifact and receipt integrity checks, and any entrypoint failure keep failing the compile (`php-transformer/docs/contracts/omitted-page-receipt.md`, "What counts as representability").
 - **SSI.** No exception class split. Acceptance is decided once, before any WordPress mutation (`includes/class-static-site-importer-direct-artifact-import.php:745-775`). Operational: a reached deadline returns a resumable continuation (`:776-777`), not a failure.
 
@@ -46,6 +46,7 @@ item (declaration, link, glyph, form property)
 | `route` | DLA | — |
 | `profile` | DLA (`profile` names it) | — |
 | `stylesheet` | DLA | — |
+| `asset` | DLA (`asset_exceeds_file_limit`) | — |
 | `block` | DLA (`profile` names the viewport) | — |
 | `page` | BE `page_compile_omitted` only; SSI stamps it on the same row | Other BE rows carry `source_path`, which is page-level |
 | item / file | nobody | BE `selector`, `value`, `src`; SSI intake `path` |
@@ -85,6 +86,8 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `route_capture_failed` | route (implicit) | — | Attempted route with no page HTML (deadline, engine error, file missing), or a redirect to an uncaptured or dropped target. | yes | — (#759 counts it) |
 | `route_export_failed` | route | error | Non-integrity error while exporting the route; the route is dropped. | yes | #764 |
 | `route_path_collision` | route | error | Website path already claimed by another route; the route is dropped. The entrypoint keeps its path. | yes | #773 |
+| `route_capture_skipped_budget` | route | error | The capture time budget left the route uncaptured: not started before admission closed, or abandoned in flight at the deadline. `metrics.timeBudgetMs`. Never the entrypoint. | yes | #785 |
+| `asset_exceeds_file_limit` | asset | warning | Captured asset over the export `maxFileBytes` (default 50 MiB, SSI's per-file intake limit); not written, references left unresolved. `metrics.bytes`, `metrics.limit`. A page document over the limit is `route_export_failed` instead. | no | #785 |
 | `route_capture_degraded` | route | warning | HTML saved, but some stages failed. `metrics.failedStages`. | no | #764 |
 | `route_profile_uncaptured` | profile | error | A declared capture profile produced no document. Makes `complete: false`. | no | #764 |
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
@@ -211,7 +214,7 @@ The capture receipt and `diagnostics.json` sit next to `website/`, outside the a
 }
 ```
 
-- `findings`: every receipt `discoveryDiagnostics` row with a `unit`, plus the missing-route codes (`route_capture_failed`, `route_export_failed`, `route_path_collision`). Discovery evidence (`sitemap_*`, `http_*`, `route_omitted_by_budget`, `route_not_found`, `route_external_redirect`) is left out. `unit` defaults to `route` and `severity` to `error` for missing-route rows and `warning` otherwise. `path` and `entrypoint` are relative to the website root. `profile` and `metrics` appear when the row has them.
+- `findings`: every receipt `discoveryDiagnostics` row with a `unit`, plus the missing-route codes (`route_capture_failed`, `route_capture_skipped_budget`, `route_export_failed`, `route_path_collision`). Discovery evidence (`sitemap_*`, `http_*`, `route_omitted_by_budget`, `route_not_found`, `route_external_redirect`) is left out. `unit` defaults to `route` and `severity` to `error` for missing-route rows and `warning` otherwise. `path` and `entrypoint` are relative to the website root. `profile` and `metrics` appear when the row has them.
 - Rows are de-duplicated and sorted by `url`, `code`, `unit`, `path`, `profile` and `reason`, so the same capture writes the same bytes. At most 500 rows are written; `omitted_findings` counts the rest.
 - `missing_routes` is `missingRoutes()` over the receipt rows, sorted by URL. It is never bounded.
 - `complete` is the capture result's `complete`; `usable` is `isUsableCapture()` under `USABLE_PARTIAL_CAPTURE_POLICY`.
@@ -227,7 +230,7 @@ SSI reads the file at intake when it is present (Automattic/static-site-importer
 | `stylesheet_unparseable` | `degraded_unit` | stylesheet |
 | `native_timeline_unproven`, `disclosure_unrestored` | `degraded_unit` | block |
 
-Each has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary's `loss_class_summary`, `loss_count` and `loss_counts`. A capture code SSI does not know yet is stamped `degraded_unit`, so a new DLA code is still counted as a loss. A capture without the file imports as before. A file that cannot be read or fails validation adds one `capture_findings_unreadable` warning and never fails the import.
+Each has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary's `loss_class_summary`, `loss_count` and `loss_counts`. A capture code SSI does not know yet is stamped `degraded_unit`, so a new DLA code is still counted as a loss. `route_capture_skipped_budget` (an omitted route) and `asset_exceeds_file_limit` (a degraded asset) are not in SSI's registry yet, so both are counted as `degraded_unit` until it adds them. A capture without the file imports as before. A file that cannot be read or fails validation adds one `capture_findings_unreadable` warning and never fails the import.
 - **SSI.** `compose()` is at `includes/class-static-site-importer-receipt-projection.php:50-103`. Compact summary fields (`diagnostic-projection.php:1374-1416`):
   - `status` (`completed`/`failed` from `fail_import`)
   - `quality_pass`, `fail_import`, `failure_reasons`
