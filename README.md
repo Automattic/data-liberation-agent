@@ -197,7 +197,7 @@ A caller with a hard deadline sets `timeBudgetMs` (CLI `--time-budget 14m`, MCP 
 
 - **Admission:** the entrypoint starts first and is always captured. Other routes start until the budget minus a grace window (25% of the budget, at most 60 s); after that no new route or linked-page wave starts.
 - **Deadline:** routes still running at the budget are abandoned: the browser closes and they get at most 5 s to unwind. The entrypoint is never abandoned: if it is still running, capture waits for it (its own navigation and stage timeouts bound it). Section media stops downloading at the deadline, and the live-source behavior discovery that normally follows export is skipped once the budget is spent.
-- **Result:** export, the homepage preview and the fidelity reference run on what was captured. Each route left out is a `route_capture_skipped_budget` finding (`unit: 'route'`, `severity: 'error'`, `metrics.timeBudgetMs`). It is a missing route, counted in `routesFailed`, so `complete` is `false` and `usable` follows `isUsableCapture`. The findings reach `website/capture-findings.json`.
+- **Result:** export, the homepage preview and the fidelity reference run on what was captured. Each route left out is a `route_capture_skipped_budget` finding (`unit: 'route'`, `severity: 'error'`, `metrics.timeBudgetMs`). It is a missing route, counted in `routesFailed`, so `complete` is `false` and `usable` follows `isUsableCapture`. The findings reach `website/capture-findings.json` and, in Static Site Importer's neutral schema, `website/source-findings.json`.
 
 **Recommended value:** the caller's deadline minus the post-capture headroom. Measured on a 10-route capture of `wordpress.org/news` (macOS, Node 24): export 4.0–5.2 s, homepage preview 5.2–5.3 s, reference finalization under 0.1 s. A 90 s budget finished in 99.5 s of wall time, process start and exit included. Export grows with the route count, about 0.5 s per route in that run, so for the default 50-route limit use **`timeBudgetMs = deadline − 60 s`**. That covers the 5 s abandonment drain, export, the preview and a margin. Leave more headroom when the entrypoint itself is slow, because the budget always waits for it.
 
@@ -267,6 +267,7 @@ The server exposes the same four verbs as tools — `inspect`, `liberate`, `comp
 - [Platform API — custom platforms](/docs/platform-api.md)
 - [Wix authenticated content endpoints](/docs/wix-content-endpoints.md) — the load-bearing content endpoints behind Wix's editor and dashboard auth
 - [Loss ledger contract](/docs/contracts/loss-ledger.md) — how capture, compile and import report degraded units, and the one caller-side acceptance policy
+- [Capture evidence names](/docs/contracts/capture-evidence.md) — the producer-neutral attribute and class names export writes for Blocks Engine
 
 ## Related
 

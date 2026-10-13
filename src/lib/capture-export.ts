@@ -17,6 +17,7 @@ export { portableInlineStyle } from './shared-stylesheets.js';
 import { allocateCaptureRoutes, type RouteDiagnostic } from './capture-export-routes.js';
 import { projectStylesheet } from './replicate/css-scope.js';
 import { IntegrityError, isIntegrityError } from './failure-class.js';
+import { mirrorCaptureVocabulary, mirrorWebsiteCaptureVocabulary } from './capture-vocabulary.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
@@ -1721,8 +1722,10 @@ function buildExportCapture(
 			replaceResources( replaceMedia( text ) ),
 			portableUrlByFamily
 		);
+	// The state HTML also carries capture evidence names; write the neutral
+	// names beside them, as in the website pages below.
 	for ( const entry of retainedEntries ) {
-		if ( entry.interactions ) localizeStringsInPlace( entry.interactions, localizeInteractionMedia );
+		if ( entry.interactions ) localizeStringsInPlace( entry.interactions, text => mirrorCaptureVocabulary( localizeInteractionMedia( text ) ) );
 	}
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
@@ -1801,6 +1804,9 @@ function buildExportCapture(
 	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
+	// Last HTML write: every capture evidence name that reached website/ also
+	// carries its producer-neutral name (docs/contracts/capture-evidence.md).
+	mirrorWebsiteCaptureVocabulary( websiteDir );
 	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.afterHtml );
 
 	writeCaptureEvidence( {

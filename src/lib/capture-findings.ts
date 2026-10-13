@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RouteDiagnostic } from './capture-export-routes.js';
+import { buildSourceFindings, SOURCE_FINDINGS_FILE } from './source-findings.js';
 import { isUsableCapture, MISSING_ROUTE_CODES, missingRoutes, type MissingRoute } from './capture-usability.js';
 
 /**
@@ -116,11 +117,17 @@ export function buildCaptureFindings( input: CaptureFindingsInput ): CaptureFind
 	};
 }
 
-/** Write `website/capture-findings.json` under a capture output directory. */
+/**
+ * Write `website/capture-findings.json` and, from the same rows, the
+ * producer-neutral `website/source-findings.json` (see source-findings.ts).
+ * Returns the capture findings path.
+ */
 export function writeCaptureFindings( outputDir: string, input: CaptureFindingsInput ): string {
 	const websiteDir = join( outputDir, 'website' );
 	mkdirSync( websiteDir, { recursive: true } );
+	const findings = buildCaptureFindings( input );
 	const path = join( websiteDir, CAPTURE_FINDINGS_FILE );
-	writeFileSync( path, `${ JSON.stringify( buildCaptureFindings( input ), null, 2 ) }\n` );
+	writeFileSync( path, `${ JSON.stringify( findings, null, 2 ) }\n` );
+	writeFileSync( join( websiteDir, SOURCE_FINDINGS_FILE ), `${ JSON.stringify( buildSourceFindings( findings ), null, 2 ) }\n` );
 	return path;
 }

@@ -1116,10 +1116,10 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).not.toContain( 'action="https://evil.example/' );
 		expect( html ).toContain( '<body class="responsive">' );
 		expect( html ).toContain(
-			'class="data-liberation-desktop-document responsive desktop-body" style="margin:3px;padding:4px"'
+			'class="data-liberation-desktop-document responsive desktop-body data-blocks-engine-capture-desktop-document" style="margin:3px;padding:4px"'
 		);
 		expect( html ).toContain(
-			'class="data-liberation-mobile-document responsive mobile-body" style="margin:5px;padding:6px"'
+			'class="data-liberation-mobile-document responsive mobile-body data-blocks-engine-capture-mobile-document" style="margin:5px;padding:6px"'
 		);
 		expect( html ).toContain( 'href="/cdn/site.css"' );
 		expect( proof.reductions ).toHaveLength( 2 );
@@ -3402,10 +3402,10 @@ describe( 'exportWebsiteCapture', () => {
 			'images/blank.png'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'class="data-liberation-desktop-document"'
+			'class="data-liberation-desktop-document data-blocks-engine-capture-desktop-document"'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'class="data-liberation-mobile-document device-mobile-optimized"'
+			'class="data-liberation-mobile-document device-mobile-optimized data-blocks-engine-capture-mobile-document"'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'Mobile Home'
@@ -3426,7 +3426,7 @@ describe( 'exportWebsiteCapture', () => {
 			'<p>$100.00</p>'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'<details class="dla-disclosure dla-initial-dialog" open="">'
+			'<details class="dla-disclosure dla-initial-dialog blocks-engine-capture-disclosure blocks-engine-capture-initial-dialog" open="">'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="https://example.com/shop/about?from=home#team"'
@@ -4103,7 +4103,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css">/g ) ).toHaveLength( 1 );
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css" media="screen">/g ) ).toHaveLength( 1 );
 		expect( html ).not.toContain( 'css_masterPage' );
-		expect( html ).toContain( '<style data-dla-disclosure="true">.marker{' );
+		expect( html ).toContain( '<style data-dla-disclosure="true" data-blocks-engine-capture-disclosure="true">.marker{' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.styleHoist.hoistedStylesheets ).toBe( 2 );
 		expect( diagnostics.styleHoist.diagnosticCounts ).toEqual( { unsafe_attributes: 2 } );

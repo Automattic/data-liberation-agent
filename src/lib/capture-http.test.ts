@@ -159,6 +159,11 @@ describe('orchestrated HTTP review capture', () => {
 			summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0 },
 		});
 		expect(findings.missing_routes).toEqual(result.missingRoutes);
+		const sourceFindings = JSON.parse(readFileSync(join(outputDir, 'website/source-findings.json'), 'utf8'));
+		expect(sourceFindings).toMatchObject({ schema: 'static-site-importer/source-findings/v1', complete: false, usable: true });
+		for (const route of result.missingRoutes) {
+			expect(sourceFindings.findings).toContainEqual(expect.objectContaining({ code: route.code, location: { url: route.url }, unit: 'route', loss_class: 'omitted_unit', owning_layer: 'data-liberation-agent' }));
+		}
 	});
 
 	it('honours the shared route budget without hiding the discovered remainder and preserves strict failure', async () => {

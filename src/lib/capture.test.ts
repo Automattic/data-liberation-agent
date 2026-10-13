@@ -406,8 +406,21 @@ describe( 'captureWebsite completeness', () => {
 			omitted_findings: 0,
 			missing_routes: [ { url: dropped, code: 'route_export_failed', reason: 'cannot export page' } ],
 		} );
+		// The same rows, in Static Site Importer's producer-neutral schema.
+		const sourceFindings = JSON.parse( readFileSync( join( root, 'website', 'source-findings.json' ), 'utf8' ) );
+		expect( sourceFindings ).toEqual( {
+			schema: 'static-site-importer/source-findings/v1',
+			entrypoint: 'index.html',
+			complete: false,
+			usable: true,
+			summary: { routes_discovered: 3, routes_captured: 2, routes_failed: 1, routes_omitted: 0, unresolved_anchors: 0, omitted_findings: 0 },
+			findings: [
+				{ code: 'route_capture_degraded', severity: 'warning', unit: 'route', loss_class: 'degraded_unit', location: { url: degraded }, message: findings.findings[ 0 ].reason, metrics: { failedStages: 1 }, owning_layer: 'data-liberation-agent' },
+				{ code: 'route_export_failed', severity: 'error', unit: 'route', loss_class: 'omitted_unit', location: { url: dropped }, message: 'cannot export page', owning_layer: 'data-liberation-agent' },
+			],
+		} );
 		const reference = JSON.parse( readFileSync( join( root, 'fidelity-reference.json' ), 'utf8' ) );
-		expect( reference.capture.map( ( file: { path: string } ) => file.path ) ).toContain( 'website/capture-findings.json' );
+		expect( reference.capture.map( ( file: { path: string } ) => file.path ) ).toEqual( expect.arrayContaining( [ 'website/capture-findings.json', 'website/source-findings.json' ] ) );
 	} );
 
 	it( 'records off-origin inventory URLs the browser capture dropped without counting them as missing', async () => {

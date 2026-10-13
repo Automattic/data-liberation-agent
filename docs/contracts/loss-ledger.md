@@ -230,7 +230,41 @@ SSI reads the file at intake when it is present (Automattic/static-site-importer
 | `stylesheet_unparseable` | `degraded_unit` | stylesheet |
 | `native_timeline_unproven`, `disclosure_unrestored` | `degraded_unit` | block |
 
-Each has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary's `loss_class_summary`, `loss_count` and `loss_counts`. A capture code SSI does not know yet is stamped `degraded_unit`, so a new DLA code is still counted as a loss. `route_capture_skipped_budget` (an omitted route) and `asset_exceeds_file_limit` (a degraded asset) are not in SSI's registry yet, so both are counted as `degraded_unit` until it adds them. A capture without the file imports as before. A file that cannot be read or fails validation adds one `capture_findings_unreadable` warning and never fails the import.
+Each has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary's `loss_class_summary`, `loss_count` and `loss_counts`. A capture code SSI does not know yet is stamped `degraded_unit`, so a new DLA code is still counted as a loss. SSI's registry also lists `route_capture_skipped_budget` (omitted route) and `asset_exceeds_file_limit` (omitted asset). A capture without the file imports as before. A file that cannot be read or fails validation adds one `capture_findings_unreadable` warning and never fails the import.
+
+### 5.2 Source findings: the importer's neutral input
+
+[#787](https://github.com/Automattic/data-liberation-agent/issues/787) moves the code registry out of SSI. SSI owns a producer-neutral input, `website/source-findings.json` (schema `static-site-importer/source-findings/v1`), in which every row states its own unit, loss class and owning layer. DLA writes it next to `capture-findings.json`, from the same built document, in the same `writeCaptureFindings()` call (`src/lib/source-findings.ts`).
+
+```json
+{
+  "schema": "static-site-importer/source-findings/v1",
+  "entrypoint": "index.html",
+  "complete": false,
+  "usable": true,
+  "summary": { "routes_discovered": 3, "routes_captured": 2, "routes_failed": 1, "routes_omitted": 0, "unresolved_anchors": 0, "omitted_findings": 0 },
+  "findings": [
+    { "code": "route_capture_degraded", "severity": "warning", "unit": "route", "loss_class": "degraded_unit", "location": { "url": "https://example.test/about/", "path": "about/index.html" }, "message": "mobile/screenshot-scrolled: screenshot timeout", "metrics": { "failedStages": 1 }, "owning_layer": "data-liberation-agent" },
+    { "code": "route_export_failed", "severity": "error", "unit": "route", "loss_class": "omitted_unit", "location": { "url": "https://example.test/pricing/" }, "message": "cannot export Pricing", "owning_layer": "data-liberation-agent" }
+  ]
+}
+```
+
+- **Rows.** One row per `capture-findings.json` finding, in the same order and under the same 500-row cap. Each missing route the cap left out follows as an `omitted_unit` route row, so every missing route is reported (the projection SSI applied to `missing_routes`). `summary.omitted_findings` counts the rows the cap dropped.
+- **Fields.** `message` is the capture `reason`. `location.url` is the source URL and `location.path` is the exported file relative to the website root. `severity` is `warning` or `error`. `unit` is the row's own unit. `owning_layer` is always `data-liberation-agent`. The capture `profile` is not a field of the neutral row; it remains in `capture-findings.json` and in `message` where capture names it.
+- **Loss class.** DLA owns the mapping in `SOURCE_FINDING_LOSS_CLASSES`, equal to SSI's `REPORTED_LOSS_CODES` entries for these codes before #787:
+
+| Code | `loss_class` | `unit` |
+|---|---|---|
+| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget` | `omitted_unit` | route |
+| `route_profile_uncaptured` | `omitted_unit` | profile |
+| `asset_exceeds_file_limit` | `omitted_unit` | asset |
+| `route_capture_degraded` | `degraded_unit` | route |
+| `stylesheet_unparseable` | `degraded_unit` | stylesheet |
+| `native_timeline_unproven`, `disclosure_unrestored` | `degraded_unit` | block |
+| any other capture code with a `unit` | `degraded_unit` | the row's unit |
+
+- **Rollout.** Step 1 writes both files for one release. Until SSI reads `source-findings.json` (step 2), SSI removes only `capture-findings.json` at intake, so `source-findings.json` travels as an ordinary static JSON file. Step 3 stops writing `capture-findings.json`.
 - **SSI.** `compose()` is at `includes/class-static-site-importer-receipt-projection.php:50-103`. Compact summary fields (`diagnostic-projection.php:1374-1416`):
   - `status` (`completed`/`failed` from `fail_import`)
   - `quality_pass`, `fail_import`, `failure_reasons`
@@ -270,7 +304,7 @@ A stricter caller tightens step 2 (for example `complete && summary.routesOmitte
   - BE `reason` is overloaded: it is `'truncated'` on overflow rows and the raw error in `context.reason`.
   - Location: `url` (DLA), `path` (DLA file, SSI intake) and `source_path` (BE, SSI).
   - BE puts `source_path` at the top level on some rows and in `context` on others (editability, include codes).
-- **`unit`, `owning_layer` and `loss_class` are sparse.** DLA has no `owning_layer` or `loss_class`. BE sets `unit` on one code. SSI stamps `unit` and `owning_layer` only on `page_compile_omitted` and on capture rows from `capture-findings.json`.
+- **`unit`, `owning_layer` and `loss_class` are sparse.** DLA carries `owning_layer` and `loss_class` only in `source-findings.json` (section 5.2), not on receipt rows. BE sets `unit` on one code. SSI stamps `unit` and `owning_layer` only on `page_compile_omitted` and on capture rows from `capture-findings.json`.
 - **`severity` means different things.** DLA `severity` is optional and absent on `route_capture_failed`. DLA `error` does not imply incompleteness: `disclosure_unrestored` is `error`, but the page counts and `complete` is unaffected. BE `error` means the compile failed.
 - **Losses classed as acceptable.** New degrade codes with no specific `pattern_family` fall through BE's default repair bucket `review_generic_mapping` (`src/Contract/ConversionFindingContract.php:353-355`), so SSI classes them `editable_approximation` / `acceptable_conversion` rather than as a loss. This covers `editability_policy_degraded`, `html_include_*`, `glyph_color_undecodable`, `*_link_declaration`, `*_navigation_link` and `static_site_importer_non_static_file_skipped`. Separately, `runtime_form_graph_rejected` maps to `importer_materialization_bug` (`materialize_form_provider`).
 - **Unmapped repair buckets.** BE emits `restore_compiled_document_identity` and `restore_projected_selector_binding`, which SSI's map does not list (`loss-classes.php:123-160`). They are recorded as drift and fall back to the heuristic.

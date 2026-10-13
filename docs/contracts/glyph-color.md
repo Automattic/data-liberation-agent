@@ -13,6 +13,7 @@ Capture records the rendered colour of single-colour icon glyphs on the glyph el
 - **Presence means evidence.** The attribute is present only when the rendered glyph is monochrome. Its absence means "no evidence": the glyph was multicolour, outside the bounds below, or sampling did not finish. A consumer then falls back to its own handling.
 - **Provenance.** Capture removes any `data-dla-glyph-color` the source authored before sampling, so every value in a captured document was measured by capture.
 - **Lifetime.** The attribute is written into the desktop and mobile documents before serialization and kept by export in `website/` HTML. It is inert: no CSS or script reads it.
+- **Neutral name.** Export also writes the same value as `data-blocks-engine-capture-glyph-color`, the consumer-owned name ([capture-evidence.md](capture-evidence.md), #787).
 
 ## What is sampled
 
