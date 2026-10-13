@@ -20,6 +20,22 @@ export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, refreshDel
  * this keeps one unresponsive candidate from stalling the whole probe pass.
  */
 export const SOURCE_LINK_PROBE_REQUEST_MS = 5_000;
+/**
+ * A navigation that timed out before its document arrived is retried once with
+ * this multiple of the navigation budget. A slow but healthy origin (a cold
+ * server-rendered cache can take 15 to 30 s per document under parallel
+ * capture) then gets one patient request instead of several identical ones that
+ * all time out the same way; a dead origin costs two requests, not four.
+ */
+export const SLOW_SOURCE_BUDGET_FACTOR = 2;
+/** The longest budget any single source navigation may use. */
+export function maxSourceNavigationBudgetMs(): number { return SOURCE_NAVIGATION_LIMITS.timeoutMs * SLOW_SOURCE_BUDGET_FACTOR; }
+/** Diagnostic code for a document that only arrived on the single slow-source retry. */
+export const SOURCE_NAVIGATION_SLOW = 'source_navigation_slow';
+/** True for a navigation that ran out of time, as opposed to a policy or transport failure. */
+export function isNavigationTimeout(error: unknown): boolean {
+	return error instanceof Error && !(error instanceof SourceNavigationError) && (error.name === 'TimeoutError' || /\bTimeout \d+ms exceeded\b/.test(error.message));
+}
 /** Diagnostic code for a delivered source document whose `load` event did not fire within the navigation budget. */
 export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
@@ -154,7 +170,7 @@ export function validateExternalBoundary(outcome: ExternalBoundary, bytes: Buffe
 	const evidence = JSON.parse(bytes.toString()) as BoundaryObservation;
 	if (evidence.routeScope) validateRouteScope(evidence.routeScope);
 	if (JSON.stringify(evidence.routeScope) !== JSON.stringify(outcome.routeScope) || !routeInScope(outcome.requestedUrl, evidence.routeScope)) throw new Error('Source outcome route ownership mismatch');
-	if (evidence.requestedUrl !== outcome.requestedUrl || !evidence.responses?.length || evidence.responses.length > SOURCE_NAVIGATION_LIMITS.hops || !Number.isFinite(evidence.elapsedMs) || evidence.elapsedMs < 0 || evidence.elapsedMs > SOURCE_NAVIGATION_LIMITS.timeoutMs) throw new Error('Source outcome identity or navigation budget mismatch');
+	if (evidence.requestedUrl !== outcome.requestedUrl || !evidence.responses?.length || evidence.responses.length > SOURCE_NAVIGATION_LIMITS.hops || !Number.isFinite(evidence.elapsedMs) || evidence.elapsedMs < 0 || evidence.elapsedMs > maxSourceNavigationBudgetMs()) throw new Error('Source outcome identity or navigation budget mismatch');
 	safeTarget(evidence.requestedUrl, false);
 	let expected = documentRequestUrl(evidence.requestedUrl);
 	const visited = new Set<string>();
