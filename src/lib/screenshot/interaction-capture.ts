@@ -230,15 +230,21 @@ interface CloseControlDescriptor {
 	label?: string;
 }
 
-/** Capture user-triggered dialogs after all baseline page artifacts are complete. */
+/**
+ * Capture user-triggered dialogs after all baseline page artifacts are complete.
+ * `skip` is a selector for controls another probe already owns; they are
+ * never clicked, so the trigger budget goes to the rest.
+ */
 export async function captureTriggeredDialogs(
 	page: Page,
-	sourceUrl: string
+	sourceUrl: string,
+	options: { skip?: string } = {}
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
 	await rememberBaselinePanels( page );
 	const initialDialogs = await captureInitiallyVisibleDialogs( page );
-	const triggers = ( await page.evaluate( ( { limit, popupTypes, plainLimit, navLimit }: { limit: number; popupTypes: string[]; plainLimit: number; navLimit: number } ) => {
+	const triggers = ( await page.evaluate( ( { limit, popupTypes, plainLimit, navLimit, skip }: { limit: number; popupTypes: string[]; plainLimit: number; navLimit: number; skip?: string } ) => {
+		const owned = ( element: Element ): boolean => skip !== undefined && element.matches( skip );
 		const visible = ( element: Element ): boolean => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
@@ -318,17 +324,18 @@ export async function captureTriggeredDialogs(
 			return visible( element );
 		};
 		const navDropdowns = Array.from( document.querySelectorAll( 'button,[role="button"]' ) )
-			.filter( isNavDropdownButton )
+			.filter( element => ! owned( element ) && isNavDropdownButton( element ) )
 			.sort( ( a, b ) => Number( b.querySelector( 'svg' ) !== null ) - Number( a.querySelector( 'svg' ) !== null ) )
 			.slice( 0, navLimit );
 		const plain = Array.from( document.querySelectorAll( 'button,[role="button"]' ) )
-			.filter( isPlainActionButton )
+			.filter( element => ! owned( element ) && isPlainActionButton( element ) )
 			.slice( 0, plainLimit );
 		const candidates = Array.from(
 			document.querySelectorAll(
 				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],[role="combobox"],button,[role="button"]'
 			)
 		).filter( ( element ) => {
+			if ( owned( element ) ) return false;
 			if ( element.getAttribute( 'aria-disabled' ) === 'true' ) return false;
 			if ( ! visible( element ) ) return false;
 			const name = (
@@ -395,7 +402,7 @@ export async function captureTriggeredDialogs(
 				dataBindings,
 			};
 		} );
-	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES } ) ) as TriggerDescriptor[];
+	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES, skip: options.skip } ) ) as TriggerDescriptor[];
 
 	const states: CapturedDialogInteraction[] = [];
 	// Keep navigation defaults suppressed for the complete popup probe transaction,

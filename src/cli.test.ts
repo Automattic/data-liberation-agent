@@ -53,6 +53,13 @@ describe('cli', () => {
     expect(limit.stderr).toContain('--max-file-bytes requires a positive integer');
   }, 30_000);
 
+  it('documents the device mode and rejects an unknown one before any request', async () => {
+    expect((await runCli(['--help'])).stdout).toContain('--device-mode <mode>');
+    const result = await runCli(['https://example.invalid/', '--device-mode', 'phone']);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('--device-mode requires auto, dual or reflow-only');
+  }, 30_000);
+
   it('reproduces the reported repro verbatim: "capture" alone fails with guidance, not an SSRF stack trace', async () => {
     const result = await runCli(['capture']);
     expect(result.code).toBe(1);

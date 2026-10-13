@@ -88,6 +88,8 @@ A copy is only faithful at the width it was captured at, because platform runtim
 
 Some runtimes regenerate their own `<style>` element instead of writing inline pixels. A top-level rule whose pixel offset changes across the sweep is runtime-owned by that observation; its learned media rules ship in a `data-dla-fluid-sheet-rules` sibling of the owning sheet, so device-document scoping and cascade order follow the source sheet. Each rule must reproduce the capture-width geometry before it is kept.
 
+Capture decides once, on the entrypoint, whether the phone profile needs its own document (`src/lib/screenshot/device-mode.ts`). It chooses `reflow-only` only when the adapter declares no per-device documents, both identities receive the same server HTML after per-request noise is removed, and both render the same element structure and body classes. Every route is then captured at desktop only. The desktop fluid sweep already spans phone widths, and one phone-width probe of the entrypoint keeps controls that only appear on phones. Any doubt or probe failure keeps `dual`. The receipt's `deviceMode` records the decision and its evidence.
+
 Elements that fit badly fall back to frozen values rather than adopting a confident wrong formula. `source-profile.json` records what was measured: one document or per-device, declarative or runtime-written geometry, the detected switch width, and how many elements were learned versus frozen.
 
 ## Resume state

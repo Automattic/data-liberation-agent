@@ -882,3 +882,41 @@ describe( 'captureWebsite time budget', () => {
 		} );
 	} );
 } );
+
+describe( 'captureWebsite device mode', () => {
+	const adapter = ( liberation?: object ) => ( {
+		findAdapter: () => ( {
+			id: 'generic', platform: 'generic', ...( liberation ? { liberation } : {} ),
+			discover: async () => ( { urls: [] } ),
+			extract: async () => ( { title: '', content: '' } ),
+		} ),
+	} );
+	afterEach( () => {
+		captureScreenshotsMock.mockClear();
+		vi.mocked( exportWebsiteCapture ).mockClear();
+		rmSync( root, { recursive: true, force: true } );
+	} );
+
+	it( 'decides automatically by default and keeps both captures for adapter device documents', async () => {
+		await captureWebsite( { url: sourceUrl, outputDir: root }, adapter() );
+		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).toMatchObject( { deviceMode: 'auto', deviceDocumentSelection: false } );
+		await captureWebsite( { url: sourceUrl, outputDir: root, deviceMode: 'dual' }, adapter( { documentSelection: () => undefined } ) );
+		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).toMatchObject( { deviceMode: 'dual', deviceDocumentSelection: true } );
+	} );
+
+	it( 'carries the decision to export, the summary and the receipt', async () => {
+		const decision = { mode: 'reflow-only' as const, requested: 'auto' as const, reason: 'the phone profile receives the same HTML and renders the same 12-element DOM, so its layout is CSS reflow', serverHtml: 'identical' as const, structure: { desktopElements: 12, phoneElements: 12, differingPaths: 0 } };
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl ], captured: 1, skipped: 0, failed: 0, durationMs: 1, deviceMode: decision } as never );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, adapter() );
+		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ] ).toMatchObject( { deviceMode: 'reflow-only', summary: { deviceMode: 'reflow-only' } } );
+		expect( result.summary.deviceMode ).toBe( 'reflow-only' );
+		expect( result.deviceMode ).toEqual( decision );
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).deviceMode ).toEqual( decision );
+	} );
+
+	it( 'rejects an unknown mode and HTTP acquisition before any capture starts', async () => {
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, deviceMode: 'phone' as never }, adapter() ) ).rejects.toThrow( 'deviceMode must be one of auto, dual, reflow-only' );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, acquisition: 'http', deviceMode: 'dual' }, adapter() ) ).rejects.toThrow( 'deviceMode applies to browser acquisition only' );
+		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
+	} );
+} );

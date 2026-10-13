@@ -114,6 +114,18 @@ export interface CaptureOptions {
 	 * matching Static Site Importer's per-file intake limit.
 	 */
 	maxFileBytes?: number;
+	/**
+	 * Whether each route is also captured in the phone profile (browser
+	 * acquisition only). `'auto'` (default) decides once on the entrypoint:
+	 * `'reflow-only'` when the adapter declares no per-device documents, the
+	 * desktop and phone identities receive the same server HTML (per-request
+	 * nonces, CSRF tokens and timestamps ignored) and the phone profile renders
+	 * the same element structure and body classes; `'dual'` otherwise. Reflow-only captures the
+	 * desktop profile alone, and the copied CSS produces the phone layout. Pass
+	 * `'dual'` or `'reflow-only'` to force a mode. The decision and its reason
+	 * are `summary.deviceMode` and the receipt's `deviceMode` record.
+	 */
+	deviceMode?: import('./screenshot/device-mode.js').DeviceModeRequest;
 	onProgress?: ( progress: CaptureProgress ) => void;
 }
 
@@ -138,6 +150,8 @@ export interface CaptureResult {
 		durationMs: number;
 		complete: boolean;
 		entrypointCaptured: boolean;
+		/** Browser capture: whether routes were captured in both profiles or desktop only. */
+		deviceMode?: import('./screenshot/device-mode.js').DeviceMode;
 	};
 	complete: boolean;
 	/**
@@ -152,6 +166,8 @@ export interface CaptureResult {
 	discoveryDiagnostics: RouteDiagnostic[];
 	unresolvedAnchors: UnresolvedAnchor[];
 	provenance: { provider: string; platform: string };
+	/** Browser capture: the device-mode decision and the evidence behind it. */
+	deviceMode?: import('./screenshot/device-mode.js').DeviceModeDecision;
 }
 
 export interface CaptureDependencies {
@@ -257,6 +273,11 @@ export async function captureWebsite(
 	validateTimeBudgetMs( options.timeBudgetMs );
 	if ( options.timeBudgetMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'timeBudgetMs applies to browser acquisition only' );
 	validateMaxFileBytes( options.maxFileBytes );
+	if ( options.deviceMode !== undefined ) {
+		const { DEVICE_MODE_REQUESTS } = await import( './screenshot/device-mode.js' );
+		if ( ! DEVICE_MODE_REQUESTS.includes( options.deviceMode ) ) throw new RangeError( `deviceMode must be one of ${ DEVICE_MODE_REQUESTS.join( ', ' ) }` );
+		if ( options.acquisition === 'http' ) throw new RangeError( 'deviceMode applies to browser acquisition only' );
+	}
 	const routeLimit = options.routeLimit === 'all' ? undefined : options.routeLimit ?? ( options.acquisition === 'http' ? undefined : DEFAULT_ROUTE_LIMIT );
 	const { onProgress } = options;
 	const startedAt = Date.now();
@@ -355,6 +376,8 @@ export async function captureWebsite(
 		...( routeLimit !== undefined ? { limit: routeLimit } : {} ),
 		primaryUrl: sourceUrl,
 		additionalProfiles: adapter.liberation?.additionalProfiles,
+		deviceMode: options.deviceMode ?? 'auto',
+		deviceDocumentSelection: Boolean( adapter.liberation?.documentSelection ),
 		referenceWidths: adapter.liberation?.referenceWidths,
 		declareSourceProfile: reference.declare,
 		captureImages: options.captureImages === true,
@@ -414,6 +437,7 @@ export async function captureWebsite(
 		routesFailed: screenshotResult.failed,
 		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
 		durationMs: screenshotResult.durationMs,
+		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
 	};
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
 	const captureReceiptPath = exportWebsiteCapture( {
@@ -422,6 +446,7 @@ export async function captureWebsite(
 		platform: detection.platform,
 		routeScope,
 		resolveDocumentSelection: adapter.liberation?.documentSelection,
+		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
 		title: inventory.siteMeta?.title,
 		summary,
 		failures,
@@ -442,6 +467,7 @@ export async function captureWebsite(
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	receipt.preview = preview;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
+	if ( screenshotResult.deviceMode ) receipt.deviceMode = screenshotResult.deviceMode;
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
 	process.stderr.write( `[timing] homepage-preview ${ Date.now() - previewStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
@@ -475,6 +501,7 @@ export async function captureWebsite(
 		discoveryDiagnostics: captureDiagnostics,
 		unresolvedAnchors,
 		provenance: { provider: 'data-liberation/browser-capture', platform: detection.platform },
+		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode } : {} ),
 	};
 	// Inside website/, so the findings travel with the artifact and the
 	// fidelity reference hashes them with the rest of the capture.
