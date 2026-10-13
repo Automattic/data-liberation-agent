@@ -302,11 +302,11 @@ describe( 'captureSelectableSetStates', () => {
 			expect( states.map( ( state ) => state.status ) ).toEqual( [ 'captured', 'captured' ] );
 			for ( const state of states ) {
 				const html = state.dialog?.html ?? '';
-				expect( html ).toContain( 'data-dla-viewport-entrance' );
+				expect( html ).toContain( 'data-blocks-engine-capture-viewport-entrance' );
 				expect( html ).toContain( 'shown-pose' );
-				expect( html.match( /data-dla-viewport-entrance=/g ) ).toHaveLength( 2 );
+				expect( html.match( /data-blocks-engine-capture-viewport-entrance=/g ) ).toHaveLength( 2 );
 				expect( html ).not.toContain( 'class="reveal hidden-pose"' );
-				const evidence = JSON.parse( /data-dla-viewport-entrance="([^"]*)"/.exec( html )![ 1 ].replace( /&quot;/g, '"' ) );
+				const evidence = JSON.parse( /data-blocks-engine-capture-viewport-entrance="([^"]*)"/.exec( html )![ 1 ].replace( /&quot;/g, '"' ) );
 				expect( evidence.attributes.class ).toEqual( { before: 'reveal hidden-pose', after: 'reveal shown-pose' } );
 			}
 		} finally {
