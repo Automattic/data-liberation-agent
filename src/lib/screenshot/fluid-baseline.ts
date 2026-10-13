@@ -116,6 +116,8 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 		return {
 			pixel, elements, element, readGeometry, translation,
 			bind: () => { for ( const role of roles ) role.identity = role.element.getAttribute( attribute ); },
+			/** The source has replaced an element it rendered before the sweep. */
+			replaced: () => roles.some( role => ! role.element.isConnected ),
 			reconcile: () => project( false ),
 			restore: ( unlearnedOnly = false ) => project( true, unlearnedOnly ),
 			activate: ( entries: Array<{ id: string; property: string; css: string; segmented: boolean }>, segmentAttribute: string, captureWidth: number | undefined ) => {
