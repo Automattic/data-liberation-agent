@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.27.7] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+- Stamp scroll entrances inside tab panels the capture opens
+
+### Fixed
+- restore page state flipped by a no-dialog probe click
+
 ## [0.27.6] - 2026-10-13
 
 ### Changed
