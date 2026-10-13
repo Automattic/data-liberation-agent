@@ -3,7 +3,8 @@ import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright';
-import { captureScreenshots } from './screenshotter.js';
+import { captureScreenshots, comparisonFailedAlike } from './screenshotter.js';
+import { SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, summarizeRouteDecisions } from './device-mode.js';
@@ -11,6 +12,14 @@ import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
 describe( 'device-mode evidence', () => {
+	it( 'never treats a timeout in both identities as the route having no phone document', () => {
+		const timeout = () => Object.assign( new Error( 'route.fetch: Timeout 29990ms exceeded.' ), { name: 'TimeoutError' } );
+		expect( comparisonFailedAlike( timeout(), timeout() ) ).toBe( false );
+		expect( comparisonFailedAlike( new SourceNavigationError( 'Source navigation time budget exhausted' ), new SourceNavigationError( 'Source navigation time budget exhausted' ) ) ).toBe( false );
+		expect( comparisonFailedAlike( new Error( 'the desktop document answered HTTP 404' ), new Error( 'the mobile document answered HTTP 404' ) ) ).toBe( true );
+		expect( comparisonFailedAlike( new Error( 'the desktop document answered HTTP 404' ), new Error( 'the mobile document answered HTTP 500' ) ) ).toBe( false );
+	} );
+
 	it( 'ignores per-request tokens and timestamps, and nothing else', () => {
 		const page = ( token: string, time: string, text = 'Hello' ) => `<html><head><meta name="csrf-token" content="${ token }"><script nonce="${ token }">window.cfg={"nonce":"${ token }","builtAt":"${ time }"}</script></head><body><form><input type="hidden" name="_csrf" value="${ token }"></form><time datetime="${ time }">${ text }</time></body></html>`;
 		expect( compareServerHtml( page( 'a1', '2026-10-09T10:00:00Z' ), page( 'a1', '2026-10-09T10:00:00Z' ) ) ).toBe( 'identical' );
@@ -85,7 +94,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		server = createServer( ( request, response ) => {
 			const [ , fixture = '', path = '' ] = ( request.url ?? '/' ).split( '/' );
 			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
-			response.end( page( fixture, request.headers[ 'user-agent' ] ?? '', path ) );
+			const body = page( fixture, request.headers[ 'user-agent' ] ?? '', path );
+			// A route slower than the (shrunk) navigation budget on every request.
+			if ( fixture === 'slow' && path === 'late' ) { setTimeout( () => response.end( body ), 4_000 ); return; }
+			response.end( body );
 		} );
 		await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
@@ -207,6 +219,25 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( route( promo ).responsiveVariants ).toBeDefined();
 		expect( readFileSync( join( run.outputDir, 'website', 'promo', 'index.html' ), 'utf8' ) ).toContain( 'Phone promo' );
 		expect( readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' ) ).not.toContain( 'Phone promo' );
+	}, 120_000 );
+
+	it( 'keeps both captures of a route whose phone check timed out', async () => {
+		// The check navigates once at the base budget; capture then retries the
+		// slow route with a longer one. Same-message timeouts in both identities
+		// must not make the route desktop-only.
+		const limits = SOURCE_NAVIGATION_LIMITS as { timeoutMs: number };
+		const budget = limits.timeoutMs;
+		limits.timeoutMs = 3_000;
+		try {
+			const run = await capture( 'slow', { routes: [ 'late' ] } );
+			const late = `${ origin }/slow/late`;
+			expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only' } );
+			expect( run.entries[ late ]!.deviceMode ).toMatchObject( { mode: 'dual', reason: expect.stringContaining( 'the phone check failed' ) } );
+			expect( Object.keys( run.entries[ late ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
+			expect( readFileSync( join( run.outputDir, run.entries[ late ]!.mobileHtml! ), 'utf8' ) ).toContain( 'Welcome' );
+		} finally {
+			limits.timeoutMs = budget;
+		}
 	}, 120_000 );
 
 	it( 'keeps both captures whenever the adapter selects among device documents', async () => {
