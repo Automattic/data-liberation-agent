@@ -17,9 +17,12 @@ import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDr
 import { DEFAULT_ROUTE_LIMIT, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { writeCaptureFindings } from './capture-findings.js';
+import { captureTimeBudgetWindow, validateTimeBudgetMs } from './capture-time-budget.js';
+import { validateMaxFileBytes } from './export-file-limit.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 export { DEFAULT_ROUTE_LIMIT, type RouteLimit } from './route-budget.js';
+export { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
 
 export interface CaptureProgress {
 	unit?: 'routes' | 'documents';
@@ -78,6 +81,27 @@ export interface CaptureOptions {
 	 * (full-route parity).
 	 */
 	referenceSample?: number | 'all';
+	/**
+	 * Capture time budget in milliseconds, measured from the start of this call
+	 * until export must begin (browser acquisition only). Route admission
+	 * closes at the budget minus a grace window (25% of the budget, at most
+	 * 60s); routes still running at the budget are abandoned, and section media
+	 * stops downloading. Export then runs on what was captured. The entrypoint
+	 * is always captured first and never skipped. Each uncaptured route is a
+	 * `route_capture_skipped_budget` finding: a missing route, counted in
+	 * `routesFailed`, so `complete` is false and `usable` follows
+	 * `isUsableCapture`. Default: no budget. Recommended: the caller's deadline
+	 * minus the post-capture headroom (README, "Capture time budget").
+	 */
+	timeBudgetMs?: number;
+	/**
+	 * Largest file export writes into `website/`, in bytes. A captured asset over
+	 * it is not written; its references resolve like any missing asset and it is
+	 * reported as `asset_exceeds_file_limit`. A page document over it fails that
+	 * route (`route_export_failed`). Default: `DEFAULT_MAX_FILE_BYTES` (50 MiB),
+	 * matching Static Site Importer's per-file intake limit.
+	 */
+	maxFileBytes?: number;
 	onProgress?: ( progress: CaptureProgress ) => void;
 }
 
@@ -142,9 +166,11 @@ interface CaptureInventory {
 	diagnostics?: Array< { code: string; url: string; reason: string } >;
 }
 
+/** `deadline` (epoch ms) stops new downloads; media not started stays unlocalized. */
 export async function downloadCaptureSectionMedia(
 	outputDir: string,
-	urls: string[]
+	urls: string[],
+	deadline?: number
 ): Promise< number > {
 	const pageRoutes = new Set(
 		urls.flatMap( ( url ) => {
@@ -193,6 +219,7 @@ export async function downloadCaptureSectionMedia(
 		srcUrls: sectionUrls,
 		isAlreadyDone: ( url ) => ! stubs.shouldAttempt( url ),
 		download: async ( url ) => {
+			if ( deadline !== undefined && Date.now() >= deadline ) return null;
 			const result = await downloadMedia( url, mediaDir, seenNames );
 			if ( result.error ) stubs.markFailure( url, result.error );
 			return result.localPath;
@@ -214,9 +241,13 @@ export async function captureWebsite(
 	if ( options.referenceSample !== undefined && options.referenceSample !== 'all' && ( ! Number.isInteger( options.referenceSample ) || options.referenceSample < 1 ) ) throw new Error( "referenceSample must be a positive integer or 'all'" );
 	const referenceSample = options.referenceSample === 'all' ? undefined : options.referenceSample ?? DEFAULT_REFERENCE_SAMPLE;
 	validateRouteLimit( options.routeLimit );
+	validateTimeBudgetMs( options.timeBudgetMs );
+	if ( options.timeBudgetMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'timeBudgetMs applies to browser acquisition only' );
+	validateMaxFileBytes( options.maxFileBytes );
 	const routeLimit = options.routeLimit === 'all' ? undefined : options.routeLimit ?? ( options.acquisition === 'http' ? undefined : DEFAULT_ROUTE_LIMIT );
 	const { onProgress } = options;
 	const startedAt = Date.now();
+	const timeBudget = options.timeBudgetMs === undefined ? undefined : captureTimeBudgetWindow( startedAt, options.timeBudgetMs );
 	let phase = '';
 	let phaseStartedAt = startedAt;
 	const progress = ( event: CaptureProgress ): void => {
@@ -326,6 +357,7 @@ export async function captureWebsite(
 			? { collectResponsiveImages: adapter.liberation.responsiveImages.bind( adapter.liberation ) }
 			: {} ),
 		publicUrlsOnly: true,
+		...( timeBudget ? { timeBudget } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );
 	process.stderr.write(
@@ -333,7 +365,7 @@ export async function captureWebsite(
 	);
 	progress( { phase: 'media', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const mediaStartedAt = Date.now();
-	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls );
+	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt );
 	process.stderr.write(
 		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
 	);
@@ -375,6 +407,7 @@ export async function captureWebsite(
 		summary,
 		failures,
 		discoveryDiagnostics: captureDiagnostics,
+		...( options.maxFileBytes !== undefined ? { limits: { maxFileBytes: options.maxFileBytes } } : {} ),
 	} );
 	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
 	const previewStartedAt = Date.now();
@@ -395,7 +428,12 @@ export async function captureWebsite(
 	// Diagnosed dynamic pages need causal evidence, not an author-authored site
 	// recipe. Discovery remains explicit untranslated evidence until a portable
 	// implementation passes the independent source fidelity gate.
-	await ( await import( './behavior-discovery.js' ) ).discoverCapturedBehavior( outputDir );
+	// It revisits the live source, so once the time budget is spent it is skipped:
+	// the caller's remaining headroom belongs to finishing the artifact.
+	const behaviorStartedAt = Date.now();
+	if ( timeBudget && behaviorStartedAt >= timeBudget.abandonAt ) process.stderr.write( '[budget] behavior discovery skipped: capture time budget spent\n' );
+	else await ( await import( './behavior-discovery.js' ) ).discoverCapturedBehavior( outputDir );
+	process.stderr.write( `[timing] behavior-discovery ${ Date.now() - behaviorStartedAt }ms\n` );
 	const finalSummary = withExportDroppedRoutes( summary, receipt.discoveryDiagnostics );
 	const complete =
 		finalSummary.routesFailed === 0 &&
@@ -421,8 +459,10 @@ export async function captureWebsite(
 	// Inside website/, so the findings travel with the artifact and the
 	// fidelity reference hashes them with the rest of the capture.
 	writeCaptureFindings( outputDir, { ...result, discoveryDiagnostics: receipt.discoveryDiagnostics ?? [] } );
+	const referenceStartedAt = Date.now();
 	reference.requireUrls(screenshotResult.linkedPageCoverage?.requiredUrls ?? screenshotResult.urls);
 	reference.finalize( captureReceiptPath );
+	process.stderr.write( `[timing] reference-finalize ${ Date.now() - referenceStartedAt }ms\n` );
 	progress( { phase: 'complete', current: urls.length, total: urls.length } );
 	if ( options.strict && ! complete ) throw new IncompleteCaptureError( result );
 	return result;

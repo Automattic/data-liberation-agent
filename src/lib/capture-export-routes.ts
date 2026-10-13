@@ -79,7 +79,7 @@ export interface RouteDiagnostic {
 	code: string;
 	url: string;
 	reason: string;
-	unit?: 'route' | 'profile' | 'stylesheet' | 'block';
+	unit?: 'route' | 'profile' | 'stylesheet' | 'block' | 'asset';
 	severity?: 'warning' | 'error';
 	/** The declared capture profile a `profile` finding is about. */
 	profile?: string;

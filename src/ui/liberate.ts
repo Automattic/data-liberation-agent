@@ -36,6 +36,10 @@ export interface LiberateOptions {
 	 * scope. Default: the homepage only; 'all' freezes every route.
 	 */
 	referenceSample?: number | 'all';
+	/** Capture time budget in ms until export must begin; see `CaptureOptions.timeBudgetMs`. Default: none. */
+	timeBudgetMs?: number;
+	/** Per-file export cap in bytes; see `CaptureOptions.maxFileBytes`. Default: 50 MiB. */
+	maxFileBytes?: number;
 	/** Optional authored runtime; installed only after live source/portable behavior comparison passes. */
 	portableMotion?: PortableMotionRecipe;
 	log?: ( message: string ) => void;
@@ -73,6 +77,8 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		captureImages: options.screenshots,
 		learnFluid: options.learnFluid !== false,
 		referenceSample: options.referenceSample,
+		timeBudgetMs: options.timeBudgetMs,
+		maxFileBytes: options.maxFileBytes,
 		onProgress: ( progress ) => {
 			if ( progress.phase === 'capturing' && progress.total ) {
 				log(

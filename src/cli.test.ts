@@ -41,6 +41,18 @@ describe('cli', () => {
     expect(result.stderr).toContain('--route-limit requires a positive integer or "all"');
   }, 30_000);
 
+  it('documents the time budget and per-file limit and rejects invalid values before any request', async () => {
+    const help = (await runCli(['--help'])).stdout;
+    expect(help).toContain('--time-budget <duration>');
+    expect(help).toContain('--max-file-bytes <n>');
+    const budget = await runCli(['https://example.invalid/', '--time-budget', 'soon']);
+    expect(budget.code).not.toBe(0);
+    expect(budget.stderr).toContain('--time-budget requires a positive duration');
+    const limit = await runCli(['https://example.invalid/', '--max-file-bytes', '0']);
+    expect(limit.code).not.toBe(0);
+    expect(limit.stderr).toContain('--max-file-bytes requires a positive integer');
+  }, 30_000);
+
   it('reproduces the reported repro verbatim: "capture" alone fails with guidance, not an SSRF stack trace', async () => {
     const result = await runCli(['capture']);
     expect(result.code).toBe(1);

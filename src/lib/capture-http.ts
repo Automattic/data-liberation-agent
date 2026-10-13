@@ -46,7 +46,7 @@ export async function captureHttpWebsite( input: {
 		} ); } catch ( error ) { runtime = { attachments: 0, observations: 0, failures: [ { url: input.sourceUrl, error: `Runtime observation unavailable: ${ String( error ) }` } ] }; }
 	}
 	progress( { phase: 'finalizing', current: urls.length, total: urls.length, unit: 'routes' } );
-	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0 } );
+	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0, ...( options.maxFileBytes !== undefined ? { limits: { maxFileBytes: options.maxFileBytes } } : {} ) } );
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	const failures = acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => ( { url: document.url, error: `${ document.variant }: ${ document.error ?? document.status }` } ) );
 	if ( runtime ) failures.push( ...runtime.failures );

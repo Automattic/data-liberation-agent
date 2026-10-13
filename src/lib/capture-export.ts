@@ -72,6 +72,7 @@ import { pathWithin } from './portable-assets.js';
 import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
 import { elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
+import { assertPageWithinFileLimit, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
 import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
@@ -121,6 +122,13 @@ interface ScreenshotManifest {
 	entries: Record< string, CaptureManifestEntry >;
 }
 
+export interface ExportLimits {
+	/** Overrides the portable media byte budget. */
+	portableMediaTotalBytes?: number;
+	/** Largest file written into `website/`; default `DEFAULT_MAX_FILE_BYTES`. See export-file-limit.ts. */
+	maxFileBytes?: number;
+}
+
 interface ExportCaptureOptions {
 	routeScope?: SiteRouteScope;
 	resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
@@ -133,8 +141,7 @@ interface ExportCaptureOptions {
 	summary: Record< string, unknown >;
 	failures: Array< { url: unknown; error: unknown } >;
 	discoveryDiagnostics?: Array< { code: string; url: string; reason: string } >;
-	/** Overrides the portable media byte budget. */
-	limits?: { portableMediaTotalBytes?: number };
+	limits?: ExportLimits;
 }
 
 type MediaCandidate = PortableMediaCandidate;
@@ -1174,6 +1181,8 @@ function buildExportCapture(
 		0,
 		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
 	);
+	validateMaxFileBytes( options.limits?.maxFileBytes );
+	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
 	const switchWidths: number[] = [];
 	const deviceSelections: Array<{ url: string; id: string; documents: string[]; missing: string[]; evidence: string }> = [];
 	const widthSelections: Array<{ url: string; kind: 'width'; switchWidth: number; evidence: string }> = [];
@@ -1361,6 +1370,7 @@ function buildExportCapture(
 			const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
 	        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
 	        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
+			assertPageWithinFileLimit( html, maxFileBytes );
 			// A route whose HTML was saved is captured even when a stage failed on it.
 			// A declared capture profile (a manifest profile record, or a viewport a
 			// stage failed in) without its document stays a profile-level loss; the
@@ -1525,6 +1535,12 @@ function buildExportCapture(
 			! isReferenced
 		)
 			continue;
+		const bytes = statSync( stub.localPath ).size;
+		if ( bytes > maxFileBytes ) {
+			routeCaptureDiagnostics.push( assetExceedsFileLimit( sourceUrl, bytes, maxFileBytes ) );
+			failedMedia.push( { family, sourceUrl, error: 'removed because media exceeds the per-file export limit', references } );
+			continue;
+		}
 		const candidate: MediaCandidate = {
 			sourceUrl,
 			localPath: stub.localPath,
@@ -1533,7 +1549,7 @@ function buildExportCapture(
 			],
 			exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
 			...( interactionMediaReferences.has( family ) ? { galleryFrame: true } : {} ),
-			bytes: statSync( stub.localPath ).size,
+			bytes,
 			dimension: mediaDimension( sourceUrl ),
 		};
 		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate ] );
@@ -1565,8 +1581,10 @@ function buildExportCapture(
 		assetHashesByPath,
 		portablePathsBySource,
 		embeddedSources,
+		maxFileBytes,
 		projectEmbeddedHtml: ( html ) => safeCapturedPageHtml( html ).html,
 	} );
+	for ( const { url, bytes } of resourceStage.oversizedResources ) routeCaptureDiagnostics.push( assetExceedsFileLimit( url, bytes, maxFileBytes ) );
 	mediaReplacements = resourceStage.mediaReplacements;
 	portablePathsBySource = resourceStage.portablePathsBySource;
 	assets.push( ...resourceStage.assets );
