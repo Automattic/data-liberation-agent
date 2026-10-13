@@ -209,6 +209,17 @@ Export writes no file larger than `maxFileBytes` into `website/` (CLI `--max-fil
 - **Assets over the limit** are not written. References to them resolve like any uncaptured asset: an image becomes the transparent placeholder, and other dependencies keep their source URL or are removed. Each asset is an `asset_exceeds_file_limit` finding (`unit: 'asset'`, `metrics: { bytes, limit }`). The page still exports, and the capture's completeness does not change.
 - **Page documents over the limit** fail that route through per-route export containment (`route_export_failed`). A page document over the limit at the entrypoint fails the capture.
 
+### Total export budget
+
+Export keeps `website/` within `maxTotalBytes` and `maxFiles` (CLI `--max-total-bytes`, `--max-files`; MCP and `captureWebsite()` take `maxTotalBytes` and `maxFiles`). Every file in `website/` counts, including the homepage preview and `source-findings.json`. The defaults are 250 MiB (`DEFAULT_MAX_TOTAL_BYTES`, 262,144,000 bytes) and 5000 files (`DEFAULT_MAX_FILES`). They match Static Site Importer's staged-archive intake limits, `max_total_uncompressed_bytes` and `max_entries` (`static_site_importer_staged_archive_limits()`), and the importer refuses a larger archive whole. Change the two together. Any runner that archives `website/` for import must accept at least these bounds.
+
+When the site would exceed the budget, export drops units in this order and builds the site again without them:
+
+1. **Assets the entrypoint does not need**, largest first, fonts last. At equal size a video goes before audio, and audio before an image. Media and captured page resources are droppable. Each one becomes an `asset_exceeds_total_budget` finding (`unit: 'asset'`, `metrics: { bytes, limit, fileLimit }`). References to it resolve like any uncaptured asset, and the capture's completeness does not change.
+2. **Non-entry routes**, last in route order first, when dropping assets is not enough. Each one becomes a `route_exceeds_total_budget` finding (`unit: 'route'`, `severity: 'error'`). It is a missing route, counted in `routesFailed`, so `complete` is `false` and `usable` follows `isUsableCapture`.
+
+The entrypoint document and every file it references are never dropped. If they alone exceed the budget, export writes them anyway and the receipt says so. Export reserves up to 8 MiB and 16 files, never more than a quarter of the budget, for the files capture writes into `website/` after export. The receipt's `exportBudget` records the budget, the size of the export, the drop counts and, once capture has written every file, the `final` size.
+
 ### Usable partial captures
 
 A capture is `complete: true` only when every route inside the [route budget](#route-budget) was captured with a document for each declared capture profile and no link points at a missing route. Links to budget-omitted routes are not missing. A partial site is still written and returned with `complete: false` (`strict: true` rejects instead). One failed route should not sink an import, so the result carries what a caller needs to decide:

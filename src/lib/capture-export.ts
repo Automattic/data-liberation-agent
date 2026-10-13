@@ -6,6 +6,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	rmSync,
 	statSync,
 	writeFileSync,
 } from 'node:fs';
@@ -73,6 +74,7 @@ import { materializePortableMedia, type FailedPortableMedia } from './portable-m
 import { elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
 import { assertPageWithinFileLimit, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
+import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, resolveExportTotalBudget, routeExceedsTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
 import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
 import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
@@ -127,6 +129,22 @@ export interface ExportLimits {
 	portableMediaTotalBytes?: number;
 	/** Largest file written into `website/`; default `DEFAULT_MAX_FILE_BYTES`. See export-file-limit.ts. */
 	maxFileBytes?: number;
+	/** Most bytes written into `website/`; default `DEFAULT_MAX_TOTAL_BYTES`. See export-total-budget.ts. */
+	maxTotalBytes?: number;
+	/** Most files written into `website/`; default `DEFAULT_MAX_FILES`. See export-total-budget.ts. */
+	maxFiles?: number;
+	/**
+	 * Keep `POST_EXPORT_RESERVE` of the budget free for files the caller writes
+	 * into `website/` after export (homepage preview, source findings, motion).
+	 */
+	reservePostExport?: boolean;
+}
+
+/** What one build of the export generation produced, for the total budget. */
+interface ExportBuild {
+	entrypointPath: string;
+	routes: Array< { url: string; path: string } >;
+	assets: DroppableAsset[];
 }
 
 interface ExportCaptureOptions {
@@ -1195,9 +1213,42 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
 	const siteSwitchWidth = httpInput ? undefined : fallbackResponsiveSwitchWidth( outputDir );
+	const budget = resolveExportTotalBudget( options.limits );
+	// Build mutates manifest entries in place; a rebuild starts from the source.
+	const pristineEntries = JSON.stringify( capture.entries );
 	return publishExportGeneration( outputDir, ( stageDir ) => {
-		buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, stageDir );
+		let exclusions = emptyExportBudgetExclusions();
+		for ( let pass = 1; ; pass++ ) {
+			if ( pass > 1 ) {
+				for ( const name of readdirSync( stageDir ) ) rmSync( join( stageDir, name ), { recursive: true, force: true } );
+				capture.entries = JSON.parse( pristineEntries ) as ScreenshotManifest[ 'entries' ];
+				if ( httpInput ) httpInput.entries = capture.entries as typeof httpInput.entries;
+			}
+			const built = buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, stageDir, budget, exclusions );
+			const plan = planExportBudget( { websiteDir: join( stageDir, 'website' ), budget, ...built, exclusions } );
+			if ( plan.withinBudget || ! plan.next ) {
+				recordExportBudget( stageDir, budget, plan, exclusions, pass );
+				break;
+			}
+			exclusions = plan.next;
+		}
 	} );
+}
+
+/** Add the total budget outcome to the staged receipt and the log. */
+function recordExportBudget( stageDir: string, budget: ExportTotalBudget, plan: { totalBytes: number; files: number; withinBudget: boolean }, exclusions: ExportBudgetExclusions, passes: number ): void {
+	const exportBudget = {
+		maxTotalBytes: budget.maxTotalBytes, maxFiles: budget.maxFiles,
+		reservedBytes: budget.reservedBytes, reservedFiles: budget.reservedFiles,
+		totalBytes: plan.totalBytes, files: plan.files, withinBudget: plan.withinBudget,
+		droppedAssets: exclusions.assets.size, droppedRoutes: exclusions.routes.size, passes,
+	};
+	const receiptPath = join( stageDir, 'capture-receipt.json' );
+	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as Record< string, unknown >;
+	receipt.exportBudget = exportBudget;
+	writeFileSync( receiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
+	if ( exclusions.assets.size || exclusions.routes.size || ! plan.withinBudget )
+		process.stderr.write( `[budget] export website ${ plan.totalBytes } bytes in ${ plan.files } files (budget ${ budget.maxTotalBytes } bytes, ${ budget.maxFiles } files, ${ budget.reservedBytes } bytes reserved): dropped ${ exclusions.assets.size } assets and ${ exclusions.routes.size } routes${ plan.withinBudget ? '' : '; entrypoint and its dependencies alone exceed the budget' }\n` );
 }
 
 function buildExportCapture(
@@ -1209,7 +1260,9 @@ function buildExportCapture(
 	embeddedSources: Set< string >,
 	siteSwitchWidth: number | undefined,
 	stageDir: string,
-): void {
+	budget: ExportTotalBudget,
+	exclusions: ExportBudgetExclusions,
+): ExportBuild {
 	const portableMediaTotalBytesLimit = Math.max(
 		0,
 		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
@@ -1244,6 +1297,12 @@ function buildExportCapture(
 		// One route's non-integrity failure drops that route, not the capture. Integrity
 		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
 		const rollback = { diagnostics: routeCaptureDiagnostics.length, switchWidths: switchWidths.length, deviceSelections: deviceSelections.length, widthSelections: widthSelections.length, fluidReports: fluidReports.length };
+		// The total budget only ever drops a route an earlier build exported, never the entrypoint.
+		const budgetDropped = exclusions.routes.get( url );
+		if ( budgetDropped !== undefined && ! isSourceCaptureUrl( url, options.sourceUrl ) ) {
+			routeCaptureDiagnostics.push( routeExceedsTotalBudget( url, budgetDropped, budget ) );
+			continue;
+		}
 		try {
 			if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) || !routeInScope( url, options.routeScope ) ) {
 				excludedRoutes.push( url );
@@ -1574,6 +1633,10 @@ function buildExportCapture(
 		)
 			continue;
 		const bytes = statSync( stub.localPath ).size;
+		if ( exclusions.assets.has( sourceUrl ) ) {
+			failedMedia.push( { family, sourceUrl, error: 'removed because the website exceeds the total export budget', references } );
+			continue;
+		}
 		if ( bytes > maxFileBytes ) {
 			routeCaptureDiagnostics.push( assetExceedsFileLimit( sourceUrl, bytes, maxFileBytes ) );
 			failedMedia.push( { family, sourceUrl, error: 'removed because media exceeds the per-file export limit', references } );
@@ -1607,6 +1670,8 @@ function buildExportCapture(
 		retainedReferences, failedMedia,
 	} );
 	let { mediaReplacements, portablePathsBySource } = mediaStage;
+	// `assets` below grows with resources and stylesheets; keep what media wrote.
+	const mediaAssetPaths = mediaStage.assets.map( asset => asset.path );
 	const { portableUrlByFamily, assetPathsByHash, assetHashesByPath, assets, unresolvedMedia, portableMedia } = mediaStage;
 
 	const resourceStage = materializePortableResources( {
@@ -1620,9 +1685,12 @@ function buildExportCapture(
 		portablePathsBySource,
 		embeddedSources,
 		maxFileBytes,
+		excludedResources: exclusions.assets,
 		projectEmbeddedHtml: ( html ) => safeCapturedPageHtml( html ).html,
 	} );
 	for ( const { url, bytes } of resourceStage.oversizedResources ) routeCaptureDiagnostics.push( assetExceedsFileLimit( url, bytes, maxFileBytes ) );
+	// Every asset the budget dropped is reported, including one no retained page reaches any more.
+	for ( const [ url, bytes ] of exclusions.assets ) routeCaptureDiagnostics.push( assetExceedsTotalBudget( url, bytes, budget ) );
 	mediaReplacements = resourceStage.mediaReplacements;
 	portablePathsBySource = resourceStage.portablePathsBySource;
 	assets.push( ...resourceStage.assets );
@@ -1882,4 +1950,17 @@ function buildExportCapture(
 	} );
 	// Evidence describes expanded bytes. Compact afterwards in the same publication.
 	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ) );
+	// Media and page resources are the assets export can leave out; generated
+	// stylesheets and sidecars only shrink with the routes that need them.
+	const droppable = new Map< string, string[] >();
+	const droppablePaths = new Set( [ ...mediaAssetPaths, ...resourceStage.assets.map( asset => asset.path ) ] );
+	for ( const [ sourceUrl, path ] of portablePathsBySource ) {
+		if ( droppablePaths.has( path ) ) droppable.set( path, [ ...( droppable.get( path ) ?? [] ), sourceUrl ] );
+	}
+	const websiteRelative = ( path: string ) => path.replace( /^website\//, '' );
+	return {
+		entrypointPath: routePathOf( entrypointUrl ).replace( /\\/g, '/' ),
+		routes: routes.map( route => ( { url: route.url, path: websiteRelative( route.path ) } ) ),
+		assets: [ ...droppable ].map( ( [ path, sourceUrls ] ) => ( { path: websiteRelative( path ), sourceUrls: sourceUrls.sort() } ) ).sort( ( a, b ) => ( a.path < b.path ? -1 : a.path > b.path ? 1 : 0 ) ),
+	};
 }
