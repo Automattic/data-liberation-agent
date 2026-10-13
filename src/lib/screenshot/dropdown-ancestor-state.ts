@@ -11,6 +11,8 @@ export interface CapturedDropdownAncestorState {
 		depth: number;
 		closed: Record< string, string | null >;
 		opened: Record< string, string | null >;
+		/** `class` in closed/opened holds only the tokens opening removed/added. */
+		classTokensOnly?: true;
 	} >;
 	placement?: {
 		parentSelector: string;
@@ -94,12 +96,15 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 			// Array.from with one that returns [] for a Set.
 			const changed = [ ...new Set( [ ...Object.keys( row.closed ), ...Object.keys( opened ) ] ) ].filter( name => !sameValue( name, row.closed[ name ] ?? null, opened[ name ] ?? null ) );
 			if ( changed.length > 32 ) return { ...result, reason: 'ancestor-attribute-count-limit' };
-			// Consumers replay class as tokens. A class list over the bound (a
-			// Squarespace body carries its whole style configuration) is recorded
-			// as only the tokens that opening removed and added.
+			// Consumers replay class as tokens. A long class list (a Squarespace
+			// body carries its whole style configuration) is recorded as only the
+			// tokens that opening removed and added. The threshold is the smallest
+			// value bound a consumer applies (Blocks Engine keeps values up to 2 KiB).
+			let classTokensOnly = false;
 			const evidence = changed.map( name => {
 				const closed = row.closed[ name ] ?? null, open = opened[ name ] ?? null;
-				if ( name !== 'class' || ![ closed, open ].some( value => bytes( value ) > 4096 ) ) return [ name, closed, open ] as const;
+				if ( name !== 'class' || ![ closed, open ].some( value => bytes( value ) > 2048 ) ) return [ name, closed, open ] as const;
+				classTokensOnly = true;
 				const before = tokens( closed ), after = tokens( open );
 				return [ name, before.filter( token => !after.includes( token ) ).join( ' ' ), after.filter( token => !before.includes( token ) ).join( ' ' ) ] as const;
 			} );
@@ -108,6 +113,7 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 				result.ancestors.push( { selector: row.selector, tag: row.tag, depth: row.depth,
 					closed: Object.fromEntries( evidence.map( ( [ name, closed ] ) => [ name, closed ] ) ),
 					opened: Object.fromEntries( evidence.map( ( [ name, , open ] ) => [ name, open ] ) ),
+					...( classTokensOnly ? { classTokensOnly: true as const } : {} ),
 				} );
 				if ( new TextEncoder().encode( JSON.stringify( result ) ).length > 32768 ) return { ...result, ancestors: [], reason: 'ancestor-state-byte-limit' };
 			}

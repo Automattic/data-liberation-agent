@@ -154,33 +154,37 @@ it.skipIf( skipBrowser )( 'records and replays the ancestor class that shows a m
 	} finally { await browser.close(); }
 }, 30_000 );
 
-// Squarespace's body carries its whole style configuration as classes, far
-// over the per-value bound. Only the changed tokens are recorded and replayed.
-it.skipIf( skipBrowser )( 'records only the changed tokens of an ancestor class list over the bound', async () => {
-	const browser = await chromium.launch( { headless: true } );
-	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
-	const config = Array.from( { length: 400 }, ( _, index ) => `tweak-setting-${ index }` ).join( ' ' );
-	try {
-		await page.setContent( `<!doctype html><style>
-		body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff}
-		.menu-open .overlay{opacity:1;visibility:visible}
-		</style><body class="${ config } menu-closed"><header id="header"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header><main>Body</main>
-		<script>document.getElementById('burger').addEventListener('click',()=>{document.body.classList.add('menu-open');document.body.classList.remove('menu-closed');});
-		addEventListener('keydown',event=>{if(event.key==='Escape'){document.body.classList.remove('menu-open');document.body.classList.add('menu-closed');}});</script>` );
-		expect( Buffer.byteLength( config ) ).toBeGreaterThan( 4096 );
-		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
-		const state = report.states.find( item => item.trigger.id === 'burger' );
-		expect( state?.dialog?.ancestorState ).toEqual( expect.objectContaining( {
-			status: 'verified',
-			ancestors: [ { selector: 'body', tag: 'body', depth: 2, closed: { class: 'menu-closed' }, opened: { class: 'menu-open' } } ],
-		} ) );
-		await page.setContent( wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states ) );
-		await page.locator( '#burger' ).click();
-		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-open` );
-		await page.keyboard.press( 'Escape' );
-		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-closed` );
-	} finally { await browser.close(); }
-}, 30_000 );
+// Squarespace's body carries its whole style configuration as classes, over
+// the 2 KiB Blocks Engine keeps per value. Only the changed tokens are recorded
+// and replayed, at 3 KB (under DLA's own 4 KiB bound) and beyond it.
+for ( const [ size, count ] of [ [ '3 KB', 170 ], [ '7 KB', 400 ] ] as const ) {
+	it.skipIf( skipBrowser )( `records only the changed tokens of a ${ size } ancestor class list`, async () => {
+		const browser = await chromium.launch( { headless: true } );
+		const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+		const config = Array.from( { length: count }, ( _, index ) => `tweak-setting-${ index }` ).join( ' ' );
+		try {
+			await page.setContent( `<!doctype html><style>
+			body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff}
+			.menu-open .overlay{opacity:1;visibility:visible}
+			</style><body class="${ config } menu-closed"><header id="header"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header><main>Body</main>
+			<script>document.getElementById('burger').addEventListener('click',()=>{document.body.classList.add('menu-open');document.body.classList.remove('menu-closed');});
+			addEventListener('keydown',event=>{if(event.key==='Escape'){document.body.classList.remove('menu-open');document.body.classList.add('menu-closed');}});</script>` );
+			expect( Buffer.byteLength( config ) ).toBeGreaterThan( 2048 );
+			if ( count === 170 ) expect( Buffer.byteLength( config ) ).toBeLessThan( 4096 );
+			const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+			const state = report.states.find( item => item.trigger.id === 'burger' );
+			expect( state?.dialog?.ancestorState ).toEqual( expect.objectContaining( {
+				status: 'verified',
+				ancestors: [ { selector: 'body', tag: 'body', depth: 2, closed: { class: 'menu-closed' }, opened: { class: 'menu-open' }, classTokensOnly: true } ],
+			} ) );
+			await page.setContent( wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states ) );
+			await page.locator( '#burger' ).click();
+			expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-open` );
+			await page.keyboard.press( 'Escape' );
+			expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-closed` );
+		} finally { await browser.close(); }
+	}, 30_000 );
+}
 
 it.skipIf( skipBrowser )( 'adds no ancestor evidence to a modal that leaves its ancestors unchanged', async () => {
 	const browser = await chromium.launch( { headless: true } );

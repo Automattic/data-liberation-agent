@@ -963,11 +963,16 @@ async function closeCapturedDialog( page: Page, selector: string, triggerSelecto
 	await page.waitForTimeout( 100 );
 	// Escape can start a closing transition (a fading overlay stays visible for
 	// its duration). Clicking a toggle trigger during it would reopen the panel.
-	await page.locator( selector ).first().evaluate( ( panel, limitMs ) => Promise.all( panel.getAnimations( { subtree: true } )
-		.filter( animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity )
-		.map( animation => Promise.race( [ animation.finished.catch( () => undefined ), new Promise( resolve => setTimeout( resolve, limitMs ) ) ] ) ) ),
-	DIALOG_WAIT_MS, { timeout: 1_000 } ).catch( () => undefined );
-	if ( ! ( await panelIntersectsViewport( page, selector ) ) ) return;
+	// A panel Escape unmounted is closed; return without waiting on a locator.
+	const present = await page.evaluate( async ( { selector, limitMs } ) => {
+		const panel = document.querySelector( selector );
+		if ( ! panel ) return false;
+		await Promise.all( panel.getAnimations( { subtree: true } )
+			.filter( animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity )
+			.map( animation => Promise.race( [ animation.finished.catch( () => undefined ), new Promise( resolve => setTimeout( resolve, limitMs ) ) ] ) ) );
+		return true;
+	}, { selector, limitMs: DIALOG_WAIT_MS } ).catch( () => true );
+	if ( ! present || ! ( await panelIntersectsViewport( page, selector ) ) ) return;
 	const close = page
 		.locator( selector )
 		.first()

@@ -35,9 +35,11 @@ Placement names the original parent and, when present, its following sibling.
 The capture is bounded to eight ancestors, 32 attributes per ancestor, 4 KiB per
 recorded attribute value, and 32 KiB of changed-state evidence. Unchanged
 attributes do not count against the value bound. Consumers replay `class` as
-tokens, so a class list over the bound (a Squarespace `body` carries its whole
+tokens, so a class list over 2 KiB (a Squarespace `body` carries its whole
 style configuration as classes) is recorded as only the tokens opening removed
-(`closed`) and added (`opened`). Class changes and restoration compare token
+(`closed`) and added (`opened`), and its row is marked `classTokensOnly: true`.
+2 KiB is the smallest value bound a consumer applies: Blocks Engine drops
+longer values. Class changes and restoration compare token
 sets, so a runtime that re-adds a theme class on close in a new order still
 verifies. `status: verified`
 requires source actions to conceal the panel and restore the original ancestor
