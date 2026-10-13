@@ -14,6 +14,11 @@ function slowOrigin( requests = new Map< string, number >() ): Server {
 		requests.set( request.url ?? '', ( requests.get( request.url ?? '' ) ?? 0 ) + 1 );
 		response.setHeader( 'content-type', 'text/html' );
 		if ( request.url === '/held-image.png' || request.url === '/never' ) return;
+		if ( request.url === '/slow-gateway' ) {
+			// A gateway that gives up slowly: 503 after longer than the budget.
+			setTimeout( () => { response.statusCode = 503; response.end( 'Service Unavailable' ); }, 4_000 );
+			return;
+		}
 		if ( request.url === '/slower-than-budget' ) {
 			// Consistently slower than the (shrunk) budget, as a cold
 			// server-rendered origin is under parallel capture.
@@ -52,18 +57,18 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		const limits = SOURCE_NAVIGATION_LIMITS as { timeoutMs: number };
 		const budget = limits.timeoutMs;
 		limits.timeoutMs = 3_000;
-		const server = slowOrigin();
+		const requests = new Map< string, number >();
+		const server = slowOrigin( requests );
 		const origin = await listen( server );
 		const outputDir = tempOutput( 'source-load-incomplete' );
 		try {
 			const url = `${ origin }/product`;
-			const started = Date.now();
 			const result = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir, concurrency: 1, learnFluid: false, settleMs: 0 } );
-			const elapsed = Date.now() - started;
 			expect( result.failed ).toBe( 0 );
 			expect( result.captured ).toBe( 1 );
-			// One navigation plus bounded readiness, not four navigation attempts.
-			expect( elapsed ).toBeLessThan( 4 * limits.timeoutMs + 30_000 );
+			// One navigation per profile (plus the session-harvest visit), not
+			// retried attempts. Counted, not timed: wall clock varies under load.
+			expect( requests.get( '/product' ) ).toBeLessThanOrEqual( 3 );
 			const failuresPath = join( outputDir, 'screenshots', 'failures.json' );
 			expect( existsSync( failuresPath ) ? JSON.parse( readFileSync( failuresPath, 'utf8' ) ) : [] ).toEqual( [] );
 			const entry = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ).entries[ url ];
@@ -120,12 +125,37 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 				expect( readFileSync( join( outputDir, path ), 'utf8' ) ).toContain( 'Slower than budget' );
 				expect( entry.profiles[ profile ].diagnostics ).toEqual( [ {
 					code: SOURCE_NAVIGATION_SLOW,
-					reason: expect.stringMatching( /within the 3000ms navigation budget \(.*Timeout \d+ms exceeded.*\); one retry with a 6000ms budget delivered it in \d+ms/ ),
+					reason: expect.stringMatching( /within the 3000ms navigation budget \(.*Timeout \d+ms exceeded.*\); the single slow-source retry, attempt 2, used a 6000ms budget and delivered it in \d+ms/ ),
 				} ] );
 			}
 			// Polite: per viewport pass, one timed-out request and one retry
 			// (plus the session-harvest visit).
 			expect( requests.get( '/slower-than-budget' ) ).toBeLessThanOrEqual( 5 );
+		} finally {
+			limits.timeoutMs = budget;
+			await close( server );
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 120_000 );
+
+	it( 'stops after the slow retry, whatever it answers', async () => {
+		// The first attempt times out at 3 s; the slow retry (6 s) gets a 503.
+		// That retry is the last attempt: no further 503 retries at 6 s each.
+		const limits = SOURCE_NAVIGATION_LIMITS as { timeoutMs: number };
+		const budget = limits.timeoutMs;
+		limits.timeoutMs = 3_000;
+		const requests = new Map< string, number >();
+		const server = slowOrigin( requests );
+		const origin = await listen( server );
+		const outputDir = tempOutput( 'source-slow-gateway' );
+		try {
+			const url = `${ origin }/slow-gateway`;
+			const result = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir, concurrency: 1, learnFluid: false, settleMs: 0, viewports: [ { id: 'desktop', width: 1440, height: 900 } ] } );
+			expect( result.failed ).toBe( 1 );
+			const failures = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'failures.json' ), 'utf8' ) );
+			expect( failures ).toEqual( [ expect.objectContaining( { url, viewport: 'desktop', stage: 'goto', error: expect.stringMatching( /503/ ), attempt: 2 } ) ] );
+			// Two capture attempts plus the session-harvest visit.
+			expect( requests.get( '/slow-gateway' ) ).toBeLessThanOrEqual( 3 );
 		} finally {
 			limits.timeoutMs = budget;
 			await close( server );
@@ -145,7 +175,6 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		const outputDir = tempOutput( 'source-document-never' );
 		try {
 			const url = `${ origin }/never`;
-			const started = Date.now();
 			const result = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir, concurrency: 1, learnFluid: false, settleMs: 0, viewports: [ { id: 'desktop', width: 1440, height: 900 } ] } );
 			expect( result.failed ).toBe( 1 );
 			expect( result.captured ).toBe( 0 );
@@ -155,8 +184,6 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 			expect( failures ).toEqual( [ expect.objectContaining( { url, viewport: 'desktop', stage: 'goto', error: expect.stringMatching( /Timeout \d+ms exceeded/ ), attempt: 2 } ) ] );
 			// Plus the session-harvest visit, which is not a capture attempt.
 			expect( requests.get( '/never' ) ).toBeLessThanOrEqual( 3 );
-			// Two bounded attempts plus backoff and the session-harvest visit; no hang.
-			expect( Date.now() - started ).toBeLessThan( 60_000 );
 		} finally {
 			limits.timeoutMs = budget;
 			await close( server );

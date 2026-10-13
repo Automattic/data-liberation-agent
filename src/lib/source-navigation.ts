@@ -32,9 +32,15 @@ export const SLOW_SOURCE_BUDGET_FACTOR = 2;
 export function maxSourceNavigationBudgetMs(): number { return SOURCE_NAVIGATION_LIMITS.timeoutMs * SLOW_SOURCE_BUDGET_FACTOR; }
 /** Diagnostic code for a document that only arrived on the single slow-source retry. */
 export const SOURCE_NAVIGATION_SLOW = 'source_navigation_slow';
-/** True for a navigation that ran out of time, as opposed to a policy or transport failure. */
+/**
+ * True for a navigation that ran out of time, as opposed to a policy or
+ * transport failure. The redirect chain's own "time budget exhausted" is a
+ * timeout too, although it is raised as a `SourceNavigationError`.
+ */
 export function isNavigationTimeout(error: unknown): boolean {
-	return error instanceof Error && !(error instanceof SourceNavigationError) && (error.name === 'TimeoutError' || /\bTimeout \d+ms exceeded\b/.test(error.message));
+	if (!(error instanceof Error)) return false;
+	if (error instanceof SourceNavigationError) return error.message === 'Source navigation time budget exhausted';
+	return error.name === 'TimeoutError' || /\bTimeout \d+ms exceeded\b/.test(error.message);
 }
 /** Diagnostic code for a delivered source document whose `load` event did not fire within the navigation budget. */
 export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
