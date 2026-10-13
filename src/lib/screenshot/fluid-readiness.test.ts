@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { COARSE_SWEEP_WIDTHS, DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { waitForImages } from './page-helpers.js';
+import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 
 describe( 'responsive readiness contract', () => {
 	let browser: Browser;
@@ -390,4 +391,66 @@ describe( 'responsive readiness contract', () => {
 		// fluid-capture.test.ts.
 		expect( adaptive.result.sampledWidths ).toEqual( DEFAULT_SWEEP_WIDTHS.filter( width => width !== 769 ) );
 	}, 120_000 );
+
+	// A breakpoint-owned subtree is remounted whenever the viewport crosses its
+	// media query, so the copy at the capture width is a fresh one. Its text
+	// reveal starts once the text intersects the viewport and then runs a
+	// timed, script-driven gradient: transparent until the solid stop has grown
+	// to 100%. The capture already scrolled it into view before width learning.
+	const revealSource = ( box: string ) => `<style>body{margin:0}</style>
+		<div id="box" style="width:720px;height:40px">Neutral text</div>
+		<div style="height:2400px"></div><p id="slot"></p><div style="height:600px"></div>
+		<script>
+		const box = document.querySelector('#box');
+		${ box }
+		const slot = document.querySelector('#slot');
+		const gradient = progress => 'linear-gradient(90deg, rgb(200, 160, 80) ' + progress + '%, rgba(0, 0, 0, 0) ' + progress + '%)';
+		window.mounts = 0;
+		function mount() {
+			window.mounts++;
+			const text = document.createElement('span');
+			text.id = 'reveal';
+			text.textContent = 'Neutral reveal';
+			text.style.cssText = 'display:inline-block;color:transparent;background-clip:text;-webkit-background-clip:text';
+			text.style.backgroundImage = gradient(0);
+			slot.replaceChildren(text);
+			const observer = new IntersectionObserver(entries => {
+				if (!entries.some(entry => entry.isIntersecting)) return;
+				observer.disconnect();
+				const start = performance.now();
+				const frame = now => {
+					const progress = Math.min(100, Math.round((now - start) / 15));
+					text.style.backgroundImage = gradient(progress);
+					if (progress < 100) requestAnimationFrame(frame);
+				};
+				requestAnimationFrame(frame);
+			}, { threshold: 0.1 });
+			observer.observe(text);
+		}
+		mount();
+		matchMedia('(min-width: 1000px)').addEventListener('change', mount);
+		</script>`;
+	const revealed = 'linear-gradient(90deg, rgb(200, 160, 80) 100%, rgba(0, 0, 0, 0) 100%)';
+
+	it.each< [ string, string, { widths?: number[] } ] >( [
+		[ 'learned', "function resize() { box.style.width = innerWidth / 2 + 'px'; } addEventListener('resize', resize); resize();", { widths: [ 1440, 768 ] } ],
+		[ 'constant', "addEventListener('resize', () => {});", {} ],
+	] )( 'leaves a text reveal remounted by the return to the capture width revealed (%s geometry)', async ( _, box, options ) => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.addInitScript( observeRuntimeStyleWrites );
+			await page.route( 'https://reveal.test/**', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><body>${ revealSource( box ) }</body></html>` } ) );
+			await page.goto( 'https://reveal.test/' );
+			const reveal = page.locator( '#reveal' );
+			await reveal.scrollIntoViewIfNeeded();
+			await page.waitForFunction( value => document.querySelector< HTMLElement >( '#reveal' )!.style.backgroundImage === value, revealed );
+			await page.evaluate( () => window.scrollTo( { top: 0, left: 0, behavior: 'instant' } ) );
+			await learnAndApplyFluidGeometry( page, { settleMs: 0, ...options } );
+			// Crossing the breakpoint replaced the copy the capture had revealed.
+			expect( await page.evaluate( () => ( window as unknown as { mounts: number } ).mounts ) ).toBeGreaterThan( 1 );
+			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
+			expect( await page.evaluate( () => window.scrollY ) ).toBe( 0 );
+			expect( await reveal.evaluate( element => ( element as HTMLElement ).style.backgroundImage ) ).toBe( revealed );
+		} finally { await page.close(); }
+	}, 60_000 );
 } );

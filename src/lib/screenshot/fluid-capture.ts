@@ -599,6 +599,7 @@ async function learnFluidGeometry(
 	await baseline.evaluate( state => state.restore() );
 	if ( original ) await page.setViewportSize( original );
 	await waitForRestGeometry( page, baseline, settleMs, false, properties );
+	await replayReplacedEntrances( page, baseline, properties );
 	await baseline.evaluate( state => state.reconcile() );
 	// A final resize may write geometry onto roles that never qualified for
 	// learning. Restore those roles without replacing the sampled role state.
@@ -944,7 +945,31 @@ async function inlineGeometryIsConstant(
 	if ( original ) await page.setViewportSize( original );
 	await settleDocument( page, 'fluid-probe', probeSettle );
 	const after = await observe();
-	return after !== null && ! after.written && after.count === before.count;
+	const constant = after !== null && ! after.written && after.count === before.count;
+	// A constant document is captured at this viewport without sampling, so it
+	// owes the capture width what a sampled return does.
+	if ( constant ) await replayReplacedEntrances( page, baseline );
+	return constant;
+}
+
+/**
+ * Replay the capture's scroll-through when the sweep away from the capture
+ * viewport made the source replace content it had already rendered.
+ *
+ * Crossing a breakpoint can remount a subtree the source renders per width.
+ * The fresh copy starts before its viewport entrance, so a reveal the
+ * capture's scroll-through already played (text whose script-driven gradient
+ * fills in once it is scrolled into view) is back at its transparent first
+ * frame. Sweep the document as every sampled width is swept, so the copy's
+ * entrance observers fire again, then let the inline-style writes they start
+ * finish before the capture width is measured or serialized. A document whose
+ * elements all survived the sweep kept its entrance state and pays nothing.
+ */
+async function replayReplacedEntrances( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
+	if ( ! await baseline.evaluate( state => state.replaced() ) ) return;
+	const { settleDocument } = await import( './page-helpers.js' );
+	await waitForRestGeometry( page, baseline, 0, true, properties );
+	await settleDocument( page, 'fluid-entrance-replay', { quietMs: 200, timeoutMs: 2_000, animations: true } );
 }
 
 /** The last contiguous stretch of numeric pixel custom-property observations. */

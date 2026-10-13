@@ -15,6 +15,24 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.27.5] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- replay viewport entrances for content the width sweep remounted
+
+## [0.27.4] - 2026-10-13
+
+### Changed
+- regenerate plugin bundles
+- Keep ?tab= links on the captured route and record each tab's key
+- Do not save analytics beacon replies as site resources
+
+### Fixed
+- retry a timed-out source document once with a longer budget
+
 ## [0.27.3] - 2026-10-13
 
 ### Changed
