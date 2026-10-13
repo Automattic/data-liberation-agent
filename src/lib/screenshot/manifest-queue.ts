@@ -69,6 +69,8 @@ export interface ManifestEntry {
   };
   /** Phone-document learning, whose canvas floor does not select the desktop document. */
   fluidMobile?: ManifestEntry['fluid'];
+  /** Reflow-only site: whether this route was captured desktop only or in both profiles, and why. */
+  deviceMode?: import('./device-mode.js').RouteDeviceDecision;
   capturedAt: string;
   /**
    * The same-origin route the server redirected this URL to. The URL is an

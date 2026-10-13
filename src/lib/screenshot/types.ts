@@ -36,6 +36,14 @@ export interface ScreenshotOpts {
 	primaryUrl?: string; // reference for same-origin enforcement
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	viewports?: Viewport[];
+	/**
+	 * Whether the default phone profile is captured as its own document (see
+	 * `device-mode.ts`). `auto` decides once on the entrypoint before route
+	 * capture. Ignored when `viewports` is given. Default: `dual`.
+	 */
+	deviceMode?: import('./device-mode.js').DeviceModeRequest;
+	/** The adapter selects among per-device documents at export, so `auto` keeps both profiles. */
+	deviceDocumentSelection?: boolean;
 	additionalProfiles?: import('../../adapters/page-actions.js').LiberationHooks['additionalProfiles'];
 	referenceWidths?: number[];
 	/** Declare required cells before navigating, so failed profiles stay pending. */
@@ -131,4 +139,6 @@ export interface ScreenshotResult {
 	linkedPageCoverage?: import('./linked-frontier.js').LinkedPageCoverage;
 	/** Findings about input routes dropped before capture (`route_off_origin`) or left by the time budget (`route_capture_skipped_budget`). */
 	routeDiagnostics?: import('../capture-export-routes.js').RouteDiagnostic[];
+	/** The device-mode decision, when `deviceMode` applied (no explicit `viewports`). */
+	deviceMode?: import('./device-mode.js').DeviceModeDecision;
 }

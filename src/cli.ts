@@ -71,6 +71,11 @@ const HELP = `
     --max-file-bytes <n> Largest file exported into the site (default 52428800,
                          50 MiB). Larger assets are not written and are reported
                          as asset_exceeds_file_limit.
+    --device-mode <mode> auto (default) captures each route once, at desktop,
+                         when the homepage serves phones the same HTML and DOM
+                         (the phone layout is CSS reflow); otherwise it also
+                         captures a phone document. dual always captures both;
+                         reflow-only always captures desktop only.
     --portable-motion <json>  Author a portable runtime from pinned independent
                          scripts and verify it against the live source before export.
                          Learning is on by default: it keeps the copy reflowing
@@ -263,6 +268,10 @@ if (args.includes('--help')) {
   if (maxFileBytesArg !== undefined && (maxFileBytesArg === null || !Number.isSafeInteger(maxFileBytes) || (maxFileBytes as number) < 1)) {
     throw new Error('--max-file-bytes requires a positive integer');
   }
+  const deviceMode = args.includes('--device-mode') ? getArg('--device-mode') : undefined;
+  if (deviceMode !== undefined && deviceMode !== 'auto' && deviceMode !== 'dual' && deviceMode !== 'reflow-only') {
+    throw new Error('--device-mode requires auto, dual or reflow-only');
+  }
   const result = await liberateSite({
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
     http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
@@ -276,6 +285,7 @@ if (args.includes('--help')) {
     referenceSample,
     timeBudgetMs,
     maxFileBytes,
+    deviceMode,
     portableMotion,
     serve: args.includes('--serve'),
     log: (message) => process.stderr.write(`${message}\n`),

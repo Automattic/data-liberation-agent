@@ -134,6 +134,14 @@ interface ExportCaptureOptions {
 	resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
 	input?: HttpExportInput;
 	embeddedDocuments?: boolean;
+	/**
+	 * `reflow-only`: the site's phone view is CSS reflow of the desktop document
+	 * (see `screenshot/device-mode.ts`). Only routes whose own phone check kept
+	 * them dual have a phone document, named by their manifest `mobileHtml`;
+	 * every other route ships its desktop document alone, and no `html-mobile/`
+	 * fallback path is read.
+	 */
+	deviceMode?: import( './screenshot/device-mode.js' ).DeviceMode;
 	outputDir: string;
 	sourceUrl: string;
 	platform: string;
@@ -1293,7 +1301,7 @@ function buildExportCapture(
 			}
 			const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
 			const acquiredMobileHtml =
-				( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
+				( options.deviceMode === 'reflow-only' || httpInput ? Boolean( entry.mobileHtml ) : true ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
 					? readFileSync( mobileHtmlPath, 'utf8' )
 					: undefined;
 			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
