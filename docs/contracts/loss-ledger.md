@@ -112,7 +112,7 @@ Other `discoveryDiagnostics` codes are discovery evidence rather than unit losse
 | `wordpress_site_plan_unresolved_navigation_link` | item (`value`) | warning | Local link or relative form action with no artifact page, rewritten to the source URL or to `#`. Covers links to omitted pages. | — (extended in #2714, #2715) |
 | `html_include_budget_exceeded` | page (`context.source_path`) | warning | Document over the include count; its includes were left unexpanded. Entry documents still throw. | #2715 |
 | `html_include_directive_ignored` | page (`context.source_path`) | warning | Non-standard or unresolvable include directive; left unexpanded. | #2715 |
-| `glyph_color_undecodable` | item (`src`, `mime_type`) | warning | Social icon glyph could not be decoded; core default icon colors apply. | #2716 |
+| `glyph_color_undecodable` | item (`src`, `mime_type`) | warning | Social icon glyph could not be decoded; core default icon colors apply. Capture now records the rendered colour as `data-dla-glyph-color` ([glyph-color.md](glyph-color.md)); BE does not read it yet. | #2716 |
 
 Emit sites:
 
@@ -275,4 +275,5 @@ A stricter caller tightens step 2 (for example `complete && summary.routesOmitte
 - **Compact rows are truncated.** `compact_summary.diagnostics` keeps the first 50 rows in report order. It drops top-level `code`, `url`, `value` and `metrics`.
 - **The partial-site rule is inconsistent.** An omitted page imports, but an omitted artifact file refuses the whole import.
 - **Not every loss is a finding row.** #2712's form-style drops are recorded as `style_value_unrepresentable:<property>` strings inside the form presentation graph's `diagnostics` list, not as rows.
-- **No classification guard.** No repository yet requires every throw site on the compile and import path to be classified (#761, "Classification guard"). Remaining conversions: Automattic/blocks-engine#2713 items 4-8, Automattic/static-site-importer#2054, #762, and #769 (capture-side glyph colour).
+- **No classification guard.** No repository yet requires every throw site on the compile and import path to be classified (#761, "Classification guard"). Remaining conversions: Automattic/blocks-engine#2713 items 4-8, Automattic/static-site-importer#2054, and #762.
+- **Glyph colour still decoded at compile.** Capture records `data-dla-glyph-color` (#769, [glyph-color.md](glyph-color.md)), but BE's `MonochromeGlyphColor` / `SocialLinksPattern::glyphColor` still decode image bytes and do not prefer the attribute yet.
