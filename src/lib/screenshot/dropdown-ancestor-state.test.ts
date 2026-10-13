@@ -144,7 +144,7 @@ it.skipIf( skipBrowser )( 'records and replays the ancestor class that shows a m
 		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page' );
 		const portable = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states );
 		await page.setContent( portable );
-		expect( await page.locator( '#burger + [data-dla-dialog-panel]:not([data-dla-observed-placement])' ).count() ).toBe( 1 );
+		expect( await page.locator( '#burger + [data-blocks-engine-capture-dialog-panel]:not([data-blocks-engine-capture-observed-placement])' ).count() ).toBe( 1 );
 		await page.locator( '#burger' ).click();
 		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page menu-open' );
 		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'header light' );

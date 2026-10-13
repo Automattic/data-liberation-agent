@@ -125,6 +125,6 @@ export const CAPTURE_SCHEMAS = [
  * helper; see docs/contracts/capture-evidence.md for its status upstream.
  */
 export const CAPTURE_RUNTIME_SHA256 = {
-	disclosure: '3d350f5508bed44c931291f9f38e5d8d7c361d5d3ea729c51f1fe11b70ce75dc',
+	disclosure: 'b545f43a77b79d075373048431101fe11d7ff8cdfe7987de6d7971512763d88f',
 	gallery: '456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b',
 } as const;
