@@ -177,7 +177,7 @@ it('preserves the native baseline through screenshot capture, export and capture
     const exportedHtml = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
     expect(exportedHtml).not.toContain("document.querySelector('#on')");
     expect(exportedHtml).toContain(NATIVE_CONTROL_STATE_RUNTIME);
-    expect(exportedHtml.match(/<script data-dla-native-control-runtime/g)).toHaveLength(1);
+    expect(exportedHtml.match(/<script data-blocks-engine-capture-native-control-runtime/g)).toHaveLength(1);
     await copy.setContent(exportedHtml);
     expect(await state(copy)).toEqual(baseline);
     await copy.evaluate(() => document.querySelector<HTMLFormElement>('#first')!.reset());
@@ -197,7 +197,7 @@ it('reconstructs only owned code after stripping forged scripts and rejects inva
   try {
     const page = await browser.newPage();
     const malicious = `<input type="checkbox" ${NATIVE_CONTROL_STATE_ATTRIBUTE}='{"version":1,"kind":"input","type":"checkbox","value":"on","defaultValue":"","checked":"true","defaultChecked":false,"indeterminate":false}'>
-      <script data-dla-native-control-runtime>window.sourceExecuted=true</script><script>window.sourceExecuted=true</script>`;
+      <script data-blocks-engine-capture-native-control-runtime>window.sourceExecuted=true</script><script>window.sourceExecuted=true</script>`;
     const clean = sanitizeFrozenHtml(malicious);
     expect(clean).not.toContain('window.sourceExecuted');
     expect(clean.match(/<script /g)).toHaveLength(1);
@@ -214,5 +214,5 @@ it('installs the runtime before the real </body>, not inside a source script tha
   const html = `<html><head></head><body><input type="checkbox" ${NATIVE_CONTROL_STATE_ATTRIBUTE}="{}">${popup}<p>after</p></body></html>`;
   const wired = wireNativeControlState(html);
   expect(wired).toContain(popup);
-  expect(wired).toMatch(/<p>after<\/p><script data-dla-native-control-runtime>[\s\S]*<\/script><\/body><\/html>$/);
+  expect(wired).toMatch(/<p>after<\/p><script data-blocks-engine-capture-native-control-runtime>[\s\S]*<\/script><\/body><\/html>$/);
 });

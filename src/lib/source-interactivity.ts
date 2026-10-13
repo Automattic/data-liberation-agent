@@ -4,7 +4,7 @@ import { resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 
-export const SOURCE_INTERACTIVITY_SCHEMA = 'data-liberation/source-interactivity/v1';
+export const SOURCE_INTERACTIVITY_SCHEMA = 'blocks-engine-capture/source-interactivity/v1';
 const MAX_SCRIPT_BYTES = 128 * 1024;
 const MAX_SCRIPTS = 32;
 

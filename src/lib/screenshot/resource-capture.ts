@@ -633,7 +633,7 @@ export class CapturedResourceStore {
 				this.replayBytes + body.length > MAX_CAPTURED_RESOURCE_TOTAL_BYTES
 			)
 				return;
-			this.replayDir ??= mkdtempSync( join( tmpdir(), 'dla-resource-replay-' ) );
+			this.replayDir ??= mkdtempSync( join( tmpdir(), 'liberation-resource-replay-' ) );
 			const path = join( this.replayDir, createHash( 'sha256' ).update( url ).digest( 'hex' ) );
 			writeFileSync( path, body );
 			this.replayBytes += body.length;

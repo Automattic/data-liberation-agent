@@ -10,7 +10,7 @@ export type NativeControlState =
 	| { version: 1; kind: 'select'; options: Array< { selected: boolean; defaultSelected: boolean } > }
 	| { version: 1; kind: 'file' };
 
-export const NATIVE_CONTROL_STATE_ATTRIBUTE = 'data-dla-native-control-state';
+export const NATIVE_CONTROL_STATE_ATTRIBUTE = 'data-blocks-engine-capture-native-control-state';
 
 /** Closure-free browser primitive, also used by capture's serialization task. */
 export function observeNativeControlState( control: Element ): NativeControlState | null {
@@ -31,9 +31,9 @@ export function observeNativeControlState( control: Element ): NativeControlStat
  */
 export function restoreNativeControlState( root: Document ): void {
 	const inputs: Array< { control: HTMLInputElement; state: Extract< NativeControlState, { kind: 'input' } > } > = [];
-	for ( const control of root.querySelectorAll( 'input[data-dla-native-control-state],textarea[data-dla-native-control-state],select[data-dla-native-control-state]' ) ) {
+	for ( const control of root.querySelectorAll( 'input[data-blocks-engine-capture-native-control-state],textarea[data-blocks-engine-capture-native-control-state],select[data-blocks-engine-capture-native-control-state]' ) ) {
 		let state: NativeControlState;
-		try { state = JSON.parse( control.getAttribute( 'data-dla-native-control-state' )! ); } catch { continue; }
+		try { state = JSON.parse( control.getAttribute( 'data-blocks-engine-capture-native-control-state' )! ); } catch { continue; }
 		if ( ! state || state.version !== 1 ) continue;
 		if ( control instanceof HTMLInputElement && state.kind === 'input' && control.type !== 'file' && state.type === control.type &&
 			typeof state.value === 'string' && typeof state.defaultValue === 'string' && typeof state.checked === 'boolean' &&
@@ -73,9 +73,9 @@ export const NATIVE_CONTROL_STATE_RUNTIME = `(${ restoreNativeControlState.toStr
  * A body-end script restores all properties synchronously before load.
  */
 export function wireNativeControlState( html: string ): string {
-	const clean = html.replace( /<script\b[^>]*\bdata-dla-native-control-runtime\b[^>]*>[\s\S]*?<\/script\s*>/gi, '' );
+	const clean = html.replace( /<script\b[^>]*\bdata-blocks-engine-capture-native-control-runtime\b[^>]*>[\s\S]*?<\/script\s*>/gi, '' );
 	if ( ! clean.includes( `${ NATIVE_CONTROL_STATE_ATTRIBUTE }=` ) ) return clean;
-	const script = `<script data-dla-native-control-runtime>${ NATIVE_CONTROL_STATE_RUNTIME }</script>`;
+	const script = `<script data-blocks-engine-capture-native-control-runtime>${ NATIVE_CONTROL_STATE_RUNTIME }</script>`;
 	// The real </body>: a source script can carry `</body>` text (document.write popups).
 	const bodyEnd = documentElementTags( clean, 'body' ).close;
 	return bodyEnd ? clean.slice( 0, bodyEnd.start ) + script + clean.slice( bodyEnd.start ) : clean + script;

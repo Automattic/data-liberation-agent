@@ -22,9 +22,9 @@
 import type { ElementHandle, Frame, Page } from 'playwright';
 
 /** Marks a Wix map that was pointed at a portable Google Maps embed. */
-export const WIX_PORTED_MAP_ATTRIBUTE = 'data-dla-ported-embed';
+export const WIX_PORTED_MAP_ATTRIBUTE = 'data-blocks-engine-capture-ported-embed';
 /** Marks the note left where a Wix-only widget could not be copied. */
-export const WIX_UNPORTED_EMBED_ATTRIBUTE = 'data-dla-unported-embed';
+export const WIX_UNPORTED_EMBED_ATTRIBUTE = 'data-blocks-engine-capture-unported-embed';
 
 const MAP_LOCATION_WAIT_MILLISECONDS = 5_000;
 const MAP_EMBED_LOAD_MILLISECONDS = 5_000;

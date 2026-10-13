@@ -87,7 +87,7 @@ import {
 import { extractSharedChrome } from './shared-chrome.js';
 
 function withoutGeometryIdentities( html: string ): string {
-	return html.replace( /\sdata-dla-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
+	return html.replace( /\sdata-blocks-engine-capture-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
 }
 
 interface CaptureManifestEntry {
@@ -210,9 +210,9 @@ const MAX_JSON_LD_SCRIPTS = 16;
 const MAX_JSON_LD_SCRIPT_BYTES = 64 * 1024;
 const MAX_JSON_LD_TOTAL_BYTES = 256 * 1024;
 const VISUAL_IFRAME_EVIDENCE_ATTRIBUTES = {
-	src: 'data-dla-visual-iframe-src',
-	width: 'data-dla-visual-iframe-width',
-	height: 'data-dla-visual-iframe-height',
+	src: 'data-blocks-engine-capture-visual-iframe-src',
+	width: 'data-blocks-engine-capture-visual-iframe-width',
+	height: 'data-blocks-engine-capture-visual-iframe-height',
 };
 const VISUAL_IFRAME_ATTRIBUTES = new Set( [
 	'allow',
@@ -528,7 +528,7 @@ export function canonicalizeUnreferencedHeaderIds(
 			element = element.parent && isElementNode( element.parent ) ? element.parent : null;
 		}
 		if ( element !== header[ 0 ] ) return;
-		const stable = `dla-shared-${ createHash( 'sha256' ).update( segments.join( '/' ) ).digest( 'hex' ).slice( 0, 16 ) }`;
+		const stable = `data-blocks-engine-capture-shared-${ createHash( 'sha256' ).update( segments.join( '/' ) ).digest( 'hex' ).slice( 0, 16 ) }`;
 		if ( html.includes( `id="${ stable }"` ) || [ ...rewrites.values() ].includes( stable ) ) return;
 		rewrites.set( id, stable );
 	} );
@@ -842,8 +842,8 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 			}
 			jsonLdScriptCount++;
 		}
-		if ( element.name === 'script' && /^application\/json(?:\s*;|\s*$)/i.test( node.attr( 'type' ) ?? '' ) && node.attr( 'data-dla-source-evidence' ) !== undefined ) {
-			const evidence = sourceEvidenceScript( node.text(), node.attr( 'data-dla-source-evidence' ) ?? '' );
+		if ( element.name === 'script' && /^application\/json(?:\s*;|\s*$)/i.test( node.attr( 'type' ) ?? '' ) && node.attr( 'data-blocks-engine-capture-source-evidence' ) !== undefined ) {
+			const evidence = sourceEvidenceScript( node.text(), node.attr( 'data-blocks-engine-capture-source-evidence' ) ?? '' );
 			if ( evidence && sourceEvidenceScriptCount < MAX_SOURCE_EVIDENCE_SCRIPTS ) sourceData.push( evidence );
 			else diagnostics.push( { code: 'source_evidence_unproven', reason: 'An inert source evidence script was invalid or exceeded its bounded retention contract.' } );
 			sourceEvidenceScriptCount++;
@@ -855,7 +855,7 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 	}
 	$( 'iframe' ).each( ( _index, element ) => {
 		const node = $( element );
-		const embeddedSource = node.attr( 'data-dla-embedded-document' );
+		const embeddedSource = node.attr( 'data-blocks-engine-capture-embedded-document' );
 		if ( embeddedSource && embeddedSources.has( embeddedSource ) ) {
 			const height = Number( node.attr( 'height' ) );
 			if ( ! Number.isFinite( height ) || height <= 0 ) { node.remove(); return; }
@@ -951,9 +951,9 @@ function appendSourceData( html: string, sourceData: SourceDataScript[] ): strin
  * Two sources feed this, checked in order so an adapter's own verdict always
  * wins over the generic re-check of the same anchor:
  *
- *  1. `a[data-dla-anchor-fragment]` — anchors a platform's `prepare()` hook
+ *  1. `a[data-blocks-engine-capture-anchor-fragment]` — anchors a platform's `prepare()` hook
  *     already resolved against its own click runtime (see AGENTS.md — Wix
- *     same-page anchors), carrying an optional `data-dla-anchor-unresolved`
+ *     same-page anchors), carrying an optional `data-blocks-engine-capture-anchor-unresolved`
  *     reason straight from that runtime. A marked link naming ANOTHER captured
  *     route resolves against that route's document, so this document's target
  *     count says nothing about it and `checkSelfConsistency` verifies the pair
@@ -998,7 +998,7 @@ function unresolvedCapturedAnchors(
 		}
 	};
 
-	$( 'a[data-dla-anchor-fragment][href]' ).each( ( _index, element ) => {
+	$( 'a[data-blocks-engine-capture-anchor-fragment][href]' ).each( ( _index, element ) => {
 		const link = $( element );
 		const href = link.attr( 'href' );
 		if ( ! href ) return;
@@ -1024,12 +1024,12 @@ function unresolvedCapturedAnchors(
 		} catch {
 			return;
 		}
-		record( fragment, link.attr( 'data-dla-anchor-unresolved' ) );
+		record( fragment, link.attr( 'data-blocks-engine-capture-anchor-unresolved' ) );
 	} );
 
 	$( 'a[href]' ).each( ( _index, element ) => {
 		const link = $( element );
-		if ( link.attr( 'data-dla-anchor-fragment' ) !== undefined ) return; // handled above
+		if ( link.attr( 'data-blocks-engine-capture-anchor-fragment' ) !== undefined ) return; // handled above
 		const href = ( link.attr( 'href' ) ?? '' ).trim();
 		if ( ! href || href === '#' || ! documentUrl ) return;
 		let resolved: URL;

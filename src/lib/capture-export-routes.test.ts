@@ -17,7 +17,7 @@ function entry( dir: string, filename: string, url: string, html: string ): Rout
 describe( 'capture export route stage', () => {
 	it( 'allocates independent nonquery collisions deterministically around authored files and directories', () => {
 		mkdirSync('.tmp-test', {recursive: true});
-		const dir = mkdtempSync(join('.tmp-test', 'dla-document-collisions-')); dirs.push(dir);
+		const dir = mkdtempSync(join('.tmp-test', 'liberation-document-collisions-')); dirs.push(dir);
 		const home = entry(dir, 'home.html', 'https://example.com/', '<h1>Home</h1>');
 		const article = entry(dir, 'article.html', 'https://example.com/article', '<h1>Without slash</h1>');
 		const directory = entry(dir, 'directory.html', 'https://example.com/article/', '<h1>Directory</h1>');
@@ -40,7 +40,7 @@ describe( 'capture export route stage', () => {
 	});
 	it( 'keeps distinct self-canonical addresses while binding explicit aliases and exact redirect targets', () => {
 		mkdirSync('.tmp-test', {recursive: true});
-		const dir = mkdtempSync(join('.tmp-test', 'dla-canonical-collisions-')); dirs.push(dir);
+		const dir = mkdtempSync(join('.tmp-test', 'liberation-canonical-collisions-')); dirs.push(dir);
 		const home = entry(dir, 'home.html', 'https://example.com/', '<h1>Home</h1>');
 		const article = {...entry(dir, 'article.html', 'https://example.com/article', '<h1>Without slash</h1>'), canonicalUrl: 'https://example.com/article'};
 		const directory = {...entry(dir, 'directory.html', 'https://example.com/article/', '<h1>Directory</h1>'), canonicalUrl: 'https://example.com/article/'};
@@ -54,7 +54,7 @@ describe( 'capture export route stage', () => {
 	});
 	it( 'allocates distinct query routes deterministically without claiming authored filenames', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
-		const dir = mkdtempSync( join( '.tmp-test', 'dla-query-routes-' ) );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-query-routes-' ) );
 		dirs.push( dir );
 		const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
 		const base = entry( dir, 'base.html', 'https://example.com/catalog/', '<h1>All</h1>' );
@@ -77,7 +77,7 @@ describe( 'capture export route stage', () => {
 
 	it( 'selects a query entrypoint without confusing it with other root query pages', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
-		const dir = mkdtempSync( join( '.tmp-test', 'dla-query-home-' ) );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-query-home-' ) );
 		dirs.push( dir );
 		const en = entry( dir, 'en.html', 'https://example.com/?lang=en', '<h1>English</h1>' );
 		const fr = entry( dir, 'fr.html', 'https://example.com/?lang=fr', '<h1>French</h1>' );
@@ -97,7 +97,7 @@ describe( 'capture export route stage', () => {
 		// `/?ref=nav` do not prove they are the same page.
 		const homeRoutes = () => {
 			mkdirSync( '.tmp-test', { recursive: true } );
-			const dir = mkdtempSync( join( '.tmp-test', 'dla-path-collision-' ) ); dirs.push( dir );
+			const dir = mkdtempSync( join( '.tmp-test', 'liberation-path-collision-' ) ); dirs.push( dir );
 			const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
 			const defaultDocument = entry( dir, 'default.html', 'https://example.com/index.html', '<h1>Home</h1>' );
 			const tracked = { ...entry( dir, 'tracked.html', 'https://example.com/?ref=nav', '<h1>Tracked</h1>' ), canonicalUrl: defaultDocument.url };
@@ -133,7 +133,7 @@ describe( 'capture export route stage', () => {
 
 		it( 'drops routes that need a directory another route holds as a file', () => {
 			mkdirSync( '.tmp-test', { recursive: true } );
-			const dir = mkdtempSync( join( '.tmp-test', 'dla-file-directory-' ) ); dirs.push( dir );
+			const dir = mkdtempSync( join( '.tmp-test', 'liberation-file-directory-' ) ); dirs.push( dir );
 			const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
 			const file = entry( dir, 'file.html', 'https://example.com/docs.html', '<h1>Docs</h1>' );
 			const guide = entry( dir, 'guide.html', 'https://example.com/docs.html/guide/', '<h1>Guide</h1>' );
@@ -149,7 +149,7 @@ describe( 'capture export route stage', () => {
 
 	it( 'collapses canonical aliases of a query rendition onto its allocated path', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
-		const dir = mkdtempSync( join( '.tmp-test', 'dla-query-canonical-' ) );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-query-canonical-' ) );
 		dirs.push( dir );
 		const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
 		const base = entry( dir, 'base.html', 'https://example.com/catalog/', '<h1>All</h1>' );
@@ -168,7 +168,7 @@ describe( 'capture export route stage', () => {
 
 	it( 'retains a canonical query alias when it is the selected entrypoint', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
-		const dir = mkdtempSync( join( '.tmp-test', 'dla-query-alias-' ) );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-query-alias-' ) );
 		dirs.push( dir );
 		const base = entry( dir, 'base.html', 'https://example.com/', '<h1>Home</h1>' );
 		const alias = { ...entry( dir, 'alias.html', 'https://example.com/?ref=nav', '<h1>Home</h1>' ), canonicalUrl: base.url };
@@ -179,7 +179,7 @@ describe( 'capture export route stage', () => {
 
 	it( 'returns the selected entrypoint document for later media selection and preserves redirects to allocated pages', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
-		const dir = mkdtempSync( join( '.tmp-test', 'dla-route-stage-' ) );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-route-stage-' ) );
 		dirs.push( dir );
 		const root = entry( dir, 'root.html', 'https://example.com/', '<h1>Home</h1>' );
 		const defaultDocument = entry( dir, 'default.html', 'https://example.com/index.html', '<h1>Different</h1>' );
@@ -208,7 +208,7 @@ describe( 'entrypoint failure reporting', () => {
 	}
 
 	it( 'names the recorded capture failure when the source URL produced no page', () => {
-		const dir = stage( 'dla-entrypoint-failed-' );
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-failed-' );
 		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
 		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
 			{ code: 'route_capture_failed', url: 'https://example.com/', reason: 'desktop/goto: HTTP 403; mobile/goto: HTTP 403' },
@@ -216,7 +216,7 @@ describe( 'entrypoint failure reporting', () => {
 	} );
 
 	it( 'matches the recorded failure by document identity, not by exact string', () => {
-		const dir = stage( 'dla-entrypoint-identity-' );
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-identity-' );
 		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
 		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
 			{ code: 'route_not_found', url: 'https://example.com', reason: 'HTTP 404' },
@@ -224,7 +224,7 @@ describe( 'entrypoint failure reporting', () => {
 	} );
 
 	it( 'names the redirect target when the source URL redirected to a route that was not captured', () => {
-		const dir = stage( 'dla-entrypoint-redirect-' );
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-redirect-' );
 		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
 		expect( () => allocateCaptureRoutes(
 			[ about ],
@@ -235,7 +235,7 @@ describe( 'entrypoint failure reporting', () => {
 	} );
 
 	it( 'says so when the source URL redirected to a route that was captured separately', () => {
-		const dir = stage( 'dla-entrypoint-redirect-captured-' );
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-redirect-captured-' );
 		const home = entry( dir, 'home.html', 'https://example.com/home/', '<h1>Home</h1>' );
 		expect( () => allocateCaptureRoutes(
 			[ home ],
@@ -246,7 +246,7 @@ describe( 'entrypoint failure reporting', () => {
 	} );
 
 	it( 'keeps the generic message when nothing was recorded for the source URL', () => {
-		const dir = stage( 'dla-entrypoint-unknown-' );
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-unknown-' );
 		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
 		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
 			{ code: 'route_capture_failed', url: 'https://example.com/other/', reason: 'desktop/goto: HTTP 500' },
@@ -256,7 +256,7 @@ describe( 'entrypoint failure reporting', () => {
 	} );
 
 	it( 'keeps the generic message when the source URL is ambiguous', () => {
-		const dir = stage( 'dla-entrypoint-ambiguous-' );
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-ambiguous-' );
 		const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
 		const anchored = entry( dir, 'anchored.html', 'https://example.com/#top', '<h1>Home</h1>' );
 		expect( () => allocateCaptureRoutes( [ home, anchored ], 'https://example.com/', [], [

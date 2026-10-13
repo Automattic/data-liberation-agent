@@ -53,7 +53,7 @@ describe( 'export publication', () => {
 		expect( first ).toBe( second );
 		expect( snapshot( outputDir ) ).toEqual( before );
 		const receipt = JSON.parse( readFileSync( first, 'utf8' ) );
-		expect( receipt.schema ).toBe( 'data-liberation/capture-receipt/v1' );
+		expect( receipt.schema ).toBe( 'blocks-engine-capture/capture-receipt/v1' );
 		expect( receipt.websiteRoot ).toBe( 'website' );
 		expect( receipt.entrypoint ).toBe( 'website/index.html' );
 		expect( existsSync( join( outputDir, '.export-publication.lock' ) ) ).toBe( false );
@@ -126,11 +126,11 @@ describe( 'export publication', () => {
 
 	it( 'removes only stale export-owned optional outputs', () => {
 		const outputDir = captureFixture(
-			'<html><body><main><div data-dla-geometry-id="wrapper-0"><section data-dla-geometry-id="target-0">Copy</section></div></main></body></html>',
+			'<html><body><main><div data-blocks-engine-capture-geometry-id="wrapper-0"><section data-blocks-engine-capture-geometry-id="target-0">Copy</section></div></main></body></html>',
 		);
 		mkdirSync( join( outputDir, 'layout-geometry' ), { recursive: true } );
 		const observation = {
-			schema: 'data-liberation/layout-geometry-capture/v1',
+			schema: 'blocks-engine-capture/layout-geometry-capture/v1',
 			observations: [ {
 				wrapperIdentity: 'wrapper-0',
 				targetIdentity: 'target-0',
@@ -387,11 +387,11 @@ describe( 'export publication', () => {
 
 	it( 'matches the owned manifest to names the exporter writes', () => {
 		const outputDir = captureFixture(
-			'<html><body><canvas id="stage"></canvas><main><div data-dla-geometry-id="wrapper-0"><section data-dla-geometry-id="target-0">Copy</section></div></main><script>const canvas=document.querySelector("canvas");canvas.getContext("2d");requestAnimationFrame(()=>{});</script></body></html>',
+			'<html><body><canvas id="stage"></canvas><main><div data-blocks-engine-capture-geometry-id="wrapper-0"><section data-blocks-engine-capture-geometry-id="target-0">Copy</section></div></main><script>const canvas=document.querySelector("canvas");canvas.getContext("2d");requestAnimationFrame(()=>{});</script></body></html>',
 		);
 		mkdirSync( join( outputDir, 'layout-geometry' ), { recursive: true } );
 		const observation = {
-			schema: 'data-liberation/layout-geometry-capture/v1',
+			schema: 'blocks-engine-capture/layout-geometry-capture/v1',
 			observations: [ {
 				wrapperIdentity: 'wrapper-0',
 				targetIdentity: 'target-0',
@@ -557,7 +557,7 @@ function httpFixture(): { outputDir: string } {
 	mkdirSync( join( outputDir, 'source-documents' ), { recursive: true } );
 	writeFileSync( join( outputDir, 'source-documents', 'home.html' ), html );
 	writeFileSync( join( outputDir, 'http-acquisition.json' ), JSON.stringify( {
-		schema: 'data-liberation/http-acquisition/v1',
+		schema: 'blocks-engine-capture/http-acquisition/v1',
 		sourceUrl,
 		documents: [ {
 			url: sourceUrl,
@@ -579,7 +579,7 @@ function exportOptions( outputDir: string ) {
 
 function tempDir(): string {
 	mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
-	const dir = mkdtempSync( join( process.cwd(), '.tmp-test', 'dla-export-publication-' ) );
+	const dir = mkdtempSync( join( process.cwd(), '.tmp-test', 'liberation-export-publication-' ) );
 	dirs.push( dir );
 	return dir;
 }

@@ -30,13 +30,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
 			if ( delay < 0 ) {
 				expect( await page.locator( '#runtime-section' ).count() ).toBe( 0 );
-				expect( await page.locator( 'a' ).getAttribute( 'data-dla-anchor-unresolved' ) ).toContain( 'did not move' );
+				expect( await page.locator( 'a' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
 			} else {
 				expect( await page.locator( '#runtime-section' ).count() ).toBe( 1 );
 				expect( await page.locator( '#runtime-section' ).evaluate( landing ) ).toBe( 1000 );
 				// The target lives inside the section the runtime scrolled to.
 				expect( await page.locator( '#section-source > #runtime-section' ).count() ).toBe( 1 );
-				expect( await page.locator( 'a' ).getAttribute( 'data-dla-anchor-unresolved' ) ).toBeNull();
+				expect( await page.locator( 'a' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
 			}
 		} finally {
 			await browser.close();
@@ -121,7 +121,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			} ) );
 			await page.goto( 'https://anchor.test/' );
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
-			expect( await page.locator( 'a[href$="#blocked-runtime"]' ).getAttribute( 'data-dla-anchor-unresolved' ) ).toContain( 'click' );
+			expect( await page.locator( 'a[href$="#blocked-runtime"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'click' );
 			expect( await page.locator( '#open-runtime' ).count() ).toBe( 1 );
 			expect( await page.locator( '#open-runtime' ).evaluate( landing ) ).toBe( 2000 );
 		} finally {
@@ -146,7 +146,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
 
 			const link = page.locator( 'nav a' );
-			expect( await link.getAttribute( 'data-dla-anchor-fragment' ) ).toBe(
+			expect( await link.getAttribute( 'data-blocks-engine-capture-anchor-fragment' ) ).toBe(
 				'dataItem-home-section'
 			);
 			// The href now names the target page and its section, so a reader
@@ -159,8 +159,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			);
 			// The target lives on the other route: nothing is resolved locally,
 			// and observing it must not navigate away from the captured page.
-			expect( await page.locator( '[data-dla-anchor-target]' ).count() ).toBe( 0 );
-			expect( await link.getAttribute( 'data-dla-anchor-unresolved' ) ).toBeNull();
+			expect( await page.locator( '[data-blocks-engine-capture-anchor-target]' ).count() ).toBe( 0 );
+			expect( await link.getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
 			expect( page.url() ).toBe( 'https://anchor.test/project' );
 		} finally {
 			await browser.close();

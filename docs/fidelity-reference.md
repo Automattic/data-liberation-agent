@@ -99,7 +99,7 @@ evidence, never a pass/fail threshold. A materialization pass proves only that
 relationship; callers compose both stage results for their acceptance policy.
 
 The exported `FidelityReference`, `ReferenceEntry`, `ReferenceArtifact`, and
-`FidelityStage` types describe `data-liberation/fidelity-reference/v1`. The manifest
+`FidelityStage` types describe `blocks-engine-capture/fidelity-reference/v1`. The manifest
 contains a fresh capture ID, source URL, timestamp, receipt SHA-256, portable-file
 SHA-256s, declared source-route/width/state scope, unknowns and entries. Each entry
 contains portable route, source URL, device/user agent, viewport dimensions,
@@ -200,7 +200,7 @@ frozen observations or extend declared required scope. A successful HTML probe
 remains an uncaptured-route finding until scheduled.
 
 The receipt's `sourceOutcomes[]` and a frozen entry's `outcome` use
-`data-liberation/source-outcome/v1`, currently `kind: 'external-redirect'`.
+`blocks-engine-capture/source-outcome/v1`, currently `kind: 'external-redirect'`.
 They retain the requested source URL, initial response status, final declaration
 mechanism, viewport/browser profile and a confined SHA-256-bound raw response
 chain. Public target identity is only origin plus a digest of its complete URL;

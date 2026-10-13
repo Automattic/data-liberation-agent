@@ -161,7 +161,7 @@ export function appendScrollDrivenAnimations( css: string, sourceCss: string ): 
 		seen.add( key );
 		blocks.push(
 			`${ selectorParser( root => root.each( selector => {
-				const gate = selectorParser().astSync( `:not([${ VIEWPORT_ENTRANCE_ATTRIBUTE }]):not([data-dla-viewport-entrance-loss])` ).first.nodes;
+				const gate = selectorParser().astSync( `:not([${ VIEWPORT_ENTRANCE_ATTRIBUTE }]):not([data-blocks-engine-capture-viewport-entrance-loss])` ).first.nodes;
 				const pseudoElement = selector.nodes.find( node => node.type === 'pseudo' && node.value.startsWith( '::' ) );
 				for ( const node of gate ) {
 					if ( pseudoElement ) selector.insertBefore( pseudoElement, node.clone() ); else selector.append( node.clone() );

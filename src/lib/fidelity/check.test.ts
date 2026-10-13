@@ -31,7 +31,7 @@ afterEach( () => {
 } );
 
 function liberatedRun(): string {
-	const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+	const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 	dirs.push( dir );
 	mkdirSync( join( dir, 'website' ), { recursive: true } );
 	writeFileSync( join( dir, 'website', 'index.html' ), '<h1>Home</h1>' );
@@ -71,7 +71,7 @@ describe( 'resolveCheckDirectory', () => {
 	} );
 
 	it( 'rejects a directory with no receipt', () => {
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
 		expect( () => resolveCheckDirectory( dir ) ).toThrow( /capture-receipt/ );
 	} );
@@ -197,12 +197,12 @@ describe( 'checkFidelity', () => {
 	it( 'fails source parity when identical static observations conceal unsupported motion', async () => {
 		const directory = liberatedRun();
 		writeFileSync( join( directory, 'source-interactivity.json' ), JSON.stringify( {
-			schema: 'data-liberation/source-interactivity/v1',
+			schema: 'blocks-engine-capture/source-interactivity/v1',
 			pages: [ { url: 'https://example.com/', status: 'unreproduced', signals: [ 'canvas-2d', 'pointer-input' ] } ],
 		} ) );
 		writeFileSync( join( directory, 'capture-receipt.json' ), JSON.stringify( {
 			source: { url: 'https://example.com/' }, websiteRoot: 'website',
-			sourceInteractivity: { schema: 'data-liberation/source-interactivity/v1', path: 'source-interactivity.json', unreproduced_route_count: 1 },
+			sourceInteractivity: { schema: 'blocks-engine-capture/source-interactivity/v1', path: 'source-interactivity.json', unreproduced_route_count: 1 },
 		} ) );
 		const report = await checkFidelity( {
 			directory,
@@ -257,7 +257,7 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 		} );
 		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website', 'other' ), { recursive: true } );
 		writeFileSync( join( dir, 'website', 'index.html' ), '<!doctype html><html><head><title>Home page</title></head><body><main><h1>Home</h1></main></body></html>' );
@@ -326,7 +326,7 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 	} );
 
 	it( 'compares a subpath source against the page it captured, not the origin root', async () => {
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website' ), { recursive: true } );
 		writeFileSync( join( dir, 'website', 'index.html' ), '<h1>Home</h1>' );
@@ -357,7 +357,7 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 	} );
 
 	it( 'compares a small sample to the source while checking every route offline', async () => {
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
 		for ( const sub of [ 'website', 'website/about', 'website/blog/a', 'website/blog/b' ] )
 			mkdirSync( join( dir, sub ), { recursive: true } );
@@ -466,7 +466,7 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 	} );
 
 	it( 'spreads the source sample so a large blog does not crowd out other pages', async () => {
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website', 'shop' ), { recursive: true } );
 		writeFileSync(
@@ -642,7 +642,7 @@ describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on 
 		} );
 		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website' ), { recursive: true } );
 		writeFileSync( join( dir, 'website', 'index.html' ), copy( origin ) );
@@ -703,7 +703,7 @@ ${ parts.banner ? banner : '' }
 		} );
 		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website' ), { recursive: true } );
 		writeFileSync( join( dir, 'website', 'index.html' ), copy );
@@ -807,7 +807,7 @@ ${ parts.banner ? banner : '' }
 	};
 
 	const routeTabRun = ( origin: string, variant: 'flat' | 'shell' | 'wrapped' | 'wrapped-broken' | 'contents' | 'contents-negative' ): string => {
-		const dir = mkdtempSync( join( tmpdir(), 'dla-check-tabs-' ) );
+		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-tabs-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website', 'services' ), { recursive: true } );
 		mkdirSync( join( dir, 'website', 'resources' ), { recursive: true } );
@@ -817,7 +817,7 @@ ${ parts.banner ? banner : '' }
 		writeFileSync( join( dir, 'website', 'resources', 'index.html' ), copyPage( variant, 'Resources' ) );
 		writeFileSync( join( dir, 'website', 'contact', 'index.html' ), copyPage( variant, 'Contact' ) );
 		writeFileSync( join( dir, 'interaction-states.json' ), JSON.stringify( {
-			schema: 'data-liberation/captured-interactions/v2',
+			schema: 'blocks-engine-capture/captured-interactions/v2',
 			pages: [
 				{
 					url: `${ origin }/`,

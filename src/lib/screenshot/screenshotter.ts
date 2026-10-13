@@ -229,9 +229,9 @@ function navBackoffMs( attempt: number, retryAfter?: string ): number {
 
 export async function capturePageHtml( page: Page ): Promise< string > {
 	const iframeEvidenceAttributes = {
-		src: 'data-dla-visual-iframe-src',
-		width: 'data-dla-visual-iframe-width',
-		height: 'data-dla-visual-iframe-height',
+		src: 'data-blocks-engine-capture-visual-iframe-src',
+		width: 'data-blocks-engine-capture-visual-iframe-width',
+		height: 'data-blocks-engine-capture-visual-iframe-height',
 	};
 	const hydrateMediaSources = () => page.evaluate( ( evidenceAttributes ) => {
 		let pendingVideoSource = false;
@@ -333,7 +333,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 					continue;
 				}
 				const style = document.createElement( 'style' );
-				style.setAttribute( 'data-dla-constructed-stylesheet', '' );
+				style.setAttribute( 'data-blocks-engine-capture-constructed-stylesheet', '' );
 				style.textContent = cssText;
 				document.head.appendChild( style );
 			}
@@ -600,10 +600,10 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 				return true;
 			};
 			const markIdentity = ( node: Element, identity: string ) => {
-				const identities = node.getAttribute( 'data-dla-geometry-id' )?.split( /\s+/ ) ?? [];
+				const identities = node.getAttribute( 'data-blocks-engine-capture-geometry-id' )?.split( /\s+/ ) ?? [];
 				if ( ! identities.includes( identity ) ) {
 					identities.push( identity );
-					node.setAttribute( 'data-dla-geometry-id', identities.join( ' ' ) );
+					node.setAttribute( 'data-blocks-engine-capture-geometry-id', identities.join( ' ' ) );
 				}
 			};
 			const omissions: Record< string, number > = {};
@@ -703,7 +703,7 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 			await new Promise< void >( ( resolve ) =>
 				requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) )
 			);
-			return { schema: 'data-liberation/layout-geometry-capture/v1', observations, omissions };
+			return { schema: 'blocks-engine-capture/layout-geometry-capture/v1', observations, omissions };
 		},
 		{ width: viewport.width, viewportId: viewport.id }
 	);
@@ -953,7 +953,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			capture = await captureLayoutGeometry( page, viewport );
 		} catch {
 			capture = {
-				schema: 'data-liberation/layout-geometry-capture/v1',
+				schema: 'blocks-engine-capture/layout-geometry-capture/v1',
 				observations: [],
 				omissions: { capture_failed: 1 },
 			};
@@ -1110,7 +1110,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	if ( args.rendererCrashed() ) return;
 	// Record the rendered colour of single-colour icon glyphs as
-	// `data-dla-glyph-color`, so compile never has to decode image bytes (#769).
+	// `data-blocks-engine-capture-glyph-color`, so compile never has to decode image bytes (#769).
 	// Bounded; a miss loses only that evidence.
 	if ( plan.captureHtml || plan.captureMobileHtml ) {
 		args.phases?.enter( 'glyph-colors' );

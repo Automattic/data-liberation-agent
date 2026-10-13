@@ -29,7 +29,7 @@ interface DocumentResponse { url: string; status: number; headers: Record<string
 interface RenderedResponse { url: string; status: number; headers: Record<string, string>; body: Buffer }
 interface RedirectDeclaration { mechanism: RedirectMechanism; target: string; delayMs: number; reload?: true }
 export interface ExternalBoundary {
-	schema: 'data-liberation/source-outcome/v1';
+	schema: 'blocks-engine-capture/source-outcome/v1';
 	kind: 'external-redirect';
 	requestedUrl: string;
 	/** Shared-origin ownership boundary, when narrower than the HTTP site. */
@@ -136,7 +136,7 @@ export function storeExternalBoundary(directory: string, observation: BoundaryOb
 	const path = `source-outcomes/${randomUUID()}.json`;
 	mkdirSync(join(directory, 'source-outcomes'), {recursive: true});
 	writeFileSync(join(directory, path), bytes);
-	return {schema: 'data-liberation/source-outcome/v1', kind: 'external-redirect', requestedUrl: observation.requestedUrl,
+	return {schema: 'blocks-engine-capture/source-outcome/v1', kind: 'external-redirect', requestedUrl: observation.requestedUrl,
 		...(observation.routeScope ? {routeScope: observation.routeScope} : {}),
 		initialStatus: observation.responses[0]!.status, mechanism: observation.declaration.mechanism,
 		target: {origin: new URL(observation.declaration.target).origin, sha256: navigationDigest(observation.declaration.target), fetched: false},
@@ -149,7 +149,7 @@ export function boundaryIdentity(outcome: ExternalBoundary): string {
 
 /** Re-derive the frozen boundary from hashed raw responses, never from the current source. */
 export function validateExternalBoundary(outcome: ExternalBoundary, bytes: Buffer): void {
-	if (outcome.schema !== 'data-liberation/source-outcome/v1' || outcome.kind !== 'external-redirect' || outcome.target?.fetched !== false ||
+	if (outcome.schema !== 'blocks-engine-capture/source-outcome/v1' || outcome.kind !== 'external-redirect' || outcome.target?.fetched !== false ||
 		!Number.isFinite(outcome.viewport) || outcome.viewport <= 0 || typeof outcome.browserProfile?.isMobile !== 'boolean' || typeof outcome.browserProfile?.hasTouch !== 'boolean') throw new Error('Invalid external source outcome');
 	const evidence = JSON.parse(bytes.toString()) as BoundaryObservation;
 	if (evidence.routeScope) validateRouteScope(evidence.routeScope);

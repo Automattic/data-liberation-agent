@@ -4,18 +4,18 @@ import { collectionItemHasResource } from './screenshot/finite-bootstrap.js';
 
 const RUNTIME = `(function(){var configs=__CONFIG__;
 function nodes(selector,root){return Array.prototype.slice.call((root||document).querySelectorAll(selector));}
-function arrange(root,keys){var items=nodes('[data-dla-collection-item]',root);if(!items.length||!keys||!keys.length)return;var parent=items[0].parentNode,byKey={};items.forEach(function(item){byKey[item.getAttribute('data-dla-collection-item')]=item;});keys.forEach(function(key){if(byKey[key])parent.appendChild(byKey[key]);});items.forEach(function(item){var key=item.getAttribute('data-dla-collection-item');if(keys.indexOf(key)===-1)parent.appendChild(item);});}
-function writeStatus(label,count,raw){var template=label.getAttribute('data-dla-status-template');if(!template)return;var text=template.split('{count}').join(String(count)).split('{query}').join(raw);if(!label.children.length)label.textContent=text;else{var node=null;for(var i=0;i<label.childNodes.length;i++)if(label.childNodes[i].nodeType===3&&label.childNodes[i].textContent.trim())node=label.childNodes[i];if(node)node.textContent=text;}}
-function applyStatus(root,count,raw,searching){var key=root.getAttribute('data-dla-collection');nodes('[data-dla-collection-status="'+key+'"]').forEach(function(node){node.hidden=!searching||(count===0&&node.getAttribute('data-dla-status-hide-zero')==='true');if(node.hidden)return;if(node.hasAttribute('data-dla-status-template'))writeStatus(node,count,raw);nodes('[data-dla-status-template]',node).forEach(function(label){writeStatus(label,count,raw);});});}
-function refresh(root){var config=configs[root.getAttribute('data-dla-collection')],field=document.querySelector('[data-dla-collection-field="'+root.getAttribute('data-dla-collection')+'"]');if(!config||!field)return;
-var raw=field.value,query=raw.toLowerCase(),category=Number(root.getAttribute('data-dla-collection-category')),mode=config.mode||'category-and-query',globalSearch=mode==='category-or-global-search'&&query!=='',count=0;
+function arrange(root,keys){var items=nodes('[data-blocks-engine-capture-collection-item]',root);if(!items.length||!keys||!keys.length)return;var parent=items[0].parentNode,byKey={};items.forEach(function(item){byKey[item.getAttribute('data-blocks-engine-capture-collection-item')]=item;});keys.forEach(function(key){if(byKey[key])parent.appendChild(byKey[key]);});items.forEach(function(item){var key=item.getAttribute('data-blocks-engine-capture-collection-item');if(keys.indexOf(key)===-1)parent.appendChild(item);});}
+function writeStatus(label,count,raw){var template=label.getAttribute('data-blocks-engine-capture-status-template');if(!template)return;var text=template.split('{count}').join(String(count)).split('{query}').join(raw);if(!label.children.length)label.textContent=text;else{var node=null;for(var i=0;i<label.childNodes.length;i++)if(label.childNodes[i].nodeType===3&&label.childNodes[i].textContent.trim())node=label.childNodes[i];if(node)node.textContent=text;}}
+function applyStatus(root,count,raw,searching){var key=root.getAttribute('data-blocks-engine-capture-collection');nodes('[data-blocks-engine-capture-collection-status="'+key+'"]').forEach(function(node){node.hidden=!searching||(count===0&&node.getAttribute('data-blocks-engine-capture-status-hide-zero')==='true');if(node.hidden)return;if(node.hasAttribute('data-blocks-engine-capture-status-template'))writeStatus(node,count,raw);nodes('[data-blocks-engine-capture-status-template]',node).forEach(function(label){writeStatus(label,count,raw);});});}
+function refresh(root){var config=configs[root.getAttribute('data-blocks-engine-capture-collection')],field=document.querySelector('[data-blocks-engine-capture-collection-field="'+root.getAttribute('data-blocks-engine-capture-collection')+'"]');if(!config||!field)return;
+var raw=field.value,query=raw.toLowerCase(),category=Number(root.getAttribute('data-blocks-engine-capture-collection-category')),mode=config.mode||'category-and-query',globalSearch=mode==='category-or-global-search'&&query!=='',count=0;
 var categoryOrder=config.categoryOrders&&config.categoryOrders[category];arrange(root,globalSearch?config.order:(categoryOrder||config.order));
-nodes('[data-dla-collection-item]',root).forEach(function(item){var walker=document.createTreeWalker(item,NodeFilter.SHOW_TEXT),parts=[];while(walker.nextNode())parts.push(walker.currentNode.textContent);var members=JSON.parse(item.getAttribute('data-dla-collection-members')),text=parts.join(' ').replace(/\\s+/g,' ').trim().toLowerCase();var show=globalSearch?text.indexOf(query)!==-1:members.indexOf(category)!==-1&&(mode==='category-or-global-search'||text.indexOf(query)!==-1);item.hidden=!show;if(show)count++;});
-var empty=document.querySelector('[data-dla-collection-empty="'+root.getAttribute('data-dla-collection')+'"]');if(empty){empty.hidden=count!==0;if(config.emptyTemplate)empty.innerHTML=config.emptyTemplate.split('__DLA_QUERY__').join(field.value.replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}));}
+nodes('[data-blocks-engine-capture-collection-item]',root).forEach(function(item){var walker=document.createTreeWalker(item,NodeFilter.SHOW_TEXT),parts=[];while(walker.nextNode())parts.push(walker.currentNode.textContent);var members=JSON.parse(item.getAttribute('data-blocks-engine-capture-collection-members')),text=parts.join(' ').replace(/\\s+/g,' ').trim().toLowerCase();var show=globalSearch?text.indexOf(query)!==-1:members.indexOf(category)!==-1&&(mode==='category-or-global-search'||text.indexOf(query)!==-1);item.hidden=!show;if(show)count++;});
+var empty=document.querySelector('[data-blocks-engine-capture-collection-empty="'+root.getAttribute('data-blocks-engine-capture-collection')+'"]');if(empty){empty.hidden=count!==0;if(config.emptyTemplate)empty.innerHTML=config.emptyTemplate.split('__DLA_QUERY__').join(field.value.replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}));}
 applyStatus(root,count,raw,globalSearch);
-nodes('[data-dla-collection-category-control="'+root.getAttribute('data-dla-collection')+'"]').forEach(function(button){button.hidden=globalSearch;if(globalSearch)return;var index=Number(button.getAttribute('data-dla-collection-index')),attrs=config.categories[index][index===category?'active':'inactive'];Object.keys(attrs).forEach(function(name){if(attrs[name]===null)button.removeAttribute(name);else button.setAttribute(name,attrs[name]);});button.setAttribute('aria-pressed',String(index===category));});}
-document.addEventListener('input',function(event){var key=event.target.getAttribute&&event.target.getAttribute('data-dla-collection-field');if(key===null||key===undefined)return;nodes('[data-dla-collection="'+key+'"]').forEach(refresh);});
-document.addEventListener('click',function(event){var control=event.target.closest&&event.target.closest('[data-dla-collection-category-control]');if(!control)return;var key=control.getAttribute('data-dla-collection-category-control');nodes('[data-dla-collection="'+key+'"]').forEach(function(root){root.setAttribute('data-dla-collection-category',control.getAttribute('data-dla-collection-index'));refresh(root);});});
+nodes('[data-blocks-engine-capture-collection-category-control="'+root.getAttribute('data-blocks-engine-capture-collection')+'"]').forEach(function(button){button.hidden=globalSearch;if(globalSearch)return;var index=Number(button.getAttribute('data-blocks-engine-capture-collection-index')),attrs=config.categories[index][index===category?'active':'inactive'];Object.keys(attrs).forEach(function(name){if(attrs[name]===null)button.removeAttribute(name);else button.setAttribute(name,attrs[name]);});button.setAttribute('aria-pressed',String(index===category));});}
+document.addEventListener('input',function(event){var key=event.target.getAttribute&&event.target.getAttribute('data-blocks-engine-capture-collection-field');if(key===null||key===undefined)return;nodes('[data-blocks-engine-capture-collection="'+key+'"]').forEach(refresh);});
+document.addEventListener('click',function(event){var control=event.target.closest&&event.target.closest('[data-blocks-engine-capture-collection-category-control]');if(!control)return;var key=control.getAttribute('data-blocks-engine-capture-collection-category-control');nodes('[data-blocks-engine-capture-collection="'+key+'"]').forEach(function(root){root.setAttribute('data-blocks-engine-capture-collection-category',control.getAttribute('data-blocks-engine-capture-collection-index'));refresh(root);});});
 })();`;
 
 /** Keep a single authoring tree. Filtering changes visibility, never swaps content. */
@@ -26,7 +26,7 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 	const configs: Array<{ mode: string; order?: string[]; categoryOrders?: string[][]; emptyTemplate?: string; categories: Array<{active: Record<string, string|null>; inactive: Record<string, string|null>}> }> = [];
 	for ( const state of verified ) {
 		const evidence = state.collectionFilter!;
-		const finite = evidence.finiteBootstrap?.schema === 'data-liberation/finite-bootstrap/v1' && evidence.finiteBootstrap.mode === 'category-or-global-search' && evidence.finiteBootstrap.coverage === 'complete' && evidence.network.dataRequests === 'observed-response-replay' && evidence.network.verification === 'intercepted-observed-responses';
+		const finite = evidence.finiteBootstrap?.schema === 'blocks-engine-capture/finite-bootstrap/v1' && evidence.finiteBootstrap.mode === 'category-or-global-search' && evidence.finiteBootstrap.coverage === 'complete' && evidence.network.dataRequests === 'observed-response-replay' && evidence.network.verification === 'intercepted-observed-responses';
 		if ( ! finite && evidence.network.dataRequests !== 'blocked' ) continue;
 		const copies = collectionCopies( $, evidence );
 		if ( ! copies.length ) continue;
@@ -40,7 +40,7 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 			if ( container.children().length !== 1 ) break;
 			container = container.children().first();
 		}
-		const children = container.children().toArray().filter( element => ! $( element ).attr( 'data-dla-collection-empty' ) );
+		const children = container.children().toArray().filter( element => ! $( element ).attr( 'data-blocks-engine-capture-collection-empty' ) );
 		const used = new Set<string>();
 		const identities = children.map( element => {
 			const text = normalize( textOf( element ) );
@@ -59,7 +59,7 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 				const inner = cheerio.load( item.html, null, false )( '*' ).first().html();
 				if ( inner ) $( element ).html( inner );
 			}
-			$( element ).attr( 'data-dla-collection-item', item.key ).attr( 'data-dla-collection-members', JSON.stringify( item.categories ) );
+			$( element ).attr( 'data-blocks-engine-capture-collection-item', item.key ).attr( 'data-blocks-engine-capture-collection-members', JSON.stringify( item.categories ) );
 			byKey.set( item.key, element );
 		} );
 		if ( finite ) {
@@ -67,7 +67,7 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 				if ( byKey.has( item.key ) ) continue;
 				container.append( item.html );
 				const added = container.children().last();
-				added.attr( 'data-dla-collection-item', item.key ).attr( 'data-dla-collection-members', JSON.stringify( item.categories ) );
+				added.attr( 'data-blocks-engine-capture-collection-item', item.key ).attr( 'data-blocks-engine-capture-collection-members', JSON.stringify( item.categories ) );
 				byKey.set( item.key, added.get( 0 ) as import('domhandler').Element );
 			}
 			const categoryOrder = evidence.finiteBootstrap!.order.categoryKeys[ evidence.initialCategory ] ?? [];
@@ -83,10 +83,10 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 				else $( node ).attr( 'hidden', '' );
 			}
 		}
-		target.attr( 'data-dla-collection', key ).attr( 'data-dla-collection-category', String( evidence.initialCategory ) ).attr( 'data-dla-collection-mode', finite ? 'category-or-global-search' : 'category-and-query' );
-		field.attr( 'data-dla-collection-field', key );
-		if ( finite && evidence.finiteBootstrap?.status?.schema === 'data-liberation/collection-status/v1' ) insertObservedStatus( $, target, evidence.finiteBootstrap.status, key );
-		const empty = `<div data-dla-collection-empty="${key}" hidden>${ evidence.emptyHtml }</div>`;
+		target.attr( 'data-blocks-engine-capture-collection', key ).attr( 'data-blocks-engine-capture-collection-category', String( evidence.initialCategory ) ).attr( 'data-blocks-engine-capture-collection-mode', finite ? 'category-or-global-search' : 'category-and-query' );
+		field.attr( 'data-blocks-engine-capture-collection-field', key );
+		if ( finite && evidence.finiteBootstrap?.status?.schema === 'blocks-engine-capture/collection-status/v1' ) insertObservedStatus( $, target, evidence.finiteBootstrap.status, key );
+		const empty = `<div data-blocks-engine-capture-collection-empty="${key}" hidden>${ evidence.emptyHtml }</div>`;
 		if ( evidence.emptyPlacement === 'after' ) target.after( empty ); else target.append( empty );
 		const attributes = ( markup: string ) => {
 			const node = cheerio.load( markup, null, false )( '*' ).first();
@@ -95,13 +95,13 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 		const categories = evidence.categories.map( category => {
 			const control = copy.root.find( category.selector );
 			const chosen = control.length === 1 ? control : controlByLabel( $, copy.root, category.label );
-			if ( chosen?.length ) chosen.attr( 'data-dla-collection-category-control', key ).attr( 'data-dla-collection-index', String( category.index ) ).attr( 'aria-pressed', String( category.index === evidence.initialCategory ) );
+			if ( chosen?.length ) chosen.attr( 'data-blocks-engine-capture-collection-category-control', key ).attr( 'data-blocks-engine-capture-collection-index', String( category.index ) ).attr( 'aria-pressed', String( category.index === evidence.initialCategory ) );
 			return { active: attributes( category.activeHtml ), inactive: attributes( category.inactiveHtml ) };
 		});
 		configs.push({ mode: finite ? 'category-or-global-search' : 'category-and-query', ...( finite ? { order: evidence.finiteBootstrap!.order.keys, categoryOrders: evidence.finiteBootstrap!.order.categoryKeys } : {} ), ...( evidence.emptyBindsQuery ? { emptyTemplate: evidence.emptyHtml } : {} ), categories });
 		}
 	}
-	if ( configs.length ) $( 'head' ).append( `<style data-dla-collection-visibility>[data-dla-collection-item][hidden],[data-dla-collection-empty][hidden],[data-dla-collection-category-control][hidden],[data-dla-collection-status][hidden]{display:none!important}</style><script data-dla-collection-runtime>${RUNTIME.replace( '__CONFIG__', JSON.stringify( configs ).replace( /</g, '\\u003c' ) )}</script>` );
+	if ( configs.length ) $( 'head' ).append( `<style data-blocks-engine-capture-collection-visibility>[data-blocks-engine-capture-collection-item][hidden],[data-blocks-engine-capture-collection-empty][hidden],[data-blocks-engine-capture-collection-category-control][hidden],[data-blocks-engine-capture-collection-status][hidden]{display:none!important}</style><script data-blocks-engine-capture-collection-runtime>${RUNTIME.replace( '__CONFIG__', JSON.stringify( configs ).replace( /</g, '\\u003c' ) )}</script>` );
 	return $.html();
 }
 
@@ -109,11 +109,11 @@ function insertObservedStatus( $: cheerio.CheerioAPI, target: cheerio.Cheerio<im
 	const markup = ( node: { html: string; hidesAtZero: boolean } ) => {
 		const fragment = cheerio.load( node.html, null, false );
 		const root = fragment.root().children().first();
-		root.attr( 'data-dla-collection-status', key ).attr( 'hidden', '' );
-		if ( node.hidesAtZero ) root.attr( 'data-dla-status-hide-zero', 'true' );
+		root.attr( 'data-blocks-engine-capture-collection-status', key ).attr( 'hidden', '' );
+		if ( node.hidesAtZero ) root.attr( 'data-blocks-engine-capture-status-hide-zero', 'true' );
 		const mark = ( element: cheerio.Cheerio<import('domhandler').Element> ) => {
 			const own = element.contents().toArray().filter( child => child.type === 'text' ).map( child => child.data ?? '' ).join( ' ' ).replace( /\s+/g, ' ' ).trim();
-			if ( own.includes( '{count}' ) || own.includes( '{query}' ) ) element.attr( 'data-dla-status-template', own );
+			if ( own.includes( '{count}' ) || own.includes( '{query}' ) ) element.attr( 'data-blocks-engine-capture-status-template', own );
 			element.children().each( ( _, child ) => mark( fragment( child ) ) );
 		};
 		mark( root );

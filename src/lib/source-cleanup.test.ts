@@ -610,7 +610,7 @@ main{padding-top:var(--owner-gap)}
 </style></head><body><div id="WIX_ADS">Wix</div><main>Owner business</main></body></html>`);
     await applySourceCleanup(page, policy);
     const report = await readSourceCleanup(page);
-    expect(await page.locator('style[data-dla-reclaimed-space]').count()).toBe(0);
+    expect(await page.locator('style[data-blocks-engine-capture-reclaimed-space]').count()).toBe(0);
     expect(report.records.some((record) => record.reclaimedVariables)).toBe(false);
     expect(await page.evaluate(() => getComputedStyle(document.querySelector('main')!).paddingTop)).toBe('12px');
     await page.close();

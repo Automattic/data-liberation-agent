@@ -14,7 +14,7 @@ import { normalizeImageKey } from './fidelity/score.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'srcset browser/export contract', () => {
 	it( 'localizes padded single URL attributes without replacing registered source pixels with placeholders', async () => {
-		const directory = mkdtempSync( join( tmpdir(), 'dla-padded-url-contract-' ) );
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-padded-url-contract-' ) );
 		const browser = await chromium.launch();
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
@@ -95,7 +95,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { await server?.close(); await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
 	it( 'retains descriptorless comma paths, density/width selection and inline pixels through export', async () => {
-		const directory = mkdtempSync( join( tmpdir(), 'dla-srcset-contract-' ) );
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-srcset-contract-' ) );
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
 			for ( const folder of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( directory, folder ) );

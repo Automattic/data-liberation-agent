@@ -61,18 +61,18 @@ attempts are separately bounded; a timeout does not assume the renderer recovere
 
 ## Portable contract and destination conversion
 
-The target carries `data-dla-native-effects` (a JSON list, preserving every effect)
-and `data-dla-native-profile`. Subjects and non-root scroll sources are referenced
-by `data-dla-native-node`, rather than authored IDs that responsive assembly can
+The target carries `data-blocks-engine-capture-native-effects` (a JSON list, preserving every effect)
+and `data-blocks-engine-capture-native-profile`. Subjects and non-root scroll sources are referenced
+by `data-blocks-engine-capture-native-node`, rather than authored IDs that responsive assembly can
 rename. `source: "root"` names the document's scrolling element. Dual responsive
-documents carry `data-dla-document-scope`; their subjects resolve within that scope.
+documents carry `data-blocks-engine-capture-document-scope`; their subjects resolve within that scope.
 Native-effect documents remain dual rather than collapsing away a profile's
 bindings. The capture receipt's `nativeViewTimelines.binding` declares these
 attributes for consumers.
 
 This is one generic document boundary, independent of motion and device naming.
-Every #550 device wrapper must carry `data-dla-document-scope` alongside its
-`data-dla-device-document` attribute. Each wrapper encloses exactly one source
+Every #550 device wrapper must carry `data-blocks-engine-capture-document-scope` alongside its
+`data-blocks-engine-capture-device-document` attribute. Each wrapper encloses exactly one source
 profile document. Node tokens may repeat across wrappers; resolution is limited
 to the target's nearest marked document scope (excluding nested document scopes).
 A single unwrapped document resolves against the document itself. Missing or
@@ -104,7 +104,7 @@ updater. Hidden responsive variants mount when they become rendered.
   non-running playback, non-unit playback rate, and non-replace iteration composition.
 - Keyframe values containing unresolved custom-property references or resource URLs.
 - Unsupported browser `ViewTimeline` capability or changed portable scroll source
-  (reported by `data-dla-native-runtime-loss`).
+  (reported by `data-blocks-engine-capture-native-runtime-loss`).
 
 Motion parity is not inferred from preservation counts. The neutral Chromium gate
 compares exact transforms and geometry at four sizes, baseline/in-view scroll

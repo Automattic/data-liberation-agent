@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 async function fixture(border = '0', width = 768, partial = false, projection?: 'subtree', failedOnly = false) {
-	const outputDir = mkdtempSync(join(tempRoot, 'dla-embedded-'));
+	const outputDir = mkdtempSync(join(tempRoot, 'liberation-embedded-'));
 	dirs.push(outputDir);
 	mkdirSync(join(outputDir, 'source-documents'));
 	const prepared =
@@ -38,7 +38,7 @@ async function fixture(border = '0', width = 768, partial = false, projection?: 
 	writeFileSync(
 		join(outputDir, 'http-acquisition.json'),
 		JSON.stringify({
-			schema: 'data-liberation/http-acquisition/v1',
+			schema: 'blocks-engine-capture/http-acquisition/v1',
 			sourceUrl,
 			documents: [
 				{
@@ -142,7 +142,7 @@ describe('observed embedded document export', () => {
 			}) } }, { fetch });
 		const source = await browser.newPage();
 		const attachments = [];
-		const measure = (page: typeof source) => page.locator('#host:visible, [data-dla-responsive-source="host"]:visible').first().evaluate(node => {
+		const measure = (page: typeof source) => page.locator('#host:visible, [data-blocks-engine-capture-responsive-source="host"]:visible').first().evaluate(node => {
 			const box = node.getBoundingClientRect(), style = getComputedStyle(node);
 			return { height: box.height, color: style.color };
 		});
@@ -220,7 +220,7 @@ describe('observed embedded document export', () => {
 		const html = '<html><head><title id="title">Owned</title><meta id="meta" name="description" content="Owned"><base id="base" target="_self" href="https://parent.test/old/"></head><body><div id="host"><style id="old">#host{color:red}</style>Owned</div><link rel="stylesheet" href="old.css"></body></html>';
 		const styles = '<style id="new">#host{color:green}</style><style id="last">#host{color:rgb(1,2,3)}</style>';
 		const projected = projectRuntimePresentation(html, sourceUrl, 'desktop', sha(html), {
-			schema: 'data-liberation/embedded-documents/v1', regions: [], documents: {},
+			schema: 'blocks-engine-capture/embedded-documents/v1', regions: [], documents: {},
 			verification: { rendering: 'unverified', interactions: 'unverified' },
 			presentation: [{ url: sourceUrl, variant: 'desktop', documentSha256: sha(html), baseUrl: 'https://parent.test/assets/',
 				styles, sha256: sha(styles), viewport: { width: 390, height: 900 }, userAgent: 'neutral', deviceScaleFactor: 1 }],
@@ -614,7 +614,7 @@ describe('observed embedded document export', () => {
 		await stage();
 		const receiptPath = join(outputDir, 'embedded-documents.json');
 		const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
-		const external = mkdtempSync(join(tempRoot, 'dla-embedded-outside-'));
+		const external = mkdtempSync(join(tempRoot, 'liberation-embedded-outside-'));
 		dirs.push(external);
 		writeFileSync(join(external, 'child.html'), 'Outside');
 		symlinkSync(join(external, 'child.html'), join(outputDir, 'embedded-documents/linked.html'));

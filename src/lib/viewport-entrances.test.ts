@@ -32,7 +32,7 @@ describe( 'source-observed viewport transition entrances', () => {
 	for ( const repeat of [ false, true ] ) it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		`captures and exports real timed viewport transitions (${ repeat ? 'repeating' : 'one-shot' })`, async () => {
 		const browser = await chromium.launch( { headless: true } );
-		const directory = mkdtempSync( join( tmpdir(), 'dla-viewport-entrances-' ) );
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-viewport-entrances-' ) );
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
 			const source = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
@@ -42,7 +42,7 @@ describe( 'source-observed viewport transition entrances', () => {
 			expect( ( await pose( source ) ).opacity ).toBe( '0' );
 			await triggerLazyLoad( source );
 			await stampViewportEntrances( source );
-			const evidence = await source.locator( '.entrance' ).getAttribute( 'data-dla-viewport-entrance' );
+			const evidence = await source.locator( '.entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
 			expect( JSON.parse( evidence! ) ).toMatchObject( { repeat, rootMargin: '0px 0px -10% 0px', attributes: { 'data-active': { before: 'false', after: 'true' } } } );
 			expect( JSON.parse( evidence! ).threshold[ 0 ] ).toBeCloseTo( 0.2 );
 			for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( directory, path ) );
@@ -51,7 +51,7 @@ describe( 'source-observed viewport transition entrances', () => {
 			exportWebsiteCapture( { outputDir: directory, sourceUrl: 'https://fixture.test/', platform: 'generic', summary: {}, failures: [] } );
 			const html = readFileSync( join( directory, 'website/index.html' ), 'utf8' );
 			expect( html ).not.toContain( 'window.fixtureReady' );
-			expect( html ).toContain( 'data-dla-viewport-entrances' );
+			expect( html ).toContain( 'data-blocks-engine-capture-viewport-entrances' );
 			server = await startStaticServer( join( directory, 'website' ) );
 			const candidate = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
 			await candidate.goto( server.url );
@@ -93,7 +93,7 @@ describe( 'source-observed viewport transition entrances', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'frozen capture comparison independently executes the portable entrances', async () => {
 		const browser = await chromium.launch( { headless: true } );
-		const directory = mkdtempSync( join( tmpdir(), 'dla-entrance-reference-' ) );
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-entrance-reference-' ) );
 		try {
 			const sourceUrl = 'https://fixture.test/';
 			const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );

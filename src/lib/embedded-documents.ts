@@ -32,7 +32,7 @@ interface EmbeddedRegion {
 	childCoverage?: { expected: number; staged: number; unresolved: number };
 }
 interface EmbeddedReceipt {
-	schema: 'data-liberation/embedded-documents/v1';
+	schema: 'blocks-engine-capture/embedded-documents/v1';
 	regions: EmbeddedRegion[];
 	documents: Record<string, { path: string; sha256: string; sourcePath: string; sourceSha256: string }>;
 	verification: { rendering: 'unverified'; interactions: 'unverified' };
@@ -70,13 +70,13 @@ export async function stageRuntimeRegions(
 		documents: AcquiredHttpDocument[];
 	};
 	if (
-		acquisition.schema !== 'data-liberation/http-acquisition/v1' ||
+		acquisition.schema !== 'blocks-engine-capture/http-acquisition/v1' ||
 		!Array.isArray(acquisition.documents) ||
 		options.attachments.length > 100
 	)
 		throw new Error('Invalid acquisition or runtime attachment budget');
 	const receipt: EmbeddedReceipt = {
-		schema: 'data-liberation/embedded-documents/v1',
+		schema: 'blocks-engine-capture/embedded-documents/v1',
 		regions: [],
 		documents: {},
 		presentation: [],
@@ -97,7 +97,7 @@ export async function stageRuntimeRegions(
 		);
 		if (
 			!document?.documentSha256 ||
-			observation.schema !== 'data-liberation/runtime-regions/v1' ||
+			observation.schema !== 'blocks-engine-capture/runtime-regions/v1' ||
 			observation.finalUrl !== observation.sourceUrl ||
 			!observation.viewport
 		)
@@ -274,7 +274,7 @@ export async function stageRuntimeRegions(
 						throw new Error('Conflicting child document bodies for one source URL');
 					receipt.documents[child.url] = { path, sha256: digest(html), sourcePath, sourceSha256: child.sha256 };
 					pending.set(sourcePath, { url: child.url, html, path, sourcePath, sourceHtml: child.html });
-					frame.attr('data-dla-embedded-document', child.url);
+					frame.attr('data-blocks-engine-capture-embedded-document', child.url);
 					const authoredHeight = /^(\d+(?:\.\d+)?)(?:px)?$/.exec(frame.attr('height') ?? '')?.[1];
 					frame.attr('height', authoredHeight ?? String(child.box.height));
 					if (!authoredHeight)
@@ -412,7 +412,7 @@ export function loadEmbeddedDocuments(outputDir: string) {
 	if (bytes.length > 32 * 1024 * 1024) throw new Error('Embedded receipt exceeds byte budget');
 	const receipt = JSON.parse(bytes.toString('utf8')) as EmbeddedReceipt;
 	if (
-		receipt.schema !== 'data-liberation/embedded-documents/v1' ||
+		receipt.schema !== 'blocks-engine-capture/embedded-documents/v1' ||
 		!Array.isArray(receipt.regions) ||
 		!receipt.documents
 	)
@@ -597,21 +597,21 @@ export function mergeResponsiveEmbeddedRegions(options: {
 		const desktopNode = d(region.selector).eq(region.index),
 			mobileNode = m(region.selector).eq(region.index);
 		const frames = ($: cheerio.CheerioAPI, node: ReturnType<typeof d>) =>
-			node.is('iframe') ? node : node.find('iframe[data-dla-embedded-document]');
+			node.is('iframe') ? node : node.find('iframe[data-blocks-engine-capture-embedded-document]');
 		const df = frames(d, desktopNode),
 			mf = frames(m, mobileNode);
 		if (df.length !== mf.length) throw new IntegrityError('Responsive embedded frame identities differ structurally');
 		for (let index = 0; index < df.length; index++) {
 			const desktopFrame = df.eq(index),
 				mobileFrame = mf.eq(index);
-			const desktopSource = desktopFrame.attr('data-dla-embedded-document') ?? '',
-				mobileSource = mobileFrame.attr('data-dla-embedded-document') ?? '';
+			const desktopSource = desktopFrame.attr('data-blocks-engine-capture-embedded-document') ?? '',
+				mobileSource = mobileFrame.attr('data-blocks-engine-capture-embedded-document') ?? '';
 			if (
 				options.receipt.documents[desktopSource]?.sha256 === options.receipt.documents[mobileSource]?.sha256 &&
 				desktopFrame.attr('height') === mobileFrame.attr('height')
 			)
 				continue;
-			const hook = `dla-embedded-${digest(JSON.stringify([region.url, region.selector, region.index, index])).slice(0, 16)}`;
+			const hook = `data-blocks-engine-capture-embedded-${digest(JSON.stringify([region.url, region.selector, region.index, index])).slice(0, 16)}`;
 			const desktopClass = `${hook}-desktop`,
 				mobileClass = `${hook}-mobile`;
 			const pair = `<span class="${desktopClass} ${options.scopeClasses.desktop}">${d.html(desktopFrame)}</span><span class="${mobileClass} ${options.scopeClasses.mobile}">${m.html(mobileFrame)}</span>`;
@@ -623,7 +623,7 @@ export function mergeResponsiveEmbeddedRegions(options: {
 		}
 	}
 	if (rules.length) {
-		const style = `<style data-dla-embedded-responsive>${rules.join('\n')}</style>`;
+		const style = `<style data-blocks-engine-capture-embedded-responsive>${rules.join('\n')}</style>`;
 		d('head').append(style);
 		m('head').append(style);
 	}

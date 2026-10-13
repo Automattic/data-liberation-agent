@@ -56,7 +56,7 @@ DLA-owned synchronous classic scripts are inserted after source-script sanitizat
 ## Hosting and document-scope handoff
 
 Every emitted device-profile wrapper carries the generic presence marker
-`data-dla-document-scope` alongside `data-dla-device-document="<identity>"`.
+`data-blocks-engine-capture-document-scope` alongside `data-blocks-engine-capture-device-document="<identity>"`.
 Captured tokens, IDs and motion bindings may repeat across independent profile
 documents. A consumer must resolve a binding inside its nearest declared scope,
 not through a global first-match lookup. A device contract with one available
@@ -73,7 +73,7 @@ attributes follow the same selected-root ownership. No destination-specific name
 or hosting-platform heuristics participate in this contract.
 
 Stylesheet `media="not all"` on an inert serialized node is runtime activation
-state, **not an authored source media condition**. `data-dla-source-media` retains
+state, **not an authored source media condition**. `data-blocks-engine-capture-source-media` retains
 the original source media list (or `all` when absent) on both inert nodes and the
 parser-emitted active copies. Destination converters and stylesheet analyzers
 must preserve this provenance and use it for authored-media analysis instead of

@@ -9,7 +9,7 @@ import { learnClockBindings } from './clock-behavior.js';
  * WordPress blocks. Values are inferred from browser evidence; nothing here is
  * authored per site. Anything the vocabulary cannot express is reported.
  */
-export const LEARNED_MOTION_SCHEMA = 'data-liberation/learned-motion/v1';
+export const LEARNED_MOTION_SCHEMA = 'blocks-engine-capture/learned-motion/v1';
 
 export interface MotionReveal { selector: string; hideWith: 'visibility' | 'display' }
 export interface MotionStep {

@@ -7,7 +7,7 @@ but not `:default`. Writing a checked attribute would change both `:default` and
 
 `capturePageHtml()` keeps authored attributes and textarea content in a detached
 snapshot. Each input, textarea and select carries a JSON
-`data-dla-native-control-state` attribute with the following versioned union:
+`data-blocks-engine-capture-native-control-state` attribute with the following versioned union:
 
 ```ts
 type NativeControlState =
@@ -29,7 +29,7 @@ have attribute-reflected values and require no independent current-state replay.
 
 `src/lib/native-control-state.ts` owns observation, the typed contract and its
 fixed offline interpreter. `wireNativeControlState()` adds one body-end script
-marked `data-dla-native-control-runtime`. It restores defaults where a parser
+marked `data-blocks-engine-capture-native-control-runtime`. It restores defaults where a parser
 changed them, then restores current properties, clearing radio peers before
 selecting observed winners. It preserves browser-native form ownership. Replay
 runs once, synchronously before load. Subsequent native activation and reset are

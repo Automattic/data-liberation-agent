@@ -40,7 +40,7 @@ it('reports where a capability was observed, and refuses to look decided when th
   const url = await source('<main><h1>Contact</h1><form id="enquiry" class="contact-form stacked"><input name="email"></form><iframe id="map" src="about:blank"></iframe></main>');
   const result = await inspectSource(url, { sampleLimit: 1 });
   expect(result.capabilityVocabulary).toEqual({
-    schema: 'data-liberation/source-capability-vocabulary/v1',
+    schema: 'blocks-engine-capture/source-capability-vocabulary/v1',
     capabilities: ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'],
   });
   const sample = result.rendered.samples[0];

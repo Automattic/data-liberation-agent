@@ -73,7 +73,7 @@ it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead
       await expect(hydrateDisclosureContent(page)).rejects.toThrow('Disclosure baseline restoration unproven');
       expect(await page.locator('#recommendation').count()).toBe(0);
       expect(await page.locator('#opener').getAttribute('aria-expanded')).toBe('false');
-      expect(await page.locator('[data-dla-hydrated-disclosure]').count()).toBe(0);
+      expect(await page.locator('[data-blocks-engine-capture-hydrated-disclosure]').count()).toBe(0);
       expect(errors).toEqual([]);
     }
     await page.setContent('<div><button id="inert" type="button" aria-expanded="false">Inert opener</button></div><aside>Kept recommendation</aside>');
@@ -113,7 +113,7 @@ it.skipIf(skipBrowser)('drops only the disclosure block when hydration cannot pr
     }]);
     const html = readFileSync(join(outputDir, entry.html), 'utf8');
     expect(html).toContain('Editorial content');
-    expect(html).not.toContain('data-dla-hydrated-disclosure');
+    expect(html).not.toContain('data-blocks-engine-capture-hydrated-disclosure');
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(outputDir, { recursive: true, force: true });
