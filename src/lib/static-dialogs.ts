@@ -424,7 +424,7 @@ function resolveObservedAncestors(
 		for ( const name of names ) {
 			if ( !DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN.test( name ) ) return undefined;
 			const closed = row.closed[ name ], opened = row.opened[ name ];
-			if ( [ closed, opened ].some( value => value !== null && ( typeof value !== 'string' || Buffer.byteLength( value ) > 4096 ) ) ) return undefined;
+			if ( [ closed, opened ].some( value => value !== null && ( typeof value !== 'string' || Buffer.byteLength( value ) > 2048 ) ) ) return undefined;
 			if ( closed === opened ) continue;
 			// Class is replayed as tokens: the portable owner must still carry the
 			// closed tokens (all of them, when the full list was recorded).

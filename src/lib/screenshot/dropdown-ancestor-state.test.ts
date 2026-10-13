@@ -175,7 +175,7 @@ for ( const [ size, count ] of [ [ '3 KB', 170 ], [ '7 KB', 400 ] ] as const ) {
 			const state = report.states.find( item => item.trigger.id === 'burger' );
 			expect( state?.dialog?.ancestorState ).toEqual( expect.objectContaining( {
 				status: 'verified',
-				ancestors: [ { selector: 'body', tag: 'body', depth: 2, closed: { class: 'menu-closed' }, opened: { class: 'menu-open' }, classTokensOnly: true } ],
+				ancestors: [ { selector: 'body', tag: 'body', depth: 2, closed: { class: 'tweak-setting-0 tweak-setting-1 tweak-setting-2 menu-closed' }, opened: { class: 'tweak-setting-0 tweak-setting-1 tweak-setting-2 menu-open' }, classTokensOnly: true } ],
 			} ) );
 			await page.setContent( wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states ) );
 			await page.locator( '#burger' ).click();
@@ -185,6 +185,43 @@ for ( const [ size, count ] of [ [ '3 KB', 170 ], [ '7 KB', 400 ] ] as const ) {
 		} finally { await browser.close(); }
 	}, 30_000 );
 }
+
+// Opening only adds a class to a long-classed header that wraps a nearer,
+// unchanged header. The row keeps unchanged tokens, so a consumer that matches
+// the nearest ancestor with the row's tag and closed tokens finds the outer
+// header rather than the inner one.
+it.skipIf( skipBrowser )( 'keeps identifying tokens when opening only adds to a long class list', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	const config = Array.from( { length: 200 }, ( _, index ) => `config-${ index }` ).join( ' ' );
+	try {
+		await page.setContent( `<!doctype html><style>
+		body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff}
+		.open .overlay{opacity:1;visibility:visible}
+		</style><header id="outer" class="${ config }"><header id="inner" class="bar"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header></header>
+		<script>document.getElementById('burger').addEventListener('click',()=>document.getElementById('outer').classList.add('open'));
+		addEventListener('keydown',event=>{if(event.key==='Escape')document.getElementById('outer').classList.remove('open');});</script>` );
+		expect( Buffer.byteLength( config ) ).toBeGreaterThan( 2048 );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const rows = report.states.find( item => item.trigger.id === 'burger' )?.dialog?.ancestorState?.ancestors ?? [];
+		expect( rows ).toEqual( [ { selector: '#outer', tag: 'header', depth: 2, closed: { class: 'config-0 config-1 config-2' }, opened: { class: 'config-0 config-1 config-2 open' }, classTokensOnly: true } ] );
+		// Blocks Engine's lookup: the nearest ancestor with the tag and every closed token.
+		const matched = await page.evaluate( row => {
+			const wanted = row.closed.class!.split( /\s+/ ).filter( Boolean );
+			for ( let node = document.getElementById( 'burger' )!.parentElement; node; node = node.parentElement ) {
+				if ( node.tagName.toLowerCase() === row.tag && wanted.every( token => node!.classList.contains( token ) ) ) return node.id;
+			}
+			return null;
+		}, rows[ 0 ]! );
+		expect( matched ).toBe( 'outer' );
+		await page.setContent( wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states ) );
+		await page.locator( '#burger' ).click();
+		expect( await page.locator( '#outer' ).getAttribute( 'class' ) ).toBe( `${ config } open` );
+		expect( await page.locator( '#inner' ).getAttribute( 'class' ) ).toBe( 'bar' );
+		await page.keyboard.press( 'Escape' );
+		expect( await page.locator( '#outer' ).getAttribute( 'class' ) ).toBe( config );
+	} finally { await browser.close(); }
+}, 30_000 );
 
 it.skipIf( skipBrowser )( 'adds no ancestor evidence to a modal that leaves its ancestors unchanged', async () => {
 	const browser = await chromium.launch( { headless: true } );

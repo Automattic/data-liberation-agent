@@ -32,14 +32,16 @@ Ancestor rows contain only observed changes to class, style, hidden, ARIA, and
 source data attributes. Internal capture/runtime probe attributes are excluded.
 Placement names the original parent and, when present, its following sibling.
 
-The capture is bounded to eight ancestors, 32 attributes per ancestor, 4 KiB per
-recorded attribute value, and 32 KiB of changed-state evidence. Unchanged
-attributes do not count against the value bound. Consumers replay `class` as
-tokens, so a class list over 2 KiB (a Squarespace `body` carries its whole
-style configuration as classes) is recorded as only the tokens opening removed
-(`closed`) and added (`opened`), and its row is marked `classTokensOnly: true`.
-2 KiB is the smallest value bound a consumer applies: Blocks Engine drops
-longer values. Class changes and restoration compare token
+The capture is bounded to eight ancestors, 32 attributes per ancestor, 2 KiB per
+recorded attribute value, and 32 KiB of changed-state evidence. 2 KiB is the
+smallest value bound a consumer applies: Blocks Engine drops longer values.
+Unchanged attributes do not count against the value bound. Consumers replay
+`class` as tokens, so a class list over 2 KiB (a Squarespace `body` carries its
+whole style configuration as classes) is recorded as the tokens opening removed
+(`closed`) and added (`opened`), plus up to three unchanged tokens in both
+states, and its row is marked `classTokensOnly: true`. The unchanged tokens keep
+the element identifiable to a consumer that matches an ancestor by its closed
+tokens; replaying them is a no-op. Class changes and restoration compare token
 sets, so a runtime that re-adds a theme class on close in a new order still
 verifies. `status: verified`
 requires source actions to conceal the panel and restore the original ancestor

@@ -96,19 +96,23 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 			// Array.from with one that returns [] for a Set.
 			const changed = [ ...new Set( [ ...Object.keys( row.closed ), ...Object.keys( opened ) ] ) ].filter( name => !sameValue( name, row.closed[ name ] ?? null, opened[ name ] ?? null ) );
 			if ( changed.length > 32 ) return { ...result, reason: 'ancestor-attribute-count-limit' };
-			// Consumers replay class as tokens. A long class list (a Squarespace
-			// body carries its whole style configuration) is recorded as only the
-			// tokens that opening removed and added. The threshold is the smallest
-			// value bound a consumer applies (Blocks Engine keeps values up to 2 KiB).
+			// Values are bounded by the smallest bound a consumer applies: Blocks
+			// Engine keeps values up to 2 KiB. Consumers replay class as tokens, so a
+			// longer class list (a Squarespace body carries its whole style
+			// configuration) is recorded as the tokens opening removed and added,
+			// plus a few unchanged tokens in both states. Those still identify the
+			// element to a consumer that matches an ancestor by its closed tokens,
+			// and replaying them is a no-op.
 			let classTokensOnly = false;
 			const evidence = changed.map( name => {
 				const closed = row.closed[ name ] ?? null, open = opened[ name ] ?? null;
 				if ( name !== 'class' || ![ closed, open ].some( value => bytes( value ) > 2048 ) ) return [ name, closed, open ] as const;
 				classTokensOnly = true;
 				const before = tokens( closed ), after = tokens( open );
-				return [ name, before.filter( token => !after.includes( token ) ).join( ' ' ), after.filter( token => !before.includes( token ) ).join( ' ' ) ] as const;
+				const kept = before.filter( token => after.includes( token ) ).slice( 0, 3 );
+				return [ name, [ ...kept, ...before.filter( token => !after.includes( token ) ) ].join( ' ' ), [ ...kept, ...after.filter( token => !before.includes( token ) ) ].join( ' ' ) ] as const;
 			} );
-			if ( evidence.some( ( [ , closed, open ] ) => bytes( closed ) > 4096 || bytes( open ) > 4096 ) ) return { ...result, reason: 'ancestor-attribute-limit' };
+			if ( evidence.some( ( [ , closed, open ] ) => bytes( closed ) > 2048 || bytes( open ) > 2048 ) ) return { ...result, reason: 'ancestor-attribute-limit' };
 			if ( changed.length > 0 ) {
 				result.ancestors.push( { selector: row.selector, tag: row.tag, depth: row.depth,
 					closed: Object.fromEntries( evidence.map( ( [ name, closed ] ) => [ name, closed ] ) ),
