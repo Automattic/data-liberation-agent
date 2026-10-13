@@ -99,7 +99,7 @@ evidence, never a pass/fail threshold. A materialization pass proves only that
 relationship; callers compose both stage results for their acceptance policy.
 
 The exported `FidelityReference`, `ReferenceEntry`, `ReferenceArtifact`, and
-`FidelityStage` types describe `data-liberation/fidelity-reference/v1`. The manifest
+`FidelityStage` types describe `blocks-engine-capture/fidelity-reference/v1`. The manifest
 contains a fresh capture ID, source URL, timestamp, receipt SHA-256, portable-file
 SHA-256s, declared source-route/width/state scope, unknowns and entries. Each entry
 contains portable route, source URL, device/user agent, viewport dimensions,
@@ -180,10 +180,15 @@ proof exists. Query renditions keep their query allocation convention. Source
 links and redirect aliases bind exact addresses to the allocated document paths.
 
 `CaptureOptions.linkedPages` configures `maxPages` (256 by default), `maxDepth`
-(8 linked hops), and `timeoutMs` (1,800,000 ms). The time budget bounds admission
-and starting queued work; an already active capture completes under its ordinary
-navigation/capture deadlines. Seeds consume the page budget at depth zero. Every
-observed eligible link remains required even when a page, depth or time budget
+(8 linked hops), and `timeoutMs` (1,800,000 ms). The time budget bounds new linked
+admission; all admitted work completes under its ordinary navigation/capture
+deadlines. Adapter-owned initial inventory and proven redirect continuations are
+admitted independently of expansion budgets. Seeds and aliases count toward the
+scheduled page total, so they reduce the remaining `maxPages` expansion allowance
+without truncating known inventory. The low-level `limit` remains a whole-capture
+page cap, including redirect continuations; a controller's whole-run deadline
+remains caller-owned. Every observed eligible link remains required even when a
+page, depth or time budget
 prevents its capture. `linked-page-coverage.json`, the receipt and capture
 diagnostics retain exact required URLs, limits, scheduled count and concrete
 omission reasons. Budget omissions and source-error/non-HTML observations keep
@@ -195,7 +200,7 @@ frozen observations or extend declared required scope. A successful HTML probe
 remains an uncaptured-route finding until scheduled.
 
 The receipt's `sourceOutcomes[]` and a frozen entry's `outcome` use
-`data-liberation/source-outcome/v1`, currently `kind: 'external-redirect'`.
+`blocks-engine-capture/source-outcome/v1`, currently `kind: 'external-redirect'`.
 They retain the requested source URL, initial response status, final declaration
 mechanism, viewport/browser profile and a confined SHA-256-bound raw response
 chain. Public target identity is only origin plus a digest of its complete URL;

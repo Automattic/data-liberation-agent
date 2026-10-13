@@ -17,7 +17,7 @@ function bytes(artifact) {
 	return value;
 }
 const json = artifact => JSON.parse(bytes(artifact).toString('utf8'));
-assert.equal(report.schema, 'data-liberation/shopify-http-proof/v4');
+assert.equal(report.schema, 'blocks-engine-capture/shopify-http-proof/v4');
 assert.equal(report.accepted, false);
 assert.equal(report.complete, false);
 assert.equal(report.verdict, 'projection_measured_incomplete');

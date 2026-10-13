@@ -12,10 +12,10 @@
 // scoped exactly like it.
 //
 import type { Page } from 'playwright';
-import { learnFluidModel, learnSegmentedFluidModel, segmentedCss, type FluidModelSegment, type GeometrySample } from './fluid-model.js';
+import { interpolateSamples, learnFluidModel, learnSegmentedFluidModel, segmentedCss, type FluidModelSegment, type GeometrySample } from './fluid-model.js';
 
 /** Marks the learned sibling of a runtime-owned stylesheet. It is source-owned CSS, scoped per document. */
-export const RUNTIME_SHEET_RULES_ATTRIBUTE = 'data-dla-fluid-sheet-rules';
+export const RUNTIME_SHEET_RULES_ATTRIBUTE = 'data-blocks-engine-capture-fluid-sheet-rules';
 /** Offsets a runtime plausibly derives from viewport width; sizes stay with inline learning. */
 const OFFSET_PROPERTIES = [ 'left', 'right', 'top', 'bottom', 'inset-inline-start', 'inset-inline-end', 'inset-block-start', 'inset-block-end' ];
 const STATE_KEY = '__dlaFluidRuntimeSheets';
@@ -46,13 +46,21 @@ export async function bindRuntimeSheets( page: Page ): Promise< void > {
 		const styles = document.querySelectorAll( 'style' );
 		for ( let index = 0; index < styles.length; index++ ) {
 			const style = styles[ index ]!;
-			if ( ! style.getAttributeNames().some( name => name.startsWith( 'data-dla-' ) ) ) baselines.set( style, style.textContent ?? '' );
+			if ( ! style.getAttributeNames().some( name => name.startsWith( 'data-blocks-engine-capture-' ) ) ) baselines.set( style, style.textContent ?? '' );
 		}
 		( window as unknown as Record< string, unknown > )[ key ] = { baselines, widths: [] as Array< Map< Element, Record< string, string[] > > > };
 	}, { key: STATE_KEY } );
 }
 
 /** Record the offsets of every source stylesheet whose text differs from the capture width. */
+/** Whether any source stylesheet was rewritten at a sampled width. */
+export async function runtimeSheetsObserved( page: Page ): Promise< boolean > {
+	return page.evaluate( ( { key } ) => {
+		const state = ( window as unknown as Record< string, { widths: Array< Map< Element, unknown > > } | undefined > )[ key ];
+		return state?.widths.some( width => width.size > 0 ) ?? false;
+	}, { key: STATE_KEY } );
+}
+
 export async function observeRuntimeSheets( page: Page ): Promise< void > {
 	await page.evaluate( ( { key, properties } ) => {
 		const state = ( window as unknown as Record< string, { baselines: Map< Element, string >; widths: Array< Map< Element, Record< string, string[] > > > } | undefined > )[ key ];
@@ -78,14 +86,14 @@ export async function observeRuntimeSheets( page: Page ): Promise< void > {
 	}, { key: STATE_KEY, properties: OFFSET_PROPERTIES } );
 }
 
-/**
- * Learn rules from the recorded sweep, write each beside its owning sheet, and
- * keep only rules that reproduce the capture width's geometry.
- */
-export async function applyRuntimeSheetRules( page: Page, widths: readonly number[] ): Promise< { applied: number; unmodelled: number } > {
-	const recorded = await page.evaluate( ( { key, properties } ) => {
+/** Per volatile source sheet, its declared offsets at each sampled width (in sample order). */
+type RecordedSheets = Array< { owner: number; values: Array< Record< string, string[] > | null > } >;
+
+/** Read the recorded sweep; `consume` also releases the page-side state. */
+function recordedSheets( page: Page, consume: boolean ): Promise< RecordedSheets > {
+	return page.evaluate( ( { key, properties, consume } ) => {
 		const state = ( window as unknown as Record< string, { baselines: Map< Element, string >; widths: Array< Map< Element, Record< string, string[] > > > } | undefined > )[ key ];
-		delete ( window as unknown as Record< string, unknown > )[ key ];
+		if ( consume ) delete ( window as unknown as Record< string, unknown > )[ key ];
 		if ( ! state ) return [];
 		const owners: Array< { owner: number; values: Array< Record< string, string[] > | null > } > = [];
 		const volatile = new Set< Element >();
@@ -108,14 +116,16 @@ export async function applyRuntimeSheetRules( page: Page, widths: readonly numbe
 		for ( const style of volatile ) {
 			const owner = styles.indexOf( style as HTMLStyleElement );
 			if ( owner < 0 ) continue;
+			// One entry per sampled width, in sample order; an unchanged width reads the baseline text.
 			const baseline = parse( state.baselines.get( style ) ?? '' );
 			owners.push( { owner, values: state.widths.map( width => width.get( style ) ?? baseline ) } );
 		}
 		return owners;
-	}, { key: STATE_KEY, properties: OFFSET_PROPERTIES } );
+	}, { key: STATE_KEY, properties: OFFSET_PROPERTIES, consume } );
+}
 
-	const byOwner = new Map< number, RuntimeSheetRule[] >();
-	let unmodelled = 0;
+/** Every learnable offset of a recorded sheet, with the widths where it held one pixel declaration. */
+function* sheetSeries( recorded: RecordedSheets, widths: readonly number[] ): Generator< { owner: number; selector: string; property: string; samples: GeometrySample[] } > {
 	for ( const { owner, values } of recorded ) {
 		const ids = new Set( values.flatMap( value => Object.keys( value ?? {} ) ) );
 		for ( const id of ids ) {
@@ -128,17 +138,41 @@ export async function applyRuntimeSheetRules( page: Page, widths: readonly numbe
 				const match = declared?.length === 1 ? /^(-?\d+(?:\.\d+)?)px$/.exec( declared[ 0 ]! ) : null;
 				if ( match ) samples.push( { viewport: widths[ index ]!, value: Number( match[ 1 ] ) } );
 			}
-			// Every width must observe exactly one pixel declaration; anything
-			// else is not one relationship the copy can reproduce.
-			if ( samples.length !== widths.length ) continue;
-			const spread = Math.max( ...samples.map( sample => sample.value ) ) - Math.min( ...samples.map( sample => sample.value ) );
-			if ( spread <= TOLERANCE_PX ) continue;
-			const segments = offsetSegments( samples );
-			if ( segments === null ) { unmodelled++; continue; }
-			const rules = byOwner.get( owner ) ?? [];
-			rules.push( { selector, property, css: segmentedCss( selector, property, segments ) } );
-			byOwner.set( owner, rules );
+			yield { owner, selector, property, samples };
 		}
+	}
+}
+
+/**
+ * The offsets recorded so far as geometry series, so adaptive sampling refines
+ * runtime-written sheets by the same evidence as inline geometry. A width where
+ * the offset held no single pixel declaration is absent from its series.
+ */
+export async function runtimeSheetSeries( page: Page, widths: readonly number[] ): Promise< GeometrySample[][] > {
+	return [ ...sheetSeries( await recordedSheets( page, false ), widths ) ].map( series => series.samples );
+}
+
+/**
+ * Learn rules from the recorded sweep, write each beside its owning sheet, and
+ * keep only rules that reproduce the capture width's geometry. `ladder` names
+ * the widths an adaptive sweep skipped inside straight intervals; they are
+ * interpolated before fitting (see interpolateSamples).
+ */
+export async function applyRuntimeSheetRules( page: Page, widths: readonly number[], ladder: readonly number[] = widths ): Promise< { applied: number; unmodelled: number } > {
+	const byOwner = new Map< number, RuntimeSheetRule[] >();
+	let unmodelled = 0;
+	for ( const { owner, selector, property, samples: observed } of sheetSeries( await recordedSheets( page, true ), widths ) ) {
+		// Every width must observe exactly one pixel declaration; anything
+		// else is not one relationship the copy can reproduce.
+		if ( observed.length !== widths.length ) continue;
+		const samples = interpolateSamples( observed, widths, ladder );
+		const spread = Math.max( ...samples.map( sample => sample.value ) ) - Math.min( ...samples.map( sample => sample.value ) );
+		if ( spread <= TOLERANCE_PX ) continue;
+		const segments = offsetSegments( samples );
+		if ( segments === null ) { unmodelled++; continue; }
+		const rules = byOwner.get( owner ) ?? [];
+		rules.push( { selector, property, css: segmentedCss( selector, property, segments ) } );
+		byOwner.set( owner, rules );
 	}
 	if ( byOwner.size === 0 ) return { applied: 0, unmodelled };
 

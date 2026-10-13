@@ -27,7 +27,7 @@ describe('GoDaddy W+M publication evidence', () => {
       await godaddyWmAdapter.liberation?.beforeSerialize?.(page, { url: 'https://example.test/about', viewport: 'desktop' });
       expect(await page.content()).not.toContain('article:published_time');
 
-      const outputDir = mkdtempSync(join(tmpdir(), 'dla-godaddy-publication-'));
+      const outputDir = mkdtempSync(join(tmpdir(), 'liberation-godaddy-publication-'));
       directories.push(outputDir);
       mkdirSync(join(outputDir, 'html'), { recursive: true });
       mkdirSync(join(outputDir, 'screenshots'), { recursive: true });

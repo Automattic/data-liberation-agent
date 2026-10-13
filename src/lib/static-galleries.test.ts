@@ -16,10 +16,10 @@ describe('wireCapturedGalleries src-swap cycles', () => {
 		try {
 			const page = await browser.newPage();
 			await page.setContent(html);
-			expect(await page.locator('#gallery').getAttribute('data-dla-gallery-sequence')).toBe(JSON.stringify(urls));
-			expect(await page.locator('[data-dla-gallery-slot]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-dla-gallery-slot')))).toEqual(['-1', '0', '1']);
+			expect(await page.locator('#gallery').getAttribute('data-blocks-engine-capture-gallery-sequence')).toBe(JSON.stringify(urls));
+			expect(await page.locator('[data-blocks-engine-capture-gallery-slot]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-blocks-engine-capture-gallery-slot')))).toEqual(['-1', '0', '1']);
 			await page.locator('.next').click();
-			expect(await page.locator('[data-dla-gallery-slot]').evaluateAll(nodes => nodes.map(node => (node as HTMLImageElement).getAttribute('src')))).toEqual([urls[0], urls[1], urls[2]]);
+			expect(await page.locator('[data-blocks-engine-capture-gallery-slot]').evaluateAll(nodes => nodes.map(node => (node as HTMLImageElement).getAttribute('src')))).toEqual([urls[0], urls[1], urls[2]]);
 		} finally { await browser.close(); }
 	}, 30_000);
 });

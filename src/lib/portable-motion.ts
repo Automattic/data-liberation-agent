@@ -8,7 +8,7 @@ import { validateMotionContract, type MotionContract } from './fidelity/candidat
 import { startStaticServer } from './replicate/local-site/static-server.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
 
-export const PORTABLE_MOTION_SCHEMA = 'data-liberation/portable-motion/v1';
+export const PORTABLE_MOTION_SCHEMA = 'blocks-engine-capture/portable-motion/v1';
 
 export interface PortableMotionRecipe {
 	schema: typeof PORTABLE_MOTION_SCHEMA;
@@ -73,13 +73,13 @@ export async function authorPortableMotion( directory: string, recipe: PortableM
 	const capture = JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) );
 	const websiteDir = resolve( root, capture.websiteRoot ?? 'website' );
 	if ( ! websiteDir.startsWith( root + sep ) || ! existsSync( websiteDir ) ) throw new Error( 'Capture website root is missing or escapes its run' );
-	const sourceReport = capture.sourceInteractivity?.schema === 'data-liberation/source-interactivity/v1' && capture.sourceInteractivity?.path === 'source-interactivity.json'
+	const sourceReport = capture.sourceInteractivity?.schema === 'blocks-engine-capture/source-interactivity/v1' && capture.sourceInteractivity?.path === 'source-interactivity.json'
 		? JSON.parse( readFileSync( join( root, capture.sourceInteractivity.path ), 'utf8' ) )
 		: null;
 	if ( ! Array.isArray( sourceReport?.pages ) ) throw new Error( 'Authored portable motion requires a diagnosed source-interactivity report' );
 	const diagnosed = new Set< string >( sourceReport.pages.filter( ( page: { status?: string } ) => page.status === 'unreproduced' ).map( ( page: { url: string } ) => page.url ) );
 	const sourceHashes = new Set< string >( ( sourceReport?.pages ?? [] ).flatMap( ( page: { scripts?: Array< { sha256: string } > } ) => ( page.scripts ?? [] ).map( ( script ) => script.sha256 ) ) );
-	const stage = mkdtempSync( join( tmpdir(), 'dla-portable-motion-' ) );
+	const stage = mkdtempSync( join( tmpdir(), 'liberation-portable-motion-' ) );
 	let server: Awaited< ReturnType< typeof startStaticServer > > | null = null;
 	try {
 		cpSync( websiteDir, stage, { recursive: true, force: true } );

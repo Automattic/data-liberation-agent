@@ -77,7 +77,7 @@ describe( 'containsMediaReference', () => {
 
 describe( 'indexPortableMediaReferences', () => {
 	it( 'matches the raw boundary check one page at a time', () => {
-		const dir = tempDir( 'dla-media-index-' );
+		const dir = tempDir( 'data-blocks-engine-capture-media-index-' );
 		const quoted = "https://static.wixstatic.com/media/Happy%20Women's%20Day.jpg";
 		const comma = 'https://cdn.example/media/asset~mv2.png/v1/fill/w_58,h_57,al_c/file.png';
 		const entity = 'https://cdn.example/q.png?w=1&h=2';
@@ -109,7 +109,7 @@ describe( 'indexPortableMediaReferences', () => {
 	} );
 
 	it( 'drops each page before reading the next under a constrained heap', () => {
-		const dir = tempDir( 'dla-media-index-heap-' );
+		const dir = tempDir( 'data-blocks-engine-capture-media-index-heap-' );
 		const pageBytes = 8 * 1024 * 1024;
 		const pageCount = 4;
 		const home = 'https://cdn.example/home.png';
@@ -148,7 +148,7 @@ if ( retained > 6 * 1024 * 1024 ) throw new Error( 'reference index retained ' +
 
 describe( 'planPortableMediaFamilies', () => {
 	it( 'admits a gallery frame beyond the ordinary image byte bound within the responsive cap', () => {
-		const dir = tempDir( 'dla-media-plan-gallery-frame-' );
+		const dir = tempDir( 'data-blocks-engine-capture-media-plan-gallery-frame-' );
 		const homepage = join( dir, 'home.html' );
 		writeFileSync( homepage, '<main></main>' );
 		const gallery = { ...candidate( dir, 'gallery.jpg', 'https://cdn.example/gallery.jpg', 6 * 1024 * 1024, 0 ), galleryFrame: true };
@@ -162,7 +162,7 @@ describe( 'planPortableMediaFamilies', () => {
 	} );
 
 	it( 'admits by homepage priority, then eligible first bytes, then source URL, independent of insertion order', () => {
-		const dir = tempDir( 'dla-media-plan-order-' );
+		const dir = tempDir( 'data-blocks-engine-capture-media-plan-order-' );
 		const homepage = join( dir, 'home.html' );
 		writeFileSync( homepage, '<main><img src="https://cdn.example/z-home.png"></main>' );
 		const home = candidate( dir, 'z-home.png', 'https://cdn.example/z-home.png', 1500, 0 );
@@ -253,7 +253,7 @@ describe( 'planPortableMediaFamilies', () => {
 	} );
 
 	it( 'reuses one content hash without charging the budget twice', () => {
-		const dir = tempDir( 'dla-media-plan-dedupe-' );
+		const dir = tempDir( 'data-blocks-engine-capture-media-plan-dedupe-' );
 		const homepage = join( dir, 'home.html' );
 		writeFileSync( homepage, '<main></main>' );
 		const first = candidate( dir, 'first.png', 'https://cdn.example/first.png', 400, 0, 7 );

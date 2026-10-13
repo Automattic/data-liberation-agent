@@ -144,12 +144,12 @@ describe( 'pager slideshow capture', () => {
 		const page = await openPage( pagerFixture() );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
-		const slides = await page.$$eval( '[data-dla-pager-stage] > [data-dla-captured-slide]', ( nodes ) =>
+		const slides = await page.$$eval( '[data-blocks-engine-capture-pager-stage] > [data-blocks-engine-capture-captured-slide]', ( nodes ) =>
 			nodes.map( ( node ) => node.querySelector( 'img' )?.getAttribute( 'src' ) ?? '' )
 		);
 		expect( slides ).toEqual( FULL );
 		expect(
-			await page.getAttribute( '[data-dla-pager-stage]', 'data-dla-captured-slide-count' )
+			await page.getAttribute( '[data-blocks-engine-capture-pager-stage]', 'data-blocks-engine-capture-captured-slide-count' )
 		).toBe( String( FULL.length ) );
 		await page.close();
 	} );
@@ -164,7 +164,7 @@ describe( 'pager slideshow capture', () => {
 		const page = await openPage( pagerFixture().replace( '<body>', `<body><script>${ patch }</script>` ) );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
-		const slides = await page.$$eval( '[data-dla-pager-stage] > [data-dla-captured-slide]', ( nodes ) =>
+		const slides = await page.$$eval( '[data-blocks-engine-capture-pager-stage] > [data-blocks-engine-capture-captured-slide]', ( nodes ) =>
 			nodes.map( ( node ) => node.querySelector( 'img' )?.getAttribute( 'src' ) ?? '' )
 		);
 		expect( slides ).toEqual( FULL );
@@ -175,7 +175,7 @@ describe( 'pager slideshow capture', () => {
 		const page = await openPage( pagerFixture() );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
-		const stage = await page.$eval( '[data-dla-pager-stage]', ( node ) => node.innerHTML );
+		const stage = await page.$eval( '[data-blocks-engine-capture-pager-stage]', ( node ) => node.innerHTML );
 		for ( const thumbnail of THUMBS.slice( 1 ) ) {
 			expect( stage ).not.toContain( thumbnail );
 		}
@@ -187,7 +187,7 @@ describe( 'pager slideshow capture', () => {
 		const page = await openPage( pagerFixture() );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
-		const shown = await page.$$eval( '[data-dla-pager-stage] > *', ( nodes ) =>
+		const shown = await page.$$eval( '[data-blocks-engine-capture-pager-stage] > *', ( nodes ) =>
 			nodes.filter( ( node ) => getComputedStyle( node ).display !== 'none' ).length
 		);
 		expect( shown ).toBe( 1 );
@@ -198,9 +198,9 @@ describe( 'pager slideshow capture', () => {
 		const page = await openPage( pagerFixture( { brokenLastControl: true } ) );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
-		const diagnostics = await page.$eval( '[data-dla-pager-stage]', ( node ) => ( {
-			captured: node.getAttribute( 'data-dla-captured-slide-count' ),
-			advertised: node.getAttribute( 'data-dla-advertised-slide-count' ),
+		const diagnostics = await page.$eval( '[data-blocks-engine-capture-pager-stage]', ( node ) => ( {
+			captured: node.getAttribute( 'data-blocks-engine-capture-captured-slide-count' ),
+			advertised: node.getAttribute( 'data-blocks-engine-capture-advertised-slide-count' ),
 		} ) );
 		expect( diagnostics ).toEqual( { captured: '2', advertised: '3' } );
 		await page.close();
@@ -210,7 +210,7 @@ describe( 'pager slideshow capture', () => {
 		const page = await openPage( LABELLED_CONTROL_FIXTURE );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
-		expect( await page.locator( '[data-dla-captured-slide]' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-captured-slide]' ).count() ).toBe( 0 );
 		await page.close();
 	} );
 
@@ -219,8 +219,8 @@ describe( 'pager slideshow capture', () => {
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
 		expect( page.url() ).toBe( ROUTE );
-		expect( await page.locator( '[data-dla-pager-control]' ).count() ).toBe( 0 );
-		expect( await page.locator( '[data-dla-captured-slide]' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-pager-control]' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-captured-slide]' ).count() ).toBe( 0 );
 		await page.close();
 	} );
 
@@ -228,7 +228,7 @@ describe( 'pager slideshow capture', () => {
 		const page = await openRoutedPage( SAME_PAGE_HREF_FIXTURE );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
-		const slides = await page.$$eval( '[data-dla-pager-stage] > [data-dla-captured-slide]', ( nodes ) =>
+		const slides = await page.$$eval( '[data-blocks-engine-capture-pager-stage] > [data-blocks-engine-capture-captured-slide]', ( nodes ) =>
 			nodes.map( ( node ) => node.querySelector( 'img' )?.getAttribute( 'src' ) ?? '' )
 		);
 		expect( slides ).toEqual( FULL );

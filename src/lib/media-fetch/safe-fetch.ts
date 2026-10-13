@@ -208,11 +208,16 @@ export async function safeFetch(rawUrl: string, opts: SafeFetchOpts = {}): Promi
       ? await opts.headersForOrigin(new URL(currentUrl).origin)
       : undefined;
     const headers = originHeaders ? { ...opts.headers, ...originHeaders } : opts.headers;
-    const res = await doFetch(currentUrl, {
-      signal: requestSignal,
-      redirect: 'manual',
-      headers,
-    });
+    let res: Response;
+    try {
+      res = await doFetch(currentUrl, {
+        signal: requestSignal,
+        redirect: 'manual',
+        headers,
+      });
+    } catch (error) {
+      throw withNetworkCause(error);
+    }
 
     // Defensive header accessor — real fetch always supplies `headers`, but
     // test mocks may omit it. A missing header reads as null.
@@ -253,12 +258,35 @@ export async function safeFetch(rawUrl: string, opts: SafeFetchOpts = {}): Promi
       }
     }
 
-    const body = await readCapped(res, maxBytes, requestSignal);
+    let body: Buffer;
+    try {
+      body = await readCapped(res, maxBytes, requestSignal);
+    } catch (error) {
+      throw withNetworkCause(error);
+    }
     return { finalUrl: currentUrl, status: res.status, headers: res.headers, body };
   }
 
   // Unreachable: the loop returns or throws on every path.
   throw new Error(`too many redirects (> ${maxRedirects})`);
+}
+
+/**
+ * Node's fetch reports a network failure (reset, refused, DNS, TLS, connect
+ * timeout) as `TypeError: fetch failed`, or `terminated` once the body is
+ * being read, and keeps the reason on `cause`. Callers that keep only
+ * `message` lose it, so name it there too. The error stays a TypeError with
+ * the same cause; other errors pass through.
+ */
+function withNetworkCause(error: unknown): unknown {
+  if (!(error instanceof TypeError) || (error.message !== 'fetch failed' && error.message !== 'terminated')) return error;
+  const cause = error.cause as { code?: unknown; message?: unknown } | undefined;
+  const code = typeof cause?.code === 'string' ? cause.code : '';
+  const detail = typeof cause?.message === 'string' ? cause.message.trim() : '';
+  // TLS failures carry a long OpenSSL dump; their code says the same thing.
+  const readable = detail.length <= 100 && !detail.includes('\n') ? detail : '';
+  const reason = readable && code && !readable.includes(code) ? `${readable} (${code})` : readable || code;
+  return reason ? new TypeError(`${error.message}: ${reason}`, { cause: error.cause }) : error;
 }
 
 /**

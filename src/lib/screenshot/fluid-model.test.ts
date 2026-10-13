@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	breakpointsFrom,
+	interpolateSamples,
 	learnFluidModel,
 	learnSegmentedFluidModel,
 	learnWidestFluidModel,
@@ -371,7 +372,7 @@ describe( 'learnSegmentedFluidModel', () => {
 		const desktop = segmented!.segments[ 1 ]!;
 		expect( desktop ).toMatchObject( { maxWidth: null, model: { kind: 'affine' } } );
 		expect( desktop.model.kind === 'affine' && desktop.model.slope * desktop.minWidth! + desktop.model.intercept ).toBeGreaterThan( 0 );
-		const css = segmentedCss( '[data-dla-fluid-segment="grid"]', 'width', segmented!.segments );
+		const css = segmentedCss( '[data-blocks-engine-capture-fluid-segment="grid"]', 'width', segmented!.segments );
 		expect( css ).toContain( `@media (min-width:${ desktop.minWidth }px)` );
 		for ( const [ width, expected ] of [ [ 1600, 460 ], [ 1728, 503 ] ] ) {
 			if ( desktop.model.kind !== 'affine' ) throw new Error( 'expected affine model' );
@@ -483,16 +484,46 @@ describe( 'learnSegmentedFluidModel', () => {
 
 	it( 'emits nested media rules', () => {
 		const segmented = learnSegmentedFluidModel( scaledHeadline )!;
-		const css = segmentedCss( '[data-dla-fluid-segment="0"]', 'font-size', segmented.segments );
-		expect( css ).toContain( '@media (max-width:767px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="0"]) { font-size: 21.42vw !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:768px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="0"]) { font-size: min(355.4px, 23.38vw) !important; }\n}' );
+		const css = segmentedCss( '[data-blocks-engine-capture-fluid-segment="0"]', 'font-size', segmented.segments );
+		expect( css ).toContain( '@media (max-width:767px) {\n:is(#data-blocks-engine-capture-fluid-specificity, [data-blocks-engine-capture-fluid-segment="0"]) { font-size: 21.42vw !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:768px) {\n:is(#data-blocks-engine-capture-fluid-specificity, [data-blocks-engine-capture-fluid-segment="0"]) { font-size: min(355.4px, 23.38vw) !important; }\n}' );
 	} );
 
 	it( 'emits the frozen tail as a media-scoped constant', () => {
 		const segmented = learnSegmentedFluidModel( headerOffset )!;
-		const css = segmentedCss( '[data-dla-fluid-segment="7"]', 'padding-top', segmented.segments );
-		expect( css ).toContain( '@media (max-width:1023px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: calc(11.87vw + 38.08px) !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:1024px) and (max-width:1919px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: calc(4.13vw + 19.5px) !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:1920px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: 89px !important; }\n}' );
+		const css = segmentedCss( '[data-blocks-engine-capture-fluid-segment="7"]', 'padding-top', segmented.segments );
+		expect( css ).toContain( '@media (max-width:1023px) {\n:is(#data-blocks-engine-capture-fluid-specificity, [data-blocks-engine-capture-fluid-segment="7"]) { padding-top: calc(11.87vw + 38.08px) !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:1024px) and (max-width:1919px) {\n:is(#data-blocks-engine-capture-fluid-specificity, [data-blocks-engine-capture-fluid-segment="7"]) { padding-top: calc(4.13vw + 19.5px) !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:1920px) {\n:is(#data-blocks-engine-capture-fluid-specificity, [data-blocks-engine-capture-fluid-segment="7"]) { padding-top: 89px !important; }\n}' );
+	} );
+} );
+
+describe( 'interpolateSamples', () => {
+	const ladder = [ 390, 600, 767, 768, 769, 800, 1024, 1280, 1440 ];
+	it( 'fills skipped ladder widths on the line between their sampled neighbours, containers too', () => {
+		const filled = interpolateSamples( [
+			{ viewport: 390, value: 195, container: 390 },
+			{ viewport: 768, value: 384, container: 768 },
+			{ viewport: 1024, value: 512, container: 1024 },
+			{ viewport: 1440, value: 720, container: 1440 },
+		], [ 390, 768, 1024, 1440 ], ladder );
+		expect( filled.map( sample => sample.viewport ) ).toEqual( ladder );
+		for ( const sample of filled ) expect( sample ).toEqual( { viewport: sample.viewport, value: sample.viewport / 2, container: sample.viewport } );
+	} );
+	it( 'keeps absent and non-pixel stretches as the full ladder would have seen them', () => {
+		const filled = interpolateSamples( [
+			{ viewport: 390, value: Number.NaN },
+			{ viewport: 768, value: Number.NaN },
+			{ viewport: 1024, value: 10 },
+		], [ 390, 768, 1024, 1440 ], ladder );
+		// NaN across 390–768; nothing past 1024 (absent at 1440); 769–800 has a non-pixel end.
+		expect( filled.map( sample => [ sample.viewport, sample.value ] ) ).toEqual( [
+			[ 390, Number.NaN ], [ 600, Number.NaN ], [ 767, Number.NaN ], [ 768, Number.NaN ],
+			[ 769, Number.NaN ], [ 800, Number.NaN ], [ 1024, 10 ],
+		] );
+	} );
+	it( 'leaves an explicit sweep unchanged', () => {
+		const samples = [ { viewport: 390, value: 1 }, { viewport: 1440, value: 2 } ];
+		expect( interpolateSamples( samples, [ 390, 1440 ], [ 390, 1440 ] ) ).toEqual( samples );
 	} );
 } );

@@ -42,7 +42,14 @@ const HELP = `
 
   Liberate options:
     --acquisition <mode> browser (default), or http for an unverified review candidate
-    --route-limit <n>    Bound HTTP routes; omitted routes remain diagnosed
+    --route-limit <n|all> Capture at most n routes, homepage included: the
+                         homepage plus an even spread of the rest, linked pages
+                         counted (browser default 50; http default all). Omitted
+                         routes are diagnosed and counted, never failed.
+    --route-selection <mode> How the route budget picks routes: discovery-order
+                         (default, the even spread) or template-coverage (fetch
+                         each route's server HTML, keep one route per template
+                         group first; writes template-groups.json).
     --runtime-route-limit <n> Observe HTTP runtime regions on at most n routes (0-50)
     --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
@@ -51,6 +58,24 @@ const HELP = `
                          interrupted, for browsing it. Liberation writes the site
                          and exits without this.
     --no-learn-fluid     Skip the width sweep and freeze the layout at one width.
+    --reference-sample <n|all>  Freeze baseline reference evidence for the
+                         homepage plus n-1 sampled routes (default 1: homepage
+                         only), or every route with "all" for full-route parity.
+                         Unsampled routes skip reference navigation; compare
+                         reports them as uncompared scope instead of failing them.
+    --time-budget <duration>  Stop starting routes and export what was captured
+                         when this much time has passed, e.g. 13m, 780s (bare
+                         numbers are ms). Routes left out are reported as
+                         route_capture_skipped_budget. Set it to your deadline
+                         minus post-capture headroom. Browser capture only.
+    --max-file-bytes <n> Largest file exported into the site (default 52428800,
+                         50 MiB). Larger assets are not written and are reported
+                         as asset_exceeds_file_limit.
+    --device-mode <mode> auto (default) captures each route once, at desktop,
+                         when the homepage serves phones the same HTML and DOM
+                         (the phone layout is CSS reflow); otherwise it also
+                         captures a phone document. dual always captures both;
+                         reflow-only always captures desktop only.
     --portable-motion <json>  Author a portable runtime from pinned independent
                          scripts and verify it against the live source before export.
                          Learning is on by default: it keeps the copy reflowing
@@ -219,16 +244,48 @@ if (args.includes('--help')) {
     if (value === null) throw new Error(`${name} requires an integer`);
     return Number(value);
   };
-  const routeLimit = httpNumber('--route-limit');
+  const routeLimitArg = args.includes('--route-limit') ? getArg('--route-limit') : undefined;
+  const routeLimit = routeLimitArg === undefined ? undefined : routeLimitArg === 'all' ? 'all' as const : Number(routeLimitArg);
+  if (routeLimitArg !== undefined && routeLimit !== 'all' && (routeLimitArg === null || !Number.isSafeInteger(routeLimit) || (routeLimit as number) < 1)) {
+    throw new Error('--route-limit requires a positive integer or "all"');
+  }
+  const routeSelection = args.includes('--route-selection') ? getArg('--route-selection') : undefined;
+  if (routeSelection !== undefined && routeSelection !== 'discovery-order' && routeSelection !== 'template-coverage') {
+    throw new Error('--route-selection requires discovery-order or template-coverage');
+  }
   const runtimeRouteLimit = httpNumber('--runtime-route-limit');
+  const referenceSampleArg = args.includes('--reference-sample') ? getArg('--reference-sample') : undefined;
+  const referenceSample = referenceSampleArg === undefined ? undefined : referenceSampleArg === 'all' ? 'all' as const : Number(referenceSampleArg);
+  if (referenceSampleArg !== undefined && referenceSample !== 'all' && (referenceSampleArg === null || !Number.isInteger(referenceSample) || (referenceSample as number) < 1)) {
+    throw new Error('--reference-sample requires a positive integer or "all"');
+  }
+  const timeBudgetArg = args.includes('--time-budget') ? getArg('--time-budget') : undefined;
+  const { parseDurationMs } = await import('./lib/duration.js');
+  const timeBudgetMs = timeBudgetArg === undefined ? undefined : parseDurationMs(timeBudgetArg ?? '');
+  if (timeBudgetArg !== undefined && timeBudgetMs === undefined) throw new Error('--time-budget requires a positive duration such as 13m, 780s or 780000ms');
+  const maxFileBytesArg = args.includes('--max-file-bytes') ? getArg('--max-file-bytes') : undefined;
+  const maxFileBytes = maxFileBytesArg === undefined ? undefined : Number(maxFileBytesArg);
+  if (maxFileBytesArg !== undefined && (maxFileBytesArg === null || !Number.isSafeInteger(maxFileBytes) || (maxFileBytes as number) < 1)) {
+    throw new Error('--max-file-bytes requires a positive integer');
+  }
+  const deviceMode = args.includes('--device-mode') ? getArg('--device-mode') : undefined;
+  if (deviceMode !== undefined && deviceMode !== 'auto' && deviceMode !== 'dual' && deviceMode !== 'reflow-only') {
+    throw new Error('--device-mode requires auto, dual or reflow-only');
+  }
   const result = await liberateSite({
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
-    http: acquisition === 'http' || routeLimit !== undefined || runtimeRouteLimit !== undefined ? {routeLimit, runtimeRouteLimit} : undefined,
+    http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
+    routeLimit,
+    routeSelection,
     url,
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),
     screenshots: args.includes('--screenshots'),
     learnFluid: !args.includes('--no-learn-fluid'),
+    referenceSample,
+    timeBudgetMs,
+    maxFileBytes,
+    deviceMode,
     portableMotion,
     serve: args.includes('--serve'),
     log: (message) => process.stderr.write(`${message}\n`),
@@ -237,6 +294,7 @@ if (args.includes('--help')) {
   const notes = [
     result.routesSkipped ? `${result.routesSkipped} reused` : '',
     result.routesFailed ? `${result.routesFailed} failed` : '',
+    result.routesOmitted ? `${result.routesOmitted} omitted by route budget` : '',
     result.complete ? '' : 'incomplete',
   ].filter(Boolean);
   console.log(

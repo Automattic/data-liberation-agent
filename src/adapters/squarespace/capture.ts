@@ -1,6 +1,6 @@
 import type { LiberationHooks } from '../page-actions.js';
 
-const VIDEO_MARKER = 'data-dla-squarespace-video';
+const VIDEO_MARKER = 'data-blocks-engine-capture-squarespace-video';
 
 /**
  * The poster Squarespace publishes for one of its hosted videos.
@@ -39,17 +39,17 @@ export const capture: LiberationHooks = {
 				// the page a visitor freshly opens at the declared top pose has the
 				// expanded header, whose height also determines the hero geometry.
 				header.classList.remove( 'shrink' );
-				let style = document.querySelector< HTMLStyleElement >( 'style[data-dla-squarespace-header-style]' );
+				let style = document.querySelector< HTMLStyleElement >( 'style[data-blocks-engine-capture-squarespace-header-style]' );
 				if ( ! style ) {
 					style = document.createElement( 'style' );
-					style.setAttribute( 'data-dla-squarespace-header-style', '' );
+					style.setAttribute( 'data-blocks-engine-capture-squarespace-header-style', '' );
 				}
-				style.textContent = ':is(#dla-squarespace-header-visible,header[data-test="header"]){transition:none!important;transform:none!important}';
+				style.textContent = ':is(#data-blocks-engine-capture-squarespace-header-visible,header[data-test="header"]){transition:none!important;transform:none!important}';
 				( document.body ?? document.head ?? document.documentElement ).append( style );
 			}
 			for ( const menu of document.querySelectorAll< HTMLElement >( '[data-test="header-menu"]' ) ) {
 				if ( menu.style.getPropertyValue( 'padding-top' ) ) {
-					menu.setAttribute( 'data-dla-fluid-ignore-padding', '' );
+					menu.setAttribute( 'data-blocks-engine-capture-fluid-ignore-padding', '' );
 				}
 			}
 		} );

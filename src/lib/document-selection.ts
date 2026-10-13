@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
-import { scopeCss } from './replicate/css-scope.js';
+import { projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { IntegrityError } from './failure-class.js';
 
 /** Platform-owned, ordered request-identity rules. No viewport/capability inference. */
 export interface DeviceDocumentSelection {
@@ -26,9 +27,9 @@ export type DocumentSelection = DeviceDocumentSelection | {
 export function validateDeviceSelection( selection: DeviceDocumentSelection ): void {
 	if ( ! selection.id || ! selection.evidence || new Set( selection.documents ).size !== selection.documents.length ||
 		! selection.documents.length || selection.documents.some( key => ! /^[a-z][a-z0-9-]*$/.test( key ) ) ||
-		! selection.documents.includes( selection.defaultDocument ) ) throw new Error( 'Invalid device document selection' );
+		! selection.documents.includes( selection.defaultDocument ) ) throw new IntegrityError( 'Invalid device document selection' );
 	for ( const rule of selection.rules ) {
-		if ( ! selection.documents.includes( rule.document ) || ! /^[im]*$/.test( rule.flags ?? '' ) ) throw new Error( 'Invalid device document rule' );
+		if ( ! selection.documents.includes( rule.document ) || ! /^[im]*$/.test( rule.flags ?? '' ) ) throw new IntegrityError( 'Invalid device document rule' );
 		new RegExp( rule.userAgent, rule.flags );
 	}
 }
@@ -72,7 +73,7 @@ function rootCss( css: string, bodyClasses: readonly string[] ): string {
 }
 
 /** Preserve each document's cascade and body flags; identity never collapses by tree similarity. */
-export function assembleDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection ): DeviceAssembly {
+export function assembleDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, onUnparseable?: UnparseableStylesheetSink ): DeviceAssembly {
 	validateDeviceSelection( selection );
 	const base = documents[ selection.defaultDocument ];
 	if ( ! base ) throw new Error( 'Default device document was not captured' );
@@ -96,33 +97,38 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		// Retain the existing scope boundary contract for fragments and consumers.
 		const body = source( 'body' );
 		for ( const [ name, value ] of Object.entries( body[ 0 ]?.attribs ?? {} ) ) wrapper.attr( name, value );
-		wrapper.attr( 'data-dla-device-document', key ).attr( 'data-dla-document-scope', '' );
-		wrapper.addClass( `data-liberation-${ key }-document` );
+		wrapper.attr( 'data-blocks-engine-capture-device-document', key ).attr( 'data-blocks-engine-capture-document-scope', '' );
+		wrapper.addClass( `data-blocks-engine-capture-${ key }-document` );
 		wrapper.html( body.html() ?? '' ).find( 'script,style' ).remove();
 		$( 'body' ).append( wrapper );
-		const scope = `[data-dla-device-document="${ key }"]`;
+		const scope = `[data-blocks-engine-capture-device-document="${ key }"]`;
 		const rootClasses = ( body.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 		for ( const node of source( 'style,link[rel~="stylesheet"]' ).toArray() ) {
 			const original = source( node );
 			const copy = $( source.html( node ) );
-			if ( original.is( 'style' ) ) copy.text( scopeCss( original.text(), { scope, rootClasses } ) + rootCss( original.text(), rootClasses ) );
-			copy.attr( 'data-dla-device-style', key ).attr( 'data-dla-source-media', original.attr( 'media' ) ?? 'all' ).attr( 'media', 'not all' );
+			if ( original.is( 'style' ) ) {
+				const scoped = projectStylesheet( () => scopeCss( original.text(), { scope, rootClasses } ) + rootCss( original.text(), rootClasses ), onUnparseable );
+				// An unparseable stylesheet stays out of the assembled document.
+				if ( scoped === undefined ) continue;
+				copy.text( scoped );
+			}
+			copy.attr( 'data-blocks-engine-capture-device-style', key ).attr( 'data-blocks-engine-capture-source-media', original.attr( 'media' ) ?? 'all' ).attr( 'media', 'not all' );
 			$( 'head' ).append( copy );
 		}
 	}
-	// Kept inline by the export's existing data-dla-* style handling.
-	// The selection runtime is what sets data-dla-selected-document, and it only
+	// Kept inline by the export's existing data-blocks-engine-capture-* style handling.
+	// The selection runtime is what sets data-blocks-engine-capture-selected-document, and it only
 	// runs where scripts do. A consumer that renders this markup without it — the
 	// block editor canvas is the one that matters — would otherwise keep every
 	// device document at display:none and show nothing at all, so the default
 	// document stands in until the runtime names one.
-	const visibility = '[data-dla-device-document]{display:none!important}[data-dla-device-unavailable]{display:none}' +
-		`html:not([data-dla-selected-document]) [data-dla-device-document="${ selection.defaultDocument }"]{display:contents!important}` +
-		Object.keys( viewports ).map( key => `html[data-dla-selected-document="${ key }"] [data-dla-device-document="${ key }"]{display:contents!important}` ).join( '' ) +
-		'html[data-dla-document-unavailable] [data-dla-device-unavailable]{display:block!important}';
-	$( 'head' ).prepend( $( '<style data-dla-device-visibility>' ).text( visibility ) );
+	const visibility = '[data-blocks-engine-capture-device-document]{display:none!important}[data-blocks-engine-capture-device-unavailable]{display:none}' +
+		`html:not([data-blocks-engine-capture-selected-document]) [data-blocks-engine-capture-device-document="${ selection.defaultDocument }"]{display:contents!important}` +
+		Object.keys( viewports ).map( key => `html[data-blocks-engine-capture-selected-document="${ key }"] [data-blocks-engine-capture-device-document="${ key }"]{display:contents!important}` ).join( '' ) +
+		'html[data-blocks-engine-capture-document-unavailable] [data-blocks-engine-capture-device-unavailable]{display:block!important}';
+	$( 'head' ).prepend( $( '<style data-blocks-engine-capture-device-visibility>' ).text( visibility ) );
 	const missing = selection.documents.filter( key => ! documents[ key ] );
-	if ( missing.length ) $( 'body' ).append( '<p data-dla-device-unavailable role="status">This source device document was not captured.</p>' );
+	if ( missing.length ) $( 'body' ).append( '<p data-blocks-engine-capture-device-unavailable role="status">This source device document was not captured.</p>' );
 	return { html: $.html(), selection, viewports, roots, missing };
 }
 
@@ -149,21 +155,21 @@ for(var i=0;i<parser.style.length;i++){var property=parser.style.item(i);node.st
 export function installDeviceSelection( html: string, assembly: Omit<DeviceAssembly, 'html'> ): string {
 	const $ = cheerio.load( html );
 	const config = JSON.stringify( { selection: assembly.selection, viewports: assembly.viewports, roots: assembly.roots } ).replace( /</g, '\\u003c' );
-	const bootstrap = `(function(){${ ROOT_OVERLAY_RUNTIME }var c=${ config },s=c.selection,ua=navigator.userAgent,key=s.defaultDocument;for(var i=0;i<s.rules.length;i++){var r=s.rules[i];if(new RegExp(r.userAgent,r.flags||'').test(ua)){key=r.document;break;}}var root=document.documentElement;root.setAttribute('data-dla-selected-document',key);var vp=c.viewports[key],meta=document.querySelector('meta[data-dla-selected-viewport]');meta.removeAttribute('content');meta.removeAttribute('id');if(vp){overlayRoot(root,c.roots,'html',key);Object.keys(vp).forEach(function(k){meta.setAttribute(k,vp[k]);});root.removeAttribute('data-dla-document-unavailable');}else{root.setAttribute('data-dla-document-unavailable',key);}var styles=document.querySelectorAll('[data-dla-device-style]');for(var j=0;j<styles.length;j++){var node=styles[j];if(node.getAttribute('data-dla-device-style')!==key)continue;var copy=node.cloneNode(true);copy.setAttribute('media',node.getAttribute('data-dla-source-media'));copy.removeAttribute('data-dla-device-style');copy.setAttribute('blocking','render');node.after(copy);}})();`;
+	const bootstrap = `(function(){${ ROOT_OVERLAY_RUNTIME }var c=${ config },s=c.selection,ua=navigator.userAgent,key=s.defaultDocument;for(var i=0;i<s.rules.length;i++){var r=s.rules[i];if(new RegExp(r.userAgent,r.flags||'').test(ua)){key=r.document;break;}}var root=document.documentElement;root.setAttribute('data-blocks-engine-capture-selected-document',key);var vp=c.viewports[key],meta=document.querySelector('meta[data-blocks-engine-capture-selected-viewport]');meta.removeAttribute('content');meta.removeAttribute('id');if(vp){overlayRoot(root,c.roots,'html',key);Object.keys(vp).forEach(function(k){meta.setAttribute(k,vp[k]);});root.removeAttribute('data-blocks-engine-capture-document-unavailable');}else{root.setAttribute('data-blocks-engine-capture-document-unavailable',key);}var styles=document.querySelectorAll('[data-blocks-engine-capture-device-style]');for(var j=0;j<styles.length;j++){var node=styles[j];if(node.getAttribute('data-blocks-engine-capture-device-style')!==key)continue;var copy=node.cloneNode(true);copy.setAttribute('media',node.getAttribute('data-blocks-engine-capture-source-media'));copy.removeAttribute('data-blocks-engine-capture-device-style');copy.setAttribute('blocking','render');node.after(copy);}})();`;
 	// The generated bytes are UTF-8; keep the encoding declaration within the
 	// first 1024 bytes rather than putting a large predicate/config in front of it.
 	$( 'meta[charset]' ).remove();
 	$( 'meta[name="viewport"]' ).remove();
-	$( 'head' ).prepend( '<meta charset="utf-8"><meta name="viewport" data-dla-selected-viewport>' );
+	$( 'head' ).prepend( '<meta charset="utf-8"><meta name="viewport" data-blocks-engine-capture-selected-viewport>' );
 	// One runtime per document, parsed after every declared device style and
 	// before <body>. It activates the selected identity's styles in document
 	// order beside their inert declarations, which keep their localized URLs.
 	// Changing media on a pending link is not render blocking; a clone inserted
 	// with blocking=render while the body is still null is.
-	const runtime = `<script data-dla-device-selection>${ bootstrap }</script>`;
-	const declared = $( 'head [data-dla-device-style]' ).last();
+	const runtime = `<script data-blocks-engine-capture-device-selection>${ bootstrap }</script>`;
+	const declared = $( 'head [data-blocks-engine-capture-device-style]' ).last();
 	if ( declared.length ) declared.after( runtime ); else $( 'head' ).append( runtime );
 	const roots = JSON.stringify( assembly.roots ).replace( /</g, '\\u003c' );
-	$( 'body' ).prepend( `<script data-dla-device-body>(function(){${ ROOT_OVERLAY_RUNTIME }var roots=${ roots },key=document.documentElement.getAttribute('data-dla-selected-document');overlayRoot(document.body,roots,'body',key);})();</script>` );
+	$( 'body' ).prepend( `<script data-blocks-engine-capture-device-body>(function(){${ ROOT_OVERLAY_RUNTIME }var roots=${ roots },key=document.documentElement.getAttribute('data-blocks-engine-capture-selected-document');overlayRoot(document.body,roots,'body',key);})();</script>` );
 	return $.html();
 }

@@ -24,6 +24,34 @@ function errorOffset(css: string, line: number, column: number): number {
   return offset + column - 1;
 }
 
+/** Receives the reason an author stylesheet could not be parsed and was left unprojected. */
+export type UnparseableStylesheetSink = (reason: string) => void;
+
+/**
+ * The reason `error` is a stylesheet syntax error that `parseCss` could not
+ * recover, or undefined for any other error (which callers must re-throw).
+ */
+export function unparseableStylesheetReason(error: unknown): string | undefined {
+  if (!(error instanceof CssSyntaxError)) return undefined;
+  return `${error.reason}${error.line === undefined ? '' : ` at line ${error.line}`}`;
+}
+
+/**
+ * Run one stylesheet projection. A stylesheet that cannot be parsed is reported
+ * to `onUnparseable` and left unprojected (undefined); any other error, or an
+ * unparseable stylesheet with no sink to report it to, is re-thrown.
+ */
+export function projectStylesheet<T>(project: () => T, onUnparseable?: UnparseableStylesheetSink): T | undefined {
+  try {
+    return project();
+  } catch (error) {
+    const reason = unparseableStylesheetReason(error);
+    if (reason === undefined || !onUnparseable) throw error;
+    onUnparseable(reason);
+    return undefined;
+  }
+}
+
 /** Parse captured CSS, recovering only proven browser-ignored fragments. */
 export function parseCss(css: string) {
   let recovered = css;

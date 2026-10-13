@@ -10,7 +10,7 @@ afterEach( () => {
 } );
 
 function site( pages: Record< string, string > ): string {
-	const dir = mkdtempSync( join( tmpdir(), 'dla-selfcheck-' ) );
+	const dir = mkdtempSync( join( tmpdir(), 'liberation-selfcheck-' ) );
 	dirs.push( dir );
 	for ( const [ path, html ] of Object.entries( pages ) ) {
 		mkdirSync( join( dir, path, '..' ), { recursive: true } );
