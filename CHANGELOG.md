@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.28.0] - 2026-10-13
+
+### Added
+- bound the website output with a total byte and file budget
+- add a Framer platform adapter that removes the host badge
+
+### Changed
+- regenerate plugin bundles
+
 ## [0.27.7] - 2026-10-13
 
 ### Changed
