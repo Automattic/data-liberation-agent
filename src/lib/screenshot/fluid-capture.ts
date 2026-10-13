@@ -87,6 +87,21 @@ const TABLET_BAND = [ 767, 768, 800, 801 ] as const;
 const COLLINEAR_TOLERANCE_PX = 0.5;
 
 /** Whether any observed series is not one line across the tablet band edges. */
+/**
+ * Whether every observed series, outside perpetually animated elements, holds
+ * one finite value at each of `samples` widths: nothing the sweep could learn
+ * varies with width.
+ */
+export function constantAcross( observations: ReadonlyMap< string, readonly GeometrySample[] >, samples: number, perpetual: ReadonlySet< string > ): boolean {
+	for ( const [ key, series ] of observations ) {
+		if ( perpetual.has( key.slice( 0, key.indexOf( ':' ) ) ) ) continue;
+		if ( series.length !== samples ) return false;
+		const first = series[ 0 ]!.value;
+		if ( ! Number.isFinite( first ) || series.some( sample => sample.value !== first ) ) return false;
+	}
+	return true;
+}
+
 export function tabletBandNeedsRefinement( series: Iterable< readonly GeometrySample[] > ): boolean {
 	for ( const samples of series ) {
 		const at = TABLET_BAND.map( width => samples.find( sample => sample.viewport === width ) );
@@ -291,9 +306,21 @@ async function learnFluidGeometry(
 		}
 		options.onProgress?.( width, measured.length );
 	};
-	for ( const width of widths ) await sample( width );
-	if ( adaptive && ( await runtimeSheetsObserved( page ) || tabletBandNeedsRefinement( observations.values() ) ) ) {
-		for ( const width of TABLET_REFINEMENT_WIDTHS ) await sample( width );
+	// The default ladder probes its narrowest, tablet and widest widths first.
+	// When every tagged series is identical across them (perpetual movers
+	// excluded) and no runtime stylesheet varied, every learned rule would be
+	// `constant` — the frozen copy already carries it — so the rest of the
+	// sweep is skipped. Probe widths are ordinary samples, never repeated.
+	const probe = adaptive ? [ ...new Set( [ Math.min( ...widths ), 768, Math.max( ...widths ) ] ) ].filter( width => widths.includes( width ) ) : [];
+	for ( const width of probe ) await sample( width );
+	const probedConstant = probe.length > 1 && ! await runtimeSheetsObserved( page ) &&
+		constantAcross( observations, probe.length, new Set( await baseline.evaluate( state =>
+			[ ...( ( state as unknown as { perpetual?: Set< string > } ).perpetual ?? [] ) ] ) ) );
+	if ( ! probedConstant ) {
+		for ( const width of widths ) if ( ! probe.includes( width ) ) await sample( width );
+		if ( adaptive && ( await runtimeSheetsObserved( page ) || tabletBandNeedsRefinement( observations.values() ) ) ) {
+			for ( const width of TABLET_REFINEMENT_WIDTHS ) await sample( width );
+		}
 	}
 	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
 
@@ -676,24 +703,51 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
 		const started = Date.now();
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
-		const snapshot = () => JSON.stringify(
-			state.elements().map( element => {
+		// One serialized geometry record per tagged element, keyed by its id, so
+		// rest can be judged per element (see `perpetual` below).
+		const snapshot = () => new Map( state.elements().map( element => {
 				const geometry = state.readGeometry( element );
 				const style = geometry.style;
 				const pixel = state.pixel;
 				const custom = [ ...style ].filter( property => property.startsWith( '--' ) )
 					.map( property => [ property, pixel( style.getPropertyValue( property ) ) ] )
 					.filter( ( [ , value ] ) => value !== null );
-				return [ element.getAttribute( attribute ),
+				const id = element.getAttribute( attribute ) ?? '';
+				return [ id, JSON.stringify( [ id,
 					properties.map( property => pixel( style.getPropertyValue( property ) ) ), custom,
 					// Keep the whole transform, not just X: scale/rotation must invalidate
 					// rest even when the translation component stays unchanged.
 					style.transform, style.transform ? getComputedStyle( element ).transform : null,
 					style.inset, geometry.position,
 					pixel( style.width ) === null ? null : geometry.parent?.clientWidth,
-					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ];
-			} )
-		);
+					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ] ) ] as const;
+			} ) );
+		// An element whose geometry changes on every observation for
+		// PERPETUAL_TICKS in a row is running a perpetual animation (a script
+		// writing transforms each frame), not settling. It can never be quiet, so
+		// it is excluded from rest for the rest of this wait; every other element
+		// must still be quiet. A finite transition shorter than the window settles
+		// before it is classified.
+		// Classified movers persist on this learning run's baseline state for its
+		// later widths: they are the same tagged elements, so each width only
+		// needs its own quiet window rather than re-proving the animation. A new
+		// run tags afresh and starts with no movers.
+		const PERPETUAL_TICKS = 8;
+		const streaks = new Map< string, number >();
+		const perpetual = ( state as unknown as { perpetual?: Set< string > } ).perpetual ??= new Set< string >();
+		const unchanged = ( before: Map< string, string >, after: Map< string, string > ) => {
+			let same = true;
+			for ( const [ id, record ] of after ) {
+				if ( perpetual.has( id ) ) continue;
+				if ( before.get( id ) === record ) { streaks.delete( id ); continue; }
+				const streak = ( streaks.get( id ) ?? 0 ) + 1;
+				streaks.set( id, streak );
+				if ( streak >= PERPETUAL_TICKS ) perpetual.add( id );
+				else same = false;
+			}
+			for ( const id of before.keys() ) if ( ! after.has( id ) && ! perpetual.has( id ) ) same = false;
+			return same;
+		};
 		const content = () => ( {
 			rendered: new Map( [ ...document.images ].map( image => [ image, image.getClientRects().length > 0 ] ) ),
 			sources: new Map( [ ...document.images ].map( image =>
@@ -756,7 +810,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 				continue;
 			}
 			const current = snapshot();
-			quiet = current === previous ? quiet + 1 : 0;
+			quiet = unchanged( previous, current ) ? quiet + 1 : 0;
 			previous = current;
 			// A display:none device variant cannot be reached by scrolling. Its
 			// pending native lazy images do not describe this width's geometry;
