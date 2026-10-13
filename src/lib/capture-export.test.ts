@@ -2483,7 +2483,7 @@ describe( 'exportWebsiteCapture', () => {
 					'https://example.com/treatments': {
 						html: 'html/treatments.html',
 						interactions: {
-							schema: 'data-liberation/interaction-states/v2',
+							schema: 'blocks-engine-capture/interaction-states/v2',
 							sourceUrl: 'https://example.com/treatments',
 							viewport: { width: 1440, height: 900 },
 							capturedAt: '2026-08-22T00:00:00.000Z',
