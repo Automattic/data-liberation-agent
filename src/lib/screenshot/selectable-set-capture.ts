@@ -479,13 +479,15 @@ export async function captureSelectableSetStates(
 					const keptFrameAttributes = [ 'title', 'allow', 'allowfullscreen', 'loading', 'referrerpolicy', 'class' ];
 					Array.from( clone.querySelectorAll( 'iframe' ) ).forEach( ( frame, index ) => {
 						const live = liveFrames[ index ];
+						// A frame with no src of its own or with srcdoc is not a page to link to.
+						const rawSource = live?.hasAttribute( 'srcdoc' ) ? undefined : live?.getAttribute( 'src' )?.trim();
 						let source: URL | undefined;
-						try {
-							// A frame with no src of its own or with srcdoc is not a page to link to.
-							if ( !live?.getAttribute( 'src' )?.trim() || live.hasAttribute( 'srcdoc' ) ) throw new Error( 'no src' );
-							source = new URL( live.getAttribute( 'src' ) ?? '', document.baseURI );
-						} catch {
-							source = undefined;
+						if ( rawSource ) {
+							try {
+								source = new URL( rawSource, document.baseURI );
+							} catch {
+								source = undefined;
+							}
 						}
 						const box = live?.getBoundingClientRect();
 						// Opacity is not checked: a panel often fades in on scroll, so a frame inside
