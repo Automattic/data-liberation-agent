@@ -87,7 +87,7 @@ it.skipIf( skipBrowser )( 'does not overwrite an ancestor edited after its captu
 		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
 		const baseline = ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ).replace( 'id="header" class="closed"', 'id="header" class="owner-edited"' );
 		const portable = wireCapturedDialogs( baseline, report.states );
-		expect( portable ).toContain( 'data-dla-dialog-ancestor-unverified="portable-owner-mismatch"' );
+		expect( portable ).toContain( 'data-blocks-engine-capture-dialog-ancestor-unverified="portable-owner-mismatch"' );
 		await page.setContent( portable );
 		await page.locator( '#a' ).click();
 		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'owner-edited' );
@@ -108,8 +108,131 @@ it.skipIf( skipBrowser )( 'reports bounded and non-restored ancestor evidence wi
 			expect( state?.dialog?.ancestorState ).toMatchObject( { status: 'unverified', reason } );
 			expect( JSON.stringify( state?.dialog?.ancestorState ).length ).toBeLessThan( 32768 );
 			const portable = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), [ state! ] );
-			expect( portable ).not.toContain( 'data-dla-dialog-ancestor-state=' );
+			expect( portable ).not.toContain( 'data-blocks-engine-capture-dialog-ancestor-state=' );
 			await page.close();
 		}
+	} finally { await browser.close(); }
+}, 30_000 );
+
+// Squarespace-style overlay: the burger only toggles a body class, and the
+// full-screen menu is shown by `.menu-open .overlay`. It is a modal, so it
+// keeps its own mount, but the class must still be recorded and replayed.
+// Escape closes it with a fade, so the probe must not toggle it open again.
+it.skipIf( skipBrowser )( 'records and replays the ancestor class that shows a modal menu', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	try {
+		await page.setContent( `<!doctype html><style>
+		body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff;transition:opacity .4s,visibility .6s}
+		.menu-open .overlay{opacity:1;visibility:visible}
+		</style><body class="page"><header id="header" class="dark header"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header><main>Body</main>
+		<script>const header=document.getElementById('header');
+		const set=open=>{document.body.classList.toggle('menu-open',open);header.classList.remove(open?'dark':'light');header.classList.add(open?'light':'dark');};
+		document.getElementById('burger').addEventListener('click',()=>set(!document.body.classList.contains('menu-open')));
+		addEventListener('keydown',event=>{if(event.key==='Escape')set(false);});</script>` );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'burger' );
+		expect( state?.dialog ).toMatchObject( {
+			presentation: 'modal',
+			ancestorState: { status: 'verified', ancestors: [
+				{ selector: '#header', tag: 'header', depth: 1, closed: { class: 'dark header' }, opened: { class: 'header light' } },
+				{ selector: 'body', tag: 'body', depth: 2, closed: { class: 'page' }, opened: { class: 'page menu-open' } },
+			] },
+		} );
+		// Closing re-added the header's theme class in a new order; as tokens it is restored.
+		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'header dark' );
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page' );
+		const portable = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states );
+		await page.setContent( portable );
+		expect( await page.locator( '#burger + [data-blocks-engine-capture-dialog-panel]:not([data-blocks-engine-capture-observed-placement])' ).count() ).toBe( 1 );
+		await page.locator( '#burger' ).click();
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page menu-open' );
+		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'header light' );
+		await page.keyboard.press( 'Escape' );
+		expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( 'page' );
+		expect( await page.locator( '#header' ).getAttribute( 'class' ) ).toBe( 'header dark' );
+	} finally { await browser.close(); }
+}, 30_000 );
+
+// Squarespace's body carries its whole style configuration as classes, over
+// the 2 KiB Blocks Engine keeps per value. Only the changed tokens are recorded
+// and replayed, at 3 KB (under DLA's own 4 KiB bound) and beyond it.
+for ( const [ size, count ] of [ [ '3 KB', 170 ], [ '7 KB', 400 ] ] as const ) {
+	it.skipIf( skipBrowser )( `records only the changed tokens of a ${ size } ancestor class list`, async () => {
+		const browser = await chromium.launch( { headless: true } );
+		const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+		const config = Array.from( { length: count }, ( _, index ) => `tweak-setting-${ index }` ).join( ' ' );
+		try {
+			await page.setContent( `<!doctype html><style>
+			body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff}
+			.menu-open .overlay{opacity:1;visibility:visible}
+			</style><body class="${ config } menu-closed"><header id="header"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header><main>Body</main>
+			<script>document.getElementById('burger').addEventListener('click',()=>{document.body.classList.add('menu-open');document.body.classList.remove('menu-closed');});
+			addEventListener('keydown',event=>{if(event.key==='Escape'){document.body.classList.remove('menu-open');document.body.classList.add('menu-closed');}});</script>` );
+			expect( Buffer.byteLength( config ) ).toBeGreaterThan( 2048 );
+			if ( count === 170 ) expect( Buffer.byteLength( config ) ).toBeLessThan( 4096 );
+			const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+			const state = report.states.find( item => item.trigger.id === 'burger' );
+			expect( state?.dialog?.ancestorState ).toEqual( expect.objectContaining( {
+				status: 'verified',
+				ancestors: [ { selector: 'body', tag: 'body', depth: 2, closed: { class: 'tweak-setting-0 tweak-setting-1 tweak-setting-2 menu-closed' }, opened: { class: 'tweak-setting-0 tweak-setting-1 tweak-setting-2 menu-open' }, classTokensOnly: true } ],
+			} ) );
+			await page.setContent( wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states ) );
+			await page.locator( '#burger' ).click();
+			expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-open` );
+			await page.keyboard.press( 'Escape' );
+			expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( `${ config } menu-closed` );
+		} finally { await browser.close(); }
+	}, 30_000 );
+}
+
+// Opening only adds a class to a long-classed header that wraps a nearer,
+// unchanged header. The row keeps unchanged tokens, so a consumer that matches
+// the nearest ancestor with the row's tag and closed tokens finds the outer
+// header rather than the inner one.
+it.skipIf( skipBrowser )( 'keeps identifying tokens when opening only adds to a long class list', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	const config = Array.from( { length: 200 }, ( _, index ) => `config-${ index }` ).join( ' ' );
+	try {
+		await page.setContent( `<!doctype html><style>
+		body{margin:0}.overlay{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff}
+		.open .overlay{opacity:1;visibility:visible}
+		</style><header id="outer" class="${ config }"><header id="inner" class="bar"><button id="burger">Open Menu</button><div class="overlay"><a href="/about">About</a></div></header></header>
+		<script>document.getElementById('burger').addEventListener('click',()=>document.getElementById('outer').classList.add('open'));
+		addEventListener('keydown',event=>{if(event.key==='Escape')document.getElementById('outer').classList.remove('open');});</script>` );
+		expect( Buffer.byteLength( config ) ).toBeGreaterThan( 2048 );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const rows = report.states.find( item => item.trigger.id === 'burger' )?.dialog?.ancestorState?.ancestors ?? [];
+		expect( rows ).toEqual( [ { selector: '#outer', tag: 'header', depth: 2, closed: { class: 'config-0 config-1 config-2' }, opened: { class: 'config-0 config-1 config-2 open' }, classTokensOnly: true } ] );
+		// Blocks Engine's lookup: the nearest ancestor with the tag and every closed token.
+		const matched = await page.evaluate( row => {
+			const wanted = row.closed.class!.split( /\s+/ ).filter( Boolean );
+			for ( let node = document.getElementById( 'burger' )!.parentElement; node; node = node.parentElement ) {
+				if ( node.tagName.toLowerCase() === row.tag && wanted.every( token => node!.classList.contains( token ) ) ) return node.id;
+			}
+			return null;
+		}, rows[ 0 ]! );
+		expect( matched ).toBe( 'outer' );
+		await page.setContent( wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), report.states ) );
+		await page.locator( '#burger' ).click();
+		expect( await page.locator( '#outer' ).getAttribute( 'class' ) ).toBe( `${ config } open` );
+		expect( await page.locator( '#inner' ).getAttribute( 'class' ) ).toBe( 'bar' );
+		await page.keyboard.press( 'Escape' );
+		expect( await page.locator( '#outer' ).getAttribute( 'class' ) ).toBe( config );
+	} finally { await browser.close(); }
+}, 30_000 );
+
+it.skipIf( skipBrowser )( 'adds no ancestor evidence to a modal that leaves its ancestors unchanged', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	try {
+		await page.setContent( `<!doctype html><body><header><button id="burger">Open Menu</button></header><script>
+		document.getElementById('burger').addEventListener('click',()=>{const nav=document.createElement('nav');nav.style.cssText='position:fixed;inset:0;background:#fff';nav.innerHTML='<a href="/about">About</a>';document.body.append(nav);
+		addEventListener('keydown',()=>nav.remove(),{once:true});});</script>` );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'burger' );
+		expect( state?.dialog?.presentation ).toBe( 'modal' );
+		expect( state?.dialog ).not.toHaveProperty( 'ancestorState' );
 	} finally { await browser.close(); }
 }, 30_000 );

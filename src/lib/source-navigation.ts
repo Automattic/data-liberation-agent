@@ -10,9 +10,18 @@ import { nonHtmlDocumentError } from './screenshot/absent-document.js';
 import { documentRequestUrl } from './url/route-key.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, bytes: 2 * 1024 * 1024, refreshDelayMs: 5_000 } as const;
+export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, refreshDelayMs: 5_000 } as const;
+/**
+ * Per-request bound for the serial unscheduled-link probe (up to 32 links, one
+ * after another). Navigation hops are bounded by the navigation budget alone;
+ * this keeps one unresponsive candidate from stalling the whole probe pass.
+ */
+export const SOURCE_LINK_PROBE_REQUEST_MS = 5_000;
+/** Diagnostic code for a delivered source document whose `load` event did not fire within the navigation budget. */
+export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
 export class SourceNavigationError extends Error {}
 export type RedirectMechanism = 'http' | 'refresh-header' | 'meta-refresh';
@@ -20,7 +29,7 @@ interface DocumentResponse { url: string; status: number; headers: Record<string
 interface RenderedResponse { url: string; status: number; headers: Record<string, string>; body: Buffer }
 interface RedirectDeclaration { mechanism: RedirectMechanism; target: string; delayMs: number; reload?: true }
 export interface ExternalBoundary {
-	schema: 'data-liberation/source-outcome/v1';
+	schema: 'blocks-engine-capture/source-outcome/v1';
 	kind: 'external-redirect';
 	requestedUrl: string;
 	/** Shared-origin ownership boundary, when narrower than the HTTP site. */
@@ -45,10 +54,16 @@ async function readSourceResponse(route: Route, url: string, timeout: number): P
 	const acquired = await route.fetch({url, maxRedirects: 0, maxRetries: 0, timeout});
 	try {
 		const headers = acquired.headers();
-		if (Number(headers['content-length'] ?? 0) > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
+		const status = acquired.status();
+		const declared = Object.fromEntries(['location', 'refresh', 'content-type'].filter(key => headers[key] !== undefined).map(key => [key, headers[key]!]));
+		// A successful non-HTML response is an absent page (nonHtmlDocumentError):
+		// its bytes are never parsed or rendered, so the document byte budget does
+		// not apply. Binary bytes decoded as UTF-8 would also grow up to 3x.
+		if (status >= 200 && status < 300 && nonHtmlDocumentError(headers['content-type'])) return {rendered: {url, status, headers, body: Buffer.alloc(0)}, response: {url, status, headers: declared, body: ''}};
+		if (Number(headers['content-length'] ?? 0) > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${SOURCE_DOCUMENT_MAX_BYTES} bytes; Content-Length)`);
 		const body = await acquired.body();
-		if (body.length > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source document exceeds navigation byte budget');
-		return {rendered: {url, status: acquired.status(), headers, body}, response: {url, status: acquired.status(), headers: Object.fromEntries(['location', 'refresh', 'content-type'].filter(key => headers[key] !== undefined).map(key => [key, headers[key]!])), body: body.toString('utf8')}};
+		if (body.length > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${body.length} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`);
+		return {rendered: {url, status, headers, body}, response: {url, status, headers: declared, body: body.toString('utf8')}};
 	} finally { await acquired.dispose(); }
 }
 
@@ -111,13 +126,17 @@ export function documentRedirect(response: DocumentResponse): RedirectDeclaratio
 	return {mechanism, target: new URL(address, baseUrl).href, delayMs};
 }
 
-/** Confined raw source evidence retains declarations; public records expose no destination query/path. */
+/**
+ * Confined raw source evidence retains complete declarations: at most the
+ * navigation hop limit of document-policy-bounded responses. Terminal documents
+ * are not retained here. Public records expose no destination query/path.
+ */
 export function storeExternalBoundary(directory: string, observation: BoundaryObservation, viewport: number, browserProfile: ExternalBoundary['browserProfile']): ExternalBoundary {
 	const bytes = JSON.stringify(observation);
 	const path = `source-outcomes/${randomUUID()}.json`;
 	mkdirSync(join(directory, 'source-outcomes'), {recursive: true});
 	writeFileSync(join(directory, path), bytes);
-	return {schema: 'data-liberation/source-outcome/v1', kind: 'external-redirect', requestedUrl: observation.requestedUrl,
+	return {schema: 'blocks-engine-capture/source-outcome/v1', kind: 'external-redirect', requestedUrl: observation.requestedUrl,
 		...(observation.routeScope ? {routeScope: observation.routeScope} : {}),
 		initialStatus: observation.responses[0]!.status, mechanism: observation.declaration.mechanism,
 		target: {origin: new URL(observation.declaration.target).origin, sha256: navigationDigest(observation.declaration.target), fetched: false},
@@ -130,7 +149,7 @@ export function boundaryIdentity(outcome: ExternalBoundary): string {
 
 /** Re-derive the frozen boundary from hashed raw responses, never from the current source. */
 export function validateExternalBoundary(outcome: ExternalBoundary, bytes: Buffer): void {
-	if (outcome.schema !== 'data-liberation/source-outcome/v1' || outcome.kind !== 'external-redirect' || outcome.target?.fetched !== false ||
+	if (outcome.schema !== 'blocks-engine-capture/source-outcome/v1' || outcome.kind !== 'external-redirect' || outcome.target?.fetched !== false ||
 		!Number.isFinite(outcome.viewport) || outcome.viewport <= 0 || typeof outcome.browserProfile?.isMobile !== 'boolean' || typeof outcome.browserProfile?.hasTouch !== 'boolean') throw new Error('Invalid external source outcome');
 	const evidence = JSON.parse(bytes.toString()) as BoundaryObservation;
 	if (evidence.routeScope) validateRouteScope(evidence.routeScope);
@@ -141,7 +160,7 @@ export function validateExternalBoundary(outcome: ExternalBoundary, bytes: Buffe
 	const visited = new Set<string>();
 	let declaration: RedirectDeclaration | undefined;
 	for (const response of evidence.responses) {
-		if (response.url !== expected || visited.has(expected) || !sameHttpSite(safeTarget(response.url, false).href, evidence.requestedUrl) || !routeInScope(response.url, evidence.routeScope) || Buffer.byteLength(response.body) > SOURCE_NAVIGATION_LIMITS.bytes) throw new Error('Invalid source redirect response chain');
+		if (response.url !== expected || visited.has(expected) || !sameHttpSite(safeTarget(response.url, false).href, evidence.requestedUrl) || !routeInScope(response.url, evidence.routeScope) || Buffer.byteLength(response.body) > SOURCE_DOCUMENT_MAX_BYTES) throw new Error('Invalid source redirect response chain');
 		visited.add(expected);
 		declaration = documentRedirect(response);
 		if (!declaration) throw new Error('Source outcome lacks a redirect declaration');
@@ -168,9 +187,14 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
 		visited.add(current);
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) throw new SourceNavigationError('Source navigation time budget exhausted');
-		const response = await acquire(current, Math.min(5_000, remaining));
+		// Each hop may use what remains of the chain budget: a slow but healthy
+		// document must not fail under a tighter per-response cap. Callers that
+		// need a per-request bound (the link probe) apply it in `acquire`.
+		const response = await acquire(current, remaining);
 		if (Date.now() > deadline) throw new SourceNavigationError('Source navigation time budget exhausted');
-		if (response.url !== current || Buffer.byteLength(response.body) > SOURCE_NAVIGATION_LIMITS.bytes) throw new SourceNavigationError('Source response identity or byte budget mismatch');
+		if (response.url !== current) throw new SourceNavigationError('Source response identity mismatch');
+		const bytes = Buffer.byteLength(response.body);
+		if (bytes > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${bytes} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`);
 		const declaration = documentRedirect(response);
 		if (!declaration || declaration.reload) return {status: response.status, response, finalUrl, ...(declaration?.reload ? {reload: declaration} : {})};
 		responses.push(response);
@@ -189,8 +213,15 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * External declarations end at an inert
  * document, before any destination request, and are returned as evidence rather
  * than as portable HTML. Unknown script navigation is never classified as a redirect.
+ * A script reload of the delivered document is its own lifecycle, replayed through
+ * the bounded reload acquisition that baseline capture also accepts.
+ *
+ * The time budget bounds document arrival (`domcontentloaded`); a document that
+ * never arrives fails with a (retryable) timeout. The `load` event is awaited
+ * within what remains of the same budget, and `loadIncomplete` reports a
+ * delivered document whose subresources were still pending when it ran out.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope} = {}): Promise<{response: Response | null; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
@@ -202,11 +233,18 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 	let rendered: RenderedResponse | undefined;
 	let acquired = false;
 	let delivered = false;
+	let executedDocument: string | undefined;
+	let scriptReloads = 0;
 	const guard = async (route: Route) => {
 		const request = route.request();
 		if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) { await route.fallback(); return; }
 		try {
 			const address = documentRequestUrl(request.url());
+			if (delivered && address === executedDocument && request.method() === 'GET') {
+				if (scriptReloads++ >= SOURCE_NAVIGATION_LIMITS.hops) throw new SourceNavigationError('Source reload budget exhausted');
+				await replaySourceReload(route, address, Math.max(1, deadline - Date.now()));
+				return;
+			}
 			if (address !== expected || delivered) throw new SourceNavigationError('Unexplained source main-frame navigation');
 			if (!acquired) {
 				const acquireResponse = async (current: string, timeout: number) => {
@@ -242,23 +280,55 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 			else if (redirectedTo || address !== rendered!.url) {
 				// No scripts from a different document execute under the requested URL.
 				await route.fulfill({status: rendered!.status, contentType: rendered!.headers['content-type'] ?? 'text/html', body: ''});
-			} else await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});
+			} else {
+				executedDocument = address;
+				await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});
+			}
 		} catch (error) {
 			failure = error instanceof Error ? error : new Error(String(error));
 			await route.abort('blockedbyclient').catch(() => {});
 		}
 	};
-	await page.route('**/*', guard);
+	// Removing a route handler while it still holds an intercepted request makes
+	// Playwright fall the request through to the network, and for a navigation
+	// that `goto` already abandoned that fallback never settles, so `unroute`
+	// hangs. Every guard await is bounded by the navigation deadline, so waiting
+	// for in-flight invocations before unrouting is itself bounded.
+	const inFlight = new Set<Promise<void>>();
+	const tracked = (route: Route): Promise<void> => {
+		const invocation = guard(route).finally(() => { inFlight.delete(invocation); });
+		inFlight.add(invocation);
+		return invocation;
+	};
+	const settled = async () => { while (inFlight.size) await Promise.allSettled([...inFlight]); };
+	await page.route('**/*', tracked);
+	// Navigation is complete once the document has been parsed; capture reads
+	// the DOM next and runs its own bounded readiness (settle, lazy-load sweep,
+	// image decode, fonts). The full `load` event additionally waits for every
+	// subresource, so a slow image or script on a healthy origin must not fail
+	// the route: it is awaited best-effort within the remaining budget only.
+	const open = (address: string) => page.goto(address, {waitUntil: 'domcontentloaded', timeout: Math.max(1, deadline - Date.now())});
 	try {
-		let response = await page.goto(requestedUrl, {waitUntil: 'load', timeout: Math.max(1, deadline - Date.now())});
+		let response = await open(requestedUrl);
 		if (failure) throw failure;
 		if (!boundary && !redirectedTo && rendered && finalUrl !== requestedUrl) {
 			expected = rendered.url;
 			delivered = false;
-			response = await page.goto(finalUrl, {waitUntil: 'load', timeout: Math.max(1, deadline - Date.now())});
+			response = await open(finalUrl);
 			if (failure) throw failure;
 		}
-		return {response, ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {})};
-	} catch (error) { throw failure ?? error; }
-	finally { await page.unroute('**/*', guard); }
+		// A same-document reload the source starts before `load` settles here,
+		// through the guard, exactly as it did while navigation awaited `load`.
+		const loaded = await page.waitForLoadState('load', {timeout: Math.max(1, Math.min(deadline - Date.now(), options.loadWaitMs ?? Infinity))}).then(() => true, () => false);
+		if (failure) throw failure;
+		return {response, ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {})};
+	} catch (error) {
+		// A `goto` timeout can precede the guard's own bounded outcome; report
+		// the guard's failure (policy or acquisition timeout) once it settles.
+		await settled();
+		throw failure ?? error;
+	} finally {
+		await settled();
+		await page.unroute('**/*', tracked);
+	}
 }

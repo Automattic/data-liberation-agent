@@ -4,7 +4,7 @@ import { withEvaluateTimeout } from './page-helpers.js';
 
 /** Facts from public Web Animations/Typed OM APIs, never framework configuration. */
 export interface NativeViewTimelineCapture {
-	schema: 'data-liberation/native-view-timelines/v1';
+	schema: 'blocks-engine-capture/native-view-timelines/v1';
 	profile: string;
 	url: string;
 	viewport: { width: number; height: number } | null;
@@ -20,8 +20,8 @@ export interface NativeViewTimelineCapture {
 const SNAPSHOT = `(async () => {
  const result=[];
  if(typeof ViewTimeline==='undefined')return result;
- let next=1+Math.max(-1,...Array.from(document.querySelectorAll('[data-dla-native-node]'),node=>Number(node.getAttribute('data-dla-native-node').replace(/^n/,''))).filter(Number.isFinite));
- const identity=node=>{if(!node)return null;let token=node.getAttribute('data-dla-native-node');if(!token){token='n'+next++;node.setAttribute('data-dla-native-node',token)}return token};
+ let next=1+Math.max(-1,...Array.from(document.querySelectorAll('[data-blocks-engine-capture-native-node]'),node=>Number(node.getAttribute('data-blocks-engine-capture-native-node').replace(/^n/,''))).filter(Number.isFinite));
+ const identity=node=>{if(!node)return null;let token=node.getAttribute('data-blocks-engine-capture-native-node');if(!token){token='n'+next++;node.setAttribute('data-blocks-engine-capture-native-node',token)}return token};
  const range=value=>typeof value==='string'?value:{rangeName:value.rangeName,offset:value.offset.toString()};
  const animations=document.getAnimations().filter(animation=>animation.timeline instanceof ViewTimeline&&!(animation instanceof CSSAnimation)&&!(animation instanceof CSSTransition));
  const alignment=new Map();
@@ -80,7 +80,7 @@ export function observedRange( ranges: Range[], extents: number[] ): { value: st
 
 export async function captureNativeViewTimelines( page: Page, profile: string, evaluateTimeoutMs = 5_000 ): Promise<NativeViewTimelineCapture> {
 	const viewport = page.viewportSize();
-	const report: NativeViewTimelineCapture = { schema: 'data-liberation/native-view-timelines/v1', profile, url: page.url(), viewport, probeViewports: [ viewport ], samples: [], preserved: 0, losses: [], status: 'observed', failures: [] };
+	const report: NativeViewTimelineCapture = { schema: 'blocks-engine-capture/native-view-timelines/v1', profile, url: page.url(), viewport, probeViewports: [ viewport ], samples: [], preserved: 0, losses: [], status: 'observed', failures: [] };
 	try { return await observeNativeViewTimelines( page, profile, evaluateTimeoutMs, report ); }
 	catch ( error ) {
 		report.status = 'unproven';
@@ -154,16 +154,16 @@ async function observeNativeViewTimelines( page: Page, profile: string, evaluate
 		report.preserved++;
 	}
 	await bounded( page.evaluate( ({ configs, profile, losses }) => {
-		for ( const node of document.querySelectorAll( '[data-dla-native-effects]' ) ) node.removeAttribute( 'data-dla-native-effects' );
+		for ( const node of document.querySelectorAll( '[data-blocks-engine-capture-native-effects]' ) ) node.removeAttribute( 'data-blocks-engine-capture-native-effects' );
 		for ( const { target, config } of configs ) {
-			const node = document.querySelector( `[data-dla-native-node="${ target }"]` );
+			const node = document.querySelector( `[data-blocks-engine-capture-native-node="${ target }"]` );
 			if ( ! node ) continue;
-			const effects = JSON.parse( node.getAttribute( 'data-dla-native-effects' ) || '[]' );
+			const effects = JSON.parse( node.getAttribute( 'data-blocks-engine-capture-native-effects' ) || '[]' );
 			effects.push( config );
-			node.setAttribute( 'data-dla-native-effects', JSON.stringify( effects ) );
-			node.setAttribute( 'data-dla-native-profile', profile );
+			node.setAttribute( 'data-blocks-engine-capture-native-effects', JSON.stringify( effects ) );
+			node.setAttribute( 'data-blocks-engine-capture-native-profile', profile );
 		}
-		if ( losses.length ) document.body.setAttribute( 'data-dla-native-losses', JSON.stringify( losses ) );
+		if ( losses.length ) document.body.setAttribute( 'data-blocks-engine-capture-native-losses', JSON.stringify( losses ) );
 	}, { configs, profile, losses: report.losses } ), 'emit bindings' );
 	return report;
 }

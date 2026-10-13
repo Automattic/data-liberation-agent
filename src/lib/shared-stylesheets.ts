@@ -35,9 +35,9 @@ export function portableInlineStyle(
 	// Exported documents carry no executable script, so identifying attributes a
 	// source runtime used to track its own style tags (Wix `id`/`data-href`, for
 	// example) cannot affect rendering once the style moves to a link. DLA's own
-	// `data-dla-*` markers are selected by later export passes and stay inline.
+	// `data-blocks-engine-capture-*` markers are selected by later export passes and stay inline.
 	const significant = attributes.replace(
-		/(^|\s)(?:id|class|rel|data-(?!dla-)[\w.:-]+)\s*=\s*(["'])[\s\S]*?\2/gi,
+		/(^|\s)(?:id|class|rel|data-(?!blocks-engine-capture-)[\w.:-]+)\s*=\s*(["'])[\s\S]*?\2/gi,
 		'$1'
 	);
 	const mediaMatch = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( significant );

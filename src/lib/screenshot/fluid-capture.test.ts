@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
-import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 	let browser: Browser;
@@ -23,9 +23,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const resize = vi.spyOn( page, 'setViewportSize' );
 			const result = await learner( page, { settleMs: 10 } );
 			expect( resize ).not.toHaveBeenCalled();
-			expect( result ).toEqual( { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} } );
+			expect( result ).toEqual( { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] } );
 			expect( await page.locator( '#priority' ).getAttribute( 'style' ) ).toBe( original );
-			expect( await page.locator( '[data-dla-fluid-id],[data-dla-fluid-segment]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id],[data-blocks-engine-capture-fluid-segment]' ).count() ).toBe( 0 );
 			if ( process.env.DLA_FLUID_EVIDENCE ) {
 				mkdirSync( process.env.DLA_FLUID_EVIDENCE, { recursive: true } );
 				writeFileSync( `${ process.env.DLA_FLUID_EVIDENCE }/inset-only.json`, JSON.stringify( { result, style: original, resizes: resize.mock.calls.length, viewport: page.viewportSize() }, null, 2 ) );
@@ -60,13 +60,15 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			// to Node or storing instrumentation on the source's window.
 			const rest = await page.evaluateHandle( () => {
 				const serialize = JSON.stringify;
-				const snapshots: { width: number; json: string }[] = [];
+				// Rest serializes one 9-field row per tagged element; keep the latest
+				// row per element for each width the sweep rested at.
+				const snapshots: { width: number; rows: Record< string, string > }[] = [];
 				JSON.stringify = ( value, replacer, space ) => {
 					const json: string = Reflect.apply( serialize, JSON, [ value, replacer, space ] );
-					if ( Array.isArray( value ) && value.length && value.every( row => Array.isArray( row ) && row.length === 9 && typeof row[ 0 ] === 'string' && row[ 0 ].startsWith( 'desktop-' ) ) ) {
-					const previous = snapshots.at( -1 );
-						if ( previous?.width === innerWidth ) previous.json = json;
-						else snapshots.push( { width: innerWidth, json } );
+					if ( Array.isArray( value ) && value.length === 9 && typeof value[ 0 ] === 'string' && value[ 0 ].startsWith( 'desktop-' ) ) {
+						let current = snapshots.at( -1 );
+						if ( current?.width !== innerWidth ) snapshots.push( current = { width: innerWidth, rows: {} } );
+						current.rows[ value[ 0 ] ] = json;
 					}
 					return json;
 				};
@@ -95,9 +97,15 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const learningEvaluations = rendererEvaluations;
 			const snapshots = await rest.evaluate( state => state.read() );
 			await rest.evaluate( state => state.cleanup() ); await rest.dispose();
-			expect( widths ).toEqual( DEFAULT_SWEEP_WIDTHS );
-			expect( measurements ).toHaveLength( 17 );
-			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...DEFAULT_SWEEP_WIDTHS, 1440 ] );
+			// The probe widths come first, then the rest of the coarse widths; each
+			// later round bisects the intervals some series leaves unexplained:
+			// the tablet-band switches and the font-size clamp past 1440. 767 and
+			// 1280 sit inside straight runs of every series and are skipped.
+			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 801, 1536, 783, 1840, 775, 791, 769, 799, 800 ];
+			expect( widths ).toEqual( LADDER_ORDER );
+			expect( result.sampledWidths ).toEqual( [ ...LADDER_ORDER ].sort( ( a, b ) => a - b ) );
+			expect( measurements ).toHaveLength( LADDER_ORDER.length );
+			expect( snapshots.map( snapshot => snapshot.width ) ).toEqual( [ ...LADDER_ORDER, 1440 ] );
 			const first = measurements[ 0 ] as Array<{ id: string; values: Record<string, number | null> }>;
 			expect( first.find( entry => entry.id === 'desktop-2' )!.values ).toMatchObject( { width: null, height: 12, 'font-size': null, 'transform-x': null, 'inset-top': null, '--literal': 4 } );
 			expect( first.find( entry => entry.id === 'desktop-5' )!.values ).toMatchObject( { width: 195, 'inset-top': null, 'inset-left': null } );
@@ -105,13 +113,13 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			// skip the important prefix, but keep the first complete duplicate.
 			expect( first.find( entry => entry.id === 'desktop-6' )!.values ).toMatchObject( { 'inset-top': 19.5, 'inset-left': 39 } );
 			expect( first.find( entry => entry.id === 'desktop-7' )!.values ).toMatchObject( { 'inset-top': 9.75, 'inset-left': 19.5 } );
-			const literalRest = JSON.parse( snapshots[ 0 ]!.json ).find( ( row: unknown[] ) => row[ 0 ] === 'desktop-2' );
+			const literalRest = JSON.parse( snapshots[ 0 ]!.rows[ 'desktop-2' ]! );
 			expect( literalRest[ 1 ].slice( 0, 3 ) ).toEqual( [ 0.5, 12, 20 ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( handles ).toEqual( { created: 1, disposed: 1 } );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 			expect( await page.locator( '#item[data-replaced]' ).count() ).toBe( 1 );
-			const css = await page.locator( 'style[data-dla-fluid-rules]' ).allTextContents();
+			const css = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).allTextContents();
 			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
 			const html = await page.content(); await copy.setContent( html );
 			const geometry: unknown[] = [];
@@ -145,6 +153,26 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			if ( ! otherGeometry ) expect( resize ).not.toHaveBeenCalled();
 		} finally { await page.close(); }
 	}, 20_000 );
+
+	it( 'reaches rest at every width when a script animates an element forever', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			// #spinner is rewritten every frame (a perpetual animation): it can never be
+			// quiet, so it must not hold every width to the full rest deadline.
+			await page.setContent( `<div id="box" style="width:720px">Box</div><div id="spinner" style="transform:translate3d(0px, 0px, 0px)">Spin</div>
+				<script>const update=()=>{document.querySelector('#box').style.width=innerWidth/2+'px'};addEventListener('resize',update);update();
+				let turn=0;const spin=()=>{turn=(turn+3)%360;document.querySelector('#spinner').style.transform='translate3d('+turn+'px, 0px, 0px)';requestAnimationFrame(spin)};spin();</script>` );
+			const widths = [ 390, 768, 1024, 1440 ];
+			const started = Date.now();
+			const result = await learnAndApplyFluidGeometry( page, { widths, settleMs: 30 } );
+			const elapsed = Date.now() - started;
+			expect( result.applied ).toBeGreaterThan( 0 );
+			// Before: every width spent its whole rest deadline (settleMs + 3.5 s), at least 14 s
+			// for these four widths. Movers are classified once and excluded, so each later
+			// width only needs its own quiet window.
+			expect( elapsed ).toBeLessThan( widths.length * 3_500 * 0.6 );
+		} finally { await page.close(); }
+	}, 40_000 );
 
 	it( 'rejects sparse relative-left fits when authored media changes position during the sweep', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
@@ -242,10 +270,10 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( order ).toEqual( reject ? [ 'prepare:390', 'sample:390', 'prepare:768' ] : [ 'prepare:390', 'sample:390', 'prepare:768', 'sample:768' ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( await page.locator( '#untagged' ).getAttribute( 'style' ) ).toBeNull();
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 			if ( reject ) {
 				expect( await declaredGeometry() ).toEqual( initialStyle );
-				expect( await page.locator( '[data-dla-fluid-segment],style[data-dla-fluid-rules]' ).count() ).toBe( 0 );
+				expect( await page.locator( '[data-blocks-engine-capture-fluid-segment],style[data-blocks-engine-capture-fluid-rules]' ).count() ).toBe( 0 );
 			}
 		} finally { await page.close(); }
 	}, 20_000 );
@@ -316,7 +344,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	it( 'never learns a top offset: anchor targets move with their section instead', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
-			<section id="feature-section" style="position:relative;height:400px"><span id="features" data-dla-anchor-target="features" data-dla-anchor-source-id="feature-section" style="position:absolute;width:0;height:0"></span></section>
+			<section id="feature-section" style="position:relative;height:400px"><span id="features" data-blocks-engine-capture-anchor-target="features" data-blocks-engine-capture-anchor-source-id="feature-section" style="position:absolute;width:0;height:0"></span></section>
 			<div id="ordinary" style="position:absolute;top:144px;width:100px;height:100px"></div>
 		` );
 
@@ -643,12 +671,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		// spans 88%, so no single vw expression reproduces both regimes. The
 		// rules live in a stylesheet keyed by a persistent attribute, and the
 		// runtime's inline pixels must not outrank them.
-		const style = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		const style = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent();
 		expect( style ).toContain( '@media (max-width:767px)' );
 		expect( style ).toContain( '21.42vw' );
 		expect( style ).toContain( '@media (min-width:768px)' );
 		expect( style ).toContain( '23.36vw' );
-		expect( await page.locator( '#portfolio' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeTruthy();
+		expect( await page.locator( '#portfolio' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeTruthy();
 		expect( await page.locator( '#portfolio' ).getAttribute( 'style' ) ).not.toContain( 'font-size' );
 
 		// A width the sweep sampled on the mobile regime: the source's own
@@ -695,7 +723,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			settleMs: 50,
 		} );
 
-		expect( await page.locator( 'style[data-dla-fluid-rules]' ).textContent() ).toContain( '21.42vw' );
+		expect( await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent() ).toContain( '21.42vw' );
 		// A late runtime write (viewport resize, re-layout) would put back
 		// inline pixels, which outrank the stylesheet at every width. The
 		// capture must strip them until serialization.
@@ -866,8 +894,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( page.viewportSize()?.width ).toBe( 390 );
 			expect( await page.locator( '#wrapper-last, #wrapper-restore' ).count() ).toBe( 0 );
 			expect( await page.locator( 'p' ).allTextContents() ).toEqual( [ 'Last-width text', 'Restored-width text' ] );
-			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
-			expect( await page.locator( '#survivor' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeTruthy();
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
+			expect( await page.locator( '#survivor' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeTruthy();
 			expect( await page.locator( '#survivor' ).evaluate( element => getComputedStyle( element ).transform ) )
 				.toBe( 'matrix(1, 0, 0, 1, 78, 0)' );
 		} finally {
@@ -917,7 +945,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				[ 'restore-scale', 'matrix(2, 0, 0, 2, 754.776, 0)' ],
 			] ) {
 				expect( await page.locator( `#${ id }` ).evaluate( element => getComputedStyle( element ).transform ), `${ id } computed transform` ).toBe( matrix );
-				expect( await page.locator( `#${ id }` ).getAttribute( 'data-dla-fluid-segment' ), `${ id } must not get a learned segment` ).toBeNull();
+				expect( await page.locator( `#${ id }` ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ), `${ id } must not get a learned segment` ).toBeNull();
 			}
 		} finally {
 			await page.close();
@@ -963,12 +991,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			settleMs: 50,
 		} );
 
-		const style = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		const style = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent();
 		expect( style ).toContain( '@media (max-width:1023px)' );
 		expect( style ).toContain( 'calc(12vw + 37.5px)' );
 		expect( style ).toContain( '@media (min-width:1024px) and (max-width:1919px)' );
 		expect( style ).toContain( '@media (min-width:1920px)' );
-		expect( await page.locator( '#first-section' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeTruthy();
+		expect( await page.locator( '#first-section' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeTruthy();
 		expect( await page.locator( '#first-section' ).getAttribute( 'style' ) ).not.toContain( 'padding-top' );
 
 		// A late runtime write must not put inline pixels back above the rules.
@@ -1021,12 +1049,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			settleMs: 40,
 		} );
 
-		const rules = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		const rules = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).textContent();
 		expect( rules ).toContain( 'padding-top' );
 		expect( rules ).toContain( '@media' );
 		expect( await page.locator( '#hero' ).getAttribute( 'style' ) ).not.toContain( 'padding-top' );
 		expect( await page.locator( '#closed-menu' ).getAttribute( 'style' ) ).toContain( 'padding-top:240px' );
-		expect( await page.locator( '#closed-menu' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeNull();
+		expect( await page.locator( '#closed-menu' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeNull();
 		await page.setViewportSize( { width: 768, height: 900 } );
 		await page.waitForTimeout( 60 );
 		expect( Number.parseFloat( await page.locator( '#hero' ).evaluate( element => getComputedStyle( element ).paddingTop ) ) ).toBeCloseTo( 242.156, 0 );
@@ -1057,5 +1085,78 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally {
 			await page.close();
 		}
+	} );
+	describe( 'adaptive refinement', () => {
+		const series = ( values: Record< number, number > ) => Object.entries( values ).map( ( [ viewport, value ] ) => ( { viewport: Number( viewport ), value } ) );
+		const coarse = [ 390, 600, 768, 1024, 1440, 1920 ];
+		const sampled = ( rule: ( width: number ) => number, widths = coarse ) => series( Object.fromEntries( widths.map( width => [ width, rule( width ) ] ) ) );
+		it( 'refines nothing when every series is one line with a neighbour across each interval', () => {
+			expect( refinementWidths( [
+				sampled( () => 10 ),
+				sampled( width => width / 2 ),
+				sampled( width => width * 0.12 + 37.5 ),
+				// A straight side explains an interval: this clamp's knee sits on a sample.
+				sampled( width => Math.min( 512, width / 2 ) ),
+			], coarse ) ).toEqual( [] );
+		} );
+		it( 'bisects an unexplained interval with the ladder width nearest its midpoint', () => {
+			// 768–1024 (midpoint 896) refines at 801; 1024–1440 (1232) at 1280; 1440–1920 (1680) at 1536.
+			expect( refinementWidths( [ sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 801 ] );
+			expect( refinementWidths( [ sampled( width => Math.min( 1000, width * 0.85 ) ) ], coarse ) ).toEqual( [ 1280 ] );
+			expect( refinementWidths( [ sampled( width => Math.min( 1000, width * 0.6 ) ) ], coarse ) ).toEqual( [ 1536 ] );
+			// Separate changes refine in the same round; an interval beside one being
+			// refined waits, since that sample may give it a straight window.
+			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ) ], coarse ) ).toEqual( [ 767, 1280 ] );
+			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ), sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 767, 801, 1280 ] );
+		} );
+		it( 'refines a series that appears, vanishes or stops being pixels inside an interval', () => {
+			expect( refinementWidths( [ series( { 390: 1, 600: 1, 768: 1, 1024: 1, 1440: 1 } ) ], coarse ) ).toEqual( [ 1536 ] );
+			expect( refinementWidths( [ series( { 390: Number.NaN, 600: Number.NaN, 768: Number.NaN, 1024: 4, 1440: 4, 1920: 4 } ) ], coarse ) ).toEqual( [ 801 ] );
+			// Absent at both ends of an interval: nothing there to learn.
+			expect( refinementWidths( [ series( { 1024: 4, 1440: 4, 1920: 4 } ) ], coarse ) ).toEqual( [ 801 ] );
+			expect( refinementWidths( [ series( { 1440: 4, 1920: 4 } ) ], coarse ) ).toEqual( [ 1280 ] );
+		} );
+		it( 'samples each common rule shape with a handful of widths', () => {
+			// The whole sweep: coarse widths, then rounds until nothing is unexplained.
+			const sweep = ( rule: ( width: number ) => number ) => {
+				const widths = [ ...coarse ];
+				for ( let next = refinementWidths( [ sampled( rule, widths ) ], widths ); next.length; next = refinementWidths( [ sampled( rule, widths ) ], widths ) ) widths.push( ...next );
+				return widths.length;
+			};
+			expect( {
+				proportional: sweep( width => width / 2 ),
+				affine: sweep( width => width * 0.12 + 37.5 ),
+				'mobile switch': sweep( width => width < 768 ? width - 20 : width / 2 ),
+				'tablet-only regime': sweep( width => width >= 768 && width <= 800 ? 500 : width / 2 ),
+				'desktop switch': sweep( width => width < 992 ? width * 0.9 : width * 0.5 + 40 ),
+				'capped in the tablet gap': sweep( width => Math.min( 600, width * 0.6 ) ),
+				'capped on the desktop': sweep( width => Math.min( 900, width * 0.75 ) ),
+				'floored and capped': sweep( width => Math.max( 200, Math.min( 600, width * 0.5 ) ) ),
+				'switch inside the tablet band': sweep( width => width >= 783 ? 600 : 300 ),
+				'no relationship': sweep( width => Math.round( 400000 / width ) ),
+			} ).toEqual( {
+				proportional: 6, affine: 6, 'mobile switch': 7, 'tablet-only regime': 13, 'desktop switch': 7,
+				'capped in the tablet gap': 7, 'capped on the desktop': 7, 'floored and capped': 7,
+				'switch inside the tablet band': 9, 'no relationship': 10,
+			} );
+		} );
+		it( 'explains a varying value\'s container too, never a perpetual mover', () => {
+			const tracked = [ 390, 768, 1024 ].map( viewport => ( { viewport, value: viewport / 2, container: viewport } ) );
+			const fixed = [ 390, 768 ].map( viewport => ( { viewport, value: 40, container: viewport } ) );
+			const observations = new Map( [ [ 'desktop-0:width', tracked ], [ 'desktop-1:height', fixed ], [ 'desktop-2:width', tracked ] ] );
+			expect( refinementSeries( observations, new Set( [ 'desktop-2' ] ) ) ).toEqual( [
+				tracked, tracked.map( ( { viewport, container } ) => ( { viewport, value: container } ) ), fixed,
+			] );
+			// A parent that bends where its child is straight is refined (1024–1440
+			// waits beside 768–1024, whose sample may explain it).
+			const bending = [ 390, 600, 768, 1024, 1440, 1920 ].map( viewport => ( { viewport, value: viewport / 2, container: viewport === 1024 ? 900 : viewport } ) );
+			expect( refinementWidths( refinementSeries( new Map( [ [ 'desktop-0:width', bending ] ] ), new Set() ), coarse ) ).toEqual( [ 801, 1536 ] );
+		} );
+		it( 'stops once a change sits between adjacent ladder widths', () => {
+			const rule = ( width: number ) => width >= 783 ? 600 : 300;
+			expect( refinementWidths( [ sampled( rule, [ ...coarse, 775, 783, 801 ] ) ], [ ...coarse, 775, 783, 801 ] ) ).toEqual( [] );
+			// An explicit ladder bounds refinement the same way.
+			expect( refinementWidths( [ sampled( rule, [ 390, 1920 ] ) ], [ 390, 1920 ], [ 390, 1920 ] ) ).toEqual( [] );
+		} );
 	} );
 } );

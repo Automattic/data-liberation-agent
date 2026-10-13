@@ -49,7 +49,7 @@ export async function publishSite( options: PublishCliOptions ): Promise< Publis
 		} );
 	}
 	const directory = resolvePublishDirectory(options.directory);
-	const staging = target.attribution ? mkdtempSync(join(tmpdir(), 'dla-publish-')) : undefined;
+	const staging = target.attribution ? mkdtempSync(join(tmpdir(), 'liberation-publish-')) : undefined;
 	try {
 		if (staging) {
 			cpSync(directory, staging, { recursive: true, dereference: true });

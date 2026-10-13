@@ -405,7 +405,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 		for (const before of previous) {
 			for (let scope = before.parentElement, depth = 0; scope && depth < 8; scope = scope.parentElement, depth++) {
 				if (!next.some(after => scope!.contains(after)) || scope.querySelectorAll('img').length < 2) continue;
-				if (!scope.id) scope.id = `dla-gallery-${roots.length}`;
+				if (!scope.id) scope.id = `data-blocks-engine-capture-gallery-${roots.length}`;
 				roots.push('#' + CSS.escape(scope.id));
 				break;
 			}
@@ -426,7 +426,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 		let state: CapturedDialogInteraction | undefined;
 		try {
 			await page.locator(root).scrollIntoViewIfNeeded();
-			await page.locator(root).evaluate((element, width) => element.setAttribute('data-dla-gallery-capture-width', String(width)), page.viewportSize()?.width ?? 0);
+			await page.locator(root).evaluate((element, width) => element.setAttribute('data-blocks-engine-capture-gallery-capture-width', String(width)), page.viewportSize()?.width ?? 0);
 			let inline: CapturedGallery | null;
 			try {
 				inline = await collect(page, await describe(page, root));

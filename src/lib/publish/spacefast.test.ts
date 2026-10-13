@@ -9,7 +9,7 @@ import { PublishError } from './types.js';
 const dirs: string[] = [];
 
 function site(): string {
-	const dir = mkdtempSync( join( tmpdir(), 'dla-publish-' ) );
+	const dir = mkdtempSync( join( tmpdir(), 'liberation-publish-' ) );
 	dirs.push( dir );
 	writeFileSync( join( dir, 'index.html' ), '<h1>Home</h1>' );
 	mkdirSync( join( dir, 'blog' ), { recursive: true } );
@@ -179,7 +179,7 @@ describe( 'spacefastTarget', () => {
 	} );
 
 	it( 'refuses to publish an empty directory', async () => {
-		const empty = mkdtempSync( join( tmpdir(), 'dla-publish-' ) );
+		const empty = mkdtempSync( join( tmpdir(), 'liberation-publish-' ) );
 		dirs.push( empty );
 		await expect( spacefastTarget.publish( { directory: empty } ) ).rejects.toBeInstanceOf(
 			PublishError

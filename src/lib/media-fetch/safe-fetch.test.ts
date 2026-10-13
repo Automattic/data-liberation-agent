@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect } from 'vitest';
 import {
   assertPublicHttpUrl,
@@ -190,5 +192,64 @@ describe('headersForOrigin', () => {
     });
 
     expect(seenHeaders[0]?.cookie).toBeUndefined();
+  });
+});
+
+describe('network failures', () => {
+  it('names the network cause that Node fetch keeps off its message', async () => {
+    // A server that resets the connection, like a source refusing a client.
+    const server = createServer((req) => { req.socket.destroy(); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const url = `http://localtest.me:${(server.address() as AddressInfo).port}/`;
+      const error = await safeFetch(url, { timeoutMs: 5_000 }).then(() => undefined, (caught: unknown) => caught);
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toBe('fetch failed: other side closed (UND_ERR_SOCKET)');
+      // The original cause stays attached for callers that inspect it.
+      expect(((error as Error).cause as { code?: string }).code).toBe('UND_ERR_SOCKET');
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('names the cause when the connection drops while the body is read', async () => {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html', 'content-length': '1000' });
+      res.write('<!doctype html><p>partial', () => setTimeout(() => req.socket.destroy(), 20));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const url = `http://localtest.me:${(server.address() as AddressInfo).port}/`;
+      const error = await safeFetch(url, { timeoutMs: 5_000 }).then(() => undefined, (caught: unknown) => caught);
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toBe('terminated: other side closed (UND_ERR_SOCKET)');
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('does not repeat a code the cause message already names', async () => {
+    const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const fakeFetch = (async () => { throw new TypeError('fetch failed', { cause }); }) as unknown as typeof fetch;
+    await expect(safeFetch('https://source.example.com/', { fetchImpl: fakeFetch }))
+      .rejects.toThrow(/^fetch failed: read ECONNRESET$/);
+  });
+
+  it('keeps only the code of a long TLS reason', async () => {
+    const cause = Object.assign(
+      new Error('80BF77ED01000000:error:0A000438:SSL routines:ssl3_read_bytes:tlsv1 alert internal error:../deps/openssl/openssl/ssl/record/rec_layer_s3.c:918:SSL alert number 80\n'),
+      { code: 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR' }
+    );
+    const fakeFetch = (async () => { throw new TypeError('fetch failed', { cause }); }) as unknown as typeof fetch;
+    await expect(safeFetch('https://source.example.com/', { fetchImpl: fakeFetch }))
+      .rejects.toThrow(/^fetch failed: ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR$/);
+  });
+
+  it('leaves timeouts and other errors unchanged', async () => {
+    const timeout = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    const fakeFetch = (async () => { throw timeout; }) as unknown as typeof fetch;
+    await expect(safeFetch('https://source.example.com/', { fetchImpl: fakeFetch })).rejects.toBe(timeout);
   });
 });

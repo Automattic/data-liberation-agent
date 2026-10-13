@@ -46,7 +46,7 @@ it( 'retains the live Home photo native translation and separate phone perspecti
 			const portable = readFileSync( join( captureDir, 'website', 'index.html' ), 'utf8' );
 			writeFileSync( join( output, `${ name }-portable.html` ), portable );
 			const targetId = name === 'desktop' ? 'bgMedia_comp-m558n8xt14' : 'img_comp-m558n8xt14';
-			const config = await page.locator( `[id="${ targetId }"]` ).getAttribute( 'data-dla-native-effects' );
+			const config = await page.locator( `[id="${ targetId }"]` ).getAttribute( 'data-blocks-engine-capture-native-effects' );
 			expect( config, `${ name } photo native animation is representable` ).toBeTruthy();
 			expect( config ).toContain( name === 'desktop' ? 'translateX(8%)' : 'perspective(100px) translateZ(11.54px)' );
 			// Same document geometry; this isolates effect retention from media localization
@@ -83,7 +83,7 @@ it( 'retains the live Home photo native translation and separate phone perspecti
 			writeFileSync( join( output, `${ name }-offline-requests.json` ), JSON.stringify( remoteRequests, null, 2 ) );
 			await page.screenshot( { path: join( output, `${ name }-source.png` ) } );
 			await copy.screenshot( { path: join( output, `${ name }-portable.png` ) } );
-			expect( await copy.locator( '[data-dla-native-runtime-loss]' ).count() ).toBe( 0 );
+			expect( await copy.locator( '[data-blocks-engine-capture-native-runtime-loss]' ).count() ).toBe( 0 );
 			expect( samples[ 0 ].portable.transform ).not.toBe( 'none' );
 			// All remote requests are blocked. Existing remote iframe documents are
 			// retained as explicit evidence; photo/CSS/font resources must be local.
@@ -117,7 +117,7 @@ it( 'retains the desktop photo through the owning pipeline at its canonical sour
 	const manifest = JSON.parse( readFileSync( result.manifestPath, 'utf8' ) );
 	const native = manifest.entries[ url ].nativeViewTimelines.desktop;
 	expect( native.preserved ).toBeGreaterThanOrEqual( 1 );
-	expect( portable ).toContain( 'data-dla-native-view-timeline-runtime' );
+	expect( portable ).toContain( 'data-blocks-engine-capture-native-view-timeline-runtime' );
 	const server = await startStaticServer( join( outputDir, 'website' ) );
 	const browser = await chromium.launch();
 	try {

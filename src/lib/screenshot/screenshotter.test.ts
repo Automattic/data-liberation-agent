@@ -537,12 +537,21 @@ describe('captureScreenshots', () => {
     }
   });
 
-  it('rejects mixed-origin URL lists', async () => {
+  it('drops off-origin URLs after the entry route and rejects an off-origin entry route', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
+      const result = await captureScreenshots({
+        urls: ['https://a.com/x', 'https://b.com/y'],
+        outputDir: dir,
+      });
+      expect(result.urls).toEqual(['https://a.com/x']);
+      expect(result.routeDiagnostics).toEqual([
+        { code: 'route_off_origin', url: 'https://b.com/y', reason: 'discovered URL is outside the entry origin https://a.com', unit: 'route', severity: 'warning' },
+      ]);
       await expect(
         captureScreenshots({
-          urls: ['https://a.com/x', 'https://b.com/y'],
+          urls: ['https://b.com/y', 'https://a.com/x'],
+          primaryUrl: 'https://a.com/',
           outputDir: dir,
         }),
       ).rejects.toThrow(/same-origin|violation/i);

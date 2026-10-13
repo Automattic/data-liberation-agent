@@ -227,6 +227,44 @@ export function learnWidestFluidModel( samples: readonly GeometrySample[] ): Flu
 		: precedingModel;
 }
 
+/**
+ * Complete a series at the ladder widths a sweep skipped between its samples.
+ *
+ * Adaptive sampling skips a ladder width only inside an interval every series
+ * crosses as one straight line, so the line between the interval's samples is
+ * what the skipped width would have observed. Fitting the completed series
+ * gives the fitters (breakpoints, least squares, medians, segment bounds) the
+ * same inputs the full ladder would have given them. A series absent at either
+ * end of the interval stays absent there; a non-pixel end stays non-pixel.
+ * Containers are interpolated alongside: a parent the value tracks is straight
+ * wherever the value is.
+ */
+export function interpolateSamples( samples: readonly GeometrySample[], sampled: readonly number[], ladder: readonly number[] ): GeometrySample[] {
+	const widths = [ ...new Set( sampled ) ].sort( ( a, b ) => a - b );
+	const at = new Map( samples.map( sample => [ sample.viewport, sample ] ) );
+	const filled = [ ...samples ];
+	for ( const viewport of ladder ) {
+		if ( at.has( viewport ) || widths.includes( viewport ) ) continue;
+		const upper = widths.findIndex( width => width > viewport );
+		if ( upper < 1 ) continue;
+		const low = at.get( widths[ upper - 1 ]! ), high = at.get( widths[ upper ]! );
+		if ( ! low || ! high ) continue;
+		if ( ! Number.isFinite( low.value ) || ! Number.isFinite( high.value ) ) {
+			filled.push( { viewport, value: Number.NaN } );
+			continue;
+		}
+		const share = ( viewport - low.viewport ) / ( high.viewport - low.viewport );
+		const between = ( a: number, b: number ) => a + ( b - a ) * share;
+		const containers = typeof low.container === 'number' && typeof high.container === 'number';
+		filled.push( {
+			viewport,
+			value: between( low.value, high.value ),
+			...( 'container' in low || 'container' in high ? { container: containers ? between( low.container!, high.container! ) : null } : {} ),
+		} );
+	}
+	return filled.sort( ( a, b ) => a.viewport - b.viewport );
+}
+
 /** Widths where the observed relationship changes, derived from a bad fit. */
 export function breakpointsFrom( samples: readonly GeometrySample[] ): number[] {
 	const ordered = [ ...samples ].sort( ( a, b ) => a.viewport - b.viewport );
@@ -489,7 +527,7 @@ export function segmentedCss(
 			// still declare the same property with a more specific selector (often
 			// one carrying a runtime variable). Give the measured rule enough
 			// specificity to replace that stale fallback at every sampled regime.
-			const declaration = `:is(#dla-fluid-specificity, ${ selector }) { ${ property }: ${ segment.model.css } !important; }`;
+			const declaration = `:is(#data-blocks-engine-capture-fluid-specificity, ${ selector }) { ${ property }: ${ segment.model.css } !important; }`;
 			if ( conditions.length === 0 ) return declaration;
 			return `@media ${ conditions.join( ' and ' ) } {\n${ declaration }\n}`;
 		} )

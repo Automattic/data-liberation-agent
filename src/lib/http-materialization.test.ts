@@ -11,7 +11,7 @@ const sourceUrl = 'https://example.test/';
 afterEach( () => { for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } ); } );
 
 function fixture() {
-	const outputDir = mkdtempSync( join( tmpdir(), 'dla-http-materialization-' ) ); dirs.push( outputDir );
+	const outputDir = mkdtempSync( join( tmpdir(), 'liberation-http-materialization-' ) ); dirs.push( outputDir );
 	mkdirSync( join( outputDir, 'source-documents' ) );
 	mkdirSync( join( outputDir, 'resources' ) );
 	const documents: AcquiredHttpDocument[] = [];
@@ -27,7 +27,7 @@ function fixture() {
 		'https://cdn.example.test/site.css': { path: 'resources/site.css', contentType: 'text/css' },
 		'https://cdn.example.test/photo.png': { path: 'resources/photo.png', contentType: 'image/png' },
 	}, failures: [] } ) );
-	const save = () => writeFileSync( join( outputDir, 'http-acquisition.json' ), JSON.stringify( { schema: 'data-liberation/http-acquisition/v1', sourceUrl, documents } ) );
+	const save = () => writeFileSync( join( outputDir, 'http-acquisition.json' ), JSON.stringify( { schema: 'blocks-engine-capture/http-acquisition/v1', sourceUrl, documents } ) );
 	save();
 	return { outputDir, documents, save, run: () => materializeHttpDocuments( { outputDir, sourceUrl, platform: 'generic', desktopVariant: 'desktop', mobileVariant: 'mobile' } ) };
 }
@@ -75,7 +75,7 @@ describe( 'HTTP review materialization', () => {
 		if ( kind === 'duplicate' ) documents.push( documents[ 0 ]! );
 		if ( kind === 'browser-evidence' ) writeFileSync( join( outputDir, 'fidelity-reference.json' ), '{}' );
 		if ( kind === 'symlink' ) {
-			const external = mkdtempSync( join( tmpdir(), 'dla-http-external-' ) ); dirs.push( external );
+			const external = mkdtempSync( join( tmpdir(), 'liberation-http-external-' ) ); dirs.push( external );
 			writeFileSync( join( external, 'outside.html' ), 'external' );
 			symlinkSync( join( external, 'outside.html' ), join( outputDir, 'source-documents/linked.html' ) );
 			documents[ 0 ]!.documentPath = 'source-documents/linked.html';

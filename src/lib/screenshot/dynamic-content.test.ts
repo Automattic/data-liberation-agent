@@ -53,7 +53,7 @@ describe('readPngHeight (rendered-height signal)', () => {
     buf.write('IHDR', 12);
     buf.writeUInt32BE(800, 16); // width
     buf.writeUInt32BE(630, 20); // height
-    const p = join(tmpdir(), `dla-png-${process.pid}.png`);
+    const p = join(tmpdir(), `liberation-png-${process.pid}.png`);
     writeFileSync(p, buf);
     expect(readPngHeight(p)).toBe(630);
     rmSync(p);
@@ -61,7 +61,7 @@ describe('readPngHeight (rendered-height signal)', () => {
 
   it('returns null for a missing file or non-PNG', () => {
     expect(readPngHeight('/no/such/file.png')).toBeNull();
-    const p = join(tmpdir(), `dla-notpng-${process.pid}.txt`);
+    const p = join(tmpdir(), `liberation-notpng-${process.pid}.txt`);
     writeFileSync(p, 'not a png at all');
     expect(readPngHeight(p)).toBeNull();
     rmSync(p);
@@ -75,7 +75,7 @@ describe('readPngHeight (rendered-height signal)', () => {
     buf.write('IHDR', 12);
     buf.writeUInt32BE(800, 16);
     buf.writeUInt32BE(0xffffffff, 20); // garbage huge height
-    const p = join(tmpdir(), `dla-png-huge-${process.pid}.png`);
+    const p = join(tmpdir(), `liberation-png-huge-${process.pid}.png`);
     writeFileSync(p, buf);
     expect(readPngHeight(p)).toBeNull();
     rmSync(p);
@@ -86,7 +86,7 @@ describe('readPngHeight (rendered-height signal)', () => {
     buf.writeUInt32BE(0x89504e47, 0);
     buf.write('JUNK', 12); // not IHDR
     buf.writeUInt32BE(630, 20);
-    const p = join(tmpdir(), `dla-png-junk-${process.pid}.png`);
+    const p = join(tmpdir(), `liberation-png-junk-${process.pid}.png`);
     writeFileSync(p, buf);
     expect(readPngHeight(p)).toBeNull();
     rmSync(p);
@@ -174,19 +174,19 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
   it('leaves dialog-bearing disclosures closed for interactivity probing', async () => {
     const page = await browser.newPage();
     await page.setContent(`
-      <details class="dla-disclosure">
-        <summary data-dla-disclosure-label="Open Menu">Menu</summary>
-        <div class="dla-dialog" role="dialog" aria-modal="true"><nav>Home</nav></div>
+      <details class="data-blocks-engine-capture-disclosure">
+        <summary data-blocks-engine-capture-disclosure-label="Open Menu">Menu</summary>
+        <div class="data-blocks-engine-capture-dialog" role="dialog" aria-modal="true"><nav>Home</nav></div>
       </details>
       <details><summary>Ordinary</summary><p>Content</p></details>
     `);
     await expandCollapsedContent(page);
-    expect(await page.evaluate(() => document.querySelector<HTMLDetailsElement>('details.dla-disclosure')?.open)).toBe(false);
-    expect(await page.evaluate(() => document.querySelector<HTMLDetailsElement>('details:not(.dla-disclosure)')?.open)).toBe(false);
+    expect(await page.evaluate(() => document.querySelector<HTMLDetailsElement>('details.data-blocks-engine-capture-disclosure')?.open)).toBe(false);
+    expect(await page.evaluate(() => document.querySelector<HTMLDetailsElement>('details:not(.data-blocks-engine-capture-disclosure)')?.open)).toBe(false);
     // The probe toggle still works: the summary opens and closes its panel.
     expect(
       await page.evaluate(() => {
-        const details = document.querySelector<HTMLDetailsElement>('details.dla-disclosure');
+        const details = document.querySelector<HTMLDetailsElement>('details.data-blocks-engine-capture-disclosure');
         const summary = details?.querySelector('summary');
         summary?.click();
         return details?.open ?? false;
@@ -375,7 +375,7 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
         text: panel.textContent?.trim(),
         hidden: panel.getAttribute('aria-hidden'),
         display: getComputedStyle(panel).display,
-        hydrated: panel.dataset.dlaHydratedDisclosure,
+        hydrated: panel.dataset.blocksEngineCaptureHydratedDisclosure,
       })),
     }));
     expect(state.expanded).toEqual(['false', 'false']);
@@ -399,7 +399,7 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
       <div id="answer" role="region">Existing answer.</div>
     `);
     expect(await hydrateDisclosureContent(page)).toHaveLength(0);
-    expect(await page.locator('[data-dla-hydrated-disclosure]').count()).toBe(0);
+    expect(await page.locator('[data-blocks-engine-capture-hydrated-disclosure]').count()).toBe(0);
     await page.close();
   });
 
@@ -480,12 +480,12 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
 
     const records = await hydrateDisclosureContent(page);
     expect(records.filter((record) => record.status === 'captured')).toHaveLength(6);
-    expect(await page.locator('#one-way [data-dla-local-disclosure]').count()).toBe(0);
+    expect(await page.locator('#one-way [data-blocks-engine-capture-local-disclosure]').count()).toBe(0);
     expect(await page.locator('#one-way button').getAttribute('aria-expanded')).toBe('false');
     expect(await page.locator('#one-way .clip').getAttribute('style')).toContain('height:0');
-    expect(await page.locator('#primary[data-dla-exclusive-disclosures]').count()).toBe(1);
-    expect(await page.locator('#scoped[data-dla-exclusive-disclosures]').count()).toBe(1);
-    expect(await page.locator('#independent[data-dla-exclusive-disclosures]').count()).toBe(0);
+    expect(await page.locator('#primary[data-blocks-engine-capture-exclusive-disclosures]').count()).toBe(1);
+    expect(await page.locator('#scoped[data-blocks-engine-capture-exclusive-disclosures]').count()).toBe(1);
+    expect(await page.locator('#independent[data-blocks-engine-capture-exclusive-disclosures]').count()).toBe(0);
     expect(await page.locator('#site-header').getAttribute('style')).toBe('height:64px;overflow:hidden');
     expect(await page.locator('#tablet-frame').getAttribute('style')).toBe('height:480px');
     expect(await page.locator('#irrelevant-clip').getAttribute('style')).toBe('height:0;overflow:hidden');
@@ -508,8 +508,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     expect(await page.locator('#primary [role="region"]').nth(1).isVisible()).toBe(true);
 
     const offline = wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g, ''), records);
-    expect(offline).toContain('data-dla-local-disclosure-runtime');
-    expect(offline).not.toContain('data-dla-inline-disclosure');
+    expect(offline).toContain('data-blocks-engine-capture-local-disclosure-runtime');
+    expect(offline).not.toContain('data-blocks-engine-capture-inline-disclosure');
     for (const width of [390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await page.setContent(offline);
@@ -595,13 +595,13 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     expect(await page.locator('#primary [role="region"]').nth(1).innerText()).toBe('Primary closed answer.');
     expect(await page.locator('#scoped button').nth(0).getAttribute('aria-expanded')).toBe('true');
     expect(await page.locator('#separate button').getAttribute('aria-expanded')).toBe('true');
-    expect(await page.locator('#stuck [data-dla-local-disclosure]').count()).toBe(0);
+    expect(await page.locator('#stuck [data-blocks-engine-capture-local-disclosure]').count()).toBe(0);
     expect(await page.locator('#stuck [role="region"]').innerText()).toBe('Stuck answer.');
     expect(await page.locator('#site-header').getAttribute('style')).toBe('height:64px;overflow:hidden');
     expect(await page.locator('#author-note').getAttribute('style')).toBe('opacity:0.85');
     expect(await page.locator('#irrelevant-clip').getAttribute('style')).toBe('height:0;overflow:hidden');
-    expect(await page.locator('#primary[data-dla-exclusive-disclosures]').count()).toBe(1);
-    expect(await page.locator('#separate[data-dla-exclusive-disclosures]').count()).toBe(0);
+    expect(await page.locator('#primary[data-blocks-engine-capture-exclusive-disclosures]').count()).toBe(1);
+    expect(await page.locator('#separate[data-blocks-engine-capture-exclusive-disclosures]').count()).toBe(0);
     const offline = wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g, ''), records);
     await page.setContent(offline);
     expect(await page.locator('#primary [role="region"]').nth(0).isVisible()).toBe(true);
@@ -795,7 +795,7 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     `);
 
     expect(await hydrateDisclosureContent(page)).toHaveLength(2);
-    expect(await page.locator('[data-dla-hydrated-disclosure]').allTextContents()).toEqual([
+    expect(await page.locator('[data-blocks-engine-capture-hydrated-disclosure]').allTextContents()).toEqual([
       'First answer.',
       'Late answer.',
     ]);

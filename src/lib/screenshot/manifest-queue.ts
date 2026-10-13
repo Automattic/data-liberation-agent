@@ -29,10 +29,14 @@ export interface ManifestEntry {
     nativeViewTimelines?: ManifestEntry['nativeViewTimelines'];
     interactions?: InteractionStatesReport;
     scrollStates?: ScrollStatesReport;
+    /** Whether this profile reused the entrypoint's shared-chrome evidence, and why. */
+    sharedChrome?: import('./chrome-reuse.js').SharedChromeRouteDecision;
     /** Wall-clock phases of this profile's capture, in order; see phase-ledger.ts. */
     phases?: import('./phase-ledger.js').CapturePhase[];
     /** How each named readiness wait ended (quiet or spent bound); see settleDocument. */
     readiness?: Record<string, import('./phase-ledger.js').ReadinessTally>;
+    /** Non-fatal observations about this profile's capture (e.g. `source_load_incomplete`). */
+    diagnostics?: ProfileDiagnostic[];
   }>;
   /** Browser URL and effective base per named profile; the manifest key remains the requested route. */
   documents?: Partial<Record<string, import('../document-resource-base.js').RenderedDocumentUrl>>;
@@ -47,6 +51,11 @@ export interface ManifestEntry {
   /** Public-API native motion evidence, keyed by source capture profile identity. */
   nativeViewTimelines?: Record<string, { path: string; preserved: number; losses: Array<{ target: string; reason: string }>; status?: 'observed' | 'unproven'; failures?: string[] }>;
   /**
+   * Evidence blocks a profile lost while its page was still saved (`unit: 'block'`
+   * findings without the route URL); export reports them on the route.
+   */
+  blockLosses?: Array<Omit<import('../capture-export-routes.js').RouteDiagnostic, 'url'> & { code: 'native_timeline_unproven' | 'disclosure_unrestored'; unit: 'block'; profile: string }>;
+  /**
    * Outcome of learning the source's sizing across viewport widths: how much
    * runtime-frozen geometry became fluid CSS, and what stayed frozen.
    */
@@ -57,9 +66,17 @@ export interface ManifestEntry {
     /** Width below which this document stops adapting; geometry, not device selection. */
     canvasFloor?: number | null;
     byKind: Record<string, number>;
+    /** Widths the sweep sampled, ascending; empty when it never resized. */
+    sampledWidths?: number[];
+    /** Learning threw; the document stayed frozen. Not a capture failure. */
+    diagnostic?: string;
   };
   /** Phone-document learning, whose canvas floor does not select the desktop document. */
   fluidMobile?: ManifestEntry['fluid'];
+  /** Whether the route's primary (desktop) profile reused the entrypoint's shared-chrome evidence; per profile under `profiles`. */
+  sharedChrome?: import('./chrome-reuse.js').SharedChromeRouteDecision;
+  /** Reflow-only site: whether this route was captured desktop only or in both profiles, and why. */
+  deviceMode?: import('./device-mode.js').RouteDeviceDecision;
   capturedAt: string;
   /**
    * The same-origin route the server redirected this URL to. The URL is an
@@ -79,6 +96,11 @@ export interface ManifestEntry {
     jsonLdTypes?: string[];
     htmlBytes?: number;
   };
+}
+
+export interface ProfileDiagnostic {
+  code: string;
+  reason: string;
 }
 
 export interface FailureEntry {

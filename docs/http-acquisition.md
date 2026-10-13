@@ -99,7 +99,7 @@ are written as UTF-8. Consumers serving them should honor
   spelling. Author CSS and route-specific structure are retained.
 - `resources/manifest.json`: optional staged source dependencies and their
   failures. These are not yet localized into a website.
-- `http-acquisition.json`: `data-liberation/http-acquisition/v1` receipt,
+- `http-acquisition.json`: `blocks-engine-capture/http-acquisition/v1` receipt,
   exact coverage, final URLs, hashes, attempts and elapsed times.
 
 `verification` explicitly reports rendering/interactions unverified and
@@ -247,7 +247,7 @@ behavior, interaction or rendering was proven. Raw runtime HTML is evidence;
 it can contain executable scripts and session URLs and must be reconstructed
 and localized before inclusion in an accepted website.
 
-The returned `data-liberation/runtime-regions/v1` report retains
+The returned `blocks-engine-capture/runtime-regions/v1` report retains
 `projection: not_materialized` and rendering/interactions unverified. Region
 evidence is scoped to its actual route and viewport, not generalized to all
 routes or widths. Child forms and sign-in controls need functional handling;

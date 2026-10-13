@@ -80,7 +80,7 @@ const freshVisitors = rows.filter(row => row.mode.startsWith('source-fresh')).ma
 	};
 });
 const report = {
-	schema: 'data-liberation/shopify-http-proof/v4',
+	schema: 'blocks-engine-capture/shopify-http-proof/v4',
 	revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
 	generatedAt: new Date().toISOString(), root,
 	verdict: 'projection_measured_incomplete', accepted: false, complete: receipt.summary.complete,

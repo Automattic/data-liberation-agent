@@ -14,7 +14,7 @@ import { documentCanScroll, settleDocument } from './page-helpers.js';
  * platform-specific selectors or attribute names.
  */
 
-export const SCROLL_STATES_SCHEMA = 'data-liberation/scroll-states/v1';
+export const SCROLL_STATES_SCHEMA = 'blocks-engine-capture/scroll-states/v1';
 
 const MAX_CONTAINERS = 6;
 const MAX_STYLE_TARGETS_PER_CONTAINER = 4;

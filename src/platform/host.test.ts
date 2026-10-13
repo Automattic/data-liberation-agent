@@ -40,7 +40,7 @@ describe( 'deployment hosts', () => {
 
 	it( 'publishes the capability vocabulary as a contract a destination can key on', async () => {
 		const { SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY } = await import( '../lib/inspect-rendered.js' );
-		expect( SOURCE_CAPABILITY_VOCABULARY ).toBe( 'data-liberation/source-capability-vocabulary/v1' );
+		expect( SOURCE_CAPABILITY_VOCABULARY ).toBe( 'blocks-engine-capture/source-capability-vocabulary/v1' );
 		expect( [ ...SOURCE_CAPABILITIES ] ).toEqual( [ 'booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation' ] );
 		expect( [ ...SOURCE_CAPABILITIES ].sort() ).toEqual( [ ...SOURCE_CAPABILITIES ] );
 		expect( new Set( SOURCE_CAPABILITIES ).size ).toBe( SOURCE_CAPABILITIES.length );

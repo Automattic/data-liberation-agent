@@ -48,14 +48,14 @@ describe( 'wireCapturedDialogs', () => {
 			const baseline = ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' );
 			const portable = wireCapturedDialogs( baseline, states );
 			await page.setContent( portable );
-			expect( await page.locator( '[data-dla-dialog-panel] [data-dla-dialog-trigger]' ).count() ).toBe( 0 );
-			expect( await page.locator( 'main [data-dla-dialog-trigger]' ).count() ).toBe( 2 );
-			expect( await page.locator( 'main button#second' ).getAttribute( 'data-dla-dialog-ancestor-unverified' ) ).toBe( 'ancestor-limit' );
+			expect( await page.locator( '[data-blocks-engine-capture-dialog-panel] [data-blocks-engine-capture-dialog-trigger]' ).count() ).toBe( 0 );
+			expect( await page.locator( 'main [data-blocks-engine-capture-dialog-trigger]' ).count() ).toBe( 2 );
+			expect( await page.locator( 'main button#second' ).getAttribute( 'data-blocks-engine-capture-dialog-ancestor-unverified' ) ).toBe( 'ancestor-limit' );
 			for ( const id of [ 'first', 'second' ] ) {
 				const trigger = page.locator( `main button#${ id }` );
 				await trigger.click();
 				const key = await trigger.getAttribute( 'aria-controls' );
-				const panel = page.locator( `[data-dla-dialog-panel="${ key }"]` );
+				const panel = page.locator( `[data-blocks-engine-capture-dialog-panel="${ key }"]` );
 				expect( await panel.evaluate( node => ( node as HTMLElement ).hidden ) ).toBe( false );
 				expect( await panel.textContent() ).toContain( `${ id } snapshot` );
 				await page.keyboard.press( 'Escape' );
@@ -109,7 +109,7 @@ describe( 'wireCapturedDialogs', () => {
 					expect( await trigger.evaluate( el => document.activeElement === el ) ).toBe( true );
 					await page.keyboard.press( ' ' );
 					expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'true' );
-					await page.locator( '[data-dla-dialog-close]' ).click();
+					await page.locator( '[data-blocks-engine-capture-dialog-close]' ).click();
 					expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'false' );
 					expect( await trigger.evaluate( el => document.activeElement === el ) ).toBe( true );
 				}
@@ -147,7 +147,7 @@ describe( 'wireCapturedDialogs', () => {
 				if ( width === 390 ) {
 					await trigger.focus();
 					await page.keyboard.press( 'Enter' );
-					const panel = page.locator( '[data-dla-dialog-panel]' );
+					const panel = page.locator( '[data-blocks-engine-capture-dialog-panel]' );
 					expect( await panel.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( false );
 					expect( await panel.evaluate( element => getComputedStyle( element ).position ) ).toBe( presentation === 'dropdown' ? 'absolute' : 'fixed' );
 					await page.keyboard.press( 'Escape' );
@@ -206,8 +206,8 @@ describe( 'wireCapturedDialogs', () => {
 				expect( wired ).not.toContain( '<details' );
 				expect( wired ).not.toContain( '<summary' );
 				if ( fixture.presentation === 'dropdown' ) {
-					expect( wired ).toContain( 'class="dla-dialog dla-dropdown"' );
-					expect( wired ).not.toContain( 'class="toggle dla-disclosure"' );
+					expect( wired ).toContain( 'class="data-blocks-engine-capture-dialog data-blocks-engine-capture-dropdown"' );
+					expect( wired ).not.toContain( 'class="toggle data-blocks-engine-capture-disclosure"' );
 				}
 				for ( const width of [ 390, 768, 1440, 390, 1440, 768 ] ) {
 					await page.setViewportSize( { width, height: 900 } );
@@ -224,14 +224,14 @@ describe( 'wireCapturedDialogs', () => {
 				const trigger = page.locator( '#toggle' );
 				await trigger.focus();
 				await page.keyboard.press( 'Enter' );
-				const panel = page.locator( '[data-dla-dialog-panel]' );
+				const panel = page.locator( '[data-blocks-engine-capture-dialog-panel]' );
 				expect( await panel.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( false );
 				expect( await panel.evaluate( element => getComputedStyle( element ).position ) ).toBe(
 					fixture.presentation === 'dropdown' ? 'absolute' : 'fixed'
 				);
 				expect( await measure() ).toMatchObject( { trigger: closed.trigger, glyph: closed.glyph } );
 				if ( fixture.presentation === 'dropdown' ) await trigger.click();
-				else await page.locator( '[data-dla-dialog-close]' ).click();
+				else await page.locator( '[data-blocks-engine-capture-dialog-close]' ).click();
 				expect( await panel.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( true );
 				expect( await trigger.evaluate( element => document.activeElement === element ) ).toBe( true );
 				await page.keyboard.press( ' ' );
@@ -248,23 +248,23 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
 			[ captured ]
 		);
-		const base = html.match( /<style data-dla-disclosure-base="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
+		const base = html.match( /<style data-blocks-engine-capture-disclosure-base="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
 		expect( base ).toContain(
-			':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}'
+			':where(details.data-blocks-engine-capture-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}'
 		);
 		expect( base ).toContain(
-			':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}'
+			':where(details.data-blocks-engine-capture-disclosure>summary)::-webkit-details-marker{display:none}'
 		);
 		// In its own cascade layer, declared before anything else in <head>.
-		expect( base.startsWith( '@layer dla-disclosure-base{' ) ).toBe( true );
-		expect( html ).toMatch( /<head><style data-dla-disclosure-base="true">/ );
-		const css = html.match( /<style data-dla-disclosure="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
-		expect( css ).not.toContain( ':where(details.dla-disclosure>summary)' );
-		expect( css ).not.toMatch( /(^|;)details\.dla-disclosure>summary(::-webkit-details-marker)?\{/ );
+		expect( base.startsWith( '@layer data-blocks-engine-capture-disclosure-base{' ) ).toBe( true );
+		expect( html ).toMatch( /<head><style data-blocks-engine-capture-disclosure-base="true">/ );
+		const css = html.match( /<style data-blocks-engine-capture-disclosure="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
+		expect( css ).not.toContain( ':where(details.data-blocks-engine-capture-disclosure>summary)' );
+		expect( css ).not.toMatch( /(^|;)details\.data-blocks-engine-capture-disclosure>summary(::-webkit-details-marker)?\{/ );
 	} );
 
 	it( 'keeps layered responsive summary visibility while retaining native disclosure behavior', async () => {
-		const source = '<html><head><style>@layer utilities{@media(min-width:40rem){.sm\\:hidden{display:none}}.sm\\:hidden{width:36px;height:43px}}body{margin:0}header{height:104px} @media(max-width:39.999rem){header{height:96px}}</style></head><body><header><details class="dla-disclosure"><summary class="sm:hidden">Menu</summary><nav>Links</nav></details></header><button id="helper">Helper</button></body></html>';
+		const source = '<html><head><style>@layer utilities{@media(min-width:40rem){.sm\\:hidden{display:none}}.sm\\:hidden{width:36px;height:43px}}body{margin:0}header{height:104px} @media(max-width:39.999rem){header{height:96px}}</style></head><body><header><details class="data-blocks-engine-capture-disclosure"><summary class="sm:hidden">Menu</summary><nav>Links</nav></details></header><button id="helper">Helper</button></body></html>';
 		const portable = wireCapturedDialogs( source, [ {
 			...captured,
 			trigger: { ...captured.trigger, selector: '#helper' },
@@ -275,7 +275,7 @@ describe( 'wireCapturedDialogs', () => {
 			await page.setContent( portable );
 			for ( const width of [ 1280, 390 ] ) {
 				await page.setViewportSize( { width, height: 844 } );
-				const summary = page.locator( 'header details.dla-disclosure > summary' );
+				const summary = page.locator( 'header details.data-blocks-engine-capture-disclosure > summary' );
 				expect( await page.locator( 'header' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( width === 1280 ? 104 : 96 );
 				expect( await summary.evaluate( element => getComputedStyle( element ).display === 'none' ) ).toBe( width === 1280 );
 				if ( width === 390 ) {
@@ -360,14 +360,14 @@ describe( 'wireCapturedDialogs', () => {
 				await trigger.evaluate( ( element ) => getComputedStyle( element ).display )
 			).toBe( 'inline-flex' );
 			await trigger.click();
-			const panel = page.locator( '[data-dla-dialog-panel]' );
+			const panel = page.locator( '[data-blocks-engine-capture-dialog-panel]' );
 			expect( await panel.evaluate( ( element ) => ( element as HTMLElement ).hidden ) ).toBe( false );
 			expect( await panel.locator( 'a' ).getAttribute( 'href' ) ).toBe( '/about' );
 			await page.setViewportSize( { width: 1600, height: 900 } );
 			await expect.poll( () => panel.evaluate( ( element ) => ( element as HTMLElement ).hidden ) ).toBe( true );
 			await page.setViewportSize( { width: 390, height: 844 } );
 			await expect.poll( () => panel.evaluate( ( element ) => ( element as HTMLElement ).hidden ) ).toBe( false );
-			await page.locator( '[data-dla-dialog-close]' ).click();
+			await page.locator( '[data-blocks-engine-capture-dialog-close]' ).click();
 			expect( await panel.evaluate( ( element ) => ( element as HTMLElement ).hidden ) ).toBe( true );
 			expect( await trigger.evaluate( ( element ) => document.activeElement === element ) ).toBe( true );
 		} finally {
@@ -386,7 +386,7 @@ describe( 'wireCapturedDialogs', () => {
 			await page.setContent( html );
 			const trigger = page.locator( 'header > button.burger' );
 			await trigger.click();
-			const panel = page.locator( '[data-dla-dialog-panel]' );
+			const panel = page.locator( '[data-blocks-engine-capture-dialog-panel]' );
 			expect( await panel.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( false );
 			await page.setViewportSize( { width: 1440, height: 900 } );
 			await expect.poll( () => panel.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( true );
@@ -401,11 +401,11 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
 			[ captured ]
 		);
-		expect( html ).toContain( '<button class="burger" data-dla-disclosure-label="Open Menu" data-dla-dialog-trigger="dla-dialog-0" aria-controls="dla-dialog-0" aria-expanded="false" aria-haspopup="dialog">Open Menu</button>' );
-		expect( html ).toContain( 'class="dla-dialog" role="dialog"' );
-		expect( html ).toContain( 'data-dla-dialog-close="dla-dialog-0"' );
+		expect( html ).toContain( '<button class="burger" data-blocks-engine-capture-disclosure-label="Open Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0" aria-controls="data-blocks-engine-capture-dialog-0" aria-expanded="false" aria-haspopup="dialog">Open Menu</button>' );
+		expect( html ).toContain( 'class="data-blocks-engine-capture-dialog" role="dialog"' );
+		expect( html ).toContain( 'data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).toContain( 'href="/about"' );
-		expect( html ).toContain( 'data-dla-disclosure-runtime' );
+		expect( html ).toContain( 'data-blocks-engine-capture-disclosure-runtime' );
 		expect( html ).not.toContain( '<details' );
 		expect( html ).not.toContain( '<summary' );
 	} );
@@ -413,12 +413,12 @@ describe( 'wireCapturedDialogs', () => {
 	it( 'derives aria-modal from the observed presentation', () => {
 		const page = '<html><head></head><body><button class="burger">Open Menu</button></body></html>';
 		const modal = wireCapturedDialogs( page, [ { ...captured, dialog: { ...captured.dialog!, presentation: 'modal' } } ] );
-		expect( modal ).toContain( '<div class="dla-dialog" role="dialog" aria-modal="true" hidden=""' );
+		expect( modal ).toContain( '<div class="data-blocks-engine-capture-dialog" role="dialog" aria-modal="true" hidden=""' );
 		const unobserved = wireCapturedDialogs( page, [ captured ] );
 		expect( unobserved ).toContain( 'aria-modal="true"' );
 		const dropdown = wireCapturedDialogs( page, [ { ...captured, dialog: { ...captured.dialog!, presentation: 'dropdown' } } ] );
-		expect( dropdown ).toContain( 'data-dla-dialog-panel="dla-dialog-0"' );
-		expect( dropdown ).toMatch( /<div class="dla-dialog( dla-dropdown)?" role="dialog" hidden=""/ );
+		expect( dropdown ).toContain( 'data-blocks-engine-capture-dialog-panel="data-blocks-engine-capture-dialog-0"' );
+		expect( dropdown ).toMatch( /<div class="data-blocks-engine-capture-dialog( data-blocks-engine-capture-dropdown)?" role="dialog" hidden=""/ );
 		expect( dropdown ).not.toContain( 'aria-modal' );
 	} );
 
@@ -427,7 +427,7 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button>Open Menu</button><button>Open Menu</button></body></html>',
 			[ captured ]
 		);
-		expect( html.match( /data-dla-dialog-trigger=/g ) ).toHaveLength( 2 );
+		expect( html.match( /data-blocks-engine-capture-dialog-trigger=/g ) ).toHaveLength( 2 );
 		expect( html.match( /Open Menu<\/button>/g ) ).toHaveLength( 2 );
 	} );
 
@@ -438,7 +438,7 @@ describe( 'wireCapturedDialogs', () => {
 		);
 		expect( html ).not.toContain( 'Stale menu' );
 		expect( html ).not.toContain( 'id="menu"' );
-		expect( html ).toContain( 'data-dla-dialog-panel="dla-dialog-0"' );
+		expect( html ).toContain( 'data-blocks-engine-capture-dialog-panel="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).toContain( 'href="/about"' );
 		expect( html ).toContain( '<div id="other-dialog">Keep me</div>' );
 	} );
@@ -448,7 +448,7 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><a class="logo" role="button"><img alt="Homepage"></a><button>Open Menu</button></body></html>',
 			[ captured ]
 		);
-		expect( html.match( /data-dla-dialog-trigger=/g ) ).toHaveLength( 1 );
+		expect( html.match( /data-blocks-engine-capture-dialog-trigger=/g ) ).toHaveLength( 1 );
 		expect( html ).toContain( '<a class="logo" role="button"><img alt="Homepage"></a>' );
 	} );
 
@@ -458,9 +458,9 @@ describe( 'wireCapturedDialogs', () => {
 			[ captured ]
 		);
 		expect( html ).toContain(
-			'<button class="menu" aria-label="Open Menu" data-menu="primary" type="submit" name="menu" data-dla-disclosure-label="Open Menu" data-dla-dialog-trigger="dla-dialog-0" aria-controls="dla-dialog-0" aria-expanded="false" aria-haspopup="dialog">Menu</button>'
+			'<button class="menu" aria-label="Open Menu" data-menu="primary" type="submit" name="menu" data-blocks-engine-capture-disclosure-label="Open Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0" aria-controls="data-blocks-engine-capture-dialog-0" aria-expanded="false" aria-haspopup="dialog">Menu</button>'
 		);
-		expect( html ).toContain( '<button type="button" hidden="" data-dla-dialog-close="dla-dialog-0" aria-label="Close Open Menu">Close</button>' );
+		expect( html ).toContain( '<button type="button" hidden="" data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0" aria-label="Close Open Menu">Close</button>' );
 		expect( html ).not.toContain( '<summary' );
 	} );
 
@@ -488,10 +488,10 @@ describe( 'wireCapturedDialogs', () => {
 				},
 			]
 		);
-		expect( html.match( /data-dla-dialog-trigger=/g ) ).toHaveLength( 1 );
+		expect( html.match( /data-blocks-engine-capture-dialog-trigger=/g ) ).toHaveLength( 1 );
 		expect( html ).toContain( '<a href="/#menu">Menu</a>' );
 		expect( html ).toMatch( /<nav><a href="\/#menu">Menu<\/a><a href="\/#concept">Concept<\/a><\/nav>/ );
-		expect( html ).toContain( '<button aria-label="Menu" data-dla-disclosure-label="Menu" data-dla-dialog-trigger="dla-dialog-0"' );
+		expect( html ).toContain( '<button aria-label="Menu" data-blocks-engine-capture-disclosure-label="Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).toContain( '<svg></svg></button>' );
 	} );
 
@@ -519,9 +519,9 @@ describe( 'wireCapturedDialogs', () => {
 				},
 			]
 		);
-		expect( html.match( /data-dla-dialog-trigger=/g ) ).toHaveLength( 1 );
+		expect( html.match( /data-blocks-engine-capture-dialog-trigger=/g ) ).toHaveLength( 1 );
 		expect( html ).toContain( '<a href="/#menu">Menu</a>' );
-		expect( html ).toContain( '<button data-dla-disclosure-label="Menu" data-dla-dialog-trigger="dla-dialog-0"' );
+		expect( html ).toContain( '<button data-blocks-engine-capture-disclosure-label="Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).not.toContain( '<summary' );
 	} );
 
@@ -549,7 +549,7 @@ describe( 'wireCapturedDialogs', () => {
 			},
 		] );
 		expect( html ).toContain( '<a href="/#menu">Menu</a>' );
-		expect( html ).not.toContain( 'dla-disclosure' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-disclosure' );
 	} );
 
 	it( 'leaves the page alone when nothing was captured', () => {
@@ -591,7 +591,7 @@ describe( 'wireCapturedDialogs', () => {
 			},
 		] );
 		expect( html ).toBe( input );
-		expect( html ).not.toContain( 'dla-disclosure' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-disclosure' );
 	} );
 
 	it( 'leaves a selectable-set state alone — it is shared-region evidence, not a popup to wire', () => {
@@ -622,13 +622,13 @@ describe( 'wireCapturedDialogs', () => {
 			},
 		] );
 		expect( html ).toBe( input );
-		expect( html ).not.toContain( 'dla-disclosure' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-disclosure' );
 	} );
 
 	it( 'replays observed choice-group transitions offline, including keyboard activation', async () => {
 		const choice = ( index: number, selected: number ) =>
 			`<div id="rating"><label id="rating-label">Rating</label><div class="choices">${ [ 0, 1, 2 ]
-				.map( ( choiceIndex ) => `<button type="button" data-dla-choice-index="${ choiceIndex }"><svg class="${ choiceIndex <= selected ? 'filled' : 'empty' }"></svg></button>` )
+				.map( ( choiceIndex ) => `<button type="button" data-blocks-engine-capture-choice-index="${ choiceIndex }"><svg class="${ choiceIndex <= selected ? 'filled' : 'empty' }"></svg></button>` )
 				.join( '' ) }</div></div>`;
 		const states: CapturedDialogInteraction[] = [ 0, 1, 2 ].map( ( index ) => ( {
 			status: 'captured',
@@ -670,8 +670,8 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><div id="rating"><label id="rating-label">Rating</label><div class="choices"><button type="button"><svg class="filled"></svg></button><button type="button"><svg class="filled"></svg></button><button type="button"><svg class="filled"></svg></button></div></div></body></html>',
 			states
 		);
-		expect( html ).toContain( 'data-dla-choice-runtime' );
-		expect( html ).toContain( 'data-dla-choice-group="0"' );
+		expect( html ).toContain( 'data-blocks-engine-capture-choice-runtime' );
+		expect( html ).toContain( 'data-blocks-engine-capture-choice-group="0"' );
 		expect( html ).toContain( 'Rating' );
 
 		const browser = await chromium.launch( { headless: true } );
@@ -698,7 +698,7 @@ describe( 'wireCapturedDialogs', () => {
 			choiceGroup: {
 				group: { selector: '#history', tag: 'div', id: 'history' },
 				choices: [ 0, 1 ].map( ( index ) => ( { index, selector: `#history button:nth-of-type(${ index + 1 })`, tag: 'button', value: null } ) ),
-				transition: { selectedIndex: 0, selected: [ null, null ], html: '<div id="history"><button data-dla-choice-index="0">A</button><button data-dla-choice-index="1">B</button></div>', htmlBytes: 115, htmlTruncated: false },
+				transition: { selectedIndex: 0, selected: [ null, null ], html: '<div id="history"><button data-blocks-engine-capture-choice-index="0">A</button><button data-blocks-engine-capture-choice-index="1">B</button></div>', htmlBytes: 115, htmlTruncated: false },
 				replay: 'unsupported',
 				replayReason: 'repeated activation was history-dependent',
 				restoration: 'verified',
@@ -733,9 +733,9 @@ describe( 'wireCapturedDialogs', () => {
 				},
 			]
 		);
-		expect( html.match( /data-dla-listbox-trigger=/g ) ).toHaveLength( 2 );
+		expect( html.match( /data-blocks-engine-capture-listbox-trigger=/g ) ).toHaveLength( 2 );
 		expect( html ).toContain( 'role="option"' );
 		expect( html ).toContain( 'Canada +1' );
-		expect( html ).toContain( 'data-dla-listbox-runtime' );
+		expect( html ).toContain( 'data-blocks-engine-capture-listbox-runtime' );
 	} );
 } );

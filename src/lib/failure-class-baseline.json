@@ -1,0 +1,383 @@
+{
+	"description": "Unclassified throw/reject sites on the capture → export path, keyed by file and normalized site text, with the number of occurrences. Enforced by failure-class-guard.test.ts. This list only shrinks: classify a site, then lower or delete its entry. Never add entries; classify new sites instead.",
+	"sites": {
+		"src/adapters/blogger/feed.ts": {
+			"throw new Error('Response contains no Atom feed')": 1,
+			"throw new Error(`HTTP ${response.status}`)": 1
+		},
+		"src/adapters/hubspot/discover.ts": {
+			"throw new Error(`HubSpot discover(): HTTP ${resp.status} ${resp.statusText} for ${normalized}`)": 1,
+			"throw new Error(`HubSpot discover(): failed reading body of ${normalized}: ${(err as Error).message}`)": 1,
+			"throw new Error(`HubSpot discover(): fetch failed for ${normalized}: ${(err as Error).message}`)": 1
+		},
+		"src/adapters/shopify/acquisition.ts": {
+			"throw new Error('Brooklyn slide pause API is unavailable')": 1,
+			"throw new Error('Brooklyn slide runtime is unavailable')": 1
+		},
+		"src/adapters/soloist/discover.ts": {
+			"throw new Error(`Soloist homepage unavailable or redirected outside the tenant: ${response.status} ${response.url}`)": 1
+		},
+		"src/adapters/soloist/route-scope.ts": {
+			"throw new Error( 'Soloist discovery requires a customer handle URL' )": 1
+		},
+		"src/adapters/wix/collections.ts": {
+			"throw new Error('Source value bound exceeded')": 1,
+			"throw new Error('Source value depth exceeded')": 1
+		},
+		"src/adapters/wix/document-selection.ts": {
+			"throw new Error( 'Wix tablet document identity is unproven' )": 1
+		},
+		"src/adapters/wix/page.ts": {
+			"throw err": 1
+		},
+		"src/lib/browser-kit/browser-kit.ts": {
+			"throw err": 1,
+			"throw new Error( 'Playwright is required but is not installed. ' + 'Run `npm install playwright` and `npx playwright install chromium` to set it up.' )": 1,
+			"throw new Error('Public source harvest requires request routing')": 1
+		},
+		"src/lib/browser-kit/managed-browser.ts": {
+			"throw err": 1,
+			"throw new Error('managed browser: acquire() after end()')": 2,
+			"throw new Error('managed browser: disconnected right after launch')": 1,
+			"throw new Error('managed browser: lease invalidated by reset()')": 2
+		},
+		"src/lib/capture-export-evidence.ts": {
+			"throw new Error( 'schema_invalid' )": 1,
+			"throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index.content ) } bytes.` )": 1,
+			"throw new Error( `Semantic evidence page \"${ page.path }\" exceeds sidecar file limit: ${ Buffer.byteLength( single ) } bytes.` )": 1
+		},
+		"src/lib/capture-export-routes.ts": {
+			"throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` )": 1,
+			"throw new Error( absence ?? `Capture does not identify one rendered homepage for the source URL: ${ sourceUrl }` )": 1
+		},
+		"src/lib/capture-export.ts": {
+			"throw new Error( 'Runtime attachment has no corresponding acquired variant' )": 1,
+			"throw new Error( 'Runtime attachments require explicit HTTP input' )": 1,
+			"throw new Error( 'Source URL is outside its adapter route scope' )": 1,
+			"throw new Error( `Captured route escapes the website directory: ${ url }` )": 1,
+			"throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` )": 1,
+			"throw new Error( `Screenshot manifest not found: ${ screenshotManifestPath }` )": 1
+		},
+		"src/lib/capture-http.ts": {
+			"throw new Error( 'HTTP orchestration requires explicit export roles for all profile variants' )": 1,
+			"throw new Error( 'HTTP review capture does not produce source screenshots' )": 1,
+			"throw new Error( 'HTTP review capture does not support resume yet' )": 1,
+			"throw new Error( 'Runtime route limit must be an integer from 0 to 50' )": 1,
+			"throw new Error( `Platform ${ platform.id } has no HTTP acquisition profile` )": 1
+		},
+		"src/lib/capture.ts": {
+			"throw new Error( \"referenceSample must be a positive integer or 'all'\" )": 1,
+			"throw new Error( 'HTTP capture options require HTTP acquisition' )": 1,
+			"throw new Error( 'Source URL is outside its adapter route scope' )": 1,
+			"throw new Error( 'Unknown capture acquisition mode' )": 1,
+			"throw new IncompleteCaptureError( result )": 2,
+			"throw new UnsupportedCapturePlatformError( `No adapter available for platform: ${ detection.platform }` )": 1,
+			"throw new UnsupportedCapturePlatformError( `Platform ${ adapter.id } has no HTTP acquisition profile` )": 1
+		},
+		"src/lib/document-selection.ts": {
+			"throw new Error( 'Default device document was not captured' )": 1,
+			"throw new Error( `Device document ${ key } has no unique viewport metadata` )": 1
+		},
+		"src/lib/embedded-documents.ts": {
+			"throw new Error('Child document identity mismatch')": 1,
+			"throw new Error('Child snapshot exceeds byte budget')": 1,
+			"throw new Error('Conflicting child document bodies for one source URL')": 1,
+			"throw new Error('Duplicate observed child index')": 1,
+			"throw new Error('Duplicate observed node index')": 1,
+			"throw new Error('Embedded document identity or containment mismatch')": 1,
+			"throw new Error('Embedded document staging byte budget exceeded')": 1,
+			"throw new Error('Embedded receipt exceeds byte budget')": 1,
+			"throw new Error('Embedded source identity or containment mismatch')": 1,
+			"throw new Error('Invalid acquisition or runtime attachment budget')": 1,
+			"throw new Error('Invalid embedded document receipt')": 1,
+			"throw new Error('Invalid embedded region budget or identity')": 1,
+			"throw new Error('Multiple runtime viewports require explicit selection per variant')": 1,
+			"throw new Error('Runtime CSS escapes acquisition directory')": 1,
+			"throw new Error('Runtime attachment prepared-document hash mismatch')": 1,
+			"throw new Error('Runtime attribute identity mismatch')": 1,
+			"throw new Error('Runtime observation does not match acquired document identity')": 1,
+			"throw new Error('Runtime observation exceeds region budget')": 1,
+			"throw new Error('Runtime presentation identity mismatch')": 2,
+			"throw new Error('Runtime projection identity or containment mismatch')": 1,
+			"throw new Error('Runtime projection source-owned identity mismatch')": 1,
+			"throw new Error('Runtime region exceeds node budget')": 1,
+			"throw new Error('Runtime region identity mismatch')": 1,
+			"throw new Error('Runtime source presentation identity or containment mismatch')": 1,
+			"throw new Error('Runtime staging byte budget exceeded')": 2,
+			"throw new Error('Source attribute retention requires a subtree and inert attribute names')": 1,
+			"throw new Error('Undeclared runtime projection')": 1
+		},
+		"src/lib/export-publication.ts": {
+			"throw error": 6,
+			"throw journalError( 'backup' )": 1,
+			"throw journalError( 'committed generation' )": 1,
+			"throw journalError( 'mutate-begin' )": 1,
+			"throw journalError( 'path' )": 1,
+			"throw journalError( 'plan commit' )": 1,
+			"throw journalError( 'plan output' )": 2,
+			"throw journalError( 'plan' )": 1,
+			"throw journalError( 'record' )": 1,
+			"throw journalError( 'type' )": 1,
+			"throw new Error( 'Export publication hold timed out' )": 1,
+			"throw new Error( 'Export publication is missing capture-receipt.json' )": 1,
+			"throw new Error( 'Export publication path escapes its root' )": 1,
+			"throw new Error( 'Export publication recovery refused an invalid generation id' )": 1,
+			"throw new Error( 'Export publication staging must stay on the output filesystem' )": 1,
+			"throw new Error( `Export publication owned output has the wrong kind: ${ item.path }` )": 1,
+			"throw new Error( `Export publication refuses a symlink at ${ item.path }` )": 2,
+			"throw new Error( `Export publication rollback cannot restore ${ begin.path }` )": 1,
+			"throw new Error( `Export publication rollback refused a symlink at ${ begin.path }` )": 1,
+			"throw new Error( `Export publication rollback refused an unowned path: ${ begin.path }` )": 1,
+			"throw new Error( `Export publication stage contains an unowned name: ${ name }` )": 1,
+			"throw new Error( `Export publication stage is missing owned output: ${ item.path }` )": 1,
+			"throw new ExportPublicationJournalError( 'Export publication backups exist without a readable journal' )": 1,
+			"throw new ExportPublicationJournalError( 'Export publication journal has a malformed record' )": 1,
+			"throw new ExportPublicationRejected( 'Export publication lock is corrupt and was not stolen. Concurrent export is rejected and is not rematerialized.', )": 1,
+			"throw recoveryBlocked()": 6,
+			"throw rejected( current.pid )": 1,
+			"throw rejected( holder?.pid )": 1,
+			"throw rejected( live.pid )": 1,
+			"throw rejected( lock.pid )": 1
+		},
+		"src/lib/extraction/sitemap.ts": {
+			"throw alreadyParsed": 1,
+			"throw new Error('redirect leaves the entry origin')": 1,
+			"throw new Error('redirect revisits a requested URL')": 1,
+			"throw new Error('rendered navigation leaves the entry origin')": 1,
+			"throw new Error(`HTTP ${response.status}`)": 1,
+			"throw new Error(`non-HTML response (${contentType})`)": 1,
+			"throw new Error(`request budget exhausted (${LINKED_PAGE_REQUEST_LIMIT})`)": 1
+		},
+		"src/lib/http-acquisition.ts": {
+			"throw error": 1,
+			"throw new Error( 'Acquisition requires unique, nonempty variants' )": 1,
+			"throw new Error( 'Acquisition returned no response' )": 1,
+			"throw new Error( `Acquisition route is off-origin: ${ url }` )": 1,
+			"throw new Error( `HTTP ${ response.status }` )": 1,
+			"throw new Error( `Not an HTML document: ${ contentType }` )": 1,
+			"throw new Error('HTTP document is outside its adapter route scope')": 2
+		},
+		"src/lib/http-export-input.ts": {
+			"throw new Error( 'Acquired HTTP document lacks content identity' )": 1,
+			"throw new Error( 'Duplicate HTTP acquisition document' )": 1,
+			"throw new Error( 'Export requires distinct, nonempty variant identities' )": 1,
+			"throw new Error( 'HTTP document escapes the acquisition directory' )": 1,
+			"throw new Error( 'HTTP document hash mismatch' )": 1,
+			"throw new Error( 'Invalid HTTP acquisition document' )": 1,
+			"throw new Error( 'Invalid HTTP acquisition receipt or source identity' )": 1,
+			"throw new Error( 'No acquired desktop HTTP documents to materialize' )": 1,
+			"throw new Error( `HTTP materialization requires separate browser evidence: ${ artifact }` )": 1,
+			"throw new Error( `Unmapped HTTP variant: ${ document.variant }` )": 1
+		},
+		"src/lib/http-runtime-observation.ts": {
+			"throw new Error( 'Runtime source response hash mismatch' )": 1
+		},
+		"src/lib/media-fetch/media.ts": {
+			"throw new Error( `non-media HTML payload (content-type \"${rawContentType || 'unknown'}\") for ${url}`, )": 1,
+			"throw new Error(`HTTP ${response.status}`)": 1,
+			"throw new Error(`Path traversal detected: ${filename}`)": 1,
+			"throw new Error(`non-media content-type \"${rawContentType || 'unknown'}\" for ${url}`)": 1,
+			"throw new Error(`non-media content-type \"${rawContentType}\" for ${url}`)": 1,
+			"throw new Error(`redirect ${res.status} with no Location header`)": 1,
+			"throw new Error(`too many redirects (> ${MAX_REDIRECTS})`)": 2,
+			"throw streamErr": 1
+		},
+		"src/lib/media-fetch/safe-fetch.ts": {
+			"throw new Error(`redirect ${res.status} with no Location header`)": 1,
+			"throw new Error(`too many redirects (> ${maxRedirects})`)": 2,
+			"throw new SsrfBlockedError('URL has no host')": 1,
+			"throw new SsrfBlockedError(`bare single-label hostname not allowed: ${host}`)": 1,
+			"throw new SsrfBlockedError(`disallowed URL scheme \"${url.protocol}\" (only http/https)`)": 1,
+			"throw new SsrfBlockedError(`internal/loopback IP address not allowed: ${host}`)": 1,
+			"throw new SsrfBlockedError(`loopback hostname not allowed: ${host}`)": 1,
+			"throw new SsrfBlockedError(`mDNS/.local hostname not allowed: ${host}`)": 1,
+			"throw new SsrfBlockedError(`unparseable URL: ${String(rawUrl).slice(0, 200)}`)": 1,
+			"throw withNetworkCause(error)": 2
+		},
+		"src/lib/media-fetch/svg-raster.ts": {
+			"throw err": 1
+		},
+		"src/lib/portable-media-plan.ts": {
+			"throw new Error( `portable media reference was not indexed: ${ reference }` )": 1
+		},
+		"src/lib/portable-motion.ts": {
+			"throw new Error( 'Authored portable motion requires a diagnosed source-interactivity report' )": 1,
+			"throw new Error( 'Authored script differs from its pin or matches a captured source script' )": 1,
+			"throw new Error( 'Authored script must not come from the captured source run' )": 1,
+			"throw new Error( 'Capture website root is missing or escapes its run' )": 1,
+			"throw new Error( 'Invalid authored portable motion script' )": 1,
+			"throw new Error( 'Invalid busy-hidden authored element' )": 1,
+			"throw new Error( 'Invalid portable motion marker' )": 1,
+			"throw new Error( 'Invalid portable motion receipt' )": 1,
+			"throw new Error( 'Invalid portable motion recipe' )": 1,
+			"throw new Error( 'Invalid portable motion script receipt' )": 1,
+			"throw new Error( 'Portable motion marker exceeds 8192 bytes' )": 1,
+			"throw new Error( 'This capture already has an authored portable motion receipt; recapture before authoring again' )": 1,
+			"throw new Error( `Authored motion element must resolve exactly once: ${ element?.selector }` )": 1,
+			"throw new Error( `Authored portable site fails offline checks: ${ offline.findings.map( ( finding ) => finding.detail ).join( '; ' ) }` )": 1,
+			"throw new Error( `Invalid portable motion element attribute: ${ name }` )": 1,
+			"throw new Error( `Invalid portable motion route: ${ route }` )": 1,
+			"throw new Error( `Portable motion did not reproduce the source: ${ report.scores.flatMap( ( score ) => score.failures ).join( '; ' ) }; ${ report.motionEvidence?.flatMap( ( row ) => row.failures ).join( '; ' ) }` )": 1,
+			"throw new Error( `Portable motion route lacks diagnosed source behavior: ${ route }` )": 1,
+			"throw new Error( `Portable motion route was not captured: ${ route }` )": 1,
+			"throw new Error( `Portable motion script missing or changed: ${ script.path }` )": 1
+		},
+		"src/lib/replicate/css-scope.ts": {
+			"throw error": 5
+		},
+		"src/lib/resume-state/faultpoint.ts": {
+			"throw new FaultInjected(name)": 1
+		},
+		"src/lib/route-budget.ts": {
+			"throw new Error( \"routeLimit must be a positive integer or 'all'\" )": 1
+		},
+		"src/lib/runtime-regions.ts": {
+			"throw new Error('Runtime observation requires at most 32 nonempty region selectors')": 1,
+			"throw new Error('Runtime stylesheet observation exceeds byte budget')": 1,
+			"throw new Error('Runtime-region source route drift')": 2
+		},
+		"src/lib/screenshot/aggregator.ts": {
+			"throw err": 1
+		},
+		"src/lib/screenshot/capture-profiles.ts": {
+			"throw new Error( 'Invalid source capture profile' )": 1
+		},
+		"src/lib/screenshot/dynamic-content.ts": {
+			"throw new Error(`${describe(trigger).selector}: no unique locally mounted panel with verified baseline restoration`)": 1,
+			"throw new Error(`Disclosure baseline restoration unproven: ${error instanceof Error ? error.message : String(error)}`, { cause: error })": 1
+		},
+		"src/lib/screenshot/finite-bootstrap.ts": {
+			"throw new Error( 'Alternate-mode unproven: category controls stayed visible during global search' )": 2,
+			"throw new Error( 'Ambiguous item identity' )": 2,
+			"throw new Error( 'Empty-query category did not restore visible controls and items' )": 1,
+			"throw new Error( 'Empty-state content depends on query' )": 1,
+			"throw new Error( 'Finite bootstrap drive budget exceeded' )": 1,
+			"throw new Error( 'Finite collection did not yield a discriminating probe' )": 1,
+			"throw new Error( 'Global search results do not match the source order' )": 1,
+			"throw new Error( 'No empty-state content was observed' )": 1,
+			"throw new Error( 'Observed responses were not replayed' )": 1,
+			"throw new Error( 'Resource-bearing collection items are not portable without localization' )": 1,
+			"throw new Error( 'Source order incomplete: shared query did not return every finite item' )": 1,
+			"throw new Error( 'Source order unsupported: no shared query matches every finite item' )": 1,
+			"throw new Error( 'Unmatched data request was not blocked' )": 1,
+			"throw new Error( 'Unverified restoration: empty query did not restore category controls' )": 1,
+			"throw new Error( 'Unverified restoration: empty query did not return the selected category' )": 1,
+			"throw new Error( `Finite coverage mismatch: declared ${ declaredCount }, observed ${ byText.size }` )": 1
+		},
+		"src/lib/screenshot/freeze.ts": {
+			"throw new Error(`[freeze] output is suspiciously small (${bytes} bytes, via ${via}) — the page likely did not render; aborting to avoid a false parity ceiling`)": 1
+		},
+		"src/lib/screenshot/linked-frontier.ts": {
+			"throw new Error(`Invalid linked-page ${name}`)": 1
+		},
+		"src/lib/screenshot/native-view-timelines.ts": {
+			"throw new Error( 'native timeline restoration is unproven' )": 1,
+			"throw new Error( `native timeline ${ operation }: ${ String( error ) }` )": 1
+		},
+		"src/lib/screenshot/output-layout.ts": {
+			"throw new Error( 'Invalid additional document identity' )": 1,
+			"throw new Error( `outputDir contains '..' traversal: ${ outputDir }` )": 1
+		},
+		"src/lib/screenshot/page-helpers.ts": {
+			"reject(new Error(`evaluate timeout after ${ms}ms`))": 1
+		},
+		"src/lib/screenshot/resource-capture.ts": {
+			"reject(new Error( `resource body timed out after ${ timeoutMs }ms` ))": 1,
+			"throw new Error( 'render dependency response body is empty' )": 2,
+			"throw new Error( 'resource URL does not resolve to a safe file path' )": 1,
+			"throw new Error( 'resource path escapes the capture directory' )": 2,
+			"throw new Error( `HTTP ${ fetched.status }` )": 1,
+			"throw new Error( `HTTP ${ status }` )": 1,
+			"throw new Error( `captured resource bytes exceed aggregate max ${ MAX_CAPTURED_RESOURCE_TOTAL_BYTES }` )": 1,
+			"throw new Error( `render dependency has unsupported content type ${ contentType || 'unknown' }` )": 1,
+			"throw new Error( `resource body ${ body.length } bytes exceeds max ${ byteCeiling }` )": 1,
+			"throw new Error( `resource body ${ declaredBytes } bytes exceeds max ${ byteCeiling }` )": 1
+		},
+		"src/lib/screenshot/same-origin.ts": {
+			"throw new Error(`enforceSameOrigin: invalid URL: ${u}`)": 1,
+			"throw new Error(`enforceSameOrigin: invalid reference URL: ${reference}`)": 1
+		},
+		"src/lib/screenshot/screenshotter.ts": {
+			"reject(new Error( `screenshot timeout after ${ ms }ms` ))": 1,
+			"throw new Error( 'Capture memory admission: runtime available memory is invalid' )": 1,
+			"throw new Error( 'Duplicate source capture profile' )": 1,
+			"throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` )": 1,
+			"throw new Error( `Duplicate source capture profile: ${ profile.id }` )": 1,
+			"throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` )": 1,
+			"throw new Error( `Unknown source device profile: ${ viewport.device }` )": 1,
+			"throw new Error( `no answer to an evaluate within ${ evaluateTimeoutMs }ms` )": 1,
+			"throw new Error('Source URL is outside its adapter route scope')": 1,
+			"throw new Error('Source cleanup incomplete; see cleanup evidence')": 1
+		},
+		"src/lib/screenshot/site-analysis.ts": {
+			"throw new Error('analyzePage: bad shape')": 1,
+			"throw new Error('analyzePage: breakpoints shape')": 1,
+			"throw new Error('analyzePage: breakpoints.minWidth / maxWidth must be arrays')": 1,
+			"throw new Error('analyzePage: cssVariables must be an array when present')": 1,
+			"throw new Error('analyzePage: metadata shape')": 1,
+			"throw new Error('analyzePage: palette must be array')": 1,
+			"throw new Error('analyzePage: typography shape')": 1
+		},
+		"src/lib/screenshot/typed-search-capture.ts": {
+			"throw new Error( 'Empty-state content depends on query or category' )": 1,
+			"throw new Error( 'Source results do not support the normalized text predicate' )": 1,
+			"throw new Error( 'Typed search drive budget exceeded' )": 1,
+			"throw new Error('Ambiguous empty-state siblings')": 1,
+			"throw new Error('Source input drive changed routes; local replay remains unproven')": 1
+		},
+		"src/lib/site-includes.ts": {
+			"throw new Error( 'Malformed site include' )": 1,
+			"throw new Error( 'Site include cycle' )": 1,
+			"throw new Error( 'Site include expansion exceeds byte limit' )": 1,
+			"throw new Error( 'Site include expansion exceeds byte read limit' )": 1,
+			"throw new Error( 'Site include expansion limit' )": 1,
+			"throw new Error( 'Site include file changed during read' )": 1,
+			"throw new Error( 'Site include file exceeds size limit or is not a file' )": 1,
+			"throw new Error( 'Site include path escapes root' )": 1,
+			"throw new Error( 'Site include root symlink' )": 1,
+			"throw new Error( `Site include symlink: ${ cursor }` )": 1
+		},
+		"src/lib/source-cleanup.ts": {
+			"throw error": 2,
+			"throw new Error('Source cleanup evidence is missing')": 1,
+			"throw new Error('Unsupported or invalid source cleanup policy; recapture with a supported policy')": 1
+		},
+		"src/lib/source-navigation.ts": {
+			"throw failure": 3,
+			"throw failure ?? error": 1,
+			"throw new Error('Invalid external source outcome')": 1,
+			"throw new Error('Invalid source redirect response chain')": 1,
+			"throw new Error('Source evidence followed an external boundary')": 1,
+			"throw new Error('Source external boundary provenance mismatch')": 1,
+			"throw new Error('Source outcome identity or navigation budget mismatch')": 1,
+			"throw new Error('Source outcome lacks a redirect declaration')": 1,
+			"throw new Error('Source outcome route ownership mismatch')": 1,
+			"throw new Error('Source reload changed its document identity or response outcome')": 1,
+			"throw new SourceNavigationError('Source HTTP redirect has no Location')": 1,
+			"throw new SourceNavigationError('Source document is outside its adapter route scope')": 1,
+			"throw new SourceNavigationError('Source navigation time budget exhausted')": 2,
+			"throw new SourceNavigationError('Source redirect declarations are ambiguous')": 1,
+			"throw new SourceNavigationError('Source redirect has an unsafe scheme or credentials')": 1,
+			"throw new SourceNavigationError('Source redirect hop budget exhausted')": 1,
+			"throw new SourceNavigationError('Source redirect loop')": 1,
+			"throw new SourceNavigationError('Source refresh declaration is unsupported')": 1,
+			"throw new SourceNavigationError('Source refresh delay is unsupported')": 1,
+			"throw new SourceNavigationError('Source refresh exceeds initial navigation delay budget')": 1,
+			"throw new SourceNavigationError('Source refresh has no destination')": 1,
+			"throw new SourceNavigationError('Source reload budget exhausted')": 2,
+			"throw new SourceNavigationError('Source reload changed its document identity or response outcome')": 1,
+			"throw new SourceNavigationError('Source response identity mismatch')": 1,
+			"throw new SourceNavigationError('Unexplained source main-frame navigation')": 1,
+			"throw new SourceNavigationError(`Source document exceeds document byte budget (${SOURCE_DOCUMENT_MAX_BYTES} bytes; Content-Length)`)": 1,
+			"throw new SourceNavigationError(`Source document exceeds document byte budget (${body.length} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`)": 1,
+			"throw new SourceNavigationError(`Source document exceeds document byte budget (${bytes} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`)": 1,
+			"throw new SourceNavigationError(notHtml)": 1
+		},
+		"src/lib/url/route-scope.ts": {
+			"throw new Error( 'Invalid adapter route scope' )": 1
+		},
+		"src/lib/viewport-entrances.ts": {
+			"throw new Error( 'Invalid viewport entrance evidence' )": 1
+		}
+	}
+}

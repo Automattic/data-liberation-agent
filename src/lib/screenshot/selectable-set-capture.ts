@@ -199,8 +199,8 @@ export async function captureSelectableSetStates(
 					return Boolean( target && target.getAttribute( 'role' ) === 'region' );
 				};
 				const isPagerControl = ( element: Element ) =>
-					element.hasAttribute( 'data-dla-pager-control' ) ||
-					Boolean( element.closest( '[data-dla-pager-stage],[data-dla-gallery-capture-width]' ) );
+					element.hasAttribute( 'data-blocks-engine-capture-pager-control' ) ||
+					Boolean( element.closest( '[data-blocks-engine-capture-pager-stage],[data-blocks-engine-capture-gallery-capture-width]' ) );
 				const looksSelectable = ( element: Element ): boolean => {
 					if ( ! visible( element ) ) return false;
 					if ( element.getAttribute( 'aria-disabled' ) === 'true' || element.hasAttribute( 'disabled' ) ) {
@@ -622,7 +622,7 @@ export async function captureSelectableSetStates(
 							( members[ 0 ]?.getAttribute( 'role' ) || '' ).toLowerCase()
 						);
 					candidates.slice( 0, members.length ).forEach( ( candidate, index ) =>
-						candidate.setAttribute( 'data-dla-choice-index', String( index ) )
+						candidate.setAttribute( 'data-blocks-engine-capture-choice-index', String( index ) )
 					);
 					for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) ) unsafe.remove();
 					for ( const node of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {

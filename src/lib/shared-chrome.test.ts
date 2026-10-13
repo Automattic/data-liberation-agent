@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { extractSharedChrome } from './shared-chrome.js';
 
 it( 'counts each source path once when admitting exact shared regions', () => {
-	const root = mkdtempSync( join( tmpdir(), 'dla-chrome-source-paths-' ) );
+	const root = mkdtempSync( join( tmpdir(), 'liberation-chrome-source-paths-' ) );
 	try {
 		// Two copies cannot pay for this part and two include directives. A
 		// duplicate caller path must not invent a third occurrence or replacement.
