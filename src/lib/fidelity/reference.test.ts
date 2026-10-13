@@ -292,7 +292,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					if ( ! drift ) expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
 				}
 			}
-		} finally { await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+		} finally {
+			// Chromium may preconnect a socket it never sends a request on; Node
+			// treats it as active, so close() alone would wait for it to time out.
+			await context.close(); server.closeAllConnections();
+			await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } );
+		}
 	}, 30_000 );
 	it( 'settles unused local fallback stacks at each frozen viewport', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
