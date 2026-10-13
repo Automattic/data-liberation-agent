@@ -86,8 +86,8 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `route_capture_failed` | route (implicit) | — | Attempted route with no page HTML (deadline, engine error, file missing), or a redirect to an uncaptured or dropped target. | yes | — (#759 counts it) |
 | `route_export_failed` | route | error | Non-integrity error while exporting the route; the route is dropped. | yes | #764 |
 | `route_path_collision` | route | error | Website path already claimed by another route; the route is dropped. The entrypoint keeps its path. | yes | #773 |
-| `route_capture_skipped_budget` | route | error | The capture time budget left the route uncaptured: not started before admission closed, or abandoned in flight at the deadline. `metrics.timeBudgetMs`. Never the entrypoint. | yes | this PR |
-| `asset_exceeds_file_limit` | asset | warning | Captured asset over the export `maxFileBytes` (default 50 MiB, SSI's per-file intake limit); not written, references left unresolved. `metrics.bytes`, `metrics.limit`. A page document over the limit is `route_export_failed` instead. | no | this PR |
+| `route_capture_skipped_budget` | route | error | The capture time budget left the route uncaptured: not started before admission closed, or abandoned in flight at the deadline. `metrics.timeBudgetMs`. Never the entrypoint. | yes | #785 |
+| `asset_exceeds_file_limit` | asset | warning | Captured asset over the export `maxFileBytes` (default 50 MiB, SSI's per-file intake limit); not written, references left unresolved. `metrics.bytes`, `metrics.limit`. A page document over the limit is `route_export_failed` instead. | no | #785 |
 | `route_capture_degraded` | route | warning | HTML saved, but some stages failed. `metrics.failedStages`. | no | #764 |
 | `route_profile_uncaptured` | profile | error | A declared capture profile produced no document. Makes `complete: false`. | no | #764 |
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
