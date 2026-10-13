@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SectionSpec } from './replicate/section-extract.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -15,9 +15,17 @@ const { captureScreenshotsMock } = vi.hoisted( () => ( {
 	} ) ),
 } ) );
 
-vi.mock( './media-fetch/safe-fetch.js', () => ( {
+vi.mock( './media-fetch/safe-fetch.js', async ( importOriginal ) => ( {
+	...await importOriginal< typeof import('./media-fetch/safe-fetch.js') >(),
 	safeFetch: vi.fn( async ( url: string ) => ( { finalUrl: url } ) ),
 } ) );
+
+const { buildTemplateGroupsMock } = vi.hoisted( () => ( { buildTemplateGroupsMock: vi.fn() } ) );
+vi.mock( './template-groups.js', async ( importOriginal ) => {
+	const actual = await importOriginal< typeof import('./template-groups.js') >();
+	buildTemplateGroupsMock.mockImplementation( actual.buildTemplateGroups );
+	return { ...actual, buildTemplateGroups: buildTemplateGroupsMock };
+} );
 
 vi.mock( './detect-platform/index.js', () => ( {
 	detect: vi.fn( async () => ( { platform: 'generic' } ) ),
@@ -52,6 +60,9 @@ vi.mock( './media-fetch/media.js', () => ( {
 	} ),
 } ) );
 
+import { existsSync } from 'node:fs';
+import { safeFetch } from './media-fetch/safe-fetch.js';
+import { spreadSample } from './route-budget.js';
 import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_ROUTE_LIMIT, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
@@ -658,6 +669,107 @@ describe( 'captureWebsite route budget', () => {
 		const receipt = JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) );
 		expect( receipt.summary ).toMatchObject( { routesOmitted: 1, complete: true } );
 		expect( receipt.discoveryDiagnostics ).toEqual( [ { code: 'route_omitted_by_budget', url: omitted, reason: 'Outside the route budget of 2 routes' } ] );
+	} );
+} );
+
+describe( 'captureWebsite route selection', () => {
+	// Ten listing pages, then a hundred posts, then three one-off templates at the end.
+	const listings = Array.from( { length: 10 }, ( _, index ) => `https://example.com/page/${ index + 2 }/` );
+	const posts = Array.from( { length: 100 }, ( _, index ) => `https://example.com/post-${ index }/` );
+	const oneOffs = [ 'https://example.com/contact/', 'https://example.com/tabs/', 'https://example.com/landing/' ];
+	const inventory = [ ...listings, ...posts, ...oneOffs ];
+	const html = ( url: string ): string => {
+		const main = url === sourceUrl ? '<section class="hero"><h1>Home</h1></section>'
+			: url.includes( '/page/' ) ? '<ul class="cards"><li class="card">Card</li></ul>'
+			: url.endsWith( '/contact/' ) ? '<form><input name="email"></form>'
+			: url.endsWith( '/tabs/' ) ? '<div role="tablist"><button role="tab">One</button></div>'
+			: url.endsWith( '/landing/' ) ? '<article class="post"><p>Landing</p></article>'
+			: `<article class="post"><p>${ url }</p></article>`;
+		const head = url.endsWith( '/landing/' ) ? '<style>.post{columns:2}</style>' : '';
+		return `<html><head>${ head }</head><body><main>${ main }</main></body></html>`;
+	};
+	const serveHtml = () => vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( {
+		finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( html( url ) ),
+	} ) );
+	const adapter = () => ( {
+		findAdapter: () => ( {
+			id: 'generic', platform: 'generic',
+			discover: async () => ( { urls: inventory.map( url => ( { url, type: 'page' } ) ) } ),
+			extract: async () => ( { title: '', content: '' } ),
+		} ),
+	} );
+	const capturedUrls = () => ( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[] } ).urls;
+	beforeEach( () => vi.mocked( safeFetch ).mockClear() );
+	afterEach( () => {
+		captureScreenshotsMock.mockClear();
+		vi.mocked( safeFetch ).mockReset();
+		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( { finalUrl: url } ) as Awaited< ReturnType< typeof safeFetch > > );
+		buildTemplateGroupsMock.mockClear();
+		rmSync( root, { recursive: true, force: true } );
+	} );
+
+	it( 'keeps discovery order by default: no grouping fetches, no report, the same selection', async () => {
+		serveHtml();
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6 }, adapter() );
+		// Only the entrypoint request capture always made.
+		expect( vi.mocked( safeFetch ) ).toHaveBeenCalledTimes( 1 );
+		expect( buildTemplateGroupsMock ).not.toHaveBeenCalled();
+		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
+		expect( existsSync( join( root, 'template-groups.json' ) ) ).toBe( false );
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateGroups ).toBeUndefined();
+		expect( result.discoveryDiagnostics.some( row => row.code === 'template_grouping_unavailable' ) ).toBe( false );
+	} );
+
+	it( 'spends the budget on one route per template first with template-coverage', async () => {
+		serveHtml();
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, routeSelection: 'template-coverage' }, adapter() );
+		// Entrypoint, then representatives by group size (posts, listings, then one-offs in inventory order).
+		expect( capturedUrls() ).toEqual( [ sourceUrl, posts[ 0 ], listings[ 0 ], ...oneOffs ] );
+		const report = JSON.parse( readFileSync( join( root, 'template-groups.json' ), 'utf8' ) );
+		expect( report ).toMatchObject( {
+			schema: 'data-liberation-agent/template-groups/v1',
+			coverage: { routes: inventory.length + 1, fingerprinted: inventory.length + 1, unfingerprinted: 0, groups: 6, singletons: 4 },
+			selection: { mode: 'template-coverage', limit: 6, selected: 6, groupsRepresented: 6, groupsOmitted: [] },
+		} );
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateGroups ).toEqual( {
+			schema: 'data-liberation-agent/template-groups/v1', report: 'template-groups.json',
+			routes: inventory.length + 1, fingerprinted: inventory.length + 1, unfingerprinted: 0, groups: 6, singletons: 4,
+			selection: { mode: 'template-coverage', groupsRepresented: 6, groupsOmitted: 0 },
+		} );
+		expect( result.summary ).toMatchObject( { routesDiscovered: 6, routesOmitted: inventory.length + 1 - 6, routesFailed: 0 } );
+		expect( result.complete ).toBe( true );
+	} );
+
+	it( 'never fails the capture when grouping fails: one finding, discovery-order selection', async () => {
+		serveHtml();
+		buildTemplateGroupsMock.mockRejectedValueOnce( new Error( 'grouping exploded' ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, routeSelection: 'template-coverage', strict: true }, adapter() );
+		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
+		expect( result.discoveryDiagnostics.filter( row => row.code === 'template_grouping_unavailable' ) ).toEqual( [ {
+			code: 'template_grouping_unavailable', url: sourceUrl,
+			reason: 'Template grouping unavailable; routes were selected in discovery order: grouping exploded',
+		} ] );
+		expect( result.complete ).toBe( true );
+		expect( isUsableCapture( result ) ).toBe( true );
+		expect( existsSync( join( root, 'template-groups.json' ) ) ).toBe( false );
+	} );
+
+	it( 'falls back to discovery order for routes it could not fetch, without failing them', async () => {
+		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => {
+			if ( url !== sourceUrl ) throw new Error( 'network down' );
+			return { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( html( url ) ) };
+		} );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, routeSelection: 'template-coverage' }, adapter() );
+		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
+		expect( JSON.parse( readFileSync( join( root, 'template-groups.json' ), 'utf8' ) ).coverage ).toEqual( { routes: inventory.length + 1, fingerprinted: 1, unfingerprinted: inventory.length, groups: 1, singletons: 1 } );
+		expect( result.summary.routesFailed ).toBe( 0 );
+		expect( result.complete ).toBe( true );
+	} );
+
+	it( 'rejects an unknown route selection before any fetch', async () => {
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, routeSelection: 'clusters' as never }, adapter() ) )
+			.rejects.toThrow( 'routeSelection must be one of discovery-order, template-coverage' );
+		expect( vi.mocked( safeFetch ) ).not.toHaveBeenCalled();
 	} );
 } );
 

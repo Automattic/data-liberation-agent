@@ -59,21 +59,66 @@ export function spreadSample( routes: string[], limit: number ): string[] {
 }
 
 /**
- * Apply a route budget to an initial inventory whose first URL is the
- * entrypoint. Routes are deduplicated by document request identity, then the
- * entrypoint plus an even spread of the remainder is kept, so the same
- * inventory always yields the same selection. `limit` counts the entrypoint.
+ * How the route budget picks routes when it truncates the inventory.
+ *
+ * - `discovery-order` (default): the entrypoint plus an even spread over the
+ *   discovered inventory (`spreadSample`).
+ * - `template-coverage`: the entrypoint, then one representative per template
+ *   group (`template-groups.ts`), then the even spread over what is left.
  */
-export function selectRouteBudget( urls: string[], limit: number | undefined ): { selected: string[]; omitted: string[] } {
+export const ROUTE_SELECTIONS = [ 'discovery-order', 'template-coverage' ] as const;
+export type RouteSelection = typeof ROUTE_SELECTIONS[ number ];
+export const DEFAULT_ROUTE_SELECTION: RouteSelection = 'discovery-order';
+
+export function validateRouteSelection( selection: unknown ): asserts selection is RouteSelection | undefined {
+	if ( selection === undefined || ( ROUTE_SELECTIONS as readonly unknown[] ).includes( selection ) ) return;
+	throw new RangeError( `routeSelection must be one of ${ ROUTE_SELECTIONS.join( ', ' ) }` );
+}
+
+/** Deduplicate an inventory by document request identity, keeping first occurrences in order. */
+export function dedupeRouteInventory( urls: readonly string[] ): string[] {
 	const seen = new Set< string >();
-	const inventory = urls.filter( url => {
+	return urls.filter( url => {
 		const key = documentRequestUrl( url );
 		if ( seen.has( key ) ) return false;
 		seen.add( key );
 		return true;
 	} );
+}
+
+/**
+ * Apply a route budget to an initial inventory whose first URL is the
+ * entrypoint. Routes are deduplicated by document request identity, then the
+ * entrypoint plus an even spread of the remainder is kept, so the same
+ * inventory always yields the same selection. `limit` counts the entrypoint.
+ *
+ * `preferred` routes (template representatives, highest priority first) are
+ * kept right after the entrypoint, as far as the budget allows; the remaining
+ * slots are the even spread over the routes not yet kept. Without `preferred`
+ * the selection is exactly the even spread.
+ */
+export function selectRouteBudget( urls: string[], limit: number | undefined, preferred: readonly string[] = [] ): { selected: string[]; omitted: string[] } {
+	const inventory = dedupeRouteInventory( urls );
 	if ( limit === undefined || inventory.length <= limit ) return { selected: inventory, omitted: [] };
-	const selected = spreadSample( inventory, limit );
+	const selected = preferred.length ? coverageSample( inventory, limit, preferred ) : spreadSample( inventory, limit );
 	const kept = new Set( selected );
 	return { selected, omitted: inventory.filter( url => ! kept.has( url ) ) };
+}
+
+function coverageSample( inventory: string[], limit: number, preferred: readonly string[] ): string[] {
+	if ( limit <= 0 ) return [];
+	const [ entrypoint, ...rest ] = inventory as [ string, ...string[] ];
+	const byKey = new Map( rest.map( url => [ documentRequestUrl( url ), url ] ) );
+	const picks = [ entrypoint ];
+	const kept = new Set( picks );
+	for ( const url of preferred ) {
+		if ( picks.length >= limit ) break;
+		const route = byKey.get( documentRequestUrl( url ) );
+		if ( route && ! kept.has( route ) ) {
+			picks.push( route );
+			kept.add( route );
+		}
+	}
+	const remaining = rest.filter( url => ! kept.has( url ) );
+	return [ ...picks, ...spreadSample( [ entrypoint, ...remaining ], limit - picks.length + 1 ).slice( 1 ) ];
 }

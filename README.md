@@ -51,6 +51,7 @@ The JSON result is versioned and destination-neutral. It samples the entry route
 | `--resume` | Reuse what is already on disk instead of recapturing |
 | `--acquisition http` | Acquire and export an explicitly unverified HTTP review candidate; browser capture remains the default |
 | `--route-limit <n\|all>` | Route budget, shared by browser and HTTP acquisition: capture at most n routes, homepage included, counting linked pages. The homepage is always kept and the rest is an even, deterministic spread over the discovered inventory. Default: 50 for browser capture, `all` for HTTP. Omitted routes are diagnosed and counted in `routesOmitted`, never as failures. See [route budget](#route-budget) |
+| `--route-selection <mode>` | How the route budget picks routes: `discovery-order` (default, the even spread) or `template-coverage` (one route per template group first; writes `template-groups.json`). See [template coverage](#template-coverage-selection) |
 | `--runtime-route-limit <n>` | Observe declared runtime regions on at most 0–50 HTTP routes (default 0) |
 | `--screenshots` | Also write full-page desktop and mobile PNGs |
 | `--serve` | Keep a local server running until interrupted |
@@ -167,6 +168,28 @@ Browser capture renders every route in several profiles, so a store-sized invent
 - **Omitted routes:** each is a `route_omitted_by_budget` entry in `discoveryDiagnostics` and counts in `summary.routesOmitted`. Omitted routes are never attempted, so they are not in `routesDiscovered`, `routesFailed` or `missingRoutes`. Links to them stay unresolved anchors with reason `target route was omitted by the route budget`.
 
 The budget is the caller's chosen scope, so omission does not make a capture incomplete: `complete` means every route inside the budget was captured. A caller that needs the whole source checks `summary.routesOmitted === 0` or passes `routeLimit: 'all'`.
+
+### Template coverage selection
+
+An even spread can spend the whole budget inside one template (a few hundred posts) and never reach the one-off templates: the contact form, a landing page with its own CSS, the shop. `routeSelection: 'template-coverage'` (CLI `--route-selection template-coverage`, MCP `routeSelection`) spends the budget by template instead:
+
+1. After discovery and before any browser starts, capture fetches each discovered route's server HTML. The pass is bounded: at most 1,000 routes (an even spread of a larger inventory), 6 requests at a time on the entry origin, 15 s per request, 8 MiB per document, 256 MiB and 120 s in total (a tenth of `timeBudgetMs` when that is smaller). If the source throttles (429 or 503), the pass waits for `Retry-After`, continues one request at a time, and stops at the next refusal, so it never spends the rate limit the browser capture needs. Routes it does not fingerprint belong to no group.
+2. Each document gets a template fingerprint: a hash of the body's skeleton (tag, stable class names and `role`; text and inline elements ignored; classes with digits, CSS-in-JS prefixes, taxonomy or author terms such as `category-news`, and state words such as `active` or `current-menu-item` dropped; repeated siblings collapsed; classless prose blocks and the inside of content containers such as `article` or `.entry-content` treated as content) plus a divergence fingerprint compared exactly: the page's own `<style>` text, its stylesheet and script URLs, executable inline scripts, forms and interactive controls (tabs, disclosures, `details`, dialogs), each by tag and stable classes, and embeds (`iframe`, `video`, `audio`, `canvas`, `object`, `embed`). Routes with the same fingerprint form a group; its representative is its first member in inventory order.
+3. When the budget truncates the inventory, the entrypoint comes first, then one representative per group (larger groups first), then the even spread over the remaining routes. When the inventory fits the budget, every route is captured as before.
+
+The pass only chooses routes; captured pages are produced exactly as in `discovery-order`. It writes `template-groups.json` next to `website/` (never inside it, so importers do not see it) and adds a `templateGroups` count summary to `capture-receipt.json`. Grouping never fails a capture: if the pass itself fails, routes are selected in discovery order and the capture records one `template_grouping_unavailable` discovery diagnostic, which is not a loss.
+
+`template-groups.json` (schema `data-liberation-agent/template-groups/v1`) is static and deterministic for the same responses: no timings.
+
+| Field | |
+|---|---|
+| `sourceUrl` | Entry URL |
+| `fingerprint` | `{ version, maxSkeletonDepth }` of the rules above |
+| `limits` | The pass bounds that applied |
+| `coverage` | `{ routes, fingerprinted, unfingerprinted, groups, singletons }` over the deduplicated inventory |
+| `groups[]` | `{ id, key, skeleton, divergence, representative, size, members }`, ordered by first member; `id` is `t1`, `t2`, … |
+| `unfingerprinted[]` | `{ url, reason, httpStatus? }`; `reason` is `not_sampled`, `time_budget`, `byte_budget`, `rate_limited`, `http_status`, `not_html`, `redirected`, `too_large` or `fetch_failed` |
+| `selection` | `{ mode, limit, selected, groupsRepresented, groupsOmitted }` for the routes the budget kept |
 
 ### Capture time budget
 

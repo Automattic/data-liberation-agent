@@ -19,6 +19,8 @@ export interface LiberateOptions {
 	http?: CaptureOptions['http'];
 	/** Route budget shared by browser and HTTP capture. Browser default: 50; 'all' captures every route. */
 	routeLimit?: CaptureOptions['routeLimit'];
+	/** How the route budget picks routes; see `CaptureOptions.routeSelection`. Default: 'discovery-order'. */
+	routeSelection?: CaptureOptions['routeSelection'];
 	url: string;
 	/** Base directory; the site lands in a per-source subdirectory. */
 	outputBase: string;
@@ -71,6 +73,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 
 	const capture = await captureWebsite( {
 		acquisition: options.acquisition, http: options.http, routeLimit: options.routeLimit,
+		...( options.routeSelection !== undefined ? { routeSelection: options.routeSelection } : {} ),
 		url: options.url,
 		outputDir,
 		resume: options.resume,

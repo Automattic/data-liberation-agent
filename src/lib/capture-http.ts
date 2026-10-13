@@ -28,6 +28,8 @@ export async function captureHttpWebsite( input: {
 	urls: string[];
 	/** Discovery diagnostics, including one `route_omitted_by_budget` row per omitted route. */
 	discoveryDiagnostics: RouteDiagnostic[];
+	/** Receipt counts from template grouping, when `routeSelection: 'template-coverage'` ran it. */
+	templateGroups?: Record<string, unknown>;
 } ): Promise<CaptureResult> {
 	const { options, platform, progress } = input;
 	const profile = platform.acquisition;
@@ -58,6 +60,7 @@ export async function captureHttpWebsite( input: {
 	receipt.failures = failures;
 	receipt.orchestration = { mode: 'http', requestedRoutes: urls.length, discoveredRoutes: urls.length + summary.routesOmitted, runtimeRouteLimit: options.http?.runtimeRouteLimit ?? 0, runtime, verification: 'unverified' };
 	if ( input.title ) receipt.title = input.title;
+	if ( input.templateGroups ) receipt.templateGroups = input.templateGroups;
 	writeFileSync( captureReceiptPath, JSON.stringify( receipt, null, 2 ) + '\n' );
 	const diagnosticPath = join( options.outputDir, 'diagnostics.json' );
 	const diagnostic = JSON.parse( readFileSync( diagnosticPath, 'utf8' ) );
