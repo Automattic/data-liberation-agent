@@ -29,6 +29,28 @@ export interface PhaseLedger {
 	readiness(): Record< string, ReadinessTally >;
 }
 
+/**
+ * One route's stage timings, summed across its capture profiles and expressed
+ * in its wall-clock duration. Profiles of a route can overlap, so when their
+ * sum exceeds the route's duration each stage is scaled down to its share of
+ * it. Time outside every profile's ledger is reported as `other`, so the
+ * values always sum to `totalMs`.
+ */
+export function routePhaseBreakdown( profiles: Array< Array< CapturePhase > | undefined >, totalMs: number ): Record< string, number > {
+	const phases: Record< string, number > = {};
+	for ( const profile of profiles ) {
+		for ( const { phase, ms } of profile ?? [] ) phases[ phase ] = ( phases[ phase ] ?? 0 ) + ms;
+	}
+	const measured = Object.values( phases ).reduce( ( total, ms ) => total + ms, 0 );
+	if ( measured > totalMs && measured > 0 ) {
+		const scale = totalMs / measured;
+		for ( const phase of Object.keys( phases ) ) phases[ phase ] = Math.floor( phases[ phase ]! * scale );
+	}
+	const accounted = Object.values( phases ).reduce( ( total, ms ) => total + ms, 0 );
+	phases.other = Math.max( 0, totalMs - accounted );
+	return phases;
+}
+
 export function createPhaseLedger( now: () => number = Date.now ): PhaseLedger {
 	const phases = new Map< string, CapturePhase >();
 	const waits: Record< string, ReadinessTally > = {};

@@ -147,6 +147,30 @@ describe('captureScreenshots', () => {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	} );
+	it( 'logs each route\'s phase breakdown, summing to the route total', async () => {
+		vi.mocked( connectBrowser ).mockResolvedValue( makeMockBrowser() as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'route-phases-' ) );
+		let stderr = '';
+		const write = vi.spyOn( process.stderr, 'write' ).mockImplementation( ( chunk ) => { stderr += String( chunk ); return true; } );
+		try {
+			const result = await captureScreenshots( { urls: [ 'https://example.com/a', 'https://example.com/b' ], outputDir, concurrency: 2, settleMs: 0 } );
+			expect( result.captured ).toBe( 2 );
+			const lines = stderr.split( '\n' );
+			const breakdowns = lines.filter( line => line.startsWith( '[timing] route-phases ' ) );
+			expect( breakdowns ).toHaveLength( 2 );
+			for ( const line of breakdowns ) {
+				const { url, ...phases } = JSON.parse( line.slice( '[timing] route-phases '.length ) );
+				expect( url ).toMatch( /^https:\/\/example\.com\/[ab]$/ );
+				expect( phases ).toHaveProperty( 'other' );
+				const total = Object.values( phases ).reduce( ( sum: number, ms ) => sum + Number( ms ), 0 );
+				const routeLine = lines.find( item => item.startsWith( '[timing] route ' ) && item.endsWith( url ) );
+				expect( total ).toBe( Number( routeLine?.match( /route (\d+)ms/ )?.[ 1 ] ) );
+			}
+		} finally {
+			write.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 	it( 'rejects an exhausted runtime budget at the one-route floor and closes its browser', async () => {
 		const constrained = vi.spyOn( process, 'constrainedMemory' ).mockReturnValue( 2 * 1024 ** 3 );
 		const available = vi.spyOn( process, 'availableMemory' ).mockReturnValue( 0 );
