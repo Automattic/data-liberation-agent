@@ -14,6 +14,7 @@ import { registerPlatform } from './registry.js';
 import { registerHost } from './host.js';
 import { netlifyHost } from '../hosts/netlify.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
+import { base44Adapter } from '../adapters/base44/index.js';
 import { bloggerAdapter } from '../adapters/blogger/index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
@@ -42,6 +43,7 @@ registerPlatform( defaultAdapter, { fallback: true } );
 // platforms, which may themselves use that framework's infrastructure.
 const builtins: Platform[] = [
 	nextjsAdapter,
+	base44Adapter,
 	bloggerAdapter,
 	emdashAdapter,
 	framerAdapter,

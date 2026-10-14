@@ -30,6 +30,14 @@ export function defaultViewports(mobile: { width: number; height: number }): Vie
  */
 export const SCREENSHOT_DEVICE_SCALE_FACTOR = 0.7;
 
+/**
+ * Quiet budget capture (and every measurement that can be compared against it)
+ * settles a route with when no explicit `settleMs` is supplied. Frozen source
+ * observations use this same budget so no measurement can observe a document
+ * after more settling than the reference was given.
+ */
+export const DEFAULT_CAPTURE_SETTLE_MS = 1_000;
+
 export interface ScreenshotOpts {
 	urls: string[];
 	outputDir: string;
@@ -69,7 +77,7 @@ export interface ScreenshotOpts {
 	/** Capture full-page and scrolled PNGs. Default: false; HTML/CSS and sidecars remain enabled. */
 	captureImages?: boolean;
 	evaluateTimeoutMs?: number; // default: 5_000
-	settleMs?: number; // default: 1_000
+	settleMs?: number; // default: DEFAULT_CAPTURE_SETTLE_MS
 	server?: CaptureLogSink;
 	verbose?: boolean;
 	/** Reject non-public requests and redirect targets during browser capture. */

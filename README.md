@@ -85,6 +85,7 @@ Naming an unknown target lists the registered ones.
 | Platform | Status |
 |---|---|
 | Blogger | Browser capture + feed accounting; opt-in orchestrated HTTP review capture |
+| Base44 | Ready (bounded probe for members-only `pushState` login rewrites) |
 | EmDash CMS | Ready |
 | Ghost | Ready |
 | GoDaddy Websites & Marketing | Ready |

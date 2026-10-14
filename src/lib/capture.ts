@@ -387,6 +387,10 @@ export async function captureWebsite(
 
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
 	const { createReferenceCollector } = await import( './fidelity/reference.js' );
+	// Reference observations settle with the capture's own budget (the same
+	// DEFAULT_CAPTURE_SETTLE_MS default `captureScreenshots` applies), so a
+	// frozen source observation can never describe a less-settled document
+	// than the capture it certifies.
 	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
 		routeScope,
 		publicUrlsOnly: true,

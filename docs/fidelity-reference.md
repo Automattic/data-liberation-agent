@@ -114,7 +114,11 @@ This is an integrity record, not a signature: preserve/hash the manifest itself 
 the caller's immutable evidence store with the rest of the run.
 
 Readiness is bounded to the settled layout, cleanup audit, decoded visible media,
-fonts and observed runtime errors. Fresh reference and candidate navigations run
+fonts and observed runtime errors. Reference observations settle with the
+capture's own quiet budget (`DEFAULT_CAPTURE_SETTLE_MS`), so a document whose
+runtime mutates after load is frozen the way the candidate comparison later
+measures it rather than as an early hydration frame. Fresh reference and
+candidate navigations run
 the controlled lazy-load sweep and return to the baseline pose before observation.
 The sweep never steps farther than the layout viewport height, so a phone document
 scaled into a wide window brings every region into view. Settling awaits in-flight

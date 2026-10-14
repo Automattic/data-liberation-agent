@@ -64,6 +64,7 @@ import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
+	DEFAULT_CAPTURE_SETTLE_MS,
 	SCREENSHOT_DEVICE_SCALE_FACTOR,
 	type CaptureLogSink,
 	type ScreenshotOpts,
@@ -2022,7 +2023,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
 	const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;
 	const evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 5_000;
-	const settleMs = opts.settleMs ?? 1_000;
+	const settleMs = opts.settleMs ?? DEFAULT_CAPTURE_SETTLE_MS;
 	const force = opts.force ?? false;
 	const server = opts.server;
 
