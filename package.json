@@ -48,6 +48,23 @@
   "engines": {
     "node": ">=22.0.0"
   },
+  "bundledDependencies": [
+    "@modelcontextprotocol/sdk",
+    "acorn",
+    "cheerio",
+    "domhandler",
+    "fast-xml-parser",
+    "ink",
+    "ink-spinner",
+    "papaparse",
+    "parse5-htmlparser2-tree-adapter",
+    "pixelmatch",
+    "pngjs",
+    "postcss",
+    "postcss-selector-parser",
+    "react",
+    "zod"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "acorn": "^8.17.0",

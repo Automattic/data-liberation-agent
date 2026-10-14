@@ -49,6 +49,36 @@ try {
   mkdirSync(consumerDir);
   const packed = run(npm, ['pack', '--json', '--pack-destination', scratch]);
   const [{ filename }] = JSON.parse(packed.stdout);
+  const releaseLayout = join(scratch, 'release-layout');
+  mkdirSync(join(releaseLayout, 'node_modules'), { recursive: true });
+  run('tar', ['-xzf', join(scratch, filename), '-C', releaseLayout, '--strip-components=1']);
+  const repoRequire = createRequire(join(repoRoot, 'package.json'));
+  const playwrightRoot = dirname(repoRequire.resolve('playwright/package.json'));
+  const playwrightRequire = createRequire(join(playwrightRoot, 'package.json'));
+  cpSync(playwrightRoot, join(releaseLayout, 'node_modules', 'playwright'), { recursive: true });
+  cpSync(
+    dirname(playwrightRequire.resolve('playwright-core/package.json')),
+    join(releaseLayout, 'node_modules', 'playwright-core'),
+    { recursive: true },
+  );
+  const compare = spawnSync(
+    process.execPath,
+    [join(releaseLayout, 'dist', 'cli.js'), 'compare', join(scratch, 'missing-run')],
+    {
+      cwd: releaseLayout,
+      encoding: 'utf8',
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: COMMAND_TIMEOUT_MS,
+    },
+  );
+  if (compare.error) throw compare.error;
+  if (compare.status === 0 || /ERR_MODULE_NOT_FOUND.*cheerio|Cannot find package 'cheerio'/.test(compare.stderr)) {
+    throw new Error(`Release-layout compare did not reach run validation: ${compare.stderr}`);
+  }
+  if (!/ENOENT|not found|missing-run/i.test(`${compare.stdout}\n${compare.stderr}`)) {
+    throw new Error(`Release-layout compare failed for an unexpected reason: ${compare.stderr}`);
+  }
+
   run(npm, [
     'install',
     '--prefix', consumerDir,
@@ -86,11 +116,12 @@ try {
   // browser revision that was never downloaded.
   const standaloneDir = join(scratch, 'standalone');
   mkdirSync(join(standaloneDir, 'node_modules'), { recursive: true });
-  const repoRequire = createRequire(join(repoRoot, 'package.json'));
-  const playwrightRoot = dirname(repoRequire.resolve('playwright/package.json'));
-  const playwrightRequire = createRequire(join(playwrightRoot, 'package.json'));
   cpSync(playwrightRoot, join(standaloneDir, 'node_modules', 'playwright'), { recursive: true });
-  cpSync(dirname(playwrightRequire.resolve('playwright-core/package.json')), join(standaloneDir, 'node_modules', 'playwright-core'), { recursive: true });
+  cpSync(
+    dirname(playwrightRequire.resolve('playwright-core/package.json')),
+    join(standaloneDir, 'node_modules', 'playwright-core'),
+    { recursive: true },
+  );
   copyFileSync(join(packageRoot, 'dist', 'capture-engine.bundle.mjs'), join(standaloneDir, 'runtime.mjs'));
   run(process.execPath, [join(repoRoot, 'scripts', 'test-runtime.mjs'), join(standaloneDir, 'runtime.mjs')], { cwd: standaloneDir });
 
