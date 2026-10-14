@@ -5,7 +5,8 @@ import { isInlineUrl } from './self-contain.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { fileHash, pathWithin, portableResourcePath, portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 import { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
-import { dependencyReferences, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSource, removeDanglingResourceReference, type PortableDependency } from './portable-references.js';
+import { dependencyReferences, isExcludedRendition, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSource, removeDanglingResourceReference, stripExcludedRenditionReferences, type PortableDependency } from './portable-references.js';
+import { stripImageSetCandidates } from './srcset.js';
 
 export interface PortableResourceOptions {
 	sourceRoot: string;
@@ -21,6 +22,8 @@ export interface PortableResourceOptions {
 	maxFileBytes?: number;
 	/** Dependency URLs the total export budget dropped; they resolve like uncaptured dependencies. */
 	excludedResources?: ReadonlyMap< string, unknown >;
+	/** Dependency URLs the total export budget excluded as redundant srcset renditions: their references leave every srcset and image-set list. */
+	excludedRenditions?: ReadonlyMap< string, unknown >;
 	projectEmbeddedHtml: ( html: string ) => string;
 }
 
@@ -156,6 +159,8 @@ export function materializePortableResources( options: PortableResourceOptions )
 				} catch { /* Preserve invalid optional metadata for diagnostics. */ }
 			}
 			if ( /text\/css/i.test( resource.contentType ) ) {
+				if ( options.excludedRenditions?.size )
+					content = stripImageSetCandidates( content, isExcludedRendition( options.excludedRenditions, dependency.url ) );
 				for ( const nested of dependencyReferences( content, dependency.url, true ) ) {
 					const mediaReplacement =
 						mediaReplacements.get( nested.reference ) ?? mediaReplacements.get( nested.url );
@@ -200,7 +205,11 @@ export function materializePortableResources( options: PortableResourceOptions )
 	};
 	for ( const entry of retainedEntries ) {
 		const originalHtml = readFileSync( entry.htmlPath, 'utf8' );
-		let html = originalHtml;
+		// Redundant renditions leave their lists before dependencies resolve, so
+		// no excluded candidate is materialized or left dangling in a srcset.
+		let html = options.excludedRenditions?.size
+			? stripExcludedRenditionReferences( originalHtml, entry.url, options.excludedRenditions )
+			: originalHtml;
 		for ( const dependency of dependencyReferences( html, entry.url, false, embeddedSources ) ) {
 			const mediaReplacement = mediaReplacements.get( dependency.reference );
 			if (

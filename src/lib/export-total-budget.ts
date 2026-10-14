@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join, posix } from 'node:path';
 import type { RouteDiagnostic } from './capture-export-routes.js';
+import { imageSetSites, isSrcsetShaped, srcsetCandidates } from './srcset.js';
 
 /**
  * Total budget for what export writes into `website/` (`maxTotalBytes`,
@@ -17,13 +18,22 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
  * first and reports each one, instead of producing an artifact the importer
  * rejects:
  *
- * 1. Captured assets the entrypoint does not need, fonts last; within that,
+ * 1. Redundant srcset renditions: an asset that is one candidate in a srcset
+ *    (img/source `srcset`, `data-srcset`, a srcset-shaped `src`, or an
+ *    `image-set()` list) where another candidate of that list is retained.
+ *    Each list keeps the rendition its element's `src` uses (when it is a
+ *    candidate) and otherwise prefers the widest candidate at or under 2048px;
+ *    a dropped rendition is removed from every srcset that retains another
+ *    candidate, so pages never show it as a missing image.
+ * 2. Captured assets the entrypoint does not need, fonts last; within that,
  *    largest first, videos before other media at equal size.
- * 2. Non-entry routes, last in route order first.
+ * 3. Non-entry routes, last in route order first.
  *
  * The entrypoint document and every file it references are never dropped.
  * Dropped assets resolve like any uncaptured asset (`asset_exceeds_total_budget`);
- * dropped routes are missing routes (`route_exceeds_total_budget`).
+ * dropped renditions are reported (`redundant_rendition_dropped`) and their
+ * references rewritten away; dropped routes are missing routes
+ * (`route_exceeds_total_budget`).
  */
 export const DEFAULT_MAX_TOTAL_BYTES = 250 * 1024 * 1024;
 export const DEFAULT_MAX_FILES = 5000;
@@ -37,6 +47,7 @@ export const POST_EXPORT_RESERVE = { bytes: 8 * 1024 * 1024, files: 16 } as cons
 
 export const ASSET_EXCEEDS_TOTAL_BUDGET = 'asset_exceeds_total_budget';
 export const ROUTE_EXCEEDS_TOTAL_BUDGET = 'route_exceeds_total_budget';
+export const REDUNDANT_RENDITION_DROPPED = 'redundant_rendition_dropped';
 
 export interface ExportTotalBudget {
 	maxTotalBytes: number;
@@ -52,10 +63,12 @@ export interface ExportBudgetExclusions {
 	assets: Map< string, number >;
 	/** Route URL -> bytes of its page and the files only it referenced. */
 	routes: Map< string, number >;
+	/** Source URL -> bytes of a redundant srcset rendition; export removes its references from every srcset that retains another candidate. */
+	renditions: Map< string, number >;
 }
 
 export function emptyExportBudgetExclusions(): ExportBudgetExclusions {
-	return { assets: new Map(), routes: new Map() };
+	return { assets: new Map(), routes: new Map(), renditions: new Map() };
 }
 
 export function validateMaxTotalBytes( maxTotalBytes: unknown ): void {
@@ -93,6 +106,14 @@ export function routeExceedsTotalBudget( url: string, bytes: number, budget: Exp
 	return {
 		code: ROUTE_EXCEEDS_TOTAL_BUDGET, url, unit: 'route', severity: 'error',
 		reason: `route (${ bytes } bytes) dropped to keep the website within the ${ budget.maxTotalBytes }-byte, ${ budget.maxFiles }-file export budget`,
+		metrics: { bytes, limit: budget.maxTotalBytes, fileLimit: budget.maxFiles },
+	};
+}
+
+export function redundantRenditionDropped( url: string, bytes: number, budget: ExportTotalBudget ): RouteDiagnostic {
+	return {
+		code: REDUNDANT_RENDITION_DROPPED, url, unit: 'asset', severity: 'warning',
+		reason: `redundant srcset rendition (${ bytes } bytes) dropped to keep the website within the ${ budget.maxTotalBytes }-byte, ${ budget.maxFiles }-file export budget; removed from its srcset and every other retained candidate still resolves`,
 		metrics: { bytes, limit: budget.maxTotalBytes, fileLimit: budget.maxFiles },
 	};
 }
@@ -155,6 +176,20 @@ const VIDEO_EXTENSIONS = new Set( [ '.mp4', '.webm', '.mov', '.m4v', '.ogv', '.a
 const AUDIO_EXTENSIONS = new Set( [ '.mp3', '.ogg', '.oga', '.wav', '.m4a', '.aac', '.flac' ] );
 const IMAGE_EXTENSIONS = new Set( [ '.avif', '.gif', '.jpg', '.jpeg', '.png', '.webp', '.svg', '.ico', '.bmp', '.tif', '.tiff' ] );
 
+/** Width candidates at or under this size stay in the site the budget keeps; wider renditions are droppable. */
+const RETAINED_RENDITION_WIDTH_LIMIT = 2048;
+const RENDITION_SCAN_EXTENSIONS = new Set( [ '.html', '.htm', '.css' ] );
+const SRCSET_ATTRIBUTE_GLOBAL = /\s(?:data-)?srcset\s*=\s*(?:"([\s\S]*?)"|'([\s\S]*?)')/gi;
+const IMG_SOURCE_ATTRIBUTE = /\ssrc\s*=\s*(?:"([\s\S]*?)"|'([\s\S]*?)')/i;
+
+/** One rendered candidate list (srcset attribute, shaped src, or image-set). */
+interface RenditionCandidateList {
+	/** Raw candidate references, in authored order, with the written path when the reference names a file now in `website/`. */
+	candidates: Array< { path?: string; size: number; density: boolean } >;
+	/** Written paths this list must retain because its element names them outside the list (e.g. an img src). */
+	forcedPaths: string[];
+}
+
 const compare = ( a: string, b: string ): number => ( a < b ? -1 : a > b ? 1 : 0 );
 
 /** Fonts are dropped last; among the rest, videos before audio before images before other files at equal size. */
@@ -210,6 +245,145 @@ function referenceClosure( root: string, files: ReadonlyMap< string, WebsiteFile
 }
 
 /**
+ * Redundant srcset renditions the budget drops before any unique asset.
+ *
+ * A rendition is redundant when it is a candidate of some srcset or image-set
+ * list that retains another written candidate even without it, is an asset
+ * export can leave out, and is never named outside a candidate list: its
+ * references are removed from every list on the next build while the site
+ * keeps rendering from the retained rendition. Each list keeps the written
+ * candidate its element's `src` names (when that is one) and otherwise
+ * prefers the widest width candidate at or under 2048px, falling back to the
+ * highest density and then the smallest oversized width.
+ */
+function redundantRenditionDrops( input: ExportBudgetPlanInput, filesByPath: ReadonlyMap< string, WebsiteFile >, websiteDir: string ): Array< { path: string; bytes: number; sourceUrls: string[] } > {
+	const droppableByPath = new Map( input.assets.map( asset => [ asset.path, asset ] ) );
+	const scanned: Array< { lists: RenditionCandidateList[]; remainder: string } > = [];
+	for ( const [ path ] of filesByPath ) {
+		if ( ! RENDITION_SCAN_EXTENSIONS.has( extname( path ).toLowerCase() ) ) continue;
+		let content: string;
+		try {
+			content = readFileSync( join( websiteDir, path ), 'utf8' );
+		} catch {
+			continue;
+		}
+		const lists: RenditionCandidateList[] = [];
+		const spans: Array< [ number, number ] > = [];
+		const candidatesOf = ( url: string ) => ( { path: resolveRenditionPath( url, path, filesByPath ), size: 1, density: false } );
+		if ( extname( path ).toLowerCase() === '.css' ) {
+			for ( const site of imageSetSites( content ) ) {
+				spans.push( [ site.start, site.end ] );
+				if ( site.urls.length >= 2 ) lists.push( { candidates: site.urls.map( candidatesOf ), forcedPaths: [] } );
+			}
+		} else {
+			// A lazy loader can name the whole width list in `src` itself; an
+			// ordinary src is a reference whose rendition stays written.
+			for ( const match of content.matchAll( /<(?:img|source)\b[^>]*>/gi ) ) {
+				const tag = match[ 0 ];
+				const tagOffset = match.index!;
+				const src = /^<img\b/i.test( tag ) ? attributeSpan( IMG_SOURCE_ATTRIBUTE, tag ) : undefined;
+				let forcedPaths: string[] = [];
+				if ( src && src.value ) {
+					if ( isSrcsetShaped( src.value ) ) {
+						spans.push( [ tagOffset + src.start, tagOffset + src.start + src.value.length ] );
+						lists.push( { candidates: srcsetCandidates( src.value ).map( candidate => ( { ...candidatesOf( candidate.url ), size: candidate.size, density: candidate.density } ) ), forcedPaths: [] } );
+					} else {
+						const sourcePath = resolveRenditionPath( src.value, path, filesByPath );
+						if ( sourcePath ) forcedPaths = [ sourcePath ];
+					}
+				}
+				for ( const attribute of tag.matchAll( SRCSET_ATTRIBUTE_GLOBAL ) ) {
+					const value = attribute[ 1 ] ?? attribute[ 2 ] ?? '';
+					if ( ! value ) continue;
+					spans.push( [ tagOffset + attribute.index! + attribute[ 0 ].length - 1 - value.length, tagOffset + attribute.index! + attribute[ 0 ].length - 1 ] );
+					lists.push( { candidates: srcsetCandidates( value ).map( candidate => ( { ...candidatesOf( candidate.url ), size: candidate.size, density: candidate.density } ) ), forcedPaths } );
+				}
+			}
+			for ( const site of imageSetSites( content ) ) {
+				spans.push( [ site.start, site.end ] );
+				if ( site.urls.length >= 2 ) lists.push( { candidates: site.urls.map( candidatesOf ), forcedPaths: [] } );
+			}
+		}
+		if ( lists.length === 0 ) continue;
+		scanned.push( { lists, remainder: withoutSpans( content, spans ) } );
+	}
+	if ( scanned.length === 0 ) return [];
+
+	const redundantHere = new Set< string >();
+	const retainedSomewhere = new Set< string >();
+	for ( const { lists } of scanned ) {
+		for ( const list of lists ) {
+			const written = list.candidates.filter( ( candidate ): candidate is typeof candidate & Required< Pick< typeof candidate, 'path' > > => candidate.path !== undefined );
+			const retainedPaths = new Set( list.forcedPaths.filter( path => written.some( candidate => candidate.path === path ) ) );
+			const keep = ( candidates: Array< ( typeof written )[ number ] > ): string | undefined =>
+				[ ...candidates ].sort( ( a, b ) => b.size - a.size || compare( a.path, b.path ) )[ 0 ]?.path;
+			const widthed = written.filter( candidate => ! candidate.density && candidate.size <= RETAINED_RENDITION_WIDTH_LIMIT );
+			const pick = widthed.length
+				? keep( widthed )
+				: keep( written.filter( candidate => candidate.density ) ) ?? keep( written.filter( candidate => candidate.size > RETAINED_RENDITION_WIDTH_LIMIT ) );
+			if ( pick ) retainedPaths.add( pick );
+			for ( const { path } of written ) {
+				if ( retainedPaths.has( path ) ) retainedSomewhere.add( path );
+				else if ( retainedPaths.size ) redundantHere.add( path );
+			}
+		}
+	}
+	return [ ...redundantHere ]
+		.filter( path =>
+			! retainedSomewhere.has( path ) &&
+			droppableByPath.has( path ) &&
+			filesByPath.has( path ) &&
+			! scanned.some( file => file.remainder.includes( posix.basename( path ) ) )
+		)
+		.map( path => ( { path, bytes: filesByPath.get( path )!.bytes, sourceUrls: [ ...droppableByPath.get( path )!.sourceUrls ].sort( compare ) } ) )
+		.sort( ( a, b ) => b.bytes - a.bytes || compare( a.path, b.path ) );
+}
+
+/** An HTML attribute value matched in a tag: the raw value and its start offset in the tag text. */
+function attributeSpan( pattern: RegExp, tag: string ): { value: string; start: number } | undefined {
+	const match = pattern.exec( tag );
+	if ( ! match ) return undefined;
+	const value = match[ 1 ] ?? match[ 2 ] ?? '';
+	return { value, start: match.index + match[ 0 ].length - 1 - value.length };
+}
+
+/** File content with every byte range in `spans` cut out. */
+function withoutSpans( content: string, spans: ReadonlyArray< [ number, number ] > ): string {
+	const sorted = [ ...spans ].sort( ( a, b ) => a[ 0 ] - b[ 0 ] );
+	let result = '';
+	let offset = 0;
+	for ( const [ start, end ] of sorted ) {
+		if ( start < offset ) continue;
+		result += content.slice( offset, start );
+		offset = end;
+	}
+	return result + content.slice( offset );
+}
+
+/** The written file a rendered candidate reference names, relative to its document or stylesheet. */
+function resolveRenditionPath( rawUrl: string, file: string, filesByPath: ReadonlyMap< string, WebsiteFile > ): string | undefined {
+	const reference = rawUrl.replace( /&amp;/g, '&' ).trim();
+	if ( ! reference || reference.startsWith( '#' ) || /^[a-z][a-z0-9+.-]*:/i.test( reference ) ) return undefined;
+	const pathname = ( reference.split( '#' )[ 0 ] ?? '' ).split( '?' )[ 0 ] ?? '';
+	if ( ! pathname || pathname === '/' ) return undefined;
+	// Root-relative references resolve from the website root, others from the referring file.
+	const base = pathname.startsWith( '/' ) ? '' : posix.dirname( file );
+	for ( const candidate of [ pathname, decodeURIComponentSafe( pathname ) ] ) {
+		const resolved = posix.normalize( posix.join( base, candidate.replace( /^\/+/, '' ) ) );
+		if ( filesByPath.has( resolved ) ) return resolved;
+	}
+	return undefined;
+}
+
+function decodeURIComponentSafe( value: string ): string {
+	try {
+		return decodeURIComponent( value );
+	} catch {
+		return value;
+	}
+}
+
+/**
  * Measure a built website against the budget and, when it is over, choose the
  * next units to drop. Deterministic: the same website and exclusions give the
  * same plan.
@@ -233,12 +407,27 @@ export function planExportBudget( input: ExportBudgetPlanInput ): ExportBudgetPl
 	const namesOf = new Map< string, Set< string > >();
 	const routePaths = new Set( input.routes.map( route => route.path ) );
 	const entryNeeds = referenceClosure( input.entrypointPath, files, websiteDir, byName, namesOf, routePaths );
-	const next: ExportBudgetExclusions = { assets: new Map( input.exclusions.assets ), routes: new Map( input.exclusions.routes ) };
+	const next: ExportBudgetExclusions = { assets: new Map( input.exclusions.assets ), routes: new Map( input.exclusions.routes ), renditions: new Map( input.exclusions.renditions ) };
 	let progressed = false;
 	const satisfied = () => excessBytes <= 0 && excessFiles <= 0;
 
+	// Redundant renditions go before any unique asset: removing one from its
+	// srcset leaves the element rendering from a retained rendition, never a
+	// missing image.
+	const renditionDroppedPaths = new Set< string >();
+	if ( ! satisfied() ) {
+		for ( const { path, bytes, sourceUrls } of redundantRenditionDrops( input, files, websiteDir ) ) {
+			if ( satisfied() ) break;
+			for ( const url of sourceUrls ) next.renditions.set( url, bytes );
+			renditionDroppedPaths.add( path );
+			excessBytes -= bytes;
+			excessFiles -= 1;
+			progressed = true;
+		}
+	}
+
 	const assets = input.assets
-		.filter( asset => files.has( asset.path ) && ! entryNeeds.has( asset.path ) && asset.sourceUrls.some( url => ! next.assets.has( url ) ) )
+		.filter( asset => files.has( asset.path ) && ! entryNeeds.has( asset.path ) && asset.sourceUrls.some( url => ! next.assets.has( url ) && ! next.renditions.has( url ) ) )
 		.map( asset => ( { ...asset, bytes: files.get( asset.path )!.bytes, rank: assetRank( asset.path ) } ) )
 		.sort( ( a, b ) => a.rank.font - b.rank.font || b.bytes - a.bytes || a.rank.kind - b.rank.kind || compare( a.path, b.path ) );
 	const droppedPaths = new Set< string >();
@@ -265,7 +454,7 @@ export function planExportBudget( input: ExportBudgetPlanInput ): ExportBudgetPl
 			let bytes = 0;
 			let count = 0;
 			for ( const path of closures.get( route.url ) ?? [] ) {
-				if ( elsewhere.has( path ) || droppedPaths.has( path ) ) continue;
+				if ( elsewhere.has( path ) || droppedPaths.has( path ) || renditionDroppedPaths.has( path ) ) continue;
 				droppedPaths.add( path );
 				bytes += files.get( path )!.bytes;
 				count += 1;

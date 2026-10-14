@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import { identityLogoReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
-import { isSrcsetShaped, rewriteMediaReferences, srcsetCandidates, srcsetReferences } from './srcset.js';
+import { isSrcsetShaped, rewriteMediaReferences, rewriteSrcset, srcsetCandidates, srcsetReferences, stripImageSetCandidates } from './srcset.js';
 import { URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 export interface PortableDependency {
@@ -304,6 +304,64 @@ export function replaceDanglingCssUrl(
 	// clean load for an asset the capture never got. about:blank cannot be fetched
 	// as a subresource, keeping the loss visible instead of silently successful.
 	return preparePortableReplacements( new Map( [ [ reference, 'about:blank' ] ] ), rejectedKeys )( html );
+}
+
+/** Whether a rendered reference names one of the excluded source URLs, escaped
+ * or resolved against the document it appears in. */
+export function isExcludedRendition(
+	excluded: ReadonlyMap< string, unknown >,
+	documentUrl: string
+): ( rawUrl: string ) => boolean {
+	return rawUrl => {
+		const normalized = rawUrl.replace( /&amp;/g, '&' );
+		if ( excluded.has( normalized ) ) return true;
+		try {
+			return excluded.has( new URL( normalized, documentUrl ).href );
+		} catch {
+			return false;
+		}
+	};
+}
+
+const SELECTABLE_SRCSET_ATTRIBUTE = /\s(?:data-)?srcset\s*=\s*(?:"([\s\S]*?)"|'([\s\S]*?)')/gi;
+const SELECTABLE_IMAGE_SOURCE = /\ssrc\s*=\s*(?:"([\s\S]*?)"|'([\s\S]*?)')/i;
+
+/**
+ * Remove srcset candidate references whose source URL the total budget
+ * excluded as a redundant rendition: img and source `srcset`/`data-srcset`
+ * attributes, a lazy loader's srcset-shaped `src`, and image-set() layers in
+ * style content. Each list never becomes empty — with no candidate left it
+ * stays as written — so a page never points at a dropped rendition.
+ */
+export function stripExcludedRenditionReferences(
+	html: string,
+	documentUrl: string,
+	excluded: ReadonlyMap< string, unknown >
+): string {
+	if ( excluded.size === 0 ) return html;
+	const drop = isExcludedRendition( excluded, documentUrl );
+	const withoutTags = html.replace( /<(?:img|source)\b[^>]*>/gi, tag => {
+		const rewritables: Array< { start: number; end: number; value: string } > = [];
+		const shapedSource = /^<img\b/i.test( tag ) ? SELECTABLE_IMAGE_SOURCE.exec( tag ) : undefined;
+		if ( shapedSource && isSrcsetShaped( ( shapedSource[ 1 ] ?? shapedSource[ 2 ] ?? '' ).replace( /&amp;/g, '&' ) ) ) {
+			rewritables.push( { start: shapedSource.index + shapedSource[ 0 ].length - 1 - ( shapedSource[ 1 ] ?? shapedSource[ 2 ] ?? '' ).length, end: shapedSource.index + shapedSource[ 0 ].length - 1, value: shapedSource[ 1 ] ?? shapedSource[ 2 ] ?? '' } );
+		}
+		for ( const attribute of tag.matchAll( SELECTABLE_SRCSET_ATTRIBUTE ) ) {
+			const value = attribute[ 1 ] ?? attribute[ 2 ] ?? '';
+			if ( ! value ) continue;
+			rewritables.push( { start: attribute.index! + attribute[ 0 ].length - 1 - value.length, end: attribute.index! + attribute[ 0 ].length - 1, value } );
+		}
+		// Spans are computed on the untouched tag; apply in reverse so offsets hold.
+		let result = tag;
+		for ( const rewriteable of rewritables.reverse() ) {
+			const candidates = srcsetCandidates( rewriteable.value );
+			const kept = candidates.filter( candidate => ! drop( candidate.url ) );
+			if ( kept.length === candidates.length || kept.length === 0 ) continue;
+			result = result.slice( 0, rewriteable.start ) + rewriteSrcset( rewriteable.value, url => drop( url ) ? null : url ) + result.slice( rewriteable.end );
+		}
+		return result;
+	} );
+	return stripImageSetCandidates( withoutTags, drop );
 }
 
 export function removeDanglingResourceReference( html: string, reference: string ): string {

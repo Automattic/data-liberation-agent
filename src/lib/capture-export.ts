@@ -74,7 +74,7 @@ import { materializePortableMedia, type FailedPortableMedia } from './portable-m
 import { elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
 import { assertPageWithinFileLimit, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
-import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, resolveExportTotalBudget, routeExceedsTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
+import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, routeExceedsTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
 import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
 import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
@@ -1241,14 +1241,14 @@ function recordExportBudget( stageDir: string, budget: ExportTotalBudget, plan: 
 		maxTotalBytes: budget.maxTotalBytes, maxFiles: budget.maxFiles,
 		reservedBytes: budget.reservedBytes, reservedFiles: budget.reservedFiles,
 		totalBytes: plan.totalBytes, files: plan.files, withinBudget: plan.withinBudget,
-		droppedAssets: exclusions.assets.size, droppedRoutes: exclusions.routes.size, passes,
+		droppedAssets: exclusions.assets.size, droppedRenditions: exclusions.renditions.size, droppedRoutes: exclusions.routes.size, passes,
 	};
 	const receiptPath = join( stageDir, 'capture-receipt.json' );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as Record< string, unknown >;
 	receipt.exportBudget = exportBudget;
 	writeFileSync( receiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
-	if ( exclusions.assets.size || exclusions.routes.size || ! plan.withinBudget )
-		process.stderr.write( `[budget] export website ${ plan.totalBytes } bytes in ${ plan.files } files (budget ${ budget.maxTotalBytes } bytes, ${ budget.maxFiles } files, ${ budget.reservedBytes } bytes reserved): dropped ${ exclusions.assets.size } assets and ${ exclusions.routes.size } routes${ plan.withinBudget ? '' : '; entrypoint and its dependencies alone exceed the budget' }\n` );
+	if ( exclusions.assets.size || exclusions.renditions.size || exclusions.routes.size || ! plan.withinBudget )
+		process.stderr.write( `[budget] export website ${ plan.totalBytes } bytes in ${ plan.files } files (budget ${ budget.maxTotalBytes } bytes, ${ budget.maxFiles } files, ${ budget.reservedBytes } bytes reserved): dropped ${ exclusions.assets.size } assets, ${ exclusions.renditions.size } redundant renditions and ${ exclusions.routes.size } routes${ plan.withinBudget ? '' : '; entrypoint and its dependencies alone exceed the budget' }\n` );
 }
 
 function buildExportCapture(
@@ -1615,6 +1615,9 @@ function buildExportCapture(
 		} catch {
 			// Invalid media URLs still flow through mediaReferences().
 		}
+		// A rendition the budget dropped is skipped: build stripped it from every
+		// srcset that retains another candidate, so nothing references it here.
+		if ( exclusions.renditions.has( sourceUrl ) ) continue;
 		const references = mediaReferences( sourceUrl, options.sourceUrl );
 		const family = mediaFamily( sourceUrl );
 		const exactReferences = references.filter( ( reference ) =>
@@ -1686,11 +1689,14 @@ function buildExportCapture(
 		embeddedSources,
 		maxFileBytes,
 		excludedResources: exclusions.assets,
+		excludedRenditions: exclusions.renditions,
 		projectEmbeddedHtml: ( html ) => safeCapturedPageHtml( html ).html,
 	} );
 	for ( const { url, bytes } of resourceStage.oversizedResources ) routeCaptureDiagnostics.push( assetExceedsFileLimit( url, bytes, maxFileBytes ) );
 	// Every asset the budget dropped is reported, including one no retained page reaches any more.
 	for ( const [ url, bytes ] of exclusions.assets ) routeCaptureDiagnostics.push( assetExceedsTotalBudget( url, bytes, budget ) );
+	// Redundant renditions the budget retired are reported like other budget losses.
+	for ( const [ url, bytes ] of exclusions.renditions ) routeCaptureDiagnostics.push( redundantRenditionDropped( url, bytes, budget ) );
 	mediaReplacements = resourceStage.mediaReplacements;
 	portablePathsBySource = resourceStage.portablePathsBySource;
 	assets.push( ...resourceStage.assets );
