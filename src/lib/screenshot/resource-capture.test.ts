@@ -458,6 +458,35 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( join( outputDir, 'website', poster ), 'utf8' ) ).toBe( 'poster bytes' );
 	} );
 
+	it( 'keeps fetching DOM dependencies while one slow resource holds a slot', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-pool-' ) );
+		dirs.push( outputDir );
+		const slow = 'https://example.com/slow.gif';
+		const fast = Array.from( { length: 16 }, ( _, index ) => `https://example.com/fast-${ index }.png` );
+		let release!: () => void;
+		const released = new Promise< void >( ( resolve ) => { release = resolve; } );
+		let active = 0;
+		let peak = 0;
+		const started: string[] = [];
+		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async ( url: string ) => {
+			started.push( url );
+			peak = Math.max( peak, ++active );
+			await ( url === slow ? released : new Promise( ( resolve ) => setTimeout( resolve, 5 ) ) );
+			active--;
+			return { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: Buffer.from( url ) };
+		} );
+		const capture = store.captureDomDependencies( [ slow, ...fast ].map( ( src ) => `<img src="${ src }">` ).join( '' ), 'https://example.com/' );
+		// Every fast resource is fetched while the slow one is still pending.
+		await vi.waitFor( () => expect( started ).toHaveLength( 17 ), { timeout: 2_000 } );
+		release();
+		await capture;
+		await store.flush();
+
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' ) );
+		expect( Object.keys( manifest.resources ).sort() ).toEqual( [ slow, ...fast ].sort() );
+		expect( peak ).toBe( 8 );
+	} );
+
 	it( 'records media fetches that exceed the capture bound', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );

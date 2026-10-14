@@ -485,52 +485,58 @@ export class CapturedResourceStore {
 
 		collect( html, documentUrl );
 		for ( const logo of identityLogoReferences( html ) ) add( logo, documentUrl );
+		// A rolling pool: a slow resource (a large animated GIF) holds one slot,
+		// not a whole batch. Stylesheets and manifests feed their own references
+		// back into `pending` as they complete.
+		const follow = ( url: string ) => {
+			const resource = this.manifest.resources[ url ];
+			if ( ! resource || ! /^(?:text\/css|application\/(?:json|manifest\+json))/i.test( resource.contentType ) ) return;
+			try {
+				const text = readFileSync(
+					resolve( this.resourceDir, resource.path.replace( /^resources\//, '' ) ),
+					'utf8'
+				);
+				if ( resource.contentType.toLowerCase().startsWith( 'text/css' ) ) collect( text, url, true );
+				if ( /manifest\+json|application\/json/i.test( resource.contentType ) ) {
+					const parsed = JSON.parse( text ) as { icons?: Array<{ src?: unknown }> };
+					for ( const icon of ( Array.isArray( parsed.icons ) ? parsed.icons : [] ).slice( 0, 64 ) )
+						if ( typeof icon?.src === 'string' ) add( icon.src, url );
+				}
+			} catch {
+				// captureUrl records unavailable resources in the manifest.
+			}
+		};
 		const startedAt = Date.now();
 		const processed = new Set< string >();
-		while ( true ) {
-			if ( Date.now() - startedAt >= MAX_DOM_RESOURCE_CAPTURE_MS ) {
-				this.manifest.failures.push( {
-					url: documentUrl,
-					error: `DOM render dependency capture exceeded ${ MAX_DOM_RESOURCE_CAPTURE_MS }ms`,
-				} );
-				break;
-			}
-			const batch = [ ...pending.keys() ]
-				.filter( ( url ) => ! processed.has( url ) )
-				.slice(
-					0,
-					Math.min( DOM_RESOURCE_CONCURRENCY, MAX_DOM_RESOURCE_DEPENDENCIES - processed.size )
-				);
-			if ( batch.length === 0 ) {
-				if ( [ ...pending.keys() ].some( ( url ) => ! processed.has( url ) ) ) {
-					this.manifest.failures.push( {
-						url: documentUrl,
-						error: `DOM render dependencies exceed max ${ MAX_DOM_RESOURCE_DEPENDENCIES }`,
+		let stopped: string | null = null;
+		const next = (): string | undefined => {
+			const url = [ ...pending.keys() ].find( ( candidate ) => ! processed.has( candidate ) );
+			if ( url === undefined || stopped ) return undefined;
+			if ( Date.now() - startedAt >= MAX_DOM_RESOURCE_CAPTURE_MS )
+				stopped = `DOM render dependency capture exceeded ${ MAX_DOM_RESOURCE_CAPTURE_MS }ms`;
+			else if ( processed.size >= MAX_DOM_RESOURCE_DEPENDENCIES )
+				stopped = `DOM render dependencies exceed max ${ MAX_DOM_RESOURCE_DEPENDENCIES }`;
+			if ( stopped ) return undefined;
+			processed.add( url );
+			return url;
+		};
+		await new Promise< void >( ( done ) => {
+			let active = 0;
+			const fill = () => {
+				while ( active < DOM_RESOURCE_CONCURRENCY ) {
+					const url = next();
+					if ( url === undefined ) break;
+					active++;
+					void this.captureUrl( url ).then( () => follow( url ) ).finally( () => {
+						active--;
+						fill();
 					} );
 				}
-				break;
-			}
-			for ( const url of batch ) processed.add( url );
-			await Promise.all( batch.map( ( url ) => this.captureUrl( url ) ) );
-			for ( const url of batch ) {
-				const resource = this.manifest.resources[ url ];
-				if ( ! resource || ! /^(?:text\/css|application\/(?:json|manifest\+json))/i.test( resource.contentType ) ) continue;
-				try {
-					const text = readFileSync(
-							resolve( this.resourceDir, resource.path.replace( /^resources\//, '' ) ),
-							'utf8'
-					);
-					if ( resource.contentType.toLowerCase().startsWith( 'text/css' ) ) collect( text, url, true );
-					if ( /manifest\+json|application\/json/i.test( resource.contentType ) ) {
-						const parsed = JSON.parse( text ) as { icons?: Array<{ src?: unknown }> };
-						for ( const icon of ( Array.isArray( parsed.icons ) ? parsed.icons : [] ).slice( 0, 64 ) )
-							if ( typeof icon?.src === 'string' ) add( icon.src, url );
-					}
-				} catch {
-					// captureUrl records unavailable resources in the manifest.
-				}
-			}
-		}
+				if ( active === 0 ) done();
+			};
+			fill();
+		} );
+		if ( stopped ) this.manifest.failures.push( { url: documentUrl, error: stopped } );
 	}
 
 	/**
