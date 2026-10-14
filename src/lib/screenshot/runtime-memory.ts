@@ -53,7 +53,7 @@ export function reclaimableMemoryFromVmStat( output: string | undefined ): numbe
 	if ( output === undefined ) return undefined;
 	const pageSize = Number( output.match( /page size of (\d+) bytes/ )?.[ 1 ] );
 	if ( ! Number.isSafeInteger( pageSize ) || pageSize <= 0 ) return undefined;
-	const pages = ( name: string ) => Number( output.match( new RegExp( `^Pages ${ name }\\s+(\\d+)\\.\\s*$`, 'm' ) )?.[ 1 ] );
+	const pages = ( name: string ) => Number( output.match( new RegExp( `^Pages ${ name }:\\s+(\\d+)\\.\\s*$`, 'm' ) )?.[ 1 ] );
 	const free = pages( 'free' ), inactive = pages( 'inactive' ), purgeable = pages( 'purgeable' ), speculative = pages( 'speculative' );
 	if ( [ free, inactive, purgeable, speculative ].some( value => ! Number.isSafeInteger( value ) ) ) return undefined;
 	return ( free + inactive + purgeable + speculative ) * pageSize;
