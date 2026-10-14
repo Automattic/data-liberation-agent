@@ -841,6 +841,11 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		const revealedPending = ( current: ReturnType< typeof content >, swept: ReturnType< typeof content > ) =>
 			[ ...current.rendered ].some( ( [ image, rendered ] ) =>
 				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! unreachable( image ) );
+		// The tallest the document has been while a sweep visited it. Scroll-linked
+		// chrome (a header that shrinks once scrolled) makes the same content
+		// shorter mid-sweep and taller again at the top, so the height read on
+		// return is not the extent swept. Only growth past this extent is a tail.
+		let sweptHeight = document.documentElement.scrollHeight;
 		const sweep = async () => {
 			// Absence of overflow is observed again at each width, never cached from
 			// a previous viewport. Arbitrary source observers cannot be proven absent,
@@ -848,8 +853,10 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			for ( let y = window.innerHeight; y < document.documentElement.scrollHeight && Date.now() - started < 20_000; y += window.innerHeight ) {
 				window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
 				await new Promise( resolve => setTimeout( resolve, 60 ) );
+				sweptHeight = Math.max( sweptHeight, document.documentElement.scrollHeight );
 			}
 			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
+			sweptHeight = Math.max( sweptHeight, document.documentElement.scrollHeight );
 			// Source libraries (e.g. MooTools) replace window.Event; the document's
 			// native factory still builds a real event.
 			const scrolled = document.createEvent( 'Event' );
@@ -858,7 +865,6 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		};
 		let sweptContent = content();
 		if ( lazy ) await sweep();
-		let sweptHeight = document.documentElement.scrollHeight;
 		// Retain the old rest budget and minimum resize window; only their
 		// redundant serial scheduling is removed. Additional sweeps share it.
 		const deadline = Date.now() + settleMs + 3500;
@@ -874,7 +880,6 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 				// tail after the first sweep. Observe it before declaring readiness.
 				sweptContent = currentContent;
 				await sweep();
-				sweptHeight = document.documentElement.scrollHeight;
 				quiet = 0;
 				previous = snapshot();
 				continue;

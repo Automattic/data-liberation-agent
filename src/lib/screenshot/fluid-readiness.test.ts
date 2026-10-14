@@ -259,6 +259,37 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.locator( '#reachable' ).evaluate( image => ( image as HTMLImageElement ).complete ) ).toBe( true );
 		} finally { await page.close(); }
 	}, 30_000 );
+	it( 'does not resweep when scroll-linked chrome restores the at-top height it had before the sweep', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>body{margin:0}</style>
+				<header id="header" style="height:120px">Neutral header</header>
+				<div id="box" style="width:720px;height:40px">Neutral text</div><div style="height:4000px"></div>
+				<script>
+				window.sweeps = 0;
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top === innerHeight) sweeps++; scroll(options); };
+				const box = document.querySelector('#box');
+				function resize() { box.style.width = innerWidth / 2 + 'px'; }
+				addEventListener('resize', resize); resize();
+				// The header shrinks once scrolled and regrows at the top on its own schedule.
+				addEventListener('scroll', () => {
+					const top = scrollY === 0;
+					setTimeout(() => { document.querySelector('#header').style.height = top ? '120px' : '64px'; }, 150);
+				});
+				</script>` );
+			const start = performance.now();
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 800 } );
+			const elapsed = performance.now() - start;
+			const sweeps = await page.evaluate( () => ( window as unknown as { sweeps: number } ).sweeps );
+			console.info( JSON.stringify( { fixture: 'scroll-linked-header', elapsedMs: Math.round( elapsed ), sweeps, result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			expect( await page.locator( '#header' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( 120 );
+			// One sweep per sampled width; the return to the capture width does not sweep.
+			expect( sweeps ).toBe( 3 );
+		} finally { await page.close(); }
+	}, 40_000 );
+
 	it( 'does not resweep for a perpetual rotator that toggles already-loaded images within the swept extent', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
