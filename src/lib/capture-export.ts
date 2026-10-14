@@ -29,6 +29,8 @@ import {
 	indexPortableMediaReferences,
 	mediaReferenceMatched,
 	planPortableMediaFamilies,
+	renditionDimension,
+	renditionFamily,
 	type PortableMediaCandidate,
 } from './portable-media-plan.js';
 import { isElementNode, isYuiRuntimeId, YUI_RUNTIME_ID } from './html-nodes.js';
@@ -71,8 +73,8 @@ import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
 import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
 import { elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
-import { materializePortableResources } from './portable-resources.js';
-import { assertPageWithinFileLimit, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
+import { materializePortableResources, planPortableResources } from './portable-resources.js';
+import { assertPageWithinFileLimit, assetExceedsBudget, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, DEFAULT_WEBSITE_TOTAL_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
 import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
@@ -123,8 +125,8 @@ interface ScreenshotManifest {
 }
 
 export interface ExportLimits {
-	/** Overrides the portable media byte budget. */
-	portableMediaTotalBytes?: number;
+	/** Total byte budget for the whole exported `website/` tree. Default `DEFAULT_WEBSITE_TOTAL_BYTES`. */
+	websiteTotalBytes?: number;
 	/** Largest file written into `website/`; default `DEFAULT_MAX_FILE_BYTES`. See export-file-limit.ts. */
 	maxFileBytes?: number;
 }
@@ -175,6 +177,8 @@ interface CaptureEntry {
 	scrollStates?: ScrollStatesReport;
 	styleHoistContext: StyleHoistContext;
 	sourceInteractivity: SourceInteractivityPage;
+	/** Byte length of the staged portable document, for the website byte budget. */
+	documentBytes: number;
 }
 
 function isUsableSectionEvidence( sections: unknown ): sections is Record< string, unknown >[] {
@@ -204,7 +208,6 @@ function semanticSectionEvidence(
 	} );
 }
 
-const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
 const MAX_DECLARATIVE_FORM_EMBEDS = 32;
 const MAX_JSON_LD_SCRIPTS = 16;
 const MAX_JSON_LD_SCRIPT_BYTES = 64 * 1024;
@@ -731,14 +734,11 @@ function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 	return { rendered, retained };
 }
 
+// One rendition family identity across every stage: URLs split only by
+// rendition parameters (Squarespace `?format=1200w`, a hashed `-520w` file
+// suffix, a GoDaddy `/rs=w:1160,h:720` segment) name the same picture.
 function mediaFamily( sourceUrl: string ): string {
-	const url = new URL( sourceUrl );
-	const transformedPath = /^(.*?)\/v1\/(?:fill|fit|crop)\//i.exec( url.pathname )?.[ 1 ];
-	if ( transformedPath ) return `${ url.origin }${ transformedPath }`;
-	const parameters = [ ...url.searchParams.keys() ];
-	return parameters.length > 0 && parameters.every( ( key ) => key === 'w' || key === 'h' )
-		? `${ url.origin }${ url.pathname }`
-		: sourceUrl;
+	return renditionFamily( sourceUrl );
 }
 
 // A captured interaction state carries the HTML of a revealed panel. That HTML
@@ -801,18 +801,7 @@ function localizeStringsInPlace( value: unknown, localize: ( text: string ) => s
 }
 
 function mediaDimension( sourceUrl: string ): number {
-	const url = new URL( sourceUrl );
-	const finalTransformation = [
-		...url.pathname.matchAll( /\/v1\/(?:fill|fit|crop)\/([^/]+)/gi ),
-	].at( -1 )?.[ 1 ];
-	const pathDimensions = [
-		...( finalTransformation ?? url.pathname ).matchAll( /(?:^|[,/])(?:w|h)_(\d+)/gi ),
-	].map( ( match ) => Number( match[ 1 ] ) || 0 );
-	return Math.max(
-		Number( url.searchParams.get( 'w' ) ) || 0,
-		Number( url.searchParams.get( 'h' ) ) || 0,
-		...pathDimensions
-	);
+	return renditionDimension( sourceUrl );
 }
 
 function routeMatchesSourceOrigin( url: string, sourceUrl: string ): boolean {
@@ -1210,9 +1199,9 @@ function buildExportCapture(
 	siteSwitchWidth: number | undefined,
 	stageDir: string,
 ): void {
-	const portableMediaTotalBytesLimit = Math.max(
+	const websiteTotalBytes = Math.max(
 		0,
-		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
+		Math.floor( options.limits?.websiteTotalBytes ?? DEFAULT_WEBSITE_TOTAL_BYTES )
 	);
 	validateMaxFileBytes( options.limits?.maxFileBytes );
 	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
@@ -1446,6 +1435,7 @@ function buildExportCapture(
 				scrollStates: entry.scrollStates,
 				styleHoistContext,
 				sourceInteractivity,
+				documentBytes: Buffer.byteLength( html ),
 			} );
 			if (
 				entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
@@ -1511,6 +1501,14 @@ function buildExportCapture(
 	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
 		retainedMediaReferenceInventory( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
+
+	// Only documents, media and resources spend the website byte budget; the
+	// stylesheets stage and shared runtime sit inside the ten-megabyte headroom
+	// between `DEFAULT_WEBSITE_TOTAL_BYTES` and the importer intake limit.
+	const portableDocumentBytes = retainedEntries.reduce(
+		( total, entry ) => total + entry.documentBytes,
+		0
+	);
 	const failedMedia: FailedPortableMedia[] = [];
 	const capturedPages = new Set(
 		[ options.sourceUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {
@@ -1592,7 +1590,18 @@ function buildExportCapture(
 		};
 		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate ] );
 	}
-	const portableMediaBudget = portableMediaTotalBytesLimit;
+	// Plan the resource side first: its required bytes — stylesheets, fonts,
+	// scripts and one rendition per referenced picture — are reserved out of
+	// the website total before the media tier plans its share. Families the
+	// media stage already covers are not double-planned.
+	const resourcePlan = planPortableResources( {
+		sourceRoot: outputDir,
+		entries: retainedEntries,
+		resourceManifest,
+		embeddedSources,
+		coveredMediaFamilies: new Set( mediaFamilies.keys() ),
+	} );
+	const portableMediaBudget = Math.max( 0, websiteTotalBytes - portableDocumentBytes - resourcePlan.requiredBytes );
 	const portableMediaPlan = planPortableMediaFamilies(
 		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates } ) ),
 		portableMediaBudget,
@@ -1620,9 +1629,15 @@ function buildExportCapture(
 		portablePathsBySource,
 		embeddedSources,
 		maxFileBytes,
+		plan: resourcePlan,
+		maxTotalBytes: Math.max(
+			0,
+			websiteTotalBytes - portableDocumentBytes - mediaStage.portableMedia.selected_bytes
+		),
 		projectEmbeddedHtml: ( html ) => safeCapturedPageHtml( html ).html,
 	} );
 	for ( const { url, bytes } of resourceStage.oversizedResources ) routeCaptureDiagnostics.push( assetExceedsFileLimit( url, bytes, maxFileBytes ) );
+	for ( const { url, bytes } of resourceStage.overBudgetResources ) routeCaptureDiagnostics.push( assetExceedsBudget( url, bytes, websiteTotalBytes ) );
 	mediaReplacements = resourceStage.mediaReplacements;
 	portablePathsBySource = resourceStage.portablePathsBySource;
 	assets.push( ...resourceStage.assets );

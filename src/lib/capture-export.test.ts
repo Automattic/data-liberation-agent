@@ -2944,9 +2944,11 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-		expect( $( 'img' ).eq( 0 ).attr( 'src' ) ).toBe( '/media/plant-300.webp' );
-		expect( $( 'img' ).eq( 1 ).attr( 'src' ) ).toBe( '/media/plant-300.webp' );
-		expect( readFileSync( join( outputDir, 'website', 'media', 'plant-300.webp' ), 'utf8' ) ).toBe( 'plant' );
+		// Same rendition family, one localized rendition: both deduplicated srcs
+		// bind to the family's retained primary.
+		expect( $( 'img' ).eq( 0 ).attr( 'src' ) ).toBe( '/media/plant-600.webp' );
+		expect( $( 'img' ).eq( 1 ).attr( 'src' ) ).toBe( '/media/plant-600.webp' );
+		expect( readFileSync( join( outputDir, 'website', 'media', 'plant-600.webp' ), 'utf8' ) ).toBe( 'plant' );
 	} );
 
 	it( 'writes one successful asset outcome with every captured route reference', () => {
@@ -6681,22 +6683,25 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		media.markSuccess( 'https://cdn.example/second.png', join( outputDir, 'media', 'second.png' ) );
 		media.flush();
 
-		const artifactTotalBytes = 500 * 1024;
+		const artifactTotalBytes = 500 * 1024 + 300 * 1024 + 4096;
 		const receiptPath = exportWebsiteCapture( {
 			outputDir,
 			sourceUrl: 'https://example.com/',
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { portableMediaTotalBytes: artifactTotalBytes },
+			limits: { websiteTotalBytes: artifactTotalBytes },
 		} );
 
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia ).toMatchObject( {
 			selected_count: 2,
 			retained_external_count: 0,
-			max_bytes: artifactTotalBytes,
 		} );
+		// The media tier gets the website budget left after the documents and
+		// resources were reserved, and never more than the whole-tree budget.
+		expect( receipt.portableMedia.max_bytes ).toBeGreaterThan( 2 * 120 * 1024 );
+		expect( receipt.portableMedia.max_bytes ).toBeLessThanOrEqual( artifactTotalBytes );
 	} );
 
 	it( 'keeps generated reports beside the portable website', () => {
@@ -6723,7 +6728,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { portableMediaTotalBytes: 480 * 1024 },
+			limits: { websiteTotalBytes: 480 * 1024 },
 		} );
 
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
@@ -6785,7 +6790,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { portableMediaTotalBytes: 400 * 1024 },
+			limits: { websiteTotalBytes: 400 * 1024 },
 		} );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia.selected_count ).toBe( 1 );
@@ -6821,7 +6826,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { portableMediaTotalBytes: limit },
+			limits: { websiteTotalBytes: limit },
 		} );
 
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( '/assets/css/capture-' );
@@ -6847,7 +6852,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { portableMediaTotalBytes: 3 * 1024 },
+			limits: { websiteTotalBytes: 3 * 1024 },
 		} );
 		expect( existsSync( join( outputDir, 'website', 'page-99', 'index.html' ) ) ).toBe( true );
 		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
@@ -7046,7 +7051,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				platform: 'fake',
 				summary: {},
 				failures: [],
-				limits: { portableMediaTotalBytes: 1000 },
+				limits: { websiteTotalBytes: 1500 },
 			} );
 
 			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
@@ -7096,7 +7101,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				platform: 'fake',
 				summary: {},
 				failures: [],
-				limits: { portableMediaTotalBytes: 1500 },
+				limits: { websiteTotalBytes: 2500 },
 			} );
 
 			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );

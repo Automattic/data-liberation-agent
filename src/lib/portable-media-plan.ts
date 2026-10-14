@@ -12,6 +12,57 @@ const MAX_PORTABLE_MEDIA_BYTES = 5 * 1024 * 1024;
 const MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 
+const WIDTH_RENDITION_QUERY_PARAMS = new Set( [
+	'w', 'h', 'width', 'height', 'format', 'dw', 'dpr', 'size',
+] );
+
+export function renditionFamily( sourceUrl: string ): string {
+	const url = new URL( sourceUrl );
+	const transformedPath = /^(.*?)\/v1\/(?:fill|fit|crop)\//i.exec( url.pathname )?.[ 1 ];
+	let pathname = transformedPath
+		? transformedPath
+		: url.pathname
+			.replace( /\/:(?:\/)?rs=w:\d+,h:\d+(?:,[^/]*)*(?=\/|$)/gi, '' );
+	pathname = pathname.replace( /-(\d+)w(?=\.\w+$)/i, '' );
+	const keptParams: string[] = [];
+	for ( const [ key, value ] of url.searchParams ) {
+		if ( WIDTH_RENDITION_QUERY_PARAMS.has( key.toLowerCase() ) && /^\d+(?:w|h)?$/i.test( value ) ) continue;
+		keptParams.push( value ? `${ key }=${ value }` : key );
+	}
+	return `${ url.origin }${ pathname }${ keptParams.length > 0 ? `?${ keptParams.join( '&' ) }` : '' }`;
+}
+
+/**
+ * The scale a rendition restores: the largest size encoded in the URL itself
+ * (a width query parameter such as Squarespace's `?format=1200w`, the width
+ * suffix of a hashed file name, a `w_800` transformation segment, or a plain
+ * `w`/`h` query), used to rank renditions of one picture.
+ */
+export function renditionDimension( sourceUrl: string ): number {
+	try {
+		const url = new URL( sourceUrl );
+		const transformations = [ ...url.pathname.matchAll( /\/v1\/(?:fill|fit|crop)\/([^/]+)/gi ) ]
+			.map( ( match ) => match[ 1 ] );
+		const dimensions: number[] = [];
+		for ( const [ key, value ] of url.searchParams ) {
+			if ( [ 'w', 'h' ].includes( key.toLowerCase() ) ) dimensions.push( Number( value ) || 0 );
+			const format = /^(\d+)w$/i.exec( value );
+			if ( key.toLowerCase() === 'format' && format ) dimensions.push( Number( format[ 1 ] ) || 0 );
+		}
+		for ( const match of (
+			// The rendered scale is encoded in the last transformation segment, so
+			// a rendered.jpg@704 path that passes through w_3939 intermediates is
+			// still a 704 rendition.
+			transformations.at( -1 ) ?? url.pathname
+		).matchAll( /(?:^|[,/])(?:w|h)_(\d+)|\/:(?:\/)?rs=w:(\d+)|-(\d+)w(?=\.\w+$)/gi ) ) {
+			dimensions.push( Number( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ) || 0 );
+		}
+		return Math.max( 0, ...dimensions );
+	} catch {
+		return 0;
+	}
+}
+
 export interface PortableMediaCandidate {
 	sourceUrl: string;
 	localPath: string;
@@ -188,18 +239,28 @@ export function planPortableMediaFamilies(
 	const admitted = new Map< PortableMediaCandidate, PortableMediaFamilyDecision[ 'admitted' ][ number ] >();
 	const hashes = new Set< string >();
 	let selectedBytes = 0;
-	for ( const family of admissionOrder ) {
-		for ( const candidate of family.eligible ) {
-			const contentHash = fileHash( candidate.localPath );
-			const needsFile = ! hashes.has( contentHash );
-			if ( ! needsFile || selectedBytes + candidate.bytes <= budget ) {
-				admitted.set( candidate, { candidate, contentHash } );
-				if ( needsFile ) {
-					hashes.add( contentHash );
-					selectedBytes += candidate.bytes;
-				}
+	const admit = ( candidate: PortableMediaCandidate ): void => {
+		const contentHash = fileHash( candidate.localPath );
+		const needsFile = ! hashes.has( contentHash );
+		if ( ! needsFile || selectedBytes + candidate.bytes <= budget ) {
+			admitted.set( candidate, { candidate, contentHash } );
+			if ( needsFile ) {
+				hashes.add( contentHash );
+				selectedBytes += candidate.bytes;
 			}
 		}
+	};
+	// Required tier first: every family gets one rendition (the widest scale
+	// the srcset names) before anything spends bytes on additional renditions,
+	// so a fan-out of sizes can never displace another picture entirely.
+	for ( const family of admissionOrder ) {
+		const primary = family.eligible[ 0 ];
+		if ( primary ) admit( primary );
+	}
+	// Additional tier after: remaining renditions and lower-priority media
+	// share whatever the budget still has left, in the same admission order.
+	for ( const family of admissionOrder ) {
+		for ( const candidate of family.eligible.slice( 1 ) ) admit( candidate );
 	}
 	return {
 		families: families.map( ( family, index ) => {

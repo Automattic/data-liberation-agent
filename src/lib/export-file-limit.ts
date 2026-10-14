@@ -11,8 +11,21 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
  */
 export const DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024;
 
+/**
+ * One total byte budget for the whole exported `website/` tree (`websiteTotalBytes`).
+ *
+ * The default sits under Static Site Importer's staged archive intake
+ * (250 MiB uncompressed, `static_site_importer_staged_archive_limits()`) and
+ * leaves headroom for the remaining artifact. Media and resources spend it
+ * together, required bytes first. Change importer and default together.
+ */
+export const DEFAULT_WEBSITE_TOTAL_BYTES = 240 * 1024 * 1024;
+
 /** A captured asset over `maxFileBytes`: not written; its references stay unresolved. */
 export const ASSET_EXCEEDS_FILE_LIMIT = 'asset_exceeds_file_limit';
+
+/** A captured asset whose bytes do not fit the portable export budget. */
+export const ASSET_EXCEEDS_BUDGET = 'asset_exceeds_budget';
 
 export function validateMaxFileBytes( maxFileBytes: unknown ): void {
 	if ( maxFileBytes !== undefined && ( typeof maxFileBytes !== 'number' || ! Number.isSafeInteger( maxFileBytes ) || maxFileBytes < 1 ) )
@@ -23,6 +36,14 @@ export function assetExceedsFileLimit( url: string, bytes: number, limit: number
 	return {
 		code: ASSET_EXCEEDS_FILE_LIMIT, url, unit: 'asset', severity: 'warning',
 		reason: `captured asset is ${ bytes } bytes, over the ${ limit }-byte per-file export limit; not written and its references left unresolved`,
+		metrics: { bytes, limit },
+	};
+}
+
+export function assetExceedsBudget( url: string, bytes: number, limit: number ): RouteDiagnostic {
+	return {
+		code: ASSET_EXCEEDS_BUDGET, url, unit: 'asset', severity: 'warning',
+		reason: `captured asset is ${ bytes } bytes, over the ${ limit }-byte portable export budget; not written and its references left unresolved`,
 		metrics: { bytes, limit },
 	};
 }

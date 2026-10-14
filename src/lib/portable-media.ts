@@ -103,6 +103,15 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			continue;
 		}
 		localizedMediaFamilies.add( family );
+		// Additional renditions the budget left out: their references fall back
+		// to the retained rendition below, and every omitted URL is diagnosed.
+		for ( const eligible of decision.eligible ) {
+			if ( ! decision.admitted.some( ( { candidate } ) => candidate === eligible ) )
+				unresolvedMedia.push( {
+					url: eligible.sourceUrl,
+					error: 'omitted because the aggregate portable export budget was reached',
+				} );
+		}
 		let fallbackAssetPath = '';
 		for ( const { candidate, contentHash } of admitted ) {
 			let assetPath = assetPathsByHash.get( contentHash );
