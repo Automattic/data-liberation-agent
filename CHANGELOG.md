@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.29.4] - 2026-10-14
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- retire redundant srcset renditions before unique assets under the total budget
+
 ## [0.29.3] - 2026-10-14
 
 ### Changed
