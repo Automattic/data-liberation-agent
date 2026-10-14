@@ -131,26 +131,17 @@ function makeCrashingBrowser(crashAt: string): MockBrowser {
 }
 
 describe('captureScreenshots', () => {
-	it.each( [ 0, 2 ** 64 ] )( 'retains parallel default capture when the runtime constraint is unlimited (%s)', async ( limit ) => {
+	it.each( [ 0, 2 ** 64 ] )( 'bounds default capture by machine memory when the runtime constraint is unlimited (%s)', async ( limit ) => {
+		// A microVM sized to the capture has no cgroup limit; its memory is the machine's.
 		const constrained = vi.spyOn( process, 'constrainedMemory' ).mockReturnValue( limit );
 		const available = vi.spyOn( process, 'availableMemory' ).mockReturnValue( 0 );
 		const browser = makeMockBrowser();
-		const newContext = browser.newContext;
-		let active = 0, peak = 0;
-		browser.newContext = vi.fn( async ( options ) => {
-			const context = await newContext( options );
-			peak = Math.max( peak, ++active );
-			const close = context.close;
-			context.close = async () => { try { await close(); } finally { active--; } };
-			return context;
-		} );
 		vi.mocked( connectBrowser ).mockResolvedValue( browser as never );
 		const outputDir = mkdtempSync( join( tmpdir(), 'memory-unconstrained-' ) );
 		try {
-			const result = await captureScreenshots( { urls: [ 'https://example.com/a', 'https://example.com/b' ], outputDir, settleMs: 0 } );
-			expect( result.captured ).toBe( 2 );
-			expect( peak ).toBe( 4 );
-			expect( available ).not.toHaveBeenCalled();
+			await expect( captureScreenshots( { urls: [ 'https://example.com/a', 'https://example.com/b' ], outputDir, settleMs: 0 } ) ).rejects.toThrow( 'no available memory at the one-route floor' );
+			expect( available ).toHaveBeenCalled();
+			expect( browser.close ).toHaveBeenCalled();
 		} finally {
 			constrained.mockRestore(); available.mockRestore();
 			rmSync( outputDir, { recursive: true, force: true } );
