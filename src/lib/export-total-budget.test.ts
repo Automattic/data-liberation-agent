@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as cheerio from 'cheerio';
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportWebsiteCapture } from './capture-export.js';
 import { buildSourceFindings, writeSourceFindings } from './source-findings.js';
@@ -10,6 +11,7 @@ import {
 	recordFinalWebsiteSize, resolveExportTotalBudget, validateMaxFiles, validateMaxTotalBytes,
 } from './export-total-budget.js';
 import { MediaStubStore } from './resume-state/index.js';
+import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 
 const SOURCE = 'https://example.com/';
 const ABOUT = 'https://example.com/about';
@@ -260,5 +262,177 @@ describe( 'planExportBudget', () => {
 		const { totalBytes } = measureWebsite( dir );
 		const plan = planExportBudget( { websiteDir: dir, budget: { maxTotalBytes: totalBytes - 1, maxFiles: 100, reservedBytes: 0, reservedFiles: 0 }, entrypointPath: 'index.html', routes: [ { url: SOURCE, path: 'index.html' } ], assets, exclusions: emptyExportBudgetExclusions() } );
 		expect( [ ...plan.next!.assets.keys() ] ).toEqual( [ 'media/b.webm' ] );
+	} );
+} );
+
+describe( 'redundant srcset renditions first', () => {
+	function website( files: Record< string, string | number > ): string {
+		const dir = tempDir( 'liberation-rendition-plan-' );
+		for ( const [ path, content ] of Object.entries( files ) ) {
+			mkdirSync( join( dir, path, '..' ), { recursive: true } );
+			writeFileSync( join( dir, path ), typeof content === 'number' ? Buffer.alloc( content ) : content );
+		}
+		return dir;
+	}
+
+	const rendition = ( name: string ) => `https://cdn.example/${ name }.webp`;
+
+	it( 'drops redundant renditions before any unique asset, keeping each src rendition and the widest candidate at or under 2048px', () => {
+		const dir = website( {
+			'index.html':
+				'<img src="/media/photo-320.webp" srcset="/media/photo-160.webp 160w, /media/photo-320.webp 320w, /media/photo-640.webp 640w, /media/photo-1280.webp 1280w" sizes="500px">' +
+				'<img src="/media/hero.png" alt="Hero">',
+			'about/index.html': '<img src="/media/unique.png" alt="Unique">',
+			'media/photo-160.webp': 600,
+			'media/photo-320.webp': 1000,
+			'media/photo-640.webp': 2000,
+			'media/photo-1280.webp': 4000,
+			'media/hero.png': 3000,
+			'media/unique.png': 4100,
+		} );
+		const renditions = [ 'media/photo-160.webp', 'media/photo-320.webp', 'media/photo-640.webp', 'media/photo-1280.webp' ];
+		const assets = [ ...renditions, 'media/hero.png', 'media/unique.png' ]
+			.map( path => ( { path, sourceUrls: [ `https://example.com/${ path }` ] } ) );
+		const routes = [ { url: SOURCE, path: 'index.html' }, { url: ABOUT, path: 'about/index.html' } ];
+		const { totalBytes } = measureWebsite( dir );
+		const plan = ( need: number ) => planExportBudget( { websiteDir: dir, budget: { maxTotalBytes: totalBytes - need, maxFiles: 100, reservedBytes: 0, reservedFiles: 0 }, entrypointPath: 'index.html', routes, assets, exclusions: emptyExportBudgetExclusions() } );
+
+		// Rendition 640w (2000 bytes) is droppable here: the site keeps its src rendition (320w) and the widest candidate at or under 2048px (1280w).
+		const early = plan( 2000 );
+		expect( early.next!.assets.size ).toBe( 0 );
+		expect( early.next!.renditions.size ).toBe( 1 );
+		expect( early.next!.renditions.has( 'https://example.com/media/photo-640.webp' ) ).toBe( true );
+
+		// The unique asset is only touched when dropped renditions are not enough.
+		const further = plan( 4000 );
+		expect( [ ...further.next!.renditions.keys() ] ).toEqual( [ 'https://example.com/media/photo-640.webp', 'https://example.com/media/photo-160.webp' ] );
+		expect( [ ...further.next!.assets.keys() ] ).toEqual( [ 'https://example.com/media/unique.png' ] );
+	} );
+
+	it( 'resolves root-relative srcset candidates on nested routes from the website root', () => {
+		const dir = website( {
+			'index.html': '<h1>Home</h1>',
+			'about/index.html': '<img src="/media/photo-320.webp" srcset="/media/photo-160.webp 160w, /media/photo-320.webp 320w, /media/photo-1280.webp 1280w" sizes="500px">',
+			'media/photo-160.webp': 600,
+			'media/photo-320.webp': 1000,
+			'media/photo-1280.webp': 4000,
+		} );
+		const assets = [ 'media/photo-160.webp', 'media/photo-320.webp', 'media/photo-1280.webp' ]
+			.map( path => ( { path, sourceUrls: [ `https://example.com/${ path }` ] } ) );
+		const routes = [ { url: SOURCE, path: 'index.html' }, { url: ABOUT, path: 'about/index.html' } ];
+		const { totalBytes } = measureWebsite( dir );
+		const plan = planExportBudget( { websiteDir: dir, budget: { maxTotalBytes: totalBytes - 600, maxFiles: 100, reservedBytes: 0, reservedFiles: 0 }, entrypointPath: 'index.html', routes, assets, exclusions: emptyExportBudgetExclusions() } );
+		// The only srcset lives on a nested route; its 160w rendition is redundant, so it goes before any route or unique asset.
+		expect( [ ...plan.next!.renditions.keys() ] ).toEqual( [ 'https://example.com/media/photo-160.webp' ] );
+		expect( plan.next!.assets.size ).toBe( 0 );
+		expect( plan.next!.routes.size ).toBe( 0 );
+	} );
+
+	it( 'never drops a rendition an element uses as its src', () => {
+		const dir = website( {
+			'index.html':
+				'<img src="/media/photo-640.webp" srcset="/media/photo-160.webp 160w, /media/photo-320.webp 320w, /media/photo-640.webp 640w, /media/photo-1280.webp 1280w" sizes="500px">' +
+				'<img src="/media/hero.png" alt="Hero">',
+			'media/photo-160.webp': 600,
+			'media/photo-320.webp': 1000,
+			'media/photo-640.webp': 2000,
+			'media/photo-1280.webp': 4000,
+			'media/hero.png': 3000,
+		} );
+		const assets = [ 'media/photo-160.webp', 'media/photo-320.webp', 'media/photo-640.webp', 'media/photo-1280.webp', 'media/hero.png' ]
+			.map( path => ( { path, sourceUrls: [ `https://example.com/${ path }` ] } ) );
+		const routes = [ { url: SOURCE, path: 'index.html' } ];
+		// Enough to require at most one rendition; the largest droppable first is 320w.
+		const need = 800;
+		const { totalBytes } = measureWebsite( dir );
+		const plan = planExportBudget( { websiteDir: dir, budget: { maxTotalBytes: totalBytes - need, maxFiles: 100, reservedBytes: 0, reservedFiles: 0 }, entrypointPath: 'index.html', routes, assets, exclusions: emptyExportBudgetExclusions() } );
+		// The src rendition (640w) and the preferred candidate (1280w) stay; the next rendering choice is 320w.
+		expect( [ ...plan.next!.renditions.keys() ] ).toEqual( [ 'https://example.com/media/photo-320.webp' ] );
+		expect( plan.next!.assets.size ).toBe( 0 );
+	} );
+
+	it( 'exports a bounded rendition set with every reference still resolving, and diagnoses each dropped rendition', () => {
+		const widths = [ 160, 320, 640, 1280, 2560 ];
+		const bytesOfWidth = ( width: number ) => ( { 160: 600, 320: 1000, 640: 2000, 1280: 4000, 2560: 8000 } )[ width as 160 ] ?? 0;
+		const renditionHtml = ( prefix: string, srcWidth: number ) => {
+			const list = widths.map( width => `${ rendition( `${ prefix }-${ width }` ) } ${ width }w` ).join( ', ' );
+			return `<img src="${ rendition( `${ prefix }-${ srcWidth }` ) }" srcset="${ list }" sizes="500px" alt="${ prefix }">`;
+		};
+		const unique = 'https://cdn.example/hero.png';
+		// Each srcset drops three renditions: the element's src rendition (320w / 640w) and the widest candidate at or under 2048px (1280w) stay in both lists.
+		const droppedRenditions = [ [ 'photo', '160' ], [ 'photo', '640' ], [ 'photo', '2560' ], [ 'other', '160' ], [ 'other', '320' ], [ 'other', '2560' ] ];
+		const droppedBytes = droppedRenditions.map( ( [ prefix, width ] ) => bytesOfWidth( Number( width ) ) ).reduce( ( sum, bytes ) => sum + bytes, 0 );
+		const fixture = ( name: string ): string => {
+			const outputDir = tempDir( name );
+			for ( const path of [ 'html', 'resources/media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+			writeFileSync( join( outputDir, 'html/homepage.html' ),
+				`<!doctype html><html><head><title>Renditions</title></head><body><h1>Renditions</h1>${ renditionHtml( 'photo', 320 ) }${ renditionHtml( 'other', 640 ) }<img src="${ unique }" alt="Hero"></body></html>` );
+			for ( const prefix of [ 'photo', 'other' ] ) {
+				for ( const width of widths ) writeFileSync( join( outputDir, `resources/media/${ prefix }-${ width }.webp` ), Buffer.alloc( bytesOfWidth( width ), width % 200 + 3 + ( prefix === 'other' ? 17 : 0 ) ) );
+			}
+			writeFileSync( join( outputDir, 'resources/media/hero.png' ), Buffer.alloc( 8000, 9 ) );
+			writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ SOURCE ]: { html: 'html/homepage.html' } } } ) );
+			const resources = Object.fromEntries( [
+				...[ 'photo', 'other' ].flatMap( prefix => widths.map( width => [ rendition( `${ prefix }-${ width }` ), { path: `resources/media/${ prefix }-${ width }.webp`, contentType: 'image/webp' } ] ) ),
+				[ unique, { path: 'resources/media/hero.png', contentType: 'image/png' } ],
+			] );
+			writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources } ) );
+			return outputDir;
+		};
+		const exportOptions = ( outputDir: string, maxTotalBytes?: number ) => ( {
+			outputDir, sourceUrl: SOURCE, platform: 'generic',
+			summary: { routesDiscovered: 1, routesCaptured: 1, routesSkipped: 0, routesFailed: 0, routesOmitted: 0 },
+			failures: [] as Array< { url: unknown; error: unknown } >,
+			...( maxTotalBytes === undefined ? {} : { limits: { maxTotalBytes } } ),
+		} );
+
+		// A first unlimited export measures the naive artifact; its size minus the dropped renditions is exactly what the budgeted export must land on,
+		// so every redundant rendition has to go while the rest stays.
+		const baseline = fixture( 'liberation-rendition-naive-' );
+		exportWebsiteCapture( exportOptions( baseline ) );
+		const maxTotalBytes = measureWebsite( join( baseline, 'website' ) ).totalBytes - droppedBytes;
+
+		const outputDir = fixture( 'liberation-rendition-budget-' );
+		exportWebsiteCapture( exportOptions( outputDir, maxTotalBytes ) );
+
+		const websiteDir = join( outputDir, 'website' );
+		const html = readFileSync( join( websiteDir, 'index.html' ), 'utf8' );
+		const exists = ( path: string ) => existsSync( join( websiteDir, path ) );
+
+		// Within budget.
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ) as { exportBudget: { totalBytes: number; withinBudget: boolean; droppedAssets: number; droppedRenditions: number; droppedRoutes: number } };
+		expect( receipt.exportBudget ).toMatchObject( { withinBudget: true, droppedAssets: 0, droppedRenditions: 6, droppedRoutes: 0 } );
+		expect( receipt.exportBudget.totalBytes ).toBeLessThanOrEqual( maxTotalBytes );
+
+		// One rendition per element's src, plus the widest candidate at or under 2048px; the unique asset stays.
+		for ( const file of [ 'media/photo-320.webp', 'media/photo-1280.webp', 'media/other-640.webp', 'media/other-1280.webp', 'media/hero.png' ] )
+			expect( exists( file ) ).toBe( true );
+		for ( const file of [ 'photo-160', 'photo-640', 'photo-2560', 'other-160', 'other-320', 'other-2560' ] )
+			expect( exists( `media/${ file }.webp` ) ).toBe( false );
+		expect( html ).toContain( '/media/hero.png' );
+
+		// Every remaining src and srcset candidate resolves to a written file; nothing was blanked with a placeholder.
+		const $ = cheerio.load( html );
+		const references: string[] = [];
+		$( 'img' ).each( ( _, element ) => {
+			const src = $( element ).attr( 'src' );
+			if ( src ) references.push( src );
+			const srcset = $( element ).attr( 'srcset' );
+			if ( srcset ) references.push( ...srcset.split( ',' ).map( candidate => candidate.trim().split( /\s+/ )[ 0 ]! ) );
+		} );
+		expect( references.length ).toBeGreaterThan( 4 );
+		for ( const reference of references )
+			expect( exists( reference.replace( /^\//, '' ) ) ).toBe( true );
+		expect( html ).not.toContain( TRANSPARENT_IMAGE_DATA_URL.slice( 0, 24 ) );
+
+		// Each dropped rendition is diagnosed with a stable code.
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ) as { discoveryDiagnostics: Array< { code: string; url: string; reason: string } > };
+		const dropped = diagnostics.discoveryDiagnostics.filter( row => row.code === 'redundant_rendition_dropped' );
+		expect( dropped.map( row => row.url ).sort() ).toEqual(
+			[ 'photo-160', 'photo-640', 'photo-2560', 'other-160', 'other-320', 'other-2560' ].map( name => rendition( name ) ).sort()
+		);
+		for ( const row of dropped ) expect( row.reason ).toContain( 'redundant srcset rendition' );
+		// The unique asset is not misreported as dropped.
+		expect( dropped.some( row => row.url === unique ) ).toBe( false );
 	} );
 } );

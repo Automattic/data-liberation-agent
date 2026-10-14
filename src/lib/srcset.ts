@@ -92,6 +92,99 @@ export function isSrcsetShaped( value: string ): boolean {
 	return /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
 }
 
+export interface ImageSetSite {
+	start: number;
+	end: number;
+	urls: string[];
+}
+
+/** One image-set() list (CSS or an HTML style context): the call's span and
+ * each layer's URL token, in authored order. */
+function splitImageSetLayers( value: string ): string[] {
+	const tokens: string[] = [];
+	let layer = '';
+	let open = 0;
+	let quote = '';
+	for ( const character of value ) {
+		if ( quote ) {
+			layer += character;
+			if ( character === quote ) quote = '';
+			continue;
+		}
+		if ( character === '"' || character === "'" ) quote = character;
+		else if ( character === '(' ) open++;
+		else if ( character === ')' ) open--;
+		if ( character === ',' && open === 0 ) {
+			tokens.push( layer );
+			layer = '';
+			continue;
+		}
+		layer += character;
+	}
+	tokens.push( layer );
+	return tokens;
+}
+
+/** A URL token (quoted, url()-wrapped, or bare) out of one image-set layer. */
+function imageSetLayerUrl( layer: string ): string | undefined {
+	const layerMatch = /^\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]+))\s*\)|([^\s,('"]+))/i.exec( layer );
+	const url = layerMatch?.[ 1 ] ?? layerMatch?.[ 2 ] ?? layerMatch?.[ 3 ] ?? layerMatch?.[ 4 ] ?? layerMatch?.[ 5 ] ?? layerMatch?.[ 6 ];
+	return url && ! /^(?:blob|data):/i.test( url ) ? url : undefined;
+}
+
+export function imageSetSites( content: string ): ImageSetSite[] {
+	const sites: ImageSetSite[] = [];
+	for ( const match of content.matchAll( /(?:-webkit-)?image-set\s*\(/gi ) ) {
+		const openParen = match.index! + match[ 0 ].lastIndexOf( '(' );
+		let depth = 0;
+		let quote = '';
+		let end = openParen;
+		for ( let offset = openParen; offset < content.length; offset++ ) {
+			const character = content[ offset ];
+			if ( quote ) {
+				if ( character === quote ) quote = '';
+			} else if ( character === '"' || character === "'" ) quote = character;
+			else if ( character === '(' ) depth++;
+			else if ( character === ')' ) {
+				depth--;
+				if ( depth === 0 ) {
+					end = offset;
+					break;
+				}
+			}
+		}
+		if ( end === openParen ) continue;
+		const urls = splitImageSetLayers( content.slice( openParen + 1, end ) )
+			.map( imageSetLayerUrl )
+			.filter( ( url ): url is string => url !== undefined );
+		if ( urls.length >= 2 ) sites.push( { start: match.index!, end: end + 1, urls } );
+	}
+	return sites;
+}
+
+/** Remove image-set() layers whose URL passes `drop`, keeping the layers that
+ * stay and the call's formatting. A call never becomes empty: with no layer
+ * left, the call stays as written. */
+export function stripImageSetCandidates( content: string, drop: ( url: string ) => boolean ): string {
+	const sites = imageSetSites( content );
+	if ( ! sites.length ) return content;
+	let result = '';
+	let offset = 0;
+	for ( const site of sites ) {
+		const call = content.slice( site.start, site.end );
+		const openParen = call.indexOf( '(' );
+		const layers = splitImageSetLayers( call.slice( openParen + 1, call.length - 1 ) );
+		const layerUrls = layers.map( imageSetLayerUrl );
+		const dropped = layerUrls.filter( url => url !== undefined && drop( url ) ).length;
+		const present = layerUrls.filter( url => url !== undefined ).length;
+		if ( dropped === 0 || dropped === present ) continue;
+		const kept = layers.filter( ( _layer, index ) => layerUrls[ index ] === undefined || ! drop( layerUrls[ index ]! ) );
+		result += `${ content.slice( offset, site.start ) }${ call.slice( 0, openParen + 1 ) }${ kept.join( ', ' ) })`;
+		offset = site.end;
+	}
+	return result + content.slice( offset );
+}
+
 /** Protect media attribute URL tokens from a general HTML/CSS/script replacement
  * pass. The callback for other content retains the caller's own policy. */
 export function rewriteMediaReferences(
