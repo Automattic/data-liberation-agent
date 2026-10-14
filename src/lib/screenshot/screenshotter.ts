@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { totalmem } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
@@ -1946,6 +1947,13 @@ async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 
  * Resumable via manifest.json / failures.json; same-origin enforced; output
  * directory validated against path traversal.
  */
+/** The memory this process group may use: its cgroup limit, or the machine's when it has none. */
+function runtimeMemoryLimit(): number {
+	const constrained = process.constrainedMemory();
+	const machine = totalmem();
+	return Number.isSafeInteger( constrained ) && constrained > 0 ? Math.min( constrained, machine ) : machine;
+}
+
 export async function captureScreenshots( opts: ScreenshotOpts ): Promise< ScreenshotResult > {
 	const startTime = Date.now();
 
@@ -1984,13 +1992,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const concurrency = Math.max( 1, Math.floor( Math.min( 10, rawConcurrency ) ) || 1 );
 	// Node reports the process group's memory constraint, including Chromium's
 	// children. RSS of this Node process alone misses the dominant capture owner.
-	// Explicit concurrency remains caller-owned; unconstrained runtimes retain
-	// the existing pool. Under a constraint, calibrate on one complete route
-	// (including its fresh reference pages) before admitting parallel routes.
-	const memoryLimit = opts.concurrency === undefined ? process.constrainedMemory() : 0;
-	// Some runtimes report an unlimited uint64 sentinel rather than zero.
-	// Only a representable byte budget is evidence of a usable constraint.
-	const memoryAdmission = Number.isSafeInteger( memoryLimit ) && memoryLimit > 0 && typeof process.availableMemory === 'function';
+	// Explicit concurrency remains caller-owned. Otherwise every runtime is
+	// bounded: a process group without a cgroup limit (zero, or the unlimited
+	// uint64 sentinel) is still bounded by the machine, as in a microVM sized to
+	// the capture. Calibrate on one complete route (including its fresh
+	// reference pages) before admitting parallel routes.
+	const memoryLimit = opts.concurrency === undefined ? runtimeMemoryLimit() : 0;
+	const memoryAdmission = memoryLimit > 0 && typeof process.availableMemory === 'function';
 	// Admission reserves memory per route, so it needs a per-route estimate:
 	// group growth above the idle floor (Node, Chromium and retained resources
 	// with no route running), divided across the routes active when sampled.
