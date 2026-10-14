@@ -5,6 +5,7 @@ import type { BrowserContext, Page } from 'playwright';
 import { PNG } from 'pngjs';
 import { observePage, routeSourceMap } from './check.js';
 import { spreadSample } from '../route-budget.js';
+import { DEFAULT_CAPTURE_SETTLE_MS } from '../screenshot/types.js';
 import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
 import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';
@@ -22,6 +23,14 @@ export interface ReferenceCollectorOptions {
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
 	prepareCapture?: ( page: Page, ctx: { url: string; viewport: string } ) => Promise<void>;
+	/**
+	 * Quiet budget the reference observation settles with, mirroring how the
+	 * candidate measurement in `checkFidelity` (default 800) and the capture
+	 * that produced the portable HTML (default 1000) wait for a document to
+	 * stop changing. Hardcoding 0 froze hydration-in-progress source content
+	 * that no other measurement ever observed again.
+	 */
+	settleMs?: number;
 	/**
 	 * Freeze baseline reference evidence for at most this many routes;
 	 * every other route skips reference navigations entirely and is reported as
@@ -190,7 +199,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
 						entry.browserProfile = browserProfile;
 						if ( ! browserProfile ) entry.readiness.reasons.push( 'source browser profile unproven' );
-						const observation = await observePage( referencePage, url, viewport, 0, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
+						const observation = await observePage( referencePage, url, viewport, options.settleMs ?? DEFAULT_CAPTURE_SETTLE_MS, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
 							await applyCaptureRemovals( referencePage!, { removeSelectors: options.removeSelectors, prepare: options.prepareCapture, ctx: { url, viewport: device } } );
 						}, true, referencePage === page );
 						const cleanup = await readSourceCleanup( referencePage );
