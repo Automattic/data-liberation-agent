@@ -44,7 +44,7 @@ import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
-import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
+import { createPhaseLedger, routePhaseBreakdown, type PhaseLedger } from './phase-ledger.js';
 import { availableRuntimeMemory } from './runtime-memory.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
@@ -2640,7 +2640,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
-		process.stderr.write( `[timing] route ${ Date.now() - routeStartedAt }ms ${ url }\n` );
+		const routeMs = Date.now() - routeStartedAt;
+		const routePhases = routePhaseBreakdown( Object.values( entry.profiles ?? {} ).map( profile => profile.phases ), routeMs );
+		process.stderr.write( `[timing] route-phases ${ JSON.stringify( { url, ...routePhases } ) }\n` );
+		process.stderr.write( `[timing] route ${ routeMs }ms ${ url }\n` );
 		opts.onProgress?.( completed, urls.length, url );
 	};
 
