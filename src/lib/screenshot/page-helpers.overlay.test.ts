@@ -90,6 +90,19 @@ describe('isConsentBanner', () => {
   it('flags a banner by the singular cookie keyword', () => {
     expect(isConsentBanner(benign({ text: 'this site uses a cookie' }))).toBe(true);
   });
+
+  it('does not flag a menu whose only consent-like words are link labels', () => {
+    expect(isConsentBanner(benign({
+      text: 'home about privacy policy contact', hasMenu: true, nonLinkText: '',
+    }))).toBe(false);
+  });
+
+  it('still flags a consent notice that also lists policy links', () => {
+    expect(isConsentBanner(benign({
+      text: 'we use cookies. privacy policy cookie policy terms accept',
+      hasMenu: true, nonLinkText: 'we use cookies. accept',
+    }))).toBe(true);
+  });
 });
 
 describe('isProviderPromotion', () => {
@@ -394,6 +407,52 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
       expect(await page.locator('#business-header').count()).toBe(1);
       expect(await page.locator('#brand').textContent()).toBe('Example Brand');
       expect(await page.locator('nav a').getAttribute('href')).toBe('/services');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('keeps a script-pinned header inside a placeholder wrapper with its menu links', async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    // A jQuery-sticky style plugin: wraps the header in a placeholder that keeps
+    // its height, then pins the header (fixed) even at the top of the page. The
+    // menu links to a privacy policy page, which is navigation, not consent.
+    await page.setContent(`<!doctype html><html><head><style>
+      body { margin: 0; }
+      #site-header { height: 56px; background: #fff; width: 100%; z-index: 10; }
+      #site-header.pinned { position: fixed; top: 0; left: 0; }
+      #site-header li { display: inline-block; margin-right: 12px; }
+    </style></head><body>
+      <div id="page">
+        <div id="site-header">
+          <a id="logo" href="/">Example Mission</a>
+          <ul class="menu">
+            <li><a href="/">Home</a></li>
+            <li><a href="/story">Our Story</a></li>
+            <li><a href="/news">News</a></li>
+            <li><a href="/contact">Contact</a></li>
+            <li><a href="/privacy-policy">Privacy Policy</a></li>
+          </ul>
+        </div>
+        <main style="height:3000px">${'Useful mission content. '.repeat(50)}</main>
+      </div>
+      <script>
+        const header = document.querySelector('#site-header');
+        const placeholder = document.createElement('div');
+        placeholder.className = 'sticky-wrapper';
+        placeholder.style.height = header.offsetHeight + 'px';
+        header.parentNode.insertBefore(placeholder, header);
+        placeholder.appendChild(header);
+        header.classList.add('pinned');
+      </script>
+    </body></html>`);
+    try {
+      expect(await page.locator('.sticky-wrapper > #site-header').count()).toBe(1);
+      expect(await dismissOverlays(page)).toEqual([]);
+      expect(await page.locator('.sticky-wrapper > #site-header').count()).toBe(1);
+      expect(await page.locator('#site-header .menu a').evaluateAll((links) => links.map((a) => a.getAttribute('href'))))
+        .toEqual(['/', '/story', '/news', '/contact', '/privacy-policy']);
+      expect(await page.locator('[data-lib-overlay]').count()).toBe(0);
     } finally {
       await page.close();
     }
