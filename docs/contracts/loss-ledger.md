@@ -247,7 +247,7 @@ SSI reads the file at intake when it is present, removes it from the artifact, a
 
 **Hooks that exist:**
 
-- **Capture.** `USABLE_PARTIAL_CAPTURE_POLICY` v1 and `isUsableCapture(result)` (`src/lib/capture-usability.ts:28-32`, `:94-104`). A capture is usable when `entrypointCaptured` is true and either `complete` is true or `missingRoutes.length <= max(1, 0.1 × routesDiscovered)`. Budget-omitted routes are in neither count. `liberate` and the MCP tool expose it as `usable` (`src/ui/liberate.ts:103`, `src/mcp-server.ts:153`). `strict: true` rejects on `complete: false` instead (`src/lib/capture.ts:408`).
+- **Capture.** `USABLE_PARTIAL_CAPTURE_POLICY` v2 and `isUsableCapture(result)` (`src/lib/capture-usability.ts:28-32`, `:94-104`). A capture is usable when `entrypointCaptured` is true and either `complete` is true or the failed routes (`missingRoutes` other than `route_capture_skipped_budget`) are at most `max(1, 0.1 × (routesDiscovered − time-budget skips))`. Route-budget omissions and time-budget skips are in neither count. `liberate` and the MCP tool expose it as `usable` (`src/ui/liberate.ts:103`, `src/mcp-server.ts:153`). `strict: true` rejects on `complete: false` instead (`src/lib/capture.ts:408`).
 - **Compile.** `status !== 'failed'`. A failed status means some `error`-severity row; in this ledger the only one is the entrypoint editability breach.
 - **Import.** The SSI direct-artifact path accepts BE-omitted non-entry pages and imports the rest. It refuses an omitted entrypoint and any omitted artifact file (`direct-artifact-import.php:745-775`). The quality gate also sets `fail_import` on `dropped_artifact_files` (`includes/class-static-site-importer-quality-gates.php:108-127`).
 
