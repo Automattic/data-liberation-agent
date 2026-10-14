@@ -38,6 +38,12 @@ vi.mock('./fluid-capture.js', async (importOriginal) => ({
 	learnAndApplyFluidGeometry: learnAndApplyFluidGeometryMock,
 }));
 
+// Admission policy tests drive the runtime's available memory directly; the
+// host's real cgroup accounting is runtime-memory.test.ts's concern.
+vi.mock('./runtime-memory.js', () => ({
+	availableRuntimeMemory: () => process.availableMemory(),
+}));
+
 import { capturePageHtml, captureScreenshots, geometryCandidateIsSafe, getHomepageUrl } from './screenshotter.js';
 import { classifyUrl } from '../extraction/sitemap.js';
 import { connectBrowser } from '../browser-kit/index.js';
