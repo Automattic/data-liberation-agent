@@ -44,6 +44,7 @@ import { captureTypedSearchStates } from './typed-search-capture.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, type PhaseLedger } from './phase-ledger.js';
+import { availableRuntimeMemory } from './runtime-memory.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
@@ -2002,7 +2003,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let activeRoutes = 0;
 	let calibrated = false;
 	const sampleMemory = (): number => {
-		const available = process.availableMemory();
+		const available = availableRuntimeMemory( memoryLimit );
 		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
 		const used = memoryLimit - available;
 		observedWorkingSet = Math.max( observedWorkingSet, used );
