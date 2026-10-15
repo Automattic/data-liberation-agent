@@ -268,4 +268,77 @@ describe( 'captureScreenshots interactions', () => {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	} );
+
+	// Interaction evidence is consumed per route, not per profile: mergeProfile
+	// accepts desktop and mobile reports alone, and every downstream reader
+	// (interaction-states.json, export media localization, fidelity) reads that
+	// route-level report. An additional profile (an adapter's third document) is
+	// still captured — its own HTML, screenshots and fluid geometry — but probing
+	// it again produced evidence no stage read, so probing is per-device only.
+	it( 'probes interactions for the per-device documents, never for an additional profile', async () => {
+		const outputDir = mkdtempSync( join( LOCAL_TMP, 'ss-' ) );
+		const desktopPage = makePage();
+		const mobilePage = makePage();
+		const tabletPage = makePage();
+		const pages = [ makeHarvestPage(), desktopPage, mobilePage, tabletPage ];
+		const captureDialogs = vi.mocked( captureTriggeredDialogs );
+		captureDialogs.mockReset();
+		captureDialogs.mockImplementation( async ( page, sourceUrl ) => ( {
+			schema: 'blocks-engine-capture/interaction-states/v1',
+			sourceUrl,
+			viewport: ( page as unknown ) === mobilePage ? { width: 402, height: 681 } : { width: 1440, height: 900 },
+			capturedAt: '2026-10-13T00:00:00.000Z',
+			states: [ {
+				status: 'captured',
+				trigger: {
+					selector: ( page as unknown ) === mobilePage ? '#mobile-menu' : '#desktop-dialog',
+					id: ( page as unknown ) === mobilePage ? 'mobile-menu' : 'desktop-dialog',
+					tag: 'button',
+					ariaHaspopup: 'dialog',
+					dataBindings: {},
+				},
+				dialog: {
+					selector: '#dialog', tag: 'nav', ariaModal: true,
+					html: '<nav><a href="/about">About</a></nav>', htmlBytes: 37, htmlTruncated: false,
+				},
+			} ],
+		} ) );
+
+		const connect = connectBrowser as ReturnType< typeof vi.fn >;
+		connect.mockReset();
+		connect.mockResolvedValue( {
+			newContext: vi.fn().mockImplementation( () =>
+				Promise.resolve( {
+					newPage: vi.fn().mockResolvedValue( pages.shift()! ),
+					addInitScript: vi.fn().mockResolvedValue( undefined ),
+					close: vi.fn().mockResolvedValue( undefined ),
+					storageState: vi.fn().mockResolvedValue( { cookies: [], origins: [] } ),
+				} )
+			),
+			close: vi.fn().mockResolvedValue( undefined ),
+			isConnected: () => true,
+		} );
+
+		try {
+			const result = await captureScreenshots( {
+				urls: [ 'https://example.com/third-document' ], outputDir, concurrency: 1, settleMs: 0, captureImages: true,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 402, height: 681 }, { id: 'tablet', width: 768, height: 900 } ],
+			} );
+			expect( result.failed ).toBe( 0 );
+			expect( captureDialogs ).toHaveBeenCalledTimes( 2 );
+			expect( captureDialogs ).toHaveBeenCalledWith( desktopPage, 'https://example.com/third-document' );
+			expect( captureDialogs ).toHaveBeenCalledWith( mobilePage, 'https://example.com/third-document' );
+			const manifest = JSON.parse(
+				readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' )
+			) as { entries: Record<string, { interactions?: unknown; profiles: Record<string, { interactions?: unknown; html?: string }> }> };
+			const route = manifest.entries[ 'https://example.com/third-document' ];
+			// The additional profile keeps its own captured document but records no
+			// probed evidence, and the route report still carries the device probes.
+			expect( route.profiles.tablet?.html ).toMatch( /^html-tablet\// );
+			expect( route.profiles.tablet?.interactions ).toBeUndefined();
+			expect( route.interactions ).toBeDefined();
+		} finally {
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 } );

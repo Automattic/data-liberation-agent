@@ -1327,16 +1327,25 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	// Dialogs and selectable sets are captured only after every baseline artifact
 	// so probing a trigger cannot alter screenshots, geometry, sidecars, or page
-	// HTML. Each viewport needs its own probe: a desktop dialog must not suppress
-	// a mobile-only trigger. Merge their bounded successful evidence rather than
-	// replacing a desktop-only dialog with a mobile-only menu.
+	// HTML. The per-device documents probe separately: a desktop dialog must not
+	// suppress a mobile-only trigger, and their bounded successful evidence merges
+	// instead of replacing a desktop-only dialog with a mobile-only menu. An
+	// additional profile (an adapter's third document) contributes no interaction
+	// evidence: mergeProfile accepts desktop and mobile reports alone, and every
+	// consumer (interaction-states.json, export media localization, fidelity)
+	// reads that route-level report, so probing an additional profile produced
+	// evidence no stage ever read. Its captured artifacts (HTML, screenshots,
+	// fluid geometry, hydrated disclosures) are unaffected: they are produced and
+	// consumed per profile before this point.
 	if ( args.rendererCrashed() ) return;
 	await releaseBaselineNavigation();
-	const releaseNavigationLock = await lockMainFrameNavigation( page );
-	try {
-		await probeInteractions();
-	} finally {
-		await releaseNavigationLock();
+	if ( isDesktop || isMobile ) {
+		const releaseNavigationLock = await lockMainFrameNavigation( page );
+		try {
+			await probeInteractions();
+		} finally {
+			await releaseNavigationLock();
+		}
 	}
 	args.phases?.enter( 'cleanup-audit' );
 	const cleanup = await readSourceCleanup(page, sourcePolicy);
