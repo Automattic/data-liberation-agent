@@ -55,6 +55,7 @@ import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { recordGlyphColors } from './glyph-color.js';
+import { portRenderedGoogleMaps } from './rendered-google-maps.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
 import { RouteTimeBudget } from '../capture-time-budget.js';
@@ -355,7 +356,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
-		const html = await page.evaluate( ( { observeControlSource, controlAttribute } ) => {
+		const html = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, iframeEvidenceAttributes } ) => {
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -480,6 +481,8 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				controls.forEach( ( control, index ) => {
 					copies[ index ]!.setAttribute( controlAttribute, JSON.stringify( observeControl( control ) ) );
 				} );
+				const portMaps = new Function( 'return (' + portMapsSource + ')' )() as typeof portRenderedGoogleMaps;
+				portMaps( document, snapshot, iframeEvidenceAttributes );
 				return `<!DOCTYPE html>${ snapshot.outerHTML }`;
 			} finally {
 				for ( const boundary of textBoundaries ) boundary.remove();
@@ -493,7 +496,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE } );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), iframeEvidenceAttributes } );
 		return wireNativeControlState( html );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {

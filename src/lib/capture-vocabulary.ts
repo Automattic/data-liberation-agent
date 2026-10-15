@@ -81,6 +81,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 	platform: {
 		'access-gate': 'a', 'member-login': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'constructed-stylesheet': 'a',
 		'ported-embed': 'a', 'unported-embed': 'a', 'squarespace-header-style': 'a', 'squarespace-header-visible': 'i', 'check-route-tab': 'a',
+		'google-map-marker': 'a', 'google-map-embed': 'c',
 	},
 } as const;
 
