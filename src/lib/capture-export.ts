@@ -24,6 +24,7 @@ import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
 import { budgetOmittedRoutes } from './capture-usability.js';
 import { OMITTED_ROUTE_REASON } from './route-budget.js';
 import { ACTION_URL_REASON, stateChangingAction } from './url/action-url.js';
+import { portableFormAction } from './url/form-action.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import {
@@ -856,8 +857,10 @@ function capturedResources( outputDir: string ): CapturedResourceManifest {
 	}
 }
 
-function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set() ): { html: string; sourceData: SourceDataScript[]; diagnostics: Array<{ code: string; reason: string }> } {
+function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set(), pageUrl?: string ): { html: string; sourceData: SourceDataScript[]; diagnostics: Array<{ code: string; reason: string }> } {
 	const $ = cheerio.load( html );
+	// Relative form actions resolve against the document base, which is removed below.
+	const baseUrl = documentBaseUrl( $( 'base[href]' ).first().attr( 'href' ), pageUrl );
 	const sourceData: SourceDataScript[] = [];
 	const diagnostics: Array<{ code: string; reason: string }> = [];
 	let sourceEvidenceScriptCount = 0;
@@ -942,6 +945,7 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 			$( element ).remove();
 		}
 	} );
+	const formActionDiagnostics = new Map< string, { code: string; reason: string } >();
 	$( '*' ).each( ( _index, element ) => {
 		const node = $( element );
 		for ( const [ attribute, rawValue ] of Object.entries(
@@ -951,11 +955,17 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 				.filter( ( character ) => character.charCodeAt( 0 ) > 0x20 )
 				.join( '' )
 				.toLowerCase();
+			if ( 'name' in element && submissionUrlAttribute( element.name, attribute ) ) {
+				const portable = portableFormAction( attribute.toLowerCase(), rawValue, baseUrl, pageUrl );
+				if ( portable.value === undefined ) node.removeAttr( attribute );
+				else node.attr( attribute, portable.value );
+				if ( portable.diagnostic ) formActionDiagnostics.set( `${ portable.diagnostic.code }\0${ portable.diagnostic.reason }`, portable.diagnostic );
+				continue;
+			}
 			if (
 				/^on/i.test( attribute ) ||
 				attribute.toLowerCase() === 'srcdoc' ||
-				[ 'action', 'formaction' ].includes( attribute.toLowerCase() ) ||
-				( [ 'href', 'src', 'xlink:href' ].includes( attribute.toLowerCase() ) &&
+				( [ 'href', 'src', 'xlink:href', 'action', 'formaction' ].includes( attribute.toLowerCase() ) &&
 					/^(?:javascript|vbscript|data:text\/html)/.test( value ) ) ||
 				( attribute.toLowerCase() === 'style' &&
 					/(?:expression\s*\(|-moz-binding|url\s*\(\s*["']?\s*(?:javascript|vbscript|data:text\/html))/i.test(
@@ -976,7 +986,23 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 		)
 			node.remove();
 	} );
+	diagnostics.push( ...formActionDiagnostics.values() );
 	return { html: normalizedDeclarativeFormEmbeds( $.html() ), sourceData, diagnostics };
+}
+
+/** `action` on a form and `formaction` on a submitter; elsewhere they are inert, like a widget's `action="like"`. */
+function submissionUrlAttribute( element: string, attribute: string ): boolean {
+	const name = attribute.toLowerCase();
+	return ( name === 'action' && element.toLowerCase() === 'form' ) || ( name === 'formaction' && [ 'button', 'input' ].includes( element.toLowerCase() ) );
+}
+
+function documentBaseUrl( href: string | undefined, pageUrl: string | undefined ): string | undefined {
+	if ( href === undefined ) return pageUrl;
+	try {
+		return new URL( href.trim(), pageUrl ).href;
+	} catch {
+		return pageUrl;
+	}
 }
 
 function appendSourceData( html: string, sourceData: SourceDataScript[] ): string {
@@ -1466,7 +1492,7 @@ function buildExportCapture(
 			normalizedDocuments.clear();
 			// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
 			const styleHoistContext = capturedStyleHoistContext( capturedHtml );
-			const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
+			const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources, url );
 	        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
 	        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
 			assertPageWithinFileLimit( html, maxFileBytes );

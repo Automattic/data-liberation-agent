@@ -102,7 +102,7 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 
 Emit sites are in `src/lib/capture-export.ts`: `:1229-1258`, `:1333`, `:1371`, `:1374`, `:1376`, `:1415`, `:1745`, `:1766`. Others are `src/lib/capture-export-routes.ts:269`, `:313`, `src/lib/screenshot/screenshotter.ts:1025`, `:1079`, `:1643`, and `src/lib/route-budget.ts:24`.
 
-Other `discoveryDiagnostics` codes are discovery evidence rather than unit losses: `sitemap_*`, `fallback_*`, `linked_page_*`, `http_*`, `device_document_uncaptured`, `source_evidence_unproven`, `template_grouping_unavailable` (the [template coverage](../../README.md#template-coverage-selection) pass failed and routes were selected in discovery order). They have no `unit` or `severity`.
+Other `discoveryDiagnostics` codes are discovery evidence rather than unit losses: `sitemap_*`, `fallback_*`, `linked_page_*`, `http_*`, `device_document_uncaptured`, `source_evidence_unproven`, `form_action_source_handler` (a form `action`/`formaction` on the source site, kept as its root-relative path so the export never submits to the source CMS), `form_action_removed` (a `javascript:`, `data:` or other non-destination submission URL, removed), `template_grouping_unavailable` (the [template coverage](../../README.md#template-coverage-selection) pass failed and routes were selected in discovery order). They have no `unit` or `severity`.
 
 ### Compile (BE)
 
