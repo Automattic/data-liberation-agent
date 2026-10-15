@@ -135,3 +135,75 @@ describe( 'transplant keeps inline structure (#784)', () => {
 	} );
 } );
 
+
+describe( 'slots anchor on element identity, not position (#784)', () => {
+	// Server documents (`H_R`, `H_M`): the post body sits under an id'd
+	// component; the member differs in its words only.
+	const server = ( title: string, words: string ) => `<html><head><title>Post</title></head><body>
+<header id="site-header"><nav><a href="/">Home</a></nav></header>
+<main><div class="shell"><section id="post-body" data-testid="post"><h1>${ title }</h1><p>${ words } with <a href="/author">a link</a> and <b>bold text</b>.</p></section></div></main>
+<footer><p>Footer</p></footer></body></html>`;
+	// The captured document (`D_R`): a runtime wrapped the page in extra
+	// containers, moved the footer before main, injected a banner, and capture
+	// annotated source elements in place. Only the ids survive unchanged.
+	const captured = ( title: string, words: string ) => `<html><head><title>Post</title></head><body>
+<div class="runtime-root"><div class="runtime-banner"><p>Injected</p></div>
+<footer><p>Footer</p></footer>
+<div class="runtime-page"><header id="site-header"><nav><a href="/">Home</a></nav></header>
+<main class="hydrated"><div class="shell" data-blocks-engine-capture-geometry-id="desktop-wrapper-1"><div class="extra-wrapper"><section id="post-body" data-testid="post" data-blocks-engine-capture-geometry-id="desktop-target-1"><h1 data-blocks-engine-capture-geometry-id="desktop-target-2">${ title }</h1><p>${ words } with <a href="/author">a link</a> and <b>bold text</b>.</p></section></div></div></main></div></div></body></html>`;
+	const BASE_URL = 'https://fixture.test/';
+
+	it( 'derives across extra wrappers and reordered siblings, keeping inline links and bold text', () => {
+		const result = deriveMemberDocument( {
+			repServerHtml: server( 'First post', 'Original words' ),
+			repProcessedHtml: captured( 'First post', 'Original words' ),
+			memberServerHtml: server( 'Second post', 'Member words' ),
+			baseUrl: BASE_URL,
+		} );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<h1 data-blocks-engine-capture-geometry-id="desktop-target-2">Second post</h1>' );
+		expect( result.html ).toContain( '<p>Member words with <a href="/author">a link</a> and <b>bold text</b>.</p>' );
+		expect( result.html ).not.toContain( 'Original words' );
+		// The runtime's structure is the representative's capture, untouched.
+		expect( result.html ).toContain( '<div class="runtime-banner"><p>Injected</p></div>' );
+	} );
+
+	it( 'falls back to data-testid when the anchor has no id', () => {
+		const withoutId = ( html: string ) => html.replace( ' id="post-body"', '' );
+		const result = deriveMemberDocument( {
+			repServerHtml: withoutId( server( 'First post', 'Original words' ) ),
+			repProcessedHtml: withoutId( captured( 'First post', 'Original words' ) ),
+			memberServerHtml: withoutId( server( 'Second post', 'Member words' ) ),
+			baseUrl: BASE_URL,
+		} );
+		expect( result.ok && result.html ).toContain( '<p>Member words with <a href="/author">a link</a> and <b>bold text</b>.</p>' );
+	} );
+
+	it( 'escalates a slot whose anchored text the runtime rewrote after load', () => {
+		const result = deriveMemberDocument( {
+			repServerHtml: server( 'First post', 'Original words' ),
+			// The runtime replaced the server's words: transplanting the member's
+			// server text over it would mix two documents.
+			repProcessedHtml: captured( 'First post', 'Rewritten words' ),
+			memberServerHtml: server( 'Second post', 'Member words' ),
+			baseUrl: BASE_URL,
+		} );
+		expect( result.ok ).toBe( false );
+		if ( result.ok ) return;
+		expect( result.gate.code ).toBe( 'slot_anchor_unmapped' );
+		expect( result.gate.reason ).toBe( 'slot at [id="post-body"]/1 carries different text in the representative\'s captured document than in its server document' );
+	} );
+
+	it( 'escalates when the anchor id is missing from the captured document', () => {
+		const result = deriveMemberDocument( {
+			repServerHtml: server( 'First post', 'Original words' ),
+			repProcessedHtml: captured( 'First post', 'Original words' ).replace( ' id="post-body"', ' id="renamed"' ).replace( ' data-testid="post"', '' ),
+			memberServerHtml: server( 'Second post', 'Member words' ),
+			baseUrl: BASE_URL,
+		} );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+		if ( result.ok ) return;
+		expect( result.gate.reason ).toContain( 'has no matching anchor' );
+	} );
+} );

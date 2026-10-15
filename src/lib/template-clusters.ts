@@ -12,9 +12,11 @@ import { templateFingerprint, TEMPLATE_FINGERPRINT_VERSION } from './template-gr
  * fingerprint of the server HTML. Phase 1 produces every non-sampled member
  * of a verified multi-member cluster by transplanting its HTTP-acquired
  * content (`H_M`) into the representative's captured, processed DOM (`D_R`):
- * the slot walk between `H_R` and `H_M` maps content slots onto the same
- * element paths in `D_R`, and each member is admitted only through cheap
- * per-member gates. A member that fails a gate never ships as derived: it
+ * the slot walk between `H_R` and `H_M` finds content slots, each slot is
+ * anchored on its nearest identified ancestor (`id`, then `data-testid`) plus
+ * a short path below it, and that anchor is resolved in `D_R` by identity —
+ * builder runtimes rebuild the DOM around ids, so server positions never
+ * survive. Each member is admitted only through cheap per-member gates. A member that fails a gate never ships as derived: it
  * escalates to the browser pipeline or is omitted by budget with a reason.
  */
 
@@ -57,9 +59,6 @@ export type MemberDerivation =
 
 const isElement = ( node: AnyNode ): node is Element => node.type === 'tag' || node.type === 'script' || node.type === 'style';
 
-/** Capture-owned nodes carry capture attributes and exist only in `D_R`. */
-const CAPTURE_OWNED_ATTRIBUTE = /^data-blocks-engine-capture-/;
-
 const SKIPPED_ELEMENTS = new Set( [ 'script', 'style', 'noscript', 'template', 'br', 'wbr', 'link', 'meta', 'base' ] );
 
 /** Inline (phrasing) elements: presence follows the text, so they never split slots by themselves. */
@@ -95,12 +94,15 @@ const normalizedWhitespace = ( value: string ): string => value.replace( /\s+/g,
 const elementDescriptor = ( element: Element ): string =>
 	`${ element.name }${ ( element.attribs.class ?? '' ).split( /\s+/ ).filter( Boolean ).map( token => `.${ token }` ).join( '' ) }${ element.attribs.role ? `[role=${ element.attribs.role }]` : '' }`;
 
-/** Slot-eligible element children, in order: skipping head noise and capture-owned nodes. */
+/**
+ * Slot-eligible element children, in order, skipping head noise. Capture
+ * annotates source elements in place (`data-blocks-engine-capture-geometry-id`
+ * and friends), so an annotated element is still the source's element and
+ * keeps its position. A node capture inserted shifts the path below its
+ * anchor; the anchor's tag and text check then escalates the member.
+ */
 const slotChildren = ( element: Element ): Element[] =>
-	element.children.filter( ( node ): node is Element => {
-		if ( ! isElement( node ) || SKIPPED_ELEMENTS.has( node.name ) ) return false;
-		return ! ( CAPTURE_OWNED_ATTRIBUTE.test( node.name ) || Object.keys( node.attribs ?? {} ).some( attribute => CAPTURE_OWNED_ATTRIBUTE.test( attribute ) ) );
-	} );
+	element.children.filter( ( node ): node is Element => isElement( node ) && ! SKIPPED_ELEMENTS.has( node.name ) );
 
 /** The element's text including inline children, normalized; attributes ignored. */
 const inlineText = ( element: Element ): string => {
@@ -113,8 +115,10 @@ const inlineText = ( element: Element ): string => {
 };
 
 interface Slot {
-	/** Element path from the body root over slot-eligible children. */
-	path: number[];
+	/** The representative's server node (`H_R`) the slot replaces. */
+	repNode: Element;
+	/** The member's server node (`H_M`) at the same place in the walk. */
+	memberNode: Element;
 	/**
 	 * `element`: the member element replaces the anchor (outer HTML).
 	 * `subtree`: the member's child nodes, text included, replace the anchor's.
@@ -126,6 +130,86 @@ interface Slot {
 	replacement: string | string[] | Array< { attribute: string; value: string } >;
 	/** Bytes the member contributed; verification sampling orders members by this. */
 	bytes: number;
+}
+
+/**
+ * Where a slot lives, independent of its server-document position: the nearest
+ * ancestor-or-self carrying an `id` (fallback `data-testid`) unique in `H_R`,
+ * plus the element path below it. Builder runtimes rebuild the DOM around
+ * these identities, so a position from the body root never survives into the
+ * captured document; the identity does. A slot with no identified ancestor is
+ * anchored on `<body>` itself.
+ */
+interface SlotAnchor {
+	attribute: 'id' | 'data-testid' | 'body';
+	value: string;
+	/** Element path below the anchor, over slot-eligible children. */
+	path: number[];
+}
+
+/** Anchor attributes, most stable first. */
+const ANCHOR_ATTRIBUTES = [ 'id', 'data-testid' ] as const;
+
+const describeAnchor = ( anchor: SlotAnchor ): string =>
+	`${ anchor.attribute === 'body' ? 'body' : `[${ anchor.attribute }="${ anchor.value }"]` }${ anchor.path.map( index => `/${ index }` ).join( '' ) }`;
+
+/** Elements of a document carrying one anchor attribute value. */
+function elementsWithAttribute( root: Element, attribute: string, value: string ): Element[] {
+	const found: Element[] = [];
+	const walk = ( node: Element ): void => {
+		if ( node.attribs?.[ attribute ] === value ) found.push( node );
+		for ( const child of node.children ) if ( isElement( child ) ) walk( child );
+	};
+	walk( root );
+	return found;
+}
+
+/** Count of each anchor attribute value in one document, for uniqueness. */
+function anchorValueCounts( root: Element ): Map< string, number > {
+	const counts = new Map< string, number >();
+	const walk = ( node: Element ): void => {
+		for ( const attribute of ANCHOR_ATTRIBUTES ) {
+			const value = node.attribs?.[ attribute ];
+			if ( value ) counts.set( `${ attribute }\u0000${ value }`, ( counts.get( `${ attribute }\u0000${ value }` ) ?? 0 ) + 1 );
+		}
+		for ( const child of node.children ) if ( isElement( child ) ) walk( child );
+	};
+	walk( root );
+	return counts;
+}
+
+/** The slot's anchor in `H_R`: nearest ancestor-or-self with an identity unique in `H_R`. */
+function slotAnchor( node: Element, body: Element, counts: Map< string, number > ): SlotAnchor {
+	const path: number[] = [];
+	let current: Element = node;
+	while ( current !== body ) {
+		for ( const attribute of ANCHOR_ATTRIBUTES ) {
+			const value = current.attribs[ attribute ];
+			if ( value && counts.get( `${ attribute }\u0000${ value }` ) === 1 ) return { attribute, value, path };
+		}
+		const parent = current.parent as Element | null;
+		if ( ! parent || ! isElement( parent ) ) break;
+		path.unshift( slotChildren( parent ).indexOf( current ) );
+		current = parent;
+	}
+	return { attribute: 'body', value: '', path };
+}
+
+/** Resolve an anchor in the representative's processed document; undefined when absent or ambiguous. */
+function resolveAnchor( body: Element, anchor: SlotAnchor ): Element | undefined {
+	let node: Element;
+	if ( anchor.attribute === 'body' ) node = body;
+	else {
+		const matches = elementsWithAttribute( body, anchor.attribute, anchor.value );
+		if ( matches.length !== 1 ) return undefined;
+		node = matches[ 0 ]!;
+	}
+	for ( const index of anchor.path ) {
+		const next = slotChildren( node )[ index ];
+		if ( ! next ) return undefined;
+		node = next;
+	}
+	return node;
 }
 
 /** Serialize one node through a Cheerio API (cheerio has no module-level serializer). */
@@ -149,9 +233,10 @@ const ownTextNodes = ( element: Element ): Array< { data: string } > =>
  * divergence as a slot at an element path. The walk is between the two server
  * documents, so script/style/template children are skipped on both sides.
  */
-function findServerSlots( repElement: Element, memberElement: Element, path: number[], slots: Slot[] ): void {
+function findServerSlots( repElement: Element, memberElement: Element, slots: Slot[] ): void {
+	const at = { repNode: repElement, memberNode: memberElement };
 	if ( elementDescriptor( repElement ) !== elementDescriptor( memberElement ) ) {
-		slots.push( { path, kind: 'element', replacement: serializeNode( memberElement as unknown as AnyNode ), bytes: inlineText( memberElement ).length } );
+		slots.push( { ...at, kind: 'element', replacement: serializeNode( memberElement as unknown as AnyNode ), bytes: inlineText( memberElement ).length } );
 		return;
 	}
 	let attributeBytes = 0;
@@ -164,20 +249,20 @@ function findServerSlots( repElement: Element, memberElement: Element, path: num
 			attributeBytes += memberValue.length;
 		}
 	}
-	if ( attributeDiffs.length ) slots.push( { path, kind: 'attribute', replacement: attributeDiffs, bytes: attributeBytes } );
+	if ( attributeDiffs.length ) slots.push( { ...at, kind: 'attribute', replacement: attributeDiffs, bytes: attributeBytes } );
 	const repChildren = slotChildren( repElement );
 	const memberChildren = slotChildren( memberElement );
 	const repOwn = ownTextNodes( repElement ).map( node => node.data );
 	const memberOwn = ownTextNodes( memberElement ).map( node => node.data );
 	if ( repChildren.length !== memberChildren.length || repOwn.length !== memberOwn.length ) {
-		slots.push( { path, kind: 'subtree', replacement: serializeChildNodes( memberElement ), bytes: inlineText( memberElement ).length } );
+		slots.push( { ...at, kind: 'subtree', replacement: serializeChildNodes( memberElement ), bytes: inlineText( memberElement ).length } );
 		return;
 	}
 	if ( repOwn.some( ( data, index ) => normalizedWhitespace( data ) !== normalizedWhitespace( memberOwn[ index ]! ) ) ) {
-		slots.push( { path, kind: 'text', replacement: memberOwn, bytes: memberOwn.join( '' ).length } );
+		slots.push( { ...at, kind: 'text', replacement: memberOwn, bytes: memberOwn.join( '' ).length } );
 	}
 	for ( let index = 0; index < repChildren.length; index++ ) {
-		findServerSlots( repChildren[ index ]!, memberChildren[ index ]!, [ ...path, index ], slots );
+		findServerSlots( repChildren[ index ]!, memberChildren[ index ]!, slots );
 	}
 }
 
@@ -202,18 +287,20 @@ function slotRuntimeObservation( element: Element ): { runtime: boolean; unobser
 }
 
 /**
- * Resolve one slot path in the representative's processed document. The anchor
- * must carry the same template identity and the same normalized text as the
- * representative's server node; anything else escalates the member.
+ * The text a slot anchor must carry in `D_R`: every descendant text node
+ * outside skipped and capture-owned elements, whitespace removed so that
+ * serialization differences between server and captured HTML do not count.
  */
-function resolveSlotAnchor( root: Element, path: number[] ): Element | undefined {
-	let node: Element = root;
-	for ( const index of path ) {
-		const next = slotChildren( node )[ index ];
-		if ( ! next ) return undefined;
-		node = next;
-	}
-	return node;
+function anchorText( element: Element ): string {
+	const parts: string[] = [];
+	const walk = ( node: Element ): void => {
+		for ( const child of node.children ) {
+			if ( child.type === 'text' ) parts.push( ( child as unknown as { data: string } ).data );
+			else if ( isElement( child ) && slotChildren( node ).includes( child ) ) walk( child );
+		}
+	};
+	walk( element );
+	return parts.join( '' ).replace( /\s+/g, '' );
 }
 
 /** Apply one slot to its anchor in the processed document; false when the anchor cannot take it. */
@@ -279,48 +366,59 @@ export function deriveMemberDocument( input: {
 		return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: 'the representative or member document has no body element' } };
 	}
 	const slots: Slot[] = [];
-	findServerSlots( repBody, memberBody, [], slots );
+	findServerSlots( repBody, memberBody, slots );
 	if ( ! slots.length ) {
 		// Nothing to transplant: the member is the representative byte for byte
 		// in content. That is a legitimate derived member with zero slots.
 		return { ok: true, html: input.repProcessedHtml, stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
 	}
+	const anchorCounts = anchorValueCounts( repBody );
+	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
 	// Content gate before any mapping: one runtime-only slot escalates the member.
-	for ( const slot of slots ) {
+	for ( const { slot, anchor } of located ) {
 		if ( slot.kind !== 'subtree' && slot.kind !== 'element' ) continue;
 		const parsed = html$( `<body>${ slot.replacement as string }</body>` )( 'body' ).children().toArray() as Element[];
 		for ( const element of parsed ) {
 			if ( element.name === 'script' ) {
-				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at /${ slot.path.join( '/' ) } carries a script element capture never observed` } };
+				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries a script element capture never observed` } };
 			}
 			const runtime = slotRuntimeObservation( element );
 			if ( runtime.runtime ) {
-				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at /${ slot.path.join( '/' ) } carries an embed, handler or hydration marker capture never observed` } };
+				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 			}
 		}
 	}
-	// Map onto the processed document with the anchor check.
+	// Resolve every anchor in the processed document before any slot applies:
+	// an attribute slot may rewrite an anchor's own id. The resolved node must
+	// carry the representative's server text; a runtime that rewrote it makes
+	// the transplant unsafe, so the member escalates.
 	let subtreeSlots = 0;
 	let unobservedSlots = 0;
-	for ( const slot of slots ) {
-		const anchor = resolveSlotAnchor( processedBody, slot.path );
-		if ( ! anchor || elementDescriptor( anchor ) !== elementDescriptor( walkServerPath( repBody, slot.path ) ) || inlineText( anchor ) !== inlineText( walkServerPath( repBody, slot.path ) ) ) {
-			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at /${ slot.path.join( '/' ) } has no matching anchor in the representative's captured document` } };
+	const mapped: Array< { slot: Slot; anchor: SlotAnchor; node: Element } > = [];
+	for ( const { slot, anchor } of located ) {
+		const node = resolveAnchor( processedBody, anchor );
+		if ( ! node || node.name !== slot.repNode.name ) {
+			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has no matching anchor in the representative's captured document` } };
+		}
+		if ( anchorText( node ) !== anchorText( slot.repNode ) ) {
+			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } carries different text in the representative's captured document than in its server document` } };
 		}
 		if ( slot.kind === 'subtree' || slot.kind === 'element' ) {
 			subtreeSlots++;
-			const memberNode = walkServerPath( memberBody, slot.path );
-			const parsed = html$( `<body>${ serializeNode( memberNode as unknown as AnyNode ) }</body>` )( 'body' ).children().toArray() as Element[];
+			const parsed = html$( `<body>${ serializeNode( slot.memberNode as unknown as AnyNode ) }</body>` )( 'body' ).children().toArray() as Element[];
 			for ( const element of parsed ) {
 				const runtime = slotRuntimeObservation( element );
 				if ( runtime.runtime ) {
-					return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at /${ slot.path.join( '/' ) } carries an embed, handler or hydration marker capture never observed` } };
+					return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 				}
 				if ( runtime.unobserved ) unobservedSlots++;
 			}
 		}
-		if ( ! applySlot( repProcessed, anchor, slot ) ) {
-			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at /${ slot.path.join( '/' ) } has a different text layout in the representative's captured document` } };
+		mapped.push( { slot, anchor, node } );
+	}
+	for ( const { slot, anchor, node } of mapped ) {
+		if ( ! applySlot( repProcessed, node, slot ) ) {
+			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has a different text layout in the representative's captured document` } };
 		}
 	}
 	// Head slots: title, description, canonical and Open Graph mirror the member.
@@ -336,17 +434,6 @@ export function deriveMemberDocument( input: {
 		}
 	}
 	return { ok: true, html: repProcessed.html(), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
-}
-
-/** The representative's server node at an element path — the anchor check's comparison target. */
-function walkServerPath( body: Element, path: number[] ): Element {
-	let node = body;
-	for ( const index of path ) {
-		const next = slotChildren( node )[ index ];
-		if ( ! next ) return node;
-		node = next;
-	}
-	return node;
 }
 
 /** Replace one processed node's attributes and content with the member's head-slot node. */

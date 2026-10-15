@@ -784,6 +784,9 @@ async function deriveTemplateClusterMembers( input: {
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification member failed the ${ derivation.gate.code } gate`, metrics: { clusterSize: group.size } } );
 					}
 				}
+				// The verdict is final here: record it so a failed cluster is visible
+				// in the receipt, not only in the diagnostics.
+				record.verification = verificationRecord;
 				if ( ! verified ) clusterFailed = true;
 
 				for ( const url of members ) {

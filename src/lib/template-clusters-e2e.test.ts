@@ -104,6 +104,10 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 			const derived: string[] = clusters.flatMap( ( cluster: { derived: Array<{ url: string }> } ): string[] => cluster.derived.map( ( member: { url: string } ) => member.url ) );
 			expect( derived ).toContain( url.replace( /\/$/, '' ) + '/post-3/' );
 			expect( derived ).toContain( url.replace( /\/$/, '' ) + '/post-4/' );
+			// Every cluster that derived members carries its verification verdict.
+			for ( const cluster of ( receipt as { clusters: Array<{ derived: unknown[]; verification?: unknown }> } ).clusters.filter( cluster => cluster.derived.length ) ) {
+				expect( cluster.verification ).toMatchObject( { captured: true, equal: true } );
+			}
 			// post-9 must NOT be derived: the fingerprint isolates it.
 			expect( derived.some( memberUrl => memberUrl.includes( 'post-9' ) ) ).toBe( false );
 			// The derived member equals its real capture offline: text, links,
