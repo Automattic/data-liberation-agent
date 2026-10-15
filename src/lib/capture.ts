@@ -16,6 +16,7 @@ import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
 import { DEFAULT_ROUTE_LIMIT, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
+import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
@@ -364,15 +365,30 @@ export async function captureWebsite(
 				return ! action;
 			} ),
 	] );
+	const aliasProbe = await probeCanonicalRouteAliases( { sourceUrl, urls: inventoryUrls, routeScope } );
+	const aliasKeys = new Set( aliasProbe.aliases.map( ( { url } ) => documentRequestUrl( url ) ) );
+	if ( aliasProbe.aliases.length ) {
+		process.stderr.write( `[capture] canonical route aliases: ${ aliasProbe.aliases.length } of ${ inventoryUrls.length } inventory routes skipped before capture; their rel=canonical is another inventory route (${ aliasProbe.probes } server-HTML probes)\n` );
+	}
+	const prunedInventoryUrls = aliasProbe.aliases.length
+		? inventoryUrls.filter( url => ! aliasKeys.has( documentRequestUrl( url ) ) )
+		: inventoryUrls;
+	const aliasDiagnostics = aliasProbe.aliases.map( ( { url, canonicalUrl } ) => ( {
+		code: ROUTE_ALIAS_CANONICAL,
+		url: documentRequestUrl( url ),
+		reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
+		unit: 'route' as const,
+	} ) );
 	const templateGrouping = options.routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { sourceUrl, urls: inventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs: options.timeBudgetMs } )
+		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs: options.timeBudgetMs } )
 		: undefined;
-	const { selected: urls, omitted } = selectRouteBudget( inventoryUrls, routeLimit, templateGrouping?.representatives );
+	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, templateGrouping?.representatives );
 	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
 		...excludedActions.values(),
 		...( templateGrouping?.diagnostic ? [ templateGrouping.diagnostic ] : [] ),
+		...aliasDiagnostics,
 		// Request identity, as the linked frontier records it, so a link to an
 		// omitted route is the same diagnostic rather than a second one.
 		...omitted.map( url => ( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: routeBudgetReason( routeLimit! ) } ) ),
@@ -380,7 +396,7 @@ export async function captureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, canonicalAliases: aliasProbe.aliases } );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
 	}
@@ -400,6 +416,7 @@ export async function captureWebsite(
 		routeScope,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
+		...( aliasProbe.aliases.length ? { linkedCanonicalAliases: aliasProbe.aliases } : {} ),
 		// The same budget bounds linked-page admissions, so the frontier cannot
 		// push the total past it.
 		...( routeLimit !== undefined ? { limit: routeLimit } : {} ),
@@ -479,6 +496,7 @@ export async function captureWebsite(
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
 		title: inventory.siteMeta?.title,
 		summary,
+		canonicalAliases: aliasProbe.aliases,
 		failures,
 		discoveryDiagnostics: captureDiagnostics,
 		limits: captureExportLimits( options ),
@@ -499,6 +517,17 @@ export async function captureWebsite(
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	if ( screenshotResult.deviceMode ) receipt.deviceMode = screenshotResult.deviceMode;
 	if ( screenshotResult.sharedChrome ) receipt.sharedChrome = screenshotResult.sharedChrome;
+	if ( adapter.engagementStats ) {
+		const engagementStartedAt = Date.now();
+		if ( timeBudget && engagementStartedAt >= timeBudget.abandonAt ) process.stderr.write( '[budget] engagement stats skipped: capture time budget spent\n' );
+		else {
+			const reading = await adapter.engagementStats( screenshotResult.urls, { deadline: timeBudget?.abandonAt } ).catch( () => undefined );
+			if ( reading && ( reading.pages.length || reading.unavailable.length ) ) {
+				receipt.engagementStats = ( await import( './engagement-stats.js' ) ).engagementStatsRecord( reading, new Date( engagementStartedAt ).toISOString() );
+			}
+			process.stderr.write( `[timing] engagement-stats ${ Date.now() - engagementStartedAt }ms (${ reading?.pages.length ?? 0 } read)\n` );
+		}
+	}
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
 	process.stderr.write( `[timing] homepage-preview ${ Date.now() - previewStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );

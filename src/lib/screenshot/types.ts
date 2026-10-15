@@ -65,6 +65,8 @@ export interface ScreenshotOpts {
 	limit?: number;
 	/** Expand rendered same-origin links through the normal capture queue. */
 	linkedPages?: import('./linked-frontier.js').LinkedPageLimits;
+	/** Routes whose rel=canonical is another inventory route; links to them count as links to that route. */
+	linkedCanonicalAliases?: readonly import('../route-aliases.js').CanonicalRouteAlias[];
 	screenshotTimeoutMs?: number; // default: 30_000
 	/** Capture full-page and scrolled PNGs. Default: false; HTML/CSS and sidecars remain enabled. */
 	captureImages?: boolean;
