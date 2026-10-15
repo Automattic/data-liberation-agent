@@ -743,6 +743,8 @@ export interface OverlayCandidate {
   hasCloseAffordance: boolean; // a visible close control exists in the subtree
   textShare?: number;        // share of the document's rendered text inside it, 0..1
   isLandmark?: boolean;      // semantic site chrome must not be dismissed as a nested overlay
+  hasMenu?: boolean;         // holds a navigation menu (nav landmark or a list of ≥3 links)
+  nonLinkText?: string;      // lowercased text outside links, truncated (set with hasMenu)
 }
 
 /** Page-global scroll-lock state (one modal locking scroll affects the page). */
@@ -848,7 +850,11 @@ const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc
  * we flag them by consent keywords / known vendors in their text/aria/selector.
  */
 export function isConsentBanner(c: OverlayCandidate): boolean {
-  const hay = `${c.text} ${c.ariaLabel ?? ''} ${c.selector}`;
+  // A pinned header that holds the site's menu commonly links to a "Privacy
+  // Policy" or "Cookie Policy" page. Those menu labels are navigation, not a
+  // consent notice: judge such chrome by the text outside its links only.
+  const text = c.hasMenu && c.nonLinkText !== undefined ? c.nonLinkText : c.text;
+  const hay = `${text} ${c.ariaLabel ?? ''} ${c.selector}`;
   return CONSENT_TEXT_RE.test(hay) || CONSENT_VENDOR_RE.test(hay);
 }
 
@@ -977,6 +983,19 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
       });
     };
 
+    // Site chrome that holds a navigation menu: a nav landmark, or a list whose
+    // items carry at least three links (Weebly/jQuery-sticky style headers use a
+    // plain <ul> menu inside a positioned div, with no semantic landmark).
+    const menuOf = (el: Element): { hasMenu: boolean; nonLinkText?: string } => {
+      const hasMenu = !!el.querySelector('nav,[role="navigation"]') ||
+        Array.from(el.querySelectorAll('ul,ol')).some((list) =>
+          Array.from(list.children).filter((li) => li.tagName === 'LI' && li.querySelector('a[href]')).length >= 3);
+      if (!hasMenu) return { hasMenu };
+      const clone = el.cloneNode(true) as Element;
+      for (const node of Array.from(clone.querySelectorAll('a,script,style,template'))) node.remove();
+      return { hasMenu, nonLinkText: (clone.textContent || '').replace(/\s+/g, ' ').toLowerCase().slice(0, 400) };
+    };
+
     const pageTextLength = (document.body?.innerText || '').trim().length;
     const candidates: Array<Record<string, unknown>> = [];
     let idx = 0;
@@ -1000,6 +1019,7 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
         text: (el.textContent || '').toLowerCase().slice(0, 400),
         ariaLabel: ((el.getAttribute('aria-label') || '').toLowerCase()) || null,
         hasCloseAffordance: !!close,
+        ...menuOf(el),
         isLandmark: /^(HEADER|NAV)$/.test(el.tagName) ||
           ['banner', 'navigation', 'contentinfo'].includes((el.getAttribute('role') || '').toLowerCase()),
         textShare: pageTextLength
