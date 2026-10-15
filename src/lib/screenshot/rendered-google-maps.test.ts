@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { capturePageHtml } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
+import { sanitizeFrozenHtml } from './freeze.js';
 
 it('ports a rendered Google map through portable export without freezing its tiles or changing the live map', async () => {
   const browser = await chromium.launch();
@@ -28,6 +29,8 @@ it('ports a rendered Google map through portable export without freezing its til
     expect($('.gm-style iframe').attr('data-blocks-engine-capture-visual-iframe-height')).toBe('320');
     expect($('.gm-style .tiles')).toHaveLength(0);
     expect(await page.locator('main').innerHTML()).toBe(before);
+    const frozen = load(sanitizeFrozenHtml(captured));
+    expect(frozen('.gm-style iframe').attr('src')).toBe('https://maps.google.com/maps?ll=-33.8651437%2C151.2099002&z=12&t=m&hl=en-AU&output=embed');
 
     mkdirSync('.tmp-test', { recursive:true });
     const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'google-map-'));
