@@ -79,7 +79,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		replica: 'c', 'content-desktop': 'c', 'content-mobile': 'c', 'content-mobile-inner': 'c',
 	},
 	platform: {
-		'access-gate': 'a', 'member-login': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'constructed-stylesheet': 'a',
+		'access-gate': 'a', 'member-login': 'a', 'engagement-stats': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'constructed-stylesheet': 'a',
 		'ported-embed': 'a', 'unported-embed': 'a', 'squarespace-header-style': 'a', 'squarespace-header-visible': 'i', 'check-route-tab': 'a',
 	},
 } as const;
@@ -97,6 +97,7 @@ export const CAPTURE_EVIDENCE_FAMILIES = {
 	'shared-<hash>': 'c',
 	'embedded-<digest>-<document>': 'c',
 	'member-login-<provider>': 'c',
+	'engagement-stats-<provider>': 'c',
 	'disclosure-open-<svg attribute>': 'a',
 	'disclosure-closed-<svg attribute>': 'a',
 	'dialog-<n>': 'i',
@@ -108,7 +109,7 @@ export const CAPTURE_EVIDENCE_FAMILIES = {
 export const CAPTURE_SCHEMAS = [
 	'asset-evidence/v1', 'behavior-model/v1', 'candidate-motion/v1', 'capture-diagnostics/v1', 'capture-receipt/v1',
 	'captured-interactions/v1', 'captured-scroll-states/v1', 'captured-semantic-evidence/v2',
-	'collection-status/v1', 'compare-overlays/v1', 'embedded-documents/v1', 'export-publication-lock/v1', 'fidelity-reference/v1',
+	'collection-status/v1', 'compare-overlays/v1', 'embedded-documents/v1', 'engagement-stats/v1', 'export-publication-lock/v1', 'fidelity-reference/v1',
 	'finite-bootstrap/v1', 'http-acquisition/v1', 'interaction-states/v1', 'interaction-states/v2', 'layout-geometry-capture/v1',
 	'layout-geometry-proof/v1', 'learned-motion/v1', 'native-view-timelines/v1', 'portable-motion/v1', 'runtime-observations/v1',
 	'runtime-regions/v1', 'scroll-states/v1', 'shopify-http-proof/v4', 'source-behavior/v1', 'source-behavior-report/v1',

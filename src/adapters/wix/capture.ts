@@ -11,7 +11,17 @@ import { canonicalizeWixCapturedHtml } from './instance-ids.js';
 import { wixDocumentSelection, wixAdditionalProfiles } from './document-selection.js';
 import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
+import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
+
+/**
+ * The Wix Blog per-post counters (views, comments). The server document holds
+ * only a skeleton there; the viewer fetches the numbers after load.
+ */
+export const WIX_ENGAGEMENT_STATS = {
+	provider: 'wix',
+	selector: '[data-hook="post-stats"]',
+};
 
 /**
  * Wix Members sign-in entry points: the login bar's button, which opens the
@@ -105,7 +115,8 @@ export function wixMediaVariant( url: string ): { id: string; url: string } | nu
 export const WIX_CAPTURE_CHROME_SELECTOR =
 	'[id="WIX_ADS"], [id$="-hiddenA11ySubMenuIndication"]';
 
-const WIX_SLIDESHOW_SELECTOR = '.wixui-slideshow';
+const WIX_SLIDESHOW_CLASS = 'wixui-slideshow';
+const WIX_SLIDESHOW_SELECTOR = `.${ WIX_SLIDESHOW_CLASS }`;
 const WIX_SLIDESHOW_LIMIT = 4;
 const WIX_SLIDE_LIMIT = 6;
 const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
@@ -113,6 +124,8 @@ const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
 const WIX_SLIDE_TRANSITION_MILLISECONDS = 1_500;
 const WIX_SLIDESHOW_REVEAL_WAIT_MILLISECONDS = 2_000;
 export const WIX_ANCHOR_SCROLL_MAX_MILLISECONDS = 3_000;
+/** 2.5× the largest documented delayed navigation (600ms in anchor-capture.test): a landing that follows a trusted click moves within this beat of the click (#839). */
+const WIX_ANCHOR_NO_MOVE_MILLISECONDS = 1_500;
 
 /**
  * In-page: visit the whole scroll-reactive layout so Wix's runtime wires
@@ -456,11 +469,16 @@ async function closeOpenedMenu( page: Page ): Promise< void > {
  * last pass; a sweep that reveals nothing after the previous sweep and its
  * hydration window also revealed nothing has confirmed the document's
  * answer, so the loop stops before its third pass.
+ *
+ * Wix server-renders every slideshow, including one it later unmounts until
+ * it is in view, so a route whose server document has none has nothing to
+ * reveal and skips the sweep. Without the server document, sweep as before.
  */
-export async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
+export async function revealAndCollectWixSlideshows( page: Page, serverHtml?: string ): Promise< void > {
 	const mounted = () => page.locator( WIX_SLIDESHOW_SELECTOR ).count().catch( () => 0 );
+	const declared = serverHtml === undefined || serverHtml.includes( WIX_SLIDESHOW_CLASS );
 	let emptyPasses = 0;
-	for ( let pass = 0; pass < 3 && emptyPasses < 2 && ( await mounted() ) === 0; pass++ ) {
+	for ( let pass = 0; declared && pass < 3 && emptyPasses < 2 && ( await mounted() ) === 0; pass++ ) {
 		await page.evaluate( wixScrollSweep, false ).catch( () => undefined );
 		if ( ( await mounted() ) > 0 ) break;
 		emptyPasses++;
@@ -705,7 +723,13 @@ export const capture: LiberationHooks = {
 				}, fragment );
 				continue;
 			}
-			await page.evaluate( async ( { fragment, maxWait, initialScroll } ) => {
+			// A drawer keeps the body's scroll locked while it is open, so the
+			// link's own navigation cannot move the document until the drawer is
+			// gone. Close it before waiting for the landing (when the click itself
+			// closed the menu, as the collapsed-menu runtime usually does on
+			// layouts where the drawer is not scroll-locking, this is a no-op).
+			if ( trigger.menu ) await closeOpenedMenu( page );
+			await page.evaluate( async ( { fragment, maxWait, noMoveMs, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ].filter( ( link ) => {
@@ -719,14 +743,25 @@ export const capture: LiberationHooks = {
 					for ( const link of links ) link.dataset.blocksEngineCaptureAnchorUnresolved = reason;
 				};
 				let previous = scrollY;
+				const startHeight = document.documentElement.scrollHeight;
 				let moved = false;
 				let stableFrames = 0;
-				for ( let attempt = 0; attempt < maxWait / 50 && ( ! moved || stableFrames < 4 ); attempt++ ) {
+				// Bounds are measured time, not iterations: a throttled timer would
+				// otherwise stretch every bound by its own lateness.
+				const waitStarted = performance.now();
+				while ( performance.now() - waitStarted < maxWait && ( ! moved || stableFrames < 4 ) ) {
 					await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
 					if ( Math.abs( scrollY - initialScroll ) >= 1 ) moved = true;
 					if ( Math.abs( scrollY - previous ) < 1 ) stableFrames++;
 					else stableFrames = 0;
 					previous = scrollY;
+					// Stability keeps the full bound: a runtime that scrolls at all
+					// moves within this beat of the click, so once the document has
+					// held scroll and height past the beat without moving, the
+					// click's landing is not coming, and continuing to the full bound
+					// only spends the wait (#839: every drawer link that never
+					// scrolled paid the whole bound on the mobile profile).
+					if ( ! moved && performance.now() - waitStarted >= noMoveMs && document.documentElement.scrollHeight === startHeight ) break;
 				}
 				if ( ! moved ) {
 					markUnresolved( 'runtime scroll did not move before timeout' );
@@ -773,10 +808,7 @@ export const capture: LiberationHooks = {
 				if ( margin > 0 ) marker.style.scrollMarginTop = `${ margin }px`;
 				for ( const link of links ) link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
 				return true;
-			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, initialScroll } );
-			// Following a link closes the menu; a link that did not navigate
-			// leaves it open, and the capture must record the closed page.
-			if ( trigger.menu ) await closeOpenedMenu( page );
+			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs: WIX_ANCHOR_NO_MOVE_MILLISECONDS, initialScroll } );
 		}
 
 		await restoreScroll();
@@ -865,7 +897,7 @@ export const capture: LiberationHooks = {
 	 * DOM that is about to be frozen so a late-hydrated widget is not lost.
 	 */
 	beforeSerialize: async ( page, ctx ) => {
-		await revealAndCollectWixSlideshows( page );
+		await revealAndCollectWixSlideshows( page, ctx.serverHtml );
 		// Maps and App Market widgets only work inside Wix's viewer (see embeds.ts).
 		await portWixRuntimeEmbeds( page ).catch( () => undefined );
 		// Revealing a slideshow scrolls, so the chrome is settled after it.
@@ -874,6 +906,11 @@ export const capture: LiberationHooks = {
 		// for the destination to point at its own login (see member-login.ts).
 		// Last of all, so a scroll-driven rerender cannot drop the marker
 		// before the freeze.
+		// Post counters are the destination's feature, not content (see
+		// engagement-stats.ts); emptied last, after any scroll-driven rerender.
+		await page.evaluate( markEngagementStats, {
+			...WIX_ENGAGEMENT_STATS, attribute: ENGAGEMENT_STATS_ATTRIBUTE, classPrefix: ENGAGEMENT_STATS_CLASS_PREFIX,
+		} ).catch( () => 0 );
 		await page.evaluate( markMemberLoginControls, {
 			...WIX_MEMBER_LOGIN, memberPaths: wixMemberPaths( ctx.url ),
 			attribute: MEMBER_LOGIN_ATTRIBUTE, classPrefix: MEMBER_LOGIN_CLASS_PREFIX,

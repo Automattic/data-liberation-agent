@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compareDerivedWithCapture, deriveMemberDocument, TEMPLATE_CLUSTERS_SCHEMA, writeTemplateClusters } from './template-clusters.js';
-import { templateFingerprint } from './template-groups.js';
+import { TEMPLATE_FINGERPRINT_VERSION, templateFingerprint } from './template-groups.js';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -110,7 +110,7 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 	it( 'writes the receipt next to website/', () => {
 		const directory = mkdtempSync( join( tmpdir(), 'template-clusters-' ) );
 		const path = writeTemplateClusters( directory, {
-			schema: TEMPLATE_CLUSTERS_SCHEMA, fingerprint: { version: 1 }, sourceUrl: BASE,
+			schema: TEMPLATE_CLUSTERS_SCHEMA, fingerprint: { version: TEMPLATE_FINGERPRINT_VERSION }, sourceUrl: BASE,
 			derivedCount: 1, escalatedCount: 0, unavailableCount: 0,
 			clusters: [ { id: 't1', key: 'k', representative: `${ BASE }/post-1/`, derived: [ { url: `${ BASE }/post-2/`, slots: 3, subtreeSlots: 0 } ], escalated: [], unavailable: [] } ],
 		} );

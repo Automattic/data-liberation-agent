@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
+import * as cheerio from 'cheerio';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
@@ -65,15 +66,19 @@ function page( path: string ): string {
 <button type="button" class="products" aria-haspopup="menu" aria-expanded="false" data-control="header">${ brand }</button>
 <div class="products-menu" role="menu" hidden><a role="menuitem" href="/alpha">Alpha</a><a role="menuitem" href="/beta">Beta</a></div></nav>
 <button type="button" class="contact" aria-haspopup="dialog" data-control="header">Contact</button>
-<div class="contact-dialog" role="dialog" aria-modal="true" aria-label="Contact us" hidden><p>Write to us any time.</p><button type="button" class="close" aria-label="Close" data-control="header">×</button></div></header>`;
+<div class="contact-dialog" role="dialog" aria-modal="true" aria-label="Contact us" hidden><p>Write to us any time.</p><button type="button" class="close" aria-label="Close" data-control="header">×</button></div>
+<button type="button" class="info" aria-haspopup="dialog" data-control="header">Info</button></header>`;
 	const main = `<main><h1>${ path || 'home' }</h1><div class="tabs"><div role="tablist"><button role="tab" aria-selected="true" data-control="tab">Overview</button><button role="tab" aria-selected="false" data-control="tab">Details</button><button role="tab" aria-selected="false" data-control="tab">Pricing</button></div>
 <div class="tab-region">The overview of ${ path || 'home' } is short.</div></div></main>`;
 	const body = path === '' ? `<div class="wrap"><div class="promo">Sale this week</div>${ header }${ main }</div>` : `${ header }${ main }<footer>Footer</footer>`;
+	// The Info control's panel lives in the site chrome (its trigger is in the
+	// header) but renders as a body-level portal, outside the landmark.
+	const infoDialog = `<div id="site-info-dialog" class="info-dialog" role="dialog" aria-label="Site info" hidden><p>Everything about this site.</p><button type="button" class="close" aria-label="Dismiss site info">×</button></div>`;
 	return `<!doctype html><html><head><meta charset="utf-8"><title>${ path || 'home' }</title><style>
 body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;height:60px;position:relative}
 .products-menu{position:absolute;top:60px;left:0;background:#fff;padding:8px}.products-menu a{display:block}
 .contact-dialog{position:fixed;inset:0;background:#fff}[hidden]{display:none!important}main{min-height:1400px}
-</style></head><body>${ body }<script>
+</style></head><body>${ body }${ infoDialog }<script>
 const instance = Math.random().toString(36).slice(2);
 document.addEventListener('click', event => { const control = event.target.closest('[data-control]'); if (control) fetch('/__click?path=' + encodeURIComponent(location.pathname) + '&control=' + control.dataset.control + '&instance=' + instance); }, true);
 const products = document.querySelector('.products'), menu = document.querySelector('.products-menu');
@@ -81,6 +86,9 @@ products.addEventListener('click', () => { menu.hidden = !menu.hidden; products.
 const dialog = document.querySelector('.contact-dialog');
 document.querySelector('.contact').addEventListener('click', () => { dialog.hidden = false; });
 dialog.querySelector('.close').addEventListener('click', () => { dialog.hidden = true; });
+const info = document.querySelector('.info-dialog');
+document.querySelector('.info').addEventListener('click', () => { info.hidden = false; });
+info.querySelector('.close').addEventListener('click', () => { info.hidden = true; });
 const copy = { Overview: 'The overview of ${ path || 'home' } is short.', Details: 'Details for ${ path || 'home' }: every feature, listed one by one, with notes on each of them.', Pricing: 'Pricing for ${ path || 'home' }: three plans, billed monthly or yearly, with a free trial included.' };
 for (const tab of document.querySelectorAll('[role=tab]')) tab.addEventListener('click', () => {
 	for (const other of document.querySelectorAll('[role=tab]')) other.setAttribute('aria-selected', String(other === tab));
@@ -136,15 +144,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 
 	it( 'probes the shared header once, on the entrypoint, and on no other route', () => {
 		expect( result.captured ).toBe( 3 );
-		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 1, states: 2, captured: 2, unanchored: 0 } );
+		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 1, states: 3, captured: 3, unanchored: 0 } );
 		// One page instance clicked the shared header: the one-time probe of the entrypoint.
 		const shared = clicks.filter( click => click.control === 'header' && click.path !== '/landing' );
 		expect( shared.length ).toBeGreaterThan( 0 );
 		expect( new Set( shared.map( click => click.instance ) ).size ).toBe( 1 );
+		// The shared header is not clicked on a route that reused it: neither the
+		// controls whose panels render inside the header nor the Info control,
+		// whose panel renders outside it at body level.
 		expect( clicksOn( 'about', 'header' ) ).toEqual( [] );
+		expect( clicksOn( 'about', 'info' ) ).toEqual( [] );
 		for ( const path of [ '', 'about' ] ) {
 			// `/about` also has a footer, which the entrypoint does not.
-			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: path ? 2 : 1, entrypoint: 1, matched: 1 }, reusedStates: 2 } );
+			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: path ? 2 : 1, entrypoint: 1, matched: 1 }, reusedStates: 3 } );
 			expect( entries[ url( path ) ]!.profiles!.desktop!.sharedChrome ).toEqual( entries[ url( path ) ]!.sharedChrome );
 		}
 	} );
@@ -154,10 +166,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 		expect( states.map( state => [ state.status, state.trigger.label, state.reusedFrom ] ) ).toEqual( [
 			[ 'captured', 'Products', url( '' ) ],
 			[ 'captured', 'Contact', url( '' ) ],
+			[ 'captured', 'Info', url( '' ) ],
 		] );
+		// Where the panel renders outside the landmark (the Info portal at body
+		// level), its state is still chrome evidence, addressed by the node's own id.
+		expect( states[ 2 ]!.dialog!.selector ).toBe( '#site-info-dialog' );
+		expect( states[ 2 ]!.dialog!.html ).toContain( 'Everything about this site.' );
 		// The entrypoint header is inside a wrapper; on this route it is a child of <body>.
 		const entrypointStates = entries[ url( '' ) ]!.interactions!.states.filter( state => state.reusedFrom );
-		expect( entrypointStates[ 0 ]!.trigger.selector ).toMatch( /^body > div > header/ );
+		expect( entrypointStates[ 0 ]!.trigger.selector ).toMatch( /^body > div:nth-of-type\(1\) > header/ );
 		expect( states[ 0 ]!.trigger.selector ).toMatch( /^body > header/ );
 		// Each trigger keeps its own panel, not the first id-less panel probed.
 		expect( states[ 1 ]!.dialog ).toMatchObject( { selector: 'body > header:nth-of-type(1) > div:nth-of-type(1)', presentation: 'modal' } );
@@ -189,11 +206,16 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 			const view = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			await view.goto( new URL( 'about/', site.url ).href );
 			// Both header controls are wired from the reused evidence, not by a source script.
-			expect( await view.locator( 'header [data-blocks-engine-capture-dialog-trigger]' ).count() ).toBe( 2 );
+			expect( await view.locator( 'header [data-blocks-engine-capture-dialog-trigger]' ).count() ).toBe( 3 );
+			const infoWired = await view.locator( '[data-blocks-engine-capture-dialog-trigger][aria-controls="site-info-dialog"]' ).count();
+			expect( infoWired ).toBe( 1 );
 			await expect.poll( () => view.getByRole( 'menuitem', { name: 'Alpha' } ).isVisible() ).toBe( false );
 			await view.getByRole( 'button', { name: 'Products' } ).click();
 			await expect.poll( () => view.getByRole( 'menuitem', { name: 'Alpha' } ).isVisible() ).toBe( true );
 			await view.getByRole( 'button', { name: 'Products' } ).click();
+			const infoButton = view.locator( 'header button.info, [data-blocks-engine-capture-disclosure-label="Info"]' ).first();
+			await infoButton.click();
+			await expect.poll( () => view.getByText( 'Everything about this site.' ).isVisible() ).toBe( true );
 			await view.getByRole( 'button', { name: 'Contact' } ).click();
 			await expect.poll( () => view.getByText( 'Write to us any time.' ).isVisible() ).toBe( true );
 		} finally {
@@ -201,4 +223,84 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 			await site.close();
 		}
 	}, 60_000 );
+} );
+
+/**
+ * `/` and `/privacy` serve the same closed header. Its menu panel is not in the
+ * served document: the page script mounts it only when the toggle is clicked,
+ * the way a client-rendered mobile menu does.
+ */
+function mountedMenuPage( path: string ): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${ path || 'home' }</title><style>
+body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;height:60px}
+.mobile-nav a{display:block}main{min-height:1400px}@media (min-width:768px){.toggle,.mobile-nav{display:none}}
+</style></head><body><header class="site-header"><a href="/">Brand</a><nav aria-label="Main"><a href="/">Home</a><a href="/privacy">Privacy</a></nav>
+<div class="actions"><button type="button" class="toggle" aria-expanded="false" aria-controls="mobile-nav"><span>Open menu</span></button></div></header>
+<main><h1>${ path || 'home' }</h1><p>Body copy for ${ path || 'home' }.</p></main><footer>Footer</footer><script>
+const header = document.querySelector('header'), toggle = document.querySelector('.toggle');
+toggle.addEventListener('click', () => {
+	const open = toggle.getAttribute('aria-expanded') !== 'true';
+	toggle.setAttribute('aria-expanded', String(open));
+	document.getElementById('mobile-nav')?.remove();
+	if (open) header.insertAdjacentHTML('beforeend', '<nav id="mobile-nav" aria-label="Mobile" class="mobile-nav"><a href="/">Home</a><a href="/privacy">Privacy</a></nav>');
+});
+</script></body></html>`;
+}
+
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome with a menu mounted on click', () => {
+	const parent = join( process.cwd(), '.tmp-test' );
+	let server: Server;
+	let origin: string;
+	let outputDir: string;
+	const url = ( path: string ) => `${ origin }/${ path }`;
+
+	beforeAll( async () => {
+		server = createServer( ( request, response ) => {
+			const path = new URL( request.url ?? '/', 'http://fixture' ).pathname.slice( 1 );
+			if ( ! [ '', 'privacy' ].includes( path ) ) {
+				response.statusCode = 404;
+				response.end( 'not found' );
+				return;
+			}
+			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
+			response.end( mountedMenuPage( path ) );
+		} );
+		await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		mkdirSync( parent, { recursive: true } );
+		outputDir = mkdtempSync( join( parent, 'shared-chrome-mounted-' ) );
+		const urls = [ url( '' ), url( 'privacy' ) ];
+		await captureScreenshots( {
+			// The default profiles: the toggle only shows at phone width, which the
+			// reflow-only device probe reaches, as on a responsive source.
+			urls, primaryUrl: urls[ 0 ], outputDir, concurrency: 2, settleMs: 50, learnFluid: false, force: true, deviceMode: 'auto',
+		} );
+		exportWebsiteCapture( { outputDir, sourceUrl: url( '' ), platform: 'neutral', summary: {}, failures: [] } );
+	}, 180_000 );
+
+	afterAll( async () => {
+		await new Promise< void >( resolve => server.close( () => resolve() ) );
+		rmSync( outputDir, { recursive: true, force: true } );
+	} );
+
+	it( 'serializes the header of every route closed, annotated and identical', () => {
+		const headers = [ 'index.html', 'privacy/index.html' ].map( file => {
+			// Equal chrome may be exported once, as a part every route includes.
+			const html = readFileSync( join( outputDir, 'website', file ), 'utf8' )
+				.replace( /<!--#include virtual="([^"]+)" -->/g, ( _, part: string ) => readFileSync( join( outputDir, 'website', part ), 'utf8' ) );
+			return html.match( /<header[\s\S]*?<\/header>/ )![ 0 ];
+		} );
+		for ( const header of headers ) {
+			const $ = cheerio.load( header );
+			const toggle = $( 'button.toggle' );
+			expect( toggle.attr( 'aria-expanded' ) ).toBe( 'false' );
+			const panel = toggle.attr( 'data-blocks-engine-capture-dialog-trigger' );
+			expect( panel ).toBeTruthy();
+			// The mounted menu is carried as a closed panel, never as the open source menu.
+			expect( $( 'nav[aria-label="Mobile"]' ).toArray().map( nav => [ $( nav ).attr( 'data-blocks-engine-capture-dialog-panel' ), $( nav ).attr( 'hidden' ) !== undefined ] ) ).toEqual( [ [ panel, true ] ] );
+		}
+		expect( headers[ 1 ] ).toBe( headers[ 0 ] );
+		const entries = ( JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as { entries: Record< string, ManifestEntry > } ).entries;
+		for ( const path of [ '', 'privacy' ] ) expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, reusedStates: 1 } );
+	} );
 } );

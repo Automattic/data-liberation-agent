@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
+import type { CanonicalRouteAlias } from './route-aliases.js';
 import type { SourceDataScript } from './source-data.js';
 
 export interface RouteEntry {
@@ -144,7 +145,9 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	capturedEntries: T[],
 	sourceUrl: string,
 	redirectAliases: Array< { url: string; target: string } >,
-	routeDiagnostics: ReadonlyArray< RouteDiagnostic > = []
+	routeDiagnostics: ReadonlyArray< RouteDiagnostic > = [],
+	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
+	preCaptureAliases: ReadonlyArray< CanonicalRouteAlias > = []
 ): RouteStage<T> {
 	const normalizedSourceUrl = normalizedUrl( sourceUrl );
 	const requestedEntrypointCandidates = capturedEntries.filter( ( { url } ) => documentRequestUrl( url ) === documentRequestUrl( sourceUrl ) );
@@ -323,6 +326,17 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		const to = `/${ destination }`;
 		// Path-only static redirect rules cannot distinguish query renditions.
 		if ( ! new URL( url ).search && from && from !== to ) portableRedirects.push( { from, to } );
+	}
+	// Routes whose server-HTML canonical was another inventory route never ran
+	// the browser, so their result is recorded here to match a capture that had
+	// run them and collapsed them: the canonical route's own page carries the
+	// alias's link key, so exported links to the alias resolve to it.
+	for ( const { url, canonicalUrl } of preCaptureAliases ) {
+		const targetEntry = entryForAddress( canonicalUrl );
+		if ( ! targetEntry || ! retained.has( targetEntry ) ) continue;
+		const routePath = routePathOf( targetEntry.url );
+		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
+		canonicalRouteAliases.set( documentRequestUrl( url ), routePath );
 	}
 	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData, pathCollisions };
 }

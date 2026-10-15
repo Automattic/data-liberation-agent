@@ -172,7 +172,11 @@ export function wireCapturedDialogs(
 		} );
 		if ( roots.length > 0 && Object.keys( transitions ).length > 0 ) choiceConfigs.push( { transitions } );
 	}
-	for ( const state of captured ) {
+	// Resolve every trigger against the same pre-mutation tree. Inserting a
+	// panel and its close button can shift positional selectors used by later
+	// states in the same chrome landmark.
+	const capturedTriggers = captured.map( state => findTriggers( $, state.trigger ) );
+	for ( const [ index, state ] of captured.entries() ) {
 		const sharedPanelId = reusedPanels.get( state.dialog!.selector );
 		const existingPanel = selectByCapturedSelector( $, state.dialog?.selector, state.dialog?.tag )
 			.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' );
@@ -180,7 +184,7 @@ export function wireCapturedDialogs(
 		if ( !reusePanel && !sharedPanelId ) removeCapturedDialog( $, state.dialog?.selector );
 		// An earlier exported panel contains a captured snapshot, not another
 		// instance of the observed source control whose ID it happens to copy.
-		const triggers = findTriggers( $, state.trigger )
+		const triggers = capturedTriggers[ index ]!
 			.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );

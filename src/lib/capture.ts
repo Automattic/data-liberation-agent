@@ -17,8 +17,9 @@ import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
 import { DEFAULT_ROUTE_LIMIT, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
+import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
-import { captureTimeBudgetWindow, validateTimeBudgetMs } from './capture-time-budget.js';
+import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteDeadlineMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
 
@@ -109,6 +110,16 @@ export interface CaptureOptions {
 	 * minus the post-capture headroom (README, "Capture time budget").
 	 */
 	timeBudgetMs?: number;
+	/**
+	 * Per-route capture deadline in milliseconds (browser acquisition only). A
+	 * route that exceeds it is abandoned: its context closes, its slot frees
+	 * for the next route, and it records a `route_capture_timeout` missing
+	 * route naming the phase it entered last. Default: derived from
+	 * `timeBudgetMs` and the admitted concurrency, never below
+	 * `ROUTE_DEADLINE_MIN_MS` (10 min); without `timeBudgetMs`, that floor
+	 * applies on its own. `0` disables the deadline.
+	 */
+	routeDeadlineMs?: number;
 	/**
 	 * Largest file export writes into `website/`, in bytes. A captured asset over
 	 * it is not written; its references resolve like any missing asset and it is
@@ -314,6 +325,7 @@ export async function captureWebsite(
 	validateRouteLimit( options.routeLimit );
 	validateRouteSelection( options.routeSelection );
 	validateTimeBudgetMs( options.timeBudgetMs );
+	validateRouteDeadlineMs( options.routeDeadlineMs );
 	if ( options.timeBudgetMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'timeBudgetMs applies to browser acquisition only' );
 	validateMaxFileBytes( options.maxFileBytes );
 	validateMaxTotalBytes( options.maxTotalBytes );
@@ -380,11 +392,25 @@ export async function captureWebsite(
 				return ! action;
 			} ),
 	] );
+	const aliasProbe = await probeCanonicalRouteAliases( { sourceUrl, urls: inventoryUrls, routeScope } );
+	const aliasKeys = new Set( aliasProbe.aliases.map( ( { url } ) => documentRequestUrl( url ) ) );
+	if ( aliasProbe.aliases.length ) {
+		process.stderr.write( `[capture] canonical route aliases: ${ aliasProbe.aliases.length } of ${ inventoryUrls.length } inventory routes skipped before capture; their rel=canonical is another inventory route (${ aliasProbe.probes } server-HTML probes)\n` );
+	}
+	const prunedInventoryUrls = aliasProbe.aliases.length
+		? inventoryUrls.filter( url => ! aliasKeys.has( documentRequestUrl( url ) ) )
+		: inventoryUrls;
+	const aliasDiagnostics = aliasProbe.aliases.map( ( { url, canonicalUrl } ) => ( {
+		code: ROUTE_ALIAS_CANONICAL,
+		url: documentRequestUrl( url ),
+		reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
+		unit: 'route' as const,
+	} ) );
 	const templateClusters = options.templateClusters === true;
 	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { sourceUrl, urls: inventoryUrls, routeScope, outputDir, timeBudgetMs: options.timeBudgetMs } )
+		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs: options.timeBudgetMs } )
 		: undefined;
 	// Verification members (#784 §4.2): one per multi-member cluster, kept right
 	// after the representatives so a budget that fits every template also fits
@@ -395,12 +421,13 @@ export async function captureWebsite(
 				.map( group => ( group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ] ?? '' ) )
 				.filter( url => url !== '' )
 		: [];
-	const { selected: urls, omitted } = selectRouteBudget( inventoryUrls, routeLimit, [ ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ] );
+	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ] );
 	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
 		...excludedActions.values(),
 		...( templateGrouping?.diagnostic ? [ templateGrouping.diagnostic ] : [] ),
+		...aliasDiagnostics,
 		// Request identity, as the linked frontier records it, so a link to an
 		// omitted route is the same diagnostic rather than a second one.
 		...omitted.map( url => ( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: routeBudgetReason( routeLimit! ) } ) ),
@@ -408,7 +435,7 @@ export async function captureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, canonicalAliases: aliasProbe.aliases } );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
 	}
@@ -428,6 +455,7 @@ export async function captureWebsite(
 		routeScope,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
+		...( aliasProbe.aliases.length ? { linkedCanonicalAliases: aliasProbe.aliases } : {} ),
 		// The same budget bounds linked-page admissions, so the frontier cannot
 		// push the total past it.
 		...( routeLimit !== undefined ? { limit: routeLimit } : {} ),
@@ -457,6 +485,7 @@ export async function captureWebsite(
 			: {} ),
 		publicUrlsOnly: true,
 		...( timeBudget ? { timeBudget } : {} ),
+		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );
 	process.stderr.write(
@@ -540,6 +569,7 @@ export async function captureWebsite(
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
 		title: inventory.siteMeta?.title,
 		summary,
+		canonicalAliases: aliasProbe.aliases,
 		failures,
 		discoveryDiagnostics: captureDiagnostics,
 		limits: captureExportLimits( options ),
@@ -566,6 +596,17 @@ export async function captureWebsite(
 	}
 	if ( screenshotResult.deviceMode ) receipt.deviceMode = screenshotResult.deviceMode;
 	if ( screenshotResult.sharedChrome ) receipt.sharedChrome = screenshotResult.sharedChrome;
+	if ( adapter.engagementStats ) {
+		const engagementStartedAt = Date.now();
+		if ( timeBudget && engagementStartedAt >= timeBudget.abandonAt ) process.stderr.write( '[budget] engagement stats skipped: capture time budget spent\n' );
+		else {
+			const reading = await adapter.engagementStats( [ ...screenshotResult.urls, ...derivedUrls ], { deadline: timeBudget?.abandonAt } ).catch( () => undefined );
+			if ( reading && ( reading.pages.length || reading.unavailable.length ) ) {
+				receipt.engagementStats = ( await import( './engagement-stats.js' ) ).engagementStatsRecord( reading, new Date( engagementStartedAt ).toISOString() );
+			}
+			process.stderr.write( `[timing] engagement-stats ${ Date.now() - engagementStartedAt }ms (${ reading?.pages.length ?? 0 } read)\n` );
+		}
+	}
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
 	process.stderr.write( `[timing] homepage-preview ${ Date.now() - previewStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
@@ -620,7 +661,7 @@ export async function captureWebsite(
  * failure yields one `template_grouping_unavailable` discovery diagnostic and
  * no representatives, so the budget falls back to discovery order.
  */
-async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; outputDir: string; timeBudgetMs?: number } ): Promise< {
+async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number } ): Promise< {
 	report?: import('./template-groups.js').TemplateGroupsReport;
 	representatives?: string[];
 	diagnostic?: { code: string; url: string; reason: string };
@@ -630,7 +671,7 @@ async function groupInventoryTemplates( input: { sourceUrl: string; urls: string
 		const { buildTemplateGroups, templateRepresentatives, TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
 		// Grouping spends at most a tenth of a capture time budget.
 		const timeBudgetMs = input.timeBudgetMs === undefined ? TEMPLATE_GROUPING_LIMITS.timeBudgetMs : Math.min( TEMPLATE_GROUPING_LIMITS.timeBudgetMs, Math.max( 1, Math.floor( input.timeBudgetMs / 10 ) ) );
-		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: { timeBudgetMs } } );
+		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: { timeBudgetMs }, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
 		const { coverage } = report;
 		process.stderr.write( `[template-groups] ${ coverage.routes } routes: ${ coverage.fingerprinted } fingerprinted into ${ coverage.groups } groups (${ coverage.singletons } singletons), ${ coverage.unfingerprinted } unfingerprinted, ${ Date.now() - startedAt }ms\n` );
 		return { report, representatives: templateRepresentatives( report ) };

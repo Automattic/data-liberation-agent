@@ -65,6 +65,8 @@ export interface ScreenshotOpts {
 	limit?: number;
 	/** Expand rendered same-origin links through the normal capture queue. */
 	linkedPages?: import('./linked-frontier.js').LinkedPageLimits;
+	/** Routes whose rel=canonical is another inventory route; links to them count as links to that route. */
+	linkedCanonicalAliases?: readonly import('../route-aliases.js').CanonicalRouteAlias[];
 	screenshotTimeoutMs?: number; // default: 30_000
 	/** Capture full-page and scrolled PNGs. Default: false; HTML/CSS and sidecars remain enabled. */
 	captureImages?: boolean;
@@ -131,6 +133,14 @@ export interface ScreenshotOpts {
 	 * `route_capture_skipped_budget` and counted in `failed`. Default: none.
 	 */
 	timeBudget?: import('../capture-time-budget.js').CaptureTimeBudgetWindow;
+	/**
+	 * Per-route deadline in milliseconds: a route that exceeds it is abandoned,
+	 * its contexts closed, and it records `route_capture_timeout`. 0 disables it.
+	 * Default: derived from the capture time budget and the admitted
+	 * concurrency (budget/concurrency, never below `ROUTE_DEADLINE_MIN_MS`), or
+	 * `ROUTE_DEADLINE_MIN_MS` without a budget.
+	 */
+	routeDeadlineMs?: number;
 }
 
 export interface ScreenshotResult {

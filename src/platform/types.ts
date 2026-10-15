@@ -9,6 +9,7 @@
 // the contract without pulling in adapter internals.
 import type { LiberationHooks } from '../adapters/page-actions.js';
 import type { CapabilityRule } from '../lib/inspect-rendered.js';
+import type { TemplateStyleNormalization } from '../lib/template-groups.js';
 import type { HttpAcquisitionProfile } from './acquisition.js';
 
 /** URL substring/regex tested against the normalized site URL. */
@@ -85,8 +86,18 @@ export interface Platform {
 	liberation?: LiberationHooks;
 	/** Optional server-document acquisition profile; rendered fidelity remains separate. */
 	acquisition?: HttpAcquisitionProfile;
+	/** Adapter-owned aggregation of a page's inline `<style>` blocks for template grouping (#836).
+	 * Declared only when the runtime generates per-item page-local CSS; the generic
+	 * fingerprint is unchanged for platforms without this hook. */
+	templateStyleNormalization?: TemplateStyleNormalization;
 	/** Read-only selectors identifying platform-owned application surfaces. */
 	inspection?: CapabilityRule[];
+	/**
+	 * Read-only: the source's engagement counters (views, likes, comments) for
+	 * the captured routes, read as data and keyed by route URL. Routes without
+	 * counters are left out. See `lib/engagement-stats.ts`.
+	 */
+	engagementStats?( urls: readonly string[], opts: { deadline?: number } ): Promise< import( '../lib/engagement-stats.js' ).EngagementStatsReading | undefined >;
 }
 
 /** Serializable, segment-bounded route ownership; query strings retain document identity. */

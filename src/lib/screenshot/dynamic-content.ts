@@ -179,6 +179,10 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         if (!safeToActivate(el) || isExpandToggle(el)) continue;
         const openBefore = new Set(populatedResting.filter((entry) => restingTrigger(entry).getAttribute('aria-expanded') === 'true').map((entry) => entry.trigger));
         if ((await activate(el)) === 'navigated') navigated = true;
+        // A panel the runtime mounts only on activation could not be checked
+        // above. Once mounted, a navigation panel is a menu, not collapsed
+        // content: close it so the resting chrome is what gets serialized.
+        else if (!safeToActivate(el)) await activate(el);
         else if (el instanceof HTMLElement) {
           for (const peer of populatedResting) {
             if (peer.trigger === el) continue;

@@ -92,8 +92,12 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 			// Budget 5: the entrypoint, one representative per template, and the
 			// verification members (coverage selection), so post-3/post-4 hang
 			// off the representative's capture.
+			const statsUrls: string[] = [];
 			const captured = await captureWebsite( { url, outputDir, captureImages: true, templateClusters: true, routeLimit: 5 }, {
-				findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: sitemapPaths.map( path => ( { url: `${ new URL( url ).origin }${ path }`, type: 'page' } ) ) } ) } ),
+				findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: sitemapPaths.map( path => ( { url: `${ new URL( url ).origin }${ path }`, type: 'page' } ) ) } ), engagementStats: async ( urls: readonly string[] ) => {
+					statsUrls.push( ...urls );
+					return { provider: 'neutral-clone', pages: [], unavailable: [] };
+				} } ),
 			} );
 			expect( captured.summary.routesCaptured ).toBeGreaterThan( 0 );
 			// The receipt records the derivation.
@@ -108,6 +112,9 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 			for ( const cluster of ( receipt as { clusters: Array<{ derived: unknown[]; verification?: unknown }> } ).clusters.filter( cluster => cluster.derived.length ) ) {
 				expect( cluster.verification ).toMatchObject( { captured: true, equal: true } );
 			}
+			// Derived members are published routes: their engagement counts are
+			// read like a captured route's, never inherited from the representative.
+			for ( const memberUrl of derived ) expect( statsUrls ).toContain( memberUrl );
 			// post-9 must NOT be derived: the fingerprint isolates it.
 			expect( derived.some( memberUrl => memberUrl.includes( 'post-9' ) ) ).toBe( false );
 			// The derived member equals its real capture offline: text, links,

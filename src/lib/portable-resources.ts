@@ -8,6 +8,24 @@ import { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
 import { dependencyReferences, isExcludedRendition, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSource, removeDanglingResourceReference, stripExcludedRenditionReferences, type PortableDependency } from './portable-references.js';
 import { stripImageSetCandidates } from './srcset.js';
 
+function hasRecognizedBinarySignature( path: string ): boolean {
+	const bytes = readFileSync( path );
+	if ( bytes.length >= 12 && bytes.toString( 'ascii', 4, 8 ) === 'ftyp' ) {
+		const brand = bytes.toString( 'ascii', 8, 12 );
+		if ( /^(?:avif|avis|heic|heix|mif1|msf1|mp4 |M4V )$/.test( brand ) ) return true;
+	}
+	return (
+		bytes.subarray( 0, 8 ).equals( Buffer.from( [ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a ] ) ) ||
+		bytes.subarray( 0, 3 ).equals( Buffer.from( [ 0xff, 0xd8, 0xff ] ) ) ||
+		bytes.toString( 'ascii', 0, 4 ) === 'RIFF' && /^(?:WEBP|WAVE)$/.test( bytes.toString( 'ascii', 8, 12 ) ) ||
+		bytes.toString( 'ascii', 0, 4 ) === 'wOF2' || bytes.toString( 'ascii', 0, 4 ) === 'wOFF' ||
+		bytes.toString( 'ascii', 0, 4 ) === 'OTTO' || bytes.toString( 'ascii', 0, 4 ) === 'TRUE' ||
+		bytes.subarray( 0, 4 ).equals( Buffer.from( [ 0, 1, 0, 0 ] ) ) ||
+		bytes.toString( 'ascii', 0, 4 ) === 'GIF8' || bytes.toString( 'ascii', 0, 4 ) === 'OggS' ||
+		bytes.toString( 'ascii', 0, 3 ) === 'ID3'
+	);
+}
+
 export interface PortableResourceOptions {
 	sourceRoot: string;
 	websiteDir: string;
@@ -119,7 +137,9 @@ export function materializePortableResources( options: PortableResourceOptions )
 			} );
 			return false;
 		}
-		const isText = /^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType );
+		const isText =
+			/^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType ) &&
+			! hasRecognizedBinarySignature( source );
 		const contentHash = isText ? '' : fileHash( source );
 		const relativePath = isText
 			? requestedPath

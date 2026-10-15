@@ -16,8 +16,14 @@ const EXPORT_DROPPED_ROUTE_CODES = [ 'route_export_failed', 'route_path_collisio
  */
 export const ROUTE_CAPTURE_SKIPPED_BUDGET = 'route_capture_skipped_budget';
 
+/**
+ * A route the per-route capture deadline left unfinished: it was started but
+ * exceeded its bounded duration, so it counts as failed and missing.
+ */
+export const ROUTE_CAPTURE_TIMEOUT = 'route_capture_timeout';
+
 /** Codes of routes that were in scope and produced no page. */
-export const MISSING_ROUTE_CODES = [ 'route_capture_failed', ROUTE_CAPTURE_SKIPPED_BUDGET, ...EXPORT_DROPPED_ROUTE_CODES ] as const;
+export const MISSING_ROUTE_CODES = [ 'route_capture_failed', ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT, ...EXPORT_DROPPED_ROUTE_CODES ] as const;
 
 /**
  * A route that was attempted (or advertised as a redirect target) and did not
@@ -30,7 +36,7 @@ export const MISSING_ROUTE_CODES = [ 'route_capture_failed', ROUTE_CAPTURE_SKIPP
 export interface MissingRoute {
 	url: string;
 	code: typeof MISSING_ROUTE_CODES[ number ];
-	/** The cause as recorded by capture or export: deadline, engine error, time budget, uncaptured redirect target, export error, path collision, total export budget. */
+	/** The * cause as recorded by capture or export: deadline, engine error, time budget, uncaptured redirect target, export error, path collision, total export budget. */
 	reason: string;
 }
 

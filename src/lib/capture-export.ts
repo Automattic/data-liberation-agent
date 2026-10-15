@@ -167,6 +167,8 @@ interface ExportCaptureOptions {
 	summary: Record< string, unknown >;
 	failures: Array< { url: unknown; error: unknown } >;
 	discoveryDiagnostics?: Array< { code: string; url: string; reason: string } >;
+	/** Routes skipped before capture because their rel=canonical is another inventory route; reported exactly as collapsed duplicates (#835). */
+	canonicalAliases?: ReadonlyArray< import( './route-aliases.js' ).CanonicalRouteAlias >;
 	limits?: ExportLimits;
 }
 
@@ -1528,7 +1530,7 @@ function buildExportCapture(
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
 		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData, pathCollisions,
-	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases, routeCaptureDiagnostics );
+	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases, routeCaptureDiagnostics, options.canonicalAliases ?? [] );
 	// Like a route_export_failed route, a colliding route keeps only its route_path_collision row.
 	const collidedUrls = new Set( pathCollisions.map( collision => collision.url ) );
 	const keptDiagnostics = routeCaptureDiagnostics.filter( diagnostic => ! collidedUrls.has( diagnostic.url ) );
