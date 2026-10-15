@@ -125,8 +125,7 @@ export function rebaseChromeState< T >( state: T, from: readonly string[], to: r
 export async function readChromeLandmarks( page: Page, mark = false ): Promise< ChromeLandmark[] > {
 	const raw = await page.evaluate( ( { selector, attributes, rootAttribute, mark } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
-		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) );
-		const kept = ( element: Element ) => ! skipped.has( element.tagName ) && ! owned( element );
+		const kept = ( element: Element ) => ! skipped.has( element.tagName );
 		const sameTag = ( element: Element ) => Array.from( element.parentElement?.children ?? [] ).filter( sibling => sibling.tagName === element.tagName );
 		const positional = ( element: Element ) => `${ element.tagName.toLowerCase() }:nth-of-type(${ sameTag( element ).indexOf( element ) + 1 })`;
 		const compact = ( element: Element ) => sameTag( element ).length > 1 ? positional( element ) : element.tagName.toLowerCase();
@@ -168,6 +167,11 @@ export async function readChromeLandmarks( page: Page, mark = false ): Promise< 
 			};
 		} );
 	}, { selector: CHROME_LANDMARK_SELECTOR, attributes: SIGNATURE_ATTRIBUTES, rootAttribute: CHROME_ROOT_ATTRIBUTE, mark } );
+	if ( process.env.CHROME_REUSE_DEBUG ) {
+		const map = ( ( globalThis as { __chromeRawBySig?: Map< string, string > } ).__chromeRawBySig ??= new Map() );
+		for ( const item of raw ) map.set( createHash( 'sha256' ).update( item.raw ).digest( 'hex' ).slice( 0, 32 ), item.raw );
+		( globalThis as { __chromeRawSigs?: unknown[] } ).__chromeRawSigs = raw;
+	}
 	return raw.map( ( { raw: signature, prefixes, label } ) => ( {
 		signature: createHash( 'sha256' ).update( signature ).digest( 'hex' ).slice( 0, 32 ),
 		prefixes: prefixes as ChromeLandmark['prefixes'],
@@ -180,8 +184,7 @@ async function anchorSelectors( page: Page, roots: readonly ChromeLandmark[], se
 	return page.evaluate( ( { roots, selectors } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
 		type ChromeAnchorInPage = { root: number; path: number[] } | 'document' | 'absent' | 'outside';
-		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) );
-		const kept = ( element: Element ) => ! skipped.has( element.tagName ) && ! owned( element );
+		const kept = ( element: Element ) => ! skipped.has( element.tagName );
 		const elements = roots.map( root => document.querySelector( root ) );
 		const anchor = ( selector: string ): ChromeAnchorInPage => {
 			let element: Element | null;
@@ -214,12 +217,18 @@ export async function anchorChromeStates( page: Page, landmarks: readonly Chrome
 	const fields = states.map( state => selectorFields( state ) );
 	const anchors = await anchorSelectors( page, landmarks, fields.map( list => list.map( field => field.selector ) ) );
 	const anchored: ChromeState[] = [];
+	const onlyRejected: string[] = [];
 	states.forEach( ( state, index ) => {
 		const trigger = anchors[ index ]![ fields[ index ]!.findIndex( field => field.path === 'trigger.selector' ) ];
-		if ( ! trigger || typeof trigger !== 'object' ) return;
+		if ( ! trigger || typeof trigger !== 'object' ) {
+			if ( process.env.CHROME_REUSE_DEBUG ) onlyRejected.push( `no-trigger ${ ( state.trigger as { label?: string } ).label ?? state.trigger.selector } anchors=${ JSON.stringify( anchors[ index ] ) } fields=${ JSON.stringify( fields[ index ] ) }` );
+			return;
+		}
 		const inRoot = anchors[ index ]!.every( item => item === 'document' || item === 'absent' || ( typeof item === 'object' && item.root === trigger.root ) );
 		if ( inRoot ) anchored.push( { root: trigger.root, state, anchors: anchors[ index ]! } );
+		else if ( process.env.CHROME_REUSE_DEBUG ) onlyRejected.push( `${ ( state.trigger as { label?: string } ).label ?? state.trigger.selector } anchors=${ JSON.stringify( anchors[ index ] ) } fields=${ JSON.stringify( fields[ index ] ) }` );
 	} );
+	if ( process.env.CHROME_REUSE_DEBUG && onlyRejected.length ) console.error( `[chrome-reuse-debug] probe unanchored: ${ onlyRejected.join( ' ; ' ) }` );
 	return { states: anchored, unanchored: states.length - anchored.length };
 }
 
@@ -259,7 +268,20 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		used.add( found );
 		matched.set( index, found );
 	} );
+	if ( process.env.CHROME_REUSE_DEBUG ) {
+		console.error( `[chrome-reuse-debug] route landmarks: ${ landmarks.map( ( item, index ) => `${ index }:${ item.label }${ item.signature === evidence.landmarks.find( l => l.label === item.label )?.signature ? '' : '?' }` ).join( ' | ' ) }` );
+		console.error( `[chrome-reuse-debug] entry landmarks: ${ evidence.landmarks.map( ( item, index ) => `${ index }:${ item.label }` ).join( ' | ' ) } matched ${ JSON.stringify( [ ...matched ] ) } evidence state roots: ${ JSON.stringify( evidence.states.map( s => s.root ) ) }` );
+		const rawBySig = ( globalThis as { __chromeRawBySig?: Map< string, string > } ).__chromeRawBySig;
+		for ( const [ index, landmark ] of evidence.landmarks.entries() ) {
+			if ( matched.has( index ) ) continue;
+			const routeIndex = matched.get( index );
+			const entryRaw = rawBySig?.get( landmark.signature ) ?? '';
+			const routeRaw = rawBySig?.get( landmarks[ routeIndex ?? 0 ]?.signature ?? '' ) ?? '';
+			await import( 'node:fs' ).then( fs => fs.appendFileSync( `/tmp/chrome-raw-${ process.pid }.txt`, `==== entry ${ index } ${ landmark.label }\n${ entryRaw }\n==== route\n${ routeRaw }\n` ) );
+		}
+	}
 	if ( ! matched.size ) {
+		if ( process.env.CHROME_REUSE_DEBUG ) console.error( `[chrome-reuse-debug] no landmark matched` );
 		return { decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ evidence.landmarks.map( item => item.label ).join( ', ' ) } there)`, landmarks: { ...counts, matched: 0 } }, states: [] };
 	}
 	const candidates = evidence.states.filter( item => matched.has( item.root ) ).map( item => {
@@ -269,7 +291,31 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		return { state, expected };
 	} );
 	const resolved = await anchorSelectors( page, landmarks, candidates.map( candidate => selectorFields( candidate.state ).map( field => field.selector ) ) );
+	if ( process.env.CHROME_REUSE_DEBUG ) {
+		candidates.forEach( ( candidate, index ) => {
+			const ok = JSON.stringify( resolved[ index ] ) === JSON.stringify( candidate.expected );
+			if ( ! ok ) console.error( `[chrome-reuse-debug] rejected ${ candidate.state.trigger.label } :: ${ JSON.stringify( selectorFields( candidate.state ) ) } expected ${ JSON.stringify( candidate.expected ) } got ${ JSON.stringify( resolved[ index ] ) }` );
+		} );
+	}
 	const reused = candidates.filter( ( candidate, index ) => JSON.stringify( resolved[ index ] ) === JSON.stringify( candidate.expected ) );
+	if ( process.env.CHROME_REUSE_DEBUG && candidates.length ) {
+		const detail = await page.evaluate( ( { selectors, roots } ) => {
+			const describe = ( element: Element | null | undefined ) => {
+				const chain: string[] = [];
+				for ( let node = element; node && node !== document.body; node = node.parentElement ) {
+					chain.unshift( `${ node.tagName.toLowerCase() }${ node.id ? `#${ node.id }` : '' }` );
+				}
+				return chain.join( ' > ' );
+			};
+			const rootsEls = roots.map( root => document.querySelector( root ) );
+			return selectors.map( ( selector: string ) => {
+				let element: Element | null = null;
+				try { element = document.querySelector( selector ); } catch { return 'BAD'; }
+				return `${ describe( element ) } :: roots=${ rootsEls.map( el => el ? ( el.contains( element ) ? 'in' : 'out' ) : 'null' ).join( ',' ) } rootEls=${ rootsEls.map( el => el ? el.tagName : 'null' ).join( ',' ) }`;
+			} );
+		}, { selectors: candidates.flatMap( candidate => selectorFields( candidate.state ).map( f => f.selector ) ), roots: landmarks.map( landmark => landmark.prefixes[ 1 ] ) } );
+		console.error( `[chrome-reuse-debug] anchor detail: ${ JSON.stringify( detail, null, 1 ).slice( 0, 3000 ) }` );
+	}
 	await page.evaluate( ( { selectors, attribute } ) => {
 		for ( const selector of selectors ) document.querySelector( selector )?.setAttribute( attribute, '' );
 	}, { selectors: reused.map( candidate => candidate.state.trigger.selector ), attribute: CHROME_REUSED_ATTRIBUTE } );
