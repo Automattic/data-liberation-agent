@@ -1113,7 +1113,10 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).not.toContain( '<base' );
 		expect( html ).not.toContain( 'http-equiv="refresh"' );
 		expect( html ).not.toContain( 'javascript:' );
-		expect( html ).not.toContain( 'action="https://evil.example/' );
+		// The form's third-party endpoint is a destination, not runtime; its
+		// javascript: formaction is not.
+		expect( html ).toContain( 'action="https://evil.example/"' );
+		expect( html ).not.toContain( 'formaction' );
 		expect( html ).toContain( '<body class="responsive">' );
 		expect( html ).toContain(
 			'class="data-blocks-engine-capture-desktop-document responsive desktop-body" style="margin:3px;padding:4px"'
@@ -1228,6 +1231,47 @@ describe( 'exportWebsiteCapture', () => {
 		expect(
 			documentsDiffer( desktop, mobile.replace( 'href="/"', 'href="/menu"' ) )
 		).toBe( true );
+	} );
+
+	it( 'keeps third-party form endpoints, never submits to the source site, and records what changed', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-form-action-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><main><h1>Give</h1>' +
+				'<form id="donate" action="https://payments.example/cgi-bin/donate" method="post" target="_top"><input type="hidden" name="button_id" value="ABC123"><input type="image" src="https://payments.example/button.gif" alt="Donate"></form>' +
+				'<form id="search" action="/search" method="get"><input name="q"><button formaction="javascript:alert(1)">Go</button></form>' +
+				'<form id="contact" action="https://www.example.com/contact.php" method="post"><input name="email"></form>' +
+				'<form id="scripted" action="data:text/html,<p>x</p>"><input name="x"></form>' +
+				'<social-like id="widget" action="like"></social-like><div id="inert" action="javascript:alert(1)"></div>' +
+				'</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '#donate' ).attr( 'action' ) ).toBe( 'https://payments.example/cgi-bin/donate' );
+		expect( $( '#search' ).attr( 'action' ) ).toBe( '/search' );
+		expect( $( '#contact' ).attr( 'action' ) ).toBe( '/contact.php' );
+		expect( $( '#scripted' ).attr( 'action' ) ).toBeUndefined();
+		expect( $( '#search button' ).attr( 'formaction' ) ).toBeUndefined();
+		// Outside a form, `action` is not a submission URL: inert values stay, script schemes go.
+		expect( $( '#widget' ).attr( 'action' ) ).toBe( 'like' );
+		expect( $( '#inert' ).attr( 'action' ) ).toBeUndefined();
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).discoveryDiagnostics
+			.filter( ( diagnostic: { code: string } ) => diagnostic.code.startsWith( 'form_action_' ) );
+		expect( diagnostics ).toEqual( expect.arrayContaining( [
+			expect.objectContaining( { code: 'form_action_source_handler', url: 'https://example.com/', reason: expect.stringContaining( 'https://example.com/search' ) } ),
+			expect.objectContaining( { code: 'form_action_source_handler', reason: expect.stringContaining( 'https://www.example.com/contact.php' ) } ),
+			expect.objectContaining( { code: 'form_action_removed', reason: 'formaction removed: javascript: is not a submission destination' } ),
+			expect.objectContaining( { code: 'form_action_removed', reason: 'action removed: data: is not a submission destination' } ),
+		] ) );
+		expect( diagnostics ).toHaveLength( 4 );
 	} );
 
 	it( 'treats viewport-only iframe embeds as equivalence, not a second document', () => {
