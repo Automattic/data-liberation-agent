@@ -11,7 +11,17 @@ import { canonicalizeWixCapturedHtml } from './instance-ids.js';
 import { wixDocumentSelection, wixAdditionalProfiles } from './document-selection.js';
 import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
+import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
+
+/**
+ * The Wix Blog per-post counters (views, comments). The server document holds
+ * only a skeleton there; the viewer fetches the numbers after load.
+ */
+export const WIX_ENGAGEMENT_STATS = {
+	provider: 'wix',
+	selector: '[data-hook="post-stats"]',
+};
 
 /**
  * Wix Members sign-in entry points: the login bar's button, which opens the
@@ -874,6 +884,11 @@ export const capture: LiberationHooks = {
 		// for the destination to point at its own login (see member-login.ts).
 		// Last of all, so a scroll-driven rerender cannot drop the marker
 		// before the freeze.
+		// Post counters are the destination's feature, not content (see
+		// engagement-stats.ts); emptied last, after any scroll-driven rerender.
+		await page.evaluate( markEngagementStats, {
+			...WIX_ENGAGEMENT_STATS, attribute: ENGAGEMENT_STATS_ATTRIBUTE, classPrefix: ENGAGEMENT_STATS_CLASS_PREFIX,
+		} ).catch( () => 0 );
 		await page.evaluate( markMemberLoginControls, {
 			...WIX_MEMBER_LOGIN, memberPaths: wixMemberPaths( ctx.url ),
 			attribute: MEMBER_LOGIN_ATTRIBUTE, classPrefix: MEMBER_LOGIN_CLASS_PREFIX,

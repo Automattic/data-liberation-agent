@@ -499,6 +499,17 @@ export async function captureWebsite(
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	if ( screenshotResult.deviceMode ) receipt.deviceMode = screenshotResult.deviceMode;
 	if ( screenshotResult.sharedChrome ) receipt.sharedChrome = screenshotResult.sharedChrome;
+	if ( adapter.engagementStats ) {
+		const engagementStartedAt = Date.now();
+		if ( timeBudget && engagementStartedAt >= timeBudget.abandonAt ) process.stderr.write( '[budget] engagement stats skipped: capture time budget spent\n' );
+		else {
+			const reading = await adapter.engagementStats( screenshotResult.urls, { deadline: timeBudget?.abandonAt } ).catch( () => undefined );
+			if ( reading && ( reading.pages.length || reading.unavailable.length ) ) {
+				receipt.engagementStats = ( await import( './engagement-stats.js' ) ).engagementStatsRecord( reading, new Date( engagementStartedAt ).toISOString() );
+			}
+			process.stderr.write( `[timing] engagement-stats ${ Date.now() - engagementStartedAt }ms (${ reading?.pages.length ?? 0 } read)\n` );
+		}
+	}
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
 	process.stderr.write( `[timing] homepage-preview ${ Date.now() - previewStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
