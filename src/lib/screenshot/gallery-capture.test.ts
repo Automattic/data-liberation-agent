@@ -41,6 +41,74 @@ document.querySelector('[aria-label="Next image"]').onclick=()=>{current=(curren
 document.querySelectorAll('#stage [role=img]').forEach((node,i)=>node.onclick=()=>{large=i;show(document.getElementById('large'),large,'large-count');document.getElementById('overlay').classList.add('visible');});
 document.querySelector('[aria-label="Next slide"]').onclick=()=>{large=(large+1)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Previous slide"]').onclick=()=>{large=(large+2)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Close gallery"]').onclick=()=>document.getElementById('overlay').classList.remove('visible');</script></body></html>`;
 
+// The source runtime translates a clipped row, lazily fills empty items, and
+// carries duplicate end items. No builder names or accessible arrow labels.
+const translatedFixture = `<!doctype html><style>
+#translated{position:relative;max-width:440px;margin:auto}.clip{overflow:hidden;width:100%;height:200px}
+#row{display:flex;list-style:none;padding:0;margin:0;width:100%;transform:translateX(-320px)}
+#row>li{flex:0 0 80%;height:200px;opacity:.3}#row img{width:100%;height:200px;object-fit:cover}
+button{position:absolute;top:90px;z-index:2}button:last-child{right:0}
+</style><section id="translated"><div class="clip"><ul id="row">${[-1,0,1,2,3].map(i=>`<li data-index="${i}">${i===2?'':`<img src="${image((i+3)%3)}">`}</li>`).join('')}</ul></div><button data-action="galleryPrevious"><svg width="20" height="20"><path d="M15 0L0 10L15 20Z"/></svg></button><button data-action="galleryNext"><svg width="20" height="20"><path d="M0 0L15 10L0 20Z"/></svg></button></section><script>
+let selected=0;const pictures=${JSON.stringify([image(0),image(1),image(2)])};function draw(){const row=document.getElementById('row');[...row.children].forEach((li,i)=>{li.style.opacity=i===selected+1?'1':'.3';if(i===selected+1&&!li.firstElementChild)li.innerHTML='<img src="'+pictures[selected]+'">'});row.style.transform='translateX('+((row.parentElement.clientWidth-row.children[0].getBoundingClientRect().width)/2-row.children[selected+1].offsetLeft+3)+'px)'}
+document.querySelector('[data-action="galleryNext"]').onclick=()=>{selected=(selected+1)%3;draw()};document.querySelector('[data-action="galleryPrevious"]').onclick=()=>{selected=(selected+2)%3;draw()};draw();</script>`;
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'replays a lazy translated image track with unnamed semantic arrows and cloned end items', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:768,height:900}});
+		await page.setContent(translatedFixture);
+		const baseline = await page.content();
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({coverage:'complete',restoration:'verified'});
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+		// Replay must remain deterministic even when a retained source stylesheet
+		// animates opacity. Add it after observation to avoid six slow source fades.
+		const portable = wireCapturedDialogs(baseline.replace(/<script>[\s\S]*?<\/script>/g,''),states).replace('</style>','#row>li{transition:opacity 2s}</style>');
+		const offline = await sharedBrowser.newPage();
+		await offline.route('**/*',route=>route.abort());
+		await offline.setContent(portable);
+		for (const width of [390,768,1440]) {
+			await offline.setViewportSize({width,height:900});
+			for (const expected of [1,2,0]) {
+				await offline.locator('[data-action="galleryNext"]').click();
+				const selected = await offline.locator('#row').evaluate(row=>{
+					const viewport=row.parentElement!.getBoundingClientRect();
+					const child=[...row.children].find(child=>Math.abs(child.getBoundingClientRect().x+child.getBoundingClientRect().width/2-viewport.x-viewport.width/2)<2);
+					return child?.querySelector('img')?.getAttribute('src');
+				});
+				expect(selected).toBe(image(expected));
+				expect(await offline.locator('#row>li').evaluateAll(items=>items.map(item=>getComputedStyle(item).opacity).sort())).toEqual(['0.3','0.3','1']);
+			}
+		}
+		await offline.locator('[data-action="galleryPrevious"]').click();
+		expect(await offline.locator('#translated').getAttribute('data-blocks-engine-capture-gallery-index')).toBe('2');
+	},30_000,
+);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'captures and replays a touch-only translated gallery without inventing arrow controls', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:390,height:900},isMobile:true,hasTouch:true});
+		const touchFixture = translatedFixture
+			.replace(/<button\b[\s\S]*?<\/button>/g,'')
+			.replace(/document\.querySelector\('\[data-action="galleryNext"\]'\)\.onclick=[\s\S]*?;draw\(\);<\/script>/,
+				`let start=0;const surface=document.querySelector('.clip');surface.style.touchAction='pan-y';surface.addEventListener('touchstart',event=>start=event.touches[0].clientX);surface.addEventListener('touchend',event=>{const delta=event.changedTouches[0].clientX-start;if(Math.abs(delta)>30){selected=(selected+(delta<0?1:2))%3;draw()}});draw();</script>`);
+		await page.setContent(touchFixture);
+		const baseline = await page.content();
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({coverage:'complete',restoration:'verified',swipe:true});
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+		await page.setContent(wireCapturedDialogs(baseline.replace(/<script>[\s\S]*?<\/script>/g,''),states));
+		expect(await page.locator('button').count()).toBe(0);
+		const client = await page.context().newCDPSession(page);
+		const box = (await page.locator('.clip').boundingBox())!;
+		const x=box.x+box.width*.8,y=box.y+box.height/2;
+		await client.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+		await client.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-box.width*.6,y}]});
+		await client.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+		expect(await page.locator('#translated').getAttribute('data-blocks-engine-capture-gallery-index')).toBe('1');
+		await client.detach();
+	},20_000,
+);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'restores the same source nodes and nested scrollport pose after an offscreen gallery drive', async () => {
 		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});

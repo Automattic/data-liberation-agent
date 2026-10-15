@@ -67,6 +67,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		gallery: 'a', 'gallery-direction': 'a', 'gallery-index': 'a', 'gallery-initial': 'a', 'gallery-sequence': 'a', 'gallery-slot': 'a',
 		'gallery-stage': 'a', 'gallery-source': 'a', 'gallery-frame': 'a', 'gallery-image': 'a', 'gallery-full-image': 'a', 'gallery-text': 'a',
 		'gallery-display': 'a', 'gallery-close': 'a', 'gallery-capture-width': 'a', 'gallery-runtime': 'a', 'gallery-visibility': 'a',
+		'gallery-control': 'a', 'gallery-track': 'a',
 		'captured-slide': 'a', 'captured-slideshow': 'a', 'captured-slide-count': 'a', 'advertised-slide-count': 'a', 'expected-slide-count': 'a',
 		'capture-error': 'a', 'pager-stage': 'a', 'pager-control': 'a', 'video-frame': 'a', 'squarespace-video': 'a',
 		slideshow: 'c', 'slideshow-track': 'c', 'slideshow-css': 'i', 'captured-slideshow-css': 'i', 'wix-captured-slideshow-css': 'i',
@@ -126,5 +127,5 @@ export const CAPTURE_SCHEMAS = [
  */
 export const CAPTURE_RUNTIME_SHA256 = {
 	disclosure: 'b545f43a77b79d075373048431101fe11d7ff8cdfe7987de6d7971512763d88f',
-	gallery: '456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b',
+	gallery: 'd177c3ad775434d80e7863f728418e8ac969544ece4a9dafee7761907ea3792a',
 } as const;
