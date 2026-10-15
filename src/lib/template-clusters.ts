@@ -468,8 +468,13 @@ export function compareDerivedWithCapture( input: {
 } ): { equal: boolean; checks: Record< 'text' | 'links' | 'images' | 'skeleton' | 'fluidRules' | 'headStyles', boolean > } {
 	const derived = cheerio.load( input.derivedHtml );
 	const real = cheerio.load( input.realHtml );
-	const documentText = ( $: cheerio.CheerioAPI ): string =>
-		normalizedWhitespace( $( 'body' ).text() );
+	// Rendered text only: inline script and style bodies carry per-request
+	// values (render timestamps, nonces) that no two documents share.
+	const documentText = ( $: cheerio.CheerioAPI ): string => {
+		const body = $( 'body' ).clone();
+		body.find( 'script, style, noscript, template' ).remove();
+		return normalizedWhitespace( body.text() );
+	};
 	// Relative URLs in the member's server HTML resolve like a browser would:
 	// the real capture carries absolute, localized URLs.
 	const collect = ( $: cheerio.CheerioAPI, selector: string, attribute: string ): string[] =>

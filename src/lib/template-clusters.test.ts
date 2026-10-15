@@ -207,3 +207,20 @@ describe( 'slots anchor on element identity, not position (#784)', () => {
 		expect( result.gate.reason ).toContain( 'has no matching anchor' );
 	} );
 } );
+
+describe( 'verification compares rendered text (#784)', () => {
+	// Builder viewers inline per-request values (render timestamps, nonces) in
+	// body scripts, so two captures of the same content never share them.
+	const page = ( renderTimeStamp: number, body: string ) =>
+		`<html><head></head><body><script>var ssrInfo = {"renderTimeStamp":${ renderTimeStamp }}</script><style>.a{color:red}</style><main><p>${ body }</p></main></body></html>`;
+
+	it( 'ignores per-request script values', () => {
+		const comparison = compareDerivedWithCapture( { derivedHtml: page( 1791708655133, 'Same post' ), realHtml: page( 1791709009600, 'Same post' ), baseUrl: BASE } );
+		expect( comparison.checks.text ).toBe( true );
+	} );
+
+	it( 'still fails on a rendered text difference', () => {
+		const comparison = compareDerivedWithCapture( { derivedHtml: page( 1, '260 views' ), realHtml: page( 1, '87 views' ), baseUrl: BASE } );
+		expect( comparison.checks.text ).toBe( false );
+	} );
+} );
