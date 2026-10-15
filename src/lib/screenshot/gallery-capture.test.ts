@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { chromium as playwrightChromium } from 'playwright';
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
-import { captureGalleries } from './gallery-capture.js';
+import { alignCapturedGalleries, captureGalleries } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureScreenshots } from './screenshotter.js';
@@ -82,6 +82,19 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		await offline.locator('[data-action="galleryPrevious"]').click();
 		expect(await offline.locator('#translated').getAttribute('data-blocks-engine-capture-gallery-index')).toBe('2');
 	},30_000,
+);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'keeps a proven offscreen track replayable when aligning the serialization boundary', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:768,height:900}});
+		await page.setContent(translatedFixture.replace('<section id="translated">','<div style="height:1200px"></div><section id="translated">'));
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline.restoration).toBe('verified');
+		expect(await page.evaluate(()=>scrollY)).toBe(0);
+		await alignCapturedGalleries(page,states);
+		expect(states[0]?.gallery?.inline).toMatchObject({coverage:'complete',restoration:'verified',initial:0});
+		expect(await page.evaluate(()=>scrollY)).toBe(0);
+	},15_000,
 );
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(

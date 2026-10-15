@@ -131,11 +131,11 @@ async function describe(
 		.then((result) => (result ? { ...result, selector: root, viewport: page.viewportSize() ?? { width: 0, height: 0 } } : null));
 }
 
-async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 'stage' | 'track'>) {
+async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 'stage' | 'track'>, alignment = false) {
 	return page
 		.locator(gallery.selector)
 		.first()
-		.evaluate((scope, {stageSelector, track}) => {
+		.evaluate((scope, {stageSelector, track, alignment}) => {
 			const stage = stageSelector === ':scope' ? scope : scope.querySelector(stageSelector);
 			if (!stage) return null;
 			const imageFor = (child: Element): HTMLImageElement | null => child.matches('img') ? child as HTMLImageElement : child.querySelector('img');
@@ -152,7 +152,7 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			});
 			// A different-height successor can be outside a nested scrollport after
 			// its arrow was clicked. Normalize that activation movement before hit testing.
-			if (laidOut.length === 1) imageFor(laidOut[0]!)!.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+			if (!alignment && laidOut.length === 1) imageFor(laidOut[0]!)!.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
 			const images = Array.from(stage.querySelectorAll('img'));
 			if (!track && images.length >= 2 && Array.from(stage.children).filter(child => imageFor(child)).length >= 2 && images.every(image => image.parentElement && (image.parentElement === stage || image.parentElement.parentElement === stage) && getComputedStyle(image.parentElement).display !== 'none')) {
 				if (images.some(image => !image.complete || image.naturalWidth <= 1)) return null;
@@ -166,6 +166,11 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 				const image = imageFor(child);
 				if (!image) return false;
 				const rect = image.getBoundingClientRect();
+				// Collection proves the cycle while the gallery is on screen, then
+				// restores the source scroll pose. At serialization a proven stage
+				// can be below the fold; read its laid-out state without scrolling
+				// the source again. Onscreen frames still require hit testing.
+				if (alignment && laidOut.includes(child) && (rect.bottom <= 0 || rect.top >= innerHeight)) return true;
 				const x =
 					Math.max(0, rect.left) + Math.min(rect.width, innerWidth - Math.max(0, rect.left)) / 2;
 				const y =
@@ -228,7 +233,7 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			const ordinal = ordinalNode.hasAttribute('data-index') ? Number(ordinalNode.getAttribute('data-index')) : undefined;
 			const key = track && Number.isInteger(ordinal) ? `${ordinal}\n${identity}` : identity;
 			return { key, ...(fullImage ? { fullImage: new URL(fullImage, document.baseURI).href } : {}), html: clone.outerHTML, text, ordinal, slot: Array.from(stage.children).indexOf(child), geometry:[rect.x,rect.y,rect.width,rect.height].map(value=>Math.round(value*10)/10) };
-		}, {stageSelector:gallery.stage,track:Boolean(gallery.track)});
+		}, {stageSelector:gallery.stage,track:Boolean(gallery.track),alignment});
 }
 
 /** Require every edge and its inverse, including the wrap, before replaying a cycle. */
@@ -438,7 +443,7 @@ export async function alignCapturedGalleries(page: Page, states: CapturedDialogI
 		const gallery = state.gallery?.inline;
 		if (!gallery || gallery.coverage !== 'complete') continue;
 		for (let sample = 0; sample < 30; sample++) {
-			const frame = await snapshot(page, gallery);
+			const frame = await snapshot(page, gallery, true);
 			const index = frame ? gallery.frames.findIndex(item => item.key === frame.key) : -1;
 			if (frame && index >= 0) { gallery.initial = index; gallery.frames[index]!.text = frame.text; break; }
 			if (sample === 29) gallery.restoration = 'unverified';
