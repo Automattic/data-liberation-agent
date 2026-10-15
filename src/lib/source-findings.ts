@@ -49,7 +49,8 @@ export const SOURCE_FINDING_LOSS_CLASSES = {
 	route_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'route' },
 	route_capture_degraded: { loss_class: 'degraded_unit', unit: 'route' },
 	route_template_derived: { loss_class: 'degraded_unit', unit: 'route' },
-	template_slot_runtime_unobserved: { loss_class: 'degraded_unit', unit: 'block' },	stylesheet_unparseable: { loss_class: 'degraded_unit', unit: 'stylesheet' },
+	template_slot_runtime_unobserved: { loss_class: 'degraded_unit', unit: 'block' },
+	stylesheet_unparseable: { loss_class: 'degraded_unit', unit: 'stylesheet' },
 	native_timeline_unproven: { loss_class: 'degraded_unit', unit: 'block' },
 	disclosure_unrestored: { loss_class: 'degraded_unit', unit: 'block' },
 } as const satisfies Record< string, { loss_class: SourceFindingLossClass; unit: SourceFindingUnit } >;
