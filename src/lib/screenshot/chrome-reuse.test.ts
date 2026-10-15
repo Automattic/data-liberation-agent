@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
+import * as cheerio from 'cheerio';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
@@ -201,4 +202,84 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 			await site.close();
 		}
 	}, 60_000 );
+} );
+
+/**
+ * `/` and `/privacy` serve the same closed header. Its menu panel is not in the
+ * served document: the page script mounts it only when the toggle is clicked,
+ * the way a client-rendered mobile menu does.
+ */
+function mountedMenuPage( path: string ): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${ path || 'home' }</title><style>
+body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;height:60px}
+.mobile-nav a{display:block}main{min-height:1400px}@media (min-width:768px){.toggle,.mobile-nav{display:none}}
+</style></head><body><header class="site-header"><a href="/">Brand</a><nav aria-label="Main"><a href="/">Home</a><a href="/privacy">Privacy</a></nav>
+<div class="actions"><button type="button" class="toggle" aria-expanded="false" aria-controls="mobile-nav"><span>Open menu</span></button></div></header>
+<main><h1>${ path || 'home' }</h1><p>Body copy for ${ path || 'home' }.</p></main><footer>Footer</footer><script>
+const header = document.querySelector('header'), toggle = document.querySelector('.toggle');
+toggle.addEventListener('click', () => {
+	const open = toggle.getAttribute('aria-expanded') !== 'true';
+	toggle.setAttribute('aria-expanded', String(open));
+	document.getElementById('mobile-nav')?.remove();
+	if (open) header.insertAdjacentHTML('beforeend', '<nav id="mobile-nav" aria-label="Mobile" class="mobile-nav"><a href="/">Home</a><a href="/privacy">Privacy</a></nav>');
+});
+</script></body></html>`;
+}
+
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome with a menu mounted on click', () => {
+	const parent = join( process.cwd(), '.tmp-test' );
+	let server: Server;
+	let origin: string;
+	let outputDir: string;
+	const url = ( path: string ) => `${ origin }/${ path }`;
+
+	beforeAll( async () => {
+		server = createServer( ( request, response ) => {
+			const path = new URL( request.url ?? '/', 'http://fixture' ).pathname.slice( 1 );
+			if ( ! [ '', 'privacy' ].includes( path ) ) {
+				response.statusCode = 404;
+				response.end( 'not found' );
+				return;
+			}
+			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
+			response.end( mountedMenuPage( path ) );
+		} );
+		await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		mkdirSync( parent, { recursive: true } );
+		outputDir = mkdtempSync( join( parent, 'shared-chrome-mounted-' ) );
+		const urls = [ url( '' ), url( 'privacy' ) ];
+		await captureScreenshots( {
+			// The default profiles: the toggle only shows at phone width, which the
+			// reflow-only device probe reaches, as on a responsive source.
+			urls, primaryUrl: urls[ 0 ], outputDir, concurrency: 2, settleMs: 50, learnFluid: false, force: true, deviceMode: 'auto',
+		} );
+		exportWebsiteCapture( { outputDir, sourceUrl: url( '' ), platform: 'neutral', summary: {}, failures: [] } );
+	}, 180_000 );
+
+	afterAll( async () => {
+		await new Promise< void >( resolve => server.close( () => resolve() ) );
+		rmSync( outputDir, { recursive: true, force: true } );
+	} );
+
+	it( 'serializes the header of every route closed, annotated and identical', () => {
+		const headers = [ 'index.html', 'privacy/index.html' ].map( file => {
+			// Equal chrome may be exported once, as a part every route includes.
+			const html = readFileSync( join( outputDir, 'website', file ), 'utf8' )
+				.replace( /<!--#include virtual="([^"]+)" -->/g, ( _, part: string ) => readFileSync( join( outputDir, 'website', part ), 'utf8' ) );
+			return html.match( /<header[\s\S]*?<\/header>/ )![ 0 ];
+		} );
+		for ( const header of headers ) {
+			const $ = cheerio.load( header );
+			const toggle = $( 'button.toggle' );
+			expect( toggle.attr( 'aria-expanded' ) ).toBe( 'false' );
+			const panel = toggle.attr( 'data-blocks-engine-capture-dialog-trigger' );
+			expect( panel ).toBeTruthy();
+			// The mounted menu is carried as a closed panel, never as the open source menu.
+			expect( $( 'nav[aria-label="Mobile"]' ).toArray().map( nav => [ $( nav ).attr( 'data-blocks-engine-capture-dialog-panel' ), $( nav ).attr( 'hidden' ) !== undefined ] ) ).toEqual( [ [ panel, true ] ] );
+		}
+		expect( headers[ 1 ] ).toBe( headers[ 0 ] );
+		const entries = ( JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as { entries: Record< string, ManifestEntry > } ).entries;
+		for ( const path of [ '', 'privacy' ] ) expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, reusedStates: 1 } );
+	} );
 } );
