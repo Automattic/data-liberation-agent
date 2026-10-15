@@ -5,6 +5,11 @@ import type { EngagementStatsReading, RouteEngagementCounts } from '../../lib/en
 export const WIX_BLOG_APP_DEF_ID = '14bcded7-0066-7c35-14d7-466cb3f09103';
 
 const REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * The endpoint requires a valid language code (400 without one) and returns the
+ * same counts for every language (ketatov.com, 2026-10-15: en, de, fr equal).
+ */
+const METADATA_LANGUAGE = 'en';
 const CONCURRENCY = 4;
 
 /** The post slug of a Wix Blog post route (`…/post/<slug>`), else undefined. */
@@ -60,7 +65,7 @@ export async function readWixEngagementStats( urls: readonly string[], opts: { d
 			const response = await doFetch( `${ base }/_api/blog-frontend-adapter-public/v2/post-page-metadata/${ encodeURIComponent( slug ) }`, {
 				method: 'POST',
 				headers: { authorization: instance!, 'content-type': 'application/json' },
-				body: JSON.stringify( { postId: slug, skipViewCountIncrement: true } ),
+				body: JSON.stringify( { postId: slug, languageCode: METADATA_LANGUAGE, skipViewCountIncrement: true } ),
 				signal: timeout(),
 			} );
 			if ( ! response.ok ) {

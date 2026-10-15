@@ -12,6 +12,7 @@ function fakeFetch( views: Record< string, number > ) {
 		calls.push( { url, init } );
 		if ( url.endsWith( '/_api/v1/access-tokens' ) ) return new Response( JSON.stringify( tokenResponse ) );
 		const slug = decodeURIComponent( url.split( '/' ).pop()! );
+		if ( init?.method === 'POST' && ! JSON.parse( String( init.body ) ).languageCode ) return new Response( 'bad request', { status: 400 } );
 		if ( slug in views ) return new Response( JSON.stringify( metadata( views[ slug ]! ) ) );
 		return new Response( 'not found', { status: 404 } );
 	};
@@ -37,7 +38,7 @@ describe( 'Wix engagement stats (#784)', () => {
 		expect( posts ).toHaveLength( 3 );
 		for ( const call of posts ) {
 			expect( ( call.init!.headers as Record< string, string > ).authorization ).toBe( 'blog-instance-token' );
-			expect( JSON.parse( String( call.init!.body ) ).skipViewCountIncrement ).toBe( true );
+			expect( JSON.parse( String( call.init!.body ) ) ).toMatchObject( { postId: expect.any( String ), languageCode: 'en', skipViewCountIncrement: true } );
 		}
 	} );
 
