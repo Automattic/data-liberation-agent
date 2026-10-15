@@ -109,8 +109,80 @@ const WIX_SLIDESHOW_SELECTOR = '.wixui-slideshow';
 const WIX_SLIDESHOW_LIMIT = 4;
 const WIX_SLIDE_LIMIT = 6;
 const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
-const WIX_SLIDE_POLL_MILLISECONDS = 100;
+/** Bound on yielding to a slideshow transition before confirming a slide change. */
+const WIX_SLIDE_TRANSITION_MILLISECONDS = 1_500;
+const WIX_SLIDESHOW_REVEAL_WAIT_MILLISECONDS = 2_000;
 export const WIX_ANCHOR_SCROLL_MAX_MILLISECONDS = 3_000;
+
+/**
+ * In-page: visit the whole scroll-reactive layout so Wix's runtime wires
+ * section navigation and mounts late widgets. Only worth running when runtime
+ * anchor resolution or a late widget actually needs the visit: one 80 ms beat
+ * per 600 px of document height establishes nothing for a document whose
+ * anchors already resolve to authored targets, and the visit itself was
+ * already made by the capture's lazy-load sweep.
+ */
+async function wixScrollSweep( settleTail: boolean ): Promise< void > {
+	const step = 600;
+	const max = Math.min( document.documentElement.scrollHeight, 12_000 );
+	for ( let top = 0; top <= max; top += step ) {
+		window.scrollTo( { top, left: 0, behavior: 'instant' } );
+		await new Promise( ( resolve ) => setTimeout( resolve, 80 ) );
+	}
+	window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
+	if ( settleTail ) await new Promise( ( resolve ) => setTimeout( resolve, 500 ) );
+}
+
+/**
+ * In-page: remove platform chrome, mark every same-page anchor link with its
+ * fragment, rewrite cross-route anchors to their target path, and report the
+ * same-page fragments plus whether any of them lacks an authored target —
+ * the only anchors the scroll sweep can still help resolve.
+ */
+function collectWixAnchorFragments( chromeSelector: string ): { fragments: string[]; needsRuntimeResolution: boolean } {
+	for ( const chrome of document.querySelectorAll( chromeSelector ) ) chrome.remove();
+
+	const fragments = new Set< string >();
+	for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
+		let target: URL;
+		try {
+			target = new URL( link.href, location.href );
+		} catch {
+			continue;
+		}
+		if ( target.origin !== location.origin ) continue;
+
+		const declaredIntent = link.getAttribute( 'data-anchor' ) ?? '';
+		const encodedFragment = target.hash ? target.hash.slice( 1 ) : declaredIntent;
+		if ( ! encodedFragment ) continue;
+		let fragment: string;
+		try {
+			fragment = decodeURIComponent( encodedFragment );
+		} catch {
+			continue;
+		}
+		// eslint-disable-next-line no-control-regex -- fragment IDs must not carry controls.
+		if ( ! fragment || fragment.length > 128 || /[\u0000-\u001f\u007f]/.test( fragment ) )
+			continue;
+		link.dataset.blocksEngineCaptureAnchorFragment = fragment;
+		if ( target.pathname !== location.pathname ) {
+			// The declared section lives on another captured route, where
+			// this page's runtime cannot resolve it. Keep the intent in
+			// the href — `<target page>#<fragment>` — and let cross-route
+			// self-consistency verify the target document. Never resolve
+			// it here: clicking would navigate away from this page.
+			link.href = `${ target.pathname }#${ encodeURIComponent( fragment ) }`;
+			continue;
+		}
+		fragments.add( fragment );
+	}
+	const needsRuntimeResolution = [ ...fragments ].some( ( fragment ) =>
+		! [ ...document.querySelectorAll< HTMLElement >( '[id],a[name]' ) ].some(
+			( element ) => element.id === fragment || element.getAttribute( 'name' ) === fragment
+		)
+	);
+	return { fragments: [ ...fragments ], needsRuntimeResolution };
+}
 
 /**
  * Wix mounts only the active slide. Replace that transient state with the
@@ -182,17 +254,62 @@ function slideshowExpectedStateCount( page: Page, slideshowIndex: number ): Prom
 	}, slideshowIndex );
 }
 
-async function waitForWixSlideChange(
+/**
+ * In-page predicate: true once the mounted slide's identity key differs from
+ * the previous one. Wix swaps the slide element at the START of its
+ * transition, so after the key changes, yield to the slideshow's remaining
+ * movement (bounded, and never held by an ambient infinite animation) before
+ * confirming: a control clicked mid-transition is queued by the runtime and
+ * lands seconds late.
+ */
+function wixSlideKeyChanged( {
+	index, previousKey, transitionBound,
+}: { index: number; previousKey: string; transitionBound: number } ): boolean | Promise< boolean > {
+	const slideshow = document.querySelectorAll< HTMLElement >( '.wixui-slideshow' )[ index ];
+	const slide = slideshow?.querySelector< HTMLElement >( '[data-testid="slidesWrapper"] > *' );
+	if ( ! slide ) return false;
+	const media = [ ...slide.querySelectorAll< HTMLImageElement >( 'img' ) ].map(
+		( image ) => image.currentSrc || image.src
+	);
+	const drawings = [ ...slide.querySelectorAll( 'svg' ) ].map( ( node ) => node.innerHTML );
+	const text = slide.textContent?.replace( /\s+/g, ' ' ).trim() ?? '';
+	if ( `${ text }\n${ media.join( '\n' ) }\n${ drawings.join( '\n' ) }` === previousKey ) return false;
+	const movement = slideshow && typeof slideshow.getAnimations === 'function'
+		? slideshow.getAnimations( { subtree: true } ).filter( ( animation ) => {
+				try {
+					if ( animation.playState !== 'running' ) return false;
+					return ( animation.effect?.getTiming?.().iterations ?? 1 ) !== Infinity;
+				} catch {
+					return false;
+				}
+			} ).map( ( animation ) => animation.finished.catch( () => undefined ) )
+		: [];
+	if ( movement.length === 0 ) return true;
+	return Promise.race( [
+		Promise.all( movement ).then( () => true ),
+		new Promise< boolean >( ( resolve ) => setTimeout( () => resolve( true ), transitionBound ) ),
+	] );
+}
+
+/**
+ * Wait on the observed condition — the slide key changing — instead of
+ * polling from Node: one wait under the same settle bound, no per-poll round
+ * trip and no fixed interval.
+ */
+export async function waitForWixSlideChange(
 	page: Page,
 	slideshowIndex: number,
 	previousKey: string
 ): Promise< { html: string; key: string } | null > {
-	for ( let elapsed = 0; elapsed < WIX_SLIDE_SETTLE_MILLISECONDS; elapsed += WIX_SLIDE_POLL_MILLISECONDS ) {
-		await page.waitForTimeout( WIX_SLIDE_POLL_MILLISECONDS );
-		const snapshot = await snapshotWixSlide( page, slideshowIndex );
-		if ( snapshot && snapshot.key !== previousKey ) return snapshot;
-	}
-	return null;
+	const changed = await page
+		.waitForFunction(
+			wixSlideKeyChanged,
+			{ index: slideshowIndex, previousKey, transitionBound: WIX_SLIDE_TRANSITION_MILLISECONDS },
+			{ timeout: WIX_SLIDE_SETTLE_MILLISECONDS }
+		)
+		.catch( () => null );
+	if ( ! changed ) return null;
+	return snapshotWixSlide( page, slideshowIndex );
 }
 
 export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
@@ -328,22 +445,34 @@ async function closeOpenedMenu( page: Page ): Promise< void > {
 	).catch( () => undefined );
 }
 
-async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
-	for ( let pass = 0; pass < 3; pass++ ) {
-		await page
-			.evaluate( async () => {
-				const step = 600;
-				const max = Math.min( document.documentElement.scrollHeight, 12_000 );
-				for ( let y = 0; y <= max; y += step ) {
-					window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
-					await new Promise( ( resolve ) => setTimeout( resolve, 80 ) );
-				}
-				window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
-			} )
-			.catch( () => undefined );
-		const count = await page.locator( WIX_SLIDESHOW_SELECTOR ).count().catch( () => 0 );
-		if ( count > 0 ) break;
-		await page.waitForTimeout( 2_000 );
+/**
+ * Reveal slideshows whose hydration waits for the scroll-reactive layout to
+ * visit the page, then collect their slides.
+ *
+ * A mounted slideshow proves the runtime has already hydrated this document,
+ * so the sweep is skipped: re-visiting the layout would redo work whose
+ * result is established. Otherwise sweep and wait on the widget appearing —
+ * the observed condition — instead of a fixed beat, never waiting after the
+ * last pass; a sweep that reveals nothing after the previous sweep and its
+ * hydration window also revealed nothing has confirmed the document's
+ * answer, so the loop stops before its third pass.
+ */
+export async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
+	const mounted = () => page.locator( WIX_SLIDESHOW_SELECTOR ).count().catch( () => 0 );
+	let emptyPasses = 0;
+	for ( let pass = 0; pass < 3 && emptyPasses < 2 && ( await mounted() ) === 0; pass++ ) {
+		await page.evaluate( wixScrollSweep, false ).catch( () => undefined );
+		if ( ( await mounted() ) > 0 ) break;
+		emptyPasses++;
+		if ( emptyPasses < 2 ) {
+			await page
+				.waitForFunction(
+					() => document.querySelector( '.wixui-slideshow' ) !== null,
+					undefined,
+					{ timeout: WIX_SLIDESHOW_REVEAL_WAIT_MILLISECONDS }
+				)
+				.catch( () => undefined );
+		}
 	}
 	await collectWixSlideshowSlides( page );
 }
@@ -436,57 +565,19 @@ export const capture: LiberationHooks = {
 				trigger.setAttribute( 'aria-haspopup', 'menu' );
 			}
 		} );
-		// Wix only wires some section navigation after its scroll-reactive layout
-		// has visited the page. This bounded sweep makes anchor readiness explicit
-		// instead of relying on whichever lazy-load phase happened to run first.
-		await page.evaluate( async () => {
-			const max = Math.min( document.documentElement.scrollHeight, 12_000 );
-			for ( let top = 0; top <= max; top += 600 ) {
-				window.scrollTo( { top, left: 0, behavior: 'instant' } );
-				await new Promise( ( resolve ) => setTimeout( resolve, 80 ) );
-			}
-			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
-			await new Promise( ( resolve ) => setTimeout( resolve, 500 ) );
-		} );
-		const fragments = await page.evaluate( ( chromeSelector ) => {
-			for ( const chrome of document.querySelectorAll( chromeSelector ) ) chrome.remove();
-
-			const fragments = new Set< string >();
-			for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
-				let target: URL;
-				try {
-					target = new URL( link.href, location.href );
-				} catch {
-					continue;
-				}
-				if ( target.origin !== location.origin ) continue;
-
-				const declaredIntent = link.getAttribute( 'data-anchor' ) ?? '';
-				const encodedFragment = target.hash ? target.hash.slice( 1 ) : declaredIntent;
-				if ( ! encodedFragment ) continue;
-				let fragment: string;
-				try {
-					fragment = decodeURIComponent( encodedFragment );
-				} catch {
-					continue;
-				}
-				// eslint-disable-next-line no-control-regex -- fragment IDs must not carry controls.
-				if ( ! fragment || fragment.length > 128 || /[\u0000-\u001f\u007f]/.test( fragment ) )
-					continue;
-				link.dataset.blocksEngineCaptureAnchorFragment = fragment;
-				if ( target.pathname !== location.pathname ) {
-					// The declared section lives on another captured route, where
-					// this page's runtime cannot resolve it. Keep the intent in
-					// the href — `<target page>#<fragment>` — and let cross-route
-					// self-consistency verify the target document. Never resolve
-					// it here: clicking would navigate away from this page.
-					link.href = `${ target.pathname }#${ encodeURIComponent( fragment ) }`;
-					continue;
-				}
-				fragments.add( fragment );
-			}
-			return [ ...fragments ];
-		}, WIX_CAPTURE_CHROME_SELECTOR );
+		let collected = await page.evaluate( collectWixAnchorFragments, WIX_CAPTURE_CHROME_SELECTOR );
+		if ( collected.needsRuntimeResolution ) {
+			// Wix only wires some section navigation after its scroll-reactive
+			// layout has visited the page. This bounded sweep makes anchor
+			// readiness explicit instead of relying on whichever lazy-load phase
+			// happened to run first. A document whose same-page anchors all
+			// resolve to authored targets skips it: the sweep would only redo
+			// the visit the capture's lazy-load already made.
+			await page.evaluate( wixScrollSweep, true ).catch( () => undefined );
+			// The sweep can lazy-load sections that carry more anchor links.
+			collected = await page.evaluate( collectWixAnchorFragments, WIX_CAPTURE_CHROME_SELECTOR );
+		}
+		const fragments = collected.fragments;
 
 		const originalScroll = await page.evaluate( () => ( { x: scrollX, y: scrollY } ) );
 		// Observing an anchor hovers and clicks its link, and Wix records that

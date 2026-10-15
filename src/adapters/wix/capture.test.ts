@@ -5,8 +5,10 @@ import {
 	capture,
 	collectWixSlideshowSlides,
 	preserveWixSlideshowSlides,
+	revealAndCollectWixSlideshows,
 	settleScrollReactiveChrome,
 	stripShowcaseMarkup,
+	waitForWixSlideChange,
 	wixMediaVariant,
 	wixMemberPaths,
 	wixStaticMediaUrl,
@@ -17,6 +19,64 @@ import { wixAdapter } from './index.js';
 
 const variant =
 	'https://static.wixstatic.com/media/8e80e7_e9cc2e6993d7493ca165d9fa3e8f503d~mv2.jpg/v1/fill/w_390,h_844,al_c/8e80e7_e9cc2e6993d7493ca165d9fa3e8f503d~mv2.jpg';
+
+/**
+ * A conformant fake of Page.waitForFunction: polls the in-page predicate
+ * (executed against the stubbed globals) until it reports truthy or the
+ * timeout, scaled down by `speed` so ten-second bounds stay unit-test bounds.
+ */
+function fakeWaitForFunction( speed = 1 ) {
+	return async (
+		fn: ( arg: never ) => unknown,
+		arg: never,
+		options?: { timeout?: number }
+	): Promise< unknown > => {
+		const budget = ( options?.timeout ?? 0 ) / speed;
+		const start = Date.now();
+		for ( ;; ) {
+			if ( await fn( arg ) ) return {};
+			if ( Date.now() - start >= budget ) throw new Error( `timed out after ${ options?.timeout }ms` );
+			await new Promise( ( resolve ) => setTimeout( resolve, 5 ) );
+		}
+	};
+}
+
+/** Stub the globals the in-page functions reference, so they run against a jsdom document. */
+function stubPageGlobals( dom: JSDOM ) {
+	vi.stubGlobal( 'document', dom.window.document );
+	vi.stubGlobal( 'window', dom.window );
+	vi.stubGlobal( 'location', dom.window.location );
+	vi.stubGlobal( 'scrollX', 0 );
+	vi.stubGlobal( 'scrollY', 0 );
+	// jsdom's CSS object omits escape; the walker only escapes fragment ids.
+	vi.stubGlobal( 'CSS', { escape: ( value: string ) => value.replace( /([^a-zA-Z0-9_\u00A0-\uFFFF-])/g, '\\$1' ) } );
+	vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
+}
+
+function fakePreparePage( dom: JSDOM ) {
+	return {
+		evaluate: async ( fn: ( arg: never ) => unknown, arg: never ) => fn( arg ),
+		waitForFunction: fakeWaitForFunction( 500 ),
+		mouse: { move: async () => undefined },
+		// Locator counts read the staged document: revealAndCollectWixSlideshows
+		// gates its sweep on the mounted slideshow count.
+		locator: ( selector: string ) => ( {
+			count: async () => dom.window.document.querySelectorAll( selector ).length,
+			nth: () => ( { locator: () => ( { count: async () => 0 } ) } ),
+		} ),
+	};
+}
+
+function recordingDom( body: string ): { dom: JSDOM; scrolls: string[] } {
+	const dom = new JSDOM( `<!doctype html><html><head></head><body>${ body }</body></html>`, {
+		url: 'https://www.ketatov.com/',
+	} );
+	const scrolls: string[] = [];
+	dom.window.scrollTo = ( ( options: ScrollToOptions | number ) => {
+		scrolls.push( `top:${ typeof options === 'number' ? options : options?.top }` );
+	} ) as unknown as typeof window.scrollTo;
+	return { dom, scrolls };
+}
 
 describe( 'wixMediaVariant', () => {
 	it( 'recognises a runtime-swapped crop and keys it by stable media id', () => {
@@ -172,7 +232,7 @@ describe( 'collectWixSlideshowSlides', () => {
 			const page = {
 				locator: () => root,
 				evaluate: async ( fn: ( arg: never ) => unknown, arg: never ) => fn( arg ),
-				waitForTimeout: async () => undefined,
+				waitForFunction: fakeWaitForFunction(),
 			};
 
 			await collectWixSlideshowSlides( page as never );
@@ -213,7 +273,7 @@ describe( 'collectWixSlideshowSlides', () => {
 			const page = {
 				locator: () => root,
 				evaluate: async ( fn: ( arg: never ) => unknown, arg: never ) => fn( arg ),
-				waitForTimeout: async () => undefined,
+				waitForFunction: fakeWaitForFunction(),
 			};
 
 			await collectWixSlideshowSlides( page as never );
@@ -252,7 +312,7 @@ describe( 'collectWixSlideshowSlides', () => {
 				calls.push( [ fn, arg ] );
 				return evaluations[ calls.length - 1 ];
 			},
-			waitForTimeout: async () => undefined,
+			waitForFunction: async () => true,
 		};
 
 		await collectWixSlideshowSlides( page as never );
@@ -263,6 +323,135 @@ describe( 'collectWixSlideshowSlides', () => {
 			slides: [ '<article>First</article>', '<article>Second</article>' ],
 		} );
 		expect( clicks ).toBe( 1 );
+	} );
+
+	it( 'records the slideshow as failed when no slide change is observed within the settle bound', async () => {
+		const dom = new JSDOM( `<!doctype html><html><head></head><body>
+			<div class="wixui-slideshow"><div data-testid="slidesWrapper"><article>Only review</article></div></div>
+		</body></html>` );
+		const originalDocument = globalThis.document;
+		Object.defineProperty( globalThis, 'document', { configurable: true, value: dom.window.document } );
+		try {
+			const next = { count: async () => 1, click: async () => undefined };
+			const absent = { count: async () => 0, nth: () => absent };
+			const root = {
+				count: async () => 1,
+				nth: () => ( {
+					locator: ( selector: string ) =>
+						selector.includes( 'nextButton' ) ? next : absent,
+				} ),
+			};
+			// The slide never changes, so the wait must exhaust its bound: scaled
+			// down here (ten seconds -> twenty milliseconds), never polled around.
+			const page = {
+				locator: () => root,
+				evaluate: async ( fn: ( arg: never ) => unknown, arg: never ) => fn( arg ),
+				waitForFunction: fakeWaitForFunction( 500 ),
+			};
+
+			await collectWixSlideshowSlides( page as never );
+
+			const slideshow = dom.window.document.querySelector( '.wixui-slideshow' )!;
+			expect( slideshow.getAttribute( 'data-blocks-engine-capture-captured-slideshow' ) ).toBe( 'false' );
+			expect( slideshow.getAttribute( 'data-blocks-engine-capture-capture-error' ) )
+				.toContain( 'fewer than two distinct slideshow states observed' );
+		} finally {
+			Object.defineProperty( globalThis, 'document', { configurable: true, value: originalDocument } );
+		}
+	} );
+} );
+
+describe( 'waitForWixSlideChange', () => {
+	// The slide key is <text>\n<media>\n<drawings>; with no media or drawings
+	// the trailing separators remain.
+	const keyOf = ( text: string ) => `${ text }\n\n`;
+
+	it( 'waits on the observed slide key and reports the change through one wait', async () => {
+		const dom = new JSDOM( `<!doctype html><html><head></head><body>
+			<div class="wixui-slideshow"><div data-testid="slidesWrapper"><article>First review</article></div></div>
+		</body></html>` );
+		stubPageGlobals( dom );
+		const page = {
+			evaluate: async ( fn: ( arg: never ) => unknown, arg: never ) => fn( arg ),
+			waitForFunction: fakeWaitForFunction( 500 ),
+		};
+
+		// The slide has not changed: the wait runs to its bound (scaled to
+		// twenty milliseconds) and reports no change.
+		await expect( waitForWixSlideChange( page as never, 0, keyOf( 'First review' ) ) )
+			.resolves.toBeNull();
+
+		dom.window.document.querySelector( '[data-testid="slidesWrapper"]' )!.innerHTML =
+			'<article>Second review</article>';
+		const snapshot = await waitForWixSlideChange( page as never, 0, keyOf( 'First review' ) );
+		expect( snapshot?.html ).toContain( 'Second review' );
+		expect( snapshot?.key ).toBe( keyOf( 'Second review' ) );
+	} );
+} );
+
+describe( 'wix prepare anchor sweep', () => {
+	it( 'skips the scroll sweep when every same-page fragment resolves to an authored target', async () => {
+		const { dom, scrolls } = recordingDom(
+			'<nav><a href="#tryforfree">Try</a></nav><section id="tryforfree"></section>'
+		);
+		stubPageGlobals( dom );
+		const page = fakePreparePage( dom );
+
+		await capture.prepare!( page as never, { url: 'https://www.ketatov.com/', viewport: 'desktop' } );
+
+		// The sweep would beat down the document in 600px steps; only the
+		// walker's own restores (per fragment, then final) touched the scroll.
+		expect( scrolls ).toEqual( [ 'top:0', 'top:0' ] );
+		const link = dom.window.document.querySelector( 'a' )!;
+		expect( link.getAttribute( 'data-blocks-engine-capture-anchor-fragment' ) ).toBe( 'tryforfree' );
+		expect( dom.window.document.getElementById( 'tryforfree' )?.getAttribute( 'data-blocks-engine-capture-anchor-target' ) )
+			.toBe( 'tryforfree' );
+		expect( link.getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
+	} );
+
+	it( 'runs the scroll sweep when a fragment has no authored target, and records why it stays unresolved', async () => {
+		const { dom, scrolls } = recordingDom( '<nav><a href="#later">Go</a></nav>' );
+		stubPageGlobals( dom );
+		const page = fakePreparePage( dom );
+
+		await capture.prepare!( page as never, { url: 'https://www.ketatov.com/', viewport: 'desktop' } );
+
+		// The sweep visits the document (scrollHeight is 0 in jsdom, so one beat
+		// down and the return to top) because the runtime is this fragment's
+		// only resolver.
+		expect( scrolls ).toContain( 'top:0' );
+		const link = dom.window.document.querySelector( 'a' )!;
+		expect( link.getAttribute( 'data-blocks-engine-capture-anchor-fragment' ) ).toBe( 'later' );
+		expect( link.getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) )
+			.toBe( 'no rendered fragment trigger' );
+	} );
+} );
+
+describe( 'revealAndCollectWixSlideshows', () => {
+	it( 'does not sweep when a slideshow is already mounted', async () => {
+		const { dom, scrolls } = recordingDom(
+			'<div class="wixui-slideshow"><div data-testid="slidesWrapper"><article>One</article></div></div>'
+		);
+		stubPageGlobals( dom );
+		const page = fakePreparePage( dom );
+
+		await revealAndCollectWixSlideshows( page as never );
+
+		// A mounted slideshow proves the runtime hydrated this document; the
+		// scroll-reactive visit already happened and must not be redone.
+		expect( scrolls ).toEqual( [] );
+	} );
+
+	it( 'sweeps on the observed condition when no slideshow mounts, then stops after two empty passes', async () => {
+		const { dom, scrolls } = recordingDom( '<main>No widgets here</main>' );
+		stubPageGlobals( dom );
+		const page = fakePreparePage( dom );
+
+		await revealAndCollectWixSlideshows( page as never );
+
+		// Two sweeps (each beats down and returns to top), one hydration window
+		// between them, and no wait after the confirming pass.
+		expect( scrolls.filter( ( top ) => top === 'top:0' ) ).toHaveLength( 4 );
 	} );
 } );
 
