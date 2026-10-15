@@ -57,6 +57,31 @@ it( 'owns recursive materialization and fallback promotion without changing medi
 	}
 } );
 
+it( 'copies AVIF binary bytes unchanged when the response is mislabeled as text/plain', () => {
+	mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
+	const root = mkdtempSync( join( process.cwd(), '.tmp-test', 'portable-avif-' ) );
+	try {
+		mkdirSync( join( root, 'resources' ), { recursive: true } );
+		const websiteDir = join( root, 'website' );
+		const htmlPath = join( root, 'page.html' );
+		const bytes = Buffer.concat( [ Buffer.from( [ 0, 0, 0, 24 ] ), Buffer.from( 'ftypavif' ), Buffer.from( [ 0x80, 0xff, 0xfe ] ) ] );
+		writeFileSync( join( root, 'resources', 'image.avif' ), bytes );
+		writeFileSync( htmlPath, '<img src="/image.avif">' );
+		const result = materializePortableResources( {
+			sourceRoot: root, websiteDir, entries: [ { url: 'https://example.test/', htmlPath } ],
+			resourceManifest: { version: 1, failures: [], resources: {
+				'https://example.test/image.avif': { path: 'resources/image.avif', contentType: 'text/plain' },
+			} },
+			mediaReplacements: new Map(), assetPathsByHash: new Map(), assetHashesByPath: new Map(), portablePathsBySource: new Map(),
+			embeddedSources: new Set(), projectEmbeddedHtml: ( html ) => html,
+		} );
+		const outputPath = join( websiteDir, 'image.avif' );
+		expect( readFileSync( outputPath ) ).toEqual( bytes );
+		expect( createHash( 'sha256' ).update( readFileSync( outputPath ) ).digest( 'hex' ) ).toBe( createHash( 'sha256' ).update( bytes ).digest( 'hex' ) );
+		expect( result.assets ).toHaveLength( 1 );
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );
+
 it( 'applies embedded page policy while resolving child dependencies against its original base', () => {
 	const root = mkdtempSync( join( tmpdir(), 'portable-embedded-' ) );
 	try {
