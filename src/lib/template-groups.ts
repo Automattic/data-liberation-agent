@@ -26,7 +26,7 @@ export const TEMPLATE_GROUPS_SCHEMA = 'data-liberation-agent/template-groups/v1'
 export const TEMPLATE_GROUPS_FILE = 'template-groups.json';
 
 /** Version of the fingerprint rules below; bump when they change. */
-export const TEMPLATE_FINGERPRINT_VERSION = 1;
+export const TEMPLATE_FINGERPRINT_VERSION = 2;
 
 export const TEMPLATE_GROUPING_LIMITS = {
 	/** Routes fetched at most; a larger inventory is fetched as an even spread. */
@@ -74,6 +74,43 @@ const VOLATILE_CLASS = /\d|^(?:css|sc|jsx|svelte|emotion|styled)-|^_|^(?:categor
 const JAVASCRIPT_TYPES = new Set( [ '', 'text/javascript', 'application/javascript', 'module', 'text/ecmascript', 'application/ecmascript' ] );
 
 const digest = ( value: string, length = 16 ) => createHash( 'sha256' ).update( value ).digest( 'hex' ).slice( 0, length );
+
+/**
+ * One inline `<style>` element as the template fingerprint sees it.
+ *
+ * `id` and the other attributes are exposed so a platform can recognize the
+ * blocks its own runtime produces; Wix's per-page CSS mappers are keyed by
+ * `<style id=…>` and its inlined viewer-widget chunks carry the fetched URL
+ * in `data-href` (#836).
+ */
+export interface TemplateStyleBlock {
+	/** The `<style>` element's `id`, or null. */
+	id: string | null;
+	/** The element's attributes, lower-cased names, as they appear in the document. */
+	attributes: Readonly< Record< string, string > >;
+	/** The block's declared CSS text, unchanged. */
+	text: string;
+}
+
+/**
+ * Adapter-owned aggregation of a page's inline `<style>` blocks for the
+ * template fingerprint's `pageStyles` divergence signal (#836).
+ *
+ * Platforms whose runtime writes per-item CSS into page-local style blocks on
+ * every request declare here which blocks are content rather than template,
+ * and drop request-dependent churn (generation marker comments, block order)
+ * that would otherwise split routes sharing one template. A site's own
+ * authored template CSS must survive; only generated, per-item composition is
+ * normalized.
+ */
+export interface TemplateStyleNormalization {
+	/**
+	 * Reduce the page's inline `<style>` blocks (document order) to the text the
+	 * fingerprint hashes, or null when the page has no template style evidence.
+	 * Called with the blocks of one server document; must be deterministic.
+	 */
+	pageStyles( styles: readonly TemplateStyleBlock[] ): string | null;
+}
 
 /** What a skeleton cannot see, compared exactly between members of a group. */
 export interface TemplateDivergence {
@@ -148,12 +185,33 @@ function resolvedSet( values: Array< string | undefined >, baseUrl: string ): st
 	return digest( [ ...resolved ].sort().join( '\n' ) );
 }
 
+/**
+ * One server document's inline `<style>` blocks, as attributes and text, in
+ * document order.
+ */
+function styleBlocks( $: cheerio.CheerioAPI ): TemplateStyleBlock[] {
+	return $( 'style' ).toArray().flatMap( element => {
+		if ( ! isElement( element ) ) return [];
+		return [ { id: element.attribs.id ?? null, attributes: { ...element.attribs }, text: $( element ).text() } ];
+	} );
+}
+
+/**
+ * The fingerprint's page-local style text: document-ordered style texts when no
+ * platform normalization is declared, otherwise the adapter's aggregation.
+ */
+function pageStyleText( styles: readonly TemplateStyleBlock[], normalization?: TemplateStyleNormalization ): string | null {
+	if ( normalization ) return normalization.pageStyles( styles );
+	if ( ! styles.length ) return null;
+	return styles.map( style => style.text ).join( '\n' );
+}
+
 /** Fingerprint one server HTML document. Pure and deterministic. */
-export function templateFingerprint( html: string, baseUrl: string ): TemplateFingerprint {
+export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization ): TemplateFingerprint {
 	const $ = cheerio.load( html );
 	const body = $( 'body' ).get( 0 );
 	const skeleton = body ? skeletonHash( body, 0 ) : digest( '' );
-	const styleText = $( 'style' ).map( ( _index, element ) => $( element ).text() ).get().join( '\n' ).replace( /\s+/g, ' ' ).trim();
+	const styleText = pageStyleText( styleBlocks( $ ), normalization );
 	const describe = ( selector: string, kind?: string ) => $( selector ).toArray().filter( isElement ).map( element => `${ kind ? `${ kind }:` : '' }${ elementDescriptor( element ) }` );
 	const controls = [
 		...describe( '[role=tab],[role=tablist],[role=tabpanel]', 'tab' ),
@@ -163,7 +221,7 @@ export function templateFingerprint( html: string, baseUrl: string ): TemplateFi
 	];
 	const embeds = [ 'audio', 'canvas', 'embed', 'iframe', 'object', 'video' ].filter( tag => $( tag ).length > 0 );
 	const divergence: TemplateDivergence = {
-		pageStyles: styleText ? digest( styleText ) : null,
+		pageStyles: styleText ? digest( styleText.replace( /\s+/g, ' ' ).trim() ) : null,
 		stylesheets: resolvedSet( $( 'link[rel~="stylesheet" i]' ).map( ( _index, element ) => $( element ).attr( 'href' ) ).get(), baseUrl ),
 		scripts: resolvedSet( $( 'script[src]' ).map( ( _index, element ) => $( element ).attr( 'src' ) ).get(), baseUrl ),
 		inlineScripts: $( 'script:not([src])' ).toArray().some( element => JAVASCRIPT_TYPES.has( ( element.attribs.type ?? '' ).trim().toLowerCase() ) && $( element ).text().trim() !== '' ),
@@ -236,6 +294,8 @@ export interface TemplateGroupingInput {
 	urls: readonly string[];
 	routeScope?: SiteRouteScope;
 	limits?: Partial< TemplateGroupingLimits >;
+	/** Platform-owned `<style>` aggregation for the divergence fingerprint. */
+	styleNormalization?: TemplateStyleNormalization;
 }
 
 /**
@@ -359,7 +419,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 			} catch {
 				decoder = new TextDecoder( 'utf-8' );
 			}
-			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl ) };
+			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization ) };
 		} catch {
 			return { reason: 'fetch_failed' };
 		}
