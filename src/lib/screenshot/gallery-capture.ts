@@ -9,12 +9,17 @@ import { settleDocument, withEvaluateTimeout } from './page-helpers.js';
 export interface CapturedGallery {
 	selector: string;
 	stage: string;
+	/** Relative control selectors, empty for a proven touch-only cycle. */
 	next: string;
 	previous: string;
 	viewport: { width: number; height: number };
 	/** Authored rendered DOM order, when all frames are already materialized. */
 	order: string[];
 	initial: number;
+	/** A clipped horizontal row whose selected item is centered by translation. */
+	track?: { inactiveOpacity: string };
+	/** A complete cycle observed using native horizontal touch gestures. */
+	swipe?: true;
 	frames: Array<{ key: string; fullImage?: string; html: string; text: Array<{ selector: string; value: string }> }>;
 	coverage: 'complete' | 'partial';
 	restoration: 'verified' | 'unverified';
@@ -50,7 +55,26 @@ export function galleryFrameMediaUrls(
 const LIMIT = 24;
 const BUDGET = 512 * 1024;
 
-/** Find a rendered image stage beside labelled directional controls, without vendor classes. */
+/** Missing accessible names can still advertise direction in authored metadata.
+ * This only proposes controls: the observed forward cycle and every inverse
+ * edge remain the authority for whether a portable gallery can be emitted. */
+function markDirectionalControls(): void {
+	for (const control of document.querySelectorAll('button,[role="button"]')) {
+		const label = (control.getAttribute('aria-label') || control.textContent || '').trim();
+		let direction = /^next (?:image|slide|photo|photograph|picture)$/i.test(label) ? 'next' : /^previous (?:image|slide|photo|photograph|picture)$/i.test(label) ? 'previous' : '';
+		if (!direction && !label && control.querySelector('svg')) {
+			const tokens = Array.from(control.attributes).filter(attr => /^(?:data-|id$|class$)/.test(attr.name)).map(attr => attr.value.replace(/([a-z])([A-Z])/g, '$1 $2')).join(' ').toLowerCase().split(/[^a-z]+/);
+			if (tokens.some(token => /^(?:gallery|carousel|slide|slideshow)$/.test(token))) {
+				const next = tokens.some(token => /^(?:next|right)$/.test(token));
+				const previous = tokens.some(token => /^(?:previous|prev|left)$/.test(token));
+				if (next !== previous) direction = next ? 'next' : 'previous';
+			}
+		}
+		if (direction) control.setAttribute('data-blocks-engine-capture-gallery-control', direction);
+	}
+}
+
+/** Find a rendered image stage controlled by directional controls or swipes. */
 async function describe(
 	page: Page,
 	root: string,
@@ -76,12 +100,9 @@ async function describe(
 				}
 				return ':scope > ' + parts.join(' > ');
 			};
-			const controls = Array.from(scope.querySelectorAll('button,[role="button"]'));
-			const name = (el: Element) => el.getAttribute('aria-label') || el.textContent || '';
-			const next = controls.find((el) => /^next (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
-			const previous = controls.find((el) => /^previous (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
-			if (!next || !previous) return null;
-			const stage = [scope, ...Array.from(scope.querySelectorAll('*'))].find((el) => {
+			const next = scope.querySelector('[data-blocks-engine-capture-gallery-control="next"]');
+			const previous = scope.querySelector('[data-blocks-engine-capture-gallery-control="previous"]');
+			const candidates = [scope, ...Array.from(scope.querySelectorAll('*'))].filter((el) => {
 				const children = Array.from(el.children);
 				return (
 					children.length >= 2 &&
@@ -89,12 +110,19 @@ async function describe(
 					children.filter(child => child.matches('img') || child.querySelector('img')).length >= 2
 				);
 			});
+			// A translated row can sit beside a separate thumbnail strip. Prefer
+			// the rendered moving stage to their common ancestor or the thumbnails.
+			const translated = candidates.find(el => getComputedStyle(el).transform !== 'none' && el.children[1]!.getBoundingClientRect().x > el.children[0]!.getBoundingClientRect().x);
+			const stage = translated || candidates[0];
 			if (!stage) return null;
+			if ((!next || !previous) && !translated) return null;
 			return {
 				selector: '',
 				stage: stage === scope ? ':scope' : path(stage, scope),
-				next: path(next, scope),
-				previous: path(previous, scope),
+				next: next ? path(next, scope) : '',
+				previous: previous ? path(previous, scope) : '',
+				...(!next || !previous ? {swipe:true as const} : {}),
+				...(translated ? {track: {inactiveOpacity: Array.from(stage.children).map(child=>getComputedStyle(child).opacity).find(opacity=>Number(opacity)>0 && Number(opacity)<1) || '1'}} : {}),
 				order: Array.from(stage.children)
 					.map((child) => child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src') || child.querySelector('img')?.currentSrc || child.querySelector('img')?.src || '')
 					.filter(Boolean).map(value => new URL(value, document.baseURI).href),
@@ -103,11 +131,11 @@ async function describe(
 		.then((result) => (result ? { ...result, selector: root, viewport: page.viewportSize() ?? { width: 0, height: 0 } } : null));
 }
 
-async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 'stage'>) {
+async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 'stage' | 'track'>, alignment = false) {
 	return page
 		.locator(gallery.selector)
 		.first()
-		.evaluate((scope, stageSelector) => {
+		.evaluate((scope, {stageSelector, track, alignment}) => {
 			const stage = stageSelector === ':scope' ? scope : scope.querySelector(stageSelector);
 			if (!stage) return null;
 			const imageFor = (child: Element): HTMLImageElement | null => child.matches('img') ? child as HTMLImageElement : child.querySelector('img');
@@ -124,9 +152,9 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			});
 			// A different-height successor can be outside a nested scrollport after
 			// its arrow was clicked. Normalize that activation movement before hit testing.
-			if (laidOut.length === 1) imageFor(laidOut[0]!)!.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+			if (!alignment && laidOut.length === 1) imageFor(laidOut[0]!)!.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
 			const images = Array.from(stage.querySelectorAll('img'));
-			if (images.length >= 2 && Array.from(stage.children).filter(child => imageFor(child)).length >= 2 && images.every(image => image.parentElement && (image.parentElement === stage || image.parentElement.parentElement === stage) && getComputedStyle(image.parentElement).display !== 'none')) {
+			if (!track && images.length >= 2 && Array.from(stage.children).filter(child => imageFor(child)).length >= 2 && images.every(image => image.parentElement && (image.parentElement === stage || image.parentElement.parentElement === stage) && getComputedStyle(image.parentElement).display !== 'none')) {
 				if (images.some(image => !image.complete || image.naturalWidth <= 1)) return null;
 				const sources = images.map(image => image.currentSrc || image.src);
 				const clone = stage.cloneNode(true) as Element;
@@ -134,10 +162,15 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 				for (const unsafe of clone.querySelectorAll('script,iframe,noscript')) unsafe.remove();
 				return { key: sources.join('\n'), html: clone.innerHTML, text: [], ordinal: undefined, slot: 0, geometry: [], slots: sources };
 			}
-			const rendered = Array.from(stage.children).filter((child) => {
+			let rendered = Array.from(stage.children).filter((child) => {
 				const image = imageFor(child);
 				if (!image) return false;
 				const rect = image.getBoundingClientRect();
+				// Collection proves the cycle while the gallery is on screen, then
+				// restores the source scroll pose. At serialization a proven stage
+				// can be below the fold; read its laid-out state without scrolling
+				// the source again. Onscreen frames still require hit testing.
+				if (alignment && laidOut.includes(child) && (rect.bottom <= 0 || rect.top >= innerHeight)) return true;
 				const x =
 					Math.max(0, rect.left) + Math.min(rect.width, innerWidth - Math.max(0, rect.left)) / 2;
 				const y =
@@ -145,9 +178,19 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 				const hit = document.elementFromPoint(x, y);
 				return rect.width > 0 && rect.height > 0 && hit !== null && child.contains(hit);
 			});
+			if (track && rendered.length) {
+				const viewport = stage.parentElement!.getBoundingClientRect();
+				const center = viewport.x + viewport.width / 2;
+				const ranked = rendered.map(child=>({child,distance:Math.abs(child.getBoundingClientRect().x+child.getBoundingClientRect().width/2-center)})).sort((a,b)=>a.distance-b.distance);
+				// A centered selected frame is evidence; an arbitrary nearest item
+				// while the track is between states is not.
+				// Source runtimes can round each variable-width item before summing
+				// the translation. Allow that small accumulated subpixel error.
+				rendered = ranked[0]!.distance < Math.max(4, viewport.width * 0.01) ? [ranked[0]!.child] : [];
+			}
 			if (rendered.length !== 1) return null;
 			const child = rendered[0]!;
-			const image = child.querySelector('img')!;
+			const image = imageFor(child)!;
 			if (!image.complete || image.naturalWidth <= 1) return null;
 			const source = image.currentSrc || image.src;
 			const clone = child.cloneNode(true) as Element;
@@ -155,7 +198,7 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			// transition classes in the source must not move it again after serialization.
 			(clone as HTMLElement).style.transform = getComputedStyle(child).transform;
 			(clone as HTMLElement).style.display = getComputedStyle(child).display;
-			const capturedImage = clone.querySelector('img')!;
+			const capturedImage = imageFor(clone)!;
 			capturedImage.setAttribute('src', source);
 			capturedImage.removeAttribute('srcset');
 			capturedImage.removeAttribute('sizes');
@@ -184,11 +227,13 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 				text.push({ selector: ':scope > ' + parts.join(' > '), value: el.textContent });
 			}
 			const fullImage = child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src');
-			const key = fullImage ? new URL(fullImage, document.baseURI).href : source;
+			const identity = fullImage ? new URL(fullImage, document.baseURI).href : source;
 			const rect = child.getBoundingClientRect();
-			const ordinal = image.hasAttribute('data-index') ? Number(image.getAttribute('data-index')) : undefined;
+			const ordinalNode = track ? child : image;
+			const ordinal = ordinalNode.hasAttribute('data-index') ? Number(ordinalNode.getAttribute('data-index')) : undefined;
+			const key = track && Number.isInteger(ordinal) ? `${ordinal}\n${identity}` : identity;
 			return { key, ...(fullImage ? { fullImage: new URL(fullImage, document.baseURI).href } : {}), html: clone.outerHTML, text, ordinal, slot: Array.from(stage.children).indexOf(child), geometry:[rect.x,rect.y,rect.width,rect.height].map(value=>Math.round(value*10)/10) };
-		}, gallery.stage);
+		}, {stageSelector:gallery.stage,track:Boolean(gallery.track),alignment});
 }
 
 /** Require every edge and its inverse, including the wrap, before replaying a cycle. */
@@ -248,7 +293,24 @@ async function collect(
 				observer.observe(stage, { attributes: true, childList: true, characterData: true, subtree: true });
 				return { observer, changed: () => changed };
 			});
-			await page.locator(descriptor.selector).first().locator(selector).click({ timeout: 2000 });
+			if (descriptor.swipe) {
+				const box = await page.locator(descriptor.selector).first().locator(descriptor.stage).evaluate(stage => {
+					const rect = stage.parentElement!.getBoundingClientRect();
+					return {left:Math.max(0,rect.left),right:Math.min(innerWidth,rect.right),top:Math.max(0,rect.top),bottom:Math.min(innerHeight,rect.bottom)};
+				});
+				const client = await page.context().newCDPSession(page);
+				try {
+					const width = box.right-box.left, y=(box.top+box.bottom)/2;
+					const forward = selector === 'next';
+					const start = box.left + width*(forward ? .8 : .2);
+					await client.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:start,y}]});
+					for (let step=1;step<=8;step++) {
+						await client.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start+width*.6*(forward ? -1 : 1)*step/8,y}]});
+						await page.waitForTimeout(30);
+					}
+					await client.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+				} finally { await client.detach(); }
+			} else await page.locator(descriptor.selector).first().locator(selector).click({ timeout: 2000 });
 			await mutation.evaluate(state => new Promise<void>(resolve => {
 				const started = performance.now();
 				const check = () => state.changed() || performance.now() - started >= 800 ? resolve() : setTimeout(check, 20);
@@ -282,7 +344,7 @@ async function collect(
 	try {
 		for (let count = 0; count < LIMIT && Date.now() < deadline; count++) {
 			const before = current;
-			const after = await act(descriptor.next, before, frame => frame.key !== before.key);
+			const after = await act(descriptor.swipe ? 'next' : descriptor.next, before, frame => frame.key !== before.key);
 			if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
 			pending = after;
 			current = after;
@@ -303,7 +365,7 @@ async function collect(
 			for (let index = frames.length - 1; index >= 0; index--) {
 				const expected = frames[index]!;
 				const before = current;
-				const restored = await act(descriptor.previous, before, frame => frame.key === expected.key);
+				const restored = await act(descriptor.swipe ? 'previous' : descriptor.previous, before, frame => frame.key === expected.key);
 				if (!restored) {
 					failure = `Previous action did not restore ${expected.key}`;
 					complete = false;
@@ -381,7 +443,7 @@ export async function alignCapturedGalleries(page: Page, states: CapturedDialogI
 		const gallery = state.gallery?.inline;
 		if (!gallery || gallery.coverage !== 'complete') continue;
 		for (let sample = 0; sample < 30; sample++) {
-			const frame = await snapshot(page, gallery);
+			const frame = await snapshot(page, gallery, true);
 			const index = frame ? gallery.frames.findIndex(item => item.key === frame.key) : -1;
 			if (frame && index >= 0) { gallery.initial = index; gallery.frames[index]!.text = frame.text; break; }
 			if (sample === 29) gallery.restoration = 'unverified';
@@ -395,12 +457,11 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 	await page.evaluate(() => {
 		(globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown }).__name ??= (fn) => fn;
 	});
-	const roots = await page.evaluate(() => {
-		const controls = Array.from(document.querySelectorAll('button,[role="button"]'));
-		const label = (element: Element) => (element.getAttribute('aria-label') || element.textContent || '').trim();
+	await page.evaluate(markDirectionalControls);
+	const roots = await page.evaluate((limit) => {
 		const visible = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
-		const previous = controls.filter(element => visible(element) && /^previous (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
-		const next = controls.filter(element => visible(element) && /^next (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
+		const previous = Array.from(document.querySelectorAll('[data-blocks-engine-capture-gallery-control="previous"]')).filter(visible);
+		const next = Array.from(document.querySelectorAll('[data-blocks-engine-capture-gallery-control="next"]')).filter(visible);
 		const roots: string[] = [];
 		for (const before of previous) {
 			for (let scope = before.parentElement, depth = 0; scope && depth < 8; scope = scope.parentElement, depth++) {
@@ -411,8 +472,22 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			}
 			if (roots.length >= 2) break;
 		}
+		// Some phone documents omit arrows entirely. A clipped translated row
+		// with authored integer item identities is only a candidate: native
+		// swipes must still prove the complete cycle and its inverse.
+		for (const stage of document.querySelectorAll('ul,ol,div')) {
+			if (roots.length >= 2) break;
+			const children = Array.from(stage.children);
+			if (children.length < 2 || children.length > limit || children.some(child=>!/^[-+]?\d+$/.test(child.getAttribute('data-index') || '')) || children.filter(child=>child.querySelector('img')).length<2 || getComputedStyle(stage).transform==='none') continue;
+			const viewport = stage.parentElement;
+			if (!viewport || !/(?:hidden|clip)/.test(getComputedStyle(viewport).overflowX)) continue;
+			const scope = viewport.parentElement;
+			if (!scope || roots.some(selector=>document.querySelector(selector)?.contains(stage))) continue;
+			if (!scope.id) scope.id=`data-blocks-engine-capture-gallery-${roots.length}`;
+			roots.push('#'+CSS.escape(scope.id));
+		}
 		return roots;
-	});
+	}, LIMIT);
 	const states: CapturedDialogInteraction[] = [];
 	for (const root of roots) {
 		// Activation moves nested scrollports as well as the window. Keep actual
@@ -452,6 +527,11 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			states.push(state);
 			// Incomplete cycles remain evidence, never a guessed portable interaction.
 			if (inline.coverage !== 'complete' || inline.restoration !== 'verified') continue;
+			if (inline.track) {
+				// A proved finite interaction owns this translation. Width learning
+				// may still fit its dimensions, but cannot pin one slide's X state.
+				await page.locator(root).locator(inline.stage).evaluate(stage=>stage.setAttribute('data-blocks-engine-capture-gallery-stage',''));
+			}
 			const selected = await snapshot(page, inline);
 			if (!selected) continue;
 			const opener = root + inline.stage.replace(':scope', '') + ` > :nth-child(${selected.slot + 1}) img`;
@@ -478,6 +558,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 				// The open, decoded image proves a surface, not that a preinitialized
 				// stage has finished materializing. Use the existing bounded readiness
 				// window before attempting the same strict directional cycle.
+				await page.evaluate(markDirectionalControls);
 				let descriptor = await describe(page, overlay);
 				for (let sample = 0; !descriptor && sample < 30; sample++) {
 					await page.waitForTimeout(100);

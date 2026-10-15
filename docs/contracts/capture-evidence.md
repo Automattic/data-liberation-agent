@@ -38,7 +38,7 @@ Emitters spell the full names, because many of them sit inside runtime script an
 | Documents | attributes `document-scope`, `device-document`, `device-style`, `device-body`, `device-selection`, `device-visibility`, `device-unavailable`, `document-unavailable`, `selected-document`, `selected-viewport`, `source-media`; classes `desktop-document`, `mobile-document`, `<profile>-document`, `desktop-only`, `mobile-only`; id suffix `--data-blocks-engine-capture-mobile` |
 | Responsive assembly | `responsive-source`, `responsive-fragment`, `responsive-fragments`, `embedded-responsive`, `embedded-document`, `anchor-fragment`, `anchor-target`, `anchor-source-id`, `anchor-alias`, `anchor-unresolved`, `fluid-id`, `fluid-segment`, `fluid-rules`, `fluid-sheet-rules`, `fluid-ignore-padding`, `geometry-id`, `visual-iframe-src`, `visual-iframe-width`, `visual-iframe-height`; classes `responsive-<hash>`, `responsive-class-<hash>`, `responsive-counterpart-<n>`, `embedded-<digest>-<document>`, `shared-<hash>`; id `fluid-specificity` |
 | Collections | `collection`, `collection-item`, `collection-members`, `collection-category`, `collection-category-control`, `collection-index`, `collection-mode`, `collection-field`, `collection-empty`, `collection-status`, `collection-runtime`, `collection-visibility`, `status-template`, `status-hide-zero`; tokens `no-match`, `no-match-7f39b2`, `no-match-2c81e4`, `finite-probe`, `finite-probe-7f39b2`, `finite-follow-up` |
-| Galleries, slideshows | `gallery`, `gallery-direction`, `gallery-index`, `gallery-initial`, `gallery-sequence`, `gallery-slot`, `gallery-stage`, `gallery-source`, `gallery-frame`, `gallery-image`, `gallery-full-image`, `gallery-text`, `gallery-display`, `gallery-close`, `gallery-capture-width`, `gallery-runtime`, `gallery-visibility`, `captured-slide`, `captured-slideshow`, `captured-slide-count`, `advertised-slide-count`, `expected-slide-count`, `capture-error`, `pager-stage`, `pager-control`, `video-frame`, `squarespace-video`; classes `slideshow` (also the keyframes name), `slideshow-track`; ids `gallery-<n>`, `slideshow-css`, `captured-slideshow-css`, `wix-captured-slideshow-css` |
+| Galleries, slideshows | `gallery`, `gallery-direction`, `gallery-index`, `gallery-initial`, `gallery-sequence`, `gallery-slot`, `gallery-stage`, `gallery-source`, `gallery-frame`, `gallery-image`, `gallery-full-image`, `gallery-text`, `gallery-display`, `gallery-close`, `gallery-capture-width`, `gallery-runtime`, `gallery-visibility`, `gallery-control`, `gallery-track`, `captured-slide`, `captured-slideshow`, `captured-slide-count`, `advertised-slide-count`, `expected-slide-count`, `capture-error`, `pager-stage`, `pager-control`, `video-frame`, `squarespace-video`; classes `slideshow` (also the keyframes name), `slideshow-track`; ids `gallery-<n>`, `slideshow-css`, `captured-slideshow-css`, `wix-captured-slideshow-css` |
 | Presentation, motion | `glyph-color` ([glyph-color.md](glyph-color.md)), `glyph-probe`, `glyph-probe-style`, `native-control-state`, `native-control-runtime`, `native-effects`, `native-node`, `native-profile`, `native-losses`, `native-runtime-loss`, `native-view-timeline-runtime`, `viewport-entrance`, `viewport-entrances`, `viewport-entrance-loss`, `source-canvas`; classes `replica`, `content-desktop`, `content-mobile`, `content-mobile-inner`, `page-<slug>` |
 | Platform evidence | `access-gate`, `member-login` (attribute; class `member-login-<provider>`), `source-evidence`, `reclaimed-space`, `constructed-stylesheet`, `ported-embed`, `unported-embed`, `squarespace-header-style`, `check-route-tab`; id `squarespace-header-visible` |
 
@@ -61,6 +61,33 @@ Every sidecar schema is `blocks-engine-capture/<name>/v<n>`. The full list is `C
 
 `website/source-findings.json` uses Static Site Importer's own schema, `static-site-importer/source-findings/v1` ([loss-ledger.md](loss-ledger.md) section 5.1).
 
+### Translated gallery tracks
+
+A complete directional gallery can carry a `track` record with observed
+`inactiveOpacity` in its interaction evidence. Only a decoded forward cycle,
+its inverse edges and restoration authorize replay. Item indices distinguish
+repeated authored images from the track's end clones. `autoplay: unmeasured`
+continues to mean that timing was not measured and no timer is inferred.
+Touch-only indexed tracks can carry `swipe: true` with empty `next` and
+`previous` selectors. Native horizontal swipes must prove the same complete
+cycle and inverse edges; missing source arrow buttons are not invented.
+
+`gallery-control` marks candidate next/previous controls during observation;
+`gallery-direction` remains the portable activation contract. `gallery-track`
+marks a clipped horizontal stage and carries its inactive-item opacity. Its
+canonical `gallery-frame` children all remain laid out. The helper centers the
+selected child after activation, image decoding and resizing rather than hiding
+all other children. Native horizontal touch gestures advance or reverse the
+selected item while vertical page scrolling stays available. Consumers must
+retain or implement this layout behavior
+when recognizing the updated helper.
+
+Once a translated cycle and its restoration are proved, `gallery-stage` also
+marks the interaction's ownership of its X transform before fluid learning.
+The learner continues to fit stage dimensions but leaves that transform to
+the observed interaction. Otherwise a segmented viewport model can pin the
+track to the slide selected during the width sweep and suppress later actions.
+
 ## Recognized capture runtimes
 
 A consumer retires or tolerates a capture helper script only when the sha256 of its trimmed body matches a digest the consumer recognizes. The export test hashes the emitted bodies and asserts these values:
@@ -68,7 +95,7 @@ A consumer retires or tolerates a capture helper script only when the sha256 of 
 | Runtime | sha256 | Status |
 |---|---|---|
 | Disclosure interpreter (`script[data-blocks-engine-capture-disclosure-runtime]`) | `b545f43a77b79d075373048431101fe11d7ff8cdfe7987de6d7971512763d88f` | Changed by #779 (modal-menu ancestor state). Blocks Engine still publishes the pre-#779 body (`3d350f55…`); like the gallery runtime, it must publish this body before it recognizes it again. Until then Blocks Engine keeps the captured runtime, as it already did for the gallery since #711. |
-| Gallery helper (`script[data-blocks-engine-capture-gallery-runtime]`) | `456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b` | This producer's current helper, which includes the src-swap sequence cycle from #711. Blocks Engine's `capture-gallery-runtime.js` (`0a6bf62a…`) is the renamed pre-#711 helper. Before #787, Blocks Engine's digest `1321b380…` was also the pre-#711 body, so the two never matched after #711. To recognize the current helper, Blocks Engine should publish this body and digest. |
+| Gallery helper (`script[data-blocks-engine-capture-gallery-runtime]`) | `d177c3ad775434d80e7863f728418e8ac969544ece4a9dafee7761907ea3792a` | This producer's current helper, including the src-swap sequence cycle and observed translated-track replay. Blocks Engine's `capture-gallery-runtime.js` (`0a6bf62a…`) is the renamed pre-#711 helper. Before #787, Blocks Engine's digest `1321b380…` was also the pre-#711 body, so the two never matched after #711. To recognize the current helper, Blocks Engine should publish this body and digest. |
 
 ## Migration
 
