@@ -124,6 +124,8 @@ const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
 const WIX_SLIDE_TRANSITION_MILLISECONDS = 1_500;
 const WIX_SLIDESHOW_REVEAL_WAIT_MILLISECONDS = 2_000;
 export const WIX_ANCHOR_SCROLL_MAX_MILLISECONDS = 3_000;
+/** 2.5× the largest documented delayed navigation (600ms in anchor-capture.test): a landing that follows a trusted click moves within this beat of the click (#839). */
+const WIX_ANCHOR_NO_MOVE_MILLISECONDS = 1_500;
 
 /**
  * In-page: visit the whole scroll-reactive layout so Wix's runtime wires
@@ -721,7 +723,13 @@ export const capture: LiberationHooks = {
 				}, fragment );
 				continue;
 			}
-			await page.evaluate( async ( { fragment, maxWait, initialScroll } ) => {
+			// A drawer keeps the body's scroll locked while it is open, so the
+			// link's own navigation cannot move the document until the drawer is
+			// gone. Close it before waiting for the landing (when the click itself
+			// closed the menu, as the collapsed-menu runtime usually does on
+			// layouts where the drawer is not scroll-locking, this is a no-op).
+			if ( trigger.menu ) await closeOpenedMenu( page );
+			await page.evaluate( async ( { fragment, maxWait, noMoveMs, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ].filter( ( link ) => {
@@ -735,14 +743,25 @@ export const capture: LiberationHooks = {
 					for ( const link of links ) link.dataset.blocksEngineCaptureAnchorUnresolved = reason;
 				};
 				let previous = scrollY;
+				const startHeight = document.documentElement.scrollHeight;
 				let moved = false;
 				let stableFrames = 0;
-				for ( let attempt = 0; attempt < maxWait / 50 && ( ! moved || stableFrames < 4 ); attempt++ ) {
+				// Bounds are measured time, not iterations: a throttled timer would
+				// otherwise stretch every bound by its own lateness.
+				const waitStarted = performance.now();
+				while ( performance.now() - waitStarted < maxWait && ( ! moved || stableFrames < 4 ) ) {
 					await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
 					if ( Math.abs( scrollY - initialScroll ) >= 1 ) moved = true;
 					if ( Math.abs( scrollY - previous ) < 1 ) stableFrames++;
 					else stableFrames = 0;
 					previous = scrollY;
+					// Stability keeps the full bound: a runtime that scrolls at all
+					// moves within this beat of the click, so once the document has
+					// held scroll and height past the beat without moving, the
+					// click's landing is not coming, and continuing to the full bound
+					// only spends the wait (#839: every drawer link that never
+					// scrolled paid the whole bound on the mobile profile).
+					if ( ! moved && performance.now() - waitStarted >= noMoveMs && document.documentElement.scrollHeight === startHeight ) break;
 				}
 				if ( ! moved ) {
 					markUnresolved( 'runtime scroll did not move before timeout' );
@@ -789,10 +808,7 @@ export const capture: LiberationHooks = {
 				if ( margin > 0 ) marker.style.scrollMarginTop = `${ margin }px`;
 				for ( const link of links ) link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
 				return true;
-			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, initialScroll } );
-			// Following a link closes the menu; a link that did not navigate
-			// leaves it open, and the capture must record the closed page.
-			if ( trigger.menu ) await closeOpenedMenu( page );
+			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs: WIX_ANCHOR_NO_MOVE_MILLISECONDS, initialScroll } );
 		}
 
 		await restoreScroll();
