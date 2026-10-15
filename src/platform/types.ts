@@ -87,6 +87,12 @@ export interface Platform {
 	acquisition?: HttpAcquisitionProfile;
 	/** Read-only selectors identifying platform-owned application surfaces. */
 	inspection?: CapabilityRule[];
+	/**
+	 * Read-only: the source's engagement counters (views, likes, comments) for
+	 * the captured routes, read as data and keyed by route URL. Routes without
+	 * counters are left out. See `lib/engagement-stats.ts`.
+	 */
+	engagementStats?( urls: readonly string[], opts: { deadline?: number } ): Promise< import( '../lib/engagement-stats.js' ).EngagementStatsReading | undefined >;
 }
 
 /** Serializable, segment-bounded route ownership; query strings retain document identity. */

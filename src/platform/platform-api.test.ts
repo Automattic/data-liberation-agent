@@ -233,4 +233,40 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 			} ),
 		);
 	} );
+
+	it( 'records the platform engagement counters in the receipt, keyed by route', async () => {
+		ensureRegistered();
+		mkdirSync( root, { recursive: true } );
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue( {
+				ok: true,
+				status: 200,
+				headers: new Map( [ [ 'x-generator', 'Acme Builder 3.1' ] ] ),
+				text: () => Promise.resolve( '<html><body>Custom domain site</body></html>' ),
+				arrayBuffer: () => Promise.resolve( new ArrayBuffer( 0 ) ),
+			} ),
+		);
+		const pricing = new URL( 'pricing', sourceUrl ).href;
+		const engagementStats = vi.fn( async ( urls: readonly string[] ) => ( {
+			provider: id,
+			pages: urls.filter( url => url === pricing ).map( url => ( { url, views: 87, likes: 0, comments: 2 } ) ),
+			unavailable: [],
+		} ) );
+		Object.assign( acmePlatform, { engagementStats } );
+		try {
+			await captureWebsite( { url: sourceUrl, outputDir: root } );
+		} finally {
+			delete ( acmePlatform as { engagementStats?: unknown } ).engagementStats;
+		}
+		expect( engagementStats ).toHaveBeenCalledWith( [ sourceUrl, pricing ], expect.any( Object ) );
+		const receipt = JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.engagementStats ).toMatchObject( {
+			schema: 'blocks-engine-capture/engagement-stats/v1',
+			provider: id,
+			binding: { attribute: 'data-blocks-engine-capture-engagement-stats', classPrefix: 'data-blocks-engine-capture-engagement-stats-' },
+			pages: [ { url: pricing, views: 87, likes: 0, comments: 2 } ],
+			unavailable: [],
+		} );
+	} );
 } );

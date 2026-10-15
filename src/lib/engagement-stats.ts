@@ -15,6 +15,12 @@
  * data attributes. A destination with its own counters (WordPress: Jetpack
  * post views and likes) renders them at the marker; one without leaves the
  * empty element.
+ *
+ * The source's numbers are data, not markup: a platform that can read them
+ * reports each route's counts once (`Platform.engagementStats`), and capture
+ * records them in the receipt keyed by route URL. A route's counts never come
+ * from its document, so a document shared between routes cannot carry another
+ * route's numbers.
  */
 
 /** Marks an emptied engagement counter; the value names the provider. */
@@ -44,4 +50,33 @@ export function markEngagementStats( args: EngagementStats & { attribute: string
 		marked++;
 	}
 	return marked;
+}
+
+export const ENGAGEMENT_STATS_SCHEMA = 'blocks-engine-capture/engagement-stats/v1';
+
+/** One route's source counters at capture time. */
+export interface RouteEngagementCounts {
+	url: string;
+	views?: number;
+	likes?: number;
+	comments?: number;
+}
+
+/** What a platform read: counts per route, and routes it could not read. */
+export interface EngagementStatsReading {
+	provider: string;
+	pages: RouteEngagementCounts[];
+	unavailable: Array< { url: string; reason: string } >;
+}
+
+/** The receipt record: the reading plus the marker binding a destination needs. */
+export function engagementStatsRecord( reading: EngagementStatsReading, readAt: string ) {
+	return {
+		schema: ENGAGEMENT_STATS_SCHEMA,
+		provider: reading.provider,
+		readAt,
+		binding: { attribute: ENGAGEMENT_STATS_ATTRIBUTE, classPrefix: ENGAGEMENT_STATS_CLASS_PREFIX },
+		pages: reading.pages,
+		unavailable: reading.unavailable,
+	};
 }
