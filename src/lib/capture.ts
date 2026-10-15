@@ -365,7 +365,7 @@ export async function captureWebsite(
 			} ),
 	] );
 	const templateGrouping = options.routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { sourceUrl, urls: inventoryUrls, routeScope, outputDir, timeBudgetMs: options.timeBudgetMs } )
+		? await groupInventoryTemplates( { sourceUrl, urls: inventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs: options.timeBudgetMs } )
 		: undefined;
 	const { selected: urls, omitted } = selectRouteBudget( inventoryUrls, routeLimit, templateGrouping?.representatives );
 	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
@@ -553,7 +553,7 @@ export async function captureWebsite(
  * failure yields one `template_grouping_unavailable` discovery diagnostic and
  * no representatives, so the budget falls back to discovery order.
  */
-async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; outputDir: string; timeBudgetMs?: number } ): Promise< {
+async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number } ): Promise< {
 	report?: import('./template-groups.js').TemplateGroupsReport;
 	representatives?: string[];
 	diagnostic?: { code: string; url: string; reason: string };
@@ -563,7 +563,7 @@ async function groupInventoryTemplates( input: { sourceUrl: string; urls: string
 		const { buildTemplateGroups, templateRepresentatives, TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
 		// Grouping spends at most a tenth of a capture time budget.
 		const timeBudgetMs = input.timeBudgetMs === undefined ? TEMPLATE_GROUPING_LIMITS.timeBudgetMs : Math.min( TEMPLATE_GROUPING_LIMITS.timeBudgetMs, Math.max( 1, Math.floor( input.timeBudgetMs / 10 ) ) );
-		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: { timeBudgetMs } } );
+		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: { timeBudgetMs }, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
 		const { coverage } = report;
 		process.stderr.write( `[template-groups] ${ coverage.routes } routes: ${ coverage.fingerprinted } fingerprinted into ${ coverage.groups } groups (${ coverage.singletons } singletons), ${ coverage.unfingerprinted } unfingerprinted, ${ Date.now() - startedAt }ms\n` );
 		return { report, representatives: templateRepresentatives( report ) };
