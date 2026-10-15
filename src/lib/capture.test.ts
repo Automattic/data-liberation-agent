@@ -765,6 +765,44 @@ describe( 'captureWebsite route selection', () => {
 		expect( result.complete ).toBe( true );
 	} );
 
+	it( 'persists each cluster verification verdict in template-clusters.json', async () => {
+		const posts = [ 'https://example.com/post-a/', 'https://example.com/post-b/', 'https://example.com/post-c/' ];
+		const postHtml = ( url: string ): string => url === sourceUrl
+			? '<html><head></head><body><main><section class="hero"><h1>Home</h1></section></main></body></html>'
+			: `<html><head></head><body><main><article class="post"><h1>${ url }</h1><p>Body of ${ url }</p></article></main></body></html>`;
+		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( {
+			finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( postHtml( url ) ),
+		} ) );
+		// The browser capture writes the captured documents and their manifest,
+		// as the real capture does, so derivation runs over files on disk.
+		captureScreenshotsMock.mockImplementationOnce( async ( { urls }: { urls: string[] } ) => {
+			mkdirSync( join( root, 'screenshots', 'html' ), { recursive: true } );
+			const entries: Record< string, { slug: string; html: string } > = {};
+			urls.forEach( ( url, index ) => {
+				writeFileSync( join( root, 'screenshots', 'html', `${ index }.html` ), postHtml( url ) );
+				entries[ url ] = { slug: `route-${ index }`, html: `screenshots/html/${ index }.html` };
+			} );
+			writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+			return { urls, captured: urls.length, skipped: 0, failed: 0, durationMs: 1 };
+		} );
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 3, templateClusters: true }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: posts.map( url => ( { url, type: 'page' } ) ) } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		// Entrypoint, the posts representative and its verification member.
+		expect( capturedUrls() ).toEqual( [ sourceUrl, posts[ 0 ], posts[ 1 ] ] );
+		const receipt = JSON.parse( readFileSync( join( root, 'template-clusters.json' ), 'utf8' ) );
+		expect( receipt.clusters ).toHaveLength( 1 );
+		expect( receipt.clusters[ 0 ] ).toMatchObject( { representative: posts[ 0 ], derived: [ { url: posts[ 2 ] } ] } );
+		expect( receipt.clusters[ 0 ].verification ).toEqual( {
+			url: posts[ 1 ], captured: true, equal: true,
+			checks: { text: true, links: true, images: true, skeleton: true, headStyles: true, fluidRules: true },
+		} );
+	} );
+
 	it( 'rejects an unknown route selection before any fetch', async () => {
 		await expect( captureWebsite( { url: sourceUrl, outputDir: root, routeSelection: 'clusters' as never }, adapter() ) )
 			.rejects.toThrow( 'routeSelection must be one of discovery-order, template-coverage' );

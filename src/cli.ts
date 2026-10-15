@@ -50,6 +50,13 @@ const HELP = `
                          (default, the even spread) or template-coverage (fetch
                          each route's server HTML, keep one route per template
                          group first; writes template-groups.json).
+    --template-clusters  Opt-in template-clustered capture (#784): group routes
+                         by template, keep representatives plus one verification
+                         member in the budget, and derive every other member of
+                         a verified cluster by transplanting its HTTP content
+                         into the representative's capture. Derived routes are
+                         reported as losses (route_template_derived) and frozen
+                         comparison lists them as uncompared scope.
     --runtime-route-limit <n> Observe HTTP runtime regions on at most n routes (0-50)
     --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
@@ -260,6 +267,7 @@ if (args.includes('--help')) {
   if (routeSelection !== undefined && routeSelection !== 'discovery-order' && routeSelection !== 'template-coverage') {
     throw new Error('--route-selection requires discovery-order or template-coverage');
   }
+  const templateClusters = args.includes('--template-clusters');
   const runtimeRouteLimit = httpNumber('--runtime-route-limit');
   const referenceSampleArg = args.includes('--reference-sample') ? getArg('--reference-sample') : undefined;
   const referenceSample = referenceSampleArg === undefined ? undefined : referenceSampleArg === 'all' ? 'all' as const : Number(referenceSampleArg);
@@ -293,6 +301,7 @@ if (args.includes('--help')) {
     http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
     routeLimit,
     routeSelection,
+    templateClusters,
     url,
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),

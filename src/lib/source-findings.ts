@@ -49,6 +49,8 @@ export const SOURCE_FINDING_LOSS_CLASSES = {
 	asset_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'asset' },
 	route_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'route' },
 	route_capture_degraded: { loss_class: 'degraded_unit', unit: 'route' },
+	route_template_derived: { loss_class: 'degraded_unit', unit: 'route' },
+	template_slot_runtime_unobserved: { loss_class: 'degraded_unit', unit: 'block' },
 	stylesheet_unparseable: { loss_class: 'degraded_unit', unit: 'stylesheet' },
 	native_timeline_unproven: { loss_class: 'degraded_unit', unit: 'block' },
 	disclosure_unrestored: { loss_class: 'degraded_unit', unit: 'block' },
@@ -84,6 +86,8 @@ export interface SourceFindings {
 		routes_captured: number;
 		routes_failed: number;
 		routes_omitted: number;
+		/** Opt-in template-clustered capture: routes exported from a verified template. */
+		routes_derived?: number;
 		unresolved_anchors: number;
 		omitted_findings: number;
 	};
@@ -93,7 +97,7 @@ export interface SourceFindings {
 export interface SourceFindingsInput {
 	complete: boolean;
 	entrypointCaptured: boolean;
-	summary: { routesDiscovered: number; routesCaptured: number; routesFailed: number; routesOmitted: number };
+	summary: { routesDiscovered: number; routesCaptured: number; routesFailed: number; routesOmitted: number; routesDerived?: number };
 	unresolvedAnchors: ReadonlyArray< unknown >;
 	/** The full list, including rows export added (the receipt's `discoveryDiagnostics`). */
 	discoveryDiagnostics: ReadonlyArray< RouteDiagnostic >;
@@ -167,6 +171,7 @@ export function buildSourceFindings( input: SourceFindingsInput ): SourceFinding
 			routes_captured: input.summary.routesCaptured,
 			routes_failed: input.summary.routesFailed,
 			routes_omitted: input.summary.routesOmitted,
+			...( input.summary.routesDerived !== undefined ? { routes_derived: input.summary.routesDerived } : {} ),
 			unresolved_anchors: input.unresolvedAnchors.length,
 			omitted_findings: sorted.length - kept.length,
 		},
