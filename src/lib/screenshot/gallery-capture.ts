@@ -527,6 +527,11 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			states.push(state);
 			// Incomplete cycles remain evidence, never a guessed portable interaction.
 			if (inline.coverage !== 'complete' || inline.restoration !== 'verified') continue;
+			if (inline.track) {
+				// A proved finite interaction owns this translation. Width learning
+				// may still fit its dimensions, but cannot pin one slide's X state.
+				await page.locator(root).locator(inline.stage).evaluate(stage=>stage.setAttribute('data-blocks-engine-capture-gallery-stage',''));
+			}
 			const selected = await snapshot(page, inline);
 			if (!selected) continue;
 			const opener = root + inline.stage.replace(':scope', '') + ` > :nth-child(${selected.slot + 1}) img`;

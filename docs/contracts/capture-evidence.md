@@ -82,6 +82,12 @@ selected item while vertical page scrolling stays available. Consumers must
 retain or implement this layout behavior
 when recognizing the updated helper.
 
+Once a translated cycle and its restoration are proved, `gallery-stage` also
+marks the interaction's ownership of its X transform before fluid learning.
+The learner continues to fit stage dimensions but leaves that transform to
+the observed interaction. Otherwise a segmented viewport model can pin the
+track to the slide selected during the width sweep and suppress later actions.
+
 ## Recognized capture runtimes
 
 A consumer retires or tolerates a capture helper script only when the sha256 of its trimmed body matches a digest the consumer recognizes. The export test hashes the emitted bodies and asserts these values:

@@ -260,7 +260,7 @@ async function learnFluidGeometry(
 					state.pixel( geometry.style.getPropertyValue( property ) ) !== null
 				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
-				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*(?:matrix\(|translate(?:3d|x)?\()/i.test( style );
+				const carriesMatrixTransform = ! element.hasAttribute( 'data-blocks-engine-capture-gallery-stage' ) && /(?:^|;)\s*transform\s*:\s*(?:matrix\(|translate(?:3d|x)?\()/i.test( style );
 				const carriesAbsoluteInset = geometry.inset !== null;
 				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
 					continue;
@@ -315,7 +315,9 @@ async function learnFluidGeometry(
 							continue;
 						}
 						if ( property === 'transform-x' ) {
-							values[ property ] = geometry.translation;
+							// Finite gallery observation already proved that changing X is
+							// an interaction state, rather than viewport-only geometry.
+							values[ property ] = element.hasAttribute( 'data-blocks-engine-capture-gallery-stage' ) ? null : geometry.translation;
 							continue;
 						}
 						// `font-size` is excluded: CSS resolves a font

@@ -8,6 +8,7 @@ import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
+import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
 let sharedBrowser: import('playwright').Browser;
 const chromium = {
@@ -43,14 +44,15 @@ document.querySelector('[aria-label="Next slide"]').onclick=()=>{large=(large+1)
 
 // The source runtime translates a clipped row, lazily fills empty items, and
 // carries duplicate end items. No builder names or accessible arrow labels.
-const translatedFixture = `<!doctype html><style>
+const translatedTrackFixture = (count = 3) => `<!doctype html><style>
 #translated{position:relative;max-width:440px;margin:auto}.clip{overflow:hidden;width:100%;height:200px}
 #row{display:flex;list-style:none;padding:0;margin:0;width:100%;transform:translateX(-320px)}
 #row>li{flex:0 0 80%;height:200px;opacity:.3}#row img{width:100%;height:200px;object-fit:cover}
 button{position:absolute;top:90px;z-index:2}button:last-child{right:0}
-</style><section id="translated"><div class="clip"><ul id="row">${[-1,0,1,2,3].map(i=>`<li data-index="${i}">${i===2?'':`<img src="${image((i+3)%3)}">`}</li>`).join('')}</ul></div><button data-action="galleryPrevious"><svg width="20" height="20"><path d="M15 0L0 10L15 20Z"/></svg></button><button data-action="galleryNext"><svg width="20" height="20"><path d="M0 0L15 10L0 20Z"/></svg></button></section><script>
-let selected=0;const pictures=${JSON.stringify([image(0),image(1),image(2)])};function draw(){const row=document.getElementById('row');[...row.children].forEach((li,i)=>{li.style.opacity=i===selected+1?'1':'.3';if(i===selected+1&&!li.firstElementChild)li.innerHTML='<img src="'+pictures[selected]+'">'});row.style.transform='translateX('+((row.parentElement.clientWidth-row.children[0].getBoundingClientRect().width)/2-row.children[selected+1].offsetLeft+3)+'px)'}
-document.querySelector('[data-action="galleryNext"]').onclick=()=>{selected=(selected+1)%3;draw()};document.querySelector('[data-action="galleryPrevious"]').onclick=()=>{selected=(selected+2)%3;draw()};draw();</script>`;
+</style><section id="translated"><div class="clip"><ul id="row">${Array.from({length:count+2},(_,i)=>i-1).map(i=>`<li data-index="${i}">${i===2?'':`<img src="${image((i+count)%count)}">`}</li>`).join('')}</ul></div><button data-action="galleryPrevious"><svg width="20" height="20"><path d="M15 0L0 10L15 20Z"/></svg></button><button data-action="galleryNext"><svg width="20" height="20"><path d="M0 0L15 10L0 20Z"/></svg></button></section><script>
+let selected=0;const pictures=${JSON.stringify(Array.from({length:count},(_,i)=>image(i)))};function draw(){const row=document.getElementById('row');[...row.children].forEach((li,i)=>{li.style.opacity=i===selected+1?'1':'.3';if(i===selected+1&&!li.firstElementChild)li.innerHTML='<img src="'+pictures[selected]+'">'});row.style.transform='translateX('+((row.parentElement.clientWidth-row.children[0].getBoundingClientRect().width)/2-row.children[selected+1].offsetLeft+3)+'px)'}
+document.querySelector('[data-action="galleryNext"]').onclick=()=>{selected=(selected+1)%${count};draw()};document.querySelector('[data-action="galleryPrevious"]').onclick=()=>{selected=(selected+${count-1})%${count};draw()};draw();</script>`;
+const translatedFixture = translatedTrackFixture();
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'replays a lazy translated image track with unnamed semantic arrows and cloned end items', async () => {
@@ -95,6 +97,26 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]?.gallery?.inline).toMatchObject({coverage:'complete',restoration:'verified',initial:0});
 		expect(await page.evaluate(()=>scrollY)).toBe(0);
 	},15_000,
+);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'leaves a proven fourteen-frame interaction in control of translation through fluid learning and export', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:768,height:900}});
+		await page.setContent(translatedTrackFixture(14).replace('max-width:440px;','').replace('draw();</script>',"window.addEventListener('resize',draw);draw();</script>"));
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({coverage:'complete',restoration:'verified',initial:0});
+		expect(states[0]?.gallery?.inline.frames).toHaveLength(14);
+		await learnAndApplyFluidGeometry(page,{widths:[390,600,768,1440],settleMs:30});
+		await page.locator('[data-action="galleryNext"]').click();
+		await page.waitForTimeout(100);
+		await alignCapturedGalleries(page,states);
+		expect(states[0]?.gallery?.inline).toMatchObject({coverage:'complete',restoration:'verified',initial:1});
+		const portable=wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g,''),states);
+		await page.setContent(portable);
+		expect(await page.locator('[data-blocks-engine-capture-gallery-frame]').count()).toBe(14);
+		await page.locator('[data-action="galleryNext"]').click();
+		expect(await page.locator('#translated').getAttribute('data-blocks-engine-capture-gallery-index')).toBe('2');
+	},45_000,
 );
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
