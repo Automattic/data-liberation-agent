@@ -453,6 +453,32 @@ describe( 'revealAndCollectWixSlideshows', () => {
 		// between them, and no wait after the confirming pass.
 		expect( scrolls.filter( ( top ) => top === 'top:0' ) ).toHaveLength( 4 );
 	} );
+
+	// Shapes from real server documents: a homepage whose slideshow Wix
+	// unmounts until it is in view, and a route that has none.
+	const serverWithSlideshow =
+		'<html><body><div id="comp-x" class="wixui-slideshow"><div data-testid="slidesWrapper"></div></div></body></html>';
+	const serverWithoutSlideshow = '<html><body><section id="comp-y" class="wixui-section"></section></body></html>';
+
+	it( 'skips the sweep when the server document has no slideshow', async () => {
+		const { dom, scrolls } = recordingDom( '<main>No widgets here</main>' );
+		stubPageGlobals( dom );
+		const page = fakePreparePage( dom );
+
+		await revealAndCollectWixSlideshows( page as never, serverWithoutSlideshow );
+
+		expect( scrolls ).toEqual( [] );
+	} );
+
+	it( 'sweeps for a server-rendered slideshow the runtime has not mounted', async () => {
+		const { dom, scrolls } = recordingDom( '<main>No widgets here</main>' );
+		stubPageGlobals( dom );
+		const page = fakePreparePage( dom );
+
+		await revealAndCollectWixSlideshows( page as never, serverWithSlideshow );
+
+		expect( scrolls.filter( ( top ) => top === 'top:0' ) ).toHaveLength( 4 );
+	} );
 } );
 
 describe( 'wix capture', () => {

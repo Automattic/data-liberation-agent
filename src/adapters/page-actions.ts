@@ -54,4 +54,11 @@ export interface LiberationHooks {
 export interface LiberationContext {
   url: string;
   viewport: string;
+  /**
+   * The route document exactly as the server sent it, before any script ran.
+   * Undefined when the body could not be read. A platform runtime can remove
+   * server-rendered markup until it is in view, so this is the evidence of
+   * what the page declares, independent of what is mounted right now.
+   */
+  serverHtml?: string;
 }

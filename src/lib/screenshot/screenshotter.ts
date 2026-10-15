@@ -801,6 +801,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let budgetMs: number = SOURCE_NAVIGATION_LIMITS.timeoutMs;
 	let timedOut: { budgetMs: number; error: string } | undefined;
 	let navigated = false;
+	let serverHtml: string | undefined;
 	let attempt = 0;
 	const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut;
 	let redirectedTo: string | undefined;
@@ -842,6 +843,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// from here, so a pending subresource is evidence, not a failure.
 			if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ budgetMs }ms navigation budget; subresources were still pending` } );
 			if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
+			// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
+			serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
 			navigated = true;
 			break;
 		} catch ( err ) {
@@ -951,7 +954,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	await applyCaptureRemovals( page, {
 		removeSelectors: args.removeSelectors,
 		prepare: args.prepareCapture,
-		ctx: { url, viewport: viewport.id },
+		ctx: { url, viewport: viewport.id, serverHtml },
 	} );
 
 	// --- responsive image map (mobile only) -----------------------------------
@@ -1093,6 +1096,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		await args.beforeSerialize( page, {
 			url,
 			viewport: viewport.id,
+			serverHtml,
 		} ).catch( () => {
 			/* best-effort — never block capture on a late platform widget */
 		} );
