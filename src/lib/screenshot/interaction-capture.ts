@@ -15,6 +15,8 @@ const MAX_NAV_DROPDOWN_PROBES = 6;
 const MAX_INITIAL_DIALOGS = 8;
 const MAX_DIALOG_HTML_BYTES = 512 * 1024;
 const DIALOG_WAIT_MS = 2_000;
+// Scroll-reveal transitions on real sites run well under a second.
+const SCROLL_REVEAL_SETTLE_MS = 1_500;
 const POPUP_HASPOPUP = [ 'dialog', 'listbox', 'menu', 'tree', 'grid' ];
 const MAX_ROUTE_CONTROLS = 12;
 
@@ -1187,12 +1189,43 @@ async function describeInterceptingElement(
 		.catch( () => undefined );
 }
 
+/**
+ * Wait for the page to finish reacting to a scroll: intersection observer
+ * callbacks run within two frames, then any finite animation or transition they
+ * started runs to completion. Infinite animations never settle and are ignored.
+ */
+async function settleScrollReveals( page: Page ): Promise< void > {
+	await page.evaluate( async ( budget: number ) => {
+		const frame = () => new Promise< void >( resolve => requestAnimationFrame( () => resolve() ) );
+		const deadline = performance.now() + budget;
+		await frame();
+		await frame();
+		while ( performance.now() < deadline ) {
+			const running = document.getAnimations().filter( animation =>
+				animation.playState === 'running' &&
+				Number.isFinite( Number( animation.effect?.getComputedTiming().endTime ) )
+			);
+			if ( running.length === 0 ) return;
+			await Promise.race( [
+				Promise.all( running.map( animation => animation.finished.catch( () => undefined ) ) ),
+				new Promise( resolve => setTimeout( resolve, Math.max( 0, deadline - performance.now() ) ) ),
+			] );
+			await frame();
+		}
+	}, SCROLL_REVEAL_SETTLE_MS ).catch( () => undefined );
+}
+
 export async function activateTrigger( page: Page, probeSelector: string, baseline?: () => Promise< void > ): Promise< void > {
 	const locator = page.locator( probeSelector ).first();
 	await locator.scrollIntoViewIfNeeded( { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
 	// Native activation scrolls nested containers as well as the window. Those
 	// layout movements precede the action; they are not revealed popup evidence.
-	await baseline?.();
+	// Neither is content the scroll reveals: let intersection-driven reveals
+	// finish before the baseline so only the activation's own changes remain.
+	if ( baseline ) {
+		await settleScrollReveals( page );
+		await baseline();
+	}
 	await page.evaluate( () => {
 		const preventSubmit = ( event: Event ) => event.preventDefault();
 		document.addEventListener( 'submit', preventSubmit, true );
