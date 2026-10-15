@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { buildSourceFindings } from '../source-findings.js';
-import { CAPTURE_BUDGET_DRAIN_MS } from '../capture-time-budget.js';
+import { CAPTURE_BUDGET_DRAIN_MS, ROUTE_DEADLINE_MIN_MS, deriveRouteDeadlineMs } from '../capture-time-budget.js';
 import { isUsableCapture, missingRoutes } from '../capture-usability.js';
 import { captureScreenshots } from './screenshotter.js';
 import type { ScreenshotResult } from './types.js';
@@ -139,3 +139,48 @@ it.skipIf( skipBrowser )( 'leaves capture unchanged without a time budget', asyn
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 60_000 );
+
+it.skipIf( skipBrowser )( 'abandons a stalled route at its per-route deadline and frees the slot for the next route', async () => {
+	// A route whose page never answers: no time budget, only the per-route
+	// deadline ends it (deriveRouteDeadlineMs has a 10-minute floor, so the
+	// configurable routeDeadlineMs is what makes this test cheap).
+	const { origin, server } = await site( new Set( [ '/slow' ] ) );
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'route-deadline-' ) );
+	try {
+		const startedAt = Date.now();
+		const routeDeadlineMs = 3_000;
+		const result = await captureScreenshots( {
+			// The stalled route is admitted first; the entries after it complete.
+			urls: [ `${ origin }/slow`, `${ origin }/`, `${ origin }/about` ], primaryUrl: `${ origin }/`,
+			outputDir, settleMs: 0, learnFluid: false, viewports, routeDeadlineMs, concurrency: 1,
+		} );
+		const captureMs = Date.now() - startedAt;
+		expect( result ).toMatchObject( { captured: 2, skipped: 0, failed: 1 } );
+		// The stalled route cost its deadline, not the whole capture.
+		expect( captureMs ).toBeLessThan( routeDeadlineMs + 10_000 );
+		expect( result.routeDiagnostics ).toEqual( [ {
+			code: 'route_capture_timeout', url: `${ origin }/slow`,
+			reason: expect.stringContaining( 'route capture deadline 3000ms' ),
+			unit: 'route', severity: 'error', metrics: { routeDeadlineMs },
+		} ] );
+
+		const { receipt, missing, complete, usable, findings } = exportCapture( outputDir, `${ origin }/`, result );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ).sort() ).toEqual( [ `${ origin }/`, `${ origin }/about` ] );
+		expect( missing ).toEqual( [ { url: `${ origin }/slow`, code: 'route_capture_timeout', reason: expect.stringContaining( 'route capture deadline 3000ms' ) } ] );
+		expect( complete ).toBe( false );
+		expect( usable ).toBe( true );
+		expect( findings.findings ).toContainEqual( expect.objectContaining( { code: 'route_capture_timeout', loss_class: 'omitted_unit', unit: 'route' } ) );
+	} finally {
+		await close( server );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 60_000 );
+
+it.skipIf( skipBrowser )( 'derives the per-route deadline from the time budget and concurrency, never below the floor', () => {
+	expect( deriveRouteDeadlineMs( undefined, 42 * 60_000, 3 ) ).toBe( 14 * 60_000 );
+	expect( deriveRouteDeadlineMs( undefined, 12_000, 6 ) ).toBe( ROUTE_DEADLINE_MIN_MS );
+	expect( deriveRouteDeadlineMs( undefined, undefined, 6 ) ).toBe( ROUTE_DEADLINE_MIN_MS );
+	expect( deriveRouteDeadlineMs( 1_500, undefined, 6 ) ).toBe( 1_500 );
+	expect( deriveRouteDeadlineMs( 0, 42 * 60_000, 3 ) ).toBe( 0 );
+} );
