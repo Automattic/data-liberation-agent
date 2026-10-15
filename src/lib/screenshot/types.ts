@@ -120,10 +120,10 @@ export interface ScreenshotOpts {
 	/** Product-owned evidence observer, after source cleanup and before geometry rewriting. */
 	observeSource?: ( page: import('playwright').Page, url: string, device: string, errors: readonly string[], browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }>, profile?: import('./capture-profiles.js').CaptureProfile, boundary?: import('../source-navigation.js').ExternalBoundary ) => Promise<void>;
 	/**
-	 * Routes that produced frozen reference pages. When given, memory admission
-	 * calibrates on one of these routes, because routes outside a bounded
-	 * reference sample complete without fresh reference pages and would
-	 * under-estimate the working set. Default: any fresh successful route.
+	 * Routes that produce fresh reference pages. When given, memory admission
+	 * estimates these routes and the routes outside the bounded reference
+	 * sample separately, so a route without reference pages reserves its own
+	 * smaller working set. Default: every route opens reference pages.
 	 */
 	referenceSampleUrls?: readonly string[];
 	/**
