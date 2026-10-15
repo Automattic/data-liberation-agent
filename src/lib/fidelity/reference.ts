@@ -9,6 +9,7 @@ import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-
 import type { LayoutObservation } from './score.js';
 import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
+import { observePageTraffic } from '../screenshot/page-helpers.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
@@ -157,12 +158,13 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							ownedResource = referenceContext;
 							await referenceContext.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 							referencePage = await referenceContext.newPage();
+							observePageTraffic( referencePage );
 						} else {
 							// Fresh siblings avoid resize/scroll history. Convenience-owned
 							// contexts borrow serially; after sibling support is proven,
 							// acquisition failures stay per-cell rather than borrowing concurrently.
 							referencePage = supportsSiblingPages ? await sourceContext.newPage() : page;
-							if ( supportsSiblingPages ) ownedResource = referencePage;
+							if ( supportsSiblingPages ) { ownedResource = referencePage; observePageTraffic( referencePage ); }
 							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
 						if (expectedBoundary) {

@@ -49,7 +49,7 @@ import { availableRuntimeMemory } from './runtime-memory.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument, observePageTraffic } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -1669,6 +1669,9 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	contexts.push( context );
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
+	// The comparison and shared-chrome probes wait on the same render-affecting
+	// quiet as capture; watch the page's traffic from before its navigation.
+	observePageTraffic( page );
 	if ( args.publicUrlsOnly || mode === 'check' ) {
 		await page.route( '**/*', async ( route ) => {
 			const request = route.request();

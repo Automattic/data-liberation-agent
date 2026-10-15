@@ -629,7 +629,12 @@ describe('waitForRenderIdle', () => {
     expect( vi.isFakeTimers() ).toBe( true );
     await vi.advanceTimersByTimeAsync( 1 );
     await expect( waiting ).resolves.toBeUndefined();
-    expect( page.listenerCount( 'request' ) ).toBe( 0 );
+    // The page's traffic ledger persists for the page's lifetime; a second
+    // wait must reuse it, not install another set of listeners.
+    const listeners = () => page.listenerCount( 'request' ) + page.listenerCount( 'requestfinished' ) + page.listenerCount( 'requestfailed' );
+    const before = listeners();
+    await expect( waitForRenderIdle( page as never, async () => {}, 500, 5_000 ) ).resolves.toBeUndefined();
+    expect( listeners() ).toBe( before );
     vi.useRealTimers();
   });
 });

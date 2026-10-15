@@ -16,6 +16,19 @@ const readinessSinks = new WeakMap<Page, (wait: string, outcome: SettleOutcome) 
 /** Route every readiness outcome on `page` to `sink` (the capture's phase ledger). */
 export function reportReadiness(page: Page, sink: (wait: string, outcome: SettleOutcome) => void): void {
   readinessSinks.set(page, sink);
+  observePageTraffic( page );
+}
+
+/**
+ * Watch the page's traffic from creation onward so [[waitForNetworkQuiet]] can
+ * take the render-affecting quiet path. Playwright only emits `request` once,
+ * so the ledger must exist before the page's first navigation for the whole
+ * navigation to count; a page that was never watched falls back to the raw
+ * bounded `networkidle` wait. No-op on reduced browser implementations without
+ * request events.
+ */
+export function observePageTraffic( page: Page ): void {
+  trafficLedger( page );
 }
 
 /**
@@ -84,29 +97,39 @@ export async function settleDocument(
 /**
  * Wait for a page to reach a stable state after load.
  *
- *   load (best-effort, 5s) ─▶ networkidle + DOM quiescence concurrently ─▶ fonts.ready (4s)
+ *   load (best-effort, 5s) ─▶ network quiet + DOM quiescence concurrently ─▶ fonts.ready (4s)
  *     ─▶ declared loading state, if any ─▶ done
  *
- * Networkidle is wrapped in try/catch because chatty analytics (GA, Intercom)
- * can hold it open indefinitely; we don't want that to block capture.
+ * The network step is [[waitForNetworkQuiet]]: quiet means no render-affecting
+ * request (scripts, stylesheets, fonts, images, media, same-origin fetch/xhr —
+ * the predicate [[waitForRenderIdle]] trusts) has started or finished, and no
+ * fetch/xhr response of any origin is still pending, for 500ms, bounded at 5s.
+ * Raw Playwright networkidle counts every request, so a source whose
+ * cross-origin analytics chatter never stops (GA, Intercom, Wix BI beacons)
+ * never satisfies it and every capture load, device comparison and fidelity
+ * reference cell paid the full bound — measured at ~58s across 14 calls on a
+ * single ketatov route. A hydration response still holds the wait until it
+ * lands, and whatever a completed response then renders is the concurrent
+ * DOM-quiescence step's job (unchanged below), so the hydration-safety
+ * guarantees in the rest of this comment still hold.
  *
  * The trailing font wait resolves FOIT (flash-of-invisible-text) BEFORE we
  * screenshot. Text styled with a custom @font-face — e.g. a Wix nav menu built
  * from an uploaded webfont — renders fully INVISIBLE during the font's block
  * period; capturing in that window drops the text from the screenshot (this is
  * exactly why source captures of Wix navs came back blank). It runs last, after
- * networkidle, so any font request issued by late hydration JS is already in
- * flight and document.fonts.ready waits for it to actually apply.
+ * the network wait, so any font request issued by late hydration JS is already
+ * in flight and document.fonts.ready waits for it to actually apply.
  *
  * The DOM-quiescence step runs after fonts because a client-rendered app can still be
- * assembling its own content well after 'load' fires and after networkidle has
- * either resolved or given up. 'load' only covers the document's own
+ * assembling its own content well after 'load' fires and after the network wait
+ * has either resolved or spent its bound. 'load' only covers the document's own
  * script/stylesheet bundle, not whatever that bundle goes on to fetch and
  * render — a SPA that loads its data via its own async call (a server
  * function, a client-side data fetch) mounts a whole section of the page on
  * that response, at a moment 'load' knows nothing about. And a page embedding
  * a chatty third-party widget (e.g. a media player polling its own endpoints)
- * can hold networkidle open indefinitely without that hydration ever finishing
+ * can keep its network busy forever without that hydration ever finishing
  * — see [[waitForRenderIdle]] for why network-quiet and render-complete are
  * different questions. Watching the DOM directly sidesteps both problems: a
  * MutationObserver on the whole document resolves once no mutation has landed
@@ -127,9 +150,7 @@ export async function waitForStable(
     /* best-effort — a held image or script never fires load */
   });
   await Promise.all([
-    page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {
-      /* best-effort — analytics can keep network busy forever */
-    }),
+    waitForNetworkQuiet(page, 'network-quiet'),
     settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs }),
   ]);
   await waitForFonts(page);
@@ -351,10 +372,89 @@ function requestAffectsRenderedContent( page: Page, request: Request ): boolean 
   if ( RENDER_RESOURCE_TYPES.has( resourceType ) ) return true;
   if ( ! [ 'fetch', 'xhr' ].includes( resourceType ) ) return false;
   try {
-    return new URL( request.url() ).origin === new URL( page.url() ).origin;
+    const pageOrigin = new URL( page.url() ).origin;
+    // An opaque page origin (about:blank, an uncommitted navigation) cannot
+    // vouch for the request's origin; a data response landing there may still
+    // hydrate the document, so classify it conservatively as render-affecting.
+    if ( pageOrigin === 'null' ) return true;
+    return new URL( request.url() ).origin === pageOrigin;
   } catch {
     return false;
   }
+}
+
+/** What the page's traffic ledger tracks: what is still outstanding, what last moved. */
+interface PageTrafficLedger {
+  /** Render-affecting requests seen but not yet finished. */
+  renderActive: Set< Request >;
+  /** When a render-affecting request last started or finished. */
+  lastRenderActivity: number;
+  /** Data (fetch/xhr) responses seen but not yet landed, any origin. */
+  pendingData: Set< Request >;
+}
+
+const trafficLedgers = new WeakMap< Page, PageTrafficLedger >();
+
+/**
+ * The page's live traffic ledger, installed on first use and kept for the
+ * page's lifetime. Quiet is provable only against traffic seen from the
+ * start: Playwright emits `request` once, so a request already in flight when
+ * the ledger is installed is invisible to it until it finishes — install at
+ * page creation ([[reportReadiness]] and [[observePageTraffic]]) and the whole
+ * navigation counts. [[waitForNetworkQuiet]] takes the ledger path only for
+ * pages that already have one, for exactly that reason; everything else —
+ * including pages without request events — falls back to raw `networkidle`,
+ * whose in-flight tracking Playwright owns from navigation.
+ */
+function trafficLedger( page: Page ): PageTrafficLedger | null {
+  if ( ! page.on || ! page.off ) return null;
+  const existing = trafficLedgers.get( page );
+  if ( existing ) return existing;
+  const ledger: PageTrafficLedger = { renderActive: new Set(), lastRenderActivity: Date.now(), pendingData: new Set() };
+  const affectsRender = ( request: Request ) => requestAffectsRenderedContent( page, request );
+  const isDataRequest = ( request: Request ) => [ 'fetch', 'xhr' ].includes( request.resourceType() );
+  const onRequest = ( request: Request ) => {
+    if ( affectsRender( request ) ) { ledger.renderActive.add( request ); ledger.lastRenderActivity = Date.now(); }
+    if ( isDataRequest( request ) ) ledger.pendingData.add( request );
+  };
+  const onSettled = ( request: Request ) => {
+    if ( affectsRender( request ) ) { ledger.renderActive.delete( request ); ledger.lastRenderActivity = Date.now(); }
+    ledger.pendingData.delete( request );
+  };
+  page.on( 'request', onRequest );
+  page.on( 'requestfinished', onSettled );
+  page.on( 'requestfailed', onSettled );
+  trafficLedgers.set( page, ledger );
+  return ledger;
+}
+
+/** Poll `quiet()` every ≤50ms until it holds or the bound is spent. */
+function awaitQuiet( quiet: () => boolean, timeoutMs: number ): Promise< 'quiet' | 'deadline' > {
+  const started = Date.now();
+  return new Promise( ( resolve ) => {
+    const check = () => {
+      if ( Date.now() - started >= timeoutMs ) { resolve( 'deadline' ); return; }
+      if ( quiet() ) { resolve( 'quiet' ); return; }
+      setTimeout( check, Math.min( 50, Math.max( 1, timeoutMs - ( Date.now() - started ) ) ) );
+    };
+    check();
+  } );
+}
+
+/**
+ * Quiet needs two things. No render-affecting request event for the quiet
+ * window — that includes same-origin fetch/xhr, so a hydration fetch from the
+ * page's own origin holds the wait from its start to its landing. And no
+ * `fetch`/`xhr` response of any origin still pending, so a hydration response
+ * from an embedded widget's origin is never raced either. What may pass
+ * unnoticed is cross-origin chatter that is merely frequent (analytics
+ * beacons): only its pending responses hold, its completed ones do not reopen
+ * the window — the concurrent DOM-quiescence step is what catches whatever a
+ * completed response renders, with the same bound it had before.
+ */
+function networkQuiet( ledger: PageTrafficLedger, quietMs: number ): boolean {
+  return ledger.renderActive.size === 0 && ledger.pendingData.size === 0 &&
+    Date.now() - ledger.lastRenderActivity >= quietMs;
 }
 
 /** Run lazy-load work and wait until render-affecting requests become quiet. */
@@ -364,7 +464,8 @@ export async function waitForRenderIdle(
   quietMs: number = 500,
   timeoutMs: number = 5_000,
 ): Promise<void> {
-  if ( ! page.on || ! page.off ) {
+  const ledger = trafficLedger( page );
+  if ( ! ledger ) {
     await action();
     try {
       await page.waitForLoadState( 'networkidle', { timeout: timeoutMs } );
@@ -373,44 +474,44 @@ export async function waitForRenderIdle(
     }
     return;
   }
+  await action();
+  await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
+}
 
-  const active = new Set< Request >();
-  let lastActivity = Date.now();
-  const onRequest = ( request: Request ) => {
-    if ( ! requestAffectsRenderedContent( page, request ) ) return;
-    active.add( request );
-    lastActivity = Date.now();
-  };
-  const onFinished = ( request: Request ) => {
-    if ( ! active.delete( request ) ) return;
-    lastActivity = Date.now();
-  };
-  page.on( 'request', onRequest );
-  page.on( 'requestfinished', onFinished );
-  page.on( 'requestfailed', onFinished );
-
-  try {
-    await action();
-    const waitStarted = Date.now();
-    await new Promise< void >( ( resolve ) => {
-      const check = () => {
-        const now = Date.now();
-        if (
-          now - waitStarted >= timeoutMs ||
-          ( active.size === 0 && now - lastActivity >= quietMs )
-        ) {
-          resolve();
-          return;
-        }
-        setTimeout( check, Math.min( 50, timeoutMs - ( now - waitStarted ) ) );
-      };
-      check();
-    } );
-  } finally {
-    page.off( 'request', onRequest );
-    page.off( 'requestfinished', onFinished );
-    page.off( 'requestfailed', onFinished );
+/**
+ * Wait until the page's network is provably quiet for `quietMs`, bounded by
+ * `timeoutMs`, and report the outcome to the page's readiness sink.
+ *
+ * This is the bounded network half of [[waitForStable]]. Unlike raw
+ * `networkidle`, only requests that can change the rendered document open or
+ * hold the quiet window (see [[networkQuiet]]), so a source whose analytics
+ * beacons never stop still resolves at its first quiet gap instead of paying
+ * the full bound. That predicate is only sound for traffic the page's ledger
+ * has seen from before its first navigation, so watched pages
+ * ([[reportReadiness]], [[observePageTraffic]]) take it; any other page — and
+ * any page without request events — falls back to the raw bounded
+ * `networkidle` wait, whose in-flight tracking covers the whole navigation.
+ */
+export async function waitForNetworkQuiet(
+  page: Page,
+  wait: string,
+  { quietMs = 500, timeoutMs = 5_000 }: { quietMs?: number; timeoutMs?: number } = {},
+): Promise<void> {
+  const started = Date.now();
+  let reason: SettleOutcome['reason'] = 'deadline';
+  const ledger = trafficLedgers.has( page ) ? trafficLedger( page ) : null;
+  if ( ! ledger ) {
+    try {
+      await page.waitForLoadState( 'networkidle', { timeout: timeoutMs } );
+      reason = 'quiet';
+    } catch {
+      /* best-effort: without a creation-time ledger quiet cannot be proven —
+         spend the bound rather than race a hydration fetch */
+    }
+  } else {
+    reason = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
   }
+  readinessSinks.get( page )?.( wait, { reason, ms: Date.now() - started } );
 }
 
 /** Page global counting sweeps and restores; only the latest may move the document. */
@@ -526,11 +627,11 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     };
     if ( requireNetworkIdle ) {
       if ( canScroll ) await settleScroll();
-      try {
-        await page.waitForLoadState( 'networkidle', { timeout: 5_000 } );
-      } catch {
-        /* best-effort hydration window for the responsive geometry sweep */
-      }
+      // Best-effort hydration window for the responsive geometry sweep: the
+      // same render-affecting quiet [[waitForStable]] waits on, so perpetual
+      // analytics chatter resolves at its first quiet gap instead of always
+      // spending the raw-networkidle bound.
+      await waitForNetworkQuiet( page, 'render-quiet' );
     } else {
       if ( canScroll ) await waitForRenderIdle(page, settleScroll);
     }
