@@ -115,7 +115,8 @@ export function wixMediaVariant( url: string ): { id: string; url: string } | nu
 export const WIX_CAPTURE_CHROME_SELECTOR =
 	'[id="WIX_ADS"], [id$="-hiddenA11ySubMenuIndication"]';
 
-const WIX_SLIDESHOW_SELECTOR = '.wixui-slideshow';
+const WIX_SLIDESHOW_CLASS = 'wixui-slideshow';
+const WIX_SLIDESHOW_SELECTOR = `.${ WIX_SLIDESHOW_CLASS }`;
 const WIX_SLIDESHOW_LIMIT = 4;
 const WIX_SLIDE_LIMIT = 6;
 const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
@@ -466,11 +467,16 @@ async function closeOpenedMenu( page: Page ): Promise< void > {
  * last pass; a sweep that reveals nothing after the previous sweep and its
  * hydration window also revealed nothing has confirmed the document's
  * answer, so the loop stops before its third pass.
+ *
+ * Wix server-renders every slideshow, including one it later unmounts until
+ * it is in view, so a route whose server document has none has nothing to
+ * reveal and skips the sweep. Without the server document, sweep as before.
  */
-export async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
+export async function revealAndCollectWixSlideshows( page: Page, serverHtml?: string ): Promise< void > {
 	const mounted = () => page.locator( WIX_SLIDESHOW_SELECTOR ).count().catch( () => 0 );
+	const declared = serverHtml === undefined || serverHtml.includes( WIX_SLIDESHOW_CLASS );
 	let emptyPasses = 0;
-	for ( let pass = 0; pass < 3 && emptyPasses < 2 && ( await mounted() ) === 0; pass++ ) {
+	for ( let pass = 0; declared && pass < 3 && emptyPasses < 2 && ( await mounted() ) === 0; pass++ ) {
 		await page.evaluate( wixScrollSweep, false ).catch( () => undefined );
 		if ( ( await mounted() ) > 0 ) break;
 		emptyPasses++;
@@ -875,7 +881,7 @@ export const capture: LiberationHooks = {
 	 * DOM that is about to be frozen so a late-hydrated widget is not lost.
 	 */
 	beforeSerialize: async ( page, ctx ) => {
-		await revealAndCollectWixSlideshows( page );
+		await revealAndCollectWixSlideshows( page, ctx.serverHtml );
 		// Maps and App Market widgets only work inside Wix's viewer (see embeds.ts).
 		await portWixRuntimeEmbeds( page ).catch( () => undefined );
 		// Revealing a slideshow scrolls, so the chrome is settled after it.
