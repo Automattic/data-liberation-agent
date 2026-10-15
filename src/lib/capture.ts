@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { pathWithin } from './portable-assets.js';
 import { findAdapter } from '../adapters/index.js';
 import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
@@ -149,6 +150,19 @@ export interface CaptureOptions {
 	 * `summary.dualRoutes` and the receipt's `deviceMode` record.
 	 */
 	deviceMode?: import('./screenshot/device-mode.js').DeviceModeRequest;
+	/**
+	 * Template-clustered capture, phase 1 of #784 (browser acquisition only).
+	 * Implies `routeSelection: 'template-coverage'`, adds one verification
+	 * member per multi-member cluster to the budget, and derives every other
+	 * member of a verified cluster from the representative's captured document
+	 * by transplanting its HTTP-acquired content (`template-clusters.ts`).
+	 * Members that fail a gate escalate to the browser pipeline or stay omitted
+	 * by budget; derived routes count in `summary.routesDerived`, carry
+	 * `route_template_derived` loss rows, and frozen comparison reports them as
+	 * uncompared scope (they have no reference evidence). No changes to the
+	 * screenshotter itself.
+	 */
+	templateClusters?: boolean;
 	onProgress?: ( progress: CaptureProgress ) => void;
 }
 
@@ -170,6 +184,8 @@ export interface CaptureResult {
 		routesFailed: number;
 		/** Discovered routes the route budget left out; not attempted, not failed. */
 		routesOmitted: number;
+		/** Opt-in template-clustered capture: routes exported from a verified template (`route_template_derived`). */
+		routesDerived?: number;
 		durationMs: number;
 		complete: boolean;
 		entrypointCaptured: boolean;
@@ -364,10 +380,22 @@ export async function captureWebsite(
 				return ! action;
 			} ),
 	] );
-	const templateGrouping = options.routeSelection === 'template-coverage'
+	const templateClusters = options.templateClusters === true;
+	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' );
+	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
+	const templateGrouping = routeSelection === 'template-coverage'
 		? await groupInventoryTemplates( { sourceUrl, urls: inventoryUrls, routeScope, outputDir, timeBudgetMs: options.timeBudgetMs } )
 		: undefined;
-	const { selected: urls, omitted } = selectRouteBudget( inventoryUrls, routeLimit, templateGrouping?.representatives );
+	// Verification members (#784 §4.2): one per multi-member cluster, kept right
+	// after the representatives so a budget that fits every template also fits
+	// its verification. Derived members hang their cluster's verdict on it.
+	const verificationMembers = templateGrouping?.report && templateClusters
+		? templateGrouping.report.groups
+				.filter( group => group.size >= 2 )
+				.map( group => ( group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ] ?? '' ) )
+				.filter( url => url !== '' )
+		: [];
+	const { selected: urls, omitted } = selectRouteBudget( inventoryUrls, routeLimit, [ ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ] );
 	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
@@ -441,6 +469,29 @@ export async function captureWebsite(
 		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
 	);
 
+	// Phase 1 of #784: derive every ungated member of a verified multi-member
+	// cluster from its representative's captured document. Opt-in
+	// (`templateClusters`), bounded by TEMPLATE_CLUSTER_LIMITS, and recorded in
+	// `template-clusters.json` next to `website/`. Derived entries become
+	// ordinary manifest entries before export, so export needs no second input
+	// kind. Any failure degrades to the pre-derivation state: the member keeps
+	// its `route_omitted_by_budget` diagnostic.
+	const derivedTemplateClusters = templateClusters && templateGrouping?.report
+		? await deriveTemplateClusterMembers( {
+				sourceUrl,
+				outputDir,
+				report: templateGrouping.report,
+				capturedUrls: screenshotResult.urls,
+				routeScope,
+				timeBudgetMs: options.timeBudgetMs,
+			} )
+		: undefined;
+	if ( derivedTemplateClusters ) {
+		process.stderr.write(
+			`[template-clusters] ${ derivedTemplateClusters.summary.derived } derived, ${ derivedTemplateClusters.summary.escalated } escalated, ${ derivedTemplateClusters.summary.unavailable } unavailable, ${ Date.now() - mediaStartedAt }ms\n`
+		);
+	}
+
 	const exportStartedAt = Date.now();
 	progress( { phase: 'finalizing', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const failuresPath = join( outputDir, 'screenshots', 'failures.json' );
@@ -457,14 +508,24 @@ export async function captureWebsite(
 		.map( row => `${ row.code } ${ row.url }` ) );
 	const linkedDiagnostics = ( screenshotResult.linkedPageCoverage?.diagnostics ?? [] ).filter( row =>
 		! initialRefusals.has( `${ row.code } ${ row.url }` ) );
-	const captureDiagnostics = [ ...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics ];
+	// A derived route is no longer omitted by budget: it shipped as a
+	// template-cluster derivative, so its omission row is replaced by the
+	// derivation's own loss row (`route_template_derived`).
+	const derivedUrls = new Set( derivedTemplateClusters?.summary.derivedUrls ?? [] );
+	const captureDiagnostics = [
+		...discoveryDiagnostics.filter( row => row.code !== ROUTE_OMITTED_BY_BUDGET || ! derivedUrls.has( row.url ) ),
+		...( screenshotResult.routeDiagnostics ?? [] ),
+		...linkedDiagnostics,
+		...( derivedTemplateClusters?.diagnostics ?? [] ),
+	];
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
 		routesDiscovered: screenshotResult.urls.length,
-		routesCaptured: screenshotResult.captured,
+		routesCaptured: screenshotResult.captured + ( derivedTemplateClusters?.summary.derived ?? 0 ),
 		routesSkipped: screenshotResult.skipped,
 		routesFailed: screenshotResult.failed,
 		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
+		...( derivedTemplateClusters ? { routesDerived: derivedTemplateClusters.summary.derived } : {} ),
 		durationMs: screenshotResult.durationMs,
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
 		...( screenshotResult.deviceMode?.routes ? { dualRoutes: screenshotResult.deviceMode.routes.dual.length } : {} ),
@@ -497,6 +558,12 @@ export async function captureWebsite(
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	receipt.preview = preview;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
+	if ( derivedTemplateClusters ) {
+		receipt.templateClusters = derivedTemplateClusters.receiptSummary;
+		// Next to `website/`, like template-groups.json: evidence of what was
+		// derived and on what cluster verdict, hashed into the fidelity reference.
+		( await import( './template-clusters.js' ) ).writeTemplateClusters( outputDir, derivedTemplateClusters.receipt );
+	}
 	if ( screenshotResult.deviceMode ) receipt.deviceMode = screenshotResult.deviceMode;
 	if ( screenshotResult.sharedChrome ) receipt.sharedChrome = screenshotResult.sharedChrome;
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
@@ -599,4 +666,207 @@ function readUnresolvedAnchors( outputDir: string ): UnresolvedAnchor[] {
 	} catch {
 		return [];
 	}
+}
+
+/** Loss-ledger codes for template-clustered capture (docs/contracts/loss-ledger.md, #784 §3.4). */
+export const ROUTE_TEMPLATE_DERIVED = 'route_template_derived';
+export const ROUTE_TEMPLATE_ESCALATED = 'route_template_escalated';
+export const TEMPLATE_SLOT_RUNTIME_UNOBSERVED = 'template_slot_runtime_unobserved';
+
+export interface TemplateClusterDerivation {
+	summary: { derived: number; derivedUrls: string[]; escalated: number; unavailable: number };
+	/** Findings projected into `capture-findings.json` and the receipt. */
+	diagnostics: RouteDiagnostic[];
+	/** The `template-clusters.json` receipt. */
+	receipt: import('./template-clusters.js').TemplateClustersReceipt;
+	/** Compact counts for the capture receipt. */
+	receiptSummary: Record< string, unknown >;
+}
+
+/**
+ * Derive members for verified clusters after the browser capture (opt-in
+ * `templateClusters`). Each cluster with a captured representative first
+ * derives its verification member and compares it, offline, with the real
+ * capture on the six acceptance checks; a mismatch fails the cluster and
+ * escalates every member. Remaining members pass the per-member gates and
+ * become ordinary manifest entries, so export needs no second input kind.
+ * One cluster's failure degrades only that cluster (#761); a terminated
+ * stage leaves the pre-derivation state (members stay budget-omitted).
+ *
+ * Derived routes are phase-1 desktop documents: the transplant copies the
+ * representative's desktop profile and fluid evidence, and a dual-site
+ * member without a derived phone document ships desktop-only. The mobile
+ * transplant (§3.1 step 4) is remaining phase-1 work.
+ */
+async function deriveTemplateClusterMembers( input: {
+	sourceUrl: string;
+	outputDir: string;
+	report: import('./template-groups.js').TemplateGroupsReport;
+	capturedUrls: readonly string[];
+	routeScope?: import('../platform/types.js').SiteRouteScope;
+	timeBudgetMs?: number;
+} ): Promise< TemplateClusterDerivation > {
+	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
+		await import( './template-clusters.js' );
+	const { safeFetch } = await import( './media-fetch/safe-fetch.js' );
+	const { CapturedResourceStore } = await import( './screenshot/resource-capture.js' );
+	const { ManifestQueue } = await import( './screenshot/manifest-queue.js' );
+	const { slugify } = await import( './url/index.js' );
+
+	const diagnostics: RouteDiagnostic[] = [];
+	const clusters: import('./template-clusters.js').TemplateClusterRecord[] = [];
+	const derivedUrls: string[] = [];
+	let escalated = 0;
+	let unavailableCount = 0;
+
+	// The capture released the manifest queue, so this stage is its single
+	// writer; a fresh queue loads the flushed file.
+	const manifestPath = join( input.outputDir, 'screenshots', 'manifest.json' );
+	const queue = new ManifestQueue( manifestPath );
+	await queue.init();
+	const capturedUrls = new Set( input.capturedUrls.map( documentRequestUrl ) );
+	try {
+		for ( const group of input.report.groups ) {
+			if ( group.size < 2 ) continue;
+			const repEntry = queue.getEntry( documentRequestUrl( group.representative ) ) ?? queue.getEntry( group.representative );
+			if ( ! repEntry?.html || repEntry.redirectedTo ) continue;
+			const repHtmlPath = resolve( input.outputDir, repEntry.html );
+			if ( ! pathWithin( input.outputDir, repHtmlPath ) || ! existsSync( repHtmlPath ) ) continue;
+			const record: import('./template-clusters.js').TemplateClusterRecord = {
+				id: group.id, key: group.key, representative: group.representative,
+				derived: [], escalated: [], unavailable: [],
+			};
+			clusters.push( record );
+			const startedAt = Date.now();
+			try {
+				const repFetch = await safeFetch( group.representative, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } );
+				const repServerHtml = repFetch.body.toString( 'utf8' );
+				const repProcessedHtml = readFileSync( repHtmlPath, 'utf8' );
+				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl );
+				let derivedInCluster = 0;
+				let clusterFailed = false;
+
+				// Verification first (#784 §4.2): one member derived, then compared
+				// with its real capture, offline, on the six acceptance checks. A
+				// mismatch (or a missing verification capture) fails the cluster: no
+				// member of it is ever derived (§3.5).
+				const members = group.members
+					.filter( url => ! capturedUrls.has( documentRequestUrl( url ) ) )
+					.sort( ( a, b ) => a.localeCompare( b ) );
+				// A captured member is the stronger verification: its real capture
+				// exists on disk, so the derived-vs-real comparison is actually
+				// scored. Preferred verification members are already in the budget.
+				const capturedMembers = group.members
+					.filter( url => url !== group.representative && capturedUrls.has( documentRequestUrl( url ) ) )
+					.sort( ( a, b ) => a.localeCompare( b ) );
+				const verificationUrl = capturedMembers[ 0 ] ?? members[ 0 ];
+				const verificationCaptured = verificationUrl !== undefined &&
+					Boolean( queue.getEntry( documentRequestUrl( verificationUrl ) ) ?? queue.getEntry( verificationUrl ) );
+				let verified = false;
+				let verificationRecord: import('./template-clusters.js').TemplateClusterRecord['verification'] =
+					{ url: verificationUrl ?? group.representative, captured: verificationCaptured };
+				if ( verificationUrl === undefined ) continue;
+				if ( verificationCaptured ) {
+					const realEntry = queue.getEntry( documentRequestUrl( verificationUrl ) ) ?? queue.getEntry( verificationUrl )!;
+					const realHtml = readFileSync( resolve( input.outputDir, realEntry.html! ), 'utf8' );
+					const memberFetch = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } );
+					const derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberFetch.body.toString( 'utf8' ), baseUrl: group.representative } );
+					if ( derivation.ok ) {
+						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } );
+						verificationRecord = { url: verificationUrl, captured: true, checks: comparison.checks, equal: comparison.equal };
+						verified = comparison.equal;
+						if ( ! comparison.equal ) {
+							const failing = Object.entries( comparison.checks ).filter( ( [ , ok ] ) => ! ok ).map( ( [ name ] ) => name ).join( ', ' );
+	diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification failed its derived-vs-real comparison (${ failing })`, metrics: { clusterSize: group.size } } );
+						}
+					} else {
+						verificationRecord = { url: verificationUrl, captured: true };
+						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification member failed the ${ derivation.gate.code } gate`, metrics: { clusterSize: group.size } } );
+					}
+				}
+				if ( ! verified ) clusterFailed = true;
+
+				for ( const url of members ) {
+					if ( clusterFailed || derivedInCluster >= TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes ) break;
+					const response = await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } ).catch( ( error: unknown ) => {
+						record.unavailable.push( { url, reason: String( ( error as Error ).message ?? error ) } );
+						unavailableCount++;
+						return undefined;
+					} );
+					if ( ! response ) continue;
+					if ( response.status < 200 || response.status >= 300 ) {
+						record.unavailable.push( { url, reason: `HTTP ${ response.status }` } );
+						unavailableCount++;
+						continue;
+					}
+					const derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: response.body.toString( 'utf8' ), baseUrl: group.representative } );
+					if ( ! derivation.ok ) {
+						// A gate failure is an escalation, not a loss: the member keeps
+						// its budget-omission row, with the gate named for the next run.
+						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url, reason: `failed the ${ derivation.gate.code } gate: ${ derivation.gate.reason }`, metrics: { clusterSize: group.size } } );
+						record.escalated.push( { url, gate: derivation.gate.code, reason: derivation.gate.reason } );
+						escalated++;
+						continue;
+					}
+					// Localize the member's slot media exactly as capture does (§3.1
+					// step 3): the same captured-resource stage over the same store.
+					await store.captureDomDependencies( derivation.html, url );
+					const memberPath = `screenshots/derived/${ slugify( url ) }.html`;
+					const memberFile = resolve( input.outputDir, memberPath );
+					mkdirSync( dirname( memberFile ), { recursive: true } );
+					writeFileSync( memberFile, derivation.html );
+					const slug = await queue.claimSlug( slugify( url ) );
+					const capturedAtNow = new Date().toISOString();
+					const repProfile = repEntry.profiles?.desktop;
+					await queue.updateEntry( url, {
+						slug,
+						html: memberPath,
+						capturedAt: capturedAtNow,
+						...( repProfile ? { profiles: { desktop: { ...repProfile } } } : {} ),
+						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
+					} as import('./screenshot/manifest-queue.js').ManifestEntry );
+					diagnostics.push( {
+						code: ROUTE_TEMPLATE_DERIVED, url, reason: `derived from cluster ${ group.id } representative ${ group.representative }`,
+						unit: 'route', severity: 'warning',
+						metrics: {
+							clusterSize: group.size,
+							verifiedSamples: verificationCaptured ? 1 : 0,
+							slots: derivation.stats.slots,
+							subtreeSlots: derivation.stats.subtreeSlots,
+							...( derivation.unobservedSlots > 0 ? { unobservedSlots: derivation.unobservedSlots } : {} ),
+						},
+					} );
+					if ( derivation.unobservedSlots > 0 ) diagnostics.push( { code: TEMPLATE_SLOT_RUNTIME_UNOBSERVED, url, reason: `${ derivation.unobservedSlots } slot(s) hold data-* swapped media whose rendered URL capture never observed`, unit: 'block', severity: 'warning' } );
+					record.derived.push( { url, slots: derivation.stats.slots, subtreeSlots: derivation.stats.subtreeSlots } );
+					derivedUrls.push( url );
+					derivedInCluster++;
+				}
+				await store.flush();
+				process.stderr.write( `[template-clusters] cluster ${ group.id }: derived ${ record.derived.length }, escalated ${ record.escalated.length }, ${ Date.now() - startedAt }ms\n` );
+			} catch ( error ) {
+				// One cluster's derivation failure degrades only that cluster: the
+				// members keep their budget-omission rows (#761).
+				diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: group.representative, reason: `cluster derivation unavailable: ${ error instanceof Error ? error.message : String( error ) }` } );
+			}
+		}
+	} finally {
+		await queue.flush().catch( () => {} );
+	}
+
+	const receipt: import('./template-clusters.js').TemplateClustersReceipt = {
+		schema: 'data-liberation-agent/template-clusters/v1',
+		fingerprint: { version: ( await import( './template-groups.js' ) ).TEMPLATE_FINGERPRINT_VERSION },
+		sourceUrl: input.sourceUrl,
+		derivedCount: derivedUrls.length,
+		escalatedCount: escalated,
+		unavailableCount,
+		clusters,
+	};
+	writeTemplateClusters( input.outputDir, receipt );
+	return {
+		summary: { derived: derivedUrls.length, derivedUrls, escalated, unavailable: unavailableCount },
+		diagnostics,
+		receipt,
+		receiptSummary: { report: TEMPLATE_CLUSTERS_FILE, derived: derivedUrls.length, escalated, unavailable: unavailableCount, clusters: clusters.length },
+	};
 }
