@@ -2,6 +2,7 @@ import { documentRequestUrl } from '../url/route-key.js';
 import type { SiteRouteScope } from '../../platform/types.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { ROUTE_OMITTED_BY_BUDGET, routeBudgetReason } from '../route-budget.js';
+import type { CanonicalRouteAlias } from '../route-aliases.js';
 import { actionUrlExclusion } from '../url/action-url.js';
 
 export interface LinkedPageLimits {
@@ -21,18 +22,25 @@ export interface LinkedPageCoverage {
 	requiredUrls: string[];
 	scheduled: number;
 	diagnostics: FrontierDiagnostic[];
+	/** Links to these routes were counted as satisfied by their canonical route, which the capture already holds. */
+	aliasedTo?: CanonicalRouteAlias[];
 }
 
 /** Exact network addresses are deduped; aliases require observed source evidence. */
 export class LinkedFrontier {
 	readonly required = new Set<string>();
 	readonly depths = new Map<string, number>();
+	/** Link targets resolved to their canonical route instead of scheduled as their own page. */
+	readonly aliased = new Map<string, string>();
 	readonly diagnostics: FrontierDiagnostic[] = [];
 	readonly limits: Required<LinkedPageLimits>;
 	private readonly deadline: number;
 	private readonly capturePageLimit?: number;
 
-	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope) {
+	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope,
+		/** Routes dropped before capture because their rel=canonical is another inventory route. */
+		private readonly aliases: ReadonlyMap<string, string> = new Map(),
+		private readonly aliasRecords: readonly CanonicalRouteAlias[] = []) {
 		this.capturePageLimit = limits.capturePageLimit;
 		if (routeScope) validateRouteScope(routeScope);
 		this.limits = {
@@ -49,6 +57,14 @@ export class LinkedFrontier {
 	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked'): boolean {
 		if (!routeInScope(url, this.routeScope)) return false;
 		url = documentRequestUrl(url);
+		// A link to a route whose server-HTML canonical is another inventory route
+		// counts as a link to that route: the capture holds its document, so the
+		// alias never spends budget and its canonical carries the evidence.
+		const aliasTarget = this.aliases.get(url);
+		if (aliasTarget !== undefined) {
+			if (!this.aliased.has(url)) this.aliased.set(url, aliasTarget);
+			url = aliasTarget;
+		}
 		// Never visited, so never required evidence and never spending budget.
 		const action = actionUrlExclusion(url);
 		if (action) {
@@ -95,6 +111,7 @@ export class LinkedFrontier {
 			requiredUrls: [ ...this.required ],
 			scheduled: this.depths.size,
 			diagnostics: this.diagnostics,
+			...( this.aliased.size ? { aliasedTo: this.aliasRecords.filter( ( { url } ) => this.aliased.has( documentRequestUrl( url ) ) ) } : {} ),
 		};
 	}
 }
