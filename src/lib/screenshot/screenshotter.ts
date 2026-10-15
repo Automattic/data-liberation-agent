@@ -57,7 +57,7 @@ import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { recordGlyphColors } from './glyph-color.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
-import { RouteTimeBudget } from '../capture-time-budget.js';
+import { RouteTimeBudget, RouteDeadlines, deriveRouteDeadlineMs, routeTimeoutDiagnostic } from '../capture-time-budget.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
@@ -2082,6 +2082,40 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
 	if ( budgetEntrypoint !== undefined ) urls = [ budgetEntrypoint, ...urls.filter( url => url !== budgetEntrypoint ) ];
 	const routeBudget = opts.timeBudget && budgetEntrypoint !== undefined ? new RouteTimeBudget( opts.timeBudget, budgetEntrypoint ) : undefined;
+	// Per-route deadline (#817): a stalled route holds its slot for a bounded
+	// duration, not until some outer deadline ends the whole capture. Derived
+	// from the capture time budget and the admitted concurrency, floored, and
+	// configurable; 0 disables it.
+	const routeDeadlineMs = deriveRouteDeadlineMs( opts.routeDeadlineMs, opts.timeBudget?.timeBudgetMs, concurrency );
+	// Contexts a route leaves open: the deadline closes them so its in-flight
+	// waits fail instead of running on unwitnessed.
+	const routeContexts = new Map< string, Set< BrowserContext > >();
+	const trackRouteContext = ( url: string, context: BrowserContext ): void => {
+		let contexts = routeContexts.get( url );
+		if ( ! contexts ) routeContexts.set( url, contexts = new Set() );
+		contexts.add( context );
+	};
+	const untrackRouteContext = ( url: string, context: BrowserContext ): void => {
+		const contexts = routeContexts.get( url );
+		if ( ! contexts ) return;
+		contexts.delete( context );
+		if ( ! contexts.size ) routeContexts.delete( url );
+	};
+	const deadlineRows: RouteDiagnostic[] = [];
+	const routeDeadlines = new RouteDeadlines( routeDeadlineMs, ( url, abandonment ) => {
+		const row = routeTimeoutDiagnostic( url, routeDeadlineMs, abandonment );
+		deadlineRows.push( row );
+		const profile = abandonment.profile ? ` (${ abandonment.profile })` : '';
+		const message = `[deadline] ${ url } abandoned at the ${ routeDeadlineMs }ms route deadline during the "${ abandonment.phase }" phase${ profile }`;
+		sendLog( server, message );
+		process.stderr.write( `${ message }
+` );
+		for ( const context of routeContexts.get( url ) ?? [] ) void context.close().catch( () => {} );
+		routeContexts.delete( url );
+	} );
+	// The phase a still-running route entered last, from the per-profile phase
+	// observers, so a deadline abandonment names it.
+	const routeDeadlinesNote = ( url: string, profile: string, phase: string ): void => routeDeadlines.note( url, phase, profile );
 	const representativeAnalysisUrl = selectRepresentativeAnalysisUrl( urls );
 
 	// The URL a session (if any) is harvested from — see sourceContextOptions
@@ -2334,7 +2368,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
 
 		if ( routeProfiles.every( profile => ! profilePlan( profile ).needsLoad ) ) {
+			// Abandoned-at-deadline routes record nothing a later export could trip on.
 			if ( routeBudget && ! routeBudget.commit( url ) ) return;
+			if ( ! routeDeadlines.commit( url ) ) return;
 			skipped++;
 			sendLog( server, `[skip] ${ url } (artifacts exist)` );
 			completed++;
@@ -2386,6 +2422,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			return aliasDisagreement;
 		};
 		const captureProfile = async ( viewport: Viewport ): Promise< { profileEntry: ManifestEntry; failures: FailureEntry[]; additional: boolean } | undefined > => {
+			// A route abandoned at its deadline captures no further profiles.
+			if ( ! routeDeadlines.commit( url ) ) return undefined;
 			const vpPlan = profilePlan( viewport );
 			if ( ! vpPlan.needsLoad ) return undefined;
 			const additional = ! [ 'desktop', 'mobile' ].includes( viewport.id );
@@ -2403,8 +2441,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let rendererCrashed = false;
 				const phases = createPhaseLedger( Date.now, ( phase ) => {
 					// In-progress phase evidence (#817): a stalled route names the step it
-					// entered last, so the unbounded wait can be fixed at its source.
+					// entered last, so the unbounded wait can be fixed at its source. The
+					// same observation feeds the per-route deadline's abandonment reason.
 					process.stderr.write( `[timing] phase ${ JSON.stringify( { url, profile: viewport.id, phase } ) }\n` );
+					routeDeadlinesNote( url, viewport.id, phase );
 				} );
 				const profileDiagnostics: ProfileDiagnostic[] = [];
 				phases.enter( 'context' );
@@ -2416,6 +2456,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					contextOptions = profileContextOptions( viewport, await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
 					identity = replayBrowserIdentity( contextOptions );
 					context = await attemptBrowser.newContext( contextOptions );
+					trackRouteContext( url, context );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
 					// context. Polyfill as a no-op so our evaluate() closures can run.
@@ -2514,6 +2555,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						} catch {
 							/* best-effort */
 						}
+						untrackRouteContext( url, context );
 					}
 					const profileRecord = profileEntry.profiles?.[ viewport.id ];
 					if ( profileRecord ) {
@@ -2596,8 +2638,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				entry.html = undefined; entry.mobileHtml = undefined; entry.desktop = undefined; entry.mobile = undefined; entry.cleanup = undefined;
 			}
 		}
-		// A route abandoned at the time budget's deadline records nothing.
+		// A route abandoned at the time budget's deadline or its per-route
+		// deadline records nothing.
 		if ( routeBudget && ! routeBudget.commit( url ) ) return;
+		if ( ! routeDeadlines.commit( url ) ) return;
 		for ( const f of urlFailures ) {
 			await manifest.recordFailure( f );
 		}
@@ -2715,12 +2759,16 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							routeBudget?.start( url );
 							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: Math.round( routeWorkingSet ), activeRoutes: running.size + 1, calibrated, url } ) }\n` );
 							activeRoutes++;
-							const pending = processUrl( url ).finally( () => { activeRoutes--; routeBudget?.finish( url ); } ).then( () => {
+							const pending = processUrl( url ).finally( () => { activeRoutes--; routeBudget?.finish( url ); routeDeadlines.finish( url ); } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
-							running.add( pending );
+							// The slot frees even if abandonment unwinds slowly: the route's own
+							// deadline resolves the race at the deadline, after it abandoned the
+							// route and closed its contexts.
+							const slot = Promise.race( [ pending, routeDeadlines.start( url ) ] );
+							running.add( slot );
 							// The race observes fatal rejection before browser cleanup.
-							void pending.then( () => running.delete( pending ), () => {} );
+							void slot.then( () => running.delete( slot ), () => {} );
 						}
 						if ( ! running.size ) continue;
 						if ( ! routeBudget ) await Promise.race( running );
@@ -2854,11 +2902,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Routes the time budget left uncaptured are missing routes: counted as failed.
 	const budgetDiagnostics = routeBudget?.diagnostics( urls ) ?? [];
 	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
-	routeDiagnostics.push( ...budgetDiagnostics );
+	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows );
 	return {
 		captured,
 		skipped,
-		failed: failedRoutes.size + budgetDiagnostics.length,
+		failed: failedRoutes.size + budgetDiagnostics.length + deadlineRows.length,
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,

@@ -1,5 +1,5 @@
 import type { RouteDiagnostic } from './capture-export-routes.js';
-import { ROUTE_CAPTURE_SKIPPED_BUDGET } from './capture-usability.js';
+import { ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT } from './capture-usability.js';
 
 /**
  * Capture time budget (`CaptureOptions.timeBudgetMs`).
@@ -35,6 +35,20 @@ export const CAPTURE_BUDGET_GRACE_FRACTION = 0.25;
 /** How long abandoned routes get to unwind after the browser is closed. */
 export const CAPTURE_BUDGET_DRAIN_MS = 5_000;
 
+/**
+ * Sane per-route deadline floor (ms). One route's bounded duration never
+ * drops below this, however small the time budget or large the concurrency:
+ * the deadline exists to bound a stalled route, not to cap a slow but
+ * progressing one. The slowest routes observed during profiling completed in
+ * about 8 minutes, so the floor sits above them.
+ */
+export const ROUTE_DEADLINE_MIN_MS = 600_000;
+
+export function validateRouteDeadlineMs( routeDeadlineMs: unknown ): void {
+	if ( routeDeadlineMs !== undefined && ( typeof routeDeadlineMs !== 'number' || ! Number.isSafeInteger( routeDeadlineMs ) || routeDeadlineMs < 0 ) )
+		throw new RangeError( 'routeDeadlineMs must be a non-negative integer number of milliseconds (0 disables the deadline)' );
+}
+
 export function validateTimeBudgetMs( timeBudgetMs: unknown ): void {
 	if ( timeBudgetMs !== undefined && ( typeof timeBudgetMs !== 'number' || ! Number.isSafeInteger( timeBudgetMs ) || timeBudgetMs < 1 ) )
 		throw new RangeError( 'timeBudgetMs must be a positive integer number of milliseconds' );
@@ -43,6 +57,21 @@ export function validateTimeBudgetMs( timeBudgetMs: unknown ): void {
 export function captureTimeBudgetWindow( startedAt: number, timeBudgetMs: number ): CaptureTimeBudgetWindow {
 	const grace = Math.min( CAPTURE_BUDGET_MAX_GRACE_MS, Math.floor( timeBudgetMs * CAPTURE_BUDGET_GRACE_FRACTION ) );
 	return { timeBudgetMs, admitUntil: startedAt + timeBudgetMs - grace, abandonAt: startedAt + timeBudgetMs };
+}
+
+/**
+ * Derive the per-route capture deadline (`CaptureOptions.routeDeadlineMs`).
+ * An explicit non-zero deadline wins; zero disables the deadline. Otherwise
+ * the deadline is the capture time budget divided by the admitted
+ * concurrency — the share of the budget one stalled route is allowed to
+ * consume — never below `ROUTE_DEADLINE_MIN_MS`. Without a budget the floor
+ * still bounds a stalled route, which otherwise holds its slot until some
+ * outer (host) deadline ends the whole capture.
+ */
+export function deriveRouteDeadlineMs( routeDeadlineMs: number | undefined, timeBudgetMs: number | undefined, concurrency: number ): number {
+	if ( routeDeadlineMs !== undefined ) return routeDeadlineMs;
+	if ( timeBudgetMs === undefined ) return ROUTE_DEADLINE_MIN_MS;
+	return Math.max( ROUTE_DEADLINE_MIN_MS, Math.floor( timeBudgetMs / Math.max( 1, concurrency ) ) );
 }
 
 /** Wait for `promise`, at most `ms`. */
@@ -146,4 +175,94 @@ export class RouteTimeBudget {
 		}
 		return rows;
 	}
+}
+
+/** What a route abandoned at its per-route deadline was doing when it stalled. */
+export interface RouteDeadlineAbandonment {
+	phase: string;
+	profile?: string;
+}
+
+/**
+ * Per-route capture deadline. Each route started with the monitor gets one
+ * bounded duration; a route that exceeds it is abandoned — its browser
+ * contexts are closed so its in-flight waits fail instead of running on, its
+ * slot is freed for the next route, and it records one
+ * `route_capture_timeout` missing-route diagnostic naming the phase it
+ * entered last. Routes that finish in time are unaffected.
+ */
+export class RouteDeadlines {
+	private readonly timers = new Map< string, NodeJS.Timeout >();
+	private readonly current = new Map< string, RouteDeadlineAbandonment >();
+	private readonly abandoned = new Map< string, RouteDeadlineAbandonment >();
+	private readonly expiryResolvers = new Map< string, () => void >();
+
+	constructor( readonly deadlineMs: number, private readonly abandon: ( url: string, abandonment: RouteDeadlineAbandonment ) => void ) {}
+
+	/** Whether the deadline applies at all (zero disables it). */
+	get enabled(): boolean {
+		return this.deadlineMs > 0;
+	}
+
+	/**
+	 * Start the deadline for one admitted route and return a promise that
+	 * settles when the route either commits or hits its deadline, so the
+	 * caller's slot frees at the deadline even if abandonment unwinds slowly.
+	 */
+	start( url: string ): Promise< void > {
+		const expiry = new Promise< void >( resolve => this.expiryResolvers.set( url, resolve ) );
+		if ( ! this.enabled ) {
+			this.expiryResolvers.delete( url );
+			return Promise.resolve();
+		}
+		const timer = setTimeout( () => this.fire( url ), this.deadlineMs );
+		timer.unref?.();
+		this.timers.set( url, timer );
+		return expiry;
+	}
+
+	/** Record the phase a still-running route entered last, and its profile. */
+	note( url: string, phase: string, profile?: string ): void {
+		if ( this.timers.has( url ) ) this.current.set( url, { phase, profile } );
+	}
+
+	private fire( url: string ): void {
+		const abandonment = this.current.get( url ) ?? { phase: 'unknown' };
+		this.current.delete( url );
+		this.timers.delete( url );
+		this.abandoned.set( url, abandonment );
+		this.abandon( url, abandonment );
+		this.expiryResolvers.get( url )?.();
+	}
+
+	/**
+	 * Called once a route is about to record its outcome. False when the route
+	 * was abandoned at its deadline: it must record nothing, so a late settle
+	 * after its contexts were closed cannot record partial artifacts.
+	 */
+	commit( url: string ): boolean {
+		return ! this.abandoned.has( url );
+	}
+
+	/** The timer for a route has ended. */
+	finish( url: string ): void {
+		const timer = this.timers.get( url );
+		if ( timer ) {
+			clearTimeout( timer );
+			this.timers.delete( url );
+		}
+		this.current.delete( url );
+		this.expiryResolvers.get( url )?.();
+		this.expiryResolvers.delete( url );
+	}
+}
+
+/** One `route_capture_timeout` finding per route the deadline abandoned. */
+export function routeTimeoutDiagnostic( url: string, deadlineMs: number, abandonment: RouteDeadlineAbandonment ): RouteDiagnostic {
+	const where = abandonment.profile ? ` in the ${ abandonment.profile } profile` : '';
+	return {
+		code: ROUTE_CAPTURE_TIMEOUT, url,
+		reason: `route capture deadline ${ deadlineMs }ms: abandoned during the "${ abandonment.phase }" phase${ where }`,
+		unit: 'route', severity: 'error', metrics: { routeDeadlineMs: deadlineMs },
+	};
 }

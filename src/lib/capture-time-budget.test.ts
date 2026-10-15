@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CAPTURE_BUDGET_DRAIN_MS, CAPTURE_BUDGET_MAX_GRACE_MS, captureTimeBudgetWindow, RouteTimeBudget, validateTimeBudgetMs } from './capture-time-budget.js';
+import { CAPTURE_BUDGET_DRAIN_MS, CAPTURE_BUDGET_MAX_GRACE_MS, captureTimeBudgetWindow, deriveRouteDeadlineMs, ROUTE_DEADLINE_MIN_MS, RouteDeadlines, RouteTimeBudget, routeTimeoutDiagnostic, validateRouteDeadlineMs, validateTimeBudgetMs } from './capture-time-budget.js';
 import { isUsableCapture, missingRoutes } from './capture-usability.js';
 
 describe( 'capture time budget window', () => {
@@ -78,5 +78,65 @@ describe( 'RouteTimeBudget', () => {
 		expect( isUsableCapture( { complete: false, entrypointCaptured: true, missingRoutes: [ ...missing.slice( 0, 9 ), ...failed( 1 ) ], summary: { routesDiscovered: 20 } } ) ).toBe( true );
 		expect( isUsableCapture( { complete: false, entrypointCaptured: true, missingRoutes: [ ...missing.slice( 0, 9 ), ...failed( 2 ) ], summary: { routesDiscovered: 20 } } ) ).toBe( false );
 		expect( isUsableCapture( { complete: false, entrypointCaptured: false, missingRoutes: missing, summary: { routesDiscovered: 20 } } ) ).toBe( false );
+	} );
+} );
+
+describe( 'RouteDeadlines', () => {
+	it( 'derives the deadline from the time budget and concurrency, never below the floor; explicit and zero win', () => {
+		expect( deriveRouteDeadlineMs( undefined, 42 * 60_000, 3 ) ).toBe( 14 * 60_000 );
+		expect( deriveRouteDeadlineMs( undefined, 60_000, 6 ) ).toBe( ROUTE_DEADLINE_MIN_MS );
+		expect( deriveRouteDeadlineMs( undefined, undefined, 6 ) ).toBe( ROUTE_DEADLINE_MIN_MS );
+		expect( deriveRouteDeadlineMs( 1_500, undefined, 6 ) ).toBe( 1_500 );
+		expect( deriveRouteDeadlineMs( 0, 42 * 60_000, 3 ) ).toBe( 0 );
+	} );
+
+	it( 'accepts a non-negative integer route deadline (zero disabled)', () => {
+		expect( () => validateRouteDeadlineMs( undefined ) ).not.toThrow();
+		expect( () => validateRouteDeadlineMs( 0 ) ).not.toThrow();
+		for ( const invalid of [ -5, 1.5, Number.POSITIVE_INFINITY, '60000' ] ) expect( () => validateRouteDeadlineMs( invalid ) ).toThrow( RangeError );
+	} );
+
+	it( 'abandons a route at its deadline and frees its slot; a finished route is unaffected', async () => {
+		vi.useFakeTimers();
+		try {
+			const abandonedUrls: string[] = [];
+			const deadlines = new RouteDeadlines( 1_000, url => abandonedUrls.push( url ) );
+			const route = new Promise< void >( () => {} );
+			const expiry = deadlines.start( 'https://example.test/slow' );
+			deadlines.finish( 'https://example.test/fast' );
+			// No abandonment before the deadline.
+			expect( deadlines.commit( 'https://example.test/slow' ) ).toBe( true );
+			let freed = false;
+			void expiry.then( () => { freed = true; } );
+			await vi.advanceTimersByTimeAsync( 999 );
+			expect( freed ).toBe( false );
+			await vi.advanceTimersByTimeAsync( 1 );
+			expect( abandonedUrls ).toEqual( [ 'https://example.test/slow' ] );
+			expect( freed ).toBe( true );
+			// Expired while running the recorded phase: the diagnostic names it.
+			deadlines.note( 'https://example.test/slow', 'settle', 'desktop' );
+			expect( routeTimeoutDiagnostic( 'https://example.test/slow', 1_000, { phase: 'settle', profile: 'desktop' } ) ).toEqual( {
+				code: 'route_capture_timeout', url: 'https://example.test/slow',
+				reason: 'route capture deadline 1000ms: abandoned during the "settle" phase in the desktop profile',
+				unit: 'route', severity: 'error', metrics: { routeDeadlineMs: 1_000 },
+			} );
+		} finally {
+			vi.useRealTimers();
+		}
+	} );
+
+	it( 'records nothing for an abandoned route and ignores later phase notes', async () => {
+		vi.useFakeTimers();
+		try {
+			const deadlines = new RouteDeadlines( 500, () => {} );
+			const expiry = deadlines.start( 'https://example.test/slow' );
+			await vi.advanceTimersByTimeAsync( 500 );
+			expect( deadlines.commit( 'https://example.test/slow' ) ).toBe( false );
+			// Phases after abandonment belong to nothing.
+			deadlines.note( 'https://example.test/slow', 'context', 'desktop' );
+			expect( expiry ).toBeInstanceOf( Promise );
+		} finally {
+			vi.useRealTimers();
+		}
 	} );
 } );

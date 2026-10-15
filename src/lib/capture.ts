@@ -17,7 +17,7 @@ import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDr
 import { DEFAULT_ROUTE_LIMIT, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { writeSourceFindings } from './source-findings.js';
-import { captureTimeBudgetWindow, validateTimeBudgetMs } from './capture-time-budget.js';
+import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteDeadlineMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
 
@@ -108,6 +108,16 @@ export interface CaptureOptions {
 	 * minus the post-capture headroom (README, "Capture time budget").
 	 */
 	timeBudgetMs?: number;
+	/**
+	 * Per-route capture deadline in milliseconds (browser acquisition only). A
+	 * route that exceeds it is abandoned: its context closes, its slot frees
+	 * for the next route, and it records a `route_capture_timeout` missing
+	 * route naming the phase it entered last. Default: derived from
+	 * `timeBudgetMs` and the admitted concurrency, never below
+	 * `ROUTE_DEADLINE_MIN_MS` (10 min); without `timeBudgetMs`, that floor
+	 * applies on its own. `0` disables the deadline.
+	 */
+	routeDeadlineMs?: number;
 	/**
 	 * Largest file export writes into `website/`, in bytes. A captured asset over
 	 * it is not written; its references resolve like any missing asset and it is
@@ -298,6 +308,7 @@ export async function captureWebsite(
 	validateRouteLimit( options.routeLimit );
 	validateRouteSelection( options.routeSelection );
 	validateTimeBudgetMs( options.timeBudgetMs );
+	validateRouteDeadlineMs( options.routeDeadlineMs );
 	if ( options.timeBudgetMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'timeBudgetMs applies to browser acquisition only' );
 	validateMaxFileBytes( options.maxFileBytes );
 	validateMaxTotalBytes( options.maxTotalBytes );
@@ -429,6 +440,7 @@ export async function captureWebsite(
 			: {} ),
 		publicUrlsOnly: true,
 		...( timeBudget ? { timeBudget } : {} ),
+		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );
 	process.stderr.write(
