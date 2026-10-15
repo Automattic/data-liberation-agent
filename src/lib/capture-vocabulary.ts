@@ -79,7 +79,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		replica: 'c', 'content-desktop': 'c', 'content-mobile': 'c', 'content-mobile-inner': 'c',
 	},
 	platform: {
-		'access-gate': 'a', 'member-login': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'constructed-stylesheet': 'a',
+		'access-gate': 'a', 'member-login': 'a', 'engagement-stats': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'constructed-stylesheet': 'a',
 		'ported-embed': 'a', 'unported-embed': 'a', 'squarespace-header-style': 'a', 'squarespace-header-visible': 'i', 'check-route-tab': 'a',
 	},
 } as const;
@@ -97,6 +97,7 @@ export const CAPTURE_EVIDENCE_FAMILIES = {
 	'shared-<hash>': 'c',
 	'embedded-<digest>-<document>': 'c',
 	'member-login-<provider>': 'c',
+	'engagement-stats-<provider>': 'c',
 	'disclosure-open-<svg attribute>': 'a',
 	'disclosure-closed-<svg attribute>': 'a',
 	'dialog-<n>': 'i',
