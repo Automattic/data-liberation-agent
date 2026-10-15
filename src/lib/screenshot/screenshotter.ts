@@ -1016,6 +1016,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		fail( 'evaluate', `source baseline reset unproven: ${ String( error ) }` );
 		return;
 	}
+	args.phases?.enter( 'observe-source' );
 	await args.observeSource?.( page, url, viewport.id, sourceErrors, args.browserProfile, viewport );
 	if ( args.rendererCrashed() ) return;
 	// A failed native timeline or disclosure probe loses that block of evidence,
@@ -1038,6 +1039,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( plan.captureHtml || plan.captureMobileHtml ) {
 		let unproven: string | undefined;
 		try {
+			args.phases?.enter( 'native-timelines' );
 			const native = await captureNativeViewTimelines( page, viewport.id, evaluateTimeoutMs );
 			if ( native.samples.length || native.status === 'unproven' ) {
 				const path = join( outputDir, 'native-view-timelines', viewport.id, `${ slug }.json` );
@@ -1086,6 +1088,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		/* best-effort — a picker that will not advance must not block capture */
 	} );
 
+	args.phases?.enter( 'before-serialize' );
 	if ( args.beforeSerialize ) {
 		await args.beforeSerialize( page, {
 			url,
@@ -1100,6 +1103,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// and width learning can rerender their source items, discarding injected
 	// answers or mistaking the new controls for another interactive component.
 	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
+		args.phases?.enter( 'hydrate-disclosures' );
 		try {
 			disclosureStates = await hydrateDisclosureContent(page);
 		} catch (error) {
@@ -1111,6 +1115,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	// Gallery cycles are part of this viewport's serialization transaction, not
 	// a later drive after the baseline HTML has already been saved.
+	args.phases?.enter( 'align-galleries' );
 	await alignCapturedGalleries(page, galleryStates);
 
 	// Capture only after every operation that can change the live DOM, then
@@ -2393,7 +2398,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const failuresBefore = profileFailures.length;
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
-				const phases = createPhaseLedger();
+				const phases = createPhaseLedger( Date.now, ( phase ) => {
+					// In-progress phase evidence (#817): a stalled route names the step it
+					// entered last, so the unbounded wait can be fixed at its source.
+					process.stderr.write( `[timing] phase ${ JSON.stringify( { url, profile: viewport.id, phase } ) }\n` );
+				} );
 				const profileDiagnostics: ProfileDiagnostic[] = [];
 				phases.enter( 'context' );
 				try {

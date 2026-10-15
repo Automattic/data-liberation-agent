@@ -6,6 +6,10 @@
  * is attributed to the step that preceded it rather than lost. Repeated phases
  * accumulate. The result is recorded on the profile's manifest entry, making
  * every capture its own performance evidence.
+ *
+ * `onEnter`, when given, observes every phase as it opens, so a stalled route
+ * names the step it is in while it is still running (in-progress phase
+ * evidence, #817).
  */
 export interface CapturePhase {
 	phase: string;
@@ -51,7 +55,7 @@ export function routePhaseBreakdown( profiles: Array< Array< CapturePhase > | un
 	return phases;
 }
 
-export function createPhaseLedger( now: () => number = Date.now ): PhaseLedger {
+export function createPhaseLedger( now: () => number = Date.now, onEnter?: ( phase: string ) => void ): PhaseLedger {
 	const phases = new Map< string, CapturePhase >();
 	const waits: Record< string, ReadinessTally > = {};
 	let current: { phase: string; startedAt: number } | null = null;
@@ -68,6 +72,7 @@ export function createPhaseLedger( now: () => number = Date.now ): PhaseLedger {
 			const at = now();
 			close( at );
 			current = { phase, startedAt: at };
+			onEnter?.( phase );
 		},
 		wait( name, outcome ) {
 			const tally = waits[ name ] ??= { count: 0, ms: 0, deadline: 0 };
