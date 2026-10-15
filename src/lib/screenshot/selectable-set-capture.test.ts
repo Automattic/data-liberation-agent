@@ -1005,6 +1005,71 @@ describe( 'captureSelectableSetStates', () => {
 	);
 
 	it.skipIf( skipBrowser )(
+		'stops re-driving a choice group once a full pass proved no activation restores it',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				// Each poster becomes a player on first activation and never returns.
+				await page.setContent( `<!doctype html><html><body>
+					<div id="posters">
+						<button type="button" aria-label="Play one">One</button>
+						<button type="button" aria-label="Play two">Two</button>
+						<button type="button" aria-label="Play three">Three</button>
+						<button type="button" aria-label="Play four">Four</button>
+					</div>
+					<script>
+						window.activations = 0;
+						document.querySelectorAll('#posters button').forEach((button) => button.addEventListener('click', () => {
+							window.activations++;
+							button.setAttribute('data-playing', 'true');
+						}));
+					</script>
+				</body></html>` );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
+				expect( states ).toHaveLength( 1 );
+				expect( states[ 0 ] ).toMatchObject( {
+					status: 'captured',
+					kind: 'choice-group',
+					choiceGroup: {
+						transition: { selectedIndex: 0 },
+						replay: 'unsupported',
+						replayReason: 'source actions did not restore the initial choice state',
+						restoration: 'unverified',
+						coverage: 'partial',
+					},
+				} );
+				// One probe, then one exhaustive restore pass over the four members.
+				expect( await page.evaluate( () => ( window as typeof window & { activations: number } ).activations ) ).toBe( 5 );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'does not probe embedded frames as selectable members',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><html><body><main><section>
+					<div id="embeds">
+						<div><iframe title="Clip one" srcdoc="<p>one</p>" style="width:320px;height:180px"></iframe></div>
+						<div><iframe title="Clip two" srcdoc="<p>two</p>" style="width:320px;height:180px"></iframe></div>
+						<div><iframe title="Clip three" srcdoc="<p>three</p>" style="width:320px;height:180px"></iframe></div>
+					</div>
+					<p id="caption">Captions for the embedded clips.</p>
+				</section></main></body></html>` );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
+				expect( states ).toEqual( [] );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
 		'rejects replay for a history-dependent group instead of exporting a wrong transition',
 		async () => {
 			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );

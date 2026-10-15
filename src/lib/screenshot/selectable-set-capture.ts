@@ -232,7 +232,10 @@ export async function captureSelectableSetStates(
 						tag === 'script' ||
 						tag === 'style' ||
 						tag === 'link' ||
-						tag === 'meta'
+						tag === 'meta' ||
+						// A frame is focusable by default, but a reader's click lands in
+						// the embedded document; the parent never observes it as a choice.
+						tag === 'iframe'
 					) {
 						return false;
 					}
@@ -721,6 +724,10 @@ export async function captureSelectableSetStates(
 					let discoveryError: { index: number; error: string } | undefined;
 					let restorationError: string | undefined;
 					let restorationIndex: number | undefined;
+					// A full pass that activated every member without reaching the initial
+					// state proves no single activation restores it. Repeating the pass
+					// cannot establish the activation-determined restoration replay needs.
+					let restorationExhausted = false;
 					const restoreChoiceGroup = async (): Promise< boolean > => {
 						const sameChoiceState = ( actual: string, expected: string ) => {
 							// Roving-focus runtimes move tabindex with focus, which an
@@ -749,7 +756,9 @@ export async function captureSelectableSetStates(
 							if ( ! result.ok && result.navigated ) navigated = true;
 							restorationIndex = undefined;
 						}
-						for ( let index = 0; index < restoreLimit && Date.now() < deadline; index++ ) {
+						if ( restorationExhausted ) return false;
+						let index = 0;
+						for ( ; index < restoreLimit && Date.now() < deadline; index++ ) {
 							const result = await activate( group.members[ index ]! );
 							if ( ! result.ok ) {
 								restorationError = result.error;
@@ -761,6 +770,7 @@ export async function captureSelectableSetStates(
 								return true;
 							}
 						}
+						if ( index === restoreLimit ) restorationExhausted = true;
 						restorationError ??= 'source actions did not restore the initial choice state';
 						return false;
 					};
