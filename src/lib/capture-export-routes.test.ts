@@ -245,6 +245,20 @@ describe( 'entrypoint failure reporting', () => {
 		) ).toThrow( 'Source homepage https://example.com/ redirects to https://example.com/home/, which was captured as a separate route' );
 	} );
 
+	it( 'reports a pre-capture canonical alias exactly like a captured-then-collapsed duplicate', () => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-pre-capture-alias-' ) );
+		dirs.push( dir );
+		const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
+		const base = entry( dir, 'base.html', 'https://example.com/challenge-page/12/', '<h1>Challenge</h1>' );
+		const aliasUrl = 'https://example.com/challenge-page/12/?programId=12';
+		// The alias was skipped before capture: only home and base were rendered.
+		const routes = allocateCaptureRoutes( [ home, base ], home.url, [], [], [ { url: aliasUrl, canonicalUrl: base.url } ] );
+		expect( routes.retainedEntries ).toEqual( [ home, base ] );
+		expect( routes.duplicateRoutes ).toEqual( [ { url: aliasUrl, canonicalUrl: base.url, path: `website/${ routes.routePathOf( base.url ) }` } ] );
+		expect( routes.canonicalRouteAliases.get( aliasUrl ) ).toBe( routes.routePathOf( base.url ) );
+	} );
+
 	it( 'keeps the generic message when nothing was recorded for the source URL', () => {
 		const dir = stage( 'data-blocks-engine-capture-entrypoint-unknown-' );
 		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );

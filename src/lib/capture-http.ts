@@ -31,6 +31,8 @@ export async function captureHttpWebsite( input: {
 	discoveryDiagnostics: RouteDiagnostic[];
 	/** Receipt counts from template grouping, when `routeSelection: 'template-coverage'` ran it. */
 	templateGroups?: Record<string, unknown>;
+	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
+	canonicalAliases?: ReadonlyArray< import('./route-aliases.js').CanonicalRouteAlias >;
 } ): Promise<CaptureResult> {
 	const { options, platform, progress } = input;
 	const profile = platform.acquisition;
@@ -49,7 +51,7 @@ export async function captureHttpWebsite( input: {
 		} ); } catch ( error ) { runtime = { attachments: 0, observations: 0, failures: [ { url: input.sourceUrl, error: `Runtime observation unavailable: ${ String( error ) }` } ] }; }
 	}
 	progress( { phase: 'finalizing', current: urls.length, total: urls.length, unit: 'routes' } );
-	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0, limits: captureExportLimits( options ) } );
+	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0, canonicalAliases: input.canonicalAliases, limits: captureExportLimits( options ) } );
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	const failures = acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => ( { url: document.url, error: `${ document.variant }: ${ document.error ?? document.status }` } ) );
 	if ( runtime ) failures.push( ...runtime.failures );
