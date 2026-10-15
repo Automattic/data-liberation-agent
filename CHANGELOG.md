@@ -15,6 +15,25 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.31.0] - 2026-10-15
+
+### Added
+- derive verified template-cluster routes from captured representatives
+- carry blog engagement counts as receipt data and mark the frozen counters
+
+### Changed
+- regenerate plugin bundles
+- skip query-only route aliases whose canonical is another inventory route
+- reuse shared-chrome states whose panels render outside the landmark
+- skip the Wix slideshow sweep when the server document has none
+- Close navigation panels mounted while expanding collapsed content
+
+### Fixed
+- capture slideshows driven by unnamed icon controls
+- abandon a stalled route at a per-route deadline
+- release a drawer's scroll lock and end a landing that never starts
+- Wix-owned normalization of per-request page styles for template grouping
+
 ## [0.30.2] - 2026-10-15
 
 ### Changed
