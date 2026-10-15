@@ -453,6 +453,18 @@ describe( 'revealAndCollectWixSlideshows', () => {
 		// between them, and no wait after the confirming pass.
 		expect( scrolls.filter( ( top ) => top === 'top:0' ) ).toHaveLength( 4 );
 	} );
+
+	it( 'never runs a third sweep when neither pass mounts a slideshow', async () => {
+		const { dom, scrolls } = recordingDom( '<main>No widgets here</main>' );
+		stubPageGlobals( dom );
+		const page = fakePreparePage( dom );
+
+		await revealAndCollectWixSlideshows( page as never );
+
+		// Four top-touching entries per sweep pair (two sweeps, two returns):
+		// a third sweep would make this six.
+		expect( scrolls ).toHaveLength( 4 );
+	} );
 } );
 
 describe( 'wix capture', () => {
@@ -488,6 +500,10 @@ describe( 'settleScrollReactiveChrome', () => {
 				vi.stubGlobal( 'document', dom.window.document );
 				return fn();
 			},
+			waitForFunction: async ( fn: () => unknown ) => {
+				calls.push( 'observe-restore' );
+				return fn();
+			},
 			waitForTimeout: async ( ms: number ) => {
 				calls.push( `wait:${ ms }` );
 			},
@@ -496,8 +512,39 @@ describe( 'settleScrollReactiveChrome', () => {
 		await settleScrollReactiveChrome( page as never );
 
 		// The order is the contract: a handler that only recomputes on an event
-		// needs the event, and its transition needs time before serialization.
-		expect( calls ).toEqual( [ 'scrollTo', 'dispatch:scroll', 'wait:400' ] );
+		// needs the event, and its restore transition is observed rather than
+		// held for a fixed beat. The 600 ms animation bound lives inside the
+		// settle evaluate, not in a Node-side timeout.
+		expect( calls ).toEqual( [ 'scrollTo', 'dispatch:scroll', 'observe-restore' ] );
+	} );
+
+	it( 'skips the restore observation entirely when the document has no chrome landmarks', async () => {
+		const calls: string[] = [];
+		const dom = new JSDOM( '<main id="content"></main>' );
+		dom.window.scrollTo = ( () => calls.push( 'scrollTo' ) ) as unknown as typeof window.scrollTo;
+		dom.window.dispatchEvent = ( ( event: Event ) => {
+			calls.push( `dispatch:${ event.type }` );
+			return true;
+		} ) as unknown as typeof window.dispatchEvent;
+		dom.window.document.getAnimations = () => [];
+		const page = {
+			evaluate: async ( fn: () => unknown ) => {
+				vi.stubGlobal( 'window', dom.window );
+				vi.stubGlobal( 'document', dom.window.document );
+				return fn();
+			},
+			waitForFunction: async () => {
+				calls.push( 'observe-restore' );
+			},
+			waitForTimeout: async ( ms: number ) => {
+				calls.push( `wait:${ ms }` );
+			},
+		};
+
+		await settleScrollReactiveChrome( page as never );
+
+		// No sticky chrome to restore: no transition to observe, no fixed wait.
+		expect( calls ).toEqual( [ 'scrollTo', 'dispatch:scroll' ] );
 	} );
 } );
 

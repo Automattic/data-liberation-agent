@@ -134,6 +134,30 @@ async function wixScrollSweep( settleTail: boolean ): Promise< void > {
 }
 
 /**
+ * Watch one running Wix animation until its effect time converges on a
+ * constant, an observed condition for "the transition has finished playing".
+ * Returns immediately when no running animation matches, so a document at
+ * rest is not held for a fixed beat.
+ */
+async function wixAnimationConverged( animation: Animation ): Promise< boolean > {
+	if ( animation.playState !== 'running' ) return true;
+	const bounding = () => {
+		try {
+			const timing = animation.effect?.getTiming?.();
+			return timing?.iterations === Infinity ? Infinity : Number( timing?.duration ) || 0;
+		} catch {
+			return 0;
+		}
+	};
+	if ( bounding() === Infinity ) return true;
+	for ( let sample = 0; sample < 3; sample++ ) {
+		if ( Number( animation.currentTime ?? 0 ) >= bounding() ) return true;
+		await new Promise( ( resolve ) => setTimeout( resolve, 100 ) );
+	}
+	return true;
+}
+
+/**
  * In-page: remove platform chrome, mark every same-page anchor link with its
  * fragment, rewrite cross-route anchors to their target path, and report the
  * same-page fragments plus whether any of them lacks an authored target —
@@ -453,18 +477,16 @@ async function closeOpenedMenu( page: Page ): Promise< void > {
  * so the sweep is skipped: re-visiting the layout would redo work whose
  * result is established. Otherwise sweep and wait on the widget appearing —
  * the observed condition — instead of a fixed beat, never waiting after the
- * last pass; a sweep that reveals nothing after the previous sweep and its
- * hydration window also revealed nothing has confirmed the document's
- * answer, so the loop stops before its third pass.
+ * last pass. Two passes are the document's whole answer: the first sweep and
+ * its hydration window is one full visit plus a wait, and a confirming sweep
+ * that again mounts nothing has settled the question.
  */
 export async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
 	const mounted = () => page.locator( WIX_SLIDESHOW_SELECTOR ).count().catch( () => 0 );
-	let emptyPasses = 0;
-	for ( let pass = 0; pass < 3 && emptyPasses < 2 && ( await mounted() ) === 0; pass++ ) {
+	for ( let pass = 0; pass < 2 && ( await mounted() ) === 0; pass++ ) {
 		await page.evaluate( wixScrollSweep, false ).catch( () => undefined );
 		if ( ( await mounted() ) > 0 ) break;
-		emptyPasses++;
-		if ( emptyPasses < 2 ) {
+		if ( pass + 1 < 2 ) {
 			await page
 				.waitForFunction(
 					() => document.querySelector( '.wixui-slideshow' ) !== null,
@@ -487,7 +509,7 @@ export async function revealAndCollectWixSlideshows( page: Page ): Promise< void
  * top, tell the handler, then let its transition run back.
  */
 export async function settleScrollReactiveChrome( page: Page ): Promise< void > {
-	await page
+	const mountedChrome = await page
 		.evaluate( () => {
 			const root = document.documentElement;
 			const behavior = root.style.scrollBehavior;
@@ -497,10 +519,24 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 			const scrolled = document.createEvent( 'Event' );
 			scrolled.initEvent( 'scroll', false, false );
 			window.dispatchEvent( scrolled );
+			return Boolean(
+				document.querySelector( 'header, [role="banner"], nav, [role="navigation"]' )
+			);
 		} )
-		.catch( () => undefined );
-	// The handler is throttled, so its transition starts a beat after the event.
-	await page.waitForTimeout( 400 );
+		.catch( () => false );
+	// The handler is throttled, so its transition starts a beat after the event:
+	// wait for the restore transition the chrome actually runs, as observed by
+	// its effect time converging, with the old bound as the fallback.
+	if ( mountedChrome ) {
+		await page
+			.waitForFunction(
+				() => Promise.all( [ ...document.getAnimations() ].map( wixAnimationConverged ) )
+					.then( ( states ) => states.every( Boolean ) ),
+				undefined,
+				{ timeout: 400 }
+			)
+			.catch( () => undefined );
+	}
 	await page
 		.evaluate( async () => {
 			// Ambient motion such as a spinner never finishes, so each wait is
