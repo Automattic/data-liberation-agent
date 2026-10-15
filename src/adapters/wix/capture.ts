@@ -730,7 +730,10 @@ export const capture: LiberationHooks = {
 				const startHeight = document.documentElement.scrollHeight;
 				let moved = false;
 				let stableFrames = 0;
-				for ( let attempt = 0; attempt < maxWait / 50 && ( ! moved || stableFrames < 4 ); attempt++ ) {
+				// Bounds are measured time, not iterations: a throttled timer would
+				// otherwise stretch every bound by its own lateness.
+				const waitStarted = performance.now();
+				while ( performance.now() - waitStarted < maxWait && ( ! moved || stableFrames < 4 ) ) {
 					await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
 					if ( Math.abs( scrollY - initialScroll ) >= 1 ) moved = true;
 					if ( Math.abs( scrollY - previous ) < 1 ) stableFrames++;
@@ -742,7 +745,7 @@ export const capture: LiberationHooks = {
 					// click's landing is not coming, and continuing to the full bound
 					// only spends the wait (#839: every drawer link that never
 					// scrolled paid the whole bound on the mobile profile).
-					if ( ! moved && attempt * 50 >= noMoveMs && document.documentElement.scrollHeight === startHeight ) break;
+					if ( ! moved && performance.now() - waitStarted >= noMoveMs && document.documentElement.scrollHeight === startHeight ) break;
 				}
 				if ( ! moved ) {
 					markUnresolved( 'runtime scroll did not move before timeout' );
