@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.30.0] - 2026-10-15
+
+### Added
+- name each phase as it opens and split mislabeled ledger phases
+
+### Changed
+- regenerate plugin bundles
+- resolve readiness network waits at render-affecting quiet
+- probe interactions only for the per-device documents
+- reuse the previous width's lazy sweep when nothing new can load
+- wait on observed conditions for anchor sweeps and slide collection
+- Count reclaimable memory on macOS in capture memory admission
+
 ## [0.29.5] - 2026-10-14
 
 ### Fixed
