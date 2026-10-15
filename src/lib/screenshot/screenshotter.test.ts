@@ -240,6 +240,53 @@ describe('captureScreenshots', () => {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	} );
+	it( 'admits routes outside the reference sample against their own smaller working set (#862)', async () => {
+		// Modelled runtime: an idle floor, a fixed cost per open route context,
+		// and reference pages that only sampled routes open while observed.
+		const GiB = 1024 ** 3;
+		const limit = 3 * GiB, idle = GiB / 4, perRoute = GiB / 4, referencePages = 2.25 * GiB;
+		const sampled = [ 'https://example.com/a', 'https://example.com/e' ];
+		const urls = [ 'https://example.com/a', 'https://example.com/b', 'https://example.com/c', 'https://example.com/d', 'https://example.com/e' ];
+		let open = 0, observing = 0, peakOpen = 0, peakUsed = 0;
+		const used = () => idle + open * perRoute + observing * referencePages;
+		const constrained = vi.spyOn( process, 'constrainedMemory' ).mockReturnValue( limit );
+		const available = vi.spyOn( process, 'availableMemory' ).mockImplementation( () => Math.max( 0, limit - used() ) );
+		const browser = makeMockBrowser();
+		const newContext = browser.newContext;
+		browser.newContext = vi.fn( async ( options ) => {
+			const context = await newContext( options );
+			open++;
+			peakOpen = Math.max( peakOpen, open );
+			peakUsed = Math.max( peakUsed, used() );
+			const close = context.close;
+			context.close = async () => { try { await close(); } finally { open--; } };
+			return context;
+		} );
+		vi.mocked( connectBrowser ).mockResolvedValue( browser as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'memory-reference-sample-' ) );
+		const write = vi.spyOn( process.stderr, 'write' ).mockImplementation( () => true );
+		try {
+			const result = await captureScreenshots( {
+				urls, outputDir, settleMs: 0, learnFluid: false, referenceSampleUrls: sampled,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
+				observeSource: async ( _page, url ) => {
+					const reference = sampled.includes( url );
+					if ( reference ) observing++;
+					peakUsed = Math.max( peakUsed, used() );
+					try { await new Promise( resolve => setTimeout( resolve, 300 ) ); } finally { if ( reference ) observing--; }
+				},
+			} );
+			expect( result.captured ).toBe( urls.length );
+			// The entrypoint's reference pages set a 2.5 GiB estimate; reserving that
+			// for every route would serialize the capture. Routes without reference
+			// pages overlap, and no admission takes the runtime past its limit.
+			expect( peakOpen ).toBeGreaterThanOrEqual( 2 );
+			expect( peakUsed ).toBeLessThanOrEqual( limit );
+		} finally {
+			write.mockRestore(); constrained.mockRestore(); available.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 	it.each( [ 'server', 'client', 'late-control' ] )( 'validates %s protocol navigation against the observed server document', async ( navigation ) => {
 		const requested = 'https://example.com/author';
 		const landed = 'http://example.com/author/';

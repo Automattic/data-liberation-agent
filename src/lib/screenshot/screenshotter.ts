@@ -2035,19 +2035,37 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// with no route running), divided across the routes active when sampled.
 	// The whole-group peak would count that floor and every concurrent route
 	// against each new route, throttling harder the more routes overlap.
+	// A route opens fresh reference pages only when it is in the reference
+	// sample, so routes are estimated per kind: a sample taken while any
+	// reference route runs is attributed to reference routes, one taken while
+	// only routes without reference pages run is attributed to those. Until a
+	// route without reference pages has been measured, it reserves the
+	// reference estimate.
+	type RouteKind = 'reference' | 'plain';
+	const routeKind = ( url: string ): RouteKind => ! opts.referenceSampleUrls || opts.referenceSampleUrls.includes( url ) ? 'reference' : 'plain';
 	let observedWorkingSet = 0;
 	let idleFloor: number | undefined;
-	let routeWorkingSet = 0;
-	let activeRoutes = 0;
-	let calibrated = false;
+	const routeWorkingSet: Record< RouteKind, number > = { reference: 0, plain: 0 };
+	const activeRoutes: Record< RouteKind, number > = { reference: 0, plain: 0 };
+	const calibrated: Record< RouteKind, boolean > = { reference: false, plain: false };
 	const sampleMemory = (): number => {
 		const available = availableRuntimeMemory( memoryLimit );
 		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
 		const used = memoryLimit - available;
 		observedWorkingSet = Math.max( observedWorkingSet, used );
-		if ( activeRoutes === 0 ) idleFloor = used;
-		else if ( idleFloor !== undefined ) routeWorkingSet = Math.max( routeWorkingSet, ( used - idleFloor ) / activeRoutes );
+		const active = activeRoutes.reference + activeRoutes.plain;
+		if ( active === 0 ) idleFloor = used;
+		else if ( idleFloor !== undefined ) {
+			const kind: RouteKind = activeRoutes.reference ? 'reference' : 'plain';
+			routeWorkingSet[ kind ] = Math.max( routeWorkingSet[ kind ], ( used - idleFloor ) / active );
+		}
 		return available;
+	};
+	// The working set to reserve for a route, or undefined before reference
+	// calibration.
+	const routeEstimate = ( kind: RouteKind ): number | undefined => {
+		if ( ! calibrated.reference ) return undefined;
+		return kind === 'plain' && calibrated.plain ? routeWorkingSet.plain : routeWorkingSet.reference;
 	};
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
 	const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;
@@ -2695,13 +2713,15 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( urlFailures.length === 0 ) {
 			captured++;
 			// Reused artifacts, absent documents and redirect aliases do not
-			// calibrate the memory cost of a fresh successful capture. A bounded
-			// reference sample leaves most routes without fresh reference pages;
-			// calibrating on one of those would under-estimate the working set,
-			// so calibration waits for a route that produced them (the entrypoint
-			// is always sampled and is captured first).
-			const producedReferencePages = ! opts.referenceSampleUrls || opts.referenceSampleUrls.includes( url );
-			if ( memoryAdmission && ! entry.redirectedTo && producedReferencePages ) { sampleMemory(); calibrated = true; }
+			// calibrate the memory cost of a fresh successful capture. Each kind
+			// calibrates on its own routes: the entrypoint is always sampled and
+			// captured first, and a route without reference pages calibrates its
+			// kind only once a sample was attributed to that kind.
+			if ( memoryAdmission && ! entry.redirectedTo ) {
+				sampleMemory();
+				const kind = routeKind( url );
+				if ( kind === 'reference' || routeWorkingSet.plain > 0 ) calibrated[ kind ] = true;
+			}
 			sendLog( server, `[ok] ${ url }` );
 		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
 			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});
@@ -2750,29 +2770,36 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					: waveEnd;
 				let cursor = segStart;
 				const running = new Set< Promise<void> >();
-				// Reserve one observed per-route working set for every running route
-				// whose peak may still be ahead, plus the route being admitted. Even
-				// one unseen route can exceed the budget; this admits overlap, rather
-				// than enforcing a per-source byte cap.
-				const admit = (): boolean => {
+				const runningKinds = new Map< Promise<void>, RouteKind >();
+				// Reserve one observed per-route working set of its kind for every
+				// running route whose peak may still be ahead, plus the route being
+				// admitted. Even one unseen route can exceed the budget; this admits
+				// overlap, rather than enforcing a per-source byte cap.
+				const admit = ( kind: RouteKind ): boolean => {
 					if ( ! memoryAdmission ) return true;
 					const available = sampleMemory();
 					if ( running.size === 0 ) {
 						if ( available === 0 ) throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` );
 						return true;
 					}
-					return calibrated && available >= ( running.size + 1 ) * routeWorkingSet;
+					let reserved = routeEstimate( kind );
+					for ( const runningKind of runningKinds.values() ) {
+						const estimate = routeEstimate( runningKind );
+						reserved = reserved === undefined || estimate === undefined ? undefined : reserved + estimate;
+					}
+					return reserved !== undefined && available >= reserved;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
 				const budgetAdmits = (): boolean => ! routeBudget || routeBudget.admits( urls[ cursor ]! );
 				try {
 					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
-						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admit() ) {
+						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admit( routeKind( urls[ cursor ]! ) ) ) {
 							const url = urls[ cursor++ ];
+							const kind = routeKind( url );
 							routeBudget?.start( url );
-							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: Math.round( routeWorkingSet ), activeRoutes: running.size + 1, calibrated, url } ) }\n` );
-							activeRoutes++;
-							const pending = processUrl( url ).finally( () => { activeRoutes--; routeBudget?.finish( url ); routeDeadlines.finish( url ); } ).then( () => {
+							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: { reference: Math.round( routeWorkingSet.reference ), plain: Math.round( routeWorkingSet.plain ) }, reservedBytes: routeEstimate( kind ), activeRoutes: running.size + 1, calibrated, kind, url } ) }\n` );
+							activeRoutes[ kind ]++;
+							const pending = processUrl( url ).finally( () => { activeRoutes[ kind ]--; routeBudget?.finish( url ); routeDeadlines.finish( url ); } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
 							// The slot frees even if abandonment unwinds slowly: the route's own
@@ -2780,8 +2807,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							// route and closed its contexts.
 							const slot = Promise.race( [ pending, routeDeadlines.start( url ) ] );
 							running.add( slot );
+							runningKinds.set( slot, kind );
 							// The race observes fatal rejection before browser cleanup.
-							void slot.then( () => running.delete( slot ), () => {} );
+							void slot.then( () => { running.delete( slot ); runningKinds.delete( slot ); }, () => {} );
 						}
 						if ( ! running.size ) continue;
 						if ( ! routeBudget ) await Promise.race( running );

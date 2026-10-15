@@ -474,8 +474,8 @@ export async function captureWebsite(
 		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
 		observeSource: reference.observe,
-		// Memory admission must calibrate on a route that actually produced fresh
-		// reference pages; bounded samples leave most routes without them.
+		// Memory admission reserves for what a route opens: bounded samples
+		// leave most routes without fresh reference pages.
 		...( reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
 		...( adapter.liberation?.canonicalizeHtml
 			? { canonicalizeHtml: adapter.liberation.canonicalizeHtml.bind( adapter.liberation ) }
