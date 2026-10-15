@@ -65,15 +65,19 @@ function page( path: string ): string {
 <button type="button" class="products" aria-haspopup="menu" aria-expanded="false" data-control="header">${ brand }</button>
 <div class="products-menu" role="menu" hidden><a role="menuitem" href="/alpha">Alpha</a><a role="menuitem" href="/beta">Beta</a></div></nav>
 <button type="button" class="contact" aria-haspopup="dialog" data-control="header">Contact</button>
-<div class="contact-dialog" role="dialog" aria-modal="true" aria-label="Contact us" hidden><p>Write to us any time.</p><button type="button" class="close" aria-label="Close" data-control="header">×</button></div></header>`;
+<div class="contact-dialog" role="dialog" aria-modal="true" aria-label="Contact us" hidden><p>Write to us any time.</p><button type="button" class="close" aria-label="Close" data-control="header">×</button></div>
+<button type="button" class="info" aria-haspopup="dialog" data-control="header">Info</button></header>`;
 	const main = `<main><h1>${ path || 'home' }</h1><div class="tabs"><div role="tablist"><button role="tab" aria-selected="true" data-control="tab">Overview</button><button role="tab" aria-selected="false" data-control="tab">Details</button><button role="tab" aria-selected="false" data-control="tab">Pricing</button></div>
 <div class="tab-region">The overview of ${ path || 'home' } is short.</div></div></main>`;
 	const body = path === '' ? `<div class="wrap"><div class="promo">Sale this week</div>${ header }${ main }</div>` : `${ header }${ main }<footer>Footer</footer>`;
+	// The Info control's panel lives in the site chrome (its trigger is in the
+	// header) but renders as a body-level portal, outside the landmark.
+	const infoDialog = `<div id="site-info-dialog" class="info-dialog" role="dialog" aria-label="Site info" hidden><p>Everything about this site.</p><button type="button" class="close" aria-label="Dismiss site info">×</button></div>`;
 	return `<!doctype html><html><head><meta charset="utf-8"><title>${ path || 'home' }</title><style>
 body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;height:60px;position:relative}
 .products-menu{position:absolute;top:60px;left:0;background:#fff;padding:8px}.products-menu a{display:block}
 .contact-dialog{position:fixed;inset:0;background:#fff}[hidden]{display:none!important}main{min-height:1400px}
-</style></head><body>${ body }<script>
+</style></head><body>${ body }${ infoDialog }<script>
 const instance = Math.random().toString(36).slice(2);
 document.addEventListener('click', event => { const control = event.target.closest('[data-control]'); if (control) fetch('/__click?path=' + encodeURIComponent(location.pathname) + '&control=' + control.dataset.control + '&instance=' + instance); }, true);
 const products = document.querySelector('.products'), menu = document.querySelector('.products-menu');
@@ -81,6 +85,9 @@ products.addEventListener('click', () => { menu.hidden = !menu.hidden; products.
 const dialog = document.querySelector('.contact-dialog');
 document.querySelector('.contact').addEventListener('click', () => { dialog.hidden = false; });
 dialog.querySelector('.close').addEventListener('click', () => { dialog.hidden = true; });
+const info = document.querySelector('.info-dialog');
+document.querySelector('.info').addEventListener('click', () => { info.hidden = false; });
+info.querySelector('.close').addEventListener('click', () => { info.hidden = true; });
 const copy = { Overview: 'The overview of ${ path || 'home' } is short.', Details: 'Details for ${ path || 'home' }: every feature, listed one by one, with notes on each of them.', Pricing: 'Pricing for ${ path || 'home' }: three plans, billed monthly or yearly, with a free trial included.' };
 for (const tab of document.querySelectorAll('[role=tab]')) tab.addEventListener('click', () => {
 	for (const other of document.querySelectorAll('[role=tab]')) other.setAttribute('aria-selected', String(other === tab));
@@ -136,15 +143,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 
 	it( 'probes the shared header once, on the entrypoint, and on no other route', () => {
 		expect( result.captured ).toBe( 3 );
-		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 1, states: 2, captured: 2, unanchored: 0 } );
+		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 1, states: 3, captured: 3, unanchored: 0 } );
 		// One page instance clicked the shared header: the one-time probe of the entrypoint.
 		const shared = clicks.filter( click => click.control === 'header' && click.path !== '/landing' );
 		expect( shared.length ).toBeGreaterThan( 0 );
 		expect( new Set( shared.map( click => click.instance ) ).size ).toBe( 1 );
+		// The shared header is not clicked on a route that reused it: neither the
+		// controls whose panels render inside the header nor the Info control,
+		// whose panel renders outside it at body level.
 		expect( clicksOn( 'about', 'header' ) ).toEqual( [] );
+		expect( clicksOn( 'about', 'info' ) ).toEqual( [] );
 		for ( const path of [ '', 'about' ] ) {
 			// `/about` also has a footer, which the entrypoint does not.
-			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: path ? 2 : 1, entrypoint: 1, matched: 1 }, reusedStates: 2 } );
+			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: path ? 2 : 1, entrypoint: 1, matched: 1 }, reusedStates: 3 } );
 			expect( entries[ url( path ) ]!.profiles!.desktop!.sharedChrome ).toEqual( entries[ url( path ) ]!.sharedChrome );
 		}
 	} );
@@ -154,10 +165,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 		expect( states.map( state => [ state.status, state.trigger.label, state.reusedFrom ] ) ).toEqual( [
 			[ 'captured', 'Products', url( '' ) ],
 			[ 'captured', 'Contact', url( '' ) ],
+			[ 'captured', 'Info', url( '' ) ],
 		] );
+		// Where the panel renders outside the landmark (the Info portal at body
+		// level), its state is still chrome evidence, addressed by the node's own id.
+		expect( states[ 2 ]!.dialog!.selector ).toBe( '#site-info-dialog' );
+		expect( states[ 2 ]!.dialog!.html ).toContain( 'Everything about this site.' );
 		// The entrypoint header is inside a wrapper; on this route it is a child of <body>.
 		const entrypointStates = entries[ url( '' ) ]!.interactions!.states.filter( state => state.reusedFrom );
-		expect( entrypointStates[ 0 ]!.trigger.selector ).toMatch( /^body > div > header/ );
+		expect( entrypointStates[ 0 ]!.trigger.selector ).toMatch( /^body > div:nth-of-type\(1\) > header/ );
 		expect( states[ 0 ]!.trigger.selector ).toMatch( /^body > header/ );
 		// Each trigger keeps its own panel, not the first id-less panel probed.
 		expect( states[ 1 ]!.dialog ).toMatchObject( { selector: 'body > header:nth-of-type(1) > div:nth-of-type(1)', presentation: 'modal' } );
@@ -189,11 +205,16 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 			const view = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			await view.goto( new URL( 'about/', site.url ).href );
 			// Both header controls are wired from the reused evidence, not by a source script.
-			expect( await view.locator( 'header [data-blocks-engine-capture-dialog-trigger]' ).count() ).toBe( 2 );
+			expect( await view.locator( 'header [data-blocks-engine-capture-dialog-trigger]' ).count() ).toBe( 3 );
+			const infoWired = await view.locator( '[data-blocks-engine-capture-dialog-trigger][aria-controls="site-info-dialog"]' ).count();
+			expect( infoWired ).toBe( 1 );
 			await expect.poll( () => view.getByRole( 'menuitem', { name: 'Alpha' } ).isVisible() ).toBe( false );
 			await view.getByRole( 'button', { name: 'Products' } ).click();
 			await expect.poll( () => view.getByRole( 'menuitem', { name: 'Alpha' } ).isVisible() ).toBe( true );
 			await view.getByRole( 'button', { name: 'Products' } ).click();
+			const infoButton = view.locator( 'header button.info, [data-blocks-engine-capture-disclosure-label="Info"]' ).first();
+			await infoButton.click();
+			await expect.poll( () => view.getByText( 'Everything about this site.' ).isVisible() ).toBe( true );
 			await view.getByRole( 'button', { name: 'Contact' } ).click();
 			await expect.poll( () => view.getByText( 'Write to us any time.' ).isVisible() ).toBe( true );
 		} finally {

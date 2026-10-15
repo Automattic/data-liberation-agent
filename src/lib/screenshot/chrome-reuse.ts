@@ -41,7 +41,18 @@ export interface ChromeLandmark {
 }
 
 /** Where a recorded selector resolves, relative to the page's chrome roots. */
-export type ChromeAnchor = { root: number; path: number[] } | 'document' | 'absent' | 'outside';
+/**
+ * Where a recorded selector resolves, relative to the page's chrome roots.
+ * `invalid` is an unresolvable selector string: a state that records one can
+ * never be replayed, so anchoring and reuse both reject it.
+ */
+export type ChromeAnchor =
+	| { root: number; path: number[] }
+	/** Outside chrome, identified by the node's unique `id` when it has one,
+	 * otherwise by its structural path from `body` (only stable across pages of
+	 * the same layout). */
+	| { outside: { id: string } | { path: number[] } }
+	| 'document' | 'absent' | 'invalid';
 
 /** One probed state, anchored to the chrome root that holds its trigger. */
 export interface ChromeState {
@@ -55,7 +66,7 @@ export interface SharedChromeEvidence {
 	url: string;
 	landmarks: ChromeLandmark[];
 	states: ChromeState[];
-	/** Probed states whose selectors left their chrome root; never reused. */
+	/** Probed states that are not chrome evidence: trigger outside chrome or an unresolvable selector. */
 	unanchored: number;
 }
 
@@ -125,8 +136,7 @@ export function rebaseChromeState< T >( state: T, from: readonly string[], to: r
 export async function readChromeLandmarks( page: Page, mark = false ): Promise< ChromeLandmark[] > {
 	const raw = await page.evaluate( ( { selector, attributes, rootAttribute, mark } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
-		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) );
-		const kept = ( element: Element ) => ! skipped.has( element.tagName ) && ! owned( element );
+		const kept = ( element: Element ) => ! skipped.has( element.tagName );
 		const sameTag = ( element: Element ) => Array.from( element.parentElement?.children ?? [] ).filter( sibling => sibling.tagName === element.tagName );
 		const positional = ( element: Element ) => `${ element.tagName.toLowerCase() }:nth-of-type(${ sameTag( element ).indexOf( element ) + 1 })`;
 		const compact = ( element: Element ) => sameTag( element ).length > 1 ? positional( element ) : element.tagName.toLowerCase();
@@ -179,24 +189,34 @@ export async function readChromeLandmarks( page: Page, mark = false ): Promise< 
 async function anchorSelectors( page: Page, roots: readonly ChromeLandmark[], selectors: readonly string[][] ): Promise< ChromeAnchor[][] > {
 	return page.evaluate( ( { roots, selectors } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
-		type ChromeAnchorInPage = { root: number; path: number[] } | 'document' | 'absent' | 'outside';
-		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) );
-		const kept = ( element: Element ) => ! skipped.has( element.tagName ) && ! owned( element );
+		type OutsideAnchorInPage = { id: string } | { path: number[] };
+		type ChromeAnchorInPage = { root: number; path: number[] } | { outside: OutsideAnchorInPage } | 'document' | 'absent' | 'invalid';
+		const kept = ( element: Element ) => ! skipped.has( element.tagName );
 		const elements = roots.map( root => document.querySelector( root ) );
+		const outside = ( element: Element ): { outside: OutsideAnchorInPage } => (
+			{ outside: element.id ? { id: element.id } : { path: bodyPath( element ) } }
+		);
+		const bodyPath = ( element: Element ): number[] => {
+			const path: number[] = [];
+			for ( let node: Element | null = element; node && node !== document.body; node = node.parentElement ) {
+				path.unshift( Array.from( node.parentElement!.children ).filter( kept ).indexOf( node ) );
+			}
+			return path;
+		};
 		const anchor = ( selector: string ): ChromeAnchorInPage => {
 			let element: Element | null;
 			try {
 				element = document.querySelector( selector );
 			} catch {
-				return 'outside';
+				return 'invalid';
 			}
 			if ( ! element ) return 'absent';
 			if ( element === document.body || element === document.documentElement ) return 'document';
 			const root = elements.findIndex( candidate => candidate?.contains( element ) );
-			if ( root < 0 ) return 'outside';
+			if ( root < 0 ) return outside( element );
 			const path: number[] = [];
 			for ( let node: Element = element; node !== elements[ root ]; node = node.parentElement! ) {
-				if ( ! kept( node ) ) return 'outside';
+				if ( ! kept( node ) ) return outside( element );
 				path.unshift( Array.from( node.parentElement!.children ).filter( kept ).indexOf( node ) );
 			}
 			return { root, path };
@@ -206,9 +226,13 @@ async function anchorSelectors( page: Page, roots: readonly ChromeLandmark[], se
 }
 
 /**
- * Anchor states probed on the entrypoint. A state is chrome evidence when its
- * trigger is inside a chrome root and every other selector it records names a
- * node in that same root, the document itself, or nothing.
+ * Anchor the states probed on the entrypoint. A state is chrome evidence when
+ * its trigger is inside a chrome root and every other selector it records
+ * resolves — in any chrome root, the document itself, nowhere, or a node
+ * outside chrome: builders often render a chrome control's panel at body
+ * level. Where each selector resolved — and its path inside a root — is
+ * recorded, and `reuseSharedChrome` verifies all of it again on every route
+ * before the state is reused there.
  */
 export async function anchorChromeStates( page: Page, landmarks: readonly ChromeLandmark[], states: readonly CapturedDialogInteraction[] ): Promise< { states: ChromeState[]; unanchored: number } > {
 	const fields = states.map( state => selectorFields( state ) );
@@ -217,8 +241,12 @@ export async function anchorChromeStates( page: Page, landmarks: readonly Chrome
 	states.forEach( ( state, index ) => {
 		const trigger = anchors[ index ]![ fields[ index ]!.findIndex( field => field.path === 'trigger.selector' ) ];
 		if ( ! trigger || typeof trigger !== 'object' ) return;
-		const inRoot = anchors[ index ]!.every( item => item === 'document' || item === 'absent' || ( typeof item === 'object' && item.root === trigger.root ) );
-		if ( inRoot ) anchored.push( { root: trigger.root, state, anchors: anchors[ index ]! } );
+		// Every resolvable position is reusable evidence: reuse verifies every
+		// selector again on the route, so only a state this page could not even
+		// name (an invalid selector, or a trigger outside chrome) is dropped.
+		if ( anchors[ index ]!.every( item => item !== 'invalid' ) && 'root' in trigger ) {
+			anchored.push( { root: trigger.root, state, anchors: anchors[ index ]! } );
+		}
 	} );
 	return { states: anchored, unanchored: states.length - anchored.length };
 }
@@ -262,10 +290,16 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 	if ( ! matched.size ) {
 		return { decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ evidence.landmarks.map( item => item.label ).join( ', ' ) } there)`, landmarks: { ...counts, matched: 0 } }, states: [] };
 	}
-	const candidates = evidence.states.filter( item => matched.has( item.root ) ).map( item => {
+	const candidates = evidence.states.filter( item =>
+		matched.has( item.root ) && item.anchors.every( anchor => typeof anchor !== 'object' || 'outside' in anchor || matched.has( anchor.root ) )
+	).map( item => {
 		const root = matched.get( item.root )!;
 		const state = rebaseChromeState( item.state, evidence.landmarks[ item.root ]!.prefixes, landmarks[ root ]!.prefixes );
-		const expected = item.anchors.map( anchor => typeof anchor === 'object' ? { root, path: anchor.path } : anchor );
+		const expected: ChromeAnchor[] = item.anchors.map( anchor => {
+			if ( typeof anchor !== 'object' ) return anchor;
+			if ( 'outside' in anchor ) return anchor;
+			return { root: matched.get( anchor.root )!, path: anchor.path };
+		} );
 		return { state, expected };
 	} );
 	const resolved = await anchorSelectors( page, landmarks, candidates.map( candidate => selectorFields( candidate.state ).map( field => field.selector ) ) );
