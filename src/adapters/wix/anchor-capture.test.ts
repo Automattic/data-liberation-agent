@@ -103,6 +103,79 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 		}
 	}, 60_000 );
 
+	// A click whose landing never starts used to hold the full scroll bound
+	// per fragment (#839): every drawer link on a wide mobile document paid
+	// 3s of nothing. Once the document holds its scroll and height past the
+	// no-move beat, the landing is not coming and the wait ends.
+	it( 'gives up on a scroll that never starts without paying the whole bound per fragment', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
+				contentType: 'text/html',
+				body: `<style>body{margin:0}header{position:fixed;top:0;z-index:5}section{height:800px}</style>
+					<header><a href="#dead-one">One</a> <a href="#dead-two">Two</a></header>
+					<section>Top</section><section>One</section><section>Two</section>
+					<script>document.querySelectorAll('header a').forEach((link) => link.addEventListener('click', (event) => event.preventDefault()));</script>`,
+			} ) );
+			await page.goto( 'https://anchor.test/' );
+			const started = Date.now();
+			await capture.prepare!( page, { url: page.url(), viewport: 'mobile' } );
+			const elapsed = Date.now() - started;
+			expect( await page.locator( 'a[href$="#dead-one"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
+			expect( await page.locator( 'a[href$="#dead-two"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
+			// Two never-moving fragments end within their no-move beats, not at
+			// 2 × the full bound (sweep + 2 frags; pre-fix returns > 7s here).
+			expect( elapsed ).toBeLessThan( 5_500 );
+		} finally {
+			await browser.close();
+		}
+	}, 30_000 );
+
+	// A drawer keeps the body's scroll locked while it is open: waiting for the
+	// landing with the drawer still up pays the full scroll bound on every
+	// fragment and ships unresolved anchors that resolve in milliseconds once
+	// the drawer is gone first.
+	it( 'closes an opened menu before waiting for the runtime scroll behind its link', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
+				contentType: 'text/html',
+				body: `<style>body{margin:0}button{position:fixed;top:0;z-index:9}section{height:1000px}
+					#drawer{position:fixed;inset:0;z-index:5;background:#fff;display:none}</style>
+					<button aria-label="menu" onclick="openDrawer()">Menu</button>
+					<div id="drawer" role="dialog" data-hook="menu-root"><a href="https://anchor.test/#team" style="display:block;margin-top:220px">Team</a></div>
+					<section>Top</section><section id="team-source">Team</section><section>End</section>
+					<script>
+						function lock( locked ) { document.documentElement.style.overflow = locked ? 'hidden' : ''; }
+						function openDrawer() { document.getElementById('drawer').style.display = 'block'; lock( true ); }
+						function closeDrawer() { document.getElementById('drawer').style.display = 'none'; lock( false ); }
+						// The drawer's runtime does not follow the link itself: closing
+						// the drawer is what releases the navigation it queued.
+						addEventListener('keydown', ( event ) => {
+							if ( event.key !== 'Escape' ) return;
+							closeDrawer();
+							setTimeout( () => window.scrollTo( { top: 1000, behavior: 'instant' } ), 50 );
+						});
+						document.querySelector('#drawer a').addEventListener('click', ( event ) => event.preventDefault());
+					</script>`,
+			} ) );
+			await page.goto( 'https://anchor.test/' );
+			await capture.prepare!( page, { url: page.url(), viewport: 'mobile' } );
+			// The navigation the visitor asked for happened once the drawer was
+			// gone: a real target stands behind the fragment.
+						expect( await page.locator( '#team' ).count() ).toBe( 1 );
+			expect( await page.locator( '#team-source > #team' ).count() ).toBe( 1 );
+			expect( await page.locator( '#team' ).evaluate( landing ) ).toBe( 1000 );
+			expect( await page.locator( 'a[href$="#team"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
+			// The capture records the closed page.
+			expect( await page.locator( '#drawer' ).evaluate( ( drawer ) => getComputedStyle( drawer as HTMLElement ).display ) ).toBe( 'none' );
+		} finally {
+			await browser.close();
+		}
+	}, 60_000 );
+
 	it( 'marks a link whose trigger cannot be clicked instead of abandoning the remaining links', async () => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
