@@ -58,6 +58,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     route: vi.fn().mockResolvedValue(undefined),
     unroute: vi.fn().mockResolvedValue(undefined),
     once: vi.fn(),
+    on: vi.fn(),
     goto: vi.fn().mockImplementation(async (url: string) => {
       currentUrl = url;
       return { status: () => statusOf(currentUrl) };
@@ -166,6 +167,34 @@ describe('captureScreenshots', () => {
 				const routeLine = lines.find( item => item.startsWith( '[timing] route ' ) && item.endsWith( url ) );
 				expect( total ).toBe( Number( routeLine?.match( /route (\d+)ms/ )?.[ 1 ] ) );
 			}
+		} finally {
+			write.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
+	it( 'names the route, profile and phase on stderr as each phase is entered, with the observe pass and serialization steps split out of their neighbours (#817)', async () => {
+		vi.mocked( connectBrowser ).mockResolvedValue( makeMockBrowser() as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'phase-evidence-' ) );
+		let stderr = '';
+		const write = vi.spyOn( process.stderr, 'write' ).mockImplementation( ( chunk ) => { stderr += String( chunk ); return true; } );
+		try {
+			await captureScreenshots( { urls: [ 'https://example.com/a' ], outputDir, settleMs: 0, observeSource: async () => {} } );
+			const events = stderr.split( '\n' )
+				.filter( line => line.startsWith( '[timing] phase ' ) )
+				.map( line => JSON.parse( line.slice( '[timing] phase '.length ) ) );
+			expect( events.length ).toBeGreaterThan( 0 );
+			for ( const event of events ) {
+				expect( event ).toEqual( { url: 'https://example.com/a', profile: expect.any( String ), phase: expect.any( String ) } );
+			}
+			const phases = events.map( event => event.phase as string );
+			// Each cost is its own phase: the reference observe pass is not folded
+			// into `galleries`, and disclosure hydration / gallery alignment are not
+			// folded into `slideshows`.
+			expect( phases ).toEqual( expect.arrayContaining( [ 'galleries', 'observe-source', 'slideshows', 'before-serialize', 'hydrate-disclosures', 'align-galleries' ] ) );
+			expect( phases.indexOf( 'galleries' ) ).toBeLessThan( phases.indexOf( 'observe-source' ) );
+			expect( phases.indexOf( 'slideshows' ) ).toBeLessThan( phases.indexOf( 'before-serialize' ) );
+			expect( phases.indexOf( 'before-serialize' ) ).toBeLessThan( phases.indexOf( 'hydrate-disclosures' ) );
+			expect( phases.indexOf( 'hydrate-disclosures' ) ).toBeLessThan( phases.indexOf( 'align-galleries' ) );
 		} finally {
 			write.mockRestore();
 			rmSync( outputDir, { recursive: true, force: true } );
