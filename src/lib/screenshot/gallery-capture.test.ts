@@ -5,6 +5,7 @@ import { chromium as playwrightChromium } from 'playwright';
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
 import { captureGalleries } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
+import { wireCapturedGalleries } from '../static-galleries.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
@@ -360,3 +361,33 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	},
 	10_000,
 );
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('captures a crossfading slideshow driven by unnamed hover-revealed icon controls', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage({viewport:{width:1024,height:768}});
+		const colors = ['red', 'green', 'blue', 'orange', 'purple', 'teal'];
+		const slide = (i: number) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="100%" height="100%" fill="${colors[i]}"/></svg>`);
+		const thumbs = colors.map((_, i) => `<a class="thumb"><img width="40" height="30" src="${slide(i)}"></a>`).join('');
+		await page.setContent(`<!doctype html><style>
+		.show{position:relative;width:400px}.view{position:relative;height:300px}.slide{position:absolute;inset:0}.slide img{width:400px;height:300px;display:block}
+		.corner{position:absolute;top:8px;right:8px;z-index:2}.corner>span{display:none}.show:hover .corner>span{display:inline-block}.ctl{display:inline-block;width:24px;height:24px;background:#000;cursor:pointer}
+		</style><div class="show"><div class="view"><div class="slides"></div><div class="corner"><span><span class="ctl prev"><i></i></span></span><span><span class="ctl next"><i></i></span></span></div></div><div class="strip">${thumbs}</div></div>
+		<nav><a class="next" href="/page/2"><img width="20" height="20" src="${slide(0)}"><img width="20" height="20" src="${slide(1)}"></a></nav>
+		<script>
+		const urls=${JSON.stringify(colors.map((_, i) => slide(i)))};const slides=document.querySelector('.slides');const nodes=[];let index=0;
+		function node(i){if(!nodes[i]){const el=document.createElement('div');el.className='slide';el.style.display='none';el.innerHTML='<div class="fade" style="opacity:0"><img src="'+urls[i]+'"></div>';nodes[i]=el;slides.append(el);}return nodes[i];}
+		function go(dir){const from=node(index);index=(index+dir+urls.length)%urls.length;const to=node(index);to.style.display='';let step=0;
+			const tick=()=>{step++;to.firstChild.style.opacity=String(Math.min(1,step/20));from.firstChild.style.opacity=String(Math.max(0,1-step/20));if(step<20)setTimeout(tick,20);else from.style.display='none';};tick();}
+		const first=node(0);first.style.display='';first.firstChild.style.opacity='1';node(1);
+		document.querySelector('.ctl.next').onclick=()=>go(1);document.querySelector('.ctl.prev').onclick=()=>go(-1);
+		</script>`);
+		const states = await captureGalleries(page);
+		expect(states, JSON.stringify(states).slice(0, 2000)).toHaveLength(1);
+		const gallery = states[0]!.gallery!.inline;
+		expect(gallery, gallery.failure).toMatchObject({ coverage: 'complete', restoration: 'verified', initial: 0 });
+		expect(gallery.frames.map(frame => frame.key)).toEqual(colors.map((_, i) => slide(i)));
+		expect(gallery.frames.every(frame => /opacity:\s*1\b/.test(frame.html))).toBe(true);
+		expect(wireCapturedGalleries(await page.content(), states)).toContain('data-blocks-engine-capture-gallery-stage');
+	} finally { await browser.close(); }
+}, 90_000);

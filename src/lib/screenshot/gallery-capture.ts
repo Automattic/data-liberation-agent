@@ -47,10 +47,41 @@ export function galleryFrameMediaUrls(
 	return [ ...urls ];
 }
 
-const LIMIT = 24;
+// Frames per cycle. Wall time is bounded separately by each cycle's deadline.
+const LIMIT = 64;
+const QUIET = 150;
+const QUIET_BOUND = 1500;
 const BUDGET = 512 * 1024;
+const DIRECTION = '__dataLiberationGalleryDirection';
+type Direction = (element: Element) => 'next' | 'previous' | null;
 
-/** Find a rendered image stage beside labelled directional controls, without vendor classes. */
+/**
+ * Install the page-side directional control classifier once, so root discovery
+ * and stage description evaluate the same predicate.
+ */
+function installDirection(key: string): void {
+	Object.defineProperty(globalThis, key, {
+		configurable: true,
+		value: (element: Element): 'next' | 'previous' | null => {
+			const button = element.matches('button,[role="button"]');
+			const tokens = `${element.id} ${element.getAttribute('class') ?? ''}`.toLowerCase().split(/[^a-z]+/);
+			const next = tokens.includes('next');
+			const previous = tokens.includes('prev') || tokens.includes('previous');
+			if (!button && next === previous) return null;
+			const name = (element.getAttribute('aria-label') || element.textContent || '').trim();
+			if (name) {
+				const match = button && /^(next|previous) (?:image|slide|photo|photograph|picture)$/i.exec(name);
+				return match ? (match[1]!.toLowerCase() as 'next' | 'previous') : null;
+			}
+			// An unnamed icon control carries its direction only in its own class or id
+			// tokens. Form fields, navigation and real links are never gallery steps.
+			if (next === previous || element.closest('form,nav,a[href]:not([href="#"])') || element.matches('input,select,textarea,option,label')) return null;
+			return next ? 'next' : 'previous';
+		},
+	});
+}
+
+/** Find a rendered image stage beside directional controls, without vendor classes. */
 async function describe(
 	page: Page,
 	root: string,
@@ -61,7 +92,8 @@ async function describe(
 	return page
 		.locator(root)
 		.first()
-		.evaluate((scope) => {
+		.evaluate((scope, key) => {
+			const direction = (globalThis as unknown as Record<string, Direction>)[key]!;
 			const path = (element: Element, ancestor: Element): string => {
 				const parts: string[] = [];
 				for (
@@ -76,10 +108,9 @@ async function describe(
 				}
 				return ':scope > ' + parts.join(' > ');
 			};
-			const controls = Array.from(scope.querySelectorAll('button,[role="button"]'));
-			const name = (el: Element) => el.getAttribute('aria-label') || el.textContent || '';
-			const next = controls.find((el) => /^next (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
-			const previous = controls.find((el) => /^previous (?:image|slide|photo|photograph|picture)$/i.test(name(el).trim()));
+			const controls = Array.from(scope.querySelectorAll('*'));
+			const next = controls.find((el) => direction(el) === 'next');
+			const previous = controls.find((el) => direction(el) === 'previous');
 			if (!next || !previous) return null;
 			const stage = [scope, ...Array.from(scope.querySelectorAll('*'))].find((el) => {
 				const children = Array.from(el.children);
@@ -99,7 +130,7 @@ async function describe(
 					.map((child) => child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src') || child.querySelector('img')?.currentSrc || child.querySelector('img')?.src || '')
 					.filter(Boolean).map(value => new URL(value, document.baseURI).href),
 			};
-		})
+		}, DIRECTION)
 		.then((result) => (result ? { ...result, selector: root, viewport: page.viewportSize() ?? { width: 0, height: 0 } } : null));
 }
 
@@ -186,8 +217,11 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			const fullImage = child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src');
 			const key = fullImage ? new URL(fullImage, document.baseURI).href : source;
 			const rect = child.getBoundingClientRect();
+			// A crossfade changes presentation without moving the frame.
+			let opacity = 1;
+			for (let node: Element | null = image; node && node !== stage; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
 			const ordinal = image.hasAttribute('data-index') ? Number(image.getAttribute('data-index')) : undefined;
-			return { key, ...(fullImage ? { fullImage: new URL(fullImage, document.baseURI).href } : {}), html: clone.outerHTML, text, ordinal, slot: Array.from(stage.children).indexOf(child), geometry:[rect.x,rect.y,rect.width,rect.height].map(value=>Math.round(value*10)/10) };
+			return { key, ...(fullImage ? { fullImage: new URL(fullImage, document.baseURI).href } : {}), html: clone.outerHTML, text, ordinal, slot: Array.from(stage.children).indexOf(child), geometry:[rect.x,rect.y,rect.width,rect.height,opacity*100].map(value=>Math.round(value*10)/10) };
 		}, gallery.stage);
 }
 
@@ -198,7 +232,20 @@ async function collect(
 ): Promise<CapturedGallery | null> {
 	if (!descriptor) return null;
 	const deadline = Date.now() + 120_000;
-	const settle = async () => {
+	// Observe the stage from before an action, so a script-timed transition's
+	// write cadence is measured from its first write.
+	const watch = () => page.locator(descriptor.selector).first().locator(descriptor.stage).evaluateHandle(stage => {
+		let last: number | undefined;
+		let cadence = 0;
+		const observer = new MutationObserver(() => {
+			const now = performance.now();
+			if (last !== undefined) cadence = Math.max(cadence, now - last);
+			last = now;
+		});
+		observer.observe(stage, { attributes: true, childList: true, characterData: true, subtree: true });
+		return { observer, changed: () => last !== undefined, last: (since: number) => last ?? since, cadence: () => cadence };
+	});
+	const settle = async (mutation: Awaited<ReturnType<typeof watch>>) => {
 		await page.waitForTimeout(100);
 		await page
 			.locator(descriptor.selector)
@@ -217,11 +264,25 @@ async function collect(
 						),
 				);
 			});
-		await page.waitForTimeout(100);
+		// Script-timed transitions write inline styles without Web Animations. Wait,
+		// within a bound, until the stage has been quiet for longer than its own write
+		// cadence, which a busy page can stretch well beyond the authored interval.
+		await mutation.evaluate((state, { quiet, bound }) => new Promise<void>((resolve) => {
+			const started = performance.now();
+			const check = () => {
+				const now = performance.now();
+				if (now - state.last(started) < Math.max(quiet, 2 * state.cadence()) && now - started < bound) return void setTimeout(check, 20);
+				resolve();
+			};
+			check();
+		}), { quiet: QUIET, bound: QUIET_BOUND });
 	};
 	// Capture can arrive during an authored automatic transition or lazy decode.
 	// Settle the rendered stage before assigning the cycle's initial identity.
-	await settle();
+	const initial = await watch();
+	await settle(initial);
+	await initial.evaluate(state => state.observer.disconnect());
+	await initial.dispose();
 	let first = await snapshot(page, descriptor);
 	for (let sample = 0; !first && sample < 30; sample++) {
 		await page.waitForTimeout(100);
@@ -242,19 +303,17 @@ async function collect(
 	};
 	const act = async (selector: string, before: NonNullable<typeof first>, accept: (frame: NonNullable<typeof first>) => boolean) => {
 		for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
-			const mutation = await page.locator(descriptor.selector).first().locator(descriptor.stage).evaluateHandle(stage => {
-				let changed = false;
-				const observer = new MutationObserver(() => { changed = true; });
-				observer.observe(stage, { attributes: true, childList: true, characterData: true, subtree: true });
-				return { observer, changed: () => changed };
-			});
-			await page.locator(descriptor.selector).first().locator(selector).click({ timeout: 2000 });
+			const mutation = await watch();
+			const control = page.locator(descriptor.selector).first().locator(selector);
+			// Icon controls can be revealed only while the pointer is over their gallery.
+			if (!(await control.isVisible())) await page.locator(descriptor.selector).first().hover({ timeout: 2000 });
+			await control.click({ timeout: 2000 });
 			await mutation.evaluate(state => new Promise<void>(resolve => {
 				const started = performance.now();
 				const check = () => state.changed() || performance.now() - started >= 800 ? resolve() : setTimeout(check, 20);
 				check();
 			}));
-			await settle();
+			await settle(mutation);
 			const changed = await mutation.evaluate(state => { state.observer.disconnect(); return state.changed(); });
 			await mutation.dispose();
 			const immediate = await snapshot(page, descriptor);
@@ -264,6 +323,10 @@ async function collect(
 			} else if (immediate && immediate.key === before.key && !changed) {
 				// The source can intentionally ignore controls while its own transition lock is held.
 				continue;
+			} else if (immediate && immediate.key === before.key) {
+				// The stage mutated but still presents the prior frame: its transition
+				// outlasted the quiet window. Wait for it without activating again.
+				return observe(accept);
 			} else if (immediate) {
 				// A different stable frame is a real but incorrect edge (for example, a
 				// Previous control that actually advances); retries must not hide it.
@@ -395,16 +458,20 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 	await page.evaluate(() => {
 		(globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown }).__name ??= (fn) => fn;
 	});
-	const roots = await page.evaluate(() => {
-		const controls = Array.from(document.querySelectorAll('button,[role="button"]'));
-		const label = (element: Element) => (element.getAttribute('aria-label') || element.textContent || '').trim();
+	await page.evaluate(installDirection, DIRECTION);
+	const roots = await page.evaluate((key) => {
+		const direction = (globalThis as unknown as Record<string, Direction>)[key]!;
+		const controls = Array.from(document.querySelectorAll('body *'));
 		const visible = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
-		const previous = controls.filter(element => visible(element) && /^previous (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
-		const next = controls.filter(element => visible(element) && /^next (?:image|slide|photo|photograph|picture)$/i.test(label(element)));
+		const previous = controls.filter(element => direction(element) === 'previous');
+		const next = controls.filter(element => direction(element) === 'next');
 		const roots: string[] = [];
 		for (const before of previous) {
 			for (let scope = before.parentElement, depth = 0; scope && depth < 8; scope = scope.parentElement, depth++) {
-				if (!next.some(after => scope!.contains(after)) || scope.querySelectorAll('img').length < 2) continue;
+				const after = next.find(control => scope!.contains(control));
+				if (!after || scope.querySelectorAll('img').length < 2) continue;
+				// Icon controls may appear only on hover, but the gallery itself must render.
+				if (!(visible(before) && visible(after)) && !Array.from(scope.querySelectorAll('img')).some(visible)) break;
 				if (!scope.id) scope.id = `data-blocks-engine-capture-gallery-${roots.length}`;
 				roots.push('#' + CSS.escape(scope.id));
 				break;
@@ -412,7 +479,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			if (roots.length >= 2) break;
 		}
 		return roots;
-	});
+	}, DIRECTION);
 	const states: CapturedDialogInteraction[] = [];
 	for (const root of roots) {
 		// Activation moves nested scrollports as well as the window. Keep actual
