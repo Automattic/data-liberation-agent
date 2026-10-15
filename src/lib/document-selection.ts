@@ -55,12 +55,17 @@ function rootCss( css: string, bodyClasses: readonly string[] ): string {
 	const root = postcss.parse( css );
 	root.walkAtRules( rule => { if ( ! [ 'media', 'supports', 'layer', 'container' ].includes( rule.name ) ) rule.remove(); } );
 	root.walkRules( rule => {
+		// Every kept selector names a root element or, unescaped, a source body class.
+		const text = rule.selector;
+		if ( ! /html|body|:root|\\/.test( text ) && ! bodyClasses.some( name => text.includes( name ) ) ) { rule.remove(); return; }
 		const selectors = rule.selectors.flatMap( selector => {
 			if ( /^(?:html|body|:root)(?![\w-])/.test( selector ) && ! /[>+~\s]/.test( selector ) ) return [ selector ];
 			// Class-only body rules already match the scoped display:contents
 			// wrapper, but its box cannot carry margins, padding or viewport paint.
 			// Copy only the compound onto the real body, retaining specificity and
 			// conditional/cascade order without making descendants into roots.
+			// Only a class-only compound can qualify; skip parsing anything else.
+			if ( ! bodyClasses.length || ! selector.startsWith( '.' ) ) return [];
 			const parsed = selectorParser().astSync( selector );
 			const compound = parsed.first;
 			return compound?.nodes.length && compound.nodes.every( node => node.type === 'class' ) &&
@@ -81,6 +86,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	$( 'style,link[rel~="stylesheet"],meta[name="viewport"],script' ).remove();
 	$( 'html' ).removeAttr( 'style' ).removeAttr( 'class' );
 	$( 'body' ).empty().removeAttr( 'class' ).removeAttr( 'style' );
+	const head = $( 'head' );
 	const viewports: DeviceAssembly['viewports'] = {};
 	const roots: DeviceAssembly['roots'] = {};
 	for ( const key of selection.documents ) {
@@ -105,15 +111,19 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		const rootClasses = ( body.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 		for ( const node of source( 'style,link[rel~="stylesheet"]' ).toArray() ) {
 			const original = source( node );
-			const copy = $( source.html( node ) );
+			let copy;
 			if ( original.is( 'style' ) ) {
-				const scoped = projectStylesheet( () => scopeCss( original.text(), { scope, rootClasses } ) + rootCss( original.text(), rootClasses ), onUnparseable );
+				const css = original.text();
+				const scoped = projectStylesheet( () => scopeCss( css, { scope, rootClasses } ) + rootCss( css, rootClasses ), onUnparseable );
 				// An unparseable stylesheet stays out of the assembled document.
 				if ( scoped === undefined ) continue;
+				// The scoped text replaces the source text, so copy only the attributes.
+				copy = $( '<style>' );
+				for ( const [ name, value ] of Object.entries( ( node as Element ).attribs ) ) copy.attr( name, value );
 				copy.text( scoped );
-			}
+			} else copy = $( source.html( node ) );
 			copy.attr( 'data-blocks-engine-capture-device-style', key ).attr( 'data-blocks-engine-capture-source-media', original.attr( 'media' ) ?? 'all' ).attr( 'media', 'not all' );
-			$( 'head' ).append( copy );
+			head.append( copy );
 		}
 	}
 	// Kept inline by the export's existing data-blocks-engine-capture-* style handling.
@@ -126,7 +136,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		`html:not([data-blocks-engine-capture-selected-document]) [data-blocks-engine-capture-device-document="${ selection.defaultDocument }"]{display:contents!important}` +
 		Object.keys( viewports ).map( key => `html[data-blocks-engine-capture-selected-document="${ key }"] [data-blocks-engine-capture-device-document="${ key }"]{display:contents!important}` ).join( '' ) +
 		'html[data-blocks-engine-capture-document-unavailable] [data-blocks-engine-capture-device-unavailable]{display:block!important}';
-	$( 'head' ).prepend( $( '<style data-blocks-engine-capture-device-visibility>' ).text( visibility ) );
+	head.prepend( $( '<style data-blocks-engine-capture-device-visibility>' ).text( visibility ) );
 	const missing = selection.documents.filter( key => ! documents[ key ] );
 	if ( missing.length ) $( 'body' ).append( '<p data-blocks-engine-capture-device-unavailable role="status">This source device document was not captured.</p>' );
 	return { html: $.html(), selection, viewports, roots, missing };
