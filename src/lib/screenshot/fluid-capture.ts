@@ -292,7 +292,7 @@ async function learnFluidGeometry(
 	const sample = async ( width: number ) => {
 		sampledWidths.push( width );
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, baseline, settleMs, true, properties );
+		await waitForRestGeometry( page, baseline, settleMs, true, properties, true );
 		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
 		await observeRuntimeSheets( page );
@@ -776,11 +776,20 @@ async function learnFluidGeometry(
  * identical reads, one second apart in total, count as rest. The resize window
  * overlaps that observation rather than preceding it. The bound keeps a
  * perpetually animating page from stalling the sweep.
+ *
+ * Sampled widths share one sweep: the first width's scroll-through visits the
+ * document end to end, and a later width can only reach lazy work the earlier
+ * sweep missed when the document grew past it or an image that may load newly
+ * entered the render tree — both of which the rest loop below observes and
+ * re-sweeps. So a width reuses the previous sweep when its document sits
+ * inside the swept extent and its pending-image set has no new work, instead
+ * of paying a full scroll-through at every width. Entrance replay still
+ * sweeps for its own sake: its scroll-through is the point.
  */
-async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES ): Promise< void > {
+async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES, reuseSweep = false ): Promise< void > {
 	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
 	const reachabilityKey = await installImageReachability( page );
-	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reachabilityKey } ) => {
+	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reuseSweep, reachabilityKey } ) => {
 		const started = Date.now();
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		// One serialized geometry record per tagged element, keyed by its id, so
@@ -841,30 +850,48 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		const revealedPending = ( current: ReturnType< typeof content >, swept: ReturnType< typeof content > ) =>
 			[ ...current.rendered ].some( ( [ image, rendered ] ) =>
 				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! unreachable( image ) );
-		// The tallest the document has been while a sweep visited it. Scroll-linked
-		// chrome (a header that shrinks once scrolled) makes the same content
-		// shorter mid-sweep and taller again at the top, so the height read on
-		// return is not the extent swept. Only growth past this extent is a tail.
-		let sweptHeight = document.documentElement.scrollHeight;
+		// Two height memories with different jobs. The threshold keeps this width's
+		// own first read: scroll-linked chrome (a header that shrinks once scrolled)
+		// makes the same content shorter mid-sweep and taller again at the top, so
+		// regrowth to the at-top height is not new work. The visited extent only
+		// accumulates heights a sweep's steps, its return, or a settled tick
+		// actually observed — never this width's first read, which can predate this
+		// width's resize handler and describe the previous viewport. It is what the
+		// reuse test below compares against and what the next width inherits.
+		const priorSweep = ( state as unknown as { swept?: { height: number; content: ReturnType< typeof content > | null } } ).swept;
+		let sweptHeight = Math.max( document.documentElement.scrollHeight, priorSweep?.height ?? 0 );
+		let visitedHeight = priorSweep?.height ?? 0;
+		let sweptContent = content();
 		const sweep = async () => {
-			// Absence of overflow is observed again at each width, never cached from
-			// a previous viewport. Arbitrary source observers cannot be proven absent,
-			// so overflowing documents still get a sweep at every width.
+			// This body runs only when this width has new work: the first width,
+			// growth past the swept extent, or a newly rendered pending image. The
+			// page sits at the top when a sweep begins — the previous sweep returned
+			// there, and a reused width never scrolled.
 			for ( let y = window.innerHeight; y < document.documentElement.scrollHeight && Date.now() - started < 20_000; y += window.innerHeight ) {
 				window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
 				await new Promise( resolve => setTimeout( resolve, 60 ) );
 				sweptHeight = Math.max( sweptHeight, document.documentElement.scrollHeight );
+				visitedHeight = Math.max( visitedHeight, document.documentElement.scrollHeight );
 			}
 			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
 			sweptHeight = Math.max( sweptHeight, document.documentElement.scrollHeight );
+			visitedHeight = Math.max( visitedHeight, document.documentElement.scrollHeight );
 			// Source libraries (e.g. MooTools) replace window.Event; the document's
 			// native factory still builds a real event.
 			const scrolled = document.createEvent( 'Event' );
 			scrolled.initEvent( 'scroll', false, false );
 			window.dispatchEvent( scrolled );
 		};
-		let sweptContent = content();
-		if ( lazy ) await sweep();
+		// Reuse the previous sampled width's sweep when it already visited this
+		// document's full extent and no image that may load newly entered the
+		// render tree: the sweep could reach nothing the rest loop's own guards
+		// would not. The swept content is carried across widths so those guards
+		// compare against what the last sweep actually saw.
+		const priorContent = priorSweep?.content ?? null;
+		const reuse = lazy && reuseSweep && priorContent !== null &&
+			document.documentElement.scrollHeight <= priorSweep!.height && ! revealedPending( sweptContent, priorContent );
+		if ( reuse ) sweptContent = priorContent;
+		else if ( lazy ) await sweep();
 		// Retain the old rest budget and minimum resize window; only their
 		// redundant serial scheduling is removed. Additional sweeps share it.
 		const deadline = Date.now() + settleMs + 3500;
@@ -874,8 +901,10 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
 			const currentContent = content();
 			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) => source !== sweptContent.sources.get( image ) );
+			const currentHeight = document.documentElement.scrollHeight;
+			visitedHeight = Math.max( visitedHeight, currentHeight );
 			if ( lazy && ( revealedPending( currentContent, sweptContent ) ||
-				changedImages.some( ( [ image ] ) => ! image.complete ) || document.documentElement.scrollHeight > sweptHeight ) ) {
+				changedImages.some( ( [ image ] ) => ! image.complete ) || currentHeight > sweptHeight ) ) {
 				// Finite delayed resize/image work can introduce another offscreen
 				// tail after the first sweep. Observe it before declaring readiness.
 				sweptContent = currentContent;
@@ -905,7 +934,13 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
 			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
 		}
-	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reachabilityKey } ), 25_000 + settleMs );
+		// Later widths reuse this wait's visited extent and content (see `reuse`),
+		// so what the last sweep actually observed is what they compare against.
+		if ( lazy ) {
+			( state as unknown as { swept?: { height: number; content: ReturnType< typeof content > | null } } ).swept =
+				{ height: visitedHeight, content: sweptContent };
+		}
+	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reuseSweep, reachabilityKey } ), 25_000 + settleMs );
 }
 
 /** Quiet window after a probe resize; outlasts common 250–500 ms resize debounces. */

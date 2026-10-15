@@ -285,10 +285,105 @@ describe( 'responsive readiness contract', () => {
 			console.info( JSON.stringify( { fixture: 'scroll-linked-header', elapsedMs: Math.round( elapsed ), sweeps, result } ) );
 			expect( result.applied ).toBeGreaterThan( 0 );
 			expect( await page.locator( '#header' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( 120 );
-			// One sweep per sampled width; the return to the capture width does not sweep.
-			expect( sweeps ).toBe( 3 );
+			// Later widths sit inside the extent the first width's sweep already
+			// visited (same height, no new pending images), so they reuse it; the
+			// return to the capture width does not sweep.
+			expect( sweeps ).toBe( 1 );
 		} finally { await page.close(); }
 	}, 40_000 );
+
+	it( 'sweeps one document extent for the whole learning when every later width sits inside it', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>body{margin:0}</style>
+				<div id="box" style="width:720px;height:40px">Neutral text</div><div style="height:3000px"></div>
+				<script>
+				window.positions = [];
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top > 0) positions.push(options.top); scroll(options); };
+				const box = document.querySelector('#box');
+				function resize() { box.style.width = innerWidth / 2 + 'px'; }
+				addEventListener('resize', resize); resize();
+				</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 200 } );
+			const positions = await page.evaluate( () => ( window as unknown as { positions: number[] } ).positions );
+			console.info( JSON.stringify( { fixture: 'shared-sweep', positions, result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+			// The document never leaves the extent the 390 sweep visited and no
+			// image can newly load, so 768 and 1440 reuse that sweep and only 390
+			// pays the scroll-through.
+			expect( positions ).toEqual( [ 900, 1800, 2700 ] );
+		} finally { await page.close(); }
+	}, 30_000 );
+
+	it( 'sweeps a later width that grows the document past the extent earlier widths visited', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>body{margin:0}</style>
+				<div id="box" style="width:720px;height:40px">Neutral text</div><div id="tail"></div>
+				<script>
+				window.positions = [];
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top > 0) positions.push(options.top); scroll(options); };
+				const box = document.querySelector('#box');
+				function resize() {
+					box.style.width = innerWidth / 2 + 'px';
+					document.querySelector('#tail').style.height = innerWidth < 800 ? '4000px' : '5200px';
+				}
+				addEventListener('resize', resize); resize();
+				</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 200 } );
+			const positions = await page.evaluate( () => ( window as unknown as { positions: number[] } ).positions );
+			console.info( JSON.stringify( { fixture: 'growth-past-swept-extent', positions, result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			// 390 sweeps its 4040px extent; 768 sits inside it and reuses the sweep;
+			// 1440 grows the document past it and pays its own scroll-through.
+			expect( positions ).toEqual( [ 900, 1800, 2700, 3600, 900, 1800, 2700, 3600, 4500 ] );
+		} finally { await page.close(); }
+	}, 30_000 );
+
+	it( 'sweeps a later width that reveals a new pending image inside the swept extent', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.route( 'https://neutral.test/late.svg', async route => {
+				await new Promise( resolve => setTimeout( resolve, 400 ) );
+				await route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"/>' } );
+			} );
+			// The fixed-height wrapper keeps the document's extent constant, so only
+			// the new pending image can decide the 768 sweep.
+			await page.setContent( `<style>body{margin:0}</style>
+				<div id="box" style="width:720px;height:40px">Neutral text</div>
+				<div style="height:3000px"><div style="height:2960px"></div><div id="tail"></div></div>
+				<script>
+				window.positions = [];
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top > 0) positions.push(options.top); scroll(options); };
+				const box = document.querySelector('#box');
+				function resize() {
+					box.style.width = innerWidth / 2 + 'px';
+					if (innerWidth === 768 && !document.querySelector('#late')) {
+						const image = document.createElement('img');
+						image.id = 'late';
+						image.loading = 'lazy';
+						image.width = 40; image.height = 40;
+						image.src = 'https://neutral.test/late.svg';
+						document.querySelector('#tail').appendChild(image);
+					}
+				}
+				addEventListener('resize', resize); resize();
+				</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 1200 } );
+			const positions = await page.evaluate( () => ( window as unknown as { positions: number[] } ).positions );
+			console.info( JSON.stringify( { fixture: 'new-pending-image', positions, result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			// The image enters the render tree pending at 768, so that width cannot
+			// reuse the 390 sweep: it sweeps again and the lazy image loads; 1440
+			// finds the completed image and reuses the 768 sweep.
+			expect( positions ).toEqual( [ 900, 1800, 2700, 900, 1800, 2700 ] );
+			expect( await page.locator( '#late' ).evaluate( image => ( image as HTMLImageElement ).complete && ( image as HTMLImageElement ).naturalWidth ) ).toBe( 40 );
+		} finally { await page.close(); }
+	}, 30_000 );
 
 	it( 'does not resweep for a perpetual rotator that toggles already-loaded images within the swept extent', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
