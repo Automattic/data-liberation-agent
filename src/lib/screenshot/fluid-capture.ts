@@ -8,6 +8,7 @@
 // copy keep reflowing after that runtime is stripped.
 //
 import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
+import { VIEWPORT_WORK_KEY, observeViewportWork, type ViewportWork } from './viewport-work.js';
 import {
 	breakpointsFrom,
 	interpolateSamples,
@@ -45,7 +46,7 @@ export interface FluidSweepOptions {
 	 * refined within DEFAULT_SWEEP_WIDTHS where the observations need it.
 	 */
 	widths?: number[];
-	/** Minimum observation window after resize, overlapping lazy work and rest. */
+	/** Extra rest budget after each resize, beyond the base bound, for slow runtimes. */
 	settleMs?: number;
 	/** Source-owned motion/readiness before each geometry sample, after rest settling. */
 	prepareViewport?: ( page: Page ) => Promise< void >;
@@ -195,6 +196,8 @@ export async function learnAndApplyFluidGeometry(
 ): Promise< FluidLearningResult > {
 	const { withEvaluateTimeout } = await import( './page-helpers.js' );
 	const original = page.viewportSize();
+	// Rest after a resize ends on the delayed work it scheduled (see waitForRestGeometry).
+	await withEvaluateTimeout( page.evaluate( observeViewportWork ), 8000 );
 	const baseline = await captureFluidBaseline( page, ID_ATTRIBUTE );
 	let completed = false;
 	try {
@@ -206,7 +209,7 @@ export async function learnAndApplyFluidGeometry(
 			await withEvaluateTimeout( ( async () => {
 				if ( ! completed ) {
 					await baseline.evaluate( state => state.restore() );
-					if ( original ) await page.setViewportSize( original );
+					if ( original ) await resizeViewport( page, original );
 					await waitForRestGeometry( page, baseline );
 					await baseline.evaluate( state => state.restore() );
 				}
@@ -291,7 +294,7 @@ async function learnFluidGeometry(
 	const sampledWidths: number[] = [];
 	const sample = async ( width: number ) => {
 		sampledWidths.push( width );
-		await page.setViewportSize( { width, height: original?.height ?? 900 } );
+		await resizeViewport( page, { width, height: original?.height ?? 900 } );
 		await waitForRestGeometry( page, baseline, settleMs, true, properties, true );
 		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
@@ -597,7 +600,7 @@ async function learnFluidGeometry(
 	// they must inherit the capture baseline rather than the widest sweep sample.
 	// The source then owns the final clone state. Learned CSS follows that resize.
 	await baseline.evaluate( state => state.restore() );
-	if ( original ) await page.setViewportSize( original );
+	if ( original ) await resizeViewport( page, original );
 	await waitForRestGeometry( page, baseline, settleMs, false, properties );
 	await replayReplacedEntrances( page, baseline, properties );
 	await baseline.evaluate( state => state.reconcile() );
@@ -766,16 +769,28 @@ async function learnFluidGeometry(
 }
 
 /**
+ * Resize with the viewport-work tracker armed, so the timeouts the resize
+ * schedules are pending until `waitForRestGeometry` observes them run.
+ */
+async function resizeViewport( page: Page, size: { width: number; height: number } ): Promise< void > {
+	await page.evaluate( key => ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( key ) ]!.arm(), VIEWPORT_WORK_KEY );
+	await page.setViewportSize( size );
+}
+
+/**
  * One per-width readiness contract: observe resize, lazy work, and at-top rest.
  *
  * Scroll-linked chrome (a header that shrinks once the page is scrolled)
  * re-expands after the sweep returns to the top on the source's own schedule,
  * and the runtime rewrites the geometry that depends on it as it goes.
  * Sampling mid-transition teaches the fitter the scrolled state, which is not
- * the state the copy renders. Watch exactly what is sampled: four consecutive
- * identical reads, one second apart in total, count as rest. The resize window
- * overlaps that observation rather than preceding it. The bound keeps a
- * perpetually animating page from stalling the sweep.
+ * the state the copy renders. Watch exactly what is sampled: rest is two
+ * identical reads 250 ms apart once no timeout the resize or scroll scheduled
+ * is still pending (see viewport-work.ts). A debounced resize handler is
+ * waited for because its timeout is pending, not because a fixed window
+ * happens to outlast it; a width whose geometry settled at once pays one read
+ * interval. The bound keeps a perpetually animating page from stalling the
+ * sweep.
  *
  * Sampled widths share one sweep: the first width's scroll-through visits the
  * document end to end, and a later width can only reach lazy work the earlier
@@ -789,8 +804,12 @@ async function learnFluidGeometry(
 async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES, reuseSweep = false ): Promise< void > {
 	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
 	const reachabilityKey = await installImageReachability( page );
-	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reuseSweep, reachabilityKey } ) => {
+	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reuseSweep, reachabilityKey, workKey } ) => {
 		const started = Date.now();
+		const work = ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( workKey ) ]!;
+		const sleep = work.sleep;
+		// The resize that preceded this wait armed the tracker.
+		await work.release();
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		// One serialized geometry record per tagged element, keyed by its id, so
 		// rest can be judged per element (see `perpetual` below).
@@ -863,13 +882,15 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		let visitedHeight = priorSweep?.height ?? 0;
 		let sweptContent = content();
 		const sweep = async () => {
+			// Timeouts the sweep's scroll events schedule are viewport work too.
+			work.arm();
 			// This body runs only when this width has new work: the first width,
 			// growth past the swept extent, or a newly rendered pending image. The
 			// page sits at the top when a sweep begins — the previous sweep returned
 			// there, and a reused width never scrolled.
 			for ( let y = window.innerHeight; y < document.documentElement.scrollHeight && Date.now() - started < 20_000; y += window.innerHeight ) {
 				window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
-				await new Promise( resolve => setTimeout( resolve, 60 ) );
+				await sleep( 60 );
 				sweptHeight = Math.max( sweptHeight, document.documentElement.scrollHeight );
 				visitedHeight = Math.max( visitedHeight, document.documentElement.scrollHeight );
 			}
@@ -881,6 +902,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			const scrolled = document.createEvent( 'Event' );
 			scrolled.initEvent( 'scroll', false, false );
 			window.dispatchEvent( scrolled );
+			await work.release();
 		};
 		// Reuse the previous sampled width's sweep when it already visited this
 		// document's full extent and no image that may load newly entered the
@@ -892,13 +914,12 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			document.documentElement.scrollHeight <= priorSweep!.height && ! revealedPending( sweptContent, priorContent );
 		if ( reuse ) sweptContent = priorContent;
 		else if ( lazy ) await sweep();
-		// Retain the old rest budget and minimum resize window; only their
-		// redundant serial scheduling is removed. Additional sweeps share it.
+		// The rest budget bounds a page that never rests. Additional sweeps share it.
 		const deadline = Date.now() + settleMs + 3500;
 		let previous = snapshot();
 		let quiet = 0;
 		while ( Date.now() < deadline ) {
-			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
+			await sleep( 250 );
 			const currentContent = content();
 			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) => source !== sweptContent.sources.get( image ) );
 			const currentHeight = document.documentElement.scrollHeight;
@@ -932,7 +953,9 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// Native-lazy images clipped out of view by an overflow ancestor are
 			// equally unreachable by this vertical sweep.
 			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
-			if ( quiet >= 4 && imagesReady && Date.now() - started >= settleMs ) break;
+			// Delayed resize work is observed as its pending timeout, so rest no
+			// longer needs a fixed window that outlasts every debounce.
+			if ( quiet >= 1 && imagesReady && work.pending() === 0 ) break;
 		}
 		// Later widths reuse this wait's visited extent and content (see `reuse`),
 		// so what the last sweep actually observed is what they compare against.
@@ -940,7 +963,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			( state as unknown as { swept?: { height: number; content: ReturnType< typeof content > | null } } ).swept =
 				{ height: visitedHeight, content: sweptContent };
 		}
-	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reuseSweep, reachabilityKey } ), 25_000 + settleMs );
+	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reuseSweep, reachabilityKey, workKey: VIEWPORT_WORK_KEY } ), 25_000 + settleMs );
 }
 
 /** Quiet window after a probe resize; outlasts common 250–500 ms resize debounces. */
