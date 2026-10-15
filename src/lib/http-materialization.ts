@@ -9,6 +9,8 @@ export interface HttpMaterializationOptions {
 	mobileVariant?: string;
 	/** Include explicitly staged, hash-verified runtime child documents. */
 	embeddedDocuments?: boolean;
+	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
+	canonicalAliases?: ReadonlyArray< import('./route-aliases.js').CanonicalRouteAlias >;
 	limits?: import('./capture-export.js').ExportLimits;
 }
 

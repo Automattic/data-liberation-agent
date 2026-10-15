@@ -62,6 +62,15 @@ import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
+
+/** Alias request identity → its canonical route's identity, for link counting. */
+function linkedAliasMap( aliases?: readonly import('../route-aliases.js').CanonicalRouteAlias[] ): Map< string, string > {
+	const map = new Map< string, string >();
+	for ( const { url, canonicalUrl } of aliases ?? [] ) {
+		try { map.set( documentRequestUrl( url ), documentRequestUrl( canonicalUrl ) ); } catch { /* An unparseable record cannot satisfy any link. */ }
+	}
+	return map;
+}
 import {
 	defaultViewports,
 	SCREENSHOT_DEVICE_SCALE_FACTOR,
@@ -2080,7 +2089,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const frontier = opts.linkedPages ? new LinkedFrontier( {
 		...opts.linkedPages,
 		capturePageLimit: opts.limit !== undefined && opts.limit >= 0 ? opts.limit : undefined,
-	}, startTime, opts.routeScope ) : undefined;
+	}, startTime, opts.routeScope, linkedAliasMap( opts.linkedCanonicalAliases ), opts.linkedCanonicalAliases ?? [] ) : undefined;
 	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0, startTime, 'inventory'));
 	// Under a time budget the entrypoint starts first, so the budget never skips it.
 	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
