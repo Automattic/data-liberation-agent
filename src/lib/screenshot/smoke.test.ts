@@ -155,8 +155,13 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       '/new': tallHtml('NEW'),
       '/target': tallHtml('TARGET'),
       '/missing-html': tallHtml('NOT CAPTURED'),
-      // A client-routed control navigating the page away after load.
+      // A client router substituting its own route through the History API:
+      // the marked document survives, so the screenshot-and-HTML pair is
+      // consistent and capture keeps it, recording the substitution.
       '/spa': tallHtml('SPA').replace('</body>', '<script>addEventListener("load",()=>history.pushState({},"","/new"))</script></body>'),
+      // A control replacing the document after load is still route drift:
+      // capture must refuse the mismatched pair.
+      '/hardnav': tallHtml('HARDNAV').replace('</body>', '<script>addEventListener("load",()=>setTimeout(()=>location.assign("/target"),50))</script></body>'),
     };
     const redirects: Record<string, [number, string]> = {
       '/old': [301, '/new'],
@@ -186,12 +191,14 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     const outputDir = mkdtempSync(join(TMP_ROOT, 'redirect-out-'));
     try {
       await captureScreenshots({
-        urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa'].map((path) => `${origin}${path}`),
+        urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa', '/hardnav'].map((path) => `${origin}${path}`),
         outputDir,
         concurrency: 2,
       });
       const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8'));
-      const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8')) as Array<{ url: string; error: string }>;
+      const failures = existsSync(join(outputDir, 'screenshots', 'failures.json'))
+        ? JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8')) as Array<{ url: string; error: string }>
+        : [];
       // Aliases carry no artifacts of their own and are never failures.
       for (const [alias, target] of [['/old', '/new'], ['/temp', '/new'], ['/elsewhere', '/target']]) {
         expect(manifest.entries[`${origin}${alias}`]).toMatchObject({ redirectedTo: `${origin}${target}` });
@@ -204,8 +211,17 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       expect(readFileSync(join(outputDir, 'html', 'new.html'), 'utf8')).toContain('NEW');
       expect(existsSync(join(outputDir, 'html', 'old.html'))).toBe(false);
       expect(existsSync(join(outputDir, 'html', 'temp.html'))).toBe(false);
-      expect(failures.filter((f) => /route drift/.test(f.error)).map((f) => f.url)).toEqual([`${origin}/spa`]);
-      expect(manifest.entries[`${origin}/spa`].html).toBeUndefined();
+      // A History-API self-substitution keeps the route's document (the marker
+      // above proves the marked document survived): html persists, the pair is
+      // consistent, and the receipt records the substituted route.
+      expect(failures.filter((f) => /route drift/.test(f.error)).every((f) => f.url === `${origin}/hardnav`)).toBe(true);
+      expect(failures.filter((f) => /route drift/.test(f.error)).length).toBeGreaterThan(0);
+      expect(manifest.entries[`${origin}/spa`].html).toBe('html/spa.html');
+      expect(manifest.entries[`${origin}/spa`].clientRouteDrift).toBe(`${origin}/new`);
+      expect(readFileSync(join(outputDir, 'html', 'spa.html'), 'utf8')).toContain('SPA');
+      // A document-replacing navigation is still drift: at least one profile
+      // refused the pair, and only the drift URL carries no persisted HTML.
+      expect(failures.some((f) => f.url === `${origin}/hardnav` && /route drift/.test(f.error))).toBe(true);
       expect(manifest.entries[`${origin}/unscheduled`]).toMatchObject({ externalRedirect: true });
       expect(manifest.entries[`${origin}/absent`]).toMatchObject({ sourceAbsentStatus: 404 });
       expect(manifest.entries[`${origin}/?missing=1`]).toMatchObject({ sourceAbsentStatus: 404 });

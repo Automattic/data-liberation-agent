@@ -83,6 +83,11 @@ export interface ManifestEntry {
    * alias of that route and has no artifacts of its own.
    */
   redirectedTo?: string;
+  /** Same-origin route a client router substituted for this route through the
+   * History API (no main-frame request). The captured document is the route's
+   * substituted content, paired with its own screenshot; the URL is provenance,
+   * not an alias — the route keeps its artifacts. */
+  clientRouteDrift?: string;
   /** Proven off-origin initial-document redirect. Destination path/query are not stored. */
   externalRedirect?: boolean;
   sourceOutcomes?: import('../source-navigation.js').ExternalBoundary[];

@@ -20,6 +20,8 @@ import {
 	countBodyTags,
 	isRouteDrift,
 	isStackingArtifact,
+	clientRouteSubstitution,
+	markCaptureDocument,
 	navigationDocumentUrl,
 	serverRedirectTarget,
 } from './document-integrity.js';
@@ -888,6 +890,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		fail( 'content', 'route drift: unexplained navigation during source baseline capture' );
 	};
 	let releaseBaselineNavigation = await lockMainFrameNavigation(page, baselineDrift, true);
+	// Mark the document the route navigated to: a client router can later
+	// substitute a route through the History API (no main-frame request, so the
+	// navigation lock above sees nothing) while keeping this exact document —
+	// the serialize-time identity check below distinguishes those (kept, proven
+	// recorded) from a replaced document (still drift).
+	await markCaptureDocument( page );
 	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	await applySourceCleanup(page, sourcePolicy);
 
@@ -1173,16 +1181,32 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// re-fetched HTML would still be paired with the wrong screenshot. Refusing
 			// and recording it — the same discipline as isStackingArtifact below — keeps
 			// the receipt honest instead of shipping a mismatched pair silently.
+			// The one exception: a same-document History-API substitution (the source's
+			// own client router, such as a gated route redirecting itself to an auth
+			// page). The screenshot above ran on exactly that document, so the pair is
+			// consistent and describes what a visitor sees; capture keeps it, and the
+			// receipt records the substituted route under `clientRouteDrift` instead
+			// of hiding the drift or persisting an unproven mismatch. A replaced
+			// document (a real navigation) still fails as it always has.
 			const capturedUrl = page.url();
-			if ( isRouteDrift( capturedUrl, navigationUrl ) ) {
+			const substitution = isRouteDrift( capturedUrl, navigationUrl )
+				? await clientRouteSubstitution( page, capturedUrl, navigationUrl )
+				: undefined;
+			if ( isRouteDrift( capturedUrl, navigationUrl ) && ! substitution ) {
 				fail( 'content', `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted` );
 			} else if ( isStackingArtifact( html ) ) {
 				fail( 'content', `nested document capture (${ countBodyTags( html ) } <body> in one page); HTML not persisted` );
 			} else {
+				// A same-document History-API substitution (a client router replacing
+				// a gated route with its auth page) leaves the marked document intact:
+				// the fullpage screenshot above ran on exactly this document, so the
+				// pair is consistent and IS what a visitor sees at this route. Keep it
+				// and record the substitution; a replaced document still fails.
 				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
 				writeFileSync( plan.paths.html, html );
 				entry.html = relative( outputDir, plan.paths.html );
 				entry.documents = { ...entry.documents, [ viewport.id ]: documentUrl };
+				if ( substitution ) entry.clientRouteDrift = substitution;
 			}
 		} catch ( err ) {
 			fail( 'content', err );
@@ -1204,7 +1228,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// here too (this carry already silently skips on any other failure), so a
 			// drifted mobile capture just leaves the page desktop-only rather than
 			// recording a failure of its own.
-			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) ) {
+			if (
+				( ! isRouteDrift( page.url(), navigationUrl ) || await clientRouteSubstitution( page, page.url(), navigationUrl ) ) &&
+				! isStackingArtifact( mhtml )
+			) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
 				entry.mobileHtml = relative( outputDir, plan.paths.htmlMobile );
@@ -2327,7 +2354,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined, deviceMode: routeDevice,
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, clientRouteDrift: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined, deviceMode: routeDevice,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
 		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
@@ -2351,6 +2378,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				if ( profileEntry.mobileScrolled ) entry.mobileScrolled = profileEntry.mobileScrolled;
 				if ( profileEntry.mobileHtml ) entry.mobileHtml = profileEntry.mobileHtml;
 				if ( profileEntry.redirectedTo ) entry.redirectedTo = profileEntry.redirectedTo;
+				if ( profileEntry.clientRouteDrift ) entry.clientRouteDrift = profileEntry.clientRouteDrift;
 				if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
 			}
 			if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];

@@ -233,3 +233,62 @@ export function routeIdentity( url: string ): string {
 		return url;
 	}
 }
+
+/**
+ * Window property {@link markCaptureDocument} sets on the document capture
+ * navigated to. A client router that later substitutes a route through the
+ * History API (a gated route redirecting itself to an auth page, for example)
+ * keeps the same document — and this value — alive without producing a
+ * main-frame request, while a replaced document starts without it.
+ */
+export const CAPTURE_DOCUMENT_MARKER = '__dlaCaptureDocument';
+
+interface PageLike {
+	evaluate< T >( script: string | ( ( arg: string ) => T ), arg?: string ): Promise< T >;
+}
+
+type CaptureDocumentIdentity = 'same' | 'replaced' | 'unknown';
+
+/**
+ * Mark the current document as the one capture navigated to. Best-effort: an
+ * unmarkable page is `unknown` to {@link isSameCaptureDocument}, which degrades
+ * every drift decision to the pre-existing behavior.
+ */
+export async function markCaptureDocument( page: PageLike ): Promise< void > {
+	// A plain anonymous function expression, not a named arrow: tsx/esbuild's
+	// keepNames transform wraps named arrows with a `__name(fn)` call that may
+	// not exist in every browser context, and string scripts lose their
+	// argument under this Playwright version.
+	await page.evaluate( function ( token ) { ( window as unknown as Record< string, number > )[ token ] = 1; }, CAPTURE_DOCUMENT_MARKER ).catch( () => undefined );
+}
+
+/** Whether the live document is still the one {@link markCaptureDocument} marked. */
+export async function isSameCaptureDocument( page: PageLike ): Promise< CaptureDocumentIdentity > {
+	// Same string-form reasoning as {@link markCaptureDocument}.
+	return await page.evaluate< CaptureDocumentIdentity >(
+		function ( token ) { return ( window as unknown as Record< string, number > )[ token ] === 1 ? 'same' : 'replaced'; }, CAPTURE_DOCUMENT_MARKER
+	).catch( (): CaptureDocumentIdentity => 'unknown' );
+}
+
+/**
+ * A route a source page substituted for its own through the History API after
+ * load (client-side routing; no main-frame request ever fired, so navigation
+ * locking never sees it). Returns the substituted URL when the live document is
+ * still the one capture navigated to and stays on the same site; otherwise
+ * undefined. The substituted document IS what the visitor sees, and the
+ * screenshot already taken pairs with it, so the capture can keep it while
+ * recording the substitution.
+ */
+export async function clientRouteSubstitution(
+	page: PageLike,
+	capturedUrl: string,
+	intendedUrl: string
+): Promise< string | undefined > {
+	try {
+		if ( new URL( capturedUrl ).origin !== new URL( intendedUrl ).origin ) return undefined;
+	} catch {
+		return undefined;
+	}
+	const identity = await isSameCaptureDocument( page );
+	return identity === 'same' ? capturedUrl : undefined;
+}
