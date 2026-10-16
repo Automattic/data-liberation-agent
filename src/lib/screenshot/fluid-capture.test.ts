@@ -318,6 +318,20 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		}
 	} );
 
+	it( 'neither counts nor sweeps for a non-pixel custom property beside pixel geometry', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			// `--edge` and `--tint` are never pixels at any width; they are observed only
+			// because they share an inline style with the pixel `--inset` and `width`.
+			await page.setContent( '<div id="tile" style="width:200px;--inset:8px;--edge:auto;--tint:rgb(1, 2, 3)">Tile</div>' );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+			expect( result.byKind ).toEqual( { constant: 2 } );
+			expect( result.unmodelled ).toBe( 0 );
+			expect( await page.locator( '#tile' ).evaluate( element => [ element.style.width, element.style.getPropertyValue( '--inset' ) ] ) ).toEqual( [ '200px', '8px' ] );
+		} finally { await page.close(); }
+	}, 30_000 );
+
 	it( 'still learns runtime-sized text, generated glyphs, and explicit blank spacers', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
