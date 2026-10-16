@@ -20,6 +20,12 @@ export interface CapturedGallery {
 	restoration: 'verified' | 'unverified';
 	/** Timing is deliberately not inferred from the captured index. */
 	autoplay: 'unmeasured';
+	/**
+	 * The source does not render its directional controls at this viewport. The
+	 * cycle was stepped through the source's own handlers; Previous is not
+	 * presented here, so it is not wired as a portable action.
+	 */
+	controls?: 'unrendered';
 	failure?: string;
 }
 
@@ -237,13 +243,27 @@ async function collect(
 	const watch = () => page.locator(descriptor.selector).first().locator(descriptor.stage).evaluateHandle(stage => {
 		let last: number | undefined;
 		let cadence = 0;
+		// A silent gap while a CSS transition or animation runs is that animation,
+		// which settle already awaits; it is not the script's own write cadence.
+		let running = 0, animated = false;
+		const start = () => { running++; animated = true; };
+		const end = () => { running = Math.max(0, running - 1); };
+		const starts = ['transitionrun', 'animationstart'], ends = ['transitionend', 'transitioncancel', 'animationend', 'animationcancel'];
+		starts.forEach(type => stage.addEventListener(type, start));
+		ends.forEach(type => stage.addEventListener(type, end));
 		const observer = new MutationObserver(() => {
 			const now = performance.now();
-			if (last !== undefined) cadence = Math.max(cadence, now - last);
+			if (last !== undefined && !animated) cadence = Math.max(cadence, now - last);
 			last = now;
+			animated = running > 0;
 		});
 		observer.observe(stage, { attributes: true, childList: true, characterData: true, subtree: true });
-		return { observer, changed: () => last !== undefined, last: (since: number) => last ?? since, cadence: () => cadence };
+		const stop = () => {
+			observer.disconnect();
+			starts.forEach(type => stage.removeEventListener(type, start));
+			ends.forEach(type => stage.removeEventListener(type, end));
+		};
+		return { stop, changed: () => last !== undefined, last: (since: number) => last ?? since, cadence: () => cadence };
 	});
 	const settle = async (mutation: Awaited<ReturnType<typeof watch>>) => {
 		await page.waitForTimeout(100);
@@ -281,7 +301,7 @@ async function collect(
 	// Settle the rendered stage before assigning the cycle's initial identity.
 	const initial = await watch();
 	await settle(initial);
-	await initial.evaluate(state => state.observer.disconnect());
+	await initial.evaluate(state => state.stop());
 	await initial.dispose();
 	let first = await snapshot(page, descriptor);
 	for (let sample = 0; !first && sample < 30; sample++) {
@@ -301,20 +321,28 @@ async function collect(
 		}
 		return null;
 	};
+	let unrendered = false;
 	const act = async (selector: string, before: NonNullable<typeof first>, accept: (frame: NonNullable<typeof first>) => boolean) => {
 		for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
 			const mutation = await watch();
 			const control = page.locator(descriptor.selector).first().locator(selector);
 			// Icon controls can be revealed only while the pointer is over their gallery.
-			if (!(await control.isVisible())) await page.locator(descriptor.selector).first().hover({ timeout: 2000 });
-			await control.click({ timeout: 2000 });
+			let visible = await control.isVisible();
+			if (!visible) {
+				await page.locator(descriptor.selector).first().hover({ timeout: 2000 });
+				visible = await control.isVisible();
+			}
+			// A source can stop rendering its arrows at narrow widths while the same
+			// stage still steps through them; the frames below are observed either way.
+			if (visible) await control.click({ timeout: 2000 });
+			else { unrendered = true; await control.dispatchEvent('click'); }
 			await mutation.evaluate(state => new Promise<void>(resolve => {
 				const started = performance.now();
 				const check = () => state.changed() || performance.now() - started >= 800 ? resolve() : setTimeout(check, 20);
 				check();
 			}));
 			await settle(mutation);
-			const changed = await mutation.evaluate(state => { state.observer.disconnect(); return state.changed(); });
+			const changed = await mutation.evaluate(state => { state.stop(); return state.changed(); });
 			await mutation.dispose();
 			const immediate = await snapshot(page, descriptor);
 			if (immediate && accept(immediate)) {
@@ -362,7 +390,9 @@ async function collect(
 			}
 		}
 		// Once Next has closed a cycle, walk it backwards and verify each inverse edge.
-		if (complete) {
+		// Closing the cycle already restored the initial frame; an unrendered
+		// Previous control has no presented edge to prove at this viewport.
+		if (complete && !unrendered) {
 			for (let index = frames.length - 1; index >= 0; index--) {
 				const expected = frames[index]!;
 				const before = current;
@@ -414,6 +444,7 @@ async function collect(
 		coverage: complete ? 'complete' : 'partial',
 		restoration: !continuityFailure && (await snapshot(page, descriptor))?.key === first.key ? 'verified' : 'unverified',
 		autoplay: 'unmeasured',
+		...(unrendered ? {controls: 'unrendered' as const} : {}),
 		...(failure ? {failure} : {}),
 	};
 }

@@ -1461,8 +1461,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 }
 
+// An inline cycle is proven per viewport even when no lightbox opens; its
+// HTML was wired from it, so the report must carry the same evidence.
+function isProvenInlineGallery( state: CapturedDialogInteraction ): boolean {
+	return state.gallery?.inline.coverage === 'complete' && state.gallery.inline.restoration === 'verified';
+}
+
 function hasPromotableInteractionEvidence( previous: InteractionStatesReport | undefined, latest: InteractionStatesReport ): boolean {
-	return ! previous || latest.states.some( state => state.status === 'captured' ) ||
+	return ! previous || latest.states.some( state => state.status === 'captured' || isProvenInlineGallery( state ) ) ||
 		( latest.routeNavigation?.length ?? 0 ) > 0 || latest.initialDialogs?.some( state => state.status === 'captured' ) === true;
 }
 
