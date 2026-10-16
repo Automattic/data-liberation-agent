@@ -71,3 +71,39 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 		expect( existsSync( join( captureRoot, 'capture-receipt.json' ) ) ).toBe( false );
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );
+
+it( 'records the site name every captured route title repeats as the receipt title', () => {
+	const root = mkdtempSync( join( tmpdir(), 'capture-evidence-title-' ) );
+	try {
+		const captureRoot = join( root, 'capture' );
+		const stageRoot = join( root, 'stage' );
+		mkdirSync( captureRoot );
+		mkdirSync( join( stageRoot, 'website', 'privacy' ), { recursive: true } );
+		writeFileSync( join( stageRoot, 'website', 'index.html' ), '<title>Acme Auto | Auto Repair in Springfield</title><main>Home</main>' );
+		writeFileSync( join( stageRoot, 'website', 'privacy', 'index.html' ), '<title>Privacy Policy | Acme Auto</title><main>Privacy</main>' );
+		const identityHtmlPath = join( stageRoot, 'identity.html' );
+		writeFileSync( identityHtmlPath, '<main>Home</main>' );
+		const resourceManifest = { version: 1 as const, resources: {}, failures: [] };
+		const receiptPath = writeCaptureEvidence( {
+			locations: { captureRoot, stageRoot },
+			source: { sourceUrl: 'https://example.test/', platform: 'generic', title: 'Acme Auto | Auto Repair in Springfield', summary: { routesFailed: 0 }, failures: [] },
+			capture: { entries: {}, absentRoutes: new Set(), interactivity: [] },
+			pages: [
+				{ slug: 'home', url: 'https://example.test/', routePath: 'index.html', identityHtmlPath, hasMobileDocument: false },
+				{ slug: 'privacy', url: 'https://example.test/privacy/', routePath: 'privacy/index.html', identityHtmlPath, hasMobileDocument: false },
+			],
+			routes: { retained: [ { url: 'https://example.test/', path: 'website/index.html' }, { url: 'https://example.test/privacy/', path: 'website/privacy/index.html' } ], excluded: [], duplicates: [] },
+			states: { interactions: [], scroll: [] },
+			layout: { switchWidths: [], fluidReports: [] },
+			assets: {
+				references: collectAssetEvidenceReferences( [], () => 'index.html', resourceManifest, captureRoot ), stubs: MediaStubStore.load( captureRoot ), manifest: resourceManifest, portablePaths: new Map(), files: [],
+				media: { selected_count: 0, selected_bytes: 0, retained_external_count: 0, max_bytes: 1000, reserved_bytes: 0 },
+			},
+			diagnostics: {
+				capture: [], dependencies: [], media: [], rejectedKeys: new Set(), anchors: [],
+				styles: { hoistedStylesheets: 0, diagnostics: [], diagnosticCounts: {}, diagnosticsTruncated: false },
+			},
+		} );
+		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).title ).toBe( 'Acme Auto' );
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );

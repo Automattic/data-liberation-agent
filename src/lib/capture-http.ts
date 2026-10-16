@@ -51,7 +51,7 @@ export async function captureHttpWebsite( input: {
 		} ); } catch ( error ) { runtime = { attachments: 0, observations: 0, failures: [ { url: input.sourceUrl, error: `Runtime observation unavailable: ${ String( error ) }` } ] }; }
 	}
 	progress( { phase: 'finalizing', current: urls.length, total: urls.length, unit: 'routes' } );
-	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0, canonicalAliases: input.canonicalAliases, limits: captureExportLimits( options ) } );
+	const captureReceiptPath = materializeHttpDocuments( { outputDir: options.outputDir, sourceUrl: input.sourceUrl, platform: platform.id, routeScope: input.routeScope, desktopVariant: roles.desktop, mobileVariant: roles.mobile, embeddedDocuments: ( runtime?.attachments ?? 0 ) > 0, canonicalAliases: input.canonicalAliases, title: input.title, limits: captureExportLimits( options ) } );
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	const failures = acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => ( { url: document.url, error: `${ document.variant }: ${ document.error ?? document.status }` } ) );
 	if ( runtime ) failures.push( ...runtime.failures );
@@ -62,7 +62,6 @@ export async function captureHttpWebsite( input: {
 	receipt.discoveryDiagnostics = diagnostics;
 	receipt.failures = failures;
 	receipt.orchestration = { mode: 'http', requestedRoutes: urls.length, discoveredRoutes: urls.length + summary.routesOmitted, runtimeRouteLimit: options.http?.runtimeRouteLimit ?? 0, runtime, verification: 'unverified' };
-	if ( input.title ) receipt.title = input.title;
 	if ( input.templateGroups ) receipt.templateGroups = input.templateGroups;
 	writeFileSync( captureReceiptPath, JSON.stringify( receipt, null, 2 ) + '\n' );
 	const diagnosticPath = join( options.outputDir, 'diagnostics.json' );

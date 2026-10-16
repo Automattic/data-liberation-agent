@@ -14,6 +14,8 @@ import { hasUncapturedProfiles, withExportDroppedRoutes } from './capture-usabil
 import { dependencyReferences, type PortableDependency } from './portable-references.js';
 import { exportPublicationBoundary, EXPORT_PUBLICATION_BOUNDARIES } from './export-publication.js';
 import { sourceGenerator } from './source-generator.js';
+import { extractTitle } from './html-extract/html-extract.js';
+import { siteNameFromRouteTitles } from './site-name.js';
 
 export interface CaptureFluidEvidence {
 	applied: number;
@@ -337,6 +339,10 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const capturedInteractivity = input.capture.interactivity;
 	const retainedEntries = input.pages;
 	const routes = input.routes.retained;
+	const siteTitle = siteNameFromRouteTitles( options.title, routes.map( route => {
+		const path = join( stageDir, route.path );
+		return existsSync( path ) ? extractTitle( readFileSync( path, 'utf8' ) ) : '';
+	} ) );
 	const excludedRoutes = input.routes.excluded;
 	const duplicateRoutes = input.routes.duplicates;
 	const interactionPages = input.states.interactions;
@@ -606,7 +612,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				websiteRoot: 'website',
 				entrypoint: 'website/index.html',
 				source: { url: options.sourceUrl, platform: options.platform, ...( generator ? { generator } : {} ), ...(options.routeScope ? { routeScope: options.routeScope } : {}) },
-				...( options.title ? { title: options.title } : {} ),
+				...( siteTitle ? { title: siteTitle } : {} ),
 				// Declares the class tokens this capture tool uses to mark one side
 				// of a desktop/mobile document pair inside one exported page, so a
 				// generic consumer can recognize them as a document-scope boundary

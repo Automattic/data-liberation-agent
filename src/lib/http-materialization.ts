@@ -12,6 +12,8 @@ export interface HttpMaterializationOptions {
 	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
 	canonicalAliases?: ReadonlyArray< import('./route-aliases.js').CanonicalRouteAlias >;
 	limits?: import('./capture-export.js').ExportLimits;
+	/** Discovered site title; the receipt trims it to the name every route repeats. */
+	title?: string;
 }
 
 /** Produce a localized review candidate; HTTP coverage is not rendered acceptance. */
