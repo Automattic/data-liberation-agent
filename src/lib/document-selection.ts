@@ -83,7 +83,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	const base = documents[ selection.defaultDocument ];
 	if ( ! base ) throw new Error( 'Default device document was not captured' );
 	const $ = cheerio.load( base );
-	$( 'style,link[rel~="stylesheet"],meta[name="viewport"],script' ).remove();
+	$( 'style,link[rel~="stylesheet"],meta[name="viewport"],script:not([type="application/ld+json"])' ).remove();
 	$( 'html' ).removeAttr( 'style' ).removeAttr( 'class' );
 	$( 'body' ).empty().removeAttr( 'class' ).removeAttr( 'style' );
 	const head = $( 'head' );

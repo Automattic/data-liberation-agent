@@ -60,6 +60,18 @@ async function observation( page: Page ) {
 	} );
 }
 
+it( 'preserves default-document JSON-LD during device assembly while removing executable scripts', () => {
+	const product = { '@context': 'https://schema.org', '@type': 'Product', name: 'Fixture' };
+	const itemList = { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: [] };
+	const html = exported( directory(), true, ( document, key ) => key === 'desktop' ? document.replace( '</head>',
+		`<script type="application/ld+json">${ JSON.stringify( product ) }</script><script type="application/ld+json">${ JSON.stringify( itemList ) }</script><script>globalThis.executable = true</script></head>` ) : document );
+	const $ = cheerio.load( html );
+	const scripts = $( 'script[type="application/ld+json"]' );
+	expect( scripts ).toHaveLength( 2 );
+	expect( scripts.toArray().map( script => JSON.parse( $( script ).text() ) ) ).toEqual( [ product, itemList ] );
+	expect( html ).not.toContain( 'globalThis.executable' );
+} );
+
 it.each( [ false, true ] )( 'normalizes each distinct captured document once for assembly and evidence (identical: %s)', async ( identical ) => {
 	const session = new Session(); session.connect();
 	try {
