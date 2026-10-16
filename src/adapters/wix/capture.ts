@@ -14,6 +14,7 @@ import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PRE
 import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
 import { normalizeWixImageGeometry } from './image-geometry.js';
+import { normalizeWixGalleryStrips } from './gallery-strip-geometry.js';
 
 /**
  * The Wix Blog per-post counters (views, comments). The server document holds
@@ -932,6 +933,10 @@ export const capture: LiberationHooks = {
 		await portWixRuntimeEmbeds( page ).catch( () => undefined );
 		// Revealing a slideshow scrolls, so the chrome is settled after it.
 		await settleScrollReactiveChrome( page );
+		// Horizontal gallery strips re-lay out too late for the sweep to learn
+		// their width; carried as host-relative CSS on the frozen DOM, after
+		// the scroll above (see gallery-strip-geometry.ts).
+		await normalizeWixGalleryStrips( page ).catch( () => 0 );
 		// The members dialog is gone, so the controls that opened it are marked
 		// for the destination to point at its own login (see member-login.ts).
 		// Last of all, so a scroll-driven rerender cannot drop the marker

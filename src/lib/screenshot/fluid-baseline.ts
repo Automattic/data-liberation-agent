@@ -1,8 +1,16 @@
 import type { Page } from 'playwright';
 
+/**
+ * Space-separated geometry properties whose learned authority an adapter
+ * gives up on an element, because it has rewritten them with a relationship it
+ * proved in the page. The authority consumes the marker the next time it
+ * observes the element; the caller removes one it never observed.
+ */
+export const FLUID_RELEASE_ATTRIBUTE = 'data-blocks-engine-capture-fluid-release';
+
 /** Capture-owned geometry belongs to a document role, not to a copied DOM id. */
 export function captureFluidBaseline( page: Page, attribute: string ) {
-	return page.evaluateHandle( attribute => {
+	return page.evaluateHandle( ( { attribute, release } ) => {
 		const pixel = ( value: string ) => /^-?\d+(?:\.\d+)?px$/.test( value.trim() ) ? Number.parseFloat( value ) : null;
 		const elements = () => [ ...document.querySelectorAll<HTMLElement>( `[${ attribute }]` ) ];
 		const element = ( id: string ) => document.querySelector<HTMLElement>( `[${ attribute }="${ id }"]` );
@@ -134,6 +142,12 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 						const element = role.current as HTMLElement | undefined;
 						const returned = role.returned;
 						if ( ! element || ! returned ) { role.stateMatches = false; continue; }
+						const released = element.getAttribute( release );
+						if ( released !== null ) {
+							const properties = released.split( /\s+/ );
+							role.authority = role.authority?.filter( entry => ! properties.includes( entry.property ) );
+							element.removeAttribute( release );
+						}
 						role.stateMatches = ( ! role.parent || role.parent.stateMatches === true ) && state( element ).every( ( value, index ) => value === returned.state[index] );
 						// Opening controls is source behavior, not a rewrite of captured
 						// geometry. Captured rules resume when that baseline state returns.
@@ -172,5 +186,5 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 				for ( const element of elements() ) element.removeAttribute( attribute );
 			},
 		};
-	}, attribute );
+	}, { attribute, release: FLUID_RELEASE_ATTRIBUTE } );
 }
