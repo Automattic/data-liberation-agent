@@ -75,6 +75,22 @@ describe( 'capture export route stage', () => {
 		expect( first.portableRedirects ).toEqual( [] );
 	} );
 
+	it( 'uses a safe query slug for query renditions and falls back when its path is reserved', () => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-query-slug-' ) ); dirs.push( dir );
+		const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
+		const listing = entry( dir, 'listing.html', 'https://example.com/blog', '<h1>Listing</h1>' );
+		const alpha = entry( dir, 'alpha.html', 'https://example.com/blog?post=alpha', '<h1>Alpha</h1>' );
+		const beta = entry( dir, 'beta.html', 'https://example.com/blog?post=beta', '<h1>Beta</h1>' );
+		const collision = entry( dir, 'existing.html', 'https://example.com/blog/alpha', '<h1>Existing</h1>' );
+		const page = entry( dir, 'page.html', 'https://example.com/blog?page=2', '<h1>Page two</h1>' );
+		const routes = allocateCaptureRoutes( [ home, listing, alpha, beta, collision, page ], home.url, [] );
+		expect( routes.routePathOf( page.url ) ).toMatch( /^blog\/index-query-\d+\.html$/ );
+		expect( routes.routePathOf( beta.url ) ).toBe( 'blog/beta/index.html' );
+		expect( routes.routePathOf( alpha.url ) ).not.toBe( 'blog/alpha/index.html' );
+		expect( routes.routePathOf( collision.url ) ).toBe( 'blog/alpha/index.html' );
+	} );
+
 	it( 'selects a query entrypoint without confusing it with other root query pages', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const dir = mkdtempSync( join( '.tmp-test', 'liberation-query-home-' ) );

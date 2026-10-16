@@ -186,16 +186,21 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	// A path inside a directory another route claims as a file has no free
 	// sibling: undefined leaves the route on the contested path, where the claim
 	// below drops it as a path collision.
-	const allocateCollisionPath = ( path: string, query: boolean ): string | undefined => {
+	const allocateCollisionPath = ( path: string, query: boolean, preferred?: string ): string | undefined => {
 		if ( [ ...reservedPaths ].some( reserved => path.startsWith( `${ reserved }/` ) ) ) return undefined;
 		const extension = extname( path );
 		const stem = extension ? path.slice( 0, -extension.length ) : path;
+		const conflicts = ( candidate: string ) => [ ...reservedPaths ].some( reserved => reserved === candidate ||
+			reserved.startsWith( `${ candidate }/` ) || candidate.startsWith( `${ reserved }/` ) );
+		if ( preferred && ! conflicts( preferred ) ) {
+			reservedPaths.add( preferred );
+			return preferred;
+		}
 		let suffix = query ? 1 : 2;
 		let allocated: string;
 		do {
 			allocated = `${ stem }-${ query ? 'query-' : '' }${ suffix++ }${ extension }`;
-		} while ( [ ...reservedPaths ].some( reserved => reserved === allocated ||
-			reserved.startsWith( `${ allocated }/` ) || allocated.startsWith( `${ reserved }/` ) ) );
+		} while ( conflicts( allocated ) );
 		reservedPaths.add( allocated );
 		return allocated;
 	};
@@ -252,7 +257,13 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			?? representatives.find( entry => ! new URL( entry.url ).search ) ?? representatives[ 0 ];
 		for ( const [ index, entry ] of representatives.entries() ) {
 			if ( entry === preferred ) continue;
-			const allocated = allocateCollisionPath( path, !!new URL(entry.url).search );
+			const queryUrl = new URL( entry.url );
+			const queryValue = queryUrl.searchParams.size === 1 ? queryUrl.searchParams.values().next().value : undefined;
+			const directory = path.replace( /\/[^/]*$/, '' );
+			// A slug-like value names the rendition; a bare number (pagination) does not.
+			const slugPath = queryValue && /^(?=[a-z0-9-]*[a-z])[a-z0-9]+(?:-[a-z0-9]+)*$/i.test( queryValue )
+				? `${ directory ? `${ directory }/` : '' }${ queryValue }/index.html` : undefined;
+			const allocated = allocateCollisionPath( path, !!queryUrl.search, slugPath );
 			if ( allocated === undefined ) continue;
 			for ( const alias of clusters[ index ] ) allocatedPaths.set( alias.url, allocated );
 		}
