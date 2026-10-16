@@ -14,7 +14,8 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 		mkdirSync( join( stageRoot, 'website' ), { recursive: true } );
 		writeFileSync( join( stageRoot, 'website', 'index.html' ), '<main>Evidence</main>' );
 		const identityHtmlPath = join( stageRoot, 'identity.html' );
-		writeFileSync( identityHtmlPath, '<main>Evidence</main>' );
+		// One mode declares a generator; the other proves the field stays absent.
+		writeFileSync( identityHtmlPath, `${ mode === 'http' ? '<meta name="generator" content="v0.app">' : '' }<main>Evidence</main>` );
 		const resourceManifest = { version: 1 as const, resources: {}, failures: [] };
 		const references = collectAssetEvidenceReferences( [], () => 'index.html', resourceManifest, captureRoot );
 		const fluidGeometry = {
@@ -49,6 +50,7 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		const diagnostics = JSON.parse( readFileSync( join( stageRoot, 'diagnostics.json' ), 'utf8' ) );
 		const profile = JSON.parse( readFileSync( join( stageRoot, 'source-profile.json' ), 'utf8' ) );
+		expect( receipt.source ).toEqual( { url: 'https://example.test/', platform: 'generic', ...( mode === 'http' ? { generator: 'v0.app' } : {} ) } );
 		expect( receipt.summary.complete ).toBe( false );
 		expect( diagnostics.complete ).toBe( receipt.summary.complete );
 		expect( receipt.sourceProfile ).toEqual( profile );
