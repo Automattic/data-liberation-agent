@@ -534,6 +534,25 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 		.catch( () => undefined );
 }
 
+/**
+ * Wix's own logging endpoints: BI events and performance marks
+ * (`frog.wix.com`) and runtime monitoring batches
+ * (`panorama.wixapps.net`). The runtime streams POSTs to them for the life of
+ * the page, and on ketatov.com every one observed ended `net::ERR_ABORTED` —
+ * no response ever reached the document — while one was almost always
+ * pending, holding network quiet to its bound.
+ */
+const WIX_TELEMETRY_HOSTS = new Set( [ 'frog.wix.com', 'panorama.wixapps.net' ] );
+
+export function isWixTelemetryRequest( url: string ): boolean {
+	try {
+		const parsed = new URL( url );
+		return parsed.protocol === 'https:' && WIX_TELEMETRY_HOSTS.has( parsed.hostname );
+	} catch {
+		return false;
+	}
+}
+
 export const capture: LiberationHooks = {
 	documentSelection: wixDocumentSelection,
 	additionalProfiles: wixAdditionalProfiles,
@@ -562,6 +581,7 @@ export const capture: LiberationHooks = {
     // them on every page (and in the importer's report).
     { id: 'wix-site-identifiers', category: 'source-attribution', selector: 'meta[http-equiv^="X-Wix-" i]' },
   ],
+	telemetryRequest: isWixTelemetryRequest,
 	removeSelectors: [ '[id="WIX_ADS"]', '[id$="-hiddenA11ySubMenuIndication"]' ],
 	/**
 	 * Wix resolves same-page anchors in its click runtime rather than with

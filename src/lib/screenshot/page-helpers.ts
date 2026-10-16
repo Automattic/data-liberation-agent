@@ -13,10 +13,17 @@ export interface SettleOutcome {
 
 const readinessSinks = new WeakMap<Page, (wait: string, outcome: SettleOutcome) => void>();
 
+/**
+ * Recognizes a request as source telemetry: traffic whose response never
+ * reaches the rendered document. A platform adapter declares it from what it
+ * knows about its own endpoints; core never guesses it.
+ */
+export type TelemetryRequest = ( url: string ) => boolean;
+
 /** Route every readiness outcome on `page` to `sink` (the capture's phase ledger). */
-export function reportReadiness(page: Page, sink: (wait: string, outcome: SettleOutcome) => void): void {
+export function reportReadiness(page: Page, sink: (wait: string, outcome: SettleOutcome) => void, telemetry?: TelemetryRequest): void {
   readinessSinks.set(page, sink);
-  observePageTraffic( page );
+  observePageTraffic( page, telemetry );
 }
 
 /**
@@ -26,9 +33,13 @@ export function reportReadiness(page: Page, sink: (wait: string, outcome: Settle
  * navigation to count; a page that was never watched falls back to the raw
  * bounded `networkidle` wait. No-op on reduced browser implementations without
  * request events.
+ *
+ * Requests `telemetry` recognizes are never entered in the ledger, so a
+ * beacon held open by its endpoint cannot hold the quiet window. The first
+ * call installs the ledger and fixes its telemetry predicate for the page.
  */
-export function observePageTraffic( page: Page ): void {
-  trafficLedger( page );
+export function observePageTraffic( page: Page, telemetry?: TelemetryRequest ): void {
+  trafficLedger( page, telemetry );
 }
 
 /**
@@ -406,18 +417,23 @@ const trafficLedgers = new WeakMap< Page, PageTrafficLedger >();
  * including pages without request events — falls back to raw `networkidle`,
  * whose in-flight tracking Playwright owns from navigation.
  */
-function trafficLedger( page: Page ): PageTrafficLedger | null {
+function trafficLedger( page: Page, telemetry?: TelemetryRequest ): PageTrafficLedger | null {
   if ( ! page.on || ! page.off ) return null;
   const existing = trafficLedgers.get( page );
   if ( existing ) return existing;
   const ledger: PageTrafficLedger = { renderActive: new Set(), lastRenderActivity: Date.now(), pendingData: new Set() };
   const affectsRender = ( request: Request ) => requestAffectsRenderedContent( page, request );
   const isDataRequest = ( request: Request ) => [ 'fetch', 'xhr' ].includes( request.resourceType() );
+  const isTelemetry = ( request: Request ) => {
+    try { return telemetry?.( request.url() ) === true; } catch { return false; }
+  };
   const onRequest = ( request: Request ) => {
+    if ( isTelemetry( request ) ) return;
     if ( affectsRender( request ) ) { ledger.renderActive.add( request ); ledger.lastRenderActivity = Date.now(); }
     if ( isDataRequest( request ) ) ledger.pendingData.add( request );
   };
   const onSettled = ( request: Request ) => {
+    if ( isTelemetry( request ) ) return;
     if ( affectsRender( request ) ) { ledger.renderActive.delete( request ); ledger.lastRenderActivity = Date.now(); }
     ledger.pendingData.delete( request );
   };
@@ -450,7 +466,9 @@ function awaitQuiet( quiet: () => boolean, timeoutMs: number ): Promise< 'quiet'
  * unnoticed is cross-origin chatter that is merely frequent (analytics
  * beacons): only its pending responses hold, its completed ones do not reopen
  * the window — the concurrent DOM-quiescence step is what catches whatever a
- * completed response renders, with the same bound it had before.
+ * completed response renders, with the same bound it had before. Declared
+ * telemetry (see [[observePageTraffic]]) is outside the ledger entirely: its
+ * endpoint may hold a beacon open past any bound, and nothing renders from it.
  */
 function networkQuiet( ledger: PageTrafficLedger, quietMs: number ): boolean {
   return ledger.renderActive.size === 0 && ledger.pendingData.size === 0 &&

@@ -52,6 +52,8 @@ interface LiberationHooks {
   prepare?(page: Page, ctx: { url: string; viewport: 'desktop' | 'mobile' }): Promise<void>;
   /** Per-viewport image variants as {stable media id → variant URL}. */
   responsiveImages?(page: Page, ctx: { url: string; viewport: 'desktop' | 'mobile' }): Promise<Record<string, string>>;
+  /** The platform's own telemetry endpoints; a pending request to one never holds readiness waits. */
+  telemetryRequest?(url: string): boolean;
 }
 ```
 
