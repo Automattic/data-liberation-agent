@@ -169,13 +169,22 @@ export function refinementSeries( observations: ReadonlyMap< string, readonly Ge
 }
 
 /**
- * Whether every observed series, outside perpetually animated elements, holds
- * one finite value at each of `samples` widths: nothing the sweep could learn
- * varies with width.
+ * Whether a series ever held pixels. A non-pixel custom property (a colour, a
+ * font stack, `auto`) is observed only because it shares an inline style with
+ * a pixel one; it carries no geometry, so nothing could be learned from it.
+ */
+function holdsPixels( series: readonly GeometrySample[] ): boolean {
+	return series.some( sample => Number.isFinite( sample.value ) );
+}
+
+/**
+ * Whether every observed series, outside perpetually animated elements and
+ * series that never held pixels, holds one finite value at each of `samples`
+ * widths: nothing the sweep could learn varies with width.
  */
 export function constantAcross( observations: ReadonlyMap< string, readonly GeometrySample[] >, samples: number, perpetual: ReadonlySet< string > ): boolean {
 	for ( const [ key, series ] of observations ) {
-		if ( perpetual.has( key.slice( 0, key.indexOf( ':' ) ) ) ) continue;
+		if ( perpetual.has( key.slice( 0, key.indexOf( ':' ) ) ) || ! holdsPixels( series ) ) continue;
 		if ( series.length !== samples ) return false;
 		const first = series[ 0 ]!.value;
 		if ( ! Number.isFinite( first ) || series.some( sample => sample.value !== first ) ) return false;
@@ -425,6 +434,8 @@ async function learnFluidGeometry(
 	let unmodelled = 0;
 
 	for ( const [ key, samples ] of observations ) {
+		// Not a geometry series, so neither learned nor unmodelled.
+		if ( ! holdsPixels( samples ) ) continue;
 		const [ id, property ] = key.split( ':' ) as [ string, LearnableProperty ];
 		// Any non-relative sample invalidates the entire offset relationship.
 		// Fitting the remaining relative samples would erase authored positioning.
