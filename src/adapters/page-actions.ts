@@ -30,6 +30,14 @@ export interface LiberationHooks {
    *  removeSelectors. Best-effort: a throw is swallowed and liberation continues. */
   prepare?(page: Page, ctx: LiberationContext): Promise<void>;
   /**
+   * Runs immediately before fluid learning, after source evidence was observed.
+   * Replace runtime-written geometry whose relationship the platform declares
+   * with that relationship as CSS, and stop the runtime rewriting it, so the
+   * width sweep neither samples nor freezes it. Only declare what is proven
+   * equivalent at the capture width. Best-effort: a throw is swallowed.
+   */
+  beforeFluid?(page: Page, ctx: LiberationContext): Promise<void>;
+  /**
    * Runs after fluid learning and immediately before HTML/screenshot serialize.
    * Use this for runtime widgets that only exist on the DOM that will be frozen.
    * Best-effort: a throw is swallowed and liberation continues.

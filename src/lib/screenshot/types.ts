@@ -114,6 +114,11 @@ export interface ScreenshotOpts {
 	telemetryRequest?: import('./page-helpers.js').TelemetryRequest;
 	/** Adapter rewrite applied to every serialized HTML artifact before it is stored. */
 	canonicalizeHtml?: ( html: string ) => string;
+	/** Adapter hook run immediately before fluid learning. Best-effort. */
+	beforeFluid?: (
+		page: import('playwright').Page,
+		ctx: import('../../adapters/page-actions.js').LiberationContext
+	) => Promise< void >;
 	/** Adapter hook run after fluid learning, immediately before serialize. Best-effort. */
 	beforeSerialize?: (
 		page: import('playwright').Page,

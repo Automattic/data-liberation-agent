@@ -475,6 +475,7 @@ export async function captureWebsite(
 		prepareCapture: adapter.liberation?.prepare,
 		telemetryRequest,
 		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
+		beforeFluid: adapter.liberation?.beforeFluid,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
 		observeSource: reference.observe,
 		// Memory admission reserves for what a route opens: bounded samples
