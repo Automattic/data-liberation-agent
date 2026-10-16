@@ -53,7 +53,7 @@ export interface ReferenceEntry {
 	device: string;
 	userAgent?: string;
 	state: string;
-	readiness: { ready: boolean; reasons: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean };
+	readiness: { ready: boolean; reasons: string[]; diagnostics?: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean };
 	observation?: ReferenceArtifact;
 	screenshot?: ReferenceArtifact;
 	document?: ReferenceArtifact;
@@ -89,6 +89,23 @@ export function readReferenceArtifact( directory: string, artifact: ReferenceArt
 }
 
 /** A single capture invocation owns this collector. Resume never invents evidence for skipped sessions. */
+/**
+ * Decides which source runtime reasons block reference readiness. A client
+ * router whose own route refresh failed (for example a cross-origin chunk the
+ * source cannot fetch) reloads the document it already shows; Next.js reports
+ * that as a same-URL hard-navigation invariant. The rendered document is
+ * unchanged, so the reason is recorded as a diagnostic. Every other runtime
+ * error, including one naming another document, still blocks.
+ */
+export function blocksSourceReadiness( reason: string, pageUrl: string ): boolean {
+	const invariant = /^source runtime error: Invariant: attempted to hard navigate to the same URL \S+ (\S+)$/.exec( reason );
+	return ! invariant || withoutHash( invariant[ 1 ]! ) !== withoutHash( pageUrl );
+}
+
+function withoutHash( value: string ): string {
+	try { const url = new URL( value ); url.hash = ''; return url.href; } catch { return value; }
+}
+
 export function createReferenceCollector( directory: string, sourceUrl: string, sourceUrls: string[], options: ReferenceCollectorOptions = {} ) {
 	const captureId = randomUUID();
 	const entries: ReferenceEntry[] = [];
@@ -144,10 +161,11 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					entries.push( entry );
 					let referencePage: Page | undefined;
 					let ownedResource: BrowserContext | Page | undefined;
-					const runtimeError = ( error: Error ) => entry.readiness.reasons.push( `source runtime error: ${ error.message }` );
+					let navigationUrl = url;
+					const recordRuntime = ( reason: string ) => ( blocksSourceReadiness( reason, navigationUrl ) ? entry.readiness.reasons : ( entry.readiness.diagnostics ??= [] ) ).push( reason );
+					const runtimeError = ( error: Error ) => recordRuntime( `source runtime error: ${ error.message }` );
 					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
 					let releaseNavigation: (() => Promise<void>) | undefined;
-					let navigationUrl = url;
 					try {
 						if ( identity?.screen && ! browser ) throw new Error( 'Preset screen replay requires a source browser context' );
 						if ( browser && supportsSiblingPages && profile ) {
@@ -175,7 +193,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							entry.outcome = storeExternalBoundary(directory, navigation.boundary, viewport, browserProfile);
 							if (boundaryIdentity(entry.outcome) !== boundaryIdentity(expectedBoundary)) throw new Error('Reference external outcome disagrees with capture');
 							entry.browserProfile = browserProfile;
-							entry.readiness.reasons.push(...errors);
+							errors.forEach( recordRuntime );
 							entry.readiness.ready = entry.readiness.reasons.length === 0;
 							return;
 						}
@@ -217,7 +235,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.document = store( `${ stem }.html`, await referencePage.content() );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
 						await collectViewportEntranceStartup( referencePage, page );
-						entry.readiness.reasons.push( ...errors );
+						errors.forEach( recordRuntime );
 						entry.readiness.ready = entry.readiness.reasons.length === 0;
 					} catch ( error ) {
 						entry.readiness.reasons.push( String( error ) );

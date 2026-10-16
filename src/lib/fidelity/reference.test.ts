@@ -652,6 +652,34 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( ( await checkFidelity( { directory } ) ).status ).toBe( 'unproven' );
 		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 90_000 );
+	it( 'records a router reload of the displayed document as a diagnostic, not a readiness failure', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-self-navigation-' ) );
+		const server = createServer( ( request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			// The same router invariant, naming either the displayed document or another one.
+			const target = request.url === '/elsewhere' ? 'location.origin + "/other"' : 'location.href';
+			response.end( `<meta name="viewport" content="width=device-width,initial-scale=1"><h1>Router document</h1><script>setTimeout(()=>{throw new Error("Invariant: attempted to hard navigate to the same URL / " + ${ target })},0)</script>` );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		const urls = [ `${ origin }/`, `${ origin }/elsewhere` ];
+		try {
+			const collector = createReferenceCollector( directory, urls[ 0 ]!, urls );
+			const captured = await captureScreenshots( { urls, outputDir: directory, concurrency: 1, settleMs: 0, observeSource: collector.observe } );
+			const receiptPath = exportWebsiteCapture( { outputDir: directory, sourceUrl: urls[ 0 ]!, platform: 'default', summary: { routesDiscovered: 2, routesCaptured: 2, routesSkipped: 0, routesFailed: 0, durationMs: captured.durationMs }, failures: [], discoveryDiagnostics: [] } );
+			const manifest = JSON.parse( readFileSync( collector.finalize( receiptPath ), 'utf8' ) ) as FidelityReference;
+			const displayed = manifest.entries.filter( entry => entry.sourceUrl === urls[ 0 ] );
+			const elsewhere = manifest.entries.filter( entry => entry.sourceUrl === urls[ 1 ] );
+			expect( displayed.length ).toBeGreaterThan( 0 );
+			expect( elsewhere.length ).toBeGreaterThan( 0 );
+			for ( const entry of displayed ) {
+				expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
+				expect( entry.readiness.diagnostics?.some( reason => reason.includes( 'hard navigate to the same URL' ) ) ).toBe( true );
+			}
+			expect( elsewhere.every( entry => ! entry.readiness.ready && entry.readiness.reasons.some( reason => reason.includes( '/other' ) ) ) ).toBe( true );
+		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+	}, 90_000 );
 	it( 'freezes each width from a fresh navigation instead of resize-history state', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-fresh-viewport-' ) );
