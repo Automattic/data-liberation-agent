@@ -6358,6 +6358,45 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', 'fonts', 'icon.ttf' ), 'utf8' ) ).toBe( 'ttf' );
 	} );
 
+	it( 'exports query-based WOFF2 bytes served as text/html as an exact font file', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-font-mime-' ) );
+		dirs.push( outputDir );
+		const fontDir = 'resources/external/0123456789abcdef/l';
+		for ( const path of [ 'html', 'screenshots', 'resources/css', fontDir ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const cssUrl = 'https://example.com/assets/site.css';
+		const fontUrl = 'https://fonts.example.net/l/font?kit=abc123&skey=def456&v=v1';
+		// WOFF2 signature followed by bytes that are not valid UTF-8, so any text
+		// decoding or HTML serialization changes the file.
+		const fontBytes = Buffer.concat( [ Buffer.from( 'wOF2' ), Buffer.from( [ 0, 1, 0, 0, 0x80, 0xff, 0xfe, 0xc3, 0x28 ] ) ] );
+		const sha256 = ( bytes: Buffer ) => createHash( 'sha256' ).update( bytes ).digest( 'hex' );
+		writeFileSync( join( outputDir, 'html/homepage.html' ),
+			`<html><head><link rel="stylesheet" href="${ cssUrl }"></head><body><main>Typography</main></body></html>` );
+		writeFileSync( join( outputDir, 'resources/css/site.css' ),
+			`@font-face{font-family:"Kit Sans";src:url("${ fontUrl }") format("woff2")}main{font-family:"Kit Sans",sans-serif}` );
+		writeFileSync( join( outputDir, fontDir, 'font-0123456789ab' ), fontBytes );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
+			version: 1, resources: {
+				[ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },
+				[ fontUrl ]: { path: `${ fontDir }/font-0123456789ab`, contentType: 'text/html; charset=utf-8' },
+			}, failures: [],
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const website = join( outputDir, 'website' );
+		const fontPath = 'external/0123456789abcdef/l/font-0123456789ab';
+		expect( existsSync( join( website, `${ fontPath }.html` ) ) ).toBe( false );
+		const exported = readFileSync( join( website, `${ fontPath }.woff2` ) );
+		expect( exported ).toEqual( fontBytes );
+		expect( sha256( exported ) ).toBe( sha256( fontBytes ) );
+		expect( readFileSync( join( website, 'css/site.css' ), 'utf8' ) )
+			.toContain( `url("/${ fontPath }.woff2") format("woff2")` );
+	} );
+
 	it( 'preserves downloaded backgrounds with HTML-escaped CDN queries in the portable page', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-css-media-export-' ) );
 		dirs.push( outputDir );
