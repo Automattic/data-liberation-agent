@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { existsSync } from 'node:fs';
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { reportReadiness, triggerLazyLoad, waitForStable, type SettleOutcome } from './page-helpers.js';
+import { reportReadiness, triggerLazyLoad, waitForStable, type SettleOutcome, type TelemetryRequest } from './page-helpers.js';
 
 // A source whose analytics beacon never stops: a cross-origin fetch every
 // 250ms leaves no 500ms request-free gap, so raw Playwright `networkidle` —
@@ -18,6 +18,17 @@ const HELD_DATA_MS = 1_200;
 
 function beaconOrigin(): Server {
 	return createServer( ( request, response ) => {
+		if ( request.url === '/telemetry' ) {
+			// A declared telemetry endpoint that holds every beacon open: it never answers.
+			return;
+		}
+		if ( request.url === '/late-hydration' ) {
+			// A slow cross-origin data response the page renders from.
+			response.setHeader( 'access-control-allow-origin', '*' );
+			response.setHeader( 'content-type', 'application/json' );
+			setTimeout( () => response.end( '{"ok":true}' ), HELD_DATA_MS );
+			return;
+		}
 		if ( request.url === '/held-data' ) {
 			// A slow cross-origin data response: while pending it must hold the wait.
 			setTimeout( () => response.end(), HELD_DATA_MS );
@@ -69,6 +80,14 @@ function chattyOrigin( beaconPort: number ): Server {
 			response.end( page( `<script>fetch( '${ beacon }/held-data' ).catch( () => {} );</script>` ) );
 			return;
 		}
+		if ( request.url === '/telemetry-beacon' ) {
+			// A beacon to a declared telemetry endpoint that never lands, beside a
+			// cross-origin data response that lands late and is rendered.
+			response.end( page( `<script>
+				fetch( '${ beacon }/telemetry', { method: 'POST', body: 'event', mode: 'no-cors' } ).catch( () => {} );
+			</script>${ mountFromData( `${ beacon }/late-hydration` ) }` ) );
+			return;
+		}
 		if ( request.url === '/same-origin-chatter' ) {
 			// Render-affecting traffic that never stops: quiet can never be met,
 			// so the wait is bounded, not silent.
@@ -110,10 +129,10 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		await close( beacons );
 	} );
 
-	async function settledPage(): Promise< { page: Page; waits: Array< { wait: string } & SettleOutcome > } > {
+	async function settledPage( telemetry?: TelemetryRequest ): Promise< { page: Page; waits: Array< { wait: string } & SettleOutcome > } > {
 		const page = await browser.newPage();
 		const waits: Array< { wait: string } & SettleOutcome > = [];
-		reportReadiness( page, ( wait, outcome ) => waits.push( { wait, ...outcome } ) );
+		reportReadiness( page, ( wait, outcome ) => waits.push( { wait, ...outcome } ), telemetry );
 		return { page, waits };
 	}
 
@@ -158,6 +177,23 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		// Completed beacons do not reopen the window, but a data response still
 		// in flight holds the wait until it lands (1.2s here).
 		expect( network?.ms ).toBeGreaterThanOrEqual( 900 );
+		await page.close();
+	}, 30_000 );
+
+	// The source declares its telemetry endpoint (as a platform adapter does);
+	// nothing about the request itself is guessed. The declaration releases the
+	// beacon only: the undeclared cross-origin response still holds the wait.
+	it( 'does not hold for a declared telemetry beacon that never lands, but waits for a late cross-origin hydration response', async () => {
+		const isTelemetry = ( url: string ) => new URL( url ).pathname === '/telemetry';
+		const { page, waits } = await settledPage( isTelemetry );
+		await page.goto( `${ origin }/telemetry-beacon`, { waitUntil: 'load', timeout: 15_000 } );
+		await waitForStable( page );
+		const network = recorded( waits, 'network-quiet' );
+		expect( network?.reason ).toBe( 'quiet' );
+		// Held for the hydration response (1.2s), not the beacon (never).
+		expect( network?.ms ).toBeGreaterThanOrEqual( 900 );
+		expect( network?.ms ).toBeLessThan( 4_000 );
+		expect( await page.evaluate( () => document.querySelector( '#hydrated' )?.textContent ) ).toBe( 'hydrated content' );
 		await page.close();
 	}, 30_000 );
 

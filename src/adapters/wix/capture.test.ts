@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	capture,
 	collectWixSlideshowSlides,
+	isWixTelemetryRequest,
 	preserveWixSlideshowSlides,
 	revealAndCollectWixSlideshows,
 	settleScrollReactiveChrome,
@@ -524,6 +525,21 @@ describe( 'settleScrollReactiveChrome', () => {
 		// The order is the contract: a handler that only recomputes on an event
 		// needs the event, and its transition needs time before serialization.
 		expect( calls ).toEqual( [ 'scrollTo', 'dispatch:scroll', 'wait:400' ] );
+	} );
+} );
+
+describe( 'Wix telemetry declaration', () => {
+	it( 'declares only Wix logging endpoints, never site data or runtime assets', () => {
+		expect( capture.telemetryRequest ).toBe( isWixTelemetryRequest );
+		expect( isWixTelemetryRequest( 'https://frog.wix.com/bolt-performance' ) ).toBe( true );
+		expect( isWixTelemetryRequest( 'https://panorama.wixapps.net/api/v1/bulklog' ) ).toBe( true );
+		for ( const url of [
+			'https://www.ketatov.com/_api/communities-blog-node-api/v3/categories',
+			'https://static.parastorage.com/services/wixstores-client-gallery/1.6050.0/assets/locale/gallery/gallery_en.json',
+			'https://siteassets.parastorage.com/pages/pages/thunderbolt',
+			'https://frog.wix.com.example/bolt-performance',
+			'not a url',
+		] ) expect( isWixTelemetryRequest( url ) ).toBe( false );
 	} );
 } );
 

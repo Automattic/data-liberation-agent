@@ -1667,6 +1667,7 @@ interface DeviceComparisonArgs {
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
 	prepareCapture?: ScreenshotOpts['prepareCapture'];
+	telemetryRequest?: ScreenshotOpts['telemetryRequest'];
 }
 
 interface DeviceModeProbeArgs extends DeviceComparisonArgs {
@@ -1699,7 +1700,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	const page = await context.newPage();
 	// The comparison and shared-chrome probes wait on the same render-affecting
 	// quiet as capture; watch the page's traffic from before its navigation.
-	observePageTraffic( page );
+	observePageTraffic( page, args.telemetryRequest );
 	if ( args.publicUrlsOnly || mode === 'check' ) {
 		await page.route( '**/*', async ( route ) => {
 			const request = route.request();
@@ -2270,6 +2271,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			phone: profileContextOptions( phoneProfile, sessionContext ),
 			publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+			telemetryRequest: opts.telemetryRequest,
 		};
 		const probed = await probeDeviceMode( {
 			...comparison, browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
@@ -2309,6 +2311,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
 				publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+				telemetryRequest: opts.telemetryRequest,
 				...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 			} ) );
 		} ) );
@@ -2502,7 +2505,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeRuntimeStyleWrites );
 					await context.addInitScript( observeViewportWork );
 					const page = await context.newPage();
-					reportReadiness( page, ( name, outcome ) => phases.wait( name, outcome ) );
+					reportReadiness( page, ( name, outcome ) => phases.wait( name, outcome ), opts.telemetryRequest );
 					page.once( 'crash', () => { rendererCrashed = true; } );
 					try {
 						await capturePerViewport( {

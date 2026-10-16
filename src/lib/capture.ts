@@ -442,10 +442,12 @@ export async function captureWebsite(
 
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
 	const { createReferenceCollector } = await import( './fidelity/reference.js' );
+	const telemetryRequest = adapter.liberation?.telemetryRequest?.bind( adapter.liberation );
 	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
 		routeScope,
 		publicUrlsOnly: true,
 		cleanupPolicy: ( await import( './source-cleanup.js' ) ).cleanupPolicy( adapter.liberation?.cleanupRules ),
+		telemetryRequest,
 		removeSelectors: adapter.liberation?.removeSelectors,
 		prepareCapture: adapter.liberation?.prepare,
 		referenceSample,
@@ -471,6 +473,7 @@ export async function captureWebsite(
 		removeSelectors: adapter.liberation?.removeSelectors,
 		cleanupPolicy: (await import('./source-cleanup.js')).cleanupPolicy(adapter.liberation?.cleanupRules),
 		prepareCapture: adapter.liberation?.prepare,
+		telemetryRequest,
 		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
 		observeSource: reference.observe,

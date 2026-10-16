@@ -17,6 +17,13 @@ export interface LiberationHooks {
   resolveClientRedirect?(page: Page, url: string): Promise<string | undefined>;
   /** Source branding rules shared by capture and comparison. */
   cleanupRules?: import('../lib/source-cleanup.js').CleanupRule[];
+  /**
+   * Recognize a request URL as this platform's own telemetry: an endpoint whose
+   * response never reaches the rendered document. Readiness waits then do not
+   * hold for it while it is pending. Declare only endpoints known to be
+   * telemetry; anything uncertain must keep holding.
+   */
+  telemetryRequest?(url: string): boolean;
   /** CSS selectors removed from the DOM before portable artifacts are produced. */
   removeSelectors?: string[];
   /** Imperative escape hatch (wait-for-app, conditional removal). Runs AFTER
