@@ -13,6 +13,7 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
 import { hasUncapturedProfiles, withExportDroppedRoutes } from './capture-usability.js';
 import { dependencyReferences, type PortableDependency } from './portable-references.js';
 import { exportPublicationBoundary, EXPORT_PUBLICATION_BOUNDARIES } from './export-publication.js';
+import { sourceGenerator } from './source-generator.js';
 
 export interface CaptureFluidEvidence {
 	applied: number;
@@ -565,6 +566,9 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	];
 
 	const receiptPath = join( stageDir, 'capture-receipt.json' );
+	// The entrypoint's self-declared generator: source evidence kept apart from the capturing platform.
+	const entrypointPage = retainedEntries.find( ( page ) => page.routePath === 'index.html' );
+	const generator = entrypointPage && existsSync( entrypointPage.identityHtmlPath ) ? sourceGenerator( readFileSync( entrypointPage.identityHtmlPath, 'utf8' ) ) : undefined;
 	// Only proven source-absent routes lack a document requiring cleanup.
 	// Keep every other attempted route in the audit, even if it lost its HTML.
 	const cleanupPages = Object.entries(capture.entries)
@@ -601,7 +605,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				...(cleanup ? { cleanup } : {}),
 				websiteRoot: 'website',
 				entrypoint: 'website/index.html',
-				source: { url: options.sourceUrl, platform: options.platform, ...(options.routeScope ? { routeScope: options.routeScope } : {}) },
+				source: { url: options.sourceUrl, platform: options.platform, ...( generator ? { generator } : {} ), ...(options.routeScope ? { routeScope: options.routeScope } : {}) },
 				...( options.title ? { title: options.title } : {} ),
 				// Declares the class tokens this capture tool uses to mark one side
 				// of a desktop/mobile document pair inside one exported page, so a
