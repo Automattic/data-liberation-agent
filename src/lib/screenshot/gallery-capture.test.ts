@@ -391,3 +391,85 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(wireCapturedGalleries(await page.content(), states)).toContain('data-blocks-engine-capture-gallery-stage');
 	} finally { await browser.close(); }
 }, 90_000);
+
+// Arrows the source stops rendering at narrow widths; the stage, its thumbnail
+// strip and its width-derived slide geometry remain the presented slideshow.
+const narrowArrowsFixture = (() => {
+	const colors = ['red', 'green', 'blue', 'orange'];
+	const slide = (i: number) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="100%" height="100%" fill="${colors[i]}"/></svg>`);
+	const thumbs = colors.map((_, i) => `<a class="thumb"><img width="40" height="30" src="${slide(i)}"></a>`).join('');
+	return `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>
+	body{margin:0}.show{position:relative;max-width:800px;margin:auto}.view{position:relative;overflow:hidden}.slide{position:relative}.slide .fit{position:relative}.slide img{display:block}
+	.corner{position:absolute;top:8px;right:8px;z-index:2}.ctl{display:inline-block;width:24px;height:24px;background:#000;cursor:pointer}
+	@media (max-width:600px){.corner{display:none}}
+	</style></head><body><div class="show"><div class="view"><div class="slides"></div><div class="corner"><span class="ctl prev"></span><span class="ctl next"></span></div></div><div class="strip">${thumbs}</div></div>
+	<script>
+	const urls=${JSON.stringify(colors.map((_, i) => slide(i)))};const slides=document.querySelector('.slides');const nodes=[];let index=0;
+	function node(i){if(!nodes[i]){const el=document.createElement('div');el.className='slide';el.style.display='none';el.innerHTML='<div class="fit"><img src="'+urls[i]+'"></div>';nodes[i]=el;slides.append(el);}return nodes[i];}
+	function fit(el){const width=slides.clientWidth;el.querySelector('.fit').style.width=width+'px';el.querySelector('img').style.width=width+'px';}
+	function go(dir){node(index).style.display='none';index=(index+dir+urls.length)%urls.length;const to=node(index);to.style.display='';fit(to);}
+	const first=node(0);first.style.display='';fit(first);node(1);
+	document.querySelector('.ctl.next').onclick=()=>go(1);document.querySelector('.ctl.prev').onclick=()=>go(-1);
+	document.querySelectorAll('.thumb').forEach((thumb,i)=>thumb.onclick=()=>go(i-index));
+	</script></body></html>`;
+})();
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'proves a slideshow at a narrow viewport whose arrows the source stops rendering', async () => {
+		const page = await sharedBrowser.newPage({hasTouch:true,isMobile:true,viewport:{width:402,height:800}});
+		await page.setContent(narrowArrowsFixture);
+		const states = await captureGalleries(page);
+		const gallery = states[0]?.gallery?.inline;
+		expect(gallery, gallery?.failure).toMatchObject({coverage:'complete',restoration:'verified',initial:0,viewport:{width:402},controls:'unrendered'});
+		expect(gallery?.frames).toHaveLength(4);
+		// Frames carry this viewport's own geometry, not another width's.
+		expect(gallery?.frames.map(frame => /width: (\d+)px/.exec(frame.html)?.[1])).toEqual(['402', '402', '402', '402']);
+		const html = wireCapturedGalleries((await page.content()).replace(/<script>[\s\S]*?<\/script>/g, ''), states);
+		expect(html.match(/data-blocks-engine-capture-gallery-stage=""/g)).toHaveLength(1);
+		expect(html.match(/data-blocks-engine-capture-gallery-frame="/g)).toHaveLength(4);
+		// Next closed the cycle; the unpresented Previous edge stays unproven and unwired.
+		expect(html.match(/data-blocks-engine-capture-gallery-direction="1"/g)).toHaveLength(1);
+		expect(html).not.toContain('data-blocks-engine-capture-gallery-direction="-1"');
+	}, 60_000,
+);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executablePath()))('records and wires each viewport\'s inline cycle through real dual-viewport capture',async()=>{
+	const parent=join(process.cwd(),'.tmp-test');mkdirSync(parent,{recursive:true});
+	const outputDir=mkdtempSync(join(parent,'gallery-narrow-'));
+	const server=createServer((_,response)=>{response.writeHead(200,{'Content-Type':'text/html'});response.end(narrowArrowsFixture);});
+	await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+	const url=`http://127.0.0.1:${(server.address() as {port:number}).port}/`;
+	try{
+		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
+		const manifest=JSON.parse(readFileSync(join(outputDir,'screenshots','manifest.json'),'utf8'));
+		const entry=manifest.entries[url];
+		const galleries=entry.interactions.states.filter((state:{kind:string})=>state.kind==='gallery');
+		expect(galleries.map((state:{gallery:{inline:{viewport:{width:number};coverage:string;restoration:string}}})=>[state.gallery.inline.viewport.width,state.gallery.inline.coverage,state.gallery.inline.restoration]).sort()).toEqual([[1440,'complete','verified'],[390,'complete','verified']].sort());
+		for(const file of [entry.html,entry.mobileHtml].filter(Boolean)) expect(readFileSync(join(outputDir,file),'utf8')).toContain('data-blocks-engine-capture-gallery-stage');
+		expect(entry.mobileHtml ?? entry.html).toBeTruthy();
+	}finally{await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
+},180_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('does not mistake a CSS transition between script writes for the script write cadence', async () => {
+	const page = await sharedBrowser.newPage({viewport:{width:800,height:600}});
+	const colors = ['red', 'green', 'blue', 'orange'];
+	const slide = (i: number) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="100%" height="100%" fill="${colors[i]}"/></svg>`);
+	// The script writes, waits for its CSS transition, then writes again: the
+	// silent gap is the transition, which settle already awaits.
+	await page.setContent(`<!doctype html><style>.view{position:relative;width:400px;height:300px}.slide{position:absolute;inset:0;display:none}.slide img{width:400px;height:300px;display:block}.slide .fade{transition:opacity 1200ms linear}.ctl{display:inline-block;width:24px;height:24px;background:#000;cursor:pointer}</style>
+	<div class="show"><div class="view"><div class="slides">${colors.map((_, i) => `<div class="slide"${i === 0 ? ' style="display:block"' : ''}><div class="fade"><img src="${slide(i)}"></div></div>`).join('')}</div></div><span class="ctl prev"></span><span class="ctl next"></span></div>
+	<script>
+	const nodes=[...document.querySelectorAll('.slide')];let index=0;
+	function go(dir){const from=nodes[index];index=(index+dir+nodes.length)%nodes.length;const to=nodes[index];to.style.display='block';const fade=to.querySelector('.fade');fade.style.opacity='0';from.querySelector('.fade').style.opacity='1';
+		requestAnimationFrame(()=>requestAnimationFrame(()=>{fade.style.opacity='1';fade.addEventListener('transitionend',()=>{from.style.display='none';},{once:true});}));}
+	document.querySelector('.ctl.next').onclick=()=>go(1);document.querySelector('.ctl.prev').onclick=()=>go(-1);
+	</script>`);
+	const started = Date.now();
+	const gallery = (await captureGalleries(page))[0]?.gallery?.inline;
+	const elapsed = Date.now() - started;
+	expect(gallery, gallery?.failure).toMatchObject({coverage:'complete',restoration:'verified'});
+	// 8 steps each await their ~1.2 s transition once (about 16 s in all);
+	// counting the transition again as cadence adds the quiet bound to every
+	// step (about 28 s).
+	expect(elapsed).toBeLessThan(22_000);
+}, 60_000);

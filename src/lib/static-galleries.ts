@@ -23,6 +23,8 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 		const stage = select(gallery.stage);
 		const next = select(gallery.next), previous = select(gallery.previous);
 		if (stage.length !== 1 || next.length !== 1 || previous.length !== 1) return;
+		// Only proven edges become portable actions.
+		const inverse = gallery.controls === 'unrendered' ? null : previous;
 		const initial = gallery.initial;
 		const frameImages = gallery.frames.map(frame => {
 			const parsed = cheerio.load(frame.html, null, false);
@@ -42,7 +44,7 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 			if (new Set(sequence).size === sequence.length && offsets.every(offset => offset >= 0)) {
 				root.attr('data-blocks-engine-capture-gallery', '').attr('data-blocks-engine-capture-gallery-source', gallery.selector).attr('data-blocks-engine-capture-gallery-sequence', JSON.stringify(sequence)).attr('data-blocks-engine-capture-gallery-index', '0');
 				slots.forEach((image, slot) => { const offset = offsets[slot]!; $(image).attr('data-blocks-engine-capture-gallery-slot', String(offset <= sequence.length / 2 ? offset : offset - sequence.length)); });
-				next.attr('data-blocks-engine-capture-gallery-direction', '1'); previous.attr('data-blocks-engine-capture-gallery-direction', '-1');
+				next.attr('data-blocks-engine-capture-gallery-direction', '1'); inverse?.attr('data-blocks-engine-capture-gallery-direction', '-1');
 				wired = true;
 				return;
 			}
@@ -67,7 +69,7 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 		for (const record of gallery.frames[initial]!.text) root.find(record.selector.replace(':scope', '')).text(record.value);
 		stage.attr('data-blocks-engine-capture-gallery-stage', '').attr('data-blocks-engine-capture-gallery-initial', String(initial));
 		next.attr('data-blocks-engine-capture-gallery-direction', '1');
-		previous.attr('data-blocks-engine-capture-gallery-direction', '-1');
+		inverse?.attr('data-blocks-engine-capture-gallery-direction', '-1');
 		if (fullImages) root.find('[aria-label*="Close" i]').attr('data-blocks-engine-capture-gallery-close', '');
 		wired = true;
 	});
