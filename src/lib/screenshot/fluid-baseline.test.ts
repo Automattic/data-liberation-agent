@@ -1,6 +1,6 @@
 import { chromium } from 'playwright';
 import { expect, it, vi } from 'vitest';
-import { captureFluidBaseline } from './fluid-baseline.js';
+import { captureFluidBaseline, FLUID_RELEASE_ATTRIBUTE } from './fluid-baseline.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
 it( 'restores unlearned replacement roles without replacing the returned learned geometry', async () => {
@@ -22,6 +22,36 @@ it( 'restores unlearned replacement roles without replacing the returned learned
 		expect( await page.locator( '#learned' ).evaluate( node => ( node as HTMLElement ).style.width ) ).toBe( '320px' );
 		expect( await page.locator( '#unlearned' ).getAttribute( 'style' ) ).toBeNull();
 		await baseline.evaluate( state => state.cleanup() );
+		await baseline.dispose();
+	} finally { await browser.close(); }
+} );
+
+it( 'gives up learned authority over the properties an element is released for, and consumes the marker', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage( { viewport: { width: 400, height: 900 } } );
+		await page.setContent( '<div id="kept" style="width:400px;height:20px"></div><div id="released" style="width:400px;height:20px"></div>' );
+		const baseline = await captureFluidBaseline( page, 'data-blocks-engine-capture-fluid-id' );
+		await page.evaluate( () => {
+			document.querySelector( '#kept' )!.setAttribute( 'data-blocks-engine-capture-fluid-id', 'desktop-0' );
+			document.querySelector( '#released' )!.setAttribute( 'data-blocks-engine-capture-fluid-id', 'desktop-1' );
+		} );
+		await baseline.evaluate( state => state.bind() );
+		await baseline.evaluate( state => state.activate( [ 'desktop-0', 'desktop-1' ].flatMap( id => [
+			{ id, property: 'width', css: '400px', segmented: false },
+			{ id, property: 'height', css: '20px', segmented: false },
+		] ), 'data-blocks-engine-capture-fluid-segment', 400 ) );
+		await page.evaluate( release => {
+			document.querySelector( '#released' )!.setAttribute( release, 'width' );
+			for ( const element of document.querySelectorAll< HTMLElement >( 'div' ) ) {
+				element.style.width = '100%';
+				element.style.height = '30px';
+			}
+		}, FLUID_RELEASE_ATTRIBUTE );
+		await page.evaluate( () => document.body.setAttribute( 'style', 'margin:0' ) );
+		expect( await page.locator( '#kept' ).getAttribute( 'style' ) ).toBe( 'width: 400px; height: 20px;' );
+		expect( await page.locator( '#released' ).getAttribute( 'style' ) ).toBe( 'width: 100%; height: 20px;' );
+		expect( await page.locator( `[${ FLUID_RELEASE_ATTRIBUTE }]` ).count() ).toBe( 0 );
 		await baseline.dispose();
 	} finally { await browser.close(); }
 } );
