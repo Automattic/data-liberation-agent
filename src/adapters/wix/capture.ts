@@ -13,6 +13,7 @@ import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
+import { normalizeWixImageGeometry } from './image-geometry.js';
 
 /**
  * The Wix Blog per-post counters (views, comments). The server document holds
@@ -910,6 +911,15 @@ export const capture: LiberationHooks = {
 				{ compId: id, markup: html, stylesheet: css }
 			);
 		}
+	},
+
+	/**
+	 * Image boxes the runtime sizes to their container are declared on the
+	 * host, so the copy carries that relationship and the sweep skips them
+	 * (see image-geometry.ts).
+	 */
+	beforeFluid: async ( page ) => {
+		await normalizeWixImageGeometry( page );
 	},
 
 	/**

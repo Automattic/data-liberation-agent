@@ -191,6 +191,7 @@ interface CapturePerViewportArgs {
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
 	resolveClientRedirect?: ( page: Page, url: string ) => Promise< string | undefined >;
+	beforeFluid?: ScreenshotOpts['beforeFluid'];
 	beforeSerialize?: (
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
@@ -1072,6 +1073,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
 		try {
 			args.phases?.enter( 'fluid' );
+			await args.beforeFluid?.( page, { url, viewport: viewport.id, serverHtml } ).catch( () => {
+				/* best-effort — the sweep learns whatever the hook left in place */
+			} );
 			const learned = await learnAndApplyFluidGeometry( page, {
 				document: isDesktop ? 'desktop' : 'mobile',
 				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
@@ -2547,6 +2551,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
 							resolveClientRedirect: opts.resolveClientRedirect,
+							beforeFluid: opts.beforeFluid,
 							beforeSerialize: opts.beforeSerialize,
 							observeSource: opts.observeSource,
 							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
