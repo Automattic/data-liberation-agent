@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.31.1] - 2026-10-16
+
+### Changed
+- regenerate plugin bundles
+- stop re-parsing projected stylesheets in device assembly
+- cut selectable-state probing that cannot change its outcome
+- end per-width rest on observed viewport work instead of a fixed window
+- Settle scroll reveals before an interaction visibility baseline
+
+### Fixed
+- reserve memory per route kind so routes without reference pages admit against their own working set
+- keep third-party form actions and record form action rewrites
+
 ## [0.31.0] - 2026-10-15
 
 ### Added
