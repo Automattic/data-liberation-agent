@@ -178,7 +178,9 @@ describe( 'exportWebsiteCapture', () => {
 		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main><article>Ordinary article page</article></main>' );
 		writeFileSync(
 			join( outputDir, 'html', 'publication.html' ),
-			readFileSync( fileURLToPath( new URL( '../../test/fixtures/360chiro-publication-metadata.html', import.meta.url ) ), 'utf8' )
+			readFileSync( fileURLToPath( new URL( '../../test/fixtures/360chiro-publication-metadata.html', import.meta.url ) ), 'utf8' ) +
+				// The fixture is metadata-only; a real route also has article content.
+				'<main><article>Can chiropractic help with back pain?</article></main>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -3098,11 +3100,11 @@ describe( 'exportWebsiteCapture', () => {
 		const missingFont = 'https://example.com/fonts/missing.woff2';
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><link rel="stylesheet" href="${ cssUrl }"></body></html>`
+			`<html><body><link rel="stylesheet" href="${ cssUrl }"><p>Home</p></body></html>`
 		);
 		writeFileSync(
 			join( outputDir, 'html', 'about.html' ),
-			`<html><body><link rel="stylesheet" href="${ cssUrl }"></body></html>`
+			`<html><body><link rel="stylesheet" href="${ cssUrl }"><p>About</p></body></html>`
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
@@ -4233,7 +4235,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			( _value, index ) => `<style nonce="runtime-${ index }">.x${ index }{color:red}</style>`
 		).join( '' );
 		for ( const slug of [ 'homepage', 'about' ] )
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body></body></html>` );
+			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body><p class="x0">${ slug }</p></body></html>` );
 		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
 			version: 1,
 			entries: {
@@ -5244,6 +5246,63 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect(
 			readFileSync( join( outputDir, 'website', 'AdminDashboard', 'index.html' ), 'utf8' )
 		).toContain( 'Access Denied' );
+	} );
+
+	it( 'excludes a route that rendered an empty document, but never the source URL itself', () => {
+		// Reproduces https://github.com/Automattic/data-liberation-agent/issues/896:
+		// a route answers HTTP 200 and the client router renders nothing at all --
+		// a body with no text and no content-bearing elements. Exported, that blank
+		// page later fails the whole WordPress import, so it must be excluded like
+		// an absent document. The source URL stays in even when it renders empty.
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const emptyHtml =
+			'<!DOCTYPE html><html><head><title>t</title></head><body>\n' +
+			'<script>console.log("boot");</script><style>body{margin:0}</style>\n</body></html>';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), emptyHtml );
+		writeFileSync( join( outputDir, 'html', 'blank.html' ), emptyHtml );
+		writeFileSync(
+			join( outputDir, 'html', 'gallery.html' ),
+			'<html><body><img src="/photo.jpg" alt=""></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/home.html' },
+					'https://example.com/blank': { html: 'html/blank.html' },
+					'https://example.com/gallery': { html: 'html/gallery.html' },
+				},
+			} )
+		);
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.routes.map( ( r: { url: string } ) => r.url ) ).toEqual( [
+			'https://example.com/',
+			'https://example.com/gallery',
+		] );
+		expect( receipt.excludedRoutes ).toEqual( [ 'https://example.com/blank' ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [
+			{
+				code: 'route_not_found',
+				url: 'https://example.com/blank',
+				reason: 'rendered document is empty',
+			},
+		] );
+		expect( existsSync( join( outputDir, 'website', 'blank', 'index.html' ) ) ).toBe( false );
+		expect( existsSync( join( outputDir, 'website', 'index.html' ) ) ).toBe( true );
+		expect( existsSync( join( outputDir, 'website', 'gallery', 'index.html' ) ) ).toBe( true );
 	} );
 
 	it( 'names a route whose HTML file went missing on disk after capture claimed success', () => {

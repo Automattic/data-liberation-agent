@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { isAbsentDocumentError, isAbsentDocumentRender, nonHtmlDocumentError } from './absent-document.js';
+import {
+	isAbsentDocumentError,
+	isAbsentDocumentRender,
+	isEmptyDocumentRender,
+	nonHtmlDocumentError,
+} from './absent-document.js';
 
 /** The exact shape captured from https://mint-brand-vote.base44.app/Favorites and
  * /SellerProfile: HTTP 200, a generic fallback template rendered by the client
@@ -70,6 +75,40 @@ describe( 'isAbsentDocumentRender', () => {
 
 	it( 'does not flag an empty document', () => {
 		expect( isAbsentDocumentRender( '<html><body></body></html>' ) ).toBe( false );
+	} );
+} );
+
+describe( 'isEmptyDocumentRender', () => {
+	it( 'calls a body with nothing in it empty', () => {
+		expect(
+			isEmptyDocumentRender( '<!DOCTYPE html><html><head></head><body></body></html>' )
+		).toBe( true );
+	} );
+
+	it( 'calls a body with only whitespace, script and style empty', () => {
+		expect(
+			isEmptyDocumentRender(
+				'<!DOCTYPE html><html><head><title>t</title></head><body>\n  \t ' +
+					'<script>console.log("boot");</script><style>body{margin:0}</style>' +
+					'<noscript>enable js</noscript><template><p>never rendered</p></template>' +
+					'</body></html>'
+			)
+		).toBe( true );
+	} );
+
+	it.each( [ 'img', 'iframe', 'svg' ] )(
+		'does not call a text-free body with an <%s> empty',
+		( tag ) => {
+			expect(
+				isEmptyDocumentRender( `<html><body><${ tag } src="/x"></${ tag }></body></html>` )
+			).toBe( false );
+		}
+	);
+
+	it( 'does not call a body with text empty', () => {
+		expect(
+			isEmptyDocumentRender( '<html><body><p>Hello there.</p></body></html>' )
+		).toBe( false );
 	} );
 } );
 
