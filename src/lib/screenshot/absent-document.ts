@@ -78,6 +78,28 @@ export function isAbsentDocumentRender( html: string ): boolean {
 	return hasAbsentDocumentHeading;
 }
 
+/** Elements whose presence makes a text-free body a real page: visible or
+ * interactive content a reader could still perceive. script/style/noscript/
+ * template/link/meta are machinery, not content, so they never count. */
+const CONTENT_BEARING_ELEMENTS =
+	'img, picture, video, audio, iframe, embed, object, svg, canvas, input, select, textarea, button';
+
+/**
+ * A route whose rendered body carries no non-whitespace text and no
+ * content-bearing element is not a page a reader can see -- a client-routed
+ * app that answered an unknown route by rendering nothing, for example.
+ * Exporting it produces a blank document that a downstream importer then
+ * chokes on, so callers treat it like an absent document. Purely structural:
+ * no vendor markup, no English phrasing, just "is there anything here".
+ */
+export function isEmptyDocumentRender( html: string ): boolean {
+	const $ = cheerio.load( html );
+	const body = $( 'body' ).clone();
+	body.find( 'script, style, noscript, template' ).remove();
+	if ( body.text().trim().length > 0 ) return false;
+	return body.find( CONTENT_BEARING_ELEMENTS ).length === 0;
+}
+
 export function failuresAreAbsentDocument(
 	failures: Array< { url?: unknown; error?: unknown } >,
 	url: string

@@ -48,6 +48,7 @@ import { MediaStubStore } from './resume-state/index.js';
 import {
 	failuresAreAbsentDocument,
 	isAbsentDocumentRender,
+	isEmptyDocumentRender,
 	isSourceCaptureUrl,
 } from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
@@ -1403,18 +1404,24 @@ function buildExportCapture(
 			// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
 			// succeeded, there is no failure to inspect. Never applied to the source
 			// URL itself -- it is known good regardless of what it renders.
-			if (
-				! isSourceCaptureUrl( url, options.sourceUrl ) &&
-				isAbsentDocumentRender( rawDesktopHtml )
-			) {
-				excludedRoutes.push( url );
-				routeCaptureDiagnostics.push( {
-					code: 'route_not_found',
-					url,
-					reason:
-						'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page',
-				} );
-				continue;
+			if ( ! isSourceCaptureUrl( url, options.sourceUrl ) ) {
+				// An empty rendered body (no text, no content-bearing element) is
+				// the same signal in its barest form: the app answered the route
+				// with nothing at all.
+				const absentRenderReason = isAbsentDocumentRender( rawDesktopHtml )
+					? 'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page'
+					: isEmptyDocumentRender( rawDesktopHtml )
+						? 'rendered document is empty'
+						: undefined;
+				if ( absentRenderReason ) {
+					excludedRoutes.push( url );
+					routeCaptureDiagnostics.push( {
+						code: 'route_not_found',
+						url,
+						reason: absentRenderReason,
+					} );
+					continue;
+				}
 			}
 			const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
 			const acquiredMobileHtml =
