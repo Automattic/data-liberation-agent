@@ -82,6 +82,31 @@ it( 'copies AVIF binary bytes unchanged when the response is mislabeled as text/
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );
 
+it( 'keeps text that starts with a font tag name as text', () => {
+	const root = mkdtempSync( join( tmpdir(), 'portable-font-tag-text-' ) );
+	try {
+		mkdirSync( join( root, 'resources' ), { recursive: true } );
+		const websiteDir = join( root, 'website' );
+		const htmlPath = join( root, 'page.html' );
+		// `true` is also the sfnt tag of Apple TrueType fonts; a real font has a small table count next.
+		writeFileSync( join( root, 'resources', 'theme' ), 'true .note{background:url("/dot.png")}' );
+		writeFileSync( join( root, 'resources', 'dot.png' ), Buffer.from( [ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a ] ) );
+		writeFileSync( htmlPath, '<link rel="stylesheet" href="/theme?v=1">' );
+		materializePortableResources( {
+			sourceRoot: root, websiteDir, entries: [ { url: 'https://example.test/', htmlPath } ],
+			resourceManifest: { version: 1, failures: [], resources: {
+				'https://example.test/theme?v=1': { path: 'resources/theme', contentType: 'text/css' },
+				'https://example.test/dot.png': { path: 'resources/dot.png', contentType: 'image/png' },
+			} },
+			mediaReplacements: new Map(), assetPathsByHash: new Map(), assetHashesByPath: new Map(), portablePathsBySource: new Map(),
+			embeddedSources: new Set(), projectEmbeddedHtml: ( html ) => html,
+		} );
+		expect( readFileSync( join( websiteDir, 'theme.css' ), 'utf8' ) ).toBe( 'true .note{background:url("/dot.png")}' );
+		expect( existsSync( join( websiteDir, 'theme.ttf' ) ) ).toBe( false );
+		expect( existsSync( join( websiteDir, 'dot.png' ) ) ).toBe( true );
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );
+
 it( 'applies embedded page policy while resolving child dependencies against its original base', () => {
 	const root = mkdtempSync( join( tmpdir(), 'portable-embedded-' ) );
 	try {

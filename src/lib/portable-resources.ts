@@ -8,22 +8,33 @@ import { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
 import { dependencyReferences, isExcludedRendition, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSource, removeDanglingResourceReference, stripExcludedRenditionReferences, type PortableDependency } from './portable-references.js';
 import { stripImageSetCandidates } from './srcset.js';
 
-function hasRecognizedBinarySignature( path: string ): boolean {
+/** The format named by a recognized binary signature, or undefined for text and unknown bytes. */
+function recognizedBinaryContentType( path: string ): string | undefined {
 	const bytes = readFileSync( path );
+	const head = bytes.toString( 'ascii', 0, 4 );
 	if ( bytes.length >= 12 && bytes.toString( 'ascii', 4, 8 ) === 'ftyp' ) {
 		const brand = bytes.toString( 'ascii', 8, 12 );
-		if ( /^(?:avif|avis|heic|heix|mif1|msf1|mp4 |M4V )$/.test( brand ) ) return true;
+		if ( /^(?:avif|avis)$/.test( brand ) ) return 'image/avif';
+		if ( /^(?:heic|heix|mif1|msf1)$/.test( brand ) ) return 'image/heic';
+		if ( /^(?:mp4 |M4V )$/.test( brand ) ) return 'video/mp4';
 	}
-	return (
-		bytes.subarray( 0, 8 ).equals( Buffer.from( [ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a ] ) ) ||
-		bytes.subarray( 0, 3 ).equals( Buffer.from( [ 0xff, 0xd8, 0xff ] ) ) ||
-		bytes.toString( 'ascii', 0, 4 ) === 'RIFF' && /^(?:WEBP|WAVE)$/.test( bytes.toString( 'ascii', 8, 12 ) ) ||
-		bytes.toString( 'ascii', 0, 4 ) === 'wOF2' || bytes.toString( 'ascii', 0, 4 ) === 'wOFF' ||
-		bytes.toString( 'ascii', 0, 4 ) === 'OTTO' || bytes.toString( 'ascii', 0, 4 ) === 'TRUE' ||
-		bytes.subarray( 0, 4 ).equals( Buffer.from( [ 0, 1, 0, 0 ] ) ) ||
-		bytes.toString( 'ascii', 0, 4 ) === 'GIF8' || bytes.toString( 'ascii', 0, 4 ) === 'OggS' ||
-		bytes.toString( 'ascii', 0, 3 ) === 'ID3'
-	);
+	if ( bytes.subarray( 0, 8 ).equals( Buffer.from( [ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a ] ) ) ) return 'image/png';
+	if ( bytes.subarray( 0, 3 ).equals( Buffer.from( [ 0xff, 0xd8, 0xff ] ) ) ) return 'image/jpeg';
+	if ( head === 'RIFF' && bytes.toString( 'ascii', 8, 12 ) === 'WEBP' ) return 'image/webp';
+	if ( head === 'RIFF' && bytes.toString( 'ascii', 8, 12 ) === 'WAVE' ) return 'audio/wav';
+	if ( head === 'wOF2' ) return 'font/woff2';
+	if ( head === 'wOFF' ) return 'font/woff';
+	// sfnt fonts: a 4-byte tag, then a small table count. The count keeps text
+	// that starts with "true" or "OTTO" out.
+	const sfntTables = bytes.length >= 12 ? bytes.readUInt16BE( 4 ) : 0;
+	if ( sfntTables >= 1 && sfntTables <= 512 ) {
+		if ( head === 'OTTO' ) return 'font/otf';
+		if ( head === 'true' || bytes.subarray( 0, 4 ).equals( Buffer.from( [ 0, 1, 0, 0 ] ) ) ) return 'font/ttf';
+	}
+	if ( head === 'GIF8' ) return 'image/gif';
+	if ( head === 'OggS' ) return 'audio/ogg';
+	if ( bytes.toString( 'ascii', 0, 3 ) === 'ID3' ) return 'audio/mpeg';
+	return undefined;
 }
 
 export interface PortableResourceOptions {
@@ -126,7 +137,14 @@ export function materializePortableResources( options: PortableResourceOptions )
 			} );
 			return false;
 		}
-		const requestedPath = portableResourcePath( resource.path, resource.contentType );
+		// Servers can label binary bytes with a text MIME (AVIF as text/plain,
+		// query-based WOFF2 as text/html). Recognized bytes are copied exactly and
+		// named by their format, so no later HTML/CSS pass reads them as text.
+		const transportIsText = /^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType );
+		const sniffedType = transportIsText ? recognizedBinaryContentType( source ) : undefined;
+		const requestedPath =
+			( sniffedType && portableResourcePath( resource.path, sniffedType ) ) ??
+			portableResourcePath( resource.path, resource.contentType );
 		if ( ! requestedPath ) {
 			unresolvedDependencies.push( {
 				url: dependency.url,
@@ -137,9 +155,7 @@ export function materializePortableResources( options: PortableResourceOptions )
 			} );
 			return false;
 		}
-		const isText =
-			/^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType ) &&
-			! hasRecognizedBinarySignature( source );
+		const isText = transportIsText && ! sniffedType;
 		const contentHash = isText ? '' : fileHash( source );
 		const relativePath = isText
 			? requestedPath
