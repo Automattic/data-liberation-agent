@@ -25,7 +25,7 @@ import {
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
-import { wireCapturedDialogs } from '../static-dialogs.js';
+import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
@@ -1417,6 +1417,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			const selectableStates = await captureSelectableSetStates( page );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
+			}
+			// A probed choice group the export cannot replay ships as static
+			// markup; record the lost interaction instead of dropping it silently.
+			for ( const loss of choiceGroupInteractionLosses( selectableStates ) ) {
+				( entry.blockLosses ??= [] ).push( { ...loss, unit: 'block', profile: viewport.id } );
 			}
 			try {
 				await dismissOverlays( page );

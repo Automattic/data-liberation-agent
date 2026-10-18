@@ -297,6 +297,10 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * form is recorded here and the collapsed label is put back. A second click
  * is the restore; a one-way handler is put back from the pre-click snapshot.
  *
+ * Non-ARIA click accordions (#901) — repeated sibling items whose own click
+ * reveals a hidden descendant, independently and reversibly — are proven the
+ * same way and emitted on the same local-disclosure contract.
+ *
  * Returns per-candidate diagnostics folded into `interaction-states.json`
  * alongside dialog/menu captures (`kind: 'disclosure'`) so this work is
  * observable with the same `candidate_count`/`captured_count` conventions.
@@ -879,6 +883,212 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
       }
       for (const entry of observedPopulated) {
         records.push({ status: 'captured', trigger: describeTrigger(entry.trigger), target: describe(entry.panel), html: entry.panel.outerHTML });
+      }
+      // Non-ARIA click disclosures (#901): repeated sibling items whose own
+      // activation reveals a previously hidden descendant of that item only.
+      // The source proves each toggle is local (no mutation elsewhere in the
+      // group), independent (an open item stays open while another opens) and
+      // reversible (a second activation restores the item's markup, class token
+      // order aside). Class/style differences become the contract's open/closed
+      // swaps; a flipped leaf glyph outside the panel keeps its closed text. Any
+      // other difference stays untouched and falls through to later probes.
+      type NavigateEventLike = Event & { destination?: { sameDocument?: boolean } };
+      const clickNavigation = (window as unknown as { navigation?: EventTarget }).navigation;
+      let clickNavigationBlocked = false;
+      const keepClickDocument = (event: Event) => {
+        if (!event.cancelable || (event as NavigateEventLike).destination?.sameDocument) return;
+        event.preventDefault();
+        clickNavigationBlocked = true;
+      };
+      clickNavigation?.addEventListener('navigate', keepClickDocument);
+      try {
+        const clickDeadline = Date.now() + 15_000;
+        const interactive = 'a,button,input,select,textarea,summary,details,label,option,[aria-expanded],[aria-haspopup],[role="tab"],[role="option"],[role="radio"],[role="menuitem"],[role="button"]';
+        const clickable = (element: HTMLElement) => {
+          if (element.matches(interactive) || element.closest('nav,[role="navigation"],details,[data-blocks-engine-capture-local-disclosure],[data-blocks-engine-capture-hydrated-disclosure],[aria-expanded]')) return false;
+          if (element.querySelector('[aria-expanded],[data-blocks-engine-capture-local-disclosure],details')) return false;
+          return element.hasAttribute('onclick') || getComputedStyle(element).cursor === 'pointer';
+        };
+        const concealed = (member: HTMLElement) => Array.from(member.querySelectorAll<HTMLElement>('*'))
+          .filter((node) => hasContent(node) && clipped(node));
+        const outermost = (nodes: HTMLElement[]) => nodes.filter((node) => !nodes.some((other) => other !== node && other.contains(node)));
+        const scanned = Array.from(root.querySelectorAll<HTMLElement>('*')).slice(0, 4000);
+        const pointer = outermost(scanned.filter((element) => visible(element) && clickable(element)));
+        const byParent = new Map<HTMLElement, HTMLElement[]>();
+        for (const element of pointer) {
+          const parent = element.parentElement;
+          if (!parent || !concealed(element).length) continue;
+          byParent.set(parent, [...(byParent.get(parent) ?? []), element]);
+        }
+        // Structure of an item apart from what the export can toggle (class and
+        // style) and apart from leaf labels outside the panel: an icon whose
+        // glyph flips (`+` to `×`) keeps its closed glyph in the copy.
+        const childPath = (ancestor: Element, node: Element) => {
+          const path: number[] = [];
+          for (let current: Element = node; current !== ancestor && current.parentElement; current = current.parentElement) {
+            path.unshift(Array.prototype.indexOf.call(current.parentElement.children, current));
+          }
+          return path;
+        };
+        const shape = (element: Element, panelPath: number[]) => {
+          const clone = element.cloneNode(true) as Element;
+          let panel: Element | undefined = clone;
+          for (const index of panelPath) panel = panel?.children[index];
+          for (const node of [clone, ...Array.from(clone.querySelectorAll('*'))]) {
+            node.removeAttribute('class');
+            node.removeAttribute('style');
+            if (node.childElementCount === 0 && panel && !panel.contains(node)) node.textContent = '';
+          }
+          return clone.outerHTML;
+        };
+        const presentation = (element: HTMLElement) => [element, ...Array.from(element.querySelectorAll<HTMLElement>('*'))]
+          .map((node) => ({ className: node.getAttribute('class'), style: node.getAttribute('style') }));
+        const tokens = (value: string | null) => [...new Set((value ?? '').split(/\s+/).filter(Boolean))].sort().join(' ');
+        const declarations = (value: string | null) => (value ?? '').replace(/\s*([:;,])\s*/g, '$1').replace(/;$/, '').trim();
+        // A runtime that removes and re-adds a class token moves it to the end
+        // of the attribute; token order and style spacing are not state.
+        const canonical = (element: HTMLElement) => {
+          const clone = element.cloneNode(true) as HTMLElement;
+          for (const node of [clone, ...Array.from(clone.querySelectorAll('*'))]) {
+            const className = node.getAttribute('class');
+            if (className !== null) node.setAttribute('class', [...new Set(className.split(/\s+/).filter(Boolean))].sort().join(' '));
+            const style = node.getAttribute('style');
+            if (style !== null) node.setAttribute('style', style.replace(/\s*([:;,])\s*/g, '$1').replace(/;$/, '').trim());
+          }
+          return clone.outerHTML;
+        };
+        const restoreGroup = async (members: HTMLElement[], initial: string[]) => {
+          for (const [index, member] of members.entries()) {
+            if (canonical(member) === initial[index]) continue;
+            try { member.click(); } catch { /* verified below */ }
+            for (let attempt = 0; attempt < 40 && canonical(member) !== initial[index]; attempt++) await wait(25);
+          }
+          if (members.some((member, index) => canonical(member) !== initial[index])) {
+            // failure-class: representability:block
+            throw new Error(`${describe(members[0]!.parentElement!).selector}: click disclosure group did not return to its baseline`);
+          }
+        };
+        let groupsProbed = 0;
+        for (const [parent, groupMembers] of byParent) {
+          if (groupMembers.length < 2 || groupsProbed >= 8 || Date.now() >= clickDeadline) continue;
+          const tag = groupMembers[0]!.tagName;
+          const members = groupMembers.filter((member) => member.tagName === tag).slice(0, 24);
+          if (members.length < 2) continue;
+          groupsProbed++;
+          const initial = members.map(canonical);
+          const resting = members.map((member) => member.cloneNode(true) as HTMLElement);
+          const route = currentRoute();
+          const opened: Array<{ member: HTMLElement; panel: HTMLElement; open: ReturnType<typeof presentation> }> = [];
+          let failure: string | undefined;
+          // Open every member in turn without closing the earlier ones.
+          for (const member of members) {
+            const hiddenBefore = concealed(member);
+            const foreign: Node[] = [];
+            // Inside the group, anything outside this item is foreign. Elsewhere,
+            // only a newly mounted element or a root/body change (a modal, a
+            // scroll lock) is: unrelated runtimes keep animating the page.
+            const observer = new MutationObserver((mutations) => {
+              for (const mutation of mutations) {
+                if (member.contains(mutation.target)) continue;
+                if (parent.contains(mutation.target)) foreign.push(mutation.target);
+                else if (mutation.target === document.body || mutation.target === document.documentElement) foreign.push(mutation.target);
+                else if (Array.from(mutation.addedNodes).some((node) => node instanceof Element)) foreign.push(mutation.target);
+              }
+            });
+            observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+            try { member.click(); } catch { failure = 'activation threw'; }
+            let revealed: HTMLElement[] = [];
+            for (let attempt = 0; attempt < 40 && !failure; attempt++) {
+              await wait(25);
+              revealed = outermost(hiddenBefore.filter((node) => node.isConnected && !clipped(node)));
+              if (revealed.length) break;
+            }
+            // Let a transition finish before the open state is read.
+            let previous = member.outerHTML;
+            for (let attempt = 0; attempt < 20 && revealed.length; attempt++) {
+              await wait(50);
+              if (member.outerHTML === previous) break;
+              previous = member.outerHTML;
+            }
+            observer.disconnect();
+            if (failure) break;
+            if (clickNavigationBlocked || currentRoute() !== route) { failure = 'activation navigated'; break; }
+            if (foreign.length) { failure = 'activation changed content outside its own item'; break; }
+            if (revealed.length !== 1) { failure = revealed.length ? 'activation revealed more than one region' : 'activation revealed nothing'; break; }
+            if (opened.some((entry) => clipped(entry.panel))) { failure = 'opening one item closed another'; break; }
+            const panelPath = childPath(member, revealed[0]!);
+            if (shape(member, panelPath) !== shape(resting[members.indexOf(member)]!, panelPath)) {
+              failure = 'activation changed more than presentation'; break;
+            }
+            opened.push({ member, panel: revealed[0]!, open: presentation(member) });
+          }
+          // A second activation closes each item and restores its exact markup.
+          if (!failure) {
+            for (const [index, entry] of opened.entries()) {
+              try { entry.member.click(); } catch { failure = 'second activation threw'; break; }
+              for (let attempt = 0; attempt < 40 && canonical(entry.member) !== initial[index]; attempt++) await wait(25);
+              if (clickNavigationBlocked || currentRoute() !== route) { failure = 'activation navigated'; break; }
+              if (canonical(entry.member) !== initial[index] || !clipped(entry.panel)) { failure = 'second activation did not close the item'; break; }
+            }
+          }
+          await restoreGroup(members, initial);
+          if (failure) {
+            records.push({ status: 'no-dialog', trigger: describeTrigger(members[0]!), target: describe(parent), error: `Click disclosure not representable: ${failure}.` });
+            continue;
+          }
+          for (const entry of opened) {
+            const { member, panel } = entry;
+            const nodes = [member, ...Array.from(member.querySelectorAll<HTMLElement>('*'))];
+            const closed = presentation(member);
+            if (tokens(closed[0]!.className) !== tokens(entry.open[0]!.className) || declarations(closed[0]!.style) !== declarations(entry.open[0]!.style)) {
+              records.push({ status: 'no-dialog', trigger: describeTrigger(member), target: describe(panel), error: 'Click disclosure not representable: the item restyles itself.' });
+              continue;
+            }
+            const undo = nodes.map((node) => Array.from(node.attributes).map((attribute) => [attribute.name, attribute.value] as const));
+            const revert = () => nodes.forEach((node, index) => {
+              for (const attribute of Array.from(node.attributes)) node.removeAttribute(attribute.name);
+              for (const [name, value] of undo[index]!) node.setAttribute(name, value);
+            });
+            const swaps: Array<{ node: HTMLElement; name: 'class' | 'style'; open: string; closed: string }> = [];
+            nodes.forEach((node, index) => {
+              if (index === 0) return;
+              const before = closed[index]!, after = entry.open[index]!;
+              if (tokens(before.className) !== tokens(after.className)) swaps.push({ node, name: 'class', open: after.className ?? '', closed: before.className ?? '' });
+              if (declarations(before.style) !== declarations(after.style)) swaps.push({ node, name: 'style', open: after.style ?? '', closed: before.style ?? '' });
+            });
+            for (const swap of swaps) {
+              swap.node.setAttribute(`data-blocks-engine-capture-disclosure-open-${swap.name}`, swap.open);
+              swap.node.setAttribute(`data-blocks-engine-capture-disclosure-closed-${swap.name}`, swap.closed);
+            }
+            if (!panel.id || document.querySelectorAll(`#${cssEscape(panel.id)}`).length !== 1) {
+              let index = 0;
+              while (document.getElementById(`data-blocks-engine-capture-disclosure-panel-${index}`)) index++;
+              panel.id = `data-blocks-engine-capture-disclosure-panel-${index}`;
+            }
+            if (!panel.hasAttribute('role')) panel.setAttribute('role', 'region');
+            panel.dataset.blocksEngineCaptureLocalDisclosure = 'true';
+            panel.dataset.blocksEngineCaptureHydratedDisclosure = 'true';
+            member.setAttribute('aria-controls', panel.id);
+            member.setAttribute('aria-expanded', 'false');
+            if (member.tabIndex < 0 && !member.hasAttribute('tabindex')) member.setAttribute('tabindex', '0');
+            // Prove the exported runtime's two states before keeping them.
+            const apply = (open: boolean) => {
+              panel.hidden = !open;
+              for (const swap of swaps) swap.node.setAttribute(swap.name, open ? swap.open : swap.closed);
+            };
+            apply(true);
+            const opens = !clipped(panel);
+            apply(false);
+            if (!opens || !clipped(panel)) {
+              revert();
+              records.push({ status: 'no-dialog', trigger: describeTrigger(member), target: describe(panel), error: 'Click disclosure not representable: the normalized panel did not toggle.' });
+              continue;
+            }
+            records.push({ status: 'captured', trigger: describeTrigger(member), target: describe(panel), html: panel.outerHTML });
+          }
+        }
+      } finally {
+        clickNavigation?.removeEventListener('navigate', keepClickDocument);
       }
       return records;
     }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES, rootSelector });

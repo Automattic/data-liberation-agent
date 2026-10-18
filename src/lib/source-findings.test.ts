@@ -53,6 +53,7 @@ describe( 'source findings (static-site-importer/source-findings/v1)', () => {
 			stylesheet_unparseable: { loss_class: 'degraded_unit', unit: 'stylesheet' },
 			native_timeline_unproven: { loss_class: 'degraded_unit', unit: 'block' },
 			disclosure_unrestored: { loss_class: 'degraded_unit', unit: 'block' },
+			interaction_unreplayable: { loss_class: 'degraded_unit', unit: 'block' },
 		} );
 		for ( const code of MISSING_ROUTE_CODES ) expect( SOURCE_FINDING_LOSS_CLASSES[ code ] ).toEqual( { loss_class: 'omitted_unit', unit: 'route' } );
 		expect( DEFAULT_SOURCE_FINDING_LOSS_CLASS ).toBe( 'degraded_unit' );

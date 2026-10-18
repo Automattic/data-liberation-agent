@@ -103,6 +103,55 @@ function activate(event){
 document.addEventListener('click',activate);document.addEventListener('keydown',activate);
 })();`;
 
+/** A captured choice-group state the export can replay without a source runtime. */
+export function isReplayableChoiceGroup( state: CapturedDialogInteraction ): boolean {
+	return (
+		state.status === 'captured' &&
+		state.kind === 'choice-group' &&
+		Boolean( state.choiceGroup ) &&
+		state.choiceGroup!.replay === 'activation-determined' &&
+		state.choiceGroup!.restoration === 'verified' &&
+		state.choiceGroup!.coverage === 'complete' &&
+		! state.choiceGroup!.transition.htmlTruncated
+	);
+}
+
+/** Finding code for an observed interaction the export cannot reproduce. */
+export const INTERACTION_UNREPLAYABLE_CODE = 'interaction_unreplayable';
+
+/**
+ * One visible loss per observed choice group that `wireCapturedDialogs` will
+ * not replay (#901). Without it the group's static markup ships silently and
+ * the reader's interaction disappears with no record.
+ */
+export function choiceGroupInteractionLosses(
+	states: readonly CapturedDialogInteraction[]
+): Array< { code: typeof INTERACTION_UNREPLAYABLE_CODE; reason: string; severity: 'warning' } > {
+	const groups = new Map< string, CapturedDialogInteraction[] >();
+	for ( const state of states ) {
+		if ( state.status !== 'captured' || state.kind !== 'choice-group' || ! state.choiceGroup ) continue;
+		const key = `${ state.choiceGroup.group.selector }|${ state.choiceGroup.group.id ?? '' }`;
+		groups.set( key, [ ...( groups.get( key ) ?? [] ), state ] );
+	}
+	const losses: Array< { code: typeof INTERACTION_UNREPLAYABLE_CODE; reason: string; severity: 'warning' } > = [];
+	for ( const members of groups.values() ) {
+		if ( members.every( isReplayableChoiceGroup ) ) continue;
+		const group = members[ 0 ]!.choiceGroup!;
+		const why =
+			members.map( ( state ) => state.choiceGroup!.replayReason ).find( Boolean ) ??
+			( group.replay === 'unsupported' ? 'replay unsupported'
+				: group.restoration !== 'verified' ? 'source restoration unverified'
+				: group.coverage !== 'complete' ? 'partial coverage'
+				: 'transition truncated' );
+		losses.push( {
+			code: INTERACTION_UNREPLAYABLE_CODE,
+			reason: `choice group ${ group.group.selector } (${ group.choices.length } choices) ships as static markup: ${ why }`,
+			severity: 'warning',
+		} );
+	}
+	return losses;
+}
+
 export function wireCapturedDialogs(
 	html: string,
 	states: CapturedDialogInteraction[],
@@ -127,16 +176,7 @@ export function wireCapturedDialogs(
 				state.gallery.closed && ! state.dialog.htmlTruncated
 			) )
 	);
-	const choiceStates = states.filter(
-		( state ) =>
-			state.status === 'captured' &&
-			state.kind === 'choice-group' &&
-			state.choiceGroup &&
-			state.choiceGroup.replay === 'activation-determined' &&
-			state.choiceGroup.restoration === 'verified' &&
-			state.choiceGroup.coverage === 'complete' &&
-			! state.choiceGroup.transition.htmlTruncated
-	);
+	const choiceStates = states.filter( isReplayableChoiceGroup );
 	const localDisclosures = html.includes('data-blocks-engine-capture-local-disclosure');
 	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 && !localDisclosures ) return html;
 	const $ = cheerio.load( html );

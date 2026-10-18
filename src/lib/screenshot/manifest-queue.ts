@@ -54,7 +54,7 @@ export interface ManifestEntry {
    * Evidence blocks a profile lost while its page was still saved (`unit: 'block'`
    * findings without the route URL); export reports them on the route.
    */
-  blockLosses?: Array<Omit<import('../capture-export-routes.js').RouteDiagnostic, 'url'> & { code: 'native_timeline_unproven' | 'disclosure_unrestored'; unit: 'block'; profile: string }>;
+  blockLosses?: Array<Omit<import('../capture-export-routes.js').RouteDiagnostic, 'url'> & { code: 'native_timeline_unproven' | 'disclosure_unrestored' | 'interaction_unreplayable'; unit: 'block'; profile: string }>;
   /**
    * Outcome of learning the source's sizing across viewport widths: how much
    * runtime-frozen geometry became fluid CSS, and what stayed frozen.
