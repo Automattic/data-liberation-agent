@@ -158,7 +158,7 @@ export async function captureSelectableSetStates(
 				// innerText reflects rendered visibility, unlike textContent which includes
 				// pre-rendered tab panels hidden by CSS classes.
 				const visibleTextOf = ( element: Element ) =>
-					( ( element as HTMLElement ).innerText ?? textOf( element ) ).replace( /\\s+/g, ' ' ).trim();
+					( ( element as HTMLElement ).innerText ?? textOf( element ) ).replace( /\s+/g, ' ' ).trim();
 				const fingerprint = ( element: Element ) => {
 					const hidden =
 						element.hasAttribute( 'hidden' ) || element.getAttribute( 'aria-hidden' ) === 'true';
