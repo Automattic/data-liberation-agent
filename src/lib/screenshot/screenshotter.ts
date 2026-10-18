@@ -82,7 +82,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
-import { anchorChromeStates, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
+import { anchorChromeStates, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /**
@@ -201,6 +201,12 @@ interface CapturePerViewportArgs {
 	canonicalizeHtml?: ( html: string ) => string;
 	/** The entrypoint's one-time chrome probe for this profile; see chrome-reuse.ts. */
 	sharedChrome?: SharedChromeProbe;
+	/**
+	 * Set on the desktop pass of a reflow-only route: its document also serves
+	 * phones, so chrome with no reusable entrypoint evidence has its phone-only
+	 * controls probed in place at this size (see `probePhoneOnlyChrome`).
+	 */
+	reflowPhoneViewport?: { width: number; height: number };
 	viewport: Viewport;
 	plan: ArtifactPlan;
 	url: string;
@@ -1400,6 +1406,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( chrome?.skip ) await clearChromeMarks( page );
 		}
 		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
+		if ( isDesktop && args.reflowPhoneViewport && chrome?.unmatchedRoots?.length ) {
+			args.phases?.enter( 'shared-chrome' );
+			const phoneStates = await probePhoneOnlyChrome( page, url, chrome.unmatchedRoots, args.reflowPhoneViewport ).catch( () => [] );
+			if ( phoneStates.length ) interactions.states.push( ...phoneStates );
+			args.phases?.enter( 'dialogs' );
+		}
 		// Route-tab observation is evidence, not a baseline artifact: its failure
 		// must not discard the dialog states captured before it.
 		try {
@@ -1666,6 +1678,69 @@ function hasSingleUrlAggregate( outputDir: string ): boolean {
 
 /** Marks phone-page controls the desktop pass already probes; removed from evidence. */
 const DESKTOP_CONTROL_ATTRIBUTE = 'data-lib-desktop-control';
+
+/**
+ * Phone-only controls of a reflow-only route's chrome that has no reusable
+ * entrypoint evidence: an interior template's header whose links differ from
+ * the entrypoint's, say. The route is captured at desktop only, where a phone
+ * menu button is not laid out, so the desktop probe never opens it, and its
+ * dropdown would ship without the dropdown/dialog evidence that keeps it
+ * closed and toggleable. The same document reflows to phone width, so the
+ * page is resized there, the unmatched roots' controls not visible at desktop
+ * are probed — as the entrypoint's phone-only probe does — and the desktop
+ * size is restored. Nothing is resized when those roots hold no such control.
+ */
+async function probePhoneOnlyChrome(
+	page: Page,
+	url: string,
+	roots: readonly string[],
+	phone: { width: number; height: number }
+): Promise< CapturedDialogInteraction[] > {
+	const marks = [ CHROME_ROOT_ATTRIBUTE, DESKTOP_CONTROL_ATTRIBUTE ];
+	const concealed = await page.evaluate( ( { roots, rootAttribute, desktopAttribute } ) => {
+		const shown = ( element: Element ) => {
+			const rect = element.getBoundingClientRect();
+			const style = getComputedStyle( element );
+			return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+		};
+		const control = 'button,summary,[role="button"],[aria-controls],[aria-expanded],[aria-haspopup]';
+		let hidden = 0;
+		for ( const selector of roots ) {
+			const root = document.querySelector( selector );
+			if ( ! root ) continue;
+			root.setAttribute( rootAttribute, '' );
+			for ( const element of [ root, ...Array.from( root.querySelectorAll( '*' ) ) ] ) {
+				if ( shown( element ) ) element.setAttribute( desktopAttribute, '' );
+				else if ( element.matches( control ) ) hidden++;
+			}
+		}
+		return hidden;
+	}, { roots: [ ...roots ], rootAttribute: CHROME_ROOT_ATTRIBUTE, desktopAttribute: DESKTOP_CONTROL_ATTRIBUTE } );
+	const clear = () => page.evaluate( ( names ) => {
+		for ( const name of names ) for ( const element of Array.from( document.querySelectorAll( `[${ name }]` ) ) ) element.removeAttribute( name );
+	}, marks ).catch( () => undefined );
+	if ( ! concealed ) {
+		await clear();
+		return [];
+	}
+	const desktop = page.viewportSize();
+	const settle = () => page.evaluate( () => new Promise< void >( resolve => requestAnimationFrame( () => requestAnimationFrame( () => setTimeout( resolve, 150 ) ) ) ) );
+	try {
+		await page.setViewportSize( phone );
+		await settle();
+		await restoreTopScrollState( page );
+		const report = await captureTriggeredDialogs( page, url, { skip: `${ OUTSIDE_CHROME },[${ DESKTOP_CONTROL_ATTRIBUTE }]` } );
+		const marker = new RegExp( `\\s(?:${ marks.join( '|' ) })(?:="")?`, 'g' );
+		return canonicalizeInteractionReport( report, html => html.replace( marker, '' ) ).states;
+	} finally {
+		await clear();
+		if ( desktop ) {
+			await page.setViewportSize( desktop ).catch( () => undefined );
+			await settle().catch( () => undefined );
+			await restoreTopScrollState( page ).catch( () => undefined );
+		}
+	}
+}
 
 interface DeviceComparisonArgs {
 	browser: Browser;
@@ -2550,6 +2625,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
+							...( routeDevice?.mode === 'reflow-only' && viewport.id === 'desktop' && phoneProfile
+								? { reflowPhoneViewport: { width: phoneProfile.width, height: phoneProfile.height } }
+								: {} ),
 							resolveClientRedirect: opts.resolveClientRedirect,
 							beforeFluid: opts.beforeFluid,
 							beforeSerialize: opts.beforeSerialize,

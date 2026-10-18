@@ -263,6 +263,12 @@ export interface ChromeReuse {
 	states: CapturedDialogInteraction[];
 	/** Selector of route controls whose evidence was reused; the route probe skips them. */
 	skip?: string;
+	/**
+	 * Positional selectors of route chrome roots that match no entrypoint
+	 * landmark. Their controls have no reusable evidence; a reflow-only route
+	 * probes their phone-only controls in place (see `probePhoneOnlyChrome`).
+	 */
+	unmatchedRoots?: string[];
 }
 
 /**
@@ -287,8 +293,9 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		used.add( found );
 		matched.set( index, found );
 	} );
+	const unmatchedRoots = landmarks.filter( ( _, position ) => ! used.has( position ) ).map( root => root.prefixes[ 1 ] );
 	if ( ! matched.size ) {
-		return { decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ evidence.landmarks.map( item => item.label ).join( ', ' ) } there)`, landmarks: { ...counts, matched: 0 } }, states: [] };
+		return { unmatchedRoots, decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ evidence.landmarks.map( item => item.label ).join( ', ' ) } there)`, landmarks: { ...counts, matched: 0 } }, states: [] };
 	}
 	const candidates = evidence.states.filter( item =>
 		matched.has( item.root ) && item.anchors.every( anchor => typeof anchor !== 'object' || 'outside' in anchor || matched.has( anchor.root ) )
@@ -318,6 +325,7 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		},
 		states: reused.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) ),
 		...( reused.length ? { skip: `[${ CHROME_REUSED_ATTRIBUTE }]` } : {} ),
+		...( unmatchedRoots.length ? { unmatchedRoots } : {} ),
 	};
 }
 
