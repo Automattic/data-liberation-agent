@@ -65,6 +65,14 @@ describe('sanitizeMediaFilename', () => {
   it('falls back to "image" when the base reduces to nothing', () => {
     expect(sanitizeMediaFilename('%20.png')).toBe('image.png');
   });
+  it('bounds long names and preserves the extension with a stable URL hash', () => {
+    const url = new URL(`https://cdn.example.com/${'a'.repeat(300)}.png`);
+    const name = deriveFilenameFromUrl(url);
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255);
+    expect(name).toMatch(/-[a-f0-9]{12}\.png$/);
+    expect(deriveFilenameFromUrl(url)).toBe(name);
+    expect(deriveFilenameFromUrl(new URL(`https://cdn.example.com/${'b'.repeat(300)}.png`))).not.toBe(name);
+  });
 });
 
 describe('upgradeMediaUrl', () => {

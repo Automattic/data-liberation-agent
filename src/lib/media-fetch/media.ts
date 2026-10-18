@@ -95,7 +95,18 @@ export function sanitizeMediaFilename(name: string): string {
     .replace(/-+/g, '-')
     .replace(/^[-.]+|[-.]+$/g, '') || 'image';
   const safeExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
-  return `${safeBase}${safeExt}`;
+  const maxBytes = 255;
+  if (Buffer.byteLength(`${safeBase}${safeExt}`, 'utf8') <= maxBytes) return `${safeBase}${safeExt}`;
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 12);
+  const suffix = `-${hash}`;
+  const extension = Buffer.byteLength(safeExt, 'utf8') + Buffer.byteLength(suffix, 'utf8') < maxBytes ? safeExt : '';
+  const available = maxBytes - Buffer.byteLength(suffix + extension, 'utf8');
+  let truncated = '';
+  for (const char of safeBase) {
+    if (Buffer.byteLength(truncated + char, 'utf8') > available) break;
+    truncated += char;
+  }
+  return `${truncated}${suffix}${extension}`;
 }
 
 export function deriveFilenameFromUrl(urlObj: URL): string {
