@@ -468,6 +468,24 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
+	it.skipIf( skipBrowser )( 'captures class-toggled pre-rendered tab panels as a shared region', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<style>.hidden{display:none}</style><main>
+				<div id="tabs"><button type="button" onclick="show(0)">One</button><button type="button" onclick="show(1)">Two</button><button type="button" onclick="show(2)">Three</button></div>
+				<div id="panels"><div>First panel with a long enough body of text to count as content.</div><div class="hidden">Second panel, different words and a different length entirely here.</div><div class="hidden">Third panel.</div></div>
+				<script>function show(i){[...document.querySelectorAll('#panels>div')].forEach((p,j)=>p.classList.toggle('hidden',j!==i));}</script>
+			</main>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( state => state.kind ) ).toEqual( Array( 3 ).fill( SELECTABLE_SET_KIND ) );
+			expect( states.map( state => state.dialog?.html ) ).toEqual( [
+				expect.stringContaining( 'First panel' ),
+				expect.stringContaining( 'Second panel' ),
+				expect.stringContaining( 'Third panel' ),
+			] );
+		} finally { await page.close(); }
+	} );
+
 	it.skipIf( skipBrowser )(
 		'captures distinct shared-region content for each member',
 		async () => {
