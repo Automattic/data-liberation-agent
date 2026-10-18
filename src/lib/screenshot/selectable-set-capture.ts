@@ -654,14 +654,19 @@ export async function captureSelectableSetStates(
 				};
 				const snapshotChoiceGroup = ( root: Element, members: Element[] ) => {
 					const clone = root.cloneNode( true ) as Element;
-					const candidates = Array.from( clone.querySelectorAll( members[ 0 ]?.tagName.toLowerCase() || '*' ) )
-						.filter( ( candidate ) =>
-							( candidate.getAttribute( 'role' ) || '' ).toLowerCase() ===
-							( members[ 0 ]?.getAttribute( 'role' ) || '' ).toLowerCase()
-						);
-					candidates.slice( 0, members.length ).forEach( ( candidate, index ) =>
-						candidate.setAttribute( 'data-blocks-engine-capture-choice-index', String( index ) )
-					);
+					// Follow each actual member's child-node path into the clone. Tag-based
+					// selection also matches nested same-tag content (e.g. FAQ answers).
+					for ( const [ index, member ] of members.entries() ) {
+						const path: number[] = [];
+						for ( let node: Node | null = member; node && node !== root; node = node.parentNode ) {
+							const parent: Node | null = node.parentNode;
+							if ( ! parent ) break;
+							path.unshift( Array.prototype.indexOf.call( parent.childNodes, node ) );
+						}
+						let candidate: Node = clone;
+						for ( const childIndex of path ) candidate = candidate.childNodes[ childIndex ]!;
+						if ( candidate instanceof Element ) candidate.setAttribute( 'data-blocks-engine-capture-choice-index', String( index ) );
+					}
 					for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) ) unsafe.remove();
 					for ( const node of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
 						for ( const attribute of Array.from( node.attributes ) ) {
