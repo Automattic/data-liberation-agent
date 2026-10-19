@@ -155,6 +155,10 @@ export async function captureSelectableSetStates(
 				};
 				const textOf = ( element: Element ) =>
 					( element.textContent || '' ).replace( /\s+/g, ' ' ).trim();
+				// innerText reflects rendered visibility, unlike textContent which includes
+				// pre-rendered tab panels hidden by CSS classes.
+				const visibleTextOf = ( element: Element ) =>
+					( ( element as HTMLElement ).innerText ?? textOf( element ) ).replace( /\s+/g, ' ' ).trim();
 				const fingerprint = ( element: Element ) => {
 					const hidden =
 						element.hasAttribute( 'hidden' ) || element.getAttribute( 'aria-hidden' ) === 'true';
@@ -162,7 +166,7 @@ export async function captureSelectableSetStates(
 					for ( const child of Array.from( element.children ) ) {
 						if ( visible( child ) ) visibleChildren++;
 					}
-					return `${ hidden }|${ element.childElementCount }|${ visibleChildren }|${ textOf( element ) }`;
+					return `${ hidden }|${ element.childElementCount }|${ visibleChildren }|${ visibleTextOf( element ) }`;
 				};
 				const isChrome = ( element: Element ) =>
 					Boolean(
@@ -709,7 +713,7 @@ export async function captureSelectableSetStates(
 					}
 
 					const initialFp = candidates.map( fingerprint );
-					const initialText = candidates.map( textOf );
+					const initialText = candidates.map( visibleTextOf );
 					const initialHtml = candidates.map( ( candidate ) => candidate.innerHTML );
 					const toggleGroup = group.members.every( ( member ) => member.hasAttribute( 'aria-pressed' ) );
 					const initialGroupHtml = snapshotChoiceGroup( group.root, group.members );
@@ -807,7 +811,7 @@ export async function captureSelectableSetStates(
 						}
 						const observation = {
 							fps: candidates.map( fingerprint ),
-							texts: candidates.map( textOf ),
+							texts: candidates.map( visibleTextOf ),
 							groupHtml: snapshotChoiceGroup( group.root, group.members ),
 							selected: group.members.map( observedSelection ),
 						};

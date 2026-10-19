@@ -468,6 +468,63 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
+	it.skipIf( skipBrowser )( 'captures class-toggled pre-rendered tab panels as a shared region', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<style>.hidden{display:none}</style><main>
+				<div id="tabs"><button type="button" onclick="show(0)">One</button><button type="button" onclick="show(1)">Two</button><button type="button" onclick="show(2)">Three</button></div>
+				<div id="panels"><div>First panel with a long enough body of text to count as content.</div><div class="hidden">Second panel, different words and a different length entirely here.</div><div class="hidden">Third panel.</div></div>
+				<script>function show(i){[...document.querySelectorAll('#panels>div')].forEach((p,j)=>p.classList.toggle('hidden',j!==i));}</script>
+			</main>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( state => [ state.kind, state.status ] ) ).toEqual( Array( 3 ).fill( [ SELECTABLE_SET_KIND, 'captured' ] ) );
+			expect( states.map( state => state.dialog?.selector ) ).toEqual( Array( 3 ).fill( '#panels' ) );
+			expect( states.map( state => state.dialog?.html ) ).toEqual( [
+				expect.stringContaining( 'First panel' ),
+				expect.stringContaining( 'Second panel' ),
+				expect.stringContaining( 'Third panel' ),
+			] );
+		} finally { await page.close(); }
+	} );
+
+	it.skipIf( skipBrowser )( 'captures hidden-attribute-toggled pre-rendered panels as a shared region', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<main>
+				<div id="tabs"><button type="button" onclick="show(0)">One</button><button type="button" onclick="show(1)">Two</button><button type="button" onclick="show(2)">Three</button></div>
+				<div id="panels"><div>First panel with a long enough body of text to count as content.</div><div hidden>Second panel, different words and a different length entirely here.</div><div hidden>Third panel.</div></div>
+				<script>function show(i){[...document.querySelectorAll('#panels>div')].forEach((p,j)=>{p.hidden=j!==i;});}</script>
+			</main>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( state => [ state.kind, state.status ] ) ).toEqual( Array( 3 ).fill( [ SELECTABLE_SET_KIND, 'captured' ] ) );
+			expect( states.map( state => state.dialog?.selector ) ).toEqual( Array( 3 ).fill( '#panels' ) );
+		} finally { await page.close(); }
+	} );
+
+	it.skipIf( skipBrowser )( 'ignores rendered whitespace when ranking pre-rendered panel regions', async () => {
+		const page = await browser.newPage();
+		try {
+			// #layout only reflows the same words between paragraphs and one line, so its
+			// innerText gains newline runs but no content; #panels changes content.
+			await serve( page, `<main>
+				<div id="tabs"><button type="button" onclick="show(0)">One</button><button type="button" onclick="show(1)">Two</button><button type="button" onclick="show(2)">Three</button></div>
+				<div id="panels"><div>First panel with a long enough body of text to count as content.</div><div hidden>Second panel, different words and a different length entirely here.</div><div hidden>Third panel.</div></div>
+				<section id="layout"></section>
+				<script>
+					const words = Array( 120 ).fill( 'w' );
+					function show(i){
+						[...document.querySelectorAll('#panels>div')].forEach((p,j)=>{p.hidden=j!==i;});
+						document.getElementById('layout').innerHTML = i === 1 ? words.map(w=>'<p>'+w+'</p>').join('') : '<p>'+words.join(' ')+'</p>';
+					}
+					show(0);
+				</script>
+			</main>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( state => [ state.kind, state.status ] ) ).toEqual( Array( 3 ).fill( [ SELECTABLE_SET_KIND, 'captured' ] ) );
+			expect( states.map( state => state.dialog?.selector ) ).toEqual( Array( 3 ).fill( '#panels' ) );
+		} finally { await page.close(); }
+	} );
+
 	it.skipIf( skipBrowser )(
 		'captures distinct shared-region content for each member',
 		async () => {
