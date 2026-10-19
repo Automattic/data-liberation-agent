@@ -228,6 +228,34 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  // Issue #899: site chrome is shared by every route; its toggles keep their
+  // resting state. A header inside a sectioning element is local content.
+  it('leaves site header and footer toggles closed while expanding local disclosures', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <header><button id="menu" aria-expanded="false" aria-controls="dropdown">Menu</button>
+        <div id="dropdown" class="hidden"><a href="#a">A</a></div></header>
+      <main><article><header><button id="local" aria-expanded="false" aria-controls="local-panel">Details</button>
+        <div id="local-panel" class="hidden">Local</div></header></article></main>
+      <footer><button id="links" aria-expanded="false" aria-controls="footer-links">Links</button>
+        <div id="footer-links" class="hidden"><a href="#b">B</a></div></footer>
+      <style>.hidden{display:none}</style>
+      <script>
+        document.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
+          const panel = document.getElementById(button.getAttribute('aria-controls'));
+          const open = panel.classList.contains('hidden');
+          panel.classList.toggle('hidden', !open);
+          button.setAttribute('aria-expanded', String(open));
+        }));
+      </script>
+    `);
+    await expandCollapsedContent(page);
+    expect(await page.evaluate(() => ['menu', 'local', 'links'].map((id) => document.getElementById(id)!.getAttribute('aria-expanded')))).toEqual(['false', 'true', 'false']);
+    expect(await page.locator('#dropdown').getAttribute('class')).toBe('hidden');
+    expect(await page.locator('#footer-links').getAttribute('class')).toBe('hidden');
+    await page.close();
+  });
+
   it('keeps a show-more disclosure collapsed in the serialized document and records the opened form', async () => {
     const page = await browser.newPage();
     await page.setContent(`

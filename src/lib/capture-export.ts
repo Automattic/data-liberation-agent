@@ -306,6 +306,34 @@ function rewriteCapturedRouteLinks(
 	portable?: PortableLinkContext
 ): string {
 	const $ = cheerio.load( html );
+	rewriteRouteLinksIn( $, documentUrl, routes, portable );
+	// A dropdown root shared by several triggers carries each trigger's opened
+	// markup as serialized state, which the replay swaps in on open. Its links
+	// were written against the same document and must resolve as the panel's
+	// own do; otherwise the copy's menu opens onto source-relative links, and
+	// otherwise-identical shared chrome differs route by route.
+	$( '[data-blocks-engine-capture-dialog-panel-state]' ).each( ( _index, element ) => {
+		const trigger = $( element );
+		let state: { html?: unknown };
+		try {
+			state = JSON.parse( trigger.attr( 'data-blocks-engine-capture-dialog-panel-state' ) ?? '' ) as { html?: unknown };
+		} catch {
+			return;
+		}
+		if ( ! state || typeof state.html !== 'string' ) return;
+		const fragment = cheerio.load( state.html, null, false );
+		rewriteRouteLinksIn( fragment, documentUrl, routes, portable );
+		trigger.attr( 'data-blocks-engine-capture-dialog-panel-state', JSON.stringify( { ...state, html: fragment.html() } ) );
+	} );
+	return $.html();
+}
+
+function rewriteRouteLinksIn(
+	$: cheerio.CheerioAPI,
+	documentUrl: string,
+	routes: Map< string, string >,
+	portable?: PortableLinkContext
+): void {
 	const comparisonRoutes = new Set([...routes.keys()].map(normalizedUrl));
 	// Document relations share navigation's route/source resolution. Resource
 	// relations keep their asset localization, including alternate stylesheets.
@@ -384,7 +412,6 @@ function rewriteCapturedRouteLinks(
 		// the document moves, so point it at the source it was written against.
 		if ( /^https?:$/.test( resolved.protocol ) ) link.attr( 'href', resolved.href );
 	} );
-	return $.html();
 }
 
 function renderedHtml( html: string ): string {

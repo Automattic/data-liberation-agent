@@ -63,14 +63,32 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         const text = (element.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
         return toggleLabels.some((label) => text === label || text.startsWith(label));
       };
+      // Site chrome (the page-level banner and contentinfo landmarks) holds
+      // menus, not collapsed editorial content. A toggle there — a phone menu
+      // button flipping `hidden` on a dropdown of links, for one — must keep its
+      // resting state: every route serializes the same chrome, the interaction
+      // probe records the opened form from a closed trigger, and shared chrome
+      // parts are factored from those exact bytes. A header or footer inside a
+      // sectioning element is local content and stays eligible.
+      const inSiteChrome = (node: Element | null | undefined) => {
+        for (let current = node ?? null; current; current = current.parentElement) {
+          const role = current.getAttribute('role');
+          if (role === 'banner' || role === 'contentinfo') return true;
+          if (role || (current.tagName !== 'HEADER' && current.tagName !== 'FOOTER')) continue;
+          if (!current.parentElement?.closest('article,aside,main,nav,section,[role="article"],[role="complementary"],[role="main"],[role="region"]')) return true;
+        }
+        return false;
+      };
       const safeToActivate = (element: Element) => {
         // An authored chooser role overrides the native button's semantics.
         // Choices belong to post-baseline interaction capture, not hydration.
         if (element.matches('[role="listbox"],[role="combobox"],[role="menu"],[role="menuitem"],[role="option"]')) return false;
         if (element.hasAttribute('aria-haspopup')) return false;
         if (element.closest('nav,[role="navigation"]')) return false;
+        if (inSiteChrome(element)) return false;
         const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
         if (controlled?.closest('nav,[role="navigation"]') || controlled?.querySelector('nav,[role="navigation"]')) return false;
+        if (inSiteChrome(controlled)) return false;
         // A submit control is never a disclosure: activating it submits its
         // form and unloads the page (a store's "View all" search button, for
         // one), which the route-revert below cannot undo.
