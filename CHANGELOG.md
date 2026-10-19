@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.32.10] - 2026-10-19
+
+### Changed
+- regenerate plugin bundles
+- Capture non-ARIA click accordions as local disclosures and report unreplayable choice groups
+- Guard selectable-set region text normalization against whitespace-only changes
+- Keep site-chrome toggles in their resting state during content hydration
+- Bound media filenames to the 255-byte filesystem limit (fixes #898)
+
 ## [0.32.9] - 2026-10-17
 
 ### Changed
