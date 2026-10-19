@@ -65,6 +65,14 @@ describe('sanitizeMediaFilename', () => {
   it('falls back to "image" when the base reduces to nothing', () => {
     expect(sanitizeMediaFilename('%20.png')).toBe('image.png');
   });
+  it('bounds long names and preserves the extension with a stable URL hash', () => {
+    const url = new URL(`https://cdn.example.com/${'a'.repeat(300)}.png`);
+    const name = deriveFilenameFromUrl(url);
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255);
+    expect(name).toMatch(/-[a-f0-9]{12}\.png$/);
+    expect(deriveFilenameFromUrl(url)).toBe(name);
+    expect(deriveFilenameFromUrl(new URL(`https://cdn.example.com/${'b'.repeat(300)}.png`))).not.toBe(name);
+  });
 });
 
 describe('upgradeMediaUrl', () => {
@@ -149,6 +157,38 @@ describe('downloadMedia — extension-less page-builder CDN URLs', () => {
     expect(res.error).toMatch(/text\/html/);
     expect(res.error).toContain(url);
     expect(readdirSync(tmp)).toEqual([]);
+  });
+});
+
+describe('downloadMedia — URL basenames over the 255-byte name limit', () => {
+  let tmp: string;
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+    if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('writes long basenames to bounded, distinct files on disk', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    global.fetch = vi.fn(async () => stubResponse('image/png')) as unknown as typeof fetch;
+    const seenNames = new Map<string, number>();
+    const shared = 'A'.repeat(300);
+    const urls = [
+      `https://lh3.example.com/aida-public/${shared}x.png`,
+      `https://lh3.example.com/aida-public/${shared}y.png`,
+      `https://lh3.example.com/other/${shared}x.png`,
+      `https://lh3.example.com/aida-public/${shared}`,
+    ];
+    const results = [];
+    for (const url of urls) results.push(await downloadMedia(url, tmp, seenNames));
+    for (const res of results) {
+      expect(res.error).toBeNull();
+      expect(Buffer.byteLength(res.filename as string, 'utf8')).toBeLessThanOrEqual(255);
+      expect(res.filename).toMatch(/\.png$/);
+      expect(existsSync(res.localPath as string)).toBe(true);
+    }
+    expect(new Set(results.map((r) => r.filename)).size).toBe(urls.length);
+    expect(readdirSync(tmp).sort()).toEqual(results.map((r) => r.filename).sort());
   });
 });
 

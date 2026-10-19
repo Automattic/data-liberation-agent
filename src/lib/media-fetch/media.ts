@@ -37,10 +37,31 @@ export interface DownloadMediaOpts {
   svgRaster?: boolean;
 }
 
+const MAX_FILENAME_BYTES = 255;
+
+// Keep a filename within the filesystem's 255-byte name limit. Names that fit
+// are returned unchanged; longer ones keep a truncated base, a short hash of
+// `hashSource` (stable and collision-safe), and the extension.
+function boundFilename(name: string, hashSource: string = name): string {
+  if (Buffer.byteLength(name, 'utf8') <= MAX_FILENAME_BYTES) return name;
+  const ext = extname(name);
+  const base = ext ? name.slice(0, -ext.length) : name;
+  const suffix = `-${createHash('sha256').update(hashSource).digest('hex').slice(0, 12)}`;
+  const extension = Buffer.byteLength(ext + suffix, 'utf8') < MAX_FILENAME_BYTES ? ext : '';
+  const available = MAX_FILENAME_BYTES - Buffer.byteLength(suffix + extension, 'utf8');
+  let truncated = '';
+  for (const char of extension ? base : name) {
+    if (Buffer.byteLength(truncated + char, 'utf8') > available) break;
+    truncated += char;
+  }
+  return `${truncated}${suffix}${extension}`;
+}
+
 export function safeFilename(filename: string, seenNames: Map<string, number>): string {
   if (!filename) {
     filename = `image-${Date.now()}`;
   }
+  filename = boundFilename(filename);
 
   if (!seenNames.has(filename)) {
     seenNames.set(filename, 1);
@@ -51,12 +72,12 @@ export function safeFilename(filename: string, seenNames: Map<string, number>): 
   const base = ext ? filename.slice(0, -ext.length) : filename;
 
   let count = (seenNames.get(filename) as number) + 1;
-  let candidate = ext ? `${base}-${count}${ext}` : `${base}-${count}`;
+  let candidate = boundFilename(ext ? `${base}-${count}${ext}` : `${base}-${count}`);
 
   // Ensure generated name doesn't collide with an existing original filename
   while (seenNames.has(candidate)) {
     count++;
-    candidate = ext ? `${base}-${count}${ext}` : `${base}-${count}`;
+    candidate = boundFilename(ext ? `${base}-${count}${ext}` : `${base}-${count}`);
   }
 
   seenNames.set(filename, count);
@@ -95,7 +116,7 @@ export function sanitizeMediaFilename(name: string): string {
     .replace(/-+/g, '-')
     .replace(/^[-.]+|[-.]+$/g, '') || 'image';
   const safeExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
-  return `${safeBase}${safeExt}`;
+  return boundFilename(`${safeBase}${safeExt}`, name);
 }
 
 export function deriveFilenameFromUrl(urlObj: URL): string {
