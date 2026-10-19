@@ -54,6 +54,7 @@ export const SOURCE_FINDING_LOSS_CLASSES = {
 	stylesheet_unparseable: { loss_class: 'degraded_unit', unit: 'stylesheet' },
 	native_timeline_unproven: { loss_class: 'degraded_unit', unit: 'block' },
 	disclosure_unrestored: { loss_class: 'degraded_unit', unit: 'block' },
+	interaction_unreplayable: { loss_class: 'degraded_unit', unit: 'block' },
 } as const satisfies Record< string, { loss_class: SourceFindingLossClass; unit: SourceFindingUnit } >;
 
 /**

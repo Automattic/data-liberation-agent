@@ -95,6 +95,7 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
 | `native_timeline_unproven` | block | warning | Native view-timeline evidence was lost on a saved page. | no | #773 |
 | `disclosure_unrestored` | block | error | Disclosure probe could not restore its baseline; hydrated panels were not kept. | no | #773 |
+| `interaction_unreplayable` | block | warning | A probed choice group cannot be replayed offline (`replay: unsupported`, unverified restoration, partial coverage or a truncated transition); its static markup ships without the interaction. | no | #901 |
 | `route_off_origin` | route | warning | Discovered URL outside the entry origin; dropped before it takes budget. | no | #773 |
 | `route_omitted_by_budget` | route (implicit) | — | Outside the caller's route budget. Not attempted; not a loss. | no | #767 |
 | `route_not_found` | route (implicit) | — | Source answered with an absent status. Nothing to copy. | no | — |
@@ -231,7 +232,7 @@ The capture receipt and `diagnostics.json` sit next to `website/`, outside the a
 | `asset_exceeds_file_limit`, `asset_exceeds_total_budget` | `omitted_unit` | asset |
 | `route_capture_degraded` | `degraded_unit` | route |
 | `stylesheet_unparseable` | `degraded_unit` | stylesheet |
-| `native_timeline_unproven`, `disclosure_unrestored` | `degraded_unit` | block |
+| `native_timeline_unproven`, `disclosure_unrestored`, `interaction_unreplayable` | `degraded_unit` | block |
 | any other capture code with a `unit` | `degraded_unit` | the row's unit |
 
 SSI reads the file at intake when it is present, removes it from the artifact, and turns each row into a canonical loss row. That row uses the row's own loss class, unit, severity and owning layer. Each class above has acceptability `accepted_reported_loss`: the import completes, and the rows are counted in the compact summary. A capture without the file imports as before. A malformed file adds one `source_findings_unreadable` warning and never fails the import. The file replaces `website/capture-findings.json` (`data-liberation-agent/capture-findings/v1`), which capture no longer writes.
