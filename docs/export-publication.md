@@ -29,6 +29,8 @@ Optional. A generation that does not produce one deletes the previous file or di
 
 Not owned, and never replaced or deleted by publication: captured HTML, `screenshots/`, `resources/`, `layout-geometry/` observations, section specs, `http-acquisition.json`, `reference/`, `fidelity-reference.json`, `source-behavior.json`, and any other run file. `capture.ts` writes preview onto the receipt and finalizes the fidelity reference after export returns. Those steps are outside this transaction.
 
+The receipt's `reports` array lists the capture-root-relative JSON sidecars an importer receives beside `website/`. It is derived from this owned set (every file entry; optional ones only when this generation wrote them) plus the site analysis files capture already wrote into the capture root (`breakpoints.json`, `computed-styles.json`, `css-variables.json`, `palette.json`, `typography.json`, from `SITE_ANALYSIS_FILES`). It includes `capture-receipt.json` and never names a directory. Consumers forward exactly that list instead of hardcoding file names.
+
 Report identities stay public relative paths (`website/index.html`, `semantic-evidence/shard-0001.json`). They do not contain the staging directory or its generation id.
 
 ## Lock

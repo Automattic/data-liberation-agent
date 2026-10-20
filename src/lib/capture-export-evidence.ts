@@ -12,7 +12,8 @@ import { pathWithin } from './portable-assets.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { hasUncapturedProfiles, withExportDroppedRoutes } from './capture-usability.js';
 import { dependencyReferences, type PortableDependency } from './portable-references.js';
-import { exportPublicationBoundary, EXPORT_PUBLICATION_BOUNDARIES } from './export-publication.js';
+import { exportPublicationBoundary, EXPORT_PUBLICATION_BOUNDARIES, EXPORT_PUBLICATION_OWNED } from './export-publication.js';
+import { SITE_ANALYSIS_FILES } from './screenshot/aggregator.js';
 import { sourceGenerator } from './source-generator.js';
 import { extractTitle } from './html-extract/html-extract.js';
 import { siteNameFromRouteTitles } from './site-name.js';
@@ -322,6 +323,20 @@ function assetEvidence(
 		assetsTruncated: !references.assetCountExact,
 		assets: records,
 	};
+}
+
+/**
+ * Capture-root-relative JSON sidecars an importer receives beside `website/`.
+ * Derived from the publication-owned files (required ones are always written
+ * into this generation; optional ones only when staged) and the site analysis
+ * files capture serialized into the capture root. Directories are excluded.
+ */
+export function importerReports( stageDir: string, captureRoot: string ): string[] {
+	const owned = EXPORT_PUBLICATION_OWNED
+		.filter( item => item.kind === 'file' && ( item.required || existsSync( join( stageDir, item.path ) ) ) )
+		.map( item => item.path as string );
+	const analysis = SITE_ANALYSIS_FILES.filter( file => existsSync( join( captureRoot, file ) ) );
+	return [ ...owned, ...analysis ].sort();
 }
 
 export const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
@@ -636,6 +651,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				...( linkedPageCoverage ? { linkedPageCoverage } : {} ),
 				discoveryDiagnostics,
 				summary: { ...summary, complete },
+				reports: importerReports( stageDir, outputDir ),
 			},
 			null,
 			2

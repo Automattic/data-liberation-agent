@@ -93,6 +93,15 @@ const BREAKPOINTS_FILE = 'breakpoints.json';
 const COMPUTED_STYLES_FILE = 'computed-styles.json';
 const CSS_VARIABLES_FILE = 'css-variables.json';
 
+/** Site-level files written by `serialize()` into the capture root. */
+export const SITE_ANALYSIS_FILES = [
+  PALETTE_FILE,
+  TYPOGRAPHY_FILE,
+  BREAKPOINTS_FILE,
+  COMPUTED_STYLES_FILE,
+  CSS_VARIABLES_FILE,
+] as const;
+
 /**
  * Aggregates PageAnalysis results from many URLs into three site-level files.
  *

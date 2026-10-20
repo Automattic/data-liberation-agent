@@ -27,6 +27,8 @@ import { inspectSourceInteractivity } from './source-interactivity.js';
 import { documentsDiffer } from './responsive-assembly.js';
 import { collectAssetEvidenceReferences } from './capture-export-evidence.js';
 import { IntegrityError } from './failure-class.js';
+import { EXPORT_PUBLICATION_OWNED } from './export-publication.js';
+import { SITE_ANALYSIS_FILES } from './screenshot/aggregator.js';
 import { missingRoutes } from './capture-usability.js';
 
 const dirs: string[] = [];
@@ -143,6 +145,32 @@ describe( 'exportWebsiteCapture', () => {
 		expect( report.pages[ 0 ] ).toMatchObject( { status: 'unreproduced', signals: [ 'canvas-2d', 'pointer-input', 'animation-frame', 'timed-dom-update', 'click-input' ] } );
 		expect( report.pages[ 0 ].scripts[ 0 ].sha256 ).toMatch( /^[a-f0-9]{64}$/ );
 		expect( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) ).not.toContain( '<script src="/motion.js"' );
+	} );
+
+	it( 'declares exactly the published importer-facing sidecars as receipt reports', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-receipt-reports-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><canvas id="stage"></canvas><script src="/motion.js"></script></body></html>' );
+		writeFileSync( join( outputDir, 'resources/motion.js' ), 'const ctx = document.getElementById("stage").getContext("2d"); function draw(){requestAnimationFrame(draw)}; addEventListener("mousemove",draw); draw();' );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: { 'https://example.test/motion.js': { path: 'resources/motion.js', contentType: 'application/javascript' } } } ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' } } } ) );
+		// Capture-time site analysis: two of the five aggregator outputs exist.
+		writeFileSync( join( outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [], maxWidth: [] } ) );
+		writeFileSync( join( outputDir, 'palette.json' ), JSON.stringify( { version: 1, colors: [] } ) );
+		// A capture-root file that is not an importer report.
+		writeFileSync( join( outputDir, 'template-groups.json' ), '{}' );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
+		const candidates = [
+			...EXPORT_PUBLICATION_OWNED.filter( item => item.kind === 'file' ).map( item => item.path as string ),
+			...SITE_ANALYSIS_FILES,
+		];
+		const published = candidates.filter( path => existsSync( join( outputDir, path ) ) && statSync( join( outputDir, path ) ).isFile() ).sort();
+		expect( receipt.reports ).toEqual( published );
+		expect( receipt.reports ).toEqual( expect.arrayContaining( [ 'capture-receipt.json', 'diagnostics.json', 'source-interactivity.json', 'breakpoints.json', 'palette.json' ] ) );
+		for ( const absent of [ 'interaction-states.json', 'scroll-states.json', 'typography.json', 'template-groups.json', 'website', 'semantic-evidence' ] )
+			expect( receipt.reports ).not.toContain( absent );
+		for ( const path of receipt.reports ) expect( statSync( join( outputDir, path ) ).isFile() ).toBe( true );
 	} );
 
 	it( 'stabilizes only unreferenced runtime header ids across routes', () => {
