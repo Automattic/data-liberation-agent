@@ -106,7 +106,8 @@ export interface ProfileDiagnostic {
 export interface FailureEntry {
   url: string;
   viewport: string;
-  stage: 'goto' | 'content' | 'screenshot-fullpage' | 'screenshot-scrolled' | 'screenshot-timeout' | 'evaluate';
+  /** `deadline`: the per-route deadline abandoned this profile after another profile of the route completed. */
+  stage: 'goto' | 'content' | 'screenshot-fullpage' | 'screenshot-scrolled' | 'screenshot-timeout' | 'evaluate' | 'deadline';
   error: string;
   timestamp: string;
   attempt: number;

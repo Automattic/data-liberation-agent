@@ -177,6 +177,62 @@ it.skipIf( skipBrowser )( 'abandons a stalled route at its per-route deadline an
 	}
 }, 60_000 );
 
+it.skipIf( skipBrowser )( 'keeps the completed desktop profile of a route abandoned at its deadline while its phone profile stalls', async () => {
+	// The homepage answers desktop identities and never answers the phone one:
+	// desktop completes, the phone profile is in flight at the deadline.
+	const requested: string[] = [];
+	const server = createServer( ( request, response ) => {
+		requested.push( request.url ?? '' );
+		if ( request.url === '/' && /iPhone/.test( request.headers[ 'user-agent' ] ?? '' ) ) return;
+		response.setHeader( 'content-type', 'text/html' );
+		const title = request.url === '/' ? 'Home' : request.url ?? '';
+		response.end( `<!doctype html><html><head><title>${ title }</title></head><body><h1>${ title }</h1><a href="/about">About</a></body></html>` );
+	} );
+	await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'route-deadline-partial-' ) );
+	try {
+		const routeDeadlineMs = 8_000;
+		const result = await captureScreenshots( {
+			urls: [ `${ origin }/`, `${ origin }/about` ], primaryUrl: `${ origin }/`,
+			outputDir, settleMs: 0, learnFluid: false, routeDeadlineMs, concurrency: 1,
+			viewports: [ { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 } ],
+		} );
+		// The partially committed route is captured, not failed.
+		expect( result ).toMatchObject( { captured: 2, skipped: 0, failed: 0 } );
+		expect( result.routeDiagnostics ).toEqual( [ {
+			code: 'route_profile_capture_timeout', url: `${ origin }/`, profile: 'mobile',
+			reason: expect.stringMatching( /^route capture deadline 8000ms: abandoned during the "[^"]+" phase in the mobile profile$/ ),
+			unit: 'profile', severity: 'error', metrics: { routeDeadlineMs },
+		} ] );
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as { entries: Record< string, { html?: string; mobileHtml?: string; profiles?: Record< string, unknown > } > };
+		const home = manifest.entries[ `${ origin }/` ]!;
+		expect( home.html && existsSync( join( outputDir, home.html ) ) ).toBeTruthy();
+		// Nothing from the in-flight phone profile is recorded.
+		expect( home.mobileHtml ).toBeUndefined();
+		expect( Object.keys( home.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
+		const failures = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'failures.json' ), 'utf8' ) ) as Array< { url: string; viewport: string; stage: string; error: string } >;
+		expect( failures.filter( failure => failure.url === `${ origin }/` ) ).toEqual( [ expect.objectContaining( {
+			viewport: 'mobile', stage: 'deadline', error: expect.stringContaining( 'route capture deadline 8000ms' ),
+		} ) ] );
+
+		const { receipt, missing, complete, usable } = exportCapture( outputDir, `${ origin }/`, result );
+		expect( existsSync( join( outputDir, 'website', 'index.html' ) ) ).toBe( true );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'Home' );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
+			code: 'route_profile_uncaptured', url: `${ origin }/`, profile: 'mobile', reason: expect.stringContaining( 'mobile/deadline: route capture deadline 8000ms' ),
+		} ) );
+		expect( missing ).toEqual( [] );
+		expect( complete ).toBe( false );
+		// A lost profile is not a missing route.
+		expect( usable ).toBe( true );
+	} finally {
+		await close( server );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 60_000 );
+
 it.skipIf( skipBrowser )( 'derives the per-route deadline from the time budget and concurrency, never below the floor', () => {
 	expect( deriveRouteDeadlineMs( undefined, 42 * 60_000, 3 ) ).toBe( 14 * 60_000 );
 	expect( deriveRouteDeadlineMs( undefined, 12_000, 6 ) ).toBe( ROUTE_DEADLINE_MIN_MS );

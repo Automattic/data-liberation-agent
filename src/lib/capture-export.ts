@@ -1590,7 +1590,13 @@ function buildExportCapture(
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
 		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData, pathCollisions,
-	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases, routeCaptureDiagnostics, options.canonicalAliases ?? [] );
+	} = allocateCaptureRoutes(
+		capturedEntries, options.sourceUrl, redirectAliases,
+		// A homepage with no manifest entry (abandoned at its deadline, skipped by
+		// the time budget) is explained only by the capture stage's rows.
+		[ ...routeCaptureDiagnostics, ...( options.discoveryDiagnostics ?? [] ) ],
+		options.canonicalAliases ?? []
+	);
 	// Like a route_export_failed route, a colliding route keeps only its route_path_collision row.
 	const collidedUrls = new Set( pathCollisions.map( collision => collision.url ) );
 	const keptDiagnostics = routeCaptureDiagnostics.filter( diagnostic => ! collidedUrls.has( diagnostic.url ) );

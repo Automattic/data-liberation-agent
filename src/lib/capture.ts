@@ -114,8 +114,11 @@ export interface CaptureOptions {
 	/**
 	 * Per-route capture deadline in milliseconds (browser acquisition only). A
 	 * route that exceeds it is abandoned: its context closes, its slot frees
-	 * for the next route, and it records a `route_capture_timeout` missing
-	 * route naming the phase it entered last. Default: derived from
+	 * for the next route, and nothing from its in-flight profile is recorded.
+	 * With no completed profile it records a `route_capture_timeout` missing
+	 * route naming the phase it entered last; otherwise it keeps its completed
+	 * profiles and each lost profile is a `route_profile_capture_timeout` (and,
+	 * at export, `route_profile_uncaptured`) row. Default: derived from
 	 * `timeBudgetMs` and the admitted concurrency, never below
 	 * `ROUTE_DEADLINE_MIN_MS` (10 min); without `timeBudgetMs`, that floor
 	 * applies on its own. `0` disables the deadline.

@@ -96,6 +96,19 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'a' ).attr( 'href' ) ).toBe( 'https://example.test/?lang=de' );
 	} );
 
+	it( 'names the capture-stage cause when the homepage has no manifest entry', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-home-deadline-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/contact.html' ), '<h1>Contact</h1>' );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/contact/': { slug: 'contact', html: 'html/contact.html' } } } ) );
+		const reason = 'route capture deadline 600000ms: abandoned during the "galleries" phase in the mobile profile';
+		expect( () => exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
+			discoveryDiagnostics: [ { code: 'route_capture_timeout', url: 'https://example.com/', reason } ],
+		} ) ).toThrow( `Source homepage https://example.com/ was not captured: ${ reason }` );
+	} );
+
 	it( 'exports query collections with their own content and correctly targeted portable links', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-query-collections-' ) );
 		dirs.push( outputDir );

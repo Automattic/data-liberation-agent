@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CAPTURE_BUDGET_DRAIN_MS, CAPTURE_BUDGET_MAX_GRACE_MS, captureTimeBudgetWindow, deriveRouteDeadlineMs, ROUTE_DEADLINE_MIN_MS, RouteDeadlines, RouteTimeBudget, routeTimeoutDiagnostic, validateRouteDeadlineMs, validateTimeBudgetMs } from './capture-time-budget.js';
+import { CAPTURE_BUDGET_DRAIN_MS, CAPTURE_BUDGET_MAX_GRACE_MS, captureTimeBudgetWindow, deriveRouteDeadlineMs, ROUTE_DEADLINE_MIN_MS, RouteDeadlines, RouteTimeBudget, routeProfileTimeoutDiagnostic, routeTimeoutDiagnostic, validateRouteDeadlineMs, validateTimeBudgetMs, type RouteDeadlineAbandonment } from './capture-time-budget.js';
 import { isUsableCapture, missingRoutes } from './capture-usability.js';
 
 describe( 'capture time budget window', () => {
@@ -135,6 +135,29 @@ describe( 'RouteDeadlines', () => {
 			// Phases after abandonment belong to nothing.
 			deadlines.note( 'https://example.test/slow', 'context', 'desktop' );
 			expect( expiry ).toBeInstanceOf( Promise );
+		} finally {
+			vi.useRealTimers();
+		}
+	} );
+	it( 'names each concurrent profile by the phase it entered last, for profile-scoped rows', async () => {
+		vi.useFakeTimers();
+		try {
+			const abandonments: RouteDeadlineAbandonment[] = [];
+			const deadlines = new RouteDeadlines( 500, ( _url, abandonment ) => abandonments.push( abandonment ) );
+			void deadlines.start( 'https://example.test/' );
+			deadlines.note( 'https://example.test/', 'galleries', 'mobile' );
+			// The completed desktop profile noted last; the stalled profile keeps its phase.
+			deadlines.note( 'https://example.test/', 'context-close', 'desktop' );
+			await vi.advanceTimersByTimeAsync( 500 );
+			const [ abandonment ] = abandonments;
+			expect( abandonment ).toEqual( { phase: 'context-close', profile: 'desktop', profilePhases: { mobile: 'galleries', desktop: 'context-close' } } );
+			expect( routeProfileTimeoutDiagnostic( 'https://example.test/', 500, abandonment!, 'mobile' ) ).toEqual( {
+				code: 'route_profile_capture_timeout', url: 'https://example.test/', profile: 'mobile',
+				reason: 'route capture deadline 500ms: abandoned during the "galleries" phase in the mobile profile',
+				unit: 'profile', severity: 'error', metrics: { routeDeadlineMs: 500 },
+			} );
+			expect( routeProfileTimeoutDiagnostic( 'https://example.test/', 500, abandonment!, 'print' ).reason )
+				.toBe( 'route capture deadline 500ms: abandoned before the print profile started' );
 		} finally {
 			vi.useRealTimers();
 		}
