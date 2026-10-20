@@ -15,6 +15,12 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.32.16] - 2026-10-20
+
+### Changed
+- regenerate plugin bundles
+- Restore the route after a click-disclosure member navigates, without re-clicking the group
+
 ## [0.32.15] - 2026-10-20
 
 ### Changed
