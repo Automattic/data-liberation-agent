@@ -59,7 +59,7 @@ import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { recordGlyphColors } from './glyph-color.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
-import { RouteTimeBudget, RouteDeadlines, deriveRouteDeadlineMs, routeTimeoutDiagnostic } from '../capture-time-budget.js';
+import { RouteTimeBudget, RouteDeadlines, deriveRouteDeadlineMs, routeProfileTimeoutDiagnostic, routeTimeoutDiagnostic, type RouteDeadlineAbandonment } from '../capture-time-budget.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
@@ -2225,12 +2225,24 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		contexts.delete( context );
 		if ( ! contexts.size ) routeContexts.delete( url );
 	};
+	// Route-level `route_capture_timeout` rows: routes the deadline abandoned
+	// before any profile completed. They count as failed routes.
 	const deadlineRows: RouteDiagnostic[] = [];
+	// Profile-level rows of routes the deadline abandoned after at least one
+	// profile completed: those routes keep their completed profiles.
+	const profileDeadlineRows: RouteDiagnostic[] = [];
+	// Per running route: commit its completed profiles at the deadline and
+	// return the profiles it lost, or undefined when nothing completed.
+	const partialRouteCommits = new Map< string, ( abandonment: RouteDeadlineAbandonment ) => string[] | undefined >();
+	const partialCommitWrites: Promise< void >[] = [];
 	const routeDeadlines = new RouteDeadlines( routeDeadlineMs, ( url, abandonment ) => {
-		const row = routeTimeoutDiagnostic( url, routeDeadlineMs, abandonment );
-		deadlineRows.push( row );
+		const lostProfiles = partialRouteCommits.get( url )?.( abandonment );
+		partialRouteCommits.delete( url );
+		if ( lostProfiles ) profileDeadlineRows.push( ...lostProfiles.map( id => routeProfileTimeoutDiagnostic( url, routeDeadlineMs, abandonment, id ) ) );
+		else deadlineRows.push( routeTimeoutDiagnostic( url, routeDeadlineMs, abandonment ) );
 		const profile = abandonment.profile ? ` (${ abandonment.profile })` : '';
-		const message = `[deadline] ${ url } abandoned at the ${ routeDeadlineMs }ms route deadline during the "${ abandonment.phase }" phase${ profile }`;
+		const kept = lostProfiles ? `; kept its completed profiles${ lostProfiles.length ? `, lost ${ lostProfiles.join( ', ' ) }` : '' }` : '';
+		const message = `[deadline] ${ url } abandoned at the ${ routeDeadlineMs }ms route deadline during the "${ abandonment.phase }" phase${ profile }${ kept }`;
 		sendLog( server, message );
 		process.stderr.write( `${ message }
 ` );
@@ -2509,6 +2521,32 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined, deviceMode: routeDevice,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
+		// Profiles merged into `entry`: complete evidence the per-route deadline
+		// keeps when it abandons a later profile.
+		const mergedProfiles = new Set< string >();
+		partialRouteCommits.set( url, abandonment => {
+			if ( ! mergedProfiles.size || ! ( entry.html || entry.mobileHtml ) || entry.redirectedTo || entry.sourceOutcomes?.length ) return undefined;
+			if ( routeBudget && ! routeBudget.commit( url ) ) return undefined;
+			const lost = routeProfiles.filter( profile => ! mergedProfiles.has( profile.id ) && profilePlan( profile ).needsLoad ).map( profile => profile.id );
+			// A snapshot: the abandoned route keeps unwinding, and nothing it does
+			// afterwards reaches the manifest.
+			const committed = structuredClone( entry );
+			const failures: FailureEntry[] = [
+				...urlFailures,
+				...lost.map( id => ( {
+					url, viewport: id, stage: 'deadline' as const, error: routeProfileTimeoutDiagnostic( url, routeDeadlineMs, abandonment, id ).reason, timestamp: capturedAt(), attempt: 1,
+				} ) ),
+			];
+			partialCommitWrites.push( ( async () => {
+				for ( const failure of failures ) await manifest.recordFailure( failure );
+				await manifest.updateEntry( url, committed );
+			} )() );
+			captured++;
+			completed++;
+			sendLog( server, `[degraded] ${ url } (route deadline; ${ mergedProfiles.size } completed profile(s) kept)` );
+			opts.onProgress?.( completed, urls.length, url );
+			return lost;
+		} );
 		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
 			const previousInteractions = entry.interactions;
 			const previousCleanup = entry.cleanup;
@@ -2721,17 +2759,18 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const builtInProfiles = ( [ 'desktop', 'mobile' ] as const )
 			.map( id => routeProfiles.find( profile => profile.id === id ) )
 			.filter( ( profile ): profile is Viewport => Boolean( profile ) );
-		const builtInResults = memoryAdmission
-			? await ( async () => {
-					const results = [];
-					for ( const viewport of builtInProfiles ) results.push( await captureProfile( viewport ) );
-					return results;
-			  } )()
-			: await Promise.all( builtInProfiles.map( viewport => captureProfile( viewport ) ) );
+		// Without memory admission the built-in profiles run concurrently; either
+		// way each is merged, in profile order, as soon as it completes, so a
+		// route abandoned at its deadline keeps the profiles that finished.
+		const builtInPending = memoryAdmission ? undefined : builtInProfiles.map( viewport => captureProfile( viewport ) );
+		for ( const pending of builtInPending ?? [] ) pending.catch( () => {} );
 		for ( let index = 0; index < builtInProfiles.length; index++ ) {
 			const viewport = builtInProfiles[ index ]!;
-			const result = builtInResults[ index ];
+			const result = builtInPending ? await builtInPending[ index ] : await captureProfile( viewport );
 			if ( ! result ) continue;
+			// Abandoned at the deadline: nothing from a later-settling profile is merged.
+			if ( ! routeDeadlines.commit( url ) ) continue;
+			mergedProfiles.add( viewport.id );
 			if ( result.profileEntry.sharedChrome ) sharedChromeDecisions.push( { url, profile: viewport.id, ...result.profileEntry.sharedChrome } );
 			urlFailures.push( ...result.failures );
 			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
@@ -2746,6 +2785,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		for ( const viewport of routeProfiles.filter( profile => ! [ 'desktop', 'mobile' ].includes( profile.id ) ) ) {
 			const result = await captureProfile( viewport );
 			if ( ! result ) continue;
+			if ( ! routeDeadlines.commit( url ) ) continue;
+			mergedProfiles.add( viewport.id );
 			urlFailures.push( ...result.failures );
 			if ( mergeProfile( viewport, result.profileEntry, result.additional ) ) urlFailures.push( {
 				url, viewport: viewport.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
@@ -2769,10 +2810,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				entry.html = undefined; entry.mobileHtml = undefined; entry.desktop = undefined; entry.mobile = undefined; entry.cleanup = undefined;
 			}
 		}
-		// A route abandoned at the time budget's deadline or its per-route
-		// deadline records nothing.
+		// A route abandoned at the time budget's deadline records nothing. One
+		// abandoned at its per-route deadline recorded its completed profiles,
+		// if any, when the deadline fired; nothing it did afterwards is recorded.
 		if ( routeBudget && ! routeBudget.commit( url ) ) return;
 		if ( ! routeDeadlines.commit( url ) ) return;
+		partialRouteCommits.delete( url );
 		for ( const f of urlFailures ) {
 			await manifest.recordFailure( f );
 		}
@@ -2899,7 +2942,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							routeBudget?.start( url );
 							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: { reference: Math.round( routeWorkingSet.reference ), plain: Math.round( routeWorkingSet.plain ) }, reservedBytes: routeEstimate( kind ), activeRoutes: running.size + 1, calibrated, kind, url } ) }\n` );
 							activeRoutes[ kind ]++;
-							const pending = processUrl( url ).finally( () => { activeRoutes[ kind ]--; routeBudget?.finish( url ); routeDeadlines.finish( url ); } ).then( () => {
+							const pending = processUrl( url ).finally( () => { partialRouteCommits.delete( url ); activeRoutes[ kind ]--; routeBudget?.finish( url ); routeDeadlines.finish( url ); } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
 							// The slot frees even if abandonment unwinds slowly: the route's own
@@ -2928,6 +2971,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 			// Past the time budget no new work is discovered either.
 			if ( routeBudget?.closed() ) break;
+			// Deadline-kept profiles are in the manifest before links are read from it.
+			await Promise.allSettled( partialCommitWrites );
 			// Expand a breadth-first wave from actual rendered artifacts. The normal
 			// navigation/capture contract proves local documents and external boundaries;
 			// successful HTML is never reduced to a classification-only probe.
@@ -2983,6 +3028,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 	} finally {
 		await resourceStore.flush();
+		await Promise.allSettled( partialCommitWrites );
 		await manifest.flush();
 		if (frontier) writeFileSync(join(opts.outputDir, 'linked-page-coverage.json'), JSON.stringify(frontier.coverage(), null, 2));
 		// Persist the accumulated responsive-image map (mobile variants) for the
@@ -3043,7 +3089,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Routes the time budget left uncaptured are missing routes: counted as failed.
 	const budgetDiagnostics = routeBudget?.diagnostics( urls ) ?? [];
 	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
-	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows );
+	// A route the deadline abandoned after a profile completed was captured
+	// (its lost profiles are profile-level rows), so only route-level rows fail.
+	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows, ...profileDeadlineRows );
 	return {
 		captured,
 		skipped,

@@ -92,6 +92,8 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `route_exceeds_total_budget` | route | error | Non-entry route dropped, last in route order first, once dropping assets could not bring `website/` within the total budget. Never the entrypoint. `metrics.bytes` (page plus files only it referenced), `metrics.limit`, `metrics.fileLimit`. | yes | #761 |
 | `route_capture_degraded` | route | warning | HTML saved, but some stages failed. `metrics.failedStages`. | no | #764 |
 | `route_profile_uncaptured` | profile | error | A declared capture profile produced no document. Makes `complete: false`. | no | #764 |
+| `route_capture_timeout` | route | error | The per-route deadline abandoned the route before any profile completed; nothing from it is recorded. `metrics.routeDeadlineMs`. | yes | #848 |
+| `route_profile_capture_timeout` | profile | error | The per-route deadline abandoned a profile after another profile of the route completed. The route keeps its completed profiles; export also reports the lost profile as `route_profile_uncaptured`. `metrics.routeDeadlineMs`. | no | #762 |
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
 | `native_timeline_unproven` | block | warning | Native view-timeline evidence was lost on a saved page. | no | #773 |
 | `disclosure_unrestored` | block | error | Disclosure probe could not restore its baseline; hydrated panels were not kept. | no | #773 |
@@ -227,8 +229,8 @@ The capture receipt and `diagnostics.json` sit next to `website/`, outside the a
 
 | Code | `loss_class` | `unit` |
 |---|---|---|
-| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget`, `route_exceeds_total_budget` | `omitted_unit` | route |
-| `route_profile_uncaptured` | `omitted_unit` | profile |
+| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget`, `route_capture_timeout`, `route_exceeds_total_budget` | `omitted_unit` | route |
+| `route_profile_uncaptured`, `route_profile_capture_timeout` | `omitted_unit` | profile |
 | `asset_exceeds_file_limit`, `asset_exceeds_total_budget` | `omitted_unit` | asset |
 | `route_capture_degraded` | `degraded_unit` | route |
 | `stylesheet_unparseable` | `degraded_unit` | stylesheet |

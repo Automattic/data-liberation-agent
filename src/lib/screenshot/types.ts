@@ -142,7 +142,9 @@ export interface ScreenshotOpts {
 	timeBudget?: import('../capture-time-budget.js').CaptureTimeBudgetWindow;
 	/**
 	 * Per-route deadline in milliseconds: a route that exceeds it is abandoned,
-	 * its contexts closed, and it records `route_capture_timeout`. 0 disables it.
+	 * its contexts closed, and it records `route_capture_timeout` -- or, when a
+	 * profile completed before the deadline, keeps that profile and records
+	 * `route_profile_capture_timeout` per lost profile. 0 disables it.
 	 * Default: derived from the capture time budget and the admitted
 	 * concurrency (budget/concurrency, never below `ROUTE_DEADLINE_MIN_MS`), or
 	 * `ROUTE_DEADLINE_MIN_MS` without a budget.

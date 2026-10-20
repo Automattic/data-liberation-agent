@@ -1,5 +1,5 @@
 import type { RouteDiagnostic } from './capture-export-routes.js';
-import { ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT } from './capture-usability.js';
+import { ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT, ROUTE_PROFILE_CAPTURE_TIMEOUT } from './capture-usability.js';
 
 /**
  * Capture time budget (`CaptureOptions.timeBudgetMs`).
@@ -181,19 +181,25 @@ export class RouteTimeBudget {
 export interface RouteDeadlineAbandonment {
 	phase: string;
 	profile?: string;
+	/** The phase each profile of the route entered last; profiles run concurrently. */
+	profilePhases?: Record< string, string >;
 }
 
 /**
  * Per-route capture deadline. Each route started with the monitor gets one
  * bounded duration; a route that exceeds it is abandoned — its browser
  * contexts are closed so its in-flight waits fail instead of running on, its
- * slot is freed for the next route, and it records one
+ * slot is freed for the next route, and nothing from its in-flight profile is
+ * recorded. A route with no completed profile records one
  * `route_capture_timeout` missing-route diagnostic naming the phase it
- * entered last. Routes that finish in time are unaffected.
+ * entered last; a route whose earlier profiles completed keeps them and
+ * records one `route_profile_capture_timeout` per abandoned profile
+ * (`routeProfileTimeoutDiagnostic`). Routes that finish in time are unaffected.
  */
 export class RouteDeadlines {
 	private readonly timers = new Map< string, NodeJS.Timeout >();
 	private readonly current = new Map< string, RouteDeadlineAbandonment >();
+	private readonly profilePhases = new Map< string, Record< string, string > >();
 	private readonly abandoned = new Map< string, RouteDeadlineAbandonment >();
 	private readonly expiryResolvers = new Map< string, () => void >();
 
@@ -222,12 +228,16 @@ export class RouteDeadlines {
 
 	/** Record the phase a still-running route entered last, and its profile. */
 	note( url: string, phase: string, profile?: string ): void {
-		if ( this.timers.has( url ) ) this.current.set( url, { phase, profile } );
+		if ( ! this.timers.has( url ) ) return;
+		this.current.set( url, { phase, profile } );
+		if ( profile ) this.profilePhases.set( url, { ...this.profilePhases.get( url ), [ profile ]: phase } );
 	}
 
 	private fire( url: string ): void {
-		const abandonment = this.current.get( url ) ?? { phase: 'unknown' };
+		const profilePhases = this.profilePhases.get( url );
+		const abandonment = { ...( this.current.get( url ) ?? { phase: 'unknown' } ), ...( profilePhases ? { profilePhases } : {} ) };
 		this.current.delete( url );
+		this.profilePhases.delete( url );
 		this.timers.delete( url );
 		this.abandoned.set( url, abandonment );
 		this.abandon( url, abandonment );
@@ -251,6 +261,7 @@ export class RouteDeadlines {
 			this.timers.delete( url );
 		}
 		this.current.delete( url );
+		this.profilePhases.delete( url );
 		this.expiryResolvers.get( url )?.();
 		this.expiryResolvers.delete( url );
 	}
@@ -263,5 +274,30 @@ export function routeTimeoutDiagnostic( url: string, deadlineMs: number, abandon
 		code: ROUTE_CAPTURE_TIMEOUT, url,
 		reason: `route capture deadline ${ deadlineMs }ms: abandoned during the "${ abandonment.phase }" phase${ where }`,
 		unit: 'route', severity: 'error', metrics: { routeDeadlineMs: deadlineMs },
+	};
+}
+
+/**
+ * Why one profile of a partially committed route has no document: a profile
+ * in flight at the deadline names the phase it entered last; one that had
+ * not started is named as such.
+ */
+export function routeProfileTimeoutReason( deadlineMs: number, abandonment: RouteDeadlineAbandonment, profile: string ): string {
+	const phase = abandonment.profilePhases?.[ profile ] ?? ( abandonment.profile === profile ? abandonment.phase : undefined );
+	return phase === undefined
+		? `route capture deadline ${ deadlineMs }ms: abandoned before the ${ profile } profile started`
+		: `route capture deadline ${ deadlineMs }ms: abandoned during the "${ phase }" phase in the ${ profile } profile`;
+}
+
+/**
+ * One `route_profile_capture_timeout` finding per profile a partially
+ * committed route lost at its deadline: the route kept the profiles that
+ * completed before it, so it is not a missing route.
+ */
+export function routeProfileTimeoutDiagnostic( url: string, deadlineMs: number, abandonment: RouteDeadlineAbandonment, profile: string ): RouteDiagnostic {
+	return {
+		code: ROUTE_PROFILE_CAPTURE_TIMEOUT, url,
+		reason: routeProfileTimeoutReason( deadlineMs, abandonment, profile ),
+		unit: 'profile', severity: 'error', profile, metrics: { routeDeadlineMs: deadlineMs },
 	};
 }
