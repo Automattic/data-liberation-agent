@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.32.14] - 2026-10-20
+
+### Changed
+- regenerate plugin bundles
+- Preserve runtime Google Maps as editable iframe embeds
+- Reserve a render-critical slice of the captured-resource budget so media cannot starve stylesheets and fonts
+
 ## [0.32.13] - 2026-10-20
 
 ### Changed
