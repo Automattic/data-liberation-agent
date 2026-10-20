@@ -42,6 +42,15 @@ const MAX_CAPTURED_RESOURCE_BYTES = 10 * 1024 * 1024;
 // (and risking drift from) the constants below.
 export const MAX_CAPTURED_VIDEO_RESOURCE_BYTES = 100 * 1024 * 1024;
 export const MAX_CAPTURED_RESOURCE_TOTAL_BYTES = 256 * 1024 * 1024;
+// The slice of the aggregate budget reserved for render-critical resources
+// (stylesheets and fonts). Media and every other resource kind may not draw
+// from it, so a page heavy with images/video cannot leave later routes
+// unstyled; render-critical resources may still use the whole aggregate.
+export const MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES = 32 * 1024 * 1024;
+// What media (images, video, audio) and everything else that is not
+// render-critical may consume of the aggregate budget, in total.
+export const MAX_CAPTURED_MEDIA_TOTAL_BYTES =
+	MAX_CAPTURED_RESOURCE_TOTAL_BYTES - MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES;
 export const CAPTURED_RESOURCE_TIMEOUT_MS = 10_000;
 // Hard ceiling on a single resource's read timeout, however large it is
 // allowed to be — a stalled connection must not hang a capture run
@@ -93,6 +102,42 @@ function looksLikeVideoOrAudioUrl( url: string | URL ): boolean {
 
 function isVideoOrAudioContentType( contentType: string ): boolean {
 	return /^(?:video|audio)\//i.test( contentType );
+}
+
+const RENDER_CRITICAL_EXTENSION_RE = /\.(?:css|woff2?|ttf|otf|eot)$/i;
+const MEDIA_EXTENSION_RE =
+	/\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|heic|heif|jxl|mp4|m4v|mov|webm|ogv|mkv|avi|mpg|mpeg|mp3|m4a|aac|wav|flac|ogg|pdf|docx?)$/i;
+
+/**
+ * Stylesheets and fonts: without them a captured route renders unstyled, so
+ * they are always admitted while their per-resource cap and the aggregate
+ * allow, regardless of how much media was captured before them.
+ */
+export function isRenderCriticalContentType( contentType: string ): boolean {
+	return /^(?:text\/css|font\/|application\/(?:x-)?font|application\/vnd\.ms-fontobject)/i.test(
+		contentType.trim()
+	);
+}
+
+function isRenderCriticalResourceType( resourceType: string ): boolean {
+	return resourceType === 'stylesheet' || resourceType === 'font';
+}
+
+/**
+ * Pre-fetch classification from the URL alone. A url whose extension names a
+ * stylesheet or font is render-critical; one naming media is not. Anything
+ * else (`/css2?family=…`, `/?style=…`) may be a stylesheet, so it is fetched
+ * with the render-critical ceiling and re-checked against its real
+ * Content-Type before it is stored.
+ */
+function mayBeRenderCriticalUrl( url: string ): boolean {
+	try {
+		const { pathname } = new URL( url );
+		if ( RENDER_CRITICAL_EXTENSION_RE.test( pathname ) ) return true;
+		return ! MEDIA_EXTENSION_RE.test( pathname ) && ! looksLikeVideoOrAudioUrl( url );
+	} catch {
+		return false;
+	}
 }
 
 export interface CapturedResourceEntry {
@@ -551,7 +596,7 @@ export class CapturedResourceStore {
 			const relativePath = resourcePath( new URL( url ), contentType, this.origin );
 			const destination = resolve( this.resourceDir, relativePath );
 			if ( body.length === 0 || ! pathWithin( this.resourceDir, destination ) ) return false;
-			this.reserveBytes( body.length );
+			this.reserveBytes( body.length, isRenderCriticalContentType( contentType ) );
 			mkdirSync( dirname( destination ), { recursive: true } );
 			writeFileSync( destination, body );
 			this.manifest.resources[ url ] = {
@@ -673,7 +718,14 @@ export class CapturedResourceStore {
 			// alone here — `safeFetch` enforces `maxBytes` DURING the fetch, so
 			// this can't be deferred to a post-fetch check the way the
 			// browser-observed path below can.
-			const byteCeiling = this.resourceByteCeiling( looksLikeVideoOrAudioUrl( url ) );
+			// Likewise whether it is render-critical: a url that may be a
+			// stylesheet/font is fetched against the whole aggregate, then
+			// re-checked against the media share once its Content-Type is known.
+			const fetchedAsRenderCritical = mayBeRenderCriticalUrl( url );
+			const byteCeiling = this.resourceByteCeiling(
+				looksLikeVideoOrAudioUrl( url ),
+				fetchedAsRenderCritical
+			);
 			const fetched = await this.fetchMedia( url, byteCeiling, resourceTimeoutMs( byteCeiling ) );
 			if ( fetched.status < 200 || fetched.status >= 300 )
 				throw new Error( `HTTP ${ fetched.status }` );
@@ -690,12 +742,24 @@ export class CapturedResourceStore {
 				throw new Error(
 					`render dependency has unsupported content type ${ contentType || 'unknown' }`
 				);
+			const renderCritical = isRenderCriticalContentType( contentType );
+			// Fetched against the whole aggregate on a guess that proved wrong:
+			// hold it to the media share before storing.
+			if ( fetchedAsRenderCritical && ! renderCritical ) {
+				const mediaCeiling = Math.min(
+					byteCeiling,
+					this.resourceByteCeiling( looksLikeVideoOrAudioUrl( url ) || isVideoOrAudioContentType( contentType ), false )
+				);
+				if ( fetched.body.length > mediaCeiling )
+					// failure-class: representability:asset
+					throw new Error( `resource body ${ fetched.body.length } bytes exceeds max ${ mediaCeiling }` );
+			}
 			const resourceUrl = new URL( url );
 			const relativePath = resourcePath( resourceUrl, contentType, this.origin );
 			const destination = resolve( this.resourceDir, relativePath );
 			if ( ! pathWithin( this.resourceDir, destination ) )
 				throw new Error( 'resource path escapes the capture directory' );
-			this.storeBody( url, fetched.body, relativePath, destination, contentType );
+			this.storeBody( url, fetched.body, relativePath, destination, contentType, renderCritical );
 			const metadata = replayableResponseMetadata(
 				Object.fromEntries( fetched.headers.entries() )
 			);
@@ -730,7 +794,7 @@ export class CapturedResourceStore {
 		// whether it's really audio/video once its Content-Type header is read
 		// below, which happens before any body is read either way.
 		const isMedia = resourceType === 'media';
-		const mediaByteCeiling = this.resourceByteCeiling( isMedia );
+		const mediaByteCeiling = this.resourceByteCeiling( isMedia, false );
 		const fetched = isMedia
 			? await this.fetchMedia(
 					requestedUrl.href,
@@ -742,9 +806,14 @@ export class CapturedResourceStore {
 		if ( status < 200 || status >= 300 ) throw new Error( `HTTP ${ status }` );
 		const headers = fetched ? Object.fromEntries( fetched.headers.entries() ) : response.headers();
 		const contentType = canonicalContentType( headers[ 'content-type' ] ?? '' );
+		// Classified before the body is read: resourceType and Content-Type are
+		// both known here.
+		const renderCritical =
+			! isMedia &&
+			( isRenderCriticalResourceType( resourceType ) || isRenderCriticalContentType( contentType ) );
 		const byteCeiling = fetched
 			? mediaByteCeiling
-			: this.resourceByteCeiling( isVideoOrAudioContentType( contentType ) );
+			: this.resourceByteCeiling( isVideoOrAudioContentType( contentType ), renderCritical );
 		const declaredBytes = Number( headers[ 'content-length' ] );
 		if ( Number.isFinite( declaredBytes ) && declaredBytes > byteCeiling ) {
 			throw new Error( `resource body ${ declaredBytes } bytes exceeds max ${ byteCeiling }` );
@@ -767,7 +836,7 @@ export class CapturedResourceStore {
 		if ( body.length > byteCeiling ) {
 			throw new Error( `resource body ${ body.length } bytes exceeds max ${ byteCeiling }` );
 		}
-		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType );
+		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType, renderCritical );
 		const replayMetadata = replayableResponseMetadata( headers );
 		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
 	}
@@ -785,7 +854,8 @@ export class CapturedResourceStore {
 		body: Buffer,
 		relativePath: string,
 		destination: string,
-		contentType: string
+		contentType: string,
+		renderCritical: boolean
 	): void {
 		const contentHash = createHash( 'sha256' ).update( body ).digest( 'hex' );
 		const stored = this.storedContent.get( contentHash );
@@ -800,7 +870,7 @@ export class CapturedResourceStore {
 		const requestedPath = relativePath.replace( /\\/g, '/' );
 		const storedPath = uniqueAssetPath( requestedPath, contentHash, this.storedPaths );
 		const target = storedPath === requestedPath ? destination : resolve( this.resourceDir, storedPath );
-		this.reserveBytes( body.length );
+		this.reserveBytes( body.length, renderCritical );
 		mkdirSync( dirname( target ), { recursive: true } );
 		writeFileSync( target, body );
 		const manifestPath = `resources/${ storedPath }`;
@@ -821,17 +891,29 @@ export class CapturedResourceStore {
 	 * below remains the authoritative backstop that the aggregate is never
 	 * exceeded on disk, exactly as it was before this per-resource ceiling
 	 * existed.
+	 *
+	 * Render-critical resources (stylesheets, fonts) may use the whole
+	 * aggregate; everything else is bounded by
+	 * {@link MAX_CAPTURED_MEDIA_TOTAL_BYTES}, so it can never spend the slice
+	 * reserved for render-critical resources.
 	 */
-	private resourceByteCeiling( isVideoLike: boolean ): number {
+	private resourceByteCeiling( isVideoLike: boolean, renderCritical: boolean ): number {
 		const typeCeiling = isVideoLike ? MAX_CAPTURED_VIDEO_RESOURCE_BYTES : MAX_CAPTURED_RESOURCE_BYTES;
-		const remaining = Math.max( 0, MAX_CAPTURED_RESOURCE_TOTAL_BYTES - this.capturedBytes );
+		const budget = renderCritical ? MAX_CAPTURED_RESOURCE_TOTAL_BYTES : MAX_CAPTURED_MEDIA_TOTAL_BYTES;
+		const remaining = Math.max( 0, budget - this.capturedBytes );
 		return Math.min( typeCeiling, remaining );
 	}
 
-	private reserveBytes( bytes: number ): void {
+	private reserveBytes( bytes: number, renderCritical: boolean ): void {
 		if ( this.capturedBytes + bytes > MAX_CAPTURED_RESOURCE_TOTAL_BYTES ) {
 			throw new Error(
 				`captured resource bytes exceed aggregate max ${ MAX_CAPTURED_RESOURCE_TOTAL_BYTES }`
+			);
+		}
+		if ( ! renderCritical && this.capturedBytes + bytes > MAX_CAPTURED_MEDIA_TOTAL_BYTES ) {
+			// failure-class: representability:asset
+			throw new Error(
+				`captured media bytes exceed max ${ MAX_CAPTURED_MEDIA_TOTAL_BYTES } outside the render-critical reserve`
 			);
 		}
 		this.capturedBytes += bytes;
