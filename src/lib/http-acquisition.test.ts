@@ -6,6 +6,7 @@ import { acquireHttpDocuments } from './http-acquisition.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import type { HttpAcquisitionProfile } from '../platform/acquisition.js';
 import { materializeHttpDocuments } from './http-materialization.js';
+import { SourceRequestGovernors } from './source-request-governor.js';
 
 const directories: string[] = [];
 const source = 'https://acquisition.example/';
@@ -114,6 +115,19 @@ describe( 'HTTP document acquisition', () => {
 		expect( result.coverage.acquired ).toBe( 6 );
 		expect( fetchImpl ).toHaveBeenCalledTimes( 7 );
 		expect( result.documents.some( row => row.attempts === 2 ) ).toBe( true );
+	} );
+
+	it( 'paces a throttled route through the origin governor until it succeeds', async () => {
+		const governors = new SourceRequestGovernors();
+		let calls = 0;
+		const fetchImpl = vi.fn<typeof fetch>( async () => ++calls <= 2
+			? new Response( '', { status: 429, headers: { 'retry-after': '0' } } )
+			: new Response( '<article>Content</article>', { headers: { 'content-type': 'text/html' } } ) );
+		const single = { ...profile, variants: [ { id: 'desktop' } ] };
+		const result = await acquireHttpDocuments( { url: source, urls: [ source ], outputDir: directory(), profile: single, governors }, dependencies( fetchImpl ) );
+		expect( result.documents[ 0 ] ).toMatchObject( { status: 'acquired', attempts: 3, httpStatus: 200 } );
+		expect( fetchImpl ).toHaveBeenCalledTimes( 3 );
+		expect( governors.forOrigin( source ).throttleEvents ).toBe( 2 );
 	} );
 
 	it( 'accepts query renditions but records actual redirect drift as browser-required', async () => {

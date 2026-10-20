@@ -9,6 +9,7 @@ import {
 	templateSelectionCoverage,
 	TEMPLATE_GROUPS_SCHEMA,
 } from './template-groups.js';
+import { SourceRequestGovernors } from './source-request-governor.js';
 
 /*
  * A synthetic multi-template CMS site, served from memory. Templates: home,
@@ -203,24 +204,40 @@ describe( 'buildTemplateGroups', () => {
 	} );
 } );
 
+describe( 'buildTemplateGroups whole-inventory coverage', () => {
+	it( 'fingerprints every inventory route with maxRoutes: all, more than a numeric maxRoutes samples', async () => {
+		const sampled = await buildTemplateGroups( { sourceUrl: INVENTORY[ 0 ]!, urls: INVENTORY, limits: { maxRoutes: 20 } }, fixtureFetch() );
+		const whole = fixtureFetch();
+		const all = await buildTemplateGroups( { sourceUrl: INVENTORY[ 0 ]!, urls: INVENTORY, limits: { maxRoutes: 'all' } }, whole );
+		expect( sampled.coverage.fingerprinted ).toBe( 20 );
+		expect( whole.requested ).toHaveLength( INVENTORY.length );
+		expect( all.coverage ).toMatchObject( { fingerprinted: INVENTORY.length, unfingerprinted: 0, groups: EXPECTED_GROUPS } );
+		expect( all.limits.maxRoutes ).toBe( 'all' );
+	} );
+} );
+
 describe( 'buildTemplateGroups throttling', () => {
-	it( 'honours Retry-After once, then stops the pass when the source keeps throttling', async () => {
+	it( 'paces itself against repeated throttling and still fingerprints every route', async () => {
 		const urls = INVENTORY.slice( 0, 12 );
 		const requested: string[] = [];
 		let calls = 0;
+		let throttled = 0;
 		const fetch = async ( url: string ): Promise< SafeFetchResult > => {
 			requested.push( url );
 			calls++;
-			// The 3rd request is throttled and so is everything after its retry.
-			if ( calls >= 3 ) return { ...response( url, 429, '' ), headers: new Headers( { 'retry-after': '0' } ) };
+			// Requests 3, 4 and 5 (consecutive, including a retry) and every 7th after are refused.
+			if ( ( calls >= 3 && calls <= 5 ) || calls % 7 === 0 ) {
+				throttled++;
+				return { ...response( url, 429, '' ), headers: new Headers( { 'retry-after': '0' } ) };
+			}
 			return response( url, 200, PAGES.get( url )!() );
 		};
-		const report = await buildTemplateGroups( { sourceUrl: urls[ 0 ]!, urls, limits: { concurrency: 1 } }, { fetch: fetch as never } );
-		expect( report.coverage.fingerprinted ).toBe( 2 );
-		// One retry, then no further requests.
-		expect( requested ).toHaveLength( 4 );
-		expect( report.unfingerprinted.filter( row => row.reason === 'rate_limited' ) ).toHaveLength( 10 );
-		expect( report.unfingerprinted.find( row => row.httpStatus === 429 ) ).toMatchObject( { reason: 'rate_limited' } );
+		const report = await buildTemplateGroups( { sourceUrl: urls[ 0 ]!, urls, limits: { concurrency: 3 } }, { fetch: fetch as never } );
+		expect( throttled ).toBeGreaterThanOrEqual( 4 );
+		expect( report.coverage.fingerprinted ).toBe( 12 );
+		expect( report.unfingerprinted ).toEqual( [] );
+		expect( report.throttle ).toEqual( { events: throttled } );
+		expect( requested ).toHaveLength( 12 + throttled );
 	} );
 
 	it( 'keeps going when the retry succeeds', async () => {
@@ -236,6 +253,36 @@ describe( 'buildTemplateGroups throttling', () => {
 		};
 		const report = await buildTemplateGroups( { sourceUrl: urls[ 0 ]!, urls, limits: { concurrency: 4 } }, { fetch: fetch as never } );
 		expect( report.coverage.fingerprinted ).toBe( 12 );
+		expect( report.throttle ).toEqual( { events: 1 } );
+	} );
+
+	it( 'leaves routes the deadline cut off during a throttle wait as time_budget', async () => {
+		const urls = INVENTORY.slice( 0, 6 );
+		const fetch = async ( url: string ): Promise< SafeFetchResult > => url === urls[ 0 ]
+			? response( url, 200, PAGES.get( url )!() )
+			: { ...response( url, 429, '' ), headers: new Headers( { 'retry-after': '30' } ) };
+		const started = Date.now();
+		const report = await buildTemplateGroups( { sourceUrl: urls[ 0 ]!, urls, limits: { concurrency: 1, timeBudgetMs: 100 } }, { fetch: fetch as never } );
+		expect( Date.now() - started ).toBeLessThan( 2000 );
+		expect( report.coverage.fingerprinted ).toBe( 1 );
+		expect( report.unfingerprinted.every( row => row.reason === 'time_budget' ) ).toBe( true );
+		expect( report.throttle ).toEqual( { events: 1 } );
+	} );
+
+	it( 'shares one governor with the rest of the capture', async () => {
+		const governors = new SourceRequestGovernors();
+		const urls = INVENTORY.slice( 0, 4 );
+		let refused = false;
+		const fetch = async ( url: string ): Promise< SafeFetchResult > => {
+			if ( ! refused && url === urls[ 2 ] ) {
+				refused = true;
+				return { ...response( url, 429, '' ), headers: new Headers( { 'retry-after': '0' } ) };
+			}
+			return response( url, 200, PAGES.get( url )!() );
+		};
+		await buildTemplateGroups( { sourceUrl: urls[ 0 ]!, urls, governors }, { fetch: fetch as never } );
+		expect( governors.forOrigin( ORIGIN ).throttleEvents ).toBe( 1 );
+		expect( governors.forOrigin( `${ ORIGIN }/other/` ) ).toBe( governors.forOrigin( ORIGIN ) );
 	} );
 } );
 
