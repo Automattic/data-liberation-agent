@@ -116,7 +116,7 @@ Run it only when a human is waiting for it, since the command holds until interr
 | Path | Contents |
 |---|---|
 | `website/` | The deliverable. Serve this directory anywhere |
-| `capture-receipt.json` | Source URL, route table mapping each page to the URL it came from, assets, profile |
+| `capture-receipt.json` | Source URL, route table mapping each page to the URL it came from, assets, profile, and `reports` (the JSON sidecars to hand an importer beside `website/`) |
 | `diagnostics.json` | Everything the source withheld or the capture could not resolve |
 | `source-profile.json` | Measured behavior: one document or per-device, declarative or runtime-written geometry, switch width |
 

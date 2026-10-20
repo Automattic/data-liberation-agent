@@ -54,7 +54,7 @@ They share the namespace anyway, so no capture name falls outside it.
 Every sidecar schema is `blocks-engine-capture/<name>/v<n>`. The full list is `CAPTURE_SCHEMAS`. Blocks Engine reads five of them:
 
 - `captured-interactions/v1` (`interaction-states.json`)
-- `capture-receipt/v1`
+- `capture-receipt/v1` — its `reports` array names the capture-root JSON sidecars to forward to an importer (additive; schema stays `v1`)
 - `source-interactivity/v1`
 - `finite-bootstrap/v1`
 - `collection-status/v1`
