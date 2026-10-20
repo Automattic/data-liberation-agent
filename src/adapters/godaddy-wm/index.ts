@@ -2,6 +2,7 @@ import type { PlatformAdapter } from '../../types.js';
 import { detection } from './detection.js';
 import { discover } from './discover.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
+import { preserveGoDaddyMapMarkers } from './maps.js';
 
 /** Preserve the date exposed only through GoDaddy's runtime blog model. */
 async function preservePublicationEvidence(page: import('playwright').Page): Promise<void> {
@@ -38,6 +39,9 @@ export const godaddyWmAdapter: PlatformAdapter = {
       { id: 'godaddy-freemium-acquisition', category: 'source-attribution', selector: '[data-freemium-ad="true"]' },
       ...providerCreditRules('godaddy', ['godaddy.com'], 'GoDaddy'),
     ],
-    beforeSerialize: async (page) => preservePublicationEvidence(page),
+    beforeSerialize: async (page) => {
+      await preservePublicationEvidence(page);
+      await preserveGoDaddyMapMarkers(page);
+    },
   },
 };

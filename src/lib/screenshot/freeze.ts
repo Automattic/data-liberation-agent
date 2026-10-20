@@ -26,6 +26,8 @@
 // Playwright injection.
 //
 import type { Page } from 'playwright';
+import { randomUUID } from 'node:crypto';
+import * as cheerio from 'cheerio';
 import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
 import { wireNativeControlState } from '../native-control-state.js';
 
@@ -37,7 +39,42 @@ const MIN_FREEZE_BYTES = 2048;
 /** Strip source code with the shared sanitizer, then reconstruct the fixed native
  *  control interpreter from inert facts. Preserve CSS and text-node boundaries. */
 export function sanitizeFrozenHtml(html: string): string {
-  return wireNativeControlState(sanitizeSourceHtml(html, { preserveEmptyComments: true }));
+  if (!html.includes('data-blocks-engine-capture-visual-iframe-src')) {
+    return wireNativeControlState(sanitizeSourceHtml(html, { preserveEmptyComments: true }));
+  }
+  // Mobile carries use the strict skill-facing sanitizer, which drops every
+  // iframe. Temporarily hold only browser-attested bounded HTTPS surfaces;
+  // rebuild them from safe attributes after source code has been stripped.
+  // Random placeholders cannot collide with source-authored markup.
+  const $ = cheerio.load(html, {}, /<(?:!doctype|html|head|body)\b/i.test(html));
+  const frames = new Map<string,string>();
+  const evidence = {
+    src:'data-blocks-engine-capture-visual-iframe-src',
+    width:'data-blocks-engine-capture-visual-iframe-width',
+    height:'data-blocks-engine-capture-visual-iframe-height',
+  };
+  $('iframe').each((_,element) => {
+    const frame = $(element);
+    const src = frame.attr(evidence.src) ?? '';
+    const width = frame.attr(evidence.width) ?? '';
+    const height = frame.attr(evidence.height) ?? '';
+    let url: URL;
+    try { url = new URL(src); } catch { return; }
+    if (url.protocol !== 'https:' || !url.hostname || !/^[1-9]\d*$/.test(width) || !/^[1-9]\d*$/.test(height)) return;
+    const safe = $('<iframe></iframe>');
+    for (const name of ['allow','allowfullscreen','class','loading','referrerpolicy','sandbox','title']) {
+      const value = frame.attr(name);
+      if (value !== undefined) safe.attr(name,value);
+    }
+    safe.attr('src',src).attr('width',width).attr('height',height);
+    for (const [name,value] of [[evidence.src,src],[evidence.width,width],[evidence.height,height]]) safe.attr(name!,value!);
+    const placeholder = `<template id="${randomUUID()}"></template>`;
+    frames.set(placeholder,$.html(safe));
+    frame.replaceWith(placeholder);
+  });
+  let sanitized = sanitizeSourceHtml($.html(), { preserveEmptyComments: true });
+  for (const [placeholder,frame] of frames) sanitized = sanitized.replace(placeholder,frame);
+  return wireNativeControlState(sanitized);
 }
 
 export interface FreezeResult { html: string; bytes: number; via: 'single-file-cli' | 'fallback'; }
