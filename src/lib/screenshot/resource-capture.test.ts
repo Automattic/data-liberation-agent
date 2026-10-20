@@ -20,6 +20,8 @@ import {
 	CAPTURED_RESOURCE_TIMEOUT_CEILING_MS,
 	CAPTURED_RESOURCE_TIMEOUT_MS,
 	CapturedResourceStore,
+	MAX_CAPTURED_MEDIA_TOTAL_BYTES,
+	MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES,
 	MAX_CAPTURED_RESOURCE_TOTAL_BYTES,
 	MAX_CAPTURED_VIDEO_RESOURCE_BYTES,
 	resourceTimeoutMs,
@@ -1162,12 +1164,12 @@ describe( 'CapturedResourceStore', () => {
 			// full 100 MB video ceiling — far above the old flat 10 MB cap.
 			expect( maxBytesByUrl.get( videoA ) ).toBe( MAX_CAPTURED_VIDEO_RESOURCE_BYTES );
 			expect( maxBytesByUrl.get( videoB ) ).toBe( MAX_CAPTURED_VIDEO_RESOURCE_BYTES );
-			// C's ceiling is bounded by what's LEFT of the aggregate budget
-			// (256 - 100 - 100 = 56 MB), not the flat 100 MB video ceiling — the
-			// per-resource limit cooperates with the aggregate cap instead of
-			// racing past it.
+			// C's ceiling is bounded by what's LEFT of the media share of the
+			// aggregate budget (256 - 32 reserved - 100 - 100 = 24 MB), not the
+			// flat 100 MB video ceiling — the per-resource limit cooperates with
+			// the aggregate cap instead of racing past it.
 			expect( maxBytesByUrl.get( videoC ) ).toBe(
-				MAX_CAPTURED_RESOURCE_TOTAL_BYTES - 2 * MAX_CAPTURED_VIDEO_RESOURCE_BYTES
+				MAX_CAPTURED_MEDIA_TOTAL_BYTES - 2 * MAX_CAPTURED_VIDEO_RESOURCE_BYTES
 			);
 
 			const manifest = JSON.parse(
@@ -1205,6 +1207,67 @@ describe( 'CapturedResourceStore', () => {
 				[ videoA, { bytes: MAX_CAPTURED_VIDEO_RESOURCE_BYTES, limit: 50 * 1024 * 1024 } ],
 				[ videoB, { bytes: MAX_CAPTURED_VIDEO_RESOURCE_BYTES, limit: 50 * 1024 * 1024 } ],
 			] );
+		} );
+
+		it( 'keeps capturing stylesheets and fonts after media exhausts its share of the budget', async () => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-render-critical-reserve-' ) );
+			dirs.push( outputDir );
+			const sourceUrl = 'https://example.com/';
+			const videos = [ 'a', 'b', 'c' ].map( ( name ) => `https://example.com/media/${ name }.mp4` );
+			const stylesheet = 'https://example.com/styles/site.css';
+			const font = 'https://example.com/fonts/body.woff2';
+			const image = 'https://example.com/media/late.png';
+			// Two full videos plus one that fills the rest of the media share.
+			const sizes: Record< string, number > = {
+				[ videos[ 0 ] ]: MAX_CAPTURED_VIDEO_RESOURCE_BYTES,
+				[ videos[ 1 ] ]: MAX_CAPTURED_VIDEO_RESOURCE_BYTES,
+				[ videos[ 2 ] ]: MAX_CAPTURED_MEDIA_TOTAL_BYTES - 2 * MAX_CAPTURED_VIDEO_RESOURCE_BYTES,
+				[ font ]: 50_000,
+				[ image ]: 1024,
+			};
+			const types: Record< string, string > = { [ font ]: 'font/woff2', [ image ]: 'image/png' };
+			const fetchMedia = vi.fn( async ( url: string, maxBytes: number ) => {
+				const size = sizes[ url ];
+				if ( size > maxBytes ) throw new Error( `response body exceeds max ${ maxBytes } bytes` );
+				return {
+					finalUrl: url,
+					status: 200,
+					headers: new Headers( { 'content-type': types[ url ] ?? 'video/mp4' } ),
+					body: Buffer.alloc( size, url ),
+				};
+			} );
+			const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+			for ( const video of videos )
+				await store.captureDomDependencies( `<video src="${ video }"></video>`, sourceUrl );
+
+			const page = new EventEmitter();
+			store.observe( page as never );
+			const css = Buffer.alloc( 94_412, 'a' );
+			page.emit( 'response', {
+				url: () => stylesheet,
+				status: () => 200,
+				headers: () => ( { 'content-type': 'text/css', 'content-length': String( css.length ) } ),
+				body: vi.fn().mockResolvedValue( css ),
+				request: () => ( { resourceType: () => 'stylesheet', method: () => 'GET' } ),
+			} );
+			await store.settle( page as never );
+			await store.captureDomDependencies( `<link rel="preload" as="font" href="${ font }">`, sourceUrl );
+			await store.captureDomDependencies( `<img src="${ image }">`, sourceUrl );
+			await store.flush();
+
+			const manifest = JSON.parse(
+				readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+			);
+			for ( const video of videos ) expect( manifest.resources[ video ] ).toBeDefined();
+			expect( manifest.resources[ stylesheet ] ).toMatchObject( { contentType: 'text/css' } );
+			expect( manifest.resources[ font ] ).toMatchObject( { contentType: 'font/woff2' } );
+			expect( manifest.resources[ image ] ).toBeUndefined();
+			expect( manifest.failures ).toEqual( [
+				{ url: image, error: expect.stringContaining( 'exceeds max' ) },
+			] );
+			expect( MAX_CAPTURED_MEDIA_TOTAL_BYTES ).toBe(
+				MAX_CAPTURED_RESOURCE_TOTAL_BYTES - MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES
+			);
 		} );
 
 		it( 'rejects a resource beyond the aggregate budget even if a misbehaving fetch ignores its assigned ceiling', async () => {
