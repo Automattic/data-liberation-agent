@@ -3,7 +3,7 @@ import { gzipSync } from 'node:zlib';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
-import { documentRedirect, isNavigationTimeout, navigateSourceDocument, inspectSourceDocument, SOURCE_NAVIGATION_LIMITS, SourceNavigationError, storeExternalBoundary, validateExternalBoundary } from './source-navigation.js';
+import { documentRedirect, isNavigationTimeout, sameRouteScriptNavigation, navigateSourceDocument, inspectSourceDocument, SOURCE_NAVIGATION_LIMITS, SourceNavigationError, storeExternalBoundary, validateExternalBoundary } from './source-navigation.js';
 import { join } from 'node:path';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 import { isRouteDrift, navigationDocumentUrl } from './screenshot/document-integrity.js';
@@ -74,6 +74,10 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const server = createServer((request, response) => {
 			response.setHeader('content-type', 'text/html');
 			response.setHeader('content-encoding', 'gzip');
+			// A browser-language redirect: the delivered document replaces itself
+			// with the same path plus a marker query, once (guarded by the query).
+			if (request.url === '/lang') { response.end(gzipSync(`<script>location.replace(location.pathname + '?noredirect=en-US')</script><h1 id="tail">Language chooser</h1>`)); return; }
+			if (request.url === '/lang?noredirect=en-US') { response.end(gzipSync('<!doctype html><title>Language page</title><h1 id="tail">Language page content</h1>')); return; }
 			if (request.url === '/declared-oversize') { response.removeHeader('content-encoding'); response.setHeader('content-length', SOURCE_DOCUMENT_MAX_BYTES + 1); response.end('x'.repeat(SOURCE_DOCUMENT_MAX_BYTES + 1)); return; }
 			const body = request.url === '/boundary' ? `${html}<meta http-equiv="refresh" content="0;url=${target}">`
 				: request.url === '/decoded-oversize' ? 'x'.repeat(SOURCE_DOCUMENT_MAX_BYTES + 1)
@@ -101,10 +105,19 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(() => validateExternalBoundary(outcome, readFileSync(join(directory, outcome.evidence.path)))).not.toThrow();
 			expect(() => validateExternalBoundary(outcome, Buffer.from(JSON.stringify({...boundary, responses: [{...boundary.responses[0], body:'x'.repeat(SOURCE_DOCUMENT_MAX_BYTES + 1)}]})))).toThrow(/Invalid source redirect response chain/);
 			expect(outbound).toBe(0);
+			const language = await navigateSourceDocument(page, `${origin}/lang`);
+			expect(language).toMatchObject({navigationUrl: `${origin}/lang`, scriptNavigationUrl: `${origin}/lang?noredirect=en-US`});
+			expect(language.redirectedTo).toBeUndefined();
+			expect(await page.locator('#tail').textContent()).toBe('Language page content');
 			const { captureScreenshots } = await import('./screenshot/screenshotter.js');
 			const captureDirectory = join(directory, 'capture');
-			const capture = await captureScreenshots({urls:[`${origin}/large`], primaryUrl:`${origin}/large`, outputDir:captureDirectory, concurrency:1, learnFluid:false, settleMs:0});
-			expect(capture.failed).toBe(0); expect(capture.captured).toBe(1);
+			const capture = await captureScreenshots({urls:[`${origin}/large`, `${origin}/lang`], primaryUrl:`${origin}/large`, outputDir:captureDirectory, concurrency:1, learnFluid:false, settleMs:0});
+			expect(capture.failed).toBe(0); expect(capture.captured).toBe(2);
+			const languageEntry = JSON.parse(readFileSync(join(captureDirectory, 'screenshots/manifest.json'), 'utf8')).entries[`${origin}/lang`];
+			// The route stays `/lang`; the document records the address it was delivered at.
+			expect(languageEntry.documents.desktop.url).toBe(`${origin}/lang?noredirect=en-US`);
+			expect(Object.keys(JSON.parse(readFileSync(join(captureDirectory, 'screenshots/manifest.json'), 'utf8')).entries).sort()).toEqual([`${origin}/lang`, `${origin}/large`]);
+			expect(readFileSync(join(captureDirectory, languageEntry.html), 'utf8')).toContain('Language page content');
 			const entry = JSON.parse(readFileSync(join(captureDirectory, 'screenshots/manifest.json'), 'utf8')).entries[`${origin}/large`];
 			for (const [profile, path] of [['desktop', entry.html], ['mobile', entry.mobileHtml]]) {
 				const capturedHtml = readFileSync(join(captureDirectory, path), 'utf8');
@@ -137,6 +150,10 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			else if (path.startsWith('/loop')) { response.writeHead(302, {location:path === '/loop-a' ? '/loop-b' : '/loop-a'}); response.end(); }
 			else if (path.startsWith('/hop/')) { response.writeHead(302, {location:`/hop/${Number(path.split('/').at(-1)) + 1}`}); response.end(); }
 			else if (path === '/script') response.end('<script>location.href="/article"</script><p>Not a declarative alias</p>');
+			// Same query-marker pattern as a language redirect, but to another path or origin.
+			else if (path === '/script-query-path') response.end('<script>location.replace("/article?noredirect=en-US")</script><p>Other path</p>');
+			else if (path === '/script-query-foreign') response.end(`<script>location.replace(${JSON.stringify(`${target.split('?')[0]}?noredirect=en-US`)})</script><p>Other origin</p>`);
+			else if (path === '/script-query-post') response.end('<form method="post" action="/script-query-post?noredirect=en-US"></form><script>document.forms[0].submit()</script><p>Same route, POST</p>');
 			else if (path.startsWith('/script-reload')) {
 				// A page script reloads its own document before load (the slow image
 				// holds load open), once or on every response.
@@ -181,7 +198,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 				await context.close();
 			}
 			const page = await browser.newPage();
-			for (const [path, error] of [['loop-a','loop'],['hop/0','hop budget'],['script','Unexplained']] as const) await expect(navigateSourceDocument(page, `${origin}/${path}`)).rejects.toThrow(error);
+			for (const [path, error] of [['loop-a','loop'],['hop/0','hop budget'],['script','Unexplained'],['script-query-path','Unexplained'],['script-query-foreign','Unexplained'],['script-query-post','Unexplained']] as const) await expect(navigateSourceDocument(page, `${origin}/${path}`)).rejects.toThrow(error);
 			// A same-document script reload is the document's own lifecycle, not
 			// drift: it settles through the bounded reload acquisition, and a
 			// script that reloads forever exhausts the reload budget.
@@ -283,6 +300,19 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			await new Promise<void>(resolve => server.close(() => resolve()));
 		}
 	}, 60_000);
+});
+
+describe('same-route script navigation', () => {
+	it('admits only a query change on the same origin and path', () => {
+		const executed = 'https://source.test/plugin/';
+		expect(sameRouteScriptNavigation(executed, executed)).toBe(true);
+		expect(sameRouteScriptNavigation('https://source.test/plugin/?noredirect=en-US', executed)).toBe(true);
+		expect(sameRouteScriptNavigation('https://source.test/plugin?noredirect=en-US', executed)).toBe(false);
+		expect(sameRouteScriptNavigation('https://source.test/other/?noredirect=en-US', executed)).toBe(false);
+		expect(sameRouteScriptNavigation('http://source.test/plugin/?noredirect=en-US', executed)).toBe(false);
+		expect(sameRouteScriptNavigation('https://www.source.test/plugin/?noredirect=en-US', executed)).toBe(false);
+		expect(sameRouteScriptNavigation('not a url', executed)).toBe(false);
+	});
 });
 
 describe('navigation timeout classification', () => {

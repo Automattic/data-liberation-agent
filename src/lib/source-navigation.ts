@@ -44,6 +44,20 @@ export function isNavigationTimeout(error: unknown): boolean {
 }
 /** Diagnostic code for a delivered source document whose `load` event did not fire within the navigation budget. */
 export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
+/** Diagnostic code for a delivered document whose script re-navigated to its own route with a different query. */
+export const SOURCE_SCRIPT_NAVIGATION = 'source_script_navigation';
+/**
+ * True when a script navigation from the delivered document `executed` to
+ * `address` stays on the same route: same origin and path, differing at most
+ * in its query (a browser-language redirect appending a marker parameter, or an
+ * exact reload). Path, origin and scheme changes remain unexplained.
+ */
+export function sameRouteScriptNavigation(address: string, executed: string): boolean {
+	try {
+		const target = new URL(address), current = new URL(executed);
+		return target.origin === current.origin && target.pathname === current.pathname && !target.username && !target.password;
+	} catch { return false; }
+}
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
 export class SourceNavigationError extends Error {}
 export type RedirectMechanism = 'http' | 'refresh-header' | 'meta-refresh';
@@ -236,14 +250,17 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * document, before any destination request, and are returned as evidence rather
  * than as portable HTML. Unknown script navigation is never classified as a redirect.
  * A script reload of the delivered document is its own lifecycle, replayed through
- * the bounded reload acquisition that baseline capture also accepts.
+ * the bounded reload acquisition that baseline capture also accepts. That
+ * includes a script navigation to the same origin and path with a different
+ * query: the route keeps its requested identity and the delivered address is
+ * returned as `scriptNavigationUrl` evidence.
  *
  * The time budget bounds document arrival (`domcontentloaded`); a document that
  * never arrives fails with a (retryable) timeout. The `load` event is awaited
  * within what remains of the same budget, and `loadIncomplete` reports a
  * delivered document whose subresources were still pending when it ran out.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation; /** Same-route query the delivered document's script navigated to, replayed as its reload. */ scriptNavigationUrl?: string}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
@@ -257,14 +274,19 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 	let delivered = false;
 	let executedDocument: string | undefined;
 	let scriptReloads = 0;
+	let scriptNavigationUrl: string | undefined;
 	const guard = async (route: Route) => {
 		const request = route.request();
 		if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) { await route.fallback(); return; }
 		try {
 			const address = documentRequestUrl(request.url());
-			if (delivered && address === executedDocument && request.method() === 'GET') {
+			if (delivered && executedDocument && request.method() === 'GET' && sameRouteScriptNavigation(address, executedDocument) && routeInScope(address, options.routeScope)) {
+				// The route keeps its requested identity; a differing query is
+				// recorded as evidence, never adopted as the captured route.
 				if (scriptReloads++ >= SOURCE_NAVIGATION_LIMITS.hops) throw new SourceNavigationError('Source reload budget exhausted');
+				safeTarget(address, publicOnly);
 				await replaySourceReload(route, address, Math.max(1, deadline - Date.now()));
+				scriptNavigationUrl = address === executedDocument ? undefined : address;
 				return;
 			}
 			if (address !== expected || delivered) throw new SourceNavigationError('Unexplained source main-frame navigation');
@@ -343,7 +365,7 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 		// through the guard, exactly as it did while navigation awaited `load`.
 		const loaded = await page.waitForLoadState('load', {timeout: Math.max(1, Math.min(deadline - Date.now(), options.loadWaitMs ?? Infinity))}).then(() => true, () => false);
 		if (failure) throw failure;
-		return {response, ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {})};
+		return {response, ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {}), ...(scriptNavigationUrl ? {scriptNavigationUrl} : {})};
 	} catch (error) {
 		// A `goto` timeout can precede the guard's own bounded outcome; report
 		// the guard's failure (policy or acquisition timeout) once it settles.
