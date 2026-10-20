@@ -3637,7 +3637,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 		const result = spawnSync(
 			process.execPath,
-			[ '--max-old-space-size=128', '--import', 'tsx', runnerPath ],
+			[ '--max-old-space-size=128', '--max-semi-space-size=1', '--import', 'tsx', runnerPath ],
 			{ cwd: process.cwd(), encoding: 'utf8', timeout: 60_000 }
 		);
 

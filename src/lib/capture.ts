@@ -19,6 +19,7 @@ import { DEFAULT_ROUTE_LIMIT, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, rou
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
+import { SourceRequestGovernors } from './source-request-governor.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteDeadlineMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
@@ -339,6 +340,8 @@ export async function captureWebsite(
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	const timeBudget = options.timeBudgetMs === undefined ? undefined : captureTimeBudgetWindow( startedAt, options.timeBudgetMs );
+	// One governor per source origin for every HTTP pass of this capture (#907).
+	const sourceGovernors = new SourceRequestGovernors();
 	let phase = '';
 	let phaseStartedAt = startedAt;
 	const progress = ( event: CaptureProgress ): void => {
@@ -410,7 +413,7 @@ export async function captureWebsite(
 	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs: options.timeBudgetMs } )
+		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs: options.timeBudgetMs, wholeInventory: routeLimit === undefined, governors: sourceGovernors } )
 		: undefined;
 	// Verification members (#784 §4.2): one per multi-member cluster, kept right
 	// after the representatives so a budget that fits every template also fits
@@ -435,7 +438,7 @@ export async function captureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, canonicalAliases: aliasProbe.aliases } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
 	}
@@ -665,25 +668,39 @@ export async function captureWebsite(
  * failure yields one `template_grouping_unavailable` discovery diagnostic and
  * no representatives, so the budget falls back to discovery order.
  */
-async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number } ): Promise< {
+async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
 	report?: import('./template-groups.js').TemplateGroupsReport;
 	representatives?: string[];
 	diagnostic?: { code: string; url: string; reason: string };
 } > {
 	const startedAt = Date.now();
 	try {
-		const { buildTemplateGroups, templateRepresentatives, TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
-		// Grouping spends at most a tenth of a capture time budget.
-		const timeBudgetMs = input.timeBudgetMs === undefined ? TEMPLATE_GROUPING_LIMITS.timeBudgetMs : Math.min( TEMPLATE_GROUPING_LIMITS.timeBudgetMs, Math.max( 1, Math.floor( input.timeBudgetMs / 10 ) ) );
-		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: { timeBudgetMs }, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
+		const { buildTemplateGroups, templateRepresentatives } = await import( './template-groups.js' );
+		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
 		const { coverage } = report;
-		process.stderr.write( `[template-groups] ${ coverage.routes } routes: ${ coverage.fingerprinted } fingerprinted into ${ coverage.groups } groups (${ coverage.singletons } singletons), ${ coverage.unfingerprinted } unfingerprinted, ${ Date.now() - startedAt }ms\n` );
+		process.stderr.write( `[template-groups] ${ coverage.routes } routes: ${ coverage.fingerprinted } fingerprinted into ${ coverage.groups } groups (${ coverage.singletons } singletons), ${ coverage.unfingerprinted } unfingerprinted, ${ report.throttle.events } throttle events, ${ Date.now() - startedAt }ms\n` );
+		const source = input.governors.forOrigin( input.sourceUrl ).stats();
+		process.stderr.write( `[timing] template-groups source ${ source.origin }: ${ source.requests } requests, ${ source.throttleEvents } throttled, sustained ${ source.sustainedRate.toFixed( 2 ) } req/s, ${ source.concurrency } in flight\n` );
 		return { report, representatives: templateRepresentatives( report ) };
 	} catch ( error ) {
 		const reason = `Template grouping unavailable; routes were selected in discovery order: ${ error instanceof Error ? error.message : String( error ) }`;
 		process.stderr.write( `[template-groups] ${ reason }\n` );
 		return { diagnostic: { code: 'template_grouping_unavailable', url: documentRequestUrl( input.sourceUrl ), reason } };
 	}
+}
+
+/**
+ * Grouping bounds for a capture. Whole-inventory capture (`routeLimit: 'all'`)
+ * makes every inventory route a candidate and, with a capture time budget,
+ * spends up to a quarter of it. Otherwise: the default spread sample, and at
+ * most a tenth of a capture time budget, never over the default pass time.
+ */
+export async function templateGroupingLimits( input: { timeBudgetMs?: number; wholeInventory: boolean } ): Promise< Partial< import('./template-groups.js').TemplateGroupingLimits > > {
+	const { TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
+	if ( input.wholeInventory ) {
+		return { maxRoutes: 'all', timeBudgetMs: input.timeBudgetMs === undefined ? TEMPLATE_GROUPING_LIMITS.timeBudgetMs : Math.max( 1, Math.floor( input.timeBudgetMs / 4 ) ) };
+	}
+	return { timeBudgetMs: input.timeBudgetMs === undefined ? TEMPLATE_GROUPING_LIMITS.timeBudgetMs : Math.min( TEMPLATE_GROUPING_LIMITS.timeBudgetMs, Math.max( 1, Math.floor( input.timeBudgetMs / 10 ) ) ) };
 }
 
 /** Record the budget's selection in the report, write it, and return the receipt summary. */

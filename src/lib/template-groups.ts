@@ -8,6 +8,7 @@ import { mapPool } from './concurrency.js';
 import { BodyTooLargeError, safeFetch } from './media-fetch/safe-fetch.js';
 import { isRouteDrift } from './screenshot/document-integrity.js';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
+import { SOURCE_REQUEST_GOVERNOR_DEFAULTS, SourceRequestGovernor, type SourceRequestGovernors } from './source-request-governor.js';
 import { spreadSample } from './route-budget.js';
 import { routeInScope } from './url/route-scope.js';
 
@@ -29,10 +30,17 @@ export const TEMPLATE_GROUPS_FILE = 'template-groups.json';
 export const TEMPLATE_FINGERPRINT_VERSION = 2;
 
 export const TEMPLATE_GROUPING_LIMITS = {
-	/** Routes fetched at most; a larger inventory is fetched as an even spread. */
-	maxRoutes: 1000,
-	/** Requests in flight at once. All routes share the entry origin, so this is a per-origin limit, as in rendered inspection (#746). */
-	concurrency: 6,
+	/**
+	 * Routes fetched at most; a larger inventory is fetched as an even spread.
+	 * `'all'` makes every inventory route a candidate (whole-site capture).
+	 */
+	maxRoutes: 1000 as number | 'all',
+	/**
+	 * Requests in flight at once. All routes share the entry origin, so this is
+	 * a per-origin limit, as in rendered inspection (#746); the source request
+	 * governor lowers it after a throttle.
+	 */
+	concurrency: SOURCE_REQUEST_GOVERNOR_DEFAULTS.concurrency as number,
 	requestTimeoutMs: 15_000,
 	/** Wall time for the whole pass; routes not fetched by then are left unfingerprinted. */
 	timeBudgetMs: 120_000,
@@ -41,7 +49,7 @@ export const TEMPLATE_GROUPING_LIMITS = {
 	maxTotalBytes: 256 * 1024 * 1024,
 } as const;
 
-export type TemplateGroupingLimits = { -readonly [ K in keyof typeof TEMPLATE_GROUPING_LIMITS ]: number };
+export type TemplateGroupingLimits = { -readonly [ K in keyof typeof TEMPLATE_GROUPING_LIMITS ]: K extends 'maxRoutes' ? number | 'all' : number };
 
 /** Elements that carry no template structure. */
 const SKIPPED_ELEMENTS = new Set( [ 'script', 'style', 'noscript', 'template', 'svg', 'link', 'meta', 'br', 'wbr' ] );
@@ -235,9 +243,8 @@ export function templateFingerprint( html: string, baseUrl: string, normalizatio
 /** Why a route has no fingerprint. */
 export type UnfingerprintedReason =
 	| 'not_sampled' // over `maxRoutes`
-	| 'time_budget' // the pass ran out of time before or while fetching it
+	| 'time_budget' // the pass ran out of time before or while fetching it, throttle waits included
 	| 'byte_budget' // the pass ran out of response bytes before fetching it
-	| 'rate_limited' // the source throttled (429/503) again after a Retry-After pause; the pass stopped
 	| 'http_status' // non-2xx response
 	| 'not_html' // response is not text/html
 	| 'redirected' // the response is another route's document
@@ -272,6 +279,11 @@ export interface TemplateGroupsReport {
 	sourceUrl: string;
 	fingerprint: { version: number; maxSkeletonDepth: number };
 	limits: TemplateGroupingLimits;
+	/**
+	 * Throttle responses (429/503) this pass received; each was retried after
+	 * its Retry-After. A count only, so the report stays deterministic.
+	 */
+	throttle: { events: number };
 	coverage: {
 		/** Deduplicated inventory, entrypoint included. */
 		routes: number;
@@ -296,6 +308,11 @@ export interface TemplateGroupingInput {
 	limits?: Partial< TemplateGroupingLimits >;
 	/** Platform-owned `<style>` aggregation for the divergence fingerprint. */
 	styleNormalization?: TemplateStyleNormalization;
+	/**
+	 * The capture's per-origin source request governors, shared with the rest
+	 * of the capture. Default: a governor of this pass alone.
+	 */
+	governors?: SourceRequestGovernors;
 }
 
 /**
@@ -317,27 +334,6 @@ export function progressiveOrder( length: number ): number[] {
 	return order;
 }
 
-const THROTTLE_STATUSES = new Set( [ 429, 503 ] );
-
-/** Retry-After in ms (seconds or an HTTP date), default 1 s, at most `maxMs`. */
-function retryAfterMs( header: string | null, maxMs: number ): number {
-	const seconds = header === null ? Number.NaN : Number( header );
-	const requested = Number.isFinite( seconds ) ? seconds * 1000 : header ? Date.parse( header ) - Date.now() : 1000;
-	return Math.min( maxMs, Math.max( 0, Number.isFinite( requested ) ? requested : 1000 ) );
-}
-
-function abortableDelay( ms: number, signal: AbortSignal ): Promise< void > {
-	return new Promise( resolve => {
-		const done = () => {
-			clearTimeout( timer );
-			signal.removeEventListener( 'abort', done );
-			resolve();
-		};
-		const timer = setTimeout( done, ms );
-		signal.addEventListener( 'abort', done, { once: true } );
-	} );
-}
-
 type RouteOutcome = { fingerprint: TemplateFingerprint } | { reason: UnfingerprintedReason; httpStatus?: number };
 
 /** Fetch and fingerprint the inventory within `limits`, then group it. Never throws for a route; per-route problems are recorded. */
@@ -345,36 +341,22 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 	const limits: TemplateGroupingLimits = { ...TEMPLATE_GROUPING_LIMITS, ...input.limits };
 	const urls = [ ...input.urls ];
 	const outcomes: RouteOutcome[] = urls.map( () => ( { reason: 'not_sampled' } ) );
-	const sampled = new Set( spreadSample( urls, limits.maxRoutes ) );
+	const sampled = new Set( limits.maxRoutes === 'all' ? urls : spreadSample( urls, limits.maxRoutes ) );
 	const order = progressiveOrder( urls.length ).filter( index => sampled.has( urls[ index ]! ) );
 	const deadline = new AbortController();
 	const timer = setTimeout( () => deadline.abort(), limits.timeBudgetMs );
+	// Throttling (429/503) is paced by the origin's governor: it honours
+	// Retry-After, drops to one request in flight and retries, so a throttled
+	// route still gets fingerprinted unless the time budget runs out.
+	const governor = input.governors?.forOrigin( input.sourceUrl, { concurrency: limits.concurrency } ) ?? new SourceRequestGovernor( new URL( input.sourceUrl ).origin, { concurrency: limits.concurrency } );
 	let bytes = 0;
-	// After the source throttles (429/503) the pass slows to one request at a
-	// time and honours Retry-After; a second refusal stops it, so grouping never
-	// spends the rate limit the browser capture needs.
-	let throttled = false;
-	let rateLimited = false;
-	let pausedUntil = 0;
-	let queue: Promise< unknown > = Promise.resolve();
+	let throttleEvents = 0;
 	try {
 		await mapPool( order, limits.concurrency, async index => {
 			outcomes[ index ] = await fingerprintRoute( urls[ index ]! );
 		} );
 	} finally {
 		clearTimeout( timer );
-	}
-
-	function admit< T >( task: () => Promise< T > ): Promise< T > {
-		const run = async () => {
-			const wait = pausedUntil - Date.now();
-			if ( wait > 0 ) await abortableDelay( wait, deadline.signal );
-			return task();
-		};
-		if ( ! throttled ) return run();
-		const result = queue.then( run );
-		queue = result.catch( () => undefined );
-		return result;
 	}
 
 	function request( url: string ) {
@@ -388,20 +370,10 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 
 	async function fingerprintRoute( url: string ): Promise< RouteOutcome > {
 		if ( deadline.signal.aborted ) return { reason: 'time_budget' };
-		if ( rateLimited ) return { reason: 'rate_limited' };
 		if ( bytes >= limits.maxTotalBytes ) return { reason: 'byte_budget' };
 		let response;
 		try {
-			response = await admit( () => request( url ) );
-			if ( THROTTLE_STATUSES.has( response.status ) ) {
-				throttled = true;
-				pausedUntil = Math.max( pausedUntil, Date.now() + retryAfterMs( response.headers.get( 'retry-after' ), limits.requestTimeoutMs ) );
-				response = await admit( () => request( url ) );
-				if ( THROTTLE_STATUSES.has( response.status ) ) {
-					rateLimited = true;
-					return { reason: 'rate_limited', httpStatus: response.status };
-				}
-			}
+			( { response } = await governor.run( () => request( url ), { signal: deadline.signal, onThrottle: () => throttleEvents++ } ) );
 		} catch ( error ) {
 			if ( deadline.signal.aborted ) return { reason: 'time_budget' };
 			return { reason: error instanceof BodyTooLargeError ? 'too_large' : 'fetch_failed' };
@@ -425,10 +397,10 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 		}
 	}
 
-	return groupTemplates( input.sourceUrl, urls, outcomes, limits );
+	return groupTemplates( input.sourceUrl, urls, outcomes, limits, throttleEvents );
 }
 
-function groupTemplates( sourceUrl: string, urls: string[], outcomes: RouteOutcome[], limits: TemplateGroupingLimits ): TemplateGroupsReport {
+function groupTemplates( sourceUrl: string, urls: string[], outcomes: RouteOutcome[], limits: TemplateGroupingLimits, throttleEvents: number ): TemplateGroupsReport {
 	const byKey = new Map< string, TemplateGroup >();
 	const unfingerprinted: TemplateGroupsReport['unfingerprinted'] = [];
 	urls.forEach( ( url, index ) => {
@@ -451,6 +423,7 @@ function groupTemplates( sourceUrl: string, urls: string[], outcomes: RouteOutco
 		sourceUrl,
 		fingerprint: { version: TEMPLATE_FINGERPRINT_VERSION, maxSkeletonDepth: MAX_SKELETON_DEPTH },
 		limits,
+		throttle: { events: throttleEvents },
 		coverage: { routes: urls.length, fingerprinted, unfingerprinted: unfingerprinted.length, groups: groups.length, singletons: groups.filter( group => group.size === 1 ).length },
 		groups,
 		unfingerprinted,
