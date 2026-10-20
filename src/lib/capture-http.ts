@@ -33,6 +33,8 @@ export async function captureHttpWebsite( input: {
 	templateGroups?: Record<string, unknown>;
 	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
 	canonicalAliases?: ReadonlyArray< import('./route-aliases.js').CanonicalRouteAlias >;
+	/** The capture's per-origin source request governors, shared with template grouping. */
+	governors?: import('./source-request-governor.js').SourceRequestGovernors;
 } ): Promise<CaptureResult> {
 	const { options, platform, progress } = input;
 	const profile = platform.acquisition;
@@ -41,7 +43,7 @@ export async function captureHttpWebsite( input: {
 	if ( ! roles || ! roles.desktop.trim() || ( roles.mobile !== undefined && ( ! roles.mobile.trim() || roles.mobile === roles.desktop ) ) || new Set( [ roles.desktop, roles.mobile ].filter( Boolean ) ).size !== profile.variants.length || profile.variants.some( variant => variant.id !== roles.desktop && variant.id !== roles.mobile ) ) throw new Error( 'HTTP orchestration requires explicit export roles for all profile variants' );
 	const urls = input.urls;
 	const acquisition = await acquireHttpDocuments( {
-		url: input.sourceUrl, urls, routeScope: input.routeScope, outputDir: options.outputDir, profile, collectAssets: true,
+		url: input.sourceUrl, urls, routeScope: input.routeScope, outputDir: options.outputDir, profile, collectAssets: true, governors: input.governors,
 		onProgress: ( current, total, document ) => progress( { phase: 'capturing', current, total, unit: 'documents', url: document.url } ),
 	} );
 	let runtime: { attachments: number; observations: number; failures: Array<{ url: string; error: string }> } | undefined;

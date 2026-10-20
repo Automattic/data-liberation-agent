@@ -63,7 +63,7 @@ vi.mock( './media-fetch/media.js', () => ( {
 import { existsSync } from 'node:fs';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { spreadSample } from './route-budget.js';
-import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_ROUTE_LIMIT, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture } from './capture.js';
+import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_ROUTE_LIMIT, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture, templateGroupingLimits } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
 
@@ -737,6 +737,23 @@ describe( 'captureWebsite route selection', () => {
 		} );
 		expect( result.summary ).toMatchObject( { routesDiscovered: 6, routesOmitted: inventory.length + 1 - 6, routesFailed: 0 } );
 		expect( result.complete ).toBe( true );
+	} );
+
+	it( 'groups the whole inventory when the route limit is all', async () => {
+		serveHtml();
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 'all', routeSelection: 'template-coverage' }, adapter() );
+		expect( buildTemplateGroupsMock.mock.calls.at( -1 )![ 0 ] ).toMatchObject( { limits: { maxRoutes: 'all' } } );
+		const report = JSON.parse( readFileSync( join( root, 'template-groups.json' ), 'utf8' ) );
+		expect( report ).toMatchObject( { limits: { maxRoutes: 'all' }, throttle: { events: 0 }, coverage: { routes: inventory.length + 1, fingerprinted: inventory.length + 1 } } );
+	} );
+
+	it( 'derives the grouping time budget from the capture time budget', async () => {
+		expect( await templateGroupingLimits( { wholeInventory: false } ) ).toEqual( { timeBudgetMs: 120_000 } );
+		expect( await templateGroupingLimits( { wholeInventory: false, timeBudgetMs: 600_000 } ) ).toEqual( { timeBudgetMs: 60_000 } );
+		expect( await templateGroupingLimits( { wholeInventory: false, timeBudgetMs: 7_200_000 } ) ).toEqual( { timeBudgetMs: 120_000 } );
+		expect( await templateGroupingLimits( { wholeInventory: true } ) ).toEqual( { maxRoutes: 'all', timeBudgetMs: 120_000 } );
+		// Whole-inventory grouping is not held to the default 120 s.
+		expect( await templateGroupingLimits( { wholeInventory: true, timeBudgetMs: 7_200_000 } ) ).toEqual( { maxRoutes: 'all', timeBudgetMs: 1_800_000 } );
 	} );
 
 	it( 'never fails the capture when grouping fails: one finding, discovery-order selection', async () => {

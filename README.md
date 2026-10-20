@@ -174,7 +174,7 @@ The budget is the caller's chosen scope, so omission does not make a capture inc
 
 An even spread can spend the whole budget inside one template (a few hundred posts) and never reach the one-off templates: the contact form, a landing page with its own CSS, the shop. `routeSelection: 'template-coverage'` (CLI `--route-selection template-coverage`, MCP `routeSelection`) spends the budget by template instead:
 
-1. After discovery and before any browser starts, capture fetches each discovered route's server HTML. The pass is bounded: at most 1,000 routes (an even spread of a larger inventory), 6 requests at a time on the entry origin, 15 s per request, 8 MiB per document, 256 MiB and 120 s in total (a tenth of `timeBudgetMs` when that is smaller). If the source throttles (429 or 503), the pass waits for `Retry-After`, continues one request at a time, and stops at the next refusal, so it never spends the rate limit the browser capture needs. Routes it does not fingerprint belong to no group.
+1. After discovery and before any browser starts, capture fetches each discovered route's server HTML. The pass is bounded: at most 1,000 routes (an even spread of a larger inventory), 6 requests at a time on the entry origin, 15 s per request, 8 MiB per document, 256 MiB and 120 s in total (a tenth of `timeBudgetMs` when that is smaller). With `routeLimit: 'all'` every inventory route is fetched, and with `timeBudgetMs` the pass may spend a quarter of it instead of 120 s. Requests go through the capture's per-origin source request governor, which HTTP acquisition shares: when the source throttles (429 or 503), the governor waits for `Retry-After` (delta-seconds or an HTTP date, at most 60 s; 1 s when absent or invalid), drops to one request in flight, retries the refused request (at most 10 attempts each) and raises the in-flight limit again by one per 4 successes. Throttling slows the pass down; only the time budget stops it. Routes it does not fingerprint belong to no group.
 2. Each document gets a template fingerprint: a hash of the body's skeleton (tag, stable class names and `role`; text and inline elements ignored; classes with digits, CSS-in-JS prefixes, taxonomy or author terms such as `category-news`, and state words such as `active` or `current-menu-item` dropped; repeated siblings collapsed; classless prose blocks and the inside of content containers such as `article` or `.entry-content` treated as content) plus a divergence fingerprint compared exactly: the page's own `<style>` text, its stylesheet and script URLs, executable inline scripts, forms and interactive controls (tabs, disclosures, `details`, dialogs), each by tag and stable classes, and embeds (`iframe`, `video`, `audio`, `canvas`, `object`, `embed`). Routes with the same fingerprint form a group; its representative is its first member in inventory order.
 3. When the budget truncates the inventory, the entrypoint comes first, then one representative per group (larger groups first), then the even spread over the remaining routes. When the inventory fits the budget, every route is captured as before.
 
@@ -186,10 +186,11 @@ The pass only chooses routes; captured pages are produced exactly as in `discove
 |---|---|
 | `sourceUrl` | Entry URL |
 | `fingerprint` | `{ version, maxSkeletonDepth }` of the rules above |
-| `limits` | The pass bounds that applied |
+| `limits` | The pass bounds that applied; `maxRoutes` is `'all'` for whole-inventory grouping |
+| `throttle` | `{ events }`: throttle responses (429/503) the pass received and retried. A count only; the sustained request rate goes to the `[timing]` log |
 | `coverage` | `{ routes, fingerprinted, unfingerprinted, groups, singletons }` over the deduplicated inventory |
 | `groups[]` | `{ id, key, skeleton, divergence, representative, size, members }`, ordered by first member; `id` is `t1`, `t2`, … |
-| `unfingerprinted[]` | `{ url, reason, httpStatus? }`; `reason` is `not_sampled`, `time_budget`, `byte_budget`, `rate_limited`, `http_status`, `not_html`, `redirected`, `too_large` or `fetch_failed` |
+| `unfingerprinted[]` | `{ url, reason, httpStatus? }`; `reason` is `not_sampled`, `time_budget` (including a throttle wait the budget cut short), `byte_budget`, `http_status`, `not_html`, `redirected`, `too_large` or `fetch_failed` |
 | `selection` | `{ mode, limit, selected, groupsRepresented, groupsOmitted }` for the routes the budget kept |
 
 ### Capture time budget

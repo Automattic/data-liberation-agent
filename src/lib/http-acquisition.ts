@@ -10,6 +10,7 @@ import * as cheerio from 'cheerio';
 import { normalizeCssUrlEscapes } from './css-url-escapes.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
+import { SourceRequestGovernor, type SourceRequestGovernors } from './source-request-governor.js';
 
 export interface AcquiredHttpDocument {
 	url: string;
@@ -41,6 +42,12 @@ export interface HttpAcquisitionOptions {
 	maxDocumentBytes?: number;
 	/** Stage deduplicated source dependencies; this does not localize a website. */
 	collectAssets?: boolean;
+	/**
+	 * The capture's per-origin source request governors. Throttling (429/503)
+	 * on the source origin is paced by its governor, shared with every other
+	 * pass of the capture. Default: a governor of this acquisition alone.
+	 */
+	governors?: SourceRequestGovernors;
 	onProgress?: ( completed: number, total: number, document: AcquiredHttpDocument ) => void;
 }
 
@@ -63,26 +70,25 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 	const tasks = urls.flatMap( url => variants.map( variant => ( { url, variant } ) ) );
 	let completed = 0;
 	const started = performance.now();
-	const documents = await mapPool( tasks, Math.max( 1, Math.min( 12, options.concurrency ?? 6 ) ), async ( { url, variant } ) => {
+	const concurrency = Math.max( 1, Math.min( 12, options.concurrency ?? 6 ) );
+	const governor = options.governors?.forOrigin( origin, { concurrency } ) ?? new SourceRequestGovernor( origin, { concurrency } );
+	const documents = await mapPool( tasks, concurrency, async ( { url, variant } ) => {
 		const routeStarted = performance.now();
 		const document: AcquiredHttpDocument = { url, variant: variant.id, status: 'failed', attempts: 0, durationMs: 0 };
 		try {
 			let response;
+			// Throttle responses (429/503) are retried by the origin's governor; a
+			// thrown transient error is retried once here.
 			for ( let attempt = 0; attempt < 2; attempt++ ) {
-				document.attempts++;
 				try {
-					response = await dependencies.fetch( url, {
-						...(options.routeScope ? { authorizeUrl: (target: string) => { if (!routeInScope(target, options.routeScope)) throw new Error('HTTP document is outside its adapter route scope'); } } : {}),
-						headersForOrigin: requestOrigin => requestOrigin === origin ? variant.headers : undefined,
-						timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? SOURCE_DOCUMENT_MAX_BYTES,
-					} );
-					if ( attempt === 0 && [ 429, 503 ].includes( response.status ) ) {
-						const retryAfter = response.headers.get( 'retry-after' );
-						const seconds = retryAfter === null ? Number.NaN : Number( retryAfter );
-						const requestedWait = Number.isFinite( seconds ) ? seconds * 1000 : retryAfter ? Date.parse( retryAfter ) - Date.now() : 500;
-						const wait = Number.isFinite( requestedWait ) ? Math.max( 0, requestedWait ) : 500;
-						if ( wait <= ( options.timeoutMs ?? 30_000 ) ) { await new Promise( resolve => setTimeout( resolve, wait ) ); continue; }
-					}
+					response = ( await governor.run( () => {
+						document.attempts++;
+						return dependencies.fetch( url, {
+							...(options.routeScope ? { authorizeUrl: (target: string) => { if (!routeInScope(target, options.routeScope)) throw new Error('HTTP document is outside its adapter route scope'); } } : {}),
+							headersForOrigin: requestOrigin => requestOrigin === origin ? variant.headers : undefined,
+							timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? SOURCE_DOCUMENT_MAX_BYTES,
+						} );
+					} ) ).response;
 					break;
 				} catch ( error ) {
 					if ( attempt === 1 || error instanceof SsrfBlockedError || error instanceof BodyTooLargeError ) throw error;
