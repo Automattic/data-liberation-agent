@@ -64,6 +64,15 @@ export interface LiberationHooks {
    * paired.
    */
   canonicalizeHtml?(html: string): string;
+  /**
+   * Selectors that identify this platform's client-error shell: the document
+   * its client runtime swaps in when the app crashes (for Next.js App Router,
+   * `html#__next_error__`). Capture checks each page's serialized HTML against
+   * them and refuses to persist a match, reporting the route as failed instead
+   * of saving the error shell as page content. Declare only selectors proven
+   * to be crash shells; absent or empty checks nothing.
+   */
+  clientErrorShellSelectors?: string[];
 }
 
 export interface LiberationContext {

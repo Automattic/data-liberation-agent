@@ -54,6 +54,10 @@ interface LiberationHooks {
   responsiveImages?(page: Page, ctx: { url: string; viewport: 'desktop' | 'mobile' }): Promise<Record<string, string>>;
   /** The platform's own telemetry endpoints; a pending request to one never holds readiness waits. */
   telemetryRequest?(url: string): boolean;
+  /** Selectors that recognize the platform's client-error shell (Next.js:
+   * `html#__next_error__`). A page whose captured HTML matches one is not
+   * saved; the route fails and names the page instead (#917). */
+  clientErrorShellSelectors?: string[];
 }
 ```
 

@@ -792,7 +792,7 @@ export interface OverlayTarget {
 /** A record of one overlay we dismissed (returned + logged for observability). */
 export interface DismissedOverlay {
   selector: string;
-  method: 'close-click' | 'escape' | 'remove';
+  method: 'close-click' | 'escape' | 'hide';
   kind: 'takeover' | 'consent' | 'provider-promotion';
   score: number;
   signals: string[];
@@ -1178,21 +1178,35 @@ function cleanupStamps(page: Page): Promise<void> {
 }
 
 /**
- * Last resort: remove the stamped overlay, and (for takeovers only) a
- * full-viewport sibling backdrop. Scroll-unlock is NOT done here — the
+ * Last resort: take the stamped overlay out of rendering, and (for takeovers
+ * only) a full-viewport sibling backdrop. Scroll-unlock is NOT done here — the
  * orchestrator calls ensureScrollUnlocked after any round that acted (a
- * successful force-remove always sets a method), so duplicating the unlock
+ * successful force-hide always sets a method), so duplicating the unlock
  * probe here would be redundant.
+ *
+ * The overlay is hidden in place (inline important display:none + aria-hidden),
+ * never `remove()`d: the element stays a child of the node its runtime put it
+ * under, with its subtree intact. Pages built by client frameworks (React,
+ * Vue, their builders) keep references to the nodes they rendered; deleting
+ * one makes the next framework commit that touches it throw ("Failed to
+ * execute 'removeChild' on 'Node'"), which unmounts the whole app — Next.js
+ * then replaces the document with its client-error shell and capture saves
+ * that shell as the page (#917). Hiding keeps every reference valid.
  *
  * `removeBackdrop` is gated to takeover modals: a consent strip reaching Tier 3
  * could share a parent with a real full-viewport fixed element (hero bg / app
- * shell), and deleting that would corrupt the carried page.
+ * shell), and hiding that would leave a hidden copy of it in the carried page.
  */
-function forceRemoveOverlay(page: Page, idx: number, removeBackdrop: boolean, reclaimBottomSpace: boolean): Promise<void> {
+function forceHideOverlay(page: Page, idx: number, removeBackdrop: boolean, reclaimBottomSpace: boolean): Promise<void> {
   return page.evaluate(({ i, removeBackdrop, reclaimBottomSpace }: { i: number; removeBackdrop: boolean; reclaimBottomSpace: boolean }) => {
     const el = document.querySelector(`[data-lib-overlay="${i}"]`);
     if (el) {
       const reservedHeight = el.getBoundingClientRect().height;
+      const hide = (node: Element) => {
+        const style = (node as HTMLElement).style;
+        style.setProperty('display', 'none', 'important');
+        node.setAttribute('aria-hidden', 'true');
+      };
       if (removeBackdrop) {
         const vpArea = (window.innerWidth || 1) * (window.innerHeight || 1) || 1;
         const parent = el.parentElement;
@@ -1201,11 +1215,11 @@ function forceRemoveOverlay(page: Page, idx: number, removeBackdrop: boolean, re
             if (s === el) continue;
             const cs = getComputedStyle(s);
             const r = s.getBoundingClientRect();
-            if (cs.position === 'fixed' && (r.width * r.height) / vpArea >= 0.9) s.remove();
+            if (cs.position === 'fixed' && (r.width * r.height) / vpArea >= 0.9) hide(s);
           }
         }
       }
-      el.remove();
+      hide(el);
       if (reclaimBottomSpace && document.body.style.paddingBottom && Math.abs(parseFloat(getComputedStyle(document.body).paddingBottom) - reservedHeight) < 1) {
         document.body.style.removeProperty('padding-bottom');
       }
@@ -1280,12 +1294,12 @@ async function dismissOne(
   } catch {
     /* fall through to the next tier */
   }
-  // Tier 3 — force remove + unlock (last resort). Backdrop removal is gated to
+  // Tier 3 — hide in place + unlock (last resort). Backdrop hiding is gated to
   // takeovers: a consent strip could share a parent with a real full-screen
-  // fixed element we must not delete.
+  // fixed element we must not neutralize.
   try {
-  await forceRemoveOverlay(page, t.idx, t.kind === 'takeover', t.kind === 'provider-promotion');
-    if (!(await overlayPresent(page, t.idx))) return 'remove';
+  await forceHideOverlay(page, t.idx, t.kind === 'takeover', t.kind === 'provider-promotion');
+    if (!(await overlayPresent(page, t.idx))) return 'hide';
   } catch {
     /* give up on this overlay */
   }
