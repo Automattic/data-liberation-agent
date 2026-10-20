@@ -1,4 +1,4 @@
-import { chromium, type Browser } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
@@ -29,6 +29,27 @@ const FAQ_ICON = `<!doctype html><html><head><style>.hidden{display:none}.faq-it
 // What export does to captured source: no scripts, no inline handlers.
 const portable = ( html: string ) =>
 	html.replace( /<script\b[\s\S]*?<\/script>/gi, '' ).replace( /\son[a-z]+="[^"]*"/gi, '' );
+
+// Reduced page from #919: a commerce gallery whose `cursor: pointer` slides each
+// hold a concealed caption, and whose click handler opens a lightbox by pushing
+// a same-document route. `setContent`'s about:blank cannot pushState a relative
+// path, so the page is served from a routed https origin like the other fixtures.
+const PUSH_STATE_SLIDES = `<!doctype html><html><head><style>
+.slides{display:flex;gap:8px}.slide{cursor:pointer;width:120px;height:120px;background:#ddd}.slide .caption{display:none}
+</style></head><body><main>
+<div class="slides">
+  <div class="slide"><span class="caption">Image 1 of 2</span></div>
+  <div class="slide"><span class="caption">Image 2 of 2</span></div>
+</div>
+<script>document.querySelectorAll('.slide').forEach(s=>s.addEventListener('click',()=>history.pushState({},'','shop/?itemId=item')));</script>
+</main></body></html>`;
+
+const PUSH_STATE_ORIGIN = 'https://slide-route.test';
+
+/** Count clicks per slide from outside the page, without touching the source handlers. */
+async function slideClickCounts( page: Page ): Promise< Record< string, number > > {
+	return page.evaluate( () => ( window as unknown as { __slideClickCounts: Record< string, number > } ).__slideClickCounts );
+}
 
 describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 	let browser: Browser;
@@ -113,6 +134,44 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		expect( losses ).toHaveLength( 1 );
 		expect( losses[ 0 ] ).toMatchObject( { code: 'interaction_unreplayable', severity: 'warning' } );
 		expect( losses[ 0 ]!.reason ).toContain( '3 choices' );
+		await page.close();
+	} );
+
+	it( 'restores the route after a member click pushes a new one, without re-clicking the group (#919)', async () => {
+		const page = await browser.newPage();
+		await page.addInitScript( () => {
+			const counts: Record< string, number > = {};
+			( window as unknown as { __slideClickCounts: Record< string, number > } ).__slideClickCounts = counts;
+			document.addEventListener( 'click', ( event ) => {
+				const target = event.target as HTMLElement | null;
+				const parent = target?.parentElement;
+				const key = target && parent?.classList.contains( 'slides' )
+					? `slide-${ Array.prototype.indexOf.call( parent.children, target ) }`
+					: 'other';
+				counts[ key ] = ( counts[ key ] ?? 0 ) + 1;
+			}, true );
+		} );
+		await page.route( `${ PUSH_STATE_ORIGIN }/**`, route => route.fulfill( { contentType: 'text/html', body: PUSH_STATE_SLIDES } ) );
+		await page.goto( `${ PUSH_STATE_ORIGIN }/gallery` );
+		const originalUrl = page.url();
+		const originalState = await page.evaluate( () => history.state );
+
+		const records = await hydrateDisclosureContent( page );
+
+		expect( records ).toEqual( [ expect.objectContaining( {
+			status: 'no-dialog',
+			kind: 'disclosure',
+			error: 'Click disclosure not representable: activation navigated.',
+		} ) ] );
+		// The document is back on the route and history state it started from.
+		expect( page.url() ).toBe( originalUrl );
+		expect( await page.evaluate( () => history.state ) ).toBe( originalState );
+		// Restoring never re-clicked members of the navigating group: the first
+		// slide was activated once for the probe and the second was not touched.
+		const clicks = await slideClickCounts( page );
+		expect( clicks[ 'slide-0' ] ?? 0 ).toBeLessThanOrEqual( 1 );
+		expect( clicks[ 'slide-1' ] ?? 0 ).toBeLessThanOrEqual( 1 );
+		expect( clicks.other ?? 0 ).toBe( 0 );
 		await page.close();
 	} );
 } );
