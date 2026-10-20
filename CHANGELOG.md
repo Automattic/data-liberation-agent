@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.32.12] - 2026-10-20
+
+### Changed
+- regenerate plugin bundles
+- Declare importer-facing sidecar reports in the capture receipt
+- Pace template grouping and HTTP acquisition through one per-origin source governor
+
 ## [0.32.11] - 2026-10-20
 
 ### Changed
