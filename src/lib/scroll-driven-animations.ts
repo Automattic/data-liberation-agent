@@ -12,6 +12,7 @@
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import { VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
+import { parseSelectorList } from './replicate/css-scope.js';
 
 /** A paused, script-started animation rule recovered from the source CSS. */
 export interface PausedAnimationRule {
@@ -116,6 +117,8 @@ export function detectPausedAnimationRules( css: string ): PausedAnimationRule[]
 			( node ): node is postcss.Declaration => node.type === 'decl'
 		);
 		if ( ! isScriptGatedEntrance( declarations ) ) return;
+		// A rule with an invalid selector list never applies, so it gates nothing.
+		if ( ! parseSelectorList( rule.selector ) ) return;
 
 		const carried = declarations
 			.filter( ( declaration ) => /^animation|^--motion/i.test( declaration.prop ) )

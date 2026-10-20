@@ -7447,6 +7447,20 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
 	} );
 
+	it( 'exports a dual-document page whose stylesheet has a browser-dropped invalid selector list', () => {
+		const invalid = '.form input:not:[type="submit"],.form textarea{color:red}';
+		const { outputDir, options } = fixture( { home: {
+			desktop: '<html><head><style>.shell{margin:0}</style></head><body><nav id="nav">Menu</nav><main><h1>Desktop</h1></main></body></html>',
+			mobile: `<html><head><style>.shell{margin:0}</style><style>#nav{color:blue}${ invalid }</style></head><body><header><p>Phone header</p></header><main><h1>Phone</h1></main></body></html>`,
+		} } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics.some( ( row: { code: string } ) => [ 'route_export_failed', 'stylesheet_unparseable' ].includes( row.code ) ) ).toBe( false );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0 } );
+		const html = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
+		expect( html ).toContain( 'Phone header' );
+		expect( html ).toContain( invalid );
+	} );
+
 	it( 'leaves an unparseable author stylesheet unprojected and still exports the page', () => {
 		const broken = '#nav{color:red}}';
 		const { outputDir, options } = fixture( { home: {

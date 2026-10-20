@@ -24,6 +24,13 @@ describe('scopeCss — selectors', () => {
     expect(out).not.toContain(':where(.data-blocks-engine-capture-mobile-document) .x .title');
   });
 
+  it('leaves a browser-dropped rule with an invalid selector list as authored', () => {
+    const invalid = '.form input:not:[type="submit"], .form textarea { color: red }';
+    const out = scopeCss(`.a { color: blue } ${invalid}`, { scope: 'body.lib-carry-site' });
+    expect(out).toContain(':where(body.lib-carry-site) .a');
+    expect(out).toContain(invalid);
+  });
+
   it('folds html/body/:root onto the scope instead of nesting under it', () => {
     const out = scopeCss('body { margin: 0 } :root { --x: 1px }', { scope: 'body.lib-carry-site' });
     expect(out).toContain(':where(body.lib-carry-site) {');

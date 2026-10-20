@@ -81,7 +81,20 @@ export function parseCss(css: string) {
   }
 }
 
-function scopeSelector(selector: string, scope: string, rootClasses: ReadonlySet<string>): string {
+/**
+ * Parse a rule's selector list, or undefined when it is invalid. Browsers drop
+ * a rule whose selector list is invalid, so a projection leaves that rule as
+ * authored: it stays inert exactly as it is on the source.
+ */
+export function parseSelectorList(selector: string): selectorParser.Root | undefined {
+  try {
+    return selectorParser().astSync(selector);
+  } catch {
+    return undefined;
+  }
+}
+
+function scopeSelector(selector: string, scope: string, rootClasses: ReadonlySet<string>): string | undefined {
   // Wrap the scope in :where() so it contributes ZERO specificity. The carried
   // source CSS then keeps its ORIGINAL internal cascade exactly — critical because
   // the same reset/component rules are emitted in both the site sheet (scope
@@ -92,7 +105,7 @@ function scopeSelector(selector: string, scope: string, rootClasses: ReadonlySet
   // :where() the wrapper adds nothing, so component classes beat element resets just
   // like on the source.
   const whereScope = `:where(${scope})`;
-  return selectorParser((selectors) => {
+  const scoped = selectorParser((selectors) => {
     selectors.each((sel) => {
       const first = sel.first;
       if (
@@ -116,7 +129,13 @@ function scopeSelector(selector: string, scope: string, rootClasses: ReadonlySet
       sel.prepend(selectorParser.combinator({ value: ' ' }));
       sel.prepend(selectorParser.string({ value: whereScope }));
     });
-  }).processSync(selector);
+  });
+  try {
+    return scoped.processSync(selector);
+  } catch {
+    // An invalid selector: the browser drops its rule.
+    return undefined;
+  }
 }
 
 export function scopeCss(css: string, opts: ScopeOpts): string {
@@ -151,7 +170,9 @@ export function scopeCss(css: string, opts: ScopeOpts): string {
       /keyframes$/i.test((rule.parent as { name?: string }).name ?? '')
     )
       return;
-    rule.selector = rule.selectors.map((s) => scopeSelector(s, opts.scope, rootClasses)).join(', ');
+    const scoped = rule.selectors.map((s) => scopeSelector(s, opts.scope, rootClasses));
+    // Leave a browser-dropped rule as authored; it stays inert.
+    if (scoped.every((selector) => selector !== undefined)) rule.selector = scoped.join(', ');
   });
 
   if (opts.scopeId) {

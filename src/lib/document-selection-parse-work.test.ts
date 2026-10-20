@@ -52,3 +52,14 @@ describe( 'device document assembly parse work', () => {
 		expect( assembly.html ).not.toContain( ':where(body).other' );
 	} );
 } );
+
+describe( 'device document root rules', () => {
+	// Browsers drop a rule whose selector list is invalid, so no root copy may
+	// carry its declarations onto the real body.
+	it( 'drops a body-class rule whose selector list is invalid', () => {
+		const invalid = ( key: string ) => `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>.${ key } input:not:[type="submit"],.${ key }{padding:3px}.${ key }{padding:1px}</style></head><body class="${ key }"><main>${ key }</main></body></html>`;
+		const assembly = assembleDeviceDocuments( { desktop: invalid( 'desktop' ), mobile: invalid( 'mobile' ) }, selection );
+		expect( assembly.html ).toContain( ':where(body).desktop{padding:1px}' );
+		expect( assembly.html ).not.toContain( ':where(body).desktop{padding:3px}' );
+	} );
+} );

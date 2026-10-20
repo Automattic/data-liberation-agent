@@ -44,6 +44,30 @@ describe( 'responsive identity CSS recovery', () => {
 		}
 	} );
 
+	// An invalid selector list makes the browser drop the whole rule. Projection
+	// leaves that rule inert as authored and still projects every other rule.
+	it( 'leaves a browser-dropped rule with an invalid selector list as authored', async () => {
+		const invalid = '.form input:not:[type="submit"], .form textarea { color: red }';
+		const css = `#target { color: green } ${ invalid }`;
+		const projected = projectResponsiveIdentityCss( css, new Map( [ [ 'target', 'phone-target' ] ] ), false );
+		expect( projected ).toContain( ':is(#target,#phone-target)' );
+		expect( projected ).toContain( invalid );
+		const browser = await chromium.launch();
+		try {
+			const color = async ( styles: string, body: string ) => {
+				const browserPage = await browser.newPage();
+				await browserPage.setContent( page( body, `<style>${ styles }</style>` ) );
+				return browserPage.evaluate( () => [ 'phone-target', 'field' ].map( id => getComputedStyle( document.getElementById( id )! ).color ) );
+			};
+			const markup = '<div id="phone-target"></div><form class="form"><textarea id="field"></textarea></form>';
+			const source = await color( css.replace( '#target', '#phone-target' ), markup );
+			expect( source[ 1 ] ).not.toBe( 'rgb(255, 0, 0)' );
+			expect( await color( projected, markup ) ).toEqual( source );
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it( 'uses the shared stray delimiter recovery during identity projection', () => {
 		const projected = projectResponsiveIdentityCss( '#target { --shadow: 0px;); --width: 1px; ]; color: red }', new Map( [ [ 'target', 'phone-target' ] ] ), false );
 		expect( projected ).toContain( ':is(#target,#phone-target)' );

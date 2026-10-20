@@ -1,8 +1,7 @@
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
-import selectorParser from 'postcss-selector-parser';
-import { projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { IntegrityError } from './failure-class.js';
 
 /** Platform-owned, ordered request-identity rules. No viewport/capability inference. */
@@ -58,6 +57,7 @@ function rootCss( css: string, bodyClasses: readonly string[] ): string {
 		// Every kept selector names a root element or, unescaped, a source body class.
 		const text = rule.selector;
 		if ( ! /html|body|:root|\\/.test( text ) && ! bodyClasses.some( name => text.includes( name ) ) ) { rule.remove(); return; }
+		let invalid = false;
 		const selectors = rule.selectors.flatMap( selector => {
 			if ( /^(?:html|body|:root)(?![\w-])/.test( selector ) && ! /[>+~\s]/.test( selector ) ) return [ selector ];
 			// Class-only body rules already match the scoped display:contents
@@ -66,13 +66,15 @@ function rootCss( css: string, bodyClasses: readonly string[] ): string {
 			// conditional/cascade order without making descendants into roots.
 			// Only a class-only compound can qualify; skip parsing anything else.
 			if ( ! bodyClasses.length || ! selector.startsWith( '.' ) ) return [];
-			const parsed = selectorParser().astSync( selector );
+			const parsed = parseSelectorList( selector );
+			// Browsers drop a rule whose selector list is invalid.
+			if ( ! parsed ) { invalid = true; return []; }
 			const compound = parsed.first;
 			return compound?.nodes.length && compound.nodes.every( node => node.type === 'class' ) &&
 				compound.nodes.some( node => node.type === 'class' && bodyClasses.includes( node.value ) )
 				? [ `:where(body)${ selector }` ] : [];
 		} );
-		if ( selectors.length ) rule.selectors = selectors; else rule.remove();
+		if ( selectors.length && ! invalid ) rule.selectors = selectors; else rule.remove();
 	} );
 	return root.toString();
 }
