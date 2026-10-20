@@ -474,6 +474,7 @@ export async function captureWebsite(
 		learnFluid: options.learnFluid !== false,
 		force: options.resume !== true,
 		removeSelectors: adapter.liberation?.removeSelectors,
+		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
 		cleanupPolicy: (await import('./source-cleanup.js')).cleanupPolicy(adapter.liberation?.cleanupRules),
 		prepareCapture: adapter.liberation?.prepare,
 		telemetryRequest,

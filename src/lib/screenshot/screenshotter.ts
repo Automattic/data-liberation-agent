@@ -21,6 +21,7 @@ import {
 	countBodyTags,
 	isRouteDrift,
 	isStackingArtifact,
+	matchClientErrorShell,
 	navigationDocumentUrl,
 	serverRedirectTarget,
 } from './document-integrity.js';
@@ -187,6 +188,7 @@ interface CapturePerViewportArgs {
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< Record< string, string > >;
 	removeSelectors?: string[];
+	clientErrorShellSelectors?: string[];
 	cleanupPolicy?: CleanupPolicy;
 	prepareCapture?: (
 		page: import('playwright').Page,
@@ -1194,6 +1196,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( plan.captureHtml ) {
 		try {
 			const { html, documentUrl } = await serializeDocument( false );
+			const shellSelector = matchClientErrorShell( html, args.clientErrorShellSelectors );
 			// Refuse to persist a capture whose page navigated away from the route we
 			// were asked to capture: every DOM-mutating step above (lazy-load probing,
 			// disclosure hydration, dialog probing…) runs on a live, script-controlled
@@ -1211,6 +1214,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				fail( 'content', `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted` );
 			} else if ( isStackingArtifact( html ) ) {
 				fail( 'content', `nested document capture (${ countBodyTags( html ) } <body> in one page); HTML not persisted` );
+			} else if ( shellSelector !== undefined ) {
+				// The source's client runtime crashed under capture and replaced the
+				// document with its framework error shell. It is never page content:
+				// refuse it and let the route fail by name (route_capture_failed).
+				fail( 'content', `client error shell: the page's client runtime replaced the document with its framework error shell (matched ${ shellSelector }); HTML not persisted` );
 			} else {
 				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
 				writeFileSync( plan.paths.html, html );
@@ -1237,7 +1245,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// here too (this carry already silently skips on any other failure), so a
 			// drifted mobile capture just leaves the page desktop-only rather than
 			// recording a failure of its own.
-			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) ) {
+			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) && matchClientErrorShell( mhtml, args.clientErrorShellSelectors ) === undefined ) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
 				entry.mobileHtml = relative( outputDir, plan.paths.htmlMobile );
@@ -2626,6 +2634,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							publicUrlsOnly: opts.publicUrlsOnly ?? false,
 							routeScope: opts.routeScope,
 							removeSelectors: opts.removeSelectors,
+							clientErrorShellSelectors: opts.clientErrorShellSelectors,
 							cleanupPolicy: opts.cleanupPolicy,
 							...( opts.collectResponsiveImages
 								? { collectResponsiveImages: opts.collectResponsiveImages }

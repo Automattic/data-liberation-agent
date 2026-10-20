@@ -536,7 +536,9 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
       const dismissed = await dismissOverlays(page);
       expect(dismissed).toHaveLength(1);
       expect(dismissed[0].kind).toBe('takeover');
-      expect(await page.locator('#modal-header').count()).toBe(0);
+      // Hidden in place (#917), never deleted from a live framework document.
+      expect(await page.locator('#modal-header').count()).toBe(1);
+      expect(await page.evaluate(() => getComputedStyle(document.querySelector('#modal-header')!).display)).toBe('none');
     } finally {
       await page.close();
     }
@@ -606,16 +608,21 @@ const MODAL_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
   <main style="height:3000px">content</main>
 </body></html>`;
 
-describe('dismissOverlays — Tier 3 force remove (Playwright)', () => {
-  it('removes the overlay + backdrop and force-unlocks scroll as a last resort', async () => {
+describe('dismissOverlays — Tier 3 hide in place (Playwright)', () => {
+  it('hides the overlay + backdrop and force-unlocks scroll as a last resort', async () => {
     const page = await browser.newPage();
     await page.setContent(MODAL_STUBBORN_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);
       expect(dismissed).toHaveLength(1);
-      expect(dismissed[0].method).toBe('remove');
-      expect(await page.locator('#m').count()).toBe(0);
-      expect(await page.locator('#bg').count()).toBe(0); // backdrop removed too
+      expect(dismissed[0].method).toBe('hide');
+      // Hidden in place, never deleted: the nodes stay children of the node
+      // their runtime put them under, so a framework commit that touches them
+      // later cannot crash for finding them gone (#917).
+      expect(await page.locator('#m').count()).toBe(1);
+      expect(await page.locator('#bg').count()).toBe(1); // backdrop hidden too
+      expect(await page.evaluate(() => getComputedStyle(document.querySelector('#m')!).display)).toBe('none');
+      expect(await page.evaluate(() => getComputedStyle(document.querySelector('#bg')!).display)).toBe('none');
       // The `body.locked` class is NOT a recognized scroll-lock name, so it
       // legitimately survives — we force scroll open via an important inline
       // override instead of removing site classes. Assert the real contract:
@@ -639,17 +646,19 @@ const CONSENT_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
   <main style="height:3000px">content</main>
 </body></html>`;
 
-describe('dismissOverlays — consent reaching Tier 3 does not delete a full-screen sibling (Playwright)', () => {
-  it('force-removes only the consent strip, preserving an unrelated full-viewport fixed element', async () => {
+describe('dismissOverlays — consent reaching Tier 3 does not neutralize a full-screen sibling (Playwright)', () => {
+  it('hides only the consent strip, preserving an unrelated full-viewport fixed element', async () => {
     const page = await browser.newPage();
     await page.setContent(CONSENT_STUBBORN_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);
       expect(dismissed).toHaveLength(1);
       expect(dismissed[0].kind).toBe('consent');
-      expect(dismissed[0].method).toBe('remove'); // dead Accept button → fell through to Tier 3
-      expect(await page.locator('#c').count()).toBe(0);    // strip removed
+      expect(dismissed[0].method).toBe('hide'); // dead Accept button → fell through to Tier 3
+      expect(await page.locator('#c').count()).toBe(1);    // strip hidden in place
+      expect(await page.evaluate(() => getComputedStyle(document.querySelector('#c')!).display)).toBe('none');
       expect(await page.locator('#hero').count()).toBe(1); // full-screen sibling PRESERVED
+      expect(await page.evaluate(() => getComputedStyle(document.querySelector('#hero')!).display)).not.toBe('none');
     } finally {
       await page.close();
     }

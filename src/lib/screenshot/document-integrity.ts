@@ -1,5 +1,3 @@
-import { sameHttpSite } from './same-origin.js';
-
 // src/lib/screenshot/document-integrity.ts
 //
 // A faithfully-captured page is ONE HTML document — exactly one <body>. A capture
@@ -14,6 +12,10 @@ import { sameHttpSite } from './same-origin.js';
 // future stacking artifact and is reused both by the segmentation fixture corpus
 // (to quarantine corrupted fixtures) and by the capture phase (to refuse/clean a
 // corrupted snapshot rather than persist it).
+
+import * as cheerio from 'cheerio';
+
+import { sameHttpSite } from './same-origin.js';
 
 // Content the HTML parser treats as text (or inert markup), so a `<body` inside
 // it is not an element: serialized script/style/textarea/title/template bodies
@@ -157,6 +159,26 @@ export function documentElementTags(html: string, name: 'head' | 'body'): Docume
  */
 export function isStackingArtifact(html: string): boolean {
   return countBodyTags(html) > 1;
+}
+
+/**
+ * The first adapter-declared client-error-shell selector that matches this
+ * serialized document, if any. A client runtime that crashes after hydration
+ * replaces the page with its framework's error shell (Next.js App Router:
+ * `<html id="__next_error__">` holding only "Application error"). That shell
+ * is never the page's content, so capture refuses to persist it and reports
+ * the route failed instead of saving the crash as the page (#917).
+ *
+ * Selector matching runs on the captured string against a parsed document, so
+ * the check sees exactly the bytes that would be written. An invalid selector
+ * never matches; the adapter owns its list.
+ */
+export function matchClientErrorShell(html: string, selectors?: readonly string[]): string | undefined {
+  if (!selectors?.length) return undefined;
+  const $ = cheerio.load(html);
+  return selectors.find((selector) => {
+    try { return $(selector).length > 0; } catch { return false; }
+  });
 }
 
 // ---------------------------------------------------------------------------
