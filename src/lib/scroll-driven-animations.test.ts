@@ -96,6 +96,11 @@ describe( 'appendScrollDrivenAnimations', () => {
 		expect( out ).toContain( '#main :where(.comp-a):not([data-blocks-engine-capture-viewport-entrance]):not([data-blocks-engine-capture-viewport-entrance-loss]){' );
 	} );
 
+	it( 'skips a gated rule whose invalid selector list the browser drops', () => {
+		const css = '.form input:not:[type="submit"], .form textarea{animation:fade 1s paused}';
+		expect( appendScrollDrivenAnimations( '.a{color:red}', css ) ).toBe( '.a{color:red}' );
+	} );
+
 	it( 'returns the sheet unchanged when nothing is gated', () => {
 		const css = '.a{color:red}';
 		expect( appendScrollDrivenAnimations( css, '.a{color:red}' ) ).toBe( css );

@@ -5,7 +5,7 @@ import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
-import { parseCss, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { documentElementTags } from './screenshot/document-integrity.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
@@ -1278,7 +1278,8 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 	// Strip only outer tokens, preserving quoted content inside the stylesheet.
 	const css = parseCss( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
 	css.walkRules( rule => {
-		const selectors = selectorParser().astSync( rule.selector );
+		const selectors = parseSelectorList( rule.selector );
+		if ( ! selectors ) return;
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
 		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value ) { const alias = id.clone(); alias.value = value; replacements.push( { node: id, alias } ); } } );
 		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-blocks-engine-capture-anchor-alias'; replacements.push( { node: attribute, alias } ); } } );
