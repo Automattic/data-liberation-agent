@@ -16,6 +16,7 @@ import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type E
 import { lockMainFrameNavigation } from '../screenshot/screenshotter.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
+import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
 
 export interface ReferenceCollectorOptions {
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
@@ -144,7 +145,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					entries.push( entry );
 					let referencePage: Page | undefined;
 					let ownedResource: BrowserContext | Page | undefined;
-					const runtimeError = ( error: Error ) => entry.readiness.reasons.push( `source runtime error: ${ error.message }` );
+					const runtimeError = ( error: Error ) => { if ( ! isMediaPlaybackLifecycleAbort( error ) ) entry.readiness.reasons.push( `source runtime error: ${ error.message }` ); };
 					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
 					let releaseNavigation: (() => Promise<void>) | undefined;
 					let navigationUrl = url;

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { totalmem } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
+import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
@@ -768,7 +769,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	resourceStore.observe( page );
 	const sourceErrors: string[] = [];
 	if ( args.observeSource ) {
-		page.on( 'pageerror', error => sourceErrors.push( `source runtime error: ${ error.message }` ) );
+		page.on( 'pageerror', error => { if ( ! isMediaPlaybackLifecycleAbort( error ) ) sourceErrors.push( `source runtime error: ${ error.message }` ); } );
 		page.on( 'crash', () => sourceErrors.push( 'source renderer crashed' ) );
 	}
 	if ( publicUrlsOnly && page.route ) {

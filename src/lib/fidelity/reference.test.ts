@@ -652,6 +652,26 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( ( await checkFidelity( { directory } ) ).status ).toBe( 'unproven' );
 		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 90_000 );
+	it( 'keeps a source ready when its own media playback interrupts play()', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-media-abort-' ) );
+		// Unhandled play() rejections from the page's own pause() and load(): Chromium reports both as AbortError page errors.
+		const html = '<h1>Autoplay hero</h1><video id="hero" muted playsinline src="/hero.mp4"></video><script>const v = document.getElementById("hero"); v.play(); v.pause(); v.play(); v.load();</script>';
+		const server = createServer( ( request, response ) => {
+			if ( request.url?.startsWith( '/hero.mp4' ) ) { response.statusCode = 204; response.end(); return; }
+			response.setHeader( 'content-type', 'text/html' ); response.end( html );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
+		try {
+			const collector = createReferenceCollector( directory, url, [ url ] );
+			const captured = await captureScreenshots( { urls: [ url ], outputDir: directory, concurrency: 1, settleMs: 0, observeSource: collector.observe } );
+			const receiptPath = exportWebsiteCapture( { outputDir: directory, sourceUrl: url, platform: 'default', summary: { routesDiscovered: 1, routesCaptured: 1, routesSkipped: 0, routesFailed: 0, durationMs: captured.durationMs }, failures: [], discoveryDiagnostics: [] } );
+			const manifest = JSON.parse( readFileSync( collector.finalize( receiptPath ), 'utf8' ) ) as FidelityReference;
+			expect( manifest.entries.length ).toBeGreaterThan( 0 );
+			expect( manifest.entries.flatMap( entry => entry.readiness.reasons ).filter( reason => reason.startsWith( 'source runtime error' ) ) ).toEqual( [] );
+		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+	}, 90_000 );
 	it( 'freezes each width from a fresh navigation instead of resize-history state', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-fresh-viewport-' ) );
