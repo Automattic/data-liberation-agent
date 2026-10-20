@@ -995,7 +995,8 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           groupsProbed++;
           const initial = members.map(canonical);
           const resting = members.map((member) => member.cloneNode(true) as HTMLElement);
-          const route = currentRoute();
+          const startRoute = currentRoute();
+          const startState = history.state;
           const opened: Array<{ member: HTMLElement; panel: HTMLElement; open: ReturnType<typeof presentation> }> = [];
           let failure: string | undefined;
           // Open every member in turn without closing the earlier ones.
@@ -1030,7 +1031,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             }
             observer.disconnect();
             if (failure) break;
-            if (clickNavigationBlocked || currentRoute() !== route) { failure = 'activation navigated'; break; }
+            if (clickNavigationBlocked || currentRoute() !== startRoute) { failure = 'activation navigated'; break; }
             if (foreign.length) { failure = 'activation changed content outside its own item'; break; }
             if (revealed.length !== 1) { failure = revealed.length ? 'activation revealed more than one region' : 'activation revealed nothing'; break; }
             if (opened.some((entry) => clipped(entry.panel))) { failure = 'opening one item closed another'; break; }
@@ -1045,11 +1046,26 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             for (const [index, entry] of opened.entries()) {
               try { entry.member.click(); } catch { failure = 'second activation threw'; break; }
               for (let attempt = 0; attempt < 40 && canonical(entry.member) !== initial[index]; attempt++) await wait(25);
-              if (clickNavigationBlocked || currentRoute() !== route) { failure = 'activation navigated'; break; }
+              if (clickNavigationBlocked || currentRoute() !== startRoute) { failure = 'activation navigated'; break; }
               if (canonical(entry.member) !== initial[index] || !clipped(entry.panel)) { failure = 'second activation did not close the item'; break; }
             }
           }
-          await restoreGroup(members, initial);
+          // A member whose activation navigated (a same-document pushState, a
+          // commerce lightbox that opens on `shop/?itemId=…`, for one) leaves the
+          // document on another route, and re-clicking members of that group to
+          // restore their markup would navigate again. Put the route and history
+          // state back with the browser API instead — the same revert the expand
+          // toggles and the single-control probe use — and give up on the group:
+          // it is recorded as not representable below.
+          if (currentRoute() !== startRoute) {
+            try {
+              history.pushState(startState, '', startRoute);
+              window.dispatchEvent(new PopStateEvent('popstate', { state: startState }));
+            } catch { /* ignore */ }
+            for (let attempt = 0; attempt < 20 && currentRoute() !== startRoute; attempt++) await wait(25);
+          } else {
+            await restoreGroup(members, initial);
+          }
           if (failure) {
             records.push({ status: 'no-dialog', trigger: describeTrigger(members[0]!), target: describe(parent), error: `Click disclosure not representable: ${failure}.` });
             continue;
