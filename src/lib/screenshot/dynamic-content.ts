@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import type { Page } from 'playwright';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
@@ -265,6 +266,22 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
   return { html: Buffer.from(html).subarray(0, MAX_DISCLOSURE_HTML_BYTES).toString(), bytes, truncated: true };
 }
 
+// One page-owned bridge: DOM-dispatched keyboard events do not reproduce a real
+// Escape press (including legacy keyCode handlers). Reuse it across root probes.
+const disclosureEscapeBindings = new WeakMap<Page, Promise<string>>();
+async function disclosureEscapeBinding(page: Page): Promise<string> {
+  let binding = disclosureEscapeBindings.get(page);
+  if (!binding) {
+    binding = (async () => {
+      const name = `__disclosureEscape_${randomUUID().replaceAll('-', '')}`;
+      await page.exposeBinding(name, () => page.keyboard.press('Escape'));
+      return name;
+    })();
+    disclosureEscapeBindings.set(page, binding);
+  }
+  return binding;
+}
+
 /**
  * Preserve content that a disclosure runtime only mounts while one item is open —
  * FAQ/accordion panels being the common case. A runtime like Radix (shadcn/ui)
@@ -307,8 +324,8 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * contains the restored panels directly. Authored chooser roles belong to the
  * later interaction pass; they do not need editorial-content hydration. An
  * unassociated local mount must restore the observed baseline before its copy
- * is retained. An unverified mutation throws into the viewport failure lifecycle
- * instead of letting the screenshot/HTML transaction serialize the altered page.
+ * is retained. An unverified mutation throws to the viewport's baseline reload
+ * recovery instead of letting the screenshot/HTML transaction save the altered page.
  *
  * The same candidate pass also includes visible "show more" / "read more"
  * toggles. Those are not left open by `expandCollapsedContent`: the opened
@@ -326,7 +343,8 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
 export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'): Promise<CapturedDialogInteraction[]> {
   let raw: RawDisclosureRecord[];
   try {
-    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit, rootSelector }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number; rootSelector: string }) => {
+    const escapeBinding = await disclosureEscapeBinding(page);
+    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit, rootSelector, escapeBinding }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number; rootSelector: string; escapeBinding: string }) => {
       const root = document.querySelector(rootSelector);
       if (!root) return [];
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -518,6 +536,12 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
               // unchanged baseline. The caller owns the existing viewport
               // failure lifecycle; abort before later probes or write-back.
               if (trigger.getAttribute('aria-expanded') !== 'false' || restingState() !== resting) {
+                await (window as unknown as Record<string, () => Promise<void>>)[escapeBinding]();
+                const deadline = Date.now() + settleMs;
+                while (Date.now() < deadline && (trigger.getAttribute('aria-expanded') !== 'false' || restingState() !== resting)) await wait(25);
+              }
+              if (trigger.getAttribute('aria-expanded') !== 'false' || restingState() !== resting) {
+                // failure-class: representability:profile
                 throw new Error(`${describe(trigger).selector}: no unique locally mounted panel with verified baseline restoration`);
               }
               records.push({ status: 'no-dialog', trigger: describeTrigger(trigger), target: describe(target), error: 'No unique locally mounted panel; baseline restoration verified.' });
@@ -1125,7 +1149,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         clickNavigation?.removeEventListener('navigate', keepClickDocument);
       }
       return records;
-    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES, rootSelector });
+    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES, rootSelector, escapeBinding });
     raw = Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
   } catch (error) {
     throw new Error(`Disclosure baseline restoration unproven: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
