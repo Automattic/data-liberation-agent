@@ -57,7 +57,7 @@ import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
-import { recordGlyphColors } from './glyph-color.js';
+import { GlyphColorCache, recordGlyphColors } from './glyph-color.js';
 import { portRenderedGoogleMaps } from './rendered-google-maps.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
@@ -232,6 +232,8 @@ interface CapturePerViewportArgs {
 	 *  alt path's iframe mobile-DOM carry. Mutated in place; written once at run end. */
 	mobileHeights: Record< string, number >;
 	resourceStore: CapturedResourceStore;
+	/** Run-scoped glyph colours, shared by every route and profile (#924). */
+	glyphColors?: GlyphColorCache;
 	publicUrlsOnly: boolean;
 	routeScope?: ScreenshotOpts['routeScope'];
 }
@@ -1175,7 +1177,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Bounded; a miss loses only that evidence.
 	if ( plan.captureHtml || plan.captureMobileHtml ) {
 		args.phases?.enter( 'glyph-colors' );
-		await recordGlyphColors( page ).catch( () => undefined );
+		await recordGlyphColors( page, {}, args.glyphColors ).catch( () => undefined );
 		if ( args.rendererCrashed() ) return;
 	}
 	// The cleanup observer may have exhausted its budget before the page
@@ -1222,6 +1224,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} else {
 				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
 				writeFileSync( plan.paths.html, html );
+				args.glyphColors?.defer( plan.paths.html, html );
 				entry.html = relative( outputDir, plan.paths.html );
 				entry.documents = { ...entry.documents, [ viewport.id ]: documentUrl };
 			}
@@ -1248,6 +1251,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) && matchClientErrorShell( mhtml, args.clientErrorShellSelectors ) === undefined ) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
+				args.glyphColors?.defer( plan.paths.htmlMobile, mhtml );
 				entry.mobileHtml = relative( outputDir, plan.paths.htmlMobile );
 				entry.documents = { ...entry.documents, mobile: documentUrl };
 				mobileHeights[ slug ] = await page.evaluate( () => document.documentElement.scrollHeight );
@@ -2311,6 +2315,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				}
 		  } )();
 	const resourceStore = new CapturedResourceStore( opts.outputDir, baseUrl );
+	// One glyph colour per distinct glyph across the run, so a shared footer
+	// serializes the same evidence on every route (#924).
+	const glyphColors = new GlyphColorCache();
 
 	// --- browser -----------------------------------------------------------
 	let browser: Browser = ( await connectBrowser( {
@@ -2627,6 +2634,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							responsiveImages,
 							mobileHeights,
 							resourceStore,
+							glyphColors,
 							publicUrlsOnly: opts.publicUrlsOnly ?? false,
 							routeScope: opts.routeScope,
 							removeSelectors: opts.removeSelectors,
@@ -2990,6 +2998,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 		}
 	} finally {
+		// Settle glyphs deferred on earlier routes with colours learned later.
+		glyphColors.resolveDeferred();
 		await resourceStore.flush();
 		await manifest.flush();
 		if (frontier) writeFileSync(join(opts.outputDir, 'linked-page-coverage.json'), JSON.stringify(frontier.coverage(), null, 2));
