@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
-import { identityLogoReferences } from '../identity-resources.js';
+import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetReferences } from '../srcset.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
@@ -529,7 +529,7 @@ export class CapturedResourceStore {
 		};
 
 		collect( html, documentUrl );
-		for ( const logo of identityLogoReferences( html ) ) add( logo, documentUrl );
+		for ( const image of metadataImageReferences( html ) ) add( image, documentUrl );
 		// A rolling pool: a slow resource (a large animated GIF) holds one slot,
 		// not a whole batch. Stylesheets and manifests feed their own references
 		// back into `pending` as they complete.

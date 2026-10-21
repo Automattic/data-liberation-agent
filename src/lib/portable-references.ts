@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { identityLogoReferences } from './identity-resources.js';
+import { metadataImageReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
 import { isSrcsetShaped, rewriteMediaReferences, rewriteSrcset, srcsetCandidates, srcsetReferences, stripImageSetCandidates } from './srcset.js';
@@ -115,7 +115,7 @@ export function dependencyReferences(
 	};
 	for ( const href of linkedFiles ) add( href );
 	for ( const reference of svgUseDocuments ) add( reference );
-	if ( ! cssOnly ) for ( const reference of identityLogoReferences( html ) ) add( reference );
+	if ( ! cssOnly ) for ( const reference of metadataImageReferences( html ) ) add( reference );
 
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();

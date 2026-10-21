@@ -35,6 +35,49 @@ afterEach( () => {
 } );
 
 describe( 'CapturedResourceStore', () => {
+	it( 'captures and localizes metadata-only images while preserving failed references', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-metadata-images-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/shop/';
+		const references = [ 'https://cdn.example/product.png', '../detail.png', '/content.png', '/social.png', '/twitter.png' ];
+		const missing = 'https://cdn.example/missing.png';
+		const unrelated = 'https://example.com/product';
+		const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64' );
+		const html = `<html><head><script type="application/ld+json">${ JSON.stringify( {
+			'@context': 'https://schema.org', '@graph': [
+				{ '@type': 'Product', url: unrelated, image: references[ 0 ] },
+				{ '@type': 'Product', image: [ { '@type': 'ImageObject', url: references[ 1 ] }, { contentUrl: references[ 2 ] }, missing ] },
+			],
+		} ) }</script><meta property="og:image" content="${ references[ 3 ] }"><meta name="twitter:image" content="${ references[ 4 ] }"></head><body><h1>Product</h1></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'home.html' ), html );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url, status: url === missing ? 404 : 200,
+			headers: new Headers( { 'content-type': 'image/png' } ), body: png,
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia.mock.calls.map( ( [ url ] ) => url ).sort() ).toEqual( [ ...references.map( reference => new URL( reference, sourceUrl ).href ), missing ].sort() );
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' ) );
+		expect( manifest.failures ).toContainEqual( expect.objectContaining( { url: missing } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+		const website = join( outputDir, 'website' );
+		const $ = cheerio.load( readFileSync( join( website, 'index.html' ), 'utf8' ) );
+		const products = JSON.parse( $( 'script[type="application/ld+json"]' ).text() )[ '@graph' ];
+		expect( products[ 0 ].url ).toBe( unrelated );
+		expect( products[ 1 ].image[ 2 ] ).toBe( missing );
+		for ( const local of [ products[ 0 ].image, products[ 1 ].image[ 0 ].url, products[ 1 ].image[ 1 ].contentUrl, $( 'meta[property="og:image"]' ).attr( 'content' ), $( 'meta[name="twitter:image"]' ).attr( 'content' ) ] ) {
+			expect( local ).toMatch( /^\// );
+			expect( readFileSync( join( website, decodeURIComponent( local ) ) ) ).toEqual( png );
+		}
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.resourceFailures ).toContainEqual( expect.objectContaining( { url: missing } ) );
+		expect( diagnostics.unresolvedDependencies ).toContainEqual( expect.objectContaining( { url: missing } ) );
+	} );
+
 	it( 'localizes declared JSON-LD logos and relative manifest icons without visible images', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-native-branding-' ) );
 		dirs.push( outputDir );
