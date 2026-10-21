@@ -72,7 +72,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		slideshow: 'c', 'slideshow-track': 'c', 'slideshow-css': 'i', 'captured-slideshow-css': 'i', 'wix-captured-slideshow-css': 'i',
 	},
 	presentation: {
-		'glyph-color': 'a', 'glyph-probe': 'a', 'glyph-probe-style': 'a',
+		'glyph-color': 'a', 'glyph-pending': 'a', 'glyph-probe': 'a', 'glyph-probe-candidate': 'a', 'glyph-probe-style': 'a',
 		'native-control-state': 'a', 'native-control-runtime': 'a', 'native-effects': 'a', 'native-node': 'a', 'native-profile': 'a',
 		'native-losses': 'a', 'native-runtime-loss': 'a', 'native-view-timeline-runtime': 'a',
 		'viewport-entrance': 'a', 'viewport-entrances': 'a', 'viewport-entrance-loss': 'a', 'source-canvas': 'a',
