@@ -172,24 +172,19 @@ describe('captureScreenshots', () => {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	} );
-	it( 'names the route, profile and phase on stderr as each phase is entered, with the observe pass and serialization steps split out of their neighbours (#817)', async () => {
+	it( 'splits the observe pass and serialization steps out of their neighbours in the route\'s phase breakdown (#817)', async () => {
 		vi.mocked( connectBrowser ).mockResolvedValue( makeMockBrowser() as never );
 		const outputDir = mkdtempSync( join( tmpdir(), 'phase-evidence-' ) );
 		let stderr = '';
 		const write = vi.spyOn( process.stderr, 'write' ).mockImplementation( ( chunk ) => { stderr += String( chunk ); return true; } );
 		try {
 			await captureScreenshots( { urls: [ 'https://example.com/a' ], outputDir, settleMs: 0, observeSource: async () => {} } );
-			const events = stderr.split( '\n' )
-				.filter( line => line.startsWith( '[timing] phase ' ) )
-				.map( line => JSON.parse( line.slice( '[timing] phase '.length ) ) );
-			expect( events.length ).toBeGreaterThan( 0 );
-			for ( const event of events ) {
-				expect( event ).toEqual( { url: 'https://example.com/a', profile: expect.any( String ), phase: expect.any( String ) } );
-			}
-			const phases = events.map( event => event.phase as string );
-			// Each cost is its own phase: the reference observe pass is not folded
-			// into `galleries`, and disclosure hydration / gallery alignment are not
-			// folded into `slideshows`.
+			const line = stderr.split( '\n' ).find( item => item.startsWith( '[timing] route-phases ' ) );
+			const { url, ...breakdown } = JSON.parse( line!.slice( '[timing] route-phases '.length ) );
+			expect( url ).toBe( 'https://example.com/a' );
+			expect( stderr ).not.toContain( '[timing] phase ' );
+			// Keys keep the order each phase was first entered.
+			const phases = Object.keys( breakdown );
 			expect( phases ).toEqual( expect.arrayContaining( [ 'galleries', 'observe-source', 'slideshows', 'before-serialize', 'hydrate-disclosures', 'align-galleries' ] ) );
 			expect( phases.indexOf( 'galleries' ) ).toBeLessThan( phases.indexOf( 'observe-source' ) );
 			expect( phases.indexOf( 'slideshows' ) ).toBeLessThan( phases.indexOf( 'before-serialize' ) );
