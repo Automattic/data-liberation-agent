@@ -82,6 +82,22 @@ const NON_DOCUMENT_EXTENSIONS = new Set([
 ]);
 
 /**
+ * Whether a URL is an attachment viewer permalink: its query string names an
+ * uploaded media file (`/?attachment_id=21`). What it serves is a document
+ * shell around that one file inside the site chrome, and a media library's
+ * sitemap lists one entry per upload — inventoried as pages they can dominate
+ * a route list and spend the route budget on media views instead of the
+ * source's real pages.
+ */
+export function isAttachmentViewerUrl(url: string): boolean {
+  try {
+    return new URL(url).searchParams.has('attachment_id');
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether a URL names something that cannot be an HTML document.
  *
  * Discovery inventories same-origin links, and a page that links straight to its
@@ -89,9 +105,12 @@ const NON_DOCUMENT_EXTENSIONS = new Set([
  * as pages they are selected for sampling, come back as `image/jpeg`, and can
  * never render, which leaves the inspection reporting fewer rendered samples
  * than it selected and therefore an uncertain complexity band for a source that
- * measured cleanly.
+ * measured cleanly. An attachment viewer permalink is a document shell around
+ * one media file, so it is excluded by its query parameter rather than by
+ * extension.
  */
 export function isNonDocumentUrl(url: string): boolean {
+  if (isAttachmentViewerUrl(url)) return true;
   let path: string;
   try {
     path = new URL(url).pathname.toLowerCase();
@@ -180,6 +199,10 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   const seenUrls = new Set<string>();
   const diagnostics: SitemapDiagnostic[] = [];
   const visited = new Set<string>();
+  // Attachment viewer entries are counted, not listed; one diagnostic reports
+  // the total against the first URL that was skipped.
+  let attachmentViewersSkipped = 0;
+  let firstAttachmentViewerSkipped = '';
 
   /**
    * Accept a sitemap entry on the entry URL's site and move it onto the entry
@@ -256,6 +279,11 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         // the existing .xml recursion signal for urlset entries.
         if (document.kind === 'index' || pathPart.endsWith('.xml')) {
           await fetchAndParse(entryUrl.href, depth + 1);
+        } else if (isAttachmentViewerUrl(entryUrl.href)) {
+          // An attachment viewer is a media view, not one of the source's
+          // documents; left out here it never spends a route-budget slot.
+          attachmentViewersSkipped++;
+          firstAttachmentViewerSkipped ||= entryUrl.href;
         } else {
           // Capture and export treat `/x` and `/x/` as one route. Keep the
           // first form the sitemap lists so the two cannot collide at export.
@@ -329,6 +357,13 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
       reason: 'No sitemap found at any probed location',
     });
     diagnostics.push(...fallbackMisses);
+  }
+  if (attachmentViewersSkipped > 0) {
+    diagnostics.push({
+      code: 'sitemap_attachment_skipped',
+      url: firstAttachmentViewerSkipped,
+      reason: `${attachmentViewersSkipped} attachment viewer URLs (?attachment_id=) left out of the route inventory`,
+    });
   }
 
   // A normal sitemap keeps its inexpensive path; thin inventories close a
@@ -423,6 +458,8 @@ async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: stri
       if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
       const contentType = response.headers.get('content-type');
       if (contentType && !/^(?:text\/html|application\/xhtml\+xml)(?:;|$)/i.test(contentType)) throw new Error(`non-HTML response (${contentType})`);
+      // resolvePageLink below already excludes attachment viewer links, so the
+      // fallback cannot re-add what the sitemap left out.
       const links = extractSameOriginLinks(response.body.toString('utf8'), response.finalUrl, baseOrigin);
       const finalRequest = new URL(response.finalUrl);
       finalRequest.hash = '';
@@ -538,6 +575,8 @@ export function resolvePageLink(href: string, baseUrl: string, baseOrigin: strin
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
     if (resolved.origin !== baseOrigin) return null;
     if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|docx?|zip|xml|json)$/i.test(resolved.pathname)) return null;
+    // An attachment viewer link is a media view, not a route.
+    if (isAttachmentViewerUrl(resolved.href)) return null;
     resolved.hash = '';
     return resolved.href;
   } catch {

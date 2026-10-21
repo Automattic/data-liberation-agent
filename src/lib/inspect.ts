@@ -186,7 +186,9 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
       // body that cannot render. It is counted on its own bound rather than the
       // discovery limit, because sitemap entries are added before navigation
       // and a media-heavy sitemap would otherwise hide the whole menu.
-      if (isNonDocumentUrl(key)) {
+      // Classify the resolved URL: routeKey strips the query, and an attachment
+      // viewer is excluded by its query parameter.
+      if (isNonDocumentUrl(parsed.href)) {
         if (media.has(key)) return;
         if (media.size >= MEDIA_COUNT_LIMIT) { mediaTruncated = true; return; }
         media.add(key);

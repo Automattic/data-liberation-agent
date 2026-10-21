@@ -35,6 +35,14 @@ describe('isNonDocumentUrl', () => {
       expect(isNonDocumentUrl(`https://example.com${path}`), path).toBe(false);
     }
   });
+
+  it('excludes attachment viewer permalinks by their query parameter', () => {
+    expect(isNonDocumentUrl('https://example.com/?attachment_id=21')).toBe(true);
+    expect(isNonDocumentUrl('https://example.com/blog/post/?attachment_id=5')).toBe(true);
+    // Only the attachment_id parameter decides; other query strings stay pages.
+    expect(isNonDocumentUrl('https://example.com/?p=21')).toBe(false);
+    expect(isNonDocumentUrl('https://example.com/?attachment=gallery')).toBe(false);
+  });
 });
 
 describe('classifyUrl', () => {
@@ -289,6 +297,80 @@ describe('fetchSitemap', () => {
       ]);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it('leaves attachment viewer entries out of a sitemap index inventory and counts them', async () => {
+    // A media library's attachment sitemap can hold hundreds of viewer URLs;
+    // inventoried as pages they spend the route budget on media views before
+    // the source's real pages are reached.
+    const urlset = (paths: string[]) =>
+      `<urlset>${paths.map((path) => `<url><loc>https://example.test${path}</loc></url>`).join('')}</urlset>`;
+    const responseByUrl = new Map([
+      ['https://example.test/sitemap.xml', `<sitemapindex>
+        <sitemap><loc>https://example.test/page-sitemap.xml</loc></sitemap>
+        <sitemap><loc>https://example.test/post-sitemap.xml</loc></sitemap>
+        <sitemap><loc>https://example.test/attachment-sitemap.xml</loc></sitemap>
+      </sitemapindex>`],
+      ['https://example.test/page-sitemap.xml', urlset(['/', '/about', '/contact'])],
+      ['https://example.test/post-sitemap.xml', urlset(['/blog/first-post', '/blog/second-post'])],
+      ['https://example.test/attachment-sitemap.xml', urlset(['/?attachment_id=21', '/?attachment_id=22', '/?attachment_id=23'])],
+    ]);
+    const fetchMock = vi.fn(async (url: string) => responseByUrl.has(String(url))
+      ? new Response(responseByUrl.get(String(url)), { status: 200 })
+      : new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/',
+        'https://example.test/about',
+        'https://example.test/contact',
+        'https://example.test/blog/first-post',
+        'https://example.test/blog/second-post',
+      ]);
+      expect(diagnostics).toEqual([
+        {
+          code: 'sitemap_attachment_skipped',
+          url: 'https://example.test/?attachment_id=21',
+          reason: '3 attachment viewer URLs (?attachment_id=) left out of the route inventory',
+        },
+      ]);
+      // No attachment entry was fetched as a child sitemap or kept as a route.
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('https://example.test/?attachment_id=21');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('leaves attachment viewer links out of the linked-page fallback inventory', async () => {
+    const server = createServer((request, response) => {
+      if (request.url === '/') {
+        response.setHeader('content-type', 'text/html');
+        response.end('<nav><a href="/about">About</a><a href="/?attachment_id=21">Viewer</a></nav>');
+        return;
+      }
+      if (request.url === '/about') {
+        response.setHeader('content-type', 'text/html');
+        response.end('<main>About</main>');
+        return;
+      }
+      response.statusCode = 404;
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not start');
+    const origin = `http://localtest.me:${address.port}`;
+
+    try {
+      const { urls } = await fetchSitemapWithDiagnostics(origin);
+      // The entry itself is capture's concern; the inventory keeps the linked page only.
+      expect(urls).toEqual([`${origin}/about`]);
+      expect(urls.some((url) => url.includes('attachment_id'))).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
 
@@ -669,6 +751,17 @@ describe('resolvePageLink', () => {
     expect(extractSameOriginLinks('<a href="/a//b">b</a><a href="//other.test/x">x</a><a href="/c/">c</a>', base)).toEqual([
       'https://example.test/a//b',
       'https://example.test/c/',
+    ]);
+  });
+
+  it('drops attachment viewer links from the link inventory', () => {
+    const base = 'https://example.test/';
+    const origin = 'https://example.test';
+    expect(resolvePageLink('/?attachment_id=21', base, origin)).toBeNull();
+    expect(resolvePageLink('/blog/post/?attachment_id=5', base, origin)).toBeNull();
+    expect(resolvePageLink('/?page=2', base, origin)).toBe('https://example.test/?page=2');
+    expect(extractSameOriginLinks('<a href="/about">About</a><a href="/?attachment_id=21">Viewer</a>', base)).toEqual([
+      'https://example.test/about',
     ]);
   });
 });
