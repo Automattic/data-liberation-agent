@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { allocateCaptureRoutes } from '../capture-export-routes.js';
 import { describe, it, expect, vi } from 'vitest';
-import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, isNonDocumentUrl, resolvePageLink } from './sitemap.js';
+import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, isAttachmentSitemapUrl, isNonDocumentUrl, resolvePageLink } from './sitemap.js';
 
 describe('isNonDocumentUrl', () => {
   it('excludes media, archives, data and font URLs', () => {
@@ -42,6 +42,25 @@ describe('isNonDocumentUrl', () => {
     // Only the attachment_id parameter decides; other query strings stay pages.
     expect(isNonDocumentUrl('https://example.com/?p=21')).toBe(false);
     expect(isNonDocumentUrl('https://example.com/?attachment=gallery')).toBe(false);
+  });
+});
+
+describe('isAttachmentSitemapUrl', () => {
+  it('recognizes attachment sitemap filenames by anchored basename', () => {
+    // Yoast / Rank Math.
+    expect(isAttachmentSitemapUrl('https://example.test/attachment-sitemap.xml')).toBe(true);
+    expect(isAttachmentSitemapUrl('https://example.test/attachment-sitemap2.xml')).toBe(true);
+    expect(isAttachmentSitemapUrl('https://example.test/attachment-sitemap-2.xml')).toBe(true);
+    // WordPress core.
+    expect(isAttachmentSitemapUrl('https://example.test/wp-sitemap-posts-attachment-1.xml')).toBe(true);
+    // The basename decides; a directory on the way does not disqualify.
+    expect(isAttachmentSitemapUrl('https://example.test/wp-content/plugins/seo/attachment-sitemap.xml')).toBe(true);
+    // A different name that merely carries the word in a path segment, or
+    // contains it inside a longer name, is an ordinary child sitemap.
+    expect(isAttachmentSitemapUrl('https://example.test/attachments-guide/post-sitemap.xml')).toBe(false);
+    expect(isAttachmentSitemapUrl('https://example.test/my-attachment-sitemap.xml')).toBe(false);
+    expect(isAttachmentSitemapUrl('https://example.test/post-sitemap.xml')).toBe(false);
+    expect(isAttachmentSitemapUrl('https://example.test/attachments-guide/')).toBe(false);
   });
 });
 
@@ -300,10 +319,13 @@ describe('fetchSitemap', () => {
     }
   });
 
-  it('leaves attachment viewer entries out of a sitemap index inventory and counts them', async () => {
-    // A media library's attachment sitemap can hold hundreds of viewer URLs;
-    // inventoried as pages they spend the route budget on media views before
-    // the source's real pages are reached.
+  it('leaves an attachment sitemap named by the index unfetched, its entries out of the inventory', async () => {
+    // A media library's attachment sitemap lists one entry per upload: pretty
+    // permalinks nested under their posts plus `?attachment_id=` viewers.
+    // Entry by entry these are indistinguishable from page URLs — on a real
+    // WordPress + Yoast source only 17 of 488 attachment entries were viewer
+    // URLs — so the index naming the sitemap is the signal: it is left
+    // unfetched and its entries never reach the route inventory.
     const urlset = (paths: string[]) =>
       `<urlset>${paths.map((path) => `<url><loc>https://example.test${path}</loc></url>`).join('')}</urlset>`;
     const responseByUrl = new Map([
@@ -313,8 +335,49 @@ describe('fetchSitemap', () => {
         <sitemap><loc>https://example.test/attachment-sitemap.xml</loc></sitemap>
       </sitemapindex>`],
       ['https://example.test/page-sitemap.xml', urlset(['/', '/about', '/contact'])],
-      ['https://example.test/post-sitemap.xml', urlset(['/blog/first-post', '/blog/second-post'])],
-      ['https://example.test/attachment-sitemap.xml', urlset(['/?attachment_id=21', '/?attachment_id=22', '/?attachment_id=23'])],
+      // An entry whose path merely contains the word stays a route.
+      ['https://example.test/post-sitemap.xml', urlset(['/blog/first-post', '/blog/second-post', '/attachments-guide/'])],
+      ['https://example.test/attachment-sitemap.xml', urlset(['/blog/first-post/diagram/', '/blog/second-post/photo/', '/?attachment_id=21'])],
+    ]);
+    const fetchMock = vi.fn(async (url: string) => responseByUrl.has(String(url))
+      ? new Response(responseByUrl.get(String(url)), { status: 200 })
+      : new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/',
+        'https://example.test/about',
+        'https://example.test/contact',
+        'https://example.test/blog/first-post',
+        'https://example.test/blog/second-post',
+        'https://example.test/attachments-guide/',
+      ]);
+      expect(diagnostics).toEqual([
+        {
+          code: 'sitemap_attachment_sitemap_skipped',
+          url: 'https://example.test/attachment-sitemap.xml',
+          reason: '1 attachment sitemap left unfetched; their entries are left out of the route inventory',
+        },
+      ]);
+      // The named attachment sitemap was never fetched, so neither its pretty
+      // permalinks nor its viewer entry reached the inventory.
+      const fetched = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(fetched).not.toContain('https://example.test/attachment-sitemap.xml');
+      expect(urls.some((url) => url.includes('/diagram') || url.includes('/photo') || url.includes('attachment_id'))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('still counts attachment viewer entries listed inside a followed sitemap', async () => {
+    const urlset = (paths: string[]) =>
+      `<urlset>${paths.map((path) => `<url><loc>https://example.test${path}</loc></url>`).join('')}</urlset>`;
+    const responseByUrl = new Map([
+      ['https://example.test/sitemap.xml', urlset([
+        '/', '/about', '/contact', '/blog/first-post', '/blog/second-post', '/?attachment_id=21', '/?attachment_id=22',
+      ])],
     ]);
     const fetchMock = vi.fn(async (url: string) => responseByUrl.has(String(url))
       ? new Response(responseByUrl.get(String(url)), { status: 200 })
@@ -334,11 +397,9 @@ describe('fetchSitemap', () => {
         {
           code: 'sitemap_attachment_skipped',
           url: 'https://example.test/?attachment_id=21',
-          reason: '3 attachment viewer URLs (?attachment_id=) left out of the route inventory',
+          reason: '2 attachment viewer URLs (?attachment_id=) left out of the route inventory',
         },
       ]);
-      // No attachment entry was fetched as a child sitemap or kept as a route.
-      expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('https://example.test/?attachment_id=21');
     } finally {
       vi.unstubAllGlobals();
     }
