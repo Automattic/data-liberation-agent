@@ -2576,13 +2576,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const failuresBefore = profileFailures.length;
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
-				const phases = createPhaseLedger( Date.now, ( phase ) => {
-					// In-progress phase evidence (#817): a stalled route names the step it
-					// entered last, so the unbounded wait can be fixed at its source. The
-					// same observation feeds the per-route deadline's abandonment reason.
-					process.stderr.write( `[timing] phase ${ JSON.stringify( { url, profile: viewport.id, phase } ) }\n` );
-					routeDeadlinesNote( url, viewport.id, phase );
-				} );
+				// A stalled route names the step it entered last (#817) through the
+				// per-route deadline's abandonment reason; `route-phases` times the rest.
+				const phases = createPhaseLedger( Date.now, ( phase ) => routeDeadlinesNote( url, viewport.id, phase ) );
 				const profileDiagnostics: ProfileDiagnostic[] = [];
 				phases.enter( 'context' );
 				try {
