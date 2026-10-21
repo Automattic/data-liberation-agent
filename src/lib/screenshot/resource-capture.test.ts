@@ -78,6 +78,23 @@ describe( 'CapturedResourceStore', () => {
 		expect( diagnostics.unresolvedDependencies ).toContainEqual( expect.objectContaining( { url: missing } ) );
 	} );
 
+	it( 'captures metadata images before the DOM dependency cap on media-heavy pages', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-metadata-cap-' ) );
+		dirs.push( outputDir );
+		const sourceUrl = 'https://example.com/shop/item/';
+		const primary = 'https://cdn.example/primary.png';
+		const gallery = Array.from( { length: 300 }, ( _, index ) => `<img src="/gallery-${ index }.png" alt="">` ).join( '' );
+		const html = `<html><head><script type="application/ld+json">${ JSON.stringify( { '@type': 'Product', name: 'Item', image: primary } ) }</script></head><body>${ gallery }</body></html>`;
+		const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64' );
+		const fetchMedia = vi.fn( async ( url: string ) => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: png } ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		const fetched = fetchMedia.mock.calls.map( ( [ url ] ) => url );
+		expect( fetched.length ).toBeLessThan( 300 );
+		expect( fetched ).toContain( primary );
+	} );
+
 	it( 'localizes declared JSON-LD logos and relative manifest icons without visible images', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-native-branding-' ) );
 		dirs.push( outputDir );

@@ -528,8 +528,11 @@ export class CapturedResourceStore {
 				add( decodeCssUrl( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '' ), baseUrl );
 		};
 
-		collect( html, documentUrl );
+		// Declared metadata images (JSON-LD, og:image) are few and name the
+		// page's primary image; queue them before DOM candidates so the
+		// dependency cap cannot crowd them out on media-heavy pages.
 		for ( const image of metadataImageReferences( html ) ) add( image, documentUrl );
+		collect( html, documentUrl );
 		// A rolling pool: a slow resource (a large animated GIF) holds one slot,
 		// not a whole batch. Stylesheets and manifests feed their own references
 		// back into `pending` as they complete.
