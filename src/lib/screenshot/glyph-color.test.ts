@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
-import { GLYPH_COLOR_ATTRIBUTE, monochromeGlyphColor, recordGlyphColors } from './glyph-color.js';
+import { GLYPH_COLOR_ATTRIBUTE, GLYPH_PENDING_ATTRIBUTE, GlyphColorCache, monochromeGlyphColor, recordGlyphColors } from './glyph-color.js';
 
 const ORIGIN = 'https://glyph-color.test';
 const FIXTURES = fileURLToPath( new URL( './fixtures/glyph-color/', import.meta.url ) );
@@ -108,6 +108,67 @@ describe( 'rendered glyph colour', () => {
 		expect( colors.slice( 0, 24 ).every( ( [ , color ] ) => color === BLUE ) ).toBe( true );
 		expect( colors.slice( 24 ).every( ( [ , color ] ) => color === null ) ).toBe( true );
 		await page.close();
+	} );
+
+	it( 'samples a repeated glyph once and records it on every copy (#924)', async () => {
+		const icons = Array.from( { length: 6 }, () => `<a href="/brand"><img src="/icons/glyph.png" width="16" height="16" alt=""></a>` ).join( '' );
+		const page = await open( browser, `<footer>${ icons }</footer>` );
+		expect( await recordGlyphColors( page, { maxGlyphs: 2 } ) ).toEqual( { candidates: 6, sampled: 1, recorded: 6 } );
+		expect( await page.locator( `footer img[${ GLYPH_COLOR_ATTRIBUTE }="${ BLUE }"]` ).count() ).toBe( 6 );
+		expect( await capturePageHtml( page ) ).not.toContain( 'data-blocks-engine-capture-glyph-probe' );
+		await page.close();
+	} );
+
+	it( 'gives a shared glyph the same colour on every route, in either capture order (#924)', async () => {
+		// Document A reaches the shared glyph only after `maxGlyphs` distinct fillers.
+		const fillers = Array.from( { length: 3 }, ( _, index ) => `<a href="/${ index }"><img id="filler-${ index }" src="/icons/glyph.png" width="16" height="16" alt=""></a>` ).join( '' );
+		const shared = `<footer><a href="https://social.example/brand">${ SVG_GLYPH( BLUE ) }</a></footer>`;
+		const capture = async ( body: string, cache: GlyphColorCache ) => {
+			const page = await open( browser, body );
+			const result = await recordGlyphColors( page, { maxGlyphs: 3 }, cache );
+			const html = await capturePageHtml( page );
+			await page.close();
+			return { result, html };
+		};
+		const footerOf = ( html: string ) => /<footer>[\s\S]*<\/footer>/.exec( html )?.[ 0 ];
+		const expected = `${ GLYPH_COLOR_ATTRIBUTE }="${ BLUE }"`;
+
+		// B then A: A applies B's sample from the cache, without a screenshot or a bound.
+		const forward = new GlyphColorCache();
+		const b1 = await capture( shared, forward );
+		const a1 = await capture( fillers + shared, forward );
+		expect( b1.result ).toEqual( { candidates: 1, sampled: 1, recorded: 1 } );
+		expect( a1.result ).toEqual( { candidates: 4, sampled: 3, recorded: 4 } );
+		expect( footerOf( a1.html ) ).toContain( expected );
+		expect( footerOf( a1.html ) ).toBe( footerOf( b1.html ) );
+
+		// A then B: A defers the glyph; the run's final pass settles it from B.
+		const reverse = new GlyphColorCache();
+		const a2 = await capture( fillers + shared, reverse );
+		const b2 = await capture( shared, reverse );
+		expect( a2.result ).toEqual( { candidates: 4, sampled: 3, recorded: 3 } );
+		expect( footerOf( a2.html ) ).toContain( GLYPH_PENDING_ATTRIBUTE );
+		const a2Final = reverse.resolveHtml( a2.html );
+		const b2Final = reverse.resolveHtml( b2.html );
+		expect( a2Final ).not.toContain( GLYPH_PENDING_ATTRIBUTE );
+		expect( footerOf( a2Final ) ).toContain( expected );
+		expect( footerOf( a2Final ) ).toBe( footerOf( b2Final ) );
+		expect( footerOf( a2Final ) ).toBe( footerOf( a1.html ) );
+
+		// The final pass rewrites deferred documents on disk, and drops markers it cannot settle.
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( process.cwd(), '.tmp-test', 'glyph-color-defer-' ) );
+		try {
+			const path = join( dir, 'a.html' );
+			const unknown = `<a href="/x"><img src="/x.png" ${ GLYPH_PENDING_ATTRIBUTE }="abc123"></a>`;
+			writeFileSync( path, a2.html + unknown );
+			reverse.defer( path, a2.html + unknown );
+			reverse.resolveDeferred();
+			const final = readFileSync( path, 'utf8' );
+			expect( final ).toBe( a2Final + '<a href="/x"><img src="/x.png"></a>' );
+		} finally {
+			rmSync( dir, { recursive: true, force: true } );
+		}
 	} );
 
 	it( 'mirrors the Blocks Engine monochrome test', () => {
