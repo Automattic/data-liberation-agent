@@ -98,6 +98,28 @@ export function isAttachmentViewerUrl(url: string): boolean {
 }
 
 /**
+ * A sitemap index that names an attachment sitemap points at a media library:
+ * one entry per upload — pretty permalinks nested under their posts plus
+ * `?attachment_id=` viewers — indistinguishable from page URLs entry by entry.
+ * The filename is the reliable signal, matched on the basename only and
+ * anchored: Yoast and Rank Math publish `attachment-sitemap.xml` with numbered
+ * variants (`attachment-sitemap2.xml`, `attachment-sitemap-2.xml`), WordPress
+ * core publishes `wp-sitemap-posts-attachment-<n>.xml`. A child sitemap that
+ * merely carries the word in a path segment, or a longer name containing it,
+ * is not one and is still followed.
+ */
+const ATTACHMENT_SITEMAP_BASENAME = /^(?:attachment-sitemap(?:-?\d+)?|wp-sitemap-posts-attachment-\d+)\.xml$/i;
+
+export function isAttachmentSitemapUrl(url: string): boolean {
+  try {
+    const basename = new URL(url).pathname.split('/').pop() ?? '';
+    return ATTACHMENT_SITEMAP_BASENAME.test(basename);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether a URL names something that cannot be an HTML document.
  *
  * Discovery inventories same-origin links, and a page that links straight to its
@@ -179,8 +201,10 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
  * Candidates are probed in preference order: `Sitemap:` directives in
  * `/robots.txt`, then `/sitemap-index.xml`, then `/sitemap.xml`. The first
  * document that parses as a sitemap wins; a `sitemapindex`'s children are
- * followed by document kind whatever their filename, while a urlset entry
- * recurses only when its path ends in `.xml`.
+ * followed by document kind whatever their filename — except one whose
+ * basename names an attachment sitemap, which is not fetched and whose media
+ * entries stay out of the inventory — while a urlset entry recurses only when
+ * its path ends in `.xml`.
  * Thin inventories traverse same-origin HTML with at most 100 raw requests,
  * 60 seconds, 2 MiB per document and 1000 retained routes. Diagnostics describe
  * linked-frontier closure, not unlinked pages or arbitrary runtime navigation.
@@ -200,9 +224,12 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   const diagnostics: SitemapDiagnostic[] = [];
   const visited = new Set<string>();
   // Attachment viewer entries are counted, not listed; one diagnostic reports
-  // the total against the first URL that was skipped.
+  // the total against the first URL that was skipped. The same shape reports a
+  // child sitemap the index named as an attachment sitemap.
   let attachmentViewersSkipped = 0;
   let firstAttachmentViewerSkipped = '';
+  let attachmentSitemapsSkipped = 0;
+  let firstAttachmentSitemapSkipped = '';
 
   /**
    * Accept a sitemap entry on the entry URL's site and move it onto the entry
@@ -277,7 +304,15 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         if (!entryUrl) continue;
         // Index entries are child sitemaps regardless of filename. Preserve
         // the existing .xml recursion signal for urlset entries.
-        if (document.kind === 'index' || pathPart.endsWith('.xml')) {
+        if (document.kind === 'index' && isAttachmentSitemapUrl(entryUrl.href)) {
+          // An attachment sitemap holds one entry per upload — pretty
+          // permalinks under their posts plus `?attachment_id=` viewers —
+          // indistinguishable from page URLs entry by entry. Named by the
+          // index, it is left unfetched so its media views never spend a
+          // route-budget slot.
+          attachmentSitemapsSkipped++;
+          firstAttachmentSitemapSkipped ||= entryUrl.href;
+        } else if (document.kind === 'index' || pathPart.endsWith('.xml')) {
           await fetchAndParse(entryUrl.href, depth + 1);
         } else if (isAttachmentViewerUrl(entryUrl.href)) {
           // An attachment viewer is a media view, not one of the source's
@@ -363,6 +398,13 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
       code: 'sitemap_attachment_skipped',
       url: firstAttachmentViewerSkipped,
       reason: `${attachmentViewersSkipped} attachment viewer URLs (?attachment_id=) left out of the route inventory`,
+    });
+  }
+  if (attachmentSitemapsSkipped > 0) {
+    diagnostics.push({
+      code: 'sitemap_attachment_sitemap_skipped',
+      url: firstAttachmentSitemapSkipped,
+      reason: `${attachmentSitemapsSkipped} attachment sitemap${attachmentSitemapsSkipped === 1 ? '' : 's'} left unfetched; their entries are left out of the route inventory`,
     });
   }
 
