@@ -2641,6 +2641,58 @@ describe( 'exportWebsiteCapture', () => {
 		expect( website ).toContain( 'data-image-src="/media/portrait.webp"' );
 	} );
 
+	it( 'localizes protocol-relative images inside captured interaction states', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-protocol-relative-interaction-media-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// Authored markup names the chart protocol-relative; the downloader
+		// resolved it against the https page.
+		const authored = '//cdn.example/files/size-chart.jpg?w=1200';
+		const downloaded = 'https://cdn.example/files/size-chart.jpg?w=640';
+		const panel = `<div id="panel" role="dialog"><img src="${ authored }" alt="Size chart"></div>`;
+		// The page names a different rendition of the chart, so the panel's
+		// reference resolves only through its media family.
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body><img src="${ downloaded }" alt=""><button id="open" aria-haspopup="dialog">Size guide</button></body></html>` );
+		writeFileSync( join( outputDir, 'media', 'size-chart.jpg' ), 'chart' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': {
+						html: 'html/homepage.html',
+						interactions: {
+							schema: 'blocks-engine-capture/interaction-states/v2',
+							sourceUrl: 'https://example.com/',
+							viewport: { width: 1440, height: 900 },
+							capturedAt: '2026-10-22T00:00:00.000Z',
+							states: [
+								{
+									status: 'captured',
+									trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', dataBindings: {} },
+									dialog: { selector: '#panel', tag: 'div', id: 'panel', role: 'dialog', ariaModal: true, html: panel, htmlBytes: panel.length, htmlTruncated: false },
+								},
+							],
+							initialDialogs: [],
+						},
+					},
+				},
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( downloaded, join( outputDir, 'media', 'size-chart.jpg' ) );
+		media.flush();
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const states = readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' );
+		expect( states ).not.toContain( 'cdn.example' );
+		expect( states ).toContain( '/media/size-chart.jpg' );
+		const website = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( website ).not.toContain( 'R0lGODlhAQAB' );
+		expect( website ).toContain( 'src="/media/size-chart.jpg"' );
+	} );
+
 	it( 'localizes large media referenced only by gallery frames', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-gallery-frame-media-export-' ) );
 		dirs.push( outputDir );

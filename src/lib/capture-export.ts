@@ -799,11 +799,13 @@ function localizeFamilyMediaUrls(
 	text: string,
 	portableUrlByFamily: Map< string, string >
 ): string {
-	if ( portableUrlByFamily.size === 0 || ! /https?:\/\//i.test( text ) ) return text;
-	return text.replace( /https?:\/\/[^\s"'<>)\\]+/gi, ( match ) => {
+	if ( portableUrlByFamily.size === 0 || ! /\/\//.test( text ) ) return text;
+	// Serialized markup keeps an author's protocol-relative `//host/path` as
+	// written; it names the same media as its https spelling.
+	return text.replace( /(?:https?:\/\/|(?<=^|[\s"'=(,])\/\/)[^\s"'<>)\\]+/gi, ( match ) => {
 		try {
 			const portable = portableUrlByFamily.get(
-				mediaFamily( new URL( match.replace( /&amp;/g, '&' ) ).href )
+				mediaFamily( new URL( match.replace( /&amp;/g, '&' ), 'https://protocol-relative.invalid/' ).href )
 			);
 			return portable ?? match;
 		} catch {
