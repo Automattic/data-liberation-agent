@@ -32,18 +32,23 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Shopify provider-service cleanu
             <input aria-label="Zip"><button>Calculate</button>
           </shipping-estimator></div>
         </details>
+        <details id="shipping-assets"><summary>Shipping cost and time</summary>
+          <div class="collapsible__content"><shipping-estimator role="form"><button>Calculate</button></shipping-estimator>
+            <script src="/assets/shipping-estimator.js" defer></script><link rel="stylesheet" href="/assets/shipping-estimator.css"></div>
+        </details>
         <details id="owner"><summary>Product details</summary><p>Owner specifications</p></details>
       </body></html>`);
 
       const report = await applySourceCleanup(page, cleanupPolicy(shopifyAdapter.liberation?.cleanupRules));
 
-      expect(await page.locator('shipping-estimator, #shipping').count()).toBe(0);
+      expect(await page.locator('shipping-estimator, #shipping, #shipping-assets').count()).toBe(0);
       expect(await page.locator('#owner').textContent()).toContain('Owner specifications');
       expect(await page.locator('main').innerText()).toBe('Owner product\n\nOwner product description');
       expect(report.failures).toEqual([]);
-      expect(report.removed).toBe(1);
+      expect(report.removed).toBe(2);
       expect(report.records).toEqual([
         expect.objectContaining({ category: 'provider-service', action: 'remove', selector: '#shipping' }),
+        expect.objectContaining({ category: 'provider-service', action: 'remove', selector: '#shipping-assets' }),
       ]);
     } finally {
       await page.close();
