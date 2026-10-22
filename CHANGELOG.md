@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.32.22] - 2026-10-22
+
+### Changed
+- regenerate plugin bundles
+- Restore the capture baseline after unproven disclosure probes
+
+### Fixed
+- remove shipping estimator service and dedicated disclosure
+
 ## [0.32.21] - 2026-10-21
 
 ### Changed
