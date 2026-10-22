@@ -77,6 +77,26 @@ describe('Shopify product JSON-LD', () => {
     expect(result['@graph'][0].keywords).toBe('Original, Outerwear, Everyday');
   });
 
+  it('leaves related-product nodes for other routes untouched', () => {
+    const related = { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: [{ '@type': 'ListItem', position: 1,
+      item: { '@type': 'Product', name: 'Other Coat', url: 'https://store.example/products/other-coat', offers: { '@type': 'Offer', price: '10.00' } } }] };
+    const { scripts } = completeProductJsonLd([source, JSON.stringify(related)], product, url);
+    const other = JSON.parse(scripts[1]!).itemListElement[0].item;
+    expect(other.hasVariant).toBeUndefined();
+    expect(other.keywords).toBeUndefined();
+    expect(other.image).toBeUndefined();
+    expect(JSON.parse(scripts[0]!).hasVariant.length).toBeGreaterThan(0);
+  });
+
+  it('keeps one gallery entry per image when renditions differ only by query', () => {
+    const first = product.images[0]!;
+    const theme = { '@context': 'https://schema.org', '@type': 'ProductGroup', url, image: `${first.startsWith('//') ? 'https:' : ''}${first.split('?')[0]}?width=1920` };
+    const { scripts } = completeProductJsonLd([JSON.stringify(theme)], product, url);
+    const images: string[] = JSON.parse(scripts[0]!).image;
+    const paths = images.map(src => new URL(src, url).pathname);
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
   it('retains original scripts and reports size/count overflow', () => {
     const oversized = { ...product, tags: ['x'.repeat(65536)] };
     expect(completeProductJsonLd([source], oversized, url)).toEqual({ scripts: [source], diagnostic: expect.stringContaining('shopify_product_jsonld_limit') });

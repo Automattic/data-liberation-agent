@@ -40,6 +40,15 @@ function variantId(node: Node, pageUrl: string): string | undefined {
   }
   return undefined;
 }
+/** Only this page's product is completed; related-product nodes keep their own data. */
+function describesPage(node: Node, pageUrl: string): boolean {
+  const own = new URL(pageUrl).pathname.replace(/\/$/, '');
+  const sources = [node.url, node['@id'], ...list(node.offers).map(offer => offer?.url)].filter((value): value is string => typeof value === 'string' && !value.startsWith('#'));
+  if (!sources.length) return true;
+  return sources.some(source => {
+    try { return new URL(source, pageUrl).pathname.replace(/\/$/, '') === own; } catch { return false; }
+  });
+}
 function completeVariant(node: Node, variant: ShopifyProductVariant, product: ShopifyProductJson, pageUrl: string): void {
   const properties = product.options.flatMap(option => {
     const value = variant[`option${option.position}` as keyof ShopifyProductVariant];
@@ -95,7 +104,7 @@ export function completeProductJsonLd(scripts: string[], product: ShopifyProduct
       if (Array.isArray(value)) { value.forEach(visit); return; }
       if (!object(value)) return;
       const types = list(value['@type']);
-      if (types.includes('ProductGroup') || types.includes('Product')) {
+      if ((types.includes('ProductGroup') || types.includes('Product')) && describesPage(value, pageUrl)) {
         found = true;
         const ownVariant = product.variants.find(v => String(v.id) === variantId(value, pageUrl));
         if (ownVariant && types.includes('Product')) completeVariant(value, ownVariant, product, pageUrl);
@@ -113,7 +122,13 @@ export function completeProductJsonLd(scripts: string[], product: ShopifyProduct
             const src = variant.featured_image?.src;
             return src ? [image(src, pageUrl)].filter(Boolean) : [];
           }));
-          value.image = append(undefined, [...images, ...list(value.image)]);
+          // CDN query parameters select a rendition (`v`, `width`), not a different image.
+          const rendition = (item: unknown): string => {
+            const src = typeof item === 'string' ? item : object(item) ? String(item.contentUrl ?? item.url ?? '') : '';
+            try { const u = new URL(src, pageUrl); return u.origin + u.pathname; } catch { return JSON.stringify(item); }
+          };
+          const seen = new Set<string>();
+          value.image = [...images, ...list(value.image)].filter(item => { const key = rendition(item); if (seen.has(key)) return false; seen.add(key); return true; });
         }
         if (value.keywords === undefined) value.keywords = product.tags;
         else {
