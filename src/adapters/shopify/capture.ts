@@ -1,5 +1,6 @@
 import type { LiberationHooks } from '../page-actions.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
+import { preserveShopifyProductJsonLd } from './product-jsonld.js';
 
 /**
  * Shopify storefronts inject third-party app chrome that isn't store content:
@@ -12,6 +13,7 @@ import { providerCreditRules } from '../../lib/source-cleanup.js';
  * purely a rendered-capture concern.
  */
 export const capture: LiberationHooks = {
+  beforeSerialize: preserveShopifyProductJsonLd,
   cleanupRules: [
     ...providerCreditRules('shopify', ['shopify.com'], 'Shopify'),
     { id: 'shopify-chat', category: 'provider-service', selector: 'shopify-chat' },

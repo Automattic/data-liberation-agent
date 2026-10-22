@@ -1,0 +1,16 @@
+{
+  "id": 10,
+  "title": "Field jacket",
+  "handle": "field-jacket",
+  "description": "A practical jacket.",
+  "tags": ["Outerwear", "Everyday"],
+  "options": [
+    {"name": "Size", "position": 1, "values": ["Small", "Medium"]},
+    {"name": "Colour", "position": 2, "values": ["Blue"]}
+  ],
+  "variants": [
+    {"id": 101, "title": "Small / Blue", "option1": "Small", "option2": "Blue", "option3": null, "sku": "FIELD-S", "price": 7890000, "compare_at_price": 8500000, "available": true, "featured_image": {"src": "//store.example/files/detail.jpg"}},
+    {"id": 102, "title": "Medium / Blue", "option1": "Medium", "option2": "Blue", "option3": null, "sku": "FIELD-M", "price": 8500000, "compare_at_price": null, "available": false, "featured_image": {"src": "//store.example/files/back.jpg"}}
+  ],
+  "images": ["//store.example/files/front.jpg", "//store.example/files/back.jpg", "//store.example/files/side.jpg"]
+}
