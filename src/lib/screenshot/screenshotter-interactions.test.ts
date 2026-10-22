@@ -38,6 +38,7 @@ function makePage() {
 	return {
 		route: vi.fn().mockResolvedValue(undefined),
 		unroute: vi.fn().mockResolvedValue(undefined),
+		exposeBinding: vi.fn().mockResolvedValue(undefined),
 		once: vi.fn(),
 		goto: vi.fn().mockImplementation( async ( url: string ) => {
 			currentUrl = url;

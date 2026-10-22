@@ -29,6 +29,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 	const routeHandlers: Array<(route: object) => Promise<void>> = [];
 	let currentUrl = '';
 	return {
+		exposeBinding: vi.fn().mockResolvedValue(undefined),
 		once: vi.fn(),
 		route: vi.fn().mockImplementation( async ( _pattern, handler ) => {
 			routeHandlers.push(handler);

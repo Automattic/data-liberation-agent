@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
+import { load } from 'cheerio';
 import { expect, it } from 'vitest';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
@@ -84,7 +85,7 @@ it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead
   } finally { await browser.close(); }
 }, 10000);
 
-it.skipIf(skipBrowser)('drops only the disclosure block when hydration cannot prove its baseline and keeps the page', async () => {
+it.skipIf(skipBrowser)('reloads the resting baseline and records a block loss when Escape cannot restore a destructive probe', async () => {
   const server = createServer((_request, response) => {
     response.setHeader('content-type', 'text/html');
     response.end(`<!doctype html><body><div><button id="opener" type="button" aria-expanded="false">Open choices</button></div>
@@ -113,7 +114,48 @@ it.skipIf(skipBrowser)('drops only the disclosure block when hydration cannot pr
     }]);
     const html = readFileSync(join(outputDir, entry.html), 'utf8');
     expect(html).toContain('Editorial content');
+    expect(html).toContain('<aside id="recommendation">Use suggested unit Keep current unit</aside>');
+    expect(html).toContain('aria-expanded="false"');
+    expect(load(html)('#options').length).toBe(0);
     expect(html).not.toContain('data-blocks-engine-capture-hydrated-disclosure');
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(outputDir, { recursive: true, force: true });
+  }
+}, 30000);
+
+// Neutral off-canvas control: no aria-controls and aria-expanded never changes.
+const drawerFixture = `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>
+#drawer{position:fixed;inset:0 0 0 10%;background:#223;color:#fff;transform:translateX(100%);visibility:hidden}
+html.drawer-active #drawer{transform:none;visibility:visible}
+</style></head><body>
+<header><div class="bar"><div class="toggle-wrap"><button type="button" class="menu-toggle" aria-expanded="false"><span>Main Menu</span></button></div></div></header>
+<main><h1>Page title</h1><p>Body copy.</p></main>
+<div id="drawer"><ul><li><a href="/a">Alpha</a></li><li><a href="/b">Beta</a></li></ul></div>
+<script>
+document.querySelector('.menu-toggle').addEventListener('click',()=>{document.getElementById('drawer').classList.add('active');document.documentElement.classList.add('drawer-active');});
+document.addEventListener('keyup',e=>{if(e.keyCode===27){document.getElementById('drawer').classList.remove('active');document.documentElement.classList.remove('drawer-active');}});
+</script></body></html>`;
+
+it.skipIf(skipBrowser)('saves the resting phone document after a real Escape restores an unassociated drawer', async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader('content-type', 'text/html');
+    response.end(drawerFixture);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'disclosure-drawer-'));
+  try {
+    const result = await captureScreenshots({ urls: [url], outputDir, concurrency: 1, settleMs: 0,
+      viewports: [{ id: 'mobile', width: 390, height: 800 }], learnFluid: false });
+    expect(result).toMatchObject({ captured: 1, failed: 0 });
+    const entry = JSON.parse(readFileSync(result.manifestPath, 'utf8')).entries[url];
+    const html = readFileSync(join(outputDir, entry.mobileHtml), 'utf8');
+    // Check element attributes, not CSS/scripts that mention the open class.
+    expect(html).not.toMatch(/<html[^>]*class="[^"]*drawer-active/);
+    expect(html).not.toMatch(/<div[^>]*id="drawer"[^>]*class="[^"]*active/);
+    expect(html).toContain('Page title');
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(outputDir, { recursive: true, force: true });

@@ -57,6 +57,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   return {
     route: vi.fn().mockResolvedValue(undefined),
     unroute: vi.fn().mockResolvedValue(undefined),
+    exposeBinding: vi.fn().mockResolvedValue(undefined),
     once: vi.fn(),
     on: vi.fn(),
     goto: vi.fn().mockImplementation(async (url: string) => {
@@ -778,6 +779,42 @@ describe('captureScreenshots', () => {
       expect(result.failed).toBeGreaterThan(0);
       const failures = JSON.parse(readFileSync(join(dir, 'screenshots', 'failures.json'), 'utf8'));
       expect(failures.some((f: { stage: string; error: string }) => f.stage === 'goto' && f.error === 'HTTP 403')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails content without saving HTML or a screenshot when disclosure baseline reload fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    const page = Object.assign(makeGoodPage(), { setViewportSize: vi.fn().mockResolvedValue(undefined) });
+    const evaluate = page.evaluate.getMockImplementation()!;
+    let probed = false;
+    let reloads = 0;
+    page.evaluate.mockImplementation(async (fn: unknown) => {
+      if (String(fn).includes('no unique locally mounted panel')) {
+        probed = true;
+        throw new Error('unrestored disclosure');
+      }
+      return evaluate(fn);
+    });
+    const goto = page.goto.getMockImplementation()!;
+    page.goto.mockImplementation(async (url: string) => {
+      await goto(url);
+      if (probed) reloads++;
+      return { status: () => probed ? 403 : 200 };
+    });
+    (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => page));
+    try {
+      const result = await captureScreenshots({
+        urls: ['https://example.com/home'], outputDir: dir, concurrency: 1, settleMs: 0,
+        viewports: [{ id: 'desktop', width: 1440, height: 900 }], learnFluid: false,
+      });
+      expect(result).toMatchObject({ captured: 0, failed: 1 });
+      expect(reloads).toBe(1);
+      expect(page.screenshot).not.toHaveBeenCalled();
+      expect(existsSync(join(dir, 'html', 'home.html'))).toBe(false);
+      const failures = JSON.parse(readFileSync(join(dir, 'screenshots', 'failures.json'), 'utf8'));
+      expect(failures).toContainEqual(expect.objectContaining({ stage: 'content', error: 'HTTP 403' }));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

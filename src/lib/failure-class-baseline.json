@@ -243,7 +243,6 @@
 			"throw new Error( 'Invalid source capture profile' )": 1
 		},
 		"src/lib/screenshot/dynamic-content.ts": {
-			"throw new Error(`${describe(trigger).selector}: no unique locally mounted panel with verified baseline restoration`)": 1,
 			"throw new Error(`Disclosure baseline restoration unproven: ${error instanceof Error ? error.message : String(error)}`, { cause: error })": 1
 		},
 		"src/lib/screenshot/finite-bootstrap.ts": {
