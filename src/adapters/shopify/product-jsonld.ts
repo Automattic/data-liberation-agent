@@ -122,13 +122,25 @@ export function completeProductJsonLd(scripts: string[], product: ShopifyProduct
             const src = variant.featured_image?.src;
             return src ? [image(src, pageUrl)].filter(Boolean) : [];
           }));
-          // CDN query parameters select a rendition (`v`, `width`), not a different image.
-          const rendition = (item: unknown): string => {
+          // The storefront serves one file from several hosts and renditions
+          // (`/cdn/shop/files/NAME?width=…`, `cdn…/files/NAME?v=…`): the file name
+          // identifies the image. Prefer the URL the page itself rendered, which
+          // the capture downloaded, and keep the product's gallery order.
+          const fileName = (item: unknown): string => {
             const src = typeof item === 'string' ? item : object(item) ? String(item.contentUrl ?? item.url ?? '') : '';
-            try { const u = new URL(src, pageUrl); return u.origin + u.pathname; } catch { return JSON.stringify(item); }
+            try { return decodeURIComponent(new URL(src, pageUrl).pathname.split('/').pop() ?? '') || src; } catch { return src; }
           };
+          const rendered = new Map<string, unknown>();
+          for (const item of [...list(value.image), ...list(value.hasVariant).flatMap(child => list(child?.image))]) {
+            if (!rendered.has(fileName(item))) rendered.set(fileName(item), item);
+          }
           const seen = new Set<string>();
-          value.image = [...images, ...list(value.image)].filter(item => { const key = rendition(item); if (seen.has(key)) return false; seen.add(key); return true; });
+          value.image = [...images, ...list(value.image)].flatMap(item => {
+            const key = fileName(item);
+            if (seen.has(key)) return [];
+            seen.add(key);
+            return [rendered.get(key) ?? item];
+          });
         }
         if (value.keywords === undefined) value.keywords = product.tags;
         else {

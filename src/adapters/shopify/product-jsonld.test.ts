@@ -88,13 +88,16 @@ describe('Shopify product JSON-LD', () => {
     expect(JSON.parse(scripts[0]!).hasVariant.length).toBeGreaterThan(0);
   });
 
-  it('keeps one gallery entry per image when renditions differ only by query', () => {
-    const first = product.images[0]!;
-    const theme = { '@context': 'https://schema.org', '@type': 'ProductGroup', url, image: `${first.startsWith('//') ? 'https:' : ''}${first.split('?')[0]}?width=1920` };
+  it('keeps one gallery entry per file and prefers the URL the page rendered', () => {
+    const name = new URL(product.images[0]!, url).pathname.split('/').pop()!;
+    const rendered = `https://store.example/cdn/shop/files/${name}?width=1920`;
+    const theme = { '@context': 'https://schema.org', '@type': 'ProductGroup', url, image: rendered };
     const { scripts } = completeProductJsonLd([JSON.stringify(theme)], product, url);
     const images: string[] = JSON.parse(scripts[0]!).image;
-    const paths = images.map(src => new URL(src, url).pathname);
-    expect(new Set(paths).size).toBe(paths.length);
+    const names = images.map(src => new URL(src, url).pathname.split('/').pop());
+    expect(new Set(names).size).toBe(names.length);
+    expect(images[0]).toBe(rendered);
+    expect(images.length).toBe(new Set([...product.images, ...product.variants.flatMap(v => v.featured_image?.src ?? [])].map(src => new URL(src, url).pathname.split("/").pop())).size);
   });
 
   it('retains original scripts and reports size/count overflow', () => {
