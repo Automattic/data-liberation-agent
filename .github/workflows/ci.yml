@@ -37,7 +37,13 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npx playwright install --with-deps chromium
+      # The runner image already carries Chromium's system libraries; `--with-deps`
+      # only re-fetched optional fonts and library upgrades from a slow apt mirror.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install chromium
       - run: npm run build
       - name: Verify skill driver coverage
         run: |
@@ -64,7 +70,13 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npx playwright install --with-deps chromium
+      # The runner image already carries Chromium's system libraries; `--with-deps`
+      # only re-fetched optional fonts and library upgrades from a slow apt mirror.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install chromium
       - run: npm run build
       - run: npx vitest run --shard=${{ matrix.shard }}/4
 
