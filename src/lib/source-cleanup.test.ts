@@ -545,6 +545,23 @@ it('keeps credit-like phrasing in article prose while removing footer credit tex
   } finally { await browser.close(); }
 }, 20_000);
 
+it('reclaims a custom-element host a removed service widget left empty, keeping mixed hosts', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<main><section id="info">
+<x-row id="vacated" class="accordion"><details><summary>Estimate delivery</summary><x-estimator></x-estimator></details></x-row>
+<x-row id="mixed" class="accordion"><details><summary>Estimate delivery</summary><x-estimator></x-estimator></details><p>Care instructions</p></x-row>
+</section></main>`);
+    const report = await applySourceCleanup(page, cleanupPolicy([{ id: 'estimator', category: 'provider-service', selector: 'details:has(> summary + x-estimator:last-child)' }]));
+    expect(report.failures).toEqual([]);
+    expect(await page.locator('#vacated').count()).toBe(0);
+    expect(await page.locator('#mixed').count()).toBe(1);
+    expect(await page.locator('#mixed p').innerText()).toBe('Care instructions');
+    expect(await page.locator('#info').count()).toBe(1);
+  } finally { await browser.close(); }
+});
+
 it('reports invalid rules rather than silently certifying cleanup', async () => {
   const browser = await chromium.launch();
   try {

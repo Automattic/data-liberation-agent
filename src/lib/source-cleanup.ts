@@ -408,10 +408,13 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
         orphanIdsIn(node);
         node.remove();
         report.removed++;
-        // Reclaim an ad-only wrapper, never a content landmark or mixed container.
-        if (rule.category === 'advertisement') for (let depth = 0; depth < 4 && parent; depth++) {
-          if (!/^(DIV|SPAN|ASIDE)$/.test(parent.tagName) || parent.children.length ||
-            !/^(?:advertisement|advertising|sponsored)?$/i.test((parent.textContent ?? '').trim())) break;
+        // Reclaim a wrapper the removal left empty (an ad slot, or a service
+        // widget's custom-element host), never a content landmark or mixed container.
+        const reclaimsWrappers = rule.category === 'advertisement' || rule.category === 'provider-service';
+        if (reclaimsWrappers) for (let depth = 0; depth < 4 && parent; depth++) {
+          const label = rule.category === 'advertisement' ? /^(?:advertisement|advertising|sponsored)?$/i : /^$/;
+          if (!(/^(DIV|SPAN|ASIDE)$/.test(parent.tagName) || parent.tagName.includes('-')) || parent.children.length ||
+            !label.test((parent.textContent ?? '').trim())) break;
           const ancestor = parent.parentElement;
           orphanIdsIn(parent);
           parent.remove();
