@@ -25,6 +25,10 @@ it('removes third-party runtime islands but preserves authored and first-party f
 				root.id = 'neutral-widget'; root.style.position = 'fixed';
 				root.innerHTML = '<form id="external-survey"><input name="feedback"></form>';
 				document.body.appendChild(root);
+				// An empty in-flow root whose only rendered content is fixed.
+				const shell = document.createElement('div'); shell.id = 'neutral-shell';
+				shell.innerHTML = '<div style="position:fixed;bottom:0"><form id="external-shell-form"><fieldset><input name="rating"></fieldset></form></div>';
+				document.body.appendChild(shell);
 				// Moving an authored node is not ownership.
 				document.body.appendChild(document.getElementById('authored'));
 				const content = document.createElement('section'); content.id = 'in-flow';
@@ -55,6 +59,7 @@ it('removes third-party runtime islands but preserves authored and first-party f
 			expect(html).toContain('<section id="in-flow"');
 			// Scripts remain in this intermediate capture, so match markup only.
 			expect(html).not.toContain('<div id="neutral-widget"');
+			expect(html).not.toContain('<div id="neutral-shell"');
 		}
 		for (const profile of ['desktop', 'mobile']) {
 			expect(entry.profiles[profile].diagnostics).toContainEqual({

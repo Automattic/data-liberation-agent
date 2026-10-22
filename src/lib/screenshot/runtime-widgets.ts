@@ -8,6 +8,15 @@ import { isFirstParty } from './first-party.js';
  */
 function observeRuntimeWidgets(): void {
 	const owners = new WeakMap<Element, string>();
+	const originOf = (url: string): string => { try { return new URL(url).origin; } catch { return url; } };
+	// An overlay island renders nothing in flow: either the root itself is
+	// fixed, or it is an empty in-flow box whose rendered content is fixed.
+	const isOverlayIsland = (root: Element): boolean => {
+		if (getComputedStyle(root).position === 'fixed') return true;
+		const box = root.getBoundingClientRect();
+		if (box.width > 0 && box.height > 0) return false;
+		return [...root.querySelectorAll('*')].some(child => getComputedStyle(child).position === 'fixed');
+	};
 	const roots = new Map<Element, string>();
 	const scriptUrl = (): string | undefined => {
 		const current = document.currentScript;
@@ -25,7 +34,8 @@ function observeRuntimeWidgets(): void {
 	const remember = (node: Node): void => {
 		if (!(node instanceof Element) || node.parentElement !== document.body) return;
 		const source = owners.get(node);
-		if (source && source === scriptUrl()) roots.set(node, source);
+		const inserter = scriptUrl();
+		if (source && inserter && originOf(source) === originOf(inserter)) roots.set(node, source);
 	};
 	const appendChild = Node.prototype.appendChild;
 	Node.prototype.appendChild = function <T extends Node>(node: T): T {
@@ -53,7 +63,7 @@ function observeRuntimeWidgets(): void {
 				if (!origins.includes(origin) || root.parentElement !== document.body) continue;
 				// A runtime script can render legitimate in-flow content. Only a
 				// detached overlay island is excluded, not arbitrary third-party DOM.
-				if (getComputedStyle(root).position !== 'fixed') continue;
+				if (!isOverlayIsland(root)) continue;
 				removed.push({ root: root.tagName.toLowerCase() + (root.id ? `#${root.id}` : '') + [...root.classList].map(name => `.${name}`).join(''), origin });
 				root.remove();
 				roots.delete(root);
