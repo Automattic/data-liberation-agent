@@ -7,6 +7,7 @@ import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetReferences } from '../srcset.js';
+import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
 import type { Page, Request, Response } from 'playwright';
@@ -107,6 +108,20 @@ function isVideoOrAudioContentType( contentType: string ): boolean {
 const RENDER_CRITICAL_EXTENSION_RE = /\.(?:css|woff2?|ttf|otf|eot)$/i;
 const MEDIA_EXTENSION_RE =
 	/\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|heic|heif|jxl|mp4|m4v|mov|webm|ogv|mkv|avi|mpg|mpeg|mp3|m4a|aac|wav|flac|ogg|pdf|docx?)$/i;
+
+/**
+ * Request headers for a direct fetch of a DOM-referenced resource. A url that
+ * could name a stylesheet or font is fetched with no Accept override — a
+ * negotiation-happy server must not turn a stylesheet into an image. Every
+ * other direct fetch (images above all) negotiates like the browser that
+ * rendered the page: format-negotiating image CDNs (Cloudflare
+ * `format=auto`, Cloudinary `f_auto`, imgix `auto=format`) pick the served
+ * encoding from Accept, and without it they hand back the legacy/original
+ * format, which can be many times larger than what a visitor receives.
+ */
+export function resourceRequestHeaders( url: string ): Record< string, string > | undefined {
+	return mayBeRenderCriticalUrl( url ) ? undefined : { accept: BROWSER_IMAGE_ACCEPT };
+}
 
 /**
  * Stylesheets and fonts: without them a captured route renders unstyled, so
@@ -415,6 +430,7 @@ export class CapturedResourceStore {
 			safeFetch( url, {
 				maxBytes,
 				timeoutMs,
+				headers: resourceRequestHeaders( url ),
 				headersForOrigin: async ( origin ) => {
 					const cookie = await sourceSessionCookieHeader( origin );
 					return cookie ? { cookie } : undefined;
