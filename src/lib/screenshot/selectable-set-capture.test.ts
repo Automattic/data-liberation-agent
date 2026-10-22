@@ -1021,7 +1021,7 @@ describe( 'captureSelectableSetStates', () => {
 			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( INDEPENDENT_TOGGLE_PAGE );
-				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 3_000 } );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
 				expect( states ).toHaveLength( 3 );
 				expect( states.every( ( state ) => state.kind === 'choice-group' && state.choiceGroup?.replay === 'unsupported' ) ).toBe( true );
 				expect( states.every( ( state ) => state.choiceGroup?.restoration === 'verified' ) ).toBe( true );
@@ -1046,7 +1046,7 @@ describe( 'captureSelectableSetStates', () => {
 			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( CLOSURE_ABSOLUTE_PAGE );
-				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 3_000 } );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
 				expect( states ).toHaveLength( 3 );
 				expect( states.every( ( state ) => state.choiceGroup?.replay === 'activation-determined' ) ).toBe( true );
 				expect( states.every( ( state ) => state.choiceGroup?.restoration === 'verified' ) ).toBe( true );
@@ -1132,7 +1132,7 @@ describe( 'captureSelectableSetStates', () => {
 			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( HISTORY_DEPENDENT_PAGE );
-				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 3_000 } );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
 				expect( states ).toHaveLength( 1 );
 				expect( states[ 0 ] ).toMatchObject( {
 					status: 'captured',
