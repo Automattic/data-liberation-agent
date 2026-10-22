@@ -26,53 +26,61 @@ export function pathWithin( root: string, candidate: string ): boolean {
 }
 
 
+const PORTABLE_EXTENSIONS_BY_TYPE: Record< string, string > = {
+	'application/ecmascript': '.js',
+	'application/javascript': '.js',
+	'application/json': '.json',
+	'application/manifest+json': '.json',
+	'application/ld+json': '.json',
+	'application/pdf': '.pdf',
+	'application/xml': '.xml',
+	'application/wasm': '.wasm',
+	'audio/mpeg': '.mp3',
+	'audio/ogg': '.ogg',
+	'audio/wav': '.wav',
+	'font/otf': '.otf',
+	'font/ttf': '.ttf',
+	'font/woff': '.woff',
+	'font/woff2': '.woff2',
+	'application/font-otf': '.otf',
+	'application/font-ttf': '.ttf',
+	'application/font-woff': '.woff',
+	'application/font-woff2': '.woff2',
+	'application/x-font-otf': '.otf',
+	'application/x-font-ttf': '.ttf',
+	'application/x-font-woff': '.woff',
+	'application/x-font-woff2': '.woff2',
+	'image/avif': '.avif',
+	'image/gif': '.gif',
+	'image/jpeg': '.jpg',
+	'image/png': '.png',
+	'image/svg+xml': '.svg',
+	'image/webp': '.webp',
+	'text/css': '.css',
+	'text/ecmascript': '.js',
+	'text/html': '.html',
+	'text/javascript': '.js',
+	'text/plain': '.txt',
+	'text/xml': '.xml',
+	'video/mp4': '.mp4',
+	'video/ogg': '.ogg',
+	'video/webm': '.webm',
+};
+
+/** Extensions that already name portable content, including common spellings the map normalises. */
+const PORTABLE_EXTENSIONS = new Set( [ ...Object.values( PORTABLE_EXTENSIONS_BY_TYPE ), '.jpeg', '.htm', '.mjs', '.cjs' ] );
+
 export function portableResourcePath( path: string, contentType: string ): string | undefined {
 	const requestedPath = path.replace( /^resources[\\/]/, '' );
-	if ( extname( basename( requestedPath ) ) ) return requestedPath;
 
-	const extension =
-		{
-			'application/ecmascript': '.js',
-			'application/javascript': '.js',
-			'application/json': '.json',
-			'application/manifest+json': '.json',
-			'application/ld+json': '.json',
-			'application/pdf': '.pdf',
-			'application/xml': '.xml',
-			'application/wasm': '.wasm',
-			'audio/mpeg': '.mp3',
-			'audio/ogg': '.ogg',
-			'audio/wav': '.wav',
-			'font/otf': '.otf',
-			'font/ttf': '.ttf',
-			'font/woff': '.woff',
-			'font/woff2': '.woff2',
-			'application/font-otf': '.otf',
-			'application/font-ttf': '.ttf',
-			'application/font-woff': '.woff',
-			'application/font-woff2': '.woff2',
-			'application/x-font-otf': '.otf',
-			'application/x-font-ttf': '.ttf',
-			'application/x-font-woff': '.woff',
-			'application/x-font-woff2': '.woff2',
-			'image/avif': '.avif',
-			'image/gif': '.gif',
-			'image/jpeg': '.jpg',
-			'image/png': '.png',
-			'image/svg+xml': '.svg',
-			'image/webp': '.webp',
-			'text/css': '.css',
-			'text/ecmascript': '.js',
-			'text/html': '.html',
-			'text/javascript': '.js',
-			'text/plain': '.txt',
-			'text/xml': '.xml',
-			'video/mp4': '.mp4',
-			'video/ogg': '.ogg',
-			'video/webm': '.webm',
-		}[ contentType.toLowerCase().split( ';', 1 )[ 0 ].trim() ] ?? '';
+	const extension = PORTABLE_EXTENSIONS_BY_TYPE[ contentType.toLowerCase().split( ';', 1 )[ 0 ].trim() ] ?? '';
 
-	return extension ? `${ requestedPath }${ extension }` : undefined;
+	const currentExtension = extname( basename( requestedPath ) ).toLowerCase();
+	if ( PORTABLE_EXTENSIONS.has( currentExtension ) || ! extension ) return currentExtension ? requestedPath : undefined;
+	// A server-script path (…/google-fonts.php) does not describe its content:
+	// keep the base name and take the served type's extension, so importers
+	// accept the file.
+	return `${ requestedPath.slice( 0, requestedPath.length - currentExtension.length ) }${ extension }`;
 }
 
 /** Encode a copied file's URL without changing its on-disk path. */
