@@ -4,7 +4,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { materializePortableResources } from './portable-resources.js';
-import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
+import { portableResourcePath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
+
+it( 'names captured resources by served content type when the requested extension does not describe it', () => {
+	// A font served by a script path (…/google-fonts.php?url=…woff2) is portable
+	// only under its content-type extension: importers refuse script files.
+	expect( portableResourcePath( 'resources/onewebstatic/google-fonts.php', 'font/woff2' ) ).toBe( 'onewebstatic/google-fonts.woff2' );
+	expect( portableResourcePath( 'resources/a/font.aspx', 'font/woff' ) ).toBe( 'a/font.woff' );
+	expect( portableResourcePath( 'resources/a/img.php', 'image/png' ) ).toBe( 'a/img.png' );
+	// An extension that already describes the content keeps the requested name.
+	expect( portableResourcePath( 'resources/a/x.woff2', 'font/woff2' ) ).toBe( 'a/x.woff2' );
+	expect( portableResourcePath( 'resources/a/photo.jpeg', 'image/jpeg' ) ).toBe( 'a/photo.jpeg' );
+	expect( portableResourcePath( 'resources/a/app.mjs', 'text/javascript' ) ).toBe( 'a/app.mjs' );
+	// Extensionless paths take the content-type extension as before.
+	expect( portableResourcePath( 'resources/a/fonts', 'font/woff2' ) ).toBe( 'a/fonts.woff2' );
+	// Without a known portable extension the requested name is kept as-is.
+	expect( portableResourcePath( 'resources/a/file.php', 'application/octet-stream' ) ).toBe( 'a/file.php' );
+	expect( portableResourcePath( 'resources/a/blob', 'application/octet-stream' ) ).toBe( undefined );
+} );
 
 it( 'owns recursive materialization and fallback promotion without changing media seed indexes', () => {
 	const root = mkdtempSync( join( tmpdir(), 'portable-resources-' ) );
@@ -135,5 +152,33 @@ it( 'applies embedded page policy while resolving child dependencies against its
 		expect( portable ).not.toContain( '<script>' );
 		expect( result.unresolvedDependencies ).toEqual( [] );
 		expect( readFileSync( join( root, 'resources', 'inner.html' ), 'utf8' ) ).toBe( child );
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );
+
+it( 'rewrites @font-face to the content-type name of a script-served font', () => {
+	const root = mkdtempSync( join( tmpdir(), 'portable-script-font-' ) );
+	try {
+		mkdirSync( join( root, 'resources', 'onewebstatic' ), { recursive: true } );
+		const websiteDir = join( root, 'website' );
+		const htmlPath = join( root, 'staged-page.html' );
+		writeFileSync( join( root, 'resources', 'onewebstatic', 'google-fonts.php' ), Buffer.concat( [ Buffer.from( 'wOF2' ), Buffer.from( [ 0, 1, 2, 3 ] ) ] ) );
+		writeFileSync( join( root, 'resources', 'fonts.css' ), "@font-face{font-family:Probe;src:url('/onewebstatic/google-fonts.php?file=probe.woff2') format('woff2')}" );
+		writeFileSync( htmlPath, '<link rel="stylesheet" href="/fonts.css">' );
+		const result = materializePortableResources( {
+			sourceRoot: root, websiteDir, entries: [ { url: 'https://example.test/', htmlPath } ],
+			resourceManifest: { version: 1, failures: [], resources: {
+				'https://example.test/fonts.css': { path: 'resources/fonts.css', contentType: 'text/css' },
+				'https://example.test/onewebstatic/google-fonts.php?file=probe.woff2': { path: 'resources/onewebstatic/google-fonts.php', contentType: 'font/woff2' },
+			} },
+			mediaReplacements: new Map(), assetPathsByHash: new Map(), assetHashesByPath: new Map(), portablePathsBySource: new Map(),
+			embeddedSources: new Set(), projectEmbeddedHtml: ( html ) => html,
+		} );
+		expect( existsSync( join( websiteDir, 'onewebstatic', 'google-fonts.woff2' ) ) ).toBe( true );
+		expect( existsSync( join( websiteDir, 'onewebstatic', 'google-fonts.php' ) ) ).toBe( false );
+		expect( result.assets.map( ( asset ) => asset.path ) ).toContain( 'website/onewebstatic/google-fonts.woff2' );
+		expect( result.resourceReplacements.get( '/onewebstatic/google-fonts.php?file=probe.woff2' ) ).toBe( '/onewebstatic/google-fonts.woff2' );
+		const css = readFileSync( join( websiteDir, 'fonts.css' ), 'utf8' );
+		expect( css ).toContain( "url('/onewebstatic/google-fonts.woff2')" );
+		expect( css ).not.toContain( '.php' );
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );
