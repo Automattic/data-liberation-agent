@@ -488,7 +488,20 @@ function resolveObservedAncestors(
 function removeCapturedDialog( $: cheerio.CheerioAPI, selector: string | undefined ): void {
 	if ( ! selector ) return;
 	try {
-		$( selector ).not( 'details.data-blocks-engine-capture-disclosure *, [data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' ).remove();
+		$( selector ).not( 'details.data-blocks-engine-capture-disclosure *, [data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' ).each( ( _, element ) => {
+			let ancestor = $( element ).parent();
+			$( element ).remove();
+			// Relocation can vacate a whole chain of source wrappers. Prune only
+			// that chain, within body, without deleting semantic landmarks.
+			while ( ancestor.parents( 'body' ).length && !ancestor.is( 'header,nav,main,aside,footer,section,form,search' ) ) {
+				const roles = ( ancestor.attr( 'role' ) ?? '' ).split( /\s+/ );
+				if ( roles.some( role => [ 'banner', 'navigation', 'main', 'complementary', 'contentinfo', 'region', 'form', 'search' ].includes( role ) ) ) break;
+				if ( ancestor.children().length || ancestor.text().trim() ) break;
+				const parent = ancestor.parent();
+				ancestor.remove();
+				ancestor = parent;
+			}
+		} );
 	} catch {
 		// Invalid source selectors cannot safely identify a node to remove.
 	}

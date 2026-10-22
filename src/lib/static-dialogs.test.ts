@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { chromium } from 'playwright';
+import * as cheerio from 'cheerio';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import type { CapturedDialogInteraction } from './screenshot/interaction-capture.js';
 import { captureTriggeredDialogs } from './screenshot/interaction-capture.js';
@@ -25,6 +26,29 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it.each( [
+		{ wrapper: '<div id="shell"><x-modal id="m1"> \n<!-- resting host -->PANEL\n </x-modal></div>', retained: [] },
+		{ wrapper: '<x-modal id="m1">PANEL<span>Other content</span></x-modal>', retained: [ 'm1' ] },
+		{ wrapper: '<x-modal id="m1">PANEL Other text</x-modal>', retained: [ 'm1' ] },
+		{ wrapper: '<main id="landmark"><x-modal id="m1">PANEL</x-modal></main>', retained: [ 'landmark' ] },
+		{ wrapper: '<div role="navigation" id="landmark"><x-modal id="m1">PANEL</x-modal></div>', retained: [ 'landmark' ] },
+	] )( 'removes only vacated dialog ancestors: $wrapper', ( { wrapper, retained } ) => {
+		const panel = '<div role="dialog">Size guide content</div>';
+		const html = wireCapturedDialogs(
+			`<html><body><x-opener data-target="#m1"><button aria-haspopup="dialog">Size guide</button></x-opener>${ wrapper.replace( 'PANEL', panel ) }</body></html>`,
+			[ {
+				...captured,
+				trigger: { ...captured.trigger, selector: 'x-opener > button', label: 'Size guide' },
+				dialog: { ...captured.dialog!, selector: '#m1 > div:nth-of-type(1)', html: panel },
+			} ]
+		);
+		const $ = cheerio.load( html );
+		expect( $( 'x-opener > button' ).next( '[data-blocks-engine-capture-dialog-panel]' ).text() ).toBe( 'Size guide content' );
+		expect( $( '#m1, #shell, #landmark' ).map( ( _, node ) => $( node ).attr( 'id' ) ).get() ).toEqual( retained );
+		expect( $( 'body' ) ).toHaveLength( 1 );
+		if ( retained.includes( 'm1' ) ) expect( $( '#m1' ).text() ).toContain( 'Other' );
+	} );
+
 	it( 'wires observed source controls rather than matching IDs copied into earlier popup snapshots', async () => {
 		const controls = '<button id="first" aria-haspopup="dialog">First gallery</button><button id="second" aria-haspopup="dialog">Second gallery</button>';
 		let nested = controls;
