@@ -66,44 +66,33 @@ export interface ShopifyArticle {
 }
 
 export interface ShopifyProductVariant {
-  id?: number;
+  id: number;
   title: string;
-  price: string;
-  compare_at_price?: string | null;
+  price: number;
+  compare_at_price?: number | null;
   sku: string;
-  option1?: string;
-  option2?: string;
-  option3?: string;
-  weight?: number;
-  weight_unit?: string;
-  inventory_quantity?: number;
+  option1?: string | null;
+  option2?: string | null;
+  option3?: string | null;
   available?: boolean;
-  image_id?: number | null;
   featured_image?: { src: string } | null;
 }
 
 export interface ShopifyProductOption {
   name: string;
+  position: number;
   values: string[];
 }
 
-export interface ShopifyProductImage {
-  id?: number;
-  src: string;
-  variant_ids?: number[];
-}
-
 export interface ShopifyProductJson {
+  id: number;
   title: string;
-  body_html: string;
+  description: string;
   handle: string;
-  product_type?: string;
-  tags?: string;
-  vendor?: string;
-  image?: { src: string };
-  variants?: ShopifyProductVariant[];
-  options?: ShopifyProductOption[];
-  images?: ShopifyProductImage[];
+  tags: string[];
+  variants: ShopifyProductVariant[];
+  options: ShopifyProductOption[];
+  images: string[];
 }
 
 // Narrow stockable-variant shape shared by `computeStock`.
