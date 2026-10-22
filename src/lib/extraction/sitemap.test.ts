@@ -62,6 +62,20 @@ describe('isAttachmentSitemapUrl', () => {
     expect(isAttachmentSitemapUrl('https://example.test/post-sitemap.xml')).toBe(false);
     expect(isAttachmentSitemapUrl('https://example.test/attachments-guide/')).toBe(false);
   });
+
+  it('recognizes Jetpack media sitemap filenames by anchored basename', () => {
+    // Jetpack lists each upload's attachment page as the <loc> of its image
+    // and video sitemaps, so they skip like the attachment sitemaps above.
+    expect(isAttachmentSitemapUrl('https://example.test/image-sitemap.xml')).toBe(true);
+    expect(isAttachmentSitemapUrl('https://example.test/image-sitemap-1.xml')).toBe(true);
+    expect(isAttachmentSitemapUrl('https://example.test/video-sitemap.xml')).toBe(true);
+    expect(isAttachmentSitemapUrl('https://example.test/video-sitemap-1.xml')).toBe(true);
+    // An ordinary numbered child sitemap or a name that merely contains the
+    // words is still followed.
+    expect(isAttachmentSitemapUrl('https://example.test/sitemap-1.xml')).toBe(false);
+    expect(isAttachmentSitemapUrl('https://example.test/news-sitemap.xml')).toBe(false);
+    expect(isAttachmentSitemapUrl('https://example.test/my-image-sitemap-page/')).toBe(false);
+  });
 });
 
 describe('classifyUrl', () => {
@@ -366,6 +380,56 @@ describe('fetchSitemap', () => {
       const fetched = fetchMock.mock.calls.map(([url]) => String(url));
       expect(fetched).not.toContain('https://example.test/attachment-sitemap.xml');
       expect(urls.some((url) => url.includes('/diagram') || url.includes('/photo') || url.includes('attachment_id'))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('leaves Jetpack image and video sitemaps named by the index unfetched, their entries out of the inventory', async () => {
+    // Jetpack publishes sitemap.xml as an index naming sitemap-<n>.xml plus
+    // image-sitemap-<n>.xml and video-sitemap-<n>.xml, and the media sitemaps
+    // list each upload's attachment page as their <loc>. Left unfetched, they
+    // never spend route-budget slots on media views (adamadam.blog: 26 of 50
+    // captured routes were attachment pages before the skip).
+    const urlset = (paths: string[]) =>
+      `<urlset>${paths.map((path) => `<url><loc>https://example.test${path}</loc></url>`).join('')}</urlset>`;
+    const responseByUrl = new Map([
+      ['https://example.test/sitemap.xml', `<sitemapindex>
+        <sitemap><loc>https://example.test/sitemap-1.xml</loc></sitemap>
+        <sitemap><loc>https://example.test/image-sitemap-1.xml</loc></sitemap>
+        <sitemap><loc>https://example.test/video-sitemap-1.xml</loc></sitemap>
+      </sitemapindex>`],
+      ['https://example.test/sitemap-1.xml', urlset(['/', '/about', '/contact', '/2019/03/first-post', '/2019/04/second-post'])],
+      ['https://example.test/image-sitemap-1.xml', urlset(['/placeholder-image-3/', '/headshot-crop/', '/?attachment_id=21'])],
+      ['https://example.test/video-sitemap-1.xml', urlset(['/sad-mov/', '/?attachment_id=22'])],
+    ]);
+    const fetchMock = vi.fn(async (url: string) => responseByUrl.has(String(url))
+      ? new Response(responseByUrl.get(String(url)), { status: 200 })
+      : new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/',
+        'https://example.test/about',
+        'https://example.test/contact',
+        'https://example.test/2019/03/first-post',
+        'https://example.test/2019/04/second-post',
+      ]);
+      expect(diagnostics).toEqual([
+        {
+          code: 'sitemap_attachment_sitemap_skipped',
+          url: 'https://example.test/image-sitemap-1.xml',
+          reason: '2 attachment sitemaps left unfetched; their entries are left out of the route inventory',
+        },
+      ]);
+      // Neither media sitemap was fetched, so neither its attachment pages
+      // nor its viewer entries reached the inventory.
+      const fetched = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(fetched).not.toContain('https://example.test/image-sitemap-1.xml');
+      expect(fetched).not.toContain('https://example.test/video-sitemap-1.xml');
+      expect(urls.some((url) => url.includes('attachment_id') || url.includes('/placeholder-image') || url.includes('/headshot-crop') || url.includes('/sad-mov'))).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }

@@ -104,11 +104,13 @@ export function isAttachmentViewerUrl(url: string): boolean {
  * The filename is the reliable signal, matched on the basename only and
  * anchored: Yoast and Rank Math publish `attachment-sitemap.xml` with numbered
  * variants (`attachment-sitemap2.xml`, `attachment-sitemap-2.xml`), WordPress
- * core publishes `wp-sitemap-posts-attachment-<n>.xml`. A child sitemap that
- * merely carries the word in a path segment, or a longer name containing it,
- * is not one and is still followed.
+ * core publishes `wp-sitemap-posts-attachment-<n>.xml`, and Jetpack publishes
+ * `image-sitemap.xml` and `video-sitemap.xml` with numbered variants
+ * (`image-sitemap-1.xml`), each entry pointing at one upload's attachment
+ * page. A child sitemap that merely carries the word in a path segment, or a
+ * longer name containing it, is not one and is still followed.
  */
-const ATTACHMENT_SITEMAP_BASENAME = /^(?:attachment-sitemap(?:-?\d+)?|wp-sitemap-posts-attachment-\d+)\.xml$/i;
+const ATTACHMENT_SITEMAP_BASENAME = /^(?:attachment-sitemap(?:-?\d+)?|(?:image|video)-sitemap(?:-?\d+)?|wp-sitemap-posts-attachment-\d+)\.xml$/i;
 
 export function isAttachmentSitemapUrl(url: string): boolean {
   try {
