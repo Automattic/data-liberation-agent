@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.32.23] - 2026-10-22
+
+### Changed
+- regenerate plugin bundles
+- install Playwright Chromium without apt deps and cache it
+
+### Fixed
+- prune wrappers vacated by relocated dialog panels
+
 ## [0.32.22] - 2026-10-22
 
 ### Changed
