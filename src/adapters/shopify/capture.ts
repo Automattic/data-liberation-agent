@@ -16,6 +16,19 @@ export const capture: LiberationHooks = {
     ...providerCreditRules('shopify', ['shopify.com'], 'Shopify'),
     { id: 'shopify-chat', category: 'provider-service', selector: 'shopify-chat' },
     { id: 'shop-cart-sync', category: 'provider-service', selector: 'shop-cart-sync' },
+    {
+      id: 'shopify-shipping-estimator', category: 'provider-service',
+      // Remove the disclosure only for a dedicated estimator body, never a
+      // mixed-content row. Ancestors match before descendants, so a dedicated
+      // row produces one cleanup record; elsewhere only the dead form leaves.
+      selector: [
+        'details:has(> summary:first-child + shipping-estimator:last-child)',
+        // The theme ships the estimator's script and stylesheet inside the
+        // row body; they are not content, so they do not make the row mixed.
+        'details:has(> summary:first-child + :last-child > shipping-estimator):not(:has(> summary + * > :not(shipping-estimator, script, link, style)))',
+        'shipping-estimator',
+      ].join(','),
+    },
   ],
   removeSelectors: ['#upCart', '#upCartStickyButton', '[class*="kl-teaser"]'],
 };
