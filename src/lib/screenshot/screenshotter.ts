@@ -46,6 +46,7 @@ import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
+import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, routePhaseBreakdown, type PhaseLedger } from './phase-ledger.js';
 import { availableRuntimeMemory } from './runtime-memory.js';
@@ -1129,6 +1130,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		/* best-effort — a picker that will not advance must not block capture */
 	} );
 
+	// Remove attributed non-content islands before interaction evidence and HTML.
+	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 	args.phases?.enter( 'before-serialize' );
 	if ( args.beforeSerialize ) {
 		await args.beforeSerialize( page, {
@@ -1213,6 +1216,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// A frozen document (the static mobile carry) also has its scripts stripped.
 	const serializeDocument = async ( frozen: boolean ): Promise< { html: string; documentUrl: { url: string; baseUrl: string } } > => {
 		args.phases?.enter( 'serialize' );
+		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 		const captured = await capturePageHtml( page );
@@ -2632,6 +2636,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	            globalThis.__name = function (fn) { return fn; };
 	          }
 	        ` );
+					await installRuntimeWidgetAttribution( context );
 					await context.addInitScript( observeViewportEntrances );
 					await context.addInitScript( observeRuntimeStyleWrites );
 					await context.addInitScript( observeViewportWork );

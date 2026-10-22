@@ -1191,13 +1191,27 @@ async function describeInterceptingElement(
 
 /**
  * Wait for the page to finish reacting to a scroll: intersection observer
- * callbacks run within two frames, then any finite animation or transition they
- * started runs to completion. Infinite animations never settle and are ignored.
+ * callbacks have run, then any finite animation or transition they started runs
+ * to completion. Infinite animations never settle and are ignored.
+ *
+ * Frame counting alone is not enough under load: observer notifications are a
+ * separate task. All observers of a document are notified in one task, in
+ * creation order, so the first callback of an observer created now arrives only
+ * after the page's earlier observers have seen the scrolled position.
  */
 async function settleScrollReveals( page: Page ): Promise< void > {
 	await page.evaluate( async ( budget: number ) => {
 		const frame = () => new Promise< void >( resolve => requestAnimationFrame( () => resolve() ) );
 		const deadline = performance.now() + budget;
+		await new Promise< void >( resolve => {
+			const timer = setTimeout( resolve, Math.max( 0, deadline - performance.now() ) );
+			const observer = new IntersectionObserver( () => {
+				observer.disconnect();
+				clearTimeout( timer );
+				resolve();
+			} );
+			observer.observe( document.documentElement );
+		} );
 		await frame();
 		await frame();
 		while ( performance.now() < deadline ) {
