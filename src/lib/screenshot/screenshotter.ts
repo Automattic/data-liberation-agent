@@ -47,6 +47,7 @@ import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
+import { restoreRuntimeEmoji } from './runtime-emoji.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, routePhaseBreakdown, type PhaseLedger } from './phase-ledger.js';
 import { availableRuntimeMemory } from './runtime-memory.js';
@@ -1132,6 +1133,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	// Remove attributed non-content islands before interaction evidence and HTML.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
+	// Restore runtime emoji replacement images to their authored text (#954),
+	// so screenshots, interaction evidence and HTML all record text where the
+	// source's emoji script had swapped in Twemoji images.
+	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 	args.phases?.enter( 'before-serialize' );
 	if ( args.beforeSerialize ) {
 		await args.beforeSerialize( page, {
@@ -1219,6 +1224,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
+		// Last normalization before the document is read: disclosure-hydration
+		// recovery can reload the baseline, and the fresh document's emoji script
+		// re-creates the replacement images this route already restored (#954).
+		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 		const captured = await capturePageHtml( page );
 		const html = canonicalize( wireCapturedDialogs( frozen ? sanitizeFrozenHtml( captured ) : captured, galleryStates ) );
 		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
