@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_ROUTE_LIMIT, selectRouteBudget, spreadSample } from './route-budget.js';
+import { selectRouteBudget, spreadSample } from './route-budget.js';
 import type { SafeFetchResult } from './media-fetch/safe-fetch.js';
 import {
 	buildTemplateGroups,
@@ -324,11 +324,11 @@ describe( 'template-coverage route selection', () => {
 		expect( selectRouteBudget( INVENTORY, 30, [ `${ ORIGIN }/not-in-inventory/` ] ).selected ).toEqual( spreadSample( INVENTORY, 30 ) );
 	} );
 
-	it( 'measures group coverage under the default budget: discovery order vs template coverage', async () => {
+	it( 'measures group coverage under a numeric budget: discovery order vs template coverage', async () => {
 		const report = await buildTemplateGroups( { sourceUrl: INVENTORY[ 0 ]!, urls: INVENTORY }, fixtureFetch() );
-		const discovery = templateSelectionCoverage( report, selectRouteBudget( INVENTORY, DEFAULT_ROUTE_LIMIT ).selected, 'discovery-order', DEFAULT_ROUTE_LIMIT );
-		const coverage = templateSelectionCoverage( report, selectRouteBudget( INVENTORY, DEFAULT_ROUTE_LIMIT, templateRepresentatives( report ) ).selected, 'template-coverage', DEFAULT_ROUTE_LIMIT );
-		process.stderr.write( `[template-groups fixture] ${ INVENTORY.length } routes, ${ report.groups.length } groups, budget ${ DEFAULT_ROUTE_LIMIT }: discovery-order ${ discovery.groupsRepresented }/${ report.groups.length } (missing ${ discovery.groupsOmitted.map( id => report.groups.find( group => group.id === id )!.representative.replace( ORIGIN, '' ) ).join( ' ' ) }), template-coverage ${ coverage.groupsRepresented }/${ report.groups.length }\n` );
+		const discovery = templateSelectionCoverage( report, selectRouteBudget( INVENTORY, 50 ).selected, 'discovery-order', 50 );
+		const coverage = templateSelectionCoverage( report, selectRouteBudget( INVENTORY, 50, templateRepresentatives( report ) ).selected, 'template-coverage', 50 );
+		process.stderr.write( `[template-groups fixture] ${ INVENTORY.length } routes, ${ report.groups.length } groups, budget 50: discovery-order ${ discovery.groupsRepresented }/${ report.groups.length } (missing ${ discovery.groupsOmitted.map( id => report.groups.find( group => group.id === id )!.representative.replace( ORIGIN, '' ) ).join( ' ' ) }), template-coverage ${ coverage.groupsRepresented }/${ report.groups.length }\n` );
 		expect( coverage.groupsRepresented ).toBe( EXPECTED_GROUPS );
 		expect( discovery.groupsRepresented ).toBeLessThan( EXPECTED_GROUPS );
 	} );

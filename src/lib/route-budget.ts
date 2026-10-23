@@ -1,21 +1,12 @@
 import { documentRequestUrl } from './url/route-key.js';
 
 /**
- * Default route budget for browser capture: the entrypoint plus 49 more routes.
- *
- * Browser capture renders every route in several profiles, and a store-sized
- * inventory cannot finish inside a hosted import deadline (~60 minutes). One
- * measured timeout inventoried 3,689 routes and reached about 180 of them in
- * 60 minutes at the default six route workers (each route took ~127 s, so
- * ~20 s of wall time per route). At that worst observed throughput 50 routes
- * take ~17 minutes, which leaves room for discovery, media, export and the
- * homepage preview, and for memory-constrained hosts that admit fewer workers.
- *
- * HTTP review acquisition stays unbounded by default: it fetches documents
- * without rendering them, so its per-route cost is a few requests rather than
- * a full browser navigation, and the same inventory finishes in minutes.
+ * Default browser capture window: 17 minutes of a ~60-minute hosted deadline.
+ * The old 50-route cap took ~17 minutes at the worst observed throughput
+ * (~127 s per route with six workers). Keep that post-capture headroom, but
+ * spend the window on however many routes this run can actually finish.
  */
-export const DEFAULT_ROUTE_LIMIT = 50;
+export const DEFAULT_CAPTURE_TIME_BUDGET_MS = 17 * 60_000;
 
 /** A positive route count, or `'all'` to capture the whole inventory. */
 export type RouteLimit = number | 'all';
@@ -97,9 +88,23 @@ export function dedupeRouteInventory( urls: readonly string[] ): string[] {
  * slots are the even spread over the routes not yet kept. Without `preferred`
  * the selection is exactly the even spread.
  */
-export function selectRouteBudget( urls: string[], limit: number | undefined, preferred: readonly string[] = [] ): { selected: string[]; omitted: string[] } {
+export function selectRouteBudget( urls: string[], limit: number | undefined, preferred: readonly string[] = [], deadlineOrder = false ): { selected: string[]; omitted: string[] } {
 	const inventory = dedupeRouteInventory( urls );
-	if ( limit === undefined || inventory.length <= limit ) return { selected: inventory, omitted: [] };
+	if ( limit === undefined || inventory.length <= limit ) {
+		if ( ! deadlineOrder ) return { selected: inventory, omitted: [] };
+		// Progressive even spreads keep every prefix representative, without
+		// throwing away routes before their observed cost is known.
+		const ordered = new Set< string >( inventory.slice( 0, 1 ) );
+		const keys = new Map( inventory.map( url => [ documentRequestUrl( url ), url ] ) );
+		for ( const url of preferred ) {
+			const route = keys.get( documentRequestUrl( url ) );
+			if ( route ) ordered.add( route );
+		}
+		for ( let count = 2; count < inventory.length; count *= 2 ) {
+			for ( const url of spreadSample( inventory, count ) ) ordered.add( url );
+		}
+		return { selected: [ ...new Set( [ ...ordered, ...inventory ] ) ], omitted: [] };
+	}
 	const selected = preferred.length ? coverageSample( inventory, limit, preferred ) : spreadSample( inventory, limit );
 	const kept = new Set( selected );
 	return { selected, omitted: inventory.filter( url => ! kept.has( url ) ) };

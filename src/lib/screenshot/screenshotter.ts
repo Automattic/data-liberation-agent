@@ -2952,7 +2952,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					return reserved !== undefined && available >= reserved;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
-				const budgetAdmits = (): boolean => ! routeBudget || routeBudget.admits( urls[ cursor ]! );
+				const budgetAdmits = (): boolean => ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 );
 				try {
 					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
 						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admit( routeKind( urls[ cursor ]! ) ) ) {
@@ -2973,7 +2973,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							// The race observes fatal rejection before browser cleanup.
 							void slot.then( () => { running.delete( slot ); runningKinds.delete( slot ); }, () => {} );
 						}
-						if ( ! running.size ) continue;
+						if ( ! running.size ) break;
 						if ( ! routeBudget ) await Promise.race( running );
 						else {
 							await routeBudget.wait( running );
@@ -3111,7 +3111,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	return {
 		captured,
 		skipped,
-		failed: failedRoutes.size + budgetDiagnostics.length + deadlineRows.length,
+		failed: failedRoutes.size + budgetDiagnostics.filter( row => row.code !== 'route_omitted_by_budget' ).length + deadlineRows.length,
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,

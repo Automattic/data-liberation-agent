@@ -15,7 +15,7 @@ import { actionUrlExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
-import { DEFAULT_ROUTE_LIMIT, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
+import { DEFAULT_CAPTURE_TIME_BUDGET_MS, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
@@ -25,7 +25,7 @@ import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
-export { DEFAULT_ROUTE_LIMIT, DEFAULT_ROUTE_SELECTION, ROUTE_SELECTIONS, type RouteLimit, type RouteSelection } from './route-budget.js';
+export { DEFAULT_CAPTURE_TIME_BUDGET_MS, DEFAULT_ROUTE_SELECTION, ROUTE_SELECTIONS, type RouteLimit, type RouteSelection } from './route-budget.js';
 export { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
 export { DEFAULT_MAX_FILES, DEFAULT_MAX_TOTAL_BYTES } from './export-total-budget.js';
 
@@ -57,8 +57,10 @@ export interface CaptureOptions {
 	 * entrypoint is always kept; the rest is an even, deterministic spread over
 	 * the discovered inventory. Each omitted route is a `route_omitted_by_budget`
 	 * discovery diagnostic and counts in `summary.routesOmitted`, never in
-	 * `routesFailed`. Browser default: `DEFAULT_ROUTE_LIMIT`; HTTP default:
-	 * `'all'`. Pass `'all'` to capture the whole inventory.
+	 * `routesFailed`. Browser default: observed-time admission within
+	 * `DEFAULT_CAPTURE_TIME_BUDGET_MS` (17 minutes), with no fixed count. HTTP
+	 * default: 'all'. An explicit number or 'all' overrides default time admission;
+	 * an explicit `timeBudgetMs` still bounds the capture.
 	 */
 	routeLimit?: RouteLimit;
 	/**
@@ -104,10 +106,13 @@ export interface CaptureOptions {
 	 * closes at the budget minus a grace window (25% of the budget, at most
 	 * 60s); routes still running at the budget are abandoned, and section media
 	 * stops downloading. Export then runs on what was captured. The entrypoint
-	 * is always captured first and never skipped. Each uncaptured route is a
-	 * `route_capture_skipped_budget` finding: a missing route, counted in
-	 * `routesFailed`, so `complete` is false and `usable` follows
-	 * `isUsableCapture`. Default: no budget. Recommended: the caller's deadline
+	 * is always captured first and never skipped. Default: 17 minutes unless
+	 * `routeLimit` is explicit. Without an explicit route limit, admission uses
+	 * observed route durations and actual overlap; unadmitted routes are
+	 * `route_omitted_by_budget` diagnostics, not failures. Abandoned routes (and
+	 * unadmitted routes with an explicit route limit) are missing routes:
+	 * `route_capture_skipped_budget`, counted in `routesFailed`, making
+	 * `complete` false. Recommended: the caller's deadline
 	 * minus the post-capture headroom (README, "Capture time budget").
 	 */
 	timeBudgetMs?: number;
@@ -336,10 +341,11 @@ export async function captureWebsite(
 		if ( ! DEVICE_MODE_REQUESTS.includes( options.deviceMode ) ) throw new RangeError( `deviceMode must be one of ${ DEVICE_MODE_REQUESTS.join( ', ' ) }` );
 		if ( options.acquisition === 'http' ) throw new RangeError( 'deviceMode applies to browser acquisition only' );
 	}
-	const routeLimit = options.routeLimit === 'all' ? undefined : options.routeLimit ?? ( options.acquisition === 'http' ? undefined : DEFAULT_ROUTE_LIMIT );
+	const routeLimit = options.routeLimit === 'all' ? undefined : options.routeLimit;
 	const { onProgress } = options;
 	const startedAt = Date.now();
-	const timeBudget = options.timeBudgetMs === undefined ? undefined : captureTimeBudgetWindow( startedAt, options.timeBudgetMs );
+	const timeBudgetMs = options.timeBudgetMs ?? ( options.acquisition !== 'http' && options.routeLimit === undefined ? DEFAULT_CAPTURE_TIME_BUDGET_MS : undefined );
+	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs ), projectAdmission: options.routeLimit === undefined };
 	// One governor per source origin for every HTTP pass of this capture (#907).
 	const sourceGovernors = new SourceRequestGovernors();
 	let phase = '';
@@ -413,7 +419,7 @@ export async function captureWebsite(
 	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs: options.timeBudgetMs, wholeInventory: routeLimit === undefined, governors: sourceGovernors } )
+		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all', governors: sourceGovernors } )
 		: undefined;
 	// Verification members (#784 §4.2): one per multi-member cluster, kept right
 	// after the representatives so a budget that fits every template also fits
@@ -424,7 +430,7 @@ export async function captureWebsite(
 				.map( group => ( group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ] ?? '' ) )
 				.filter( url => url !== '' )
 		: [];
-	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ] );
+	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ], timeBudget?.projectAdmission );
 	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
@@ -557,7 +563,7 @@ export async function captureWebsite(
 	];
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
-		routesDiscovered: screenshotResult.urls.length,
+		routesDiscovered: screenshotResult.urls.length - ( screenshotResult.routeDiagnostics ?? [] ).filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ).length,
 		routesCaptured: screenshotResult.captured + ( derivedTemplateClusters?.summary.derived ?? 0 ),
 		routesSkipped: screenshotResult.skipped,
 		routesFailed: screenshotResult.failed,

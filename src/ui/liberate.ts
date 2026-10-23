@@ -17,7 +17,7 @@ import { authorPortableMotion, type PortableMotionRecipe } from '../lib/portable
 export interface LiberateOptions {
 	acquisition?: CaptureOptions['acquisition'];
 	http?: CaptureOptions['http'];
-	/** Route budget shared by browser and HTTP capture. Browser default: 50; 'all' captures every route. */
+	/** Route budget shared by browser and HTTP capture. Browser default: 17-minute time window; explicit limits override it. */
 	routeLimit?: CaptureOptions['routeLimit'];
 	/** How the route budget picks routes; see `CaptureOptions.routeSelection`. Default: 'discovery-order'. */
 	routeSelection?: CaptureOptions['routeSelection'];
@@ -40,7 +40,7 @@ export interface LiberateOptions {
 	 * scope. Default: the homepage only; 'all' freezes every route.
 	 */
 	referenceSample?: number | 'all';
-	/** Capture time budget in ms until export must begin; see `CaptureOptions.timeBudgetMs`. Default: none. */
+	/** Capture time budget in ms until export must begin; see `CaptureOptions.timeBudgetMs`. Default: 17 minutes unless routeLimit is explicit. */
 	timeBudgetMs?: number;
 	/** Per-file export cap in bytes; see `CaptureOptions.maxFileBytes`. Default: 50 MiB. */
 	maxFileBytes?: number;

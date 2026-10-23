@@ -44,7 +44,7 @@ const HELP = `
     --acquisition <mode> browser (default), or http for an unverified review candidate
     --route-limit <n|all> Capture at most n routes, homepage included: the
                          homepage plus an even spread of the rest, linked pages
-                         counted (browser default 50; http default all). Omitted
+                         counted (browser default: 17-minute time window; http default all). Omitted
                          routes are diagnosed and counted, never failed.
     --route-selection <mode> How the route budget picks routes: discovery-order
                          (default, the even spread) or template-coverage (fetch
@@ -72,8 +72,9 @@ const HELP = `
                          reports them as uncompared scope instead of failing them.
     --time-budget <duration>  Stop starting routes and export what was captured
                          when this much time has passed, e.g. 13m, 780s (bare
-                         numbers are ms). Routes left out are reported as
-                         route_capture_skipped_budget. Set it to your deadline
+                         numbers are ms). Default: 17m unless --route-limit is set.
+                         Unadmitted routes are route_omitted_by_budget; abandoned
+                         routes are route_capture_skipped_budget. Set to your deadline
                          minus post-capture headroom. Browser capture only.
     --max-file-bytes <n> Largest file exported into the site (default 52428800,
                          50 MiB). Larger assets are not written and are reported
