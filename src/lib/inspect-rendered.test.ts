@@ -36,6 +36,19 @@ it('distinguishes a rendered simple source from a JS-created booking app', async
   expect(complex.rendered.samples[0].capabilities).toContainEqual(expect.objectContaining({ capability: 'booking' }));
 }, 30_000);
 
+it('counts a password field as membership, not a login link', async () => {
+  const url = await source('<nav><a href="https://app.example.com/login">Log in</a><a href="/sign-in">Sign in</a></nav><main><h1>Home</h1></main>');
+  const linked = await inspectSource(url, { sampleLimit: 1 });
+  expect(linked.rendered.samples[0].capabilities.map((found) => found.capability)).not.toContain('membership');
+  server.removeAllListeners('request');
+  server.on('request', (req, res) => {
+    res.setHeader('content-type', req.url === '/sitemap.xml' ? 'application/xml' : 'text/html');
+    res.end(req.url === '/sitemap.xml' ? '<urlset/>' : '<main><form><input type="password"></form></main>');
+  });
+  const gated = await inspectSource(url, { sampleLimit: 1 });
+  expect(gated.rendered.samples[0].capabilities).toContainEqual(expect.objectContaining({ capability: 'membership' }));
+}, 30_000);
+
 it('reports where a capability was observed, and refuses to look decided when the sample was not', async () => {
   const url = await source('<main><h1>Contact</h1><form id="enquiry" class="contact-form stacked"><input name="email"></form><iframe id="map" src="about:blank"></iframe></main>');
   const result = await inspectSource(url, { sampleLimit: 1 });

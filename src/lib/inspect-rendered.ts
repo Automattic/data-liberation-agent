@@ -82,7 +82,8 @@ const GENERIC_RULES: CapabilityRule[] = [
   { capability: 'media', selector: 'video,audio,canvas', evidence: 'Media or canvas surface requires behavioral review' },
   { capability: 'embeds', selector: 'iframe,object,embed', evidence: 'Embedded surface; inner application behavior is unknown' },
   { capability: 'dialogs', selector: 'dialog,[role="dialog"],[aria-haspopup],[aria-expanded],details', evidence: 'Interactive disclosure or popup affordance' },
-  { capability: 'membership', selector: 'input[type="password"],a[href*="/login"],a[href*="/sign-in"]', evidence: 'Authentication affordance; backend behavior is unknown' },
+  // A "Log in" link usually leads to a separate app; only a password field on the site itself counts.
+  { capability: 'membership', selector: 'input[type="password"]', evidence: 'Password field; authentication backend is unknown' },
   { capability: 'commerce', selector: '[itemtype*="schema.org/Product"],a[href*="/checkout"],form[action*="/cart"]', evidence: 'Product or checkout surface; transactions were not exercised' },
 ];
 
