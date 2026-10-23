@@ -3,7 +3,7 @@ import { totalmem } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
-import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
+import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
@@ -810,7 +810,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					return;
 				}
 			}
-			await route.continue();
+			await route.fallback();
 		} );
 	}
 
@@ -1839,7 +1839,7 @@ const CHECK_RECHECK_MS = 1_500;
  * same way, so their signatures are comparable.
  */
 async function loadForComparison( args: DeviceComparisonArgs, options: BrowserContextOptions, viewport: 'desktop' | 'mobile', mode: 'probe' | 'check', contexts: BrowserContext[] ) {
-	const context = await args.browser.newContext( options );
+	const context = await createSourceContext( args.browser, options );
 	contexts.push( context );
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
@@ -2149,6 +2149,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every desktop
 	// screenshot while the layout pass stays at the logical viewport (so CSS
 	// media queries hit their real desktop branch); see types.ts.
+	// Resolve device/caller overrides first. createSourceContext then applies the
+	// matching wire and navigator identity to this final UA, not the desktop seed.
 	const profileContextOptions = ( viewport: Viewport, sessionContext: BrowserContextOptions ): BrowserContextOptions => {
 		const device = viewport.device ? devices[ viewport.device ] : undefined;
 		if ( viewport.device && ! device ) throw new Error( `Unknown source device profile: ${ viewport.device }` );
@@ -2635,7 +2637,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					// once per run — every worker and viewport for every route reuses it.
 					contextOptions = profileContextOptions( viewport, await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
 					identity = replayBrowserIdentity( contextOptions );
-					context = await attemptBrowser.newContext( contextOptions );
+					context = await createSourceContext( attemptBrowser, contextOptions );
 					trackRouteContext( url, context );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
@@ -3018,7 +3020,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			} else if ( candidates.size ) {
 				let context: BrowserContext | undefined;
 				try {
-					context = await browser.newContext( await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
+					context = await createSourceContext( browser, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
 					// Inspecting an action URL performs the action; export names it instead.
 					for ( const url of [ ...candidates ].filter( url => ! stateChangingAction( url ) ).slice(0, 32) ) {
 						try {

@@ -15,6 +15,11 @@ vi.mock( '../url/index.js', async ( importOriginal ) => {
 	};
 } );
 
+// Mock contexts carry no wire identity; source-identity.test.ts owns that contract.
+vi.mock( '../browser-kit/source-identity.js', async ( importOriginal ) => ( {
+	...( await importOriginal< typeof import( '../browser-kit/source-identity.js' ) >() ),
+	createSourceContext: ( browser: { newContext: ( options: unknown ) => unknown }, options: unknown ) => browser.newContext( options ),
+} ) );
 vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 	...( await importOriginal< typeof import( '../browser-kit/index.js' ) >() ),
 	connectBrowser: vi.fn(),

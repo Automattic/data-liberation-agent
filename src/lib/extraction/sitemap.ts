@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { sourceContextOptions } from '../browser-kit/browser-kit.js';
+import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { assertPublicHttpUrl, safeFetch } from '../media-fetch/safe-fetch.js';
 
 function decodeXml(value: string): string {
@@ -584,11 +584,11 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string, signal
     browser = await chromium.launch({ headless: true });
     signal?.addEventListener('abort', abort, { once: true });
     signal?.throwIfAborted();
-    const page = await browser.newPage(await sourceContextOptions(browser, baseUrl, { publicUrlsOnly: true }));
+    const page = await createSourcePage(browser, await sourceContextOptions(browser, baseUrl, { publicUrlsOnly: true }));
     await page.route('**/*', async route => {
       try { assertPublicHttpUrl(route.request().url()); }
       catch { await route.abort(); return; }
-      await route.continue();
+      await route.fallback();
     });
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
