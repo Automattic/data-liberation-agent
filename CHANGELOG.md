@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.32.29] - 2026-10-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- count a password field as membership, not a login link
+
 ## [0.32.28] - 2026-10-22
 
 ### Changed
