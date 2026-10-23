@@ -86,6 +86,20 @@ const AD_RULES: CleanupRule[] = [
   { id: 'provider-acquisition', category: 'source-attribution', selector: 'body > div,body > aside,footer > div', promotion: true },
 ];
 
+/** Captcha providers render a status widget into the page's own forms at
+ *  runtime: an icon, status text and hidden solution inputs. Serialized, it is
+ *  dead markup sitting beside the submit control, and downstream form importers
+ *  decline the whole form over the extra item. The verification only ever worked
+ *  on the provider, so the widget root goes wherever a form embeds it;
+ *  surrounding fields and the submit control stay. One.com wraps the Friendly
+ *  Captcha widget in its own container (`#frcFieldContainer`) instead of
+ *  emitting the provider's own root class, so that wrapper is in the same
+ *  selector list. */
+const CAPTCHA_WIDGET_RULE: CleanupRule = {
+  id: 'captcha-widget', category: 'provider-service',
+  selector: '.frc-captcha,#frcFieldContainer,.g-recaptcha,.grecaptcha-badge,.h-captcha,.cf-turnstile',
+};
+
 /** Last rule in the policy: a platform that names its own badge keeps the
  * attribution in the evidence, and this catches the platforms nobody named. */
 const BUILDER_CHROME_RULE: CleanupRule = {
@@ -94,7 +108,7 @@ const BUILDER_CHROME_RULE: CleanupRule = {
 };
 
 export function cleanupPolicy(rules: CleanupRule[] = []): CleanupPolicy {
-  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, ...rules, BUILDER_CHROME_RULE],
+  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, CAPTCHA_WIDGET_RULE, ...rules, BUILDER_CHROME_RULE],
     promotion: { ...PROMOTION_PATTERNS }, builderChrome: { ...BUILDER_CHROME_PATTERNS } };
 }
 
