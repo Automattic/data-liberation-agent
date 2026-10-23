@@ -63,7 +63,7 @@ vi.mock( './media-fetch/media.js', () => ( {
 import { existsSync } from 'node:fs';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { spreadSample } from './route-budget.js';
-import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_ROUTE_LIMIT, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture, templateGroupingLimits } from './capture.js';
+import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_CAPTURE_TIME_BUDGET_MS, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture, templateGroupingLimits } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
 
@@ -520,28 +520,16 @@ describe( 'captureWebsite route budget', () => {
 		rmSync( root, { recursive: true, force: true } );
 	} );
 
-	it( 'bounds a store-sized inventory to the default budget and reports every omitted route', async () => {
+	it( 'sends the whole inventory to deadline admission without a default count cap', async () => {
 		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, storeAdapter() );
-		const call = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[]; limit?: number };
-		expect( DEFAULT_ROUTE_LIMIT ).toBe( 50 );
-		expect( call.urls ).toHaveLength( DEFAULT_ROUTE_LIMIT );
+		const call = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[]; limit?: number; timeBudget: { timeBudgetMs: number; projectAdmission: boolean } };
+		expect( DEFAULT_CAPTURE_TIME_BUDGET_MS ).toBe( 17 * 60_000 );
+		expect( call.urls ).toHaveLength( store.length + 1 );
 		expect( call.urls[ 0 ] ).toBe( sourceUrl );
-		// Linked-page admissions share the same budget.
-		expect( call.limit ).toBe( DEFAULT_ROUTE_LIMIT );
-		// An even spread reaches the end of the inventory, not just its head.
-		expect( call.urls ).toContain( store.at( -1 ) );
-		const omitted = result.discoveryDiagnostics.filter( row => row.code === 'route_omitted_by_budget' );
-		expect( omitted ).toHaveLength( store.length + 1 - DEFAULT_ROUTE_LIMIT );
-		expect( new Set( [ ...omitted.map( row => row.url ), ...call.urls ] ).size ).toBe( store.length + 1 );
-		expect( omitted[ 0 ] ).toEqual( { code: 'route_omitted_by_budget', url: expect.any( String ), reason: 'Outside the route budget of 50 routes' } );
-		expect( result.summary ).toMatchObject( { routesDiscovered: DEFAULT_ROUTE_LIMIT, routesOmitted: store.length + 1 - DEFAULT_ROUTE_LIMIT, routesFailed: 0 } );
-		expect( result.missingRoutes ).toEqual( [] );
+		expect( call.limit ).toBeUndefined();
+		expect( call.timeBudget ).toMatchObject( { timeBudgetMs: DEFAULT_CAPTURE_TIME_BUDGET_MS, projectAdmission: true } );
+		expect( result.summary ).toMatchObject( { routesOmitted: 0, routesFailed: 0 } );
 		expect( result.complete ).toBe( true );
-		expect( isUsableCapture( result ) ).toBe( true );
-		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ] ).toMatchObject( {
-			summary: { routesOmitted: store.length + 1 - DEFAULT_ROUTE_LIMIT },
-			discoveryDiagnostics: expect.arrayContaining( [ omitted[ 0 ] ] ),
-		} );
 	} );
 
 	it( 'selects the same routes, entrypoint first, for the same inventory', async () => {
@@ -881,11 +869,25 @@ describe( 'captureWebsite time budget', () => {
 		rmSync( root, { recursive: true, force: true } );
 	} );
 
-	it( 'passes no budget and the default export limits when none is set', async () => {
+	it( 'passes the default time window and export limits when none is set', async () => {
 		await captureWebsite( { url: sourceUrl, outputDir: root }, adapter( [] ) );
-		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).not.toHaveProperty( 'timeBudget' );
+		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).toHaveProperty( 'timeBudget.timeBudgetMs', DEFAULT_CAPTURE_TIME_BUDGET_MS );
 		// Default byte limits, with room kept for what capture writes into website/ after export.
 		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ].limits ).toEqual( { reservePostExport: true } );
+	} );
+
+	it.each( [ 7, 'all' ] as const )( 'lets explicit routeLimit %s override default time admission', async routeLimit => {
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit }, adapter( [] ) );
+		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).not.toHaveProperty( 'timeBudget' );
+	} );
+
+	it( 'counts time-admission omissions as scope rather than failures', async () => {
+		const omitted = 'https://example.com/omitted';
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl, omitted ], captured: 1, skipped: 0, failed: 0, durationMs: 1, routeDiagnostics: [ { code: 'route_omitted_by_budget', url: omitted, reason: 'projected cost exceeds remaining window' } ] } as never );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, adapter( [ omitted ] ) );
+		expect( result.summary ).toMatchObject( { routesDiscovered: 1, routesCaptured: 1, routesOmitted: 1, routesFailed: 0 } );
+		expect( result.complete ).toBe( true );
+		expect( result.missingRoutes ).toEqual( [] );
 	} );
 
 	it( 'passes the budget window to capture and maxFileBytes to export', async () => {
