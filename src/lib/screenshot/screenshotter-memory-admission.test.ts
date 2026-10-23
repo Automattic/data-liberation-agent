@@ -1,8 +1,51 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { chromium } from 'playwright';
 import { captureScreenshots } from './screenshotter.js';
+import * as runtimeMemory from './runtime-memory.js';
+
+const skipBrowser = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
+
+it.skipIf( skipBrowser )( 'calibrates degraded captures and admits overlapping routes despite every phone profile failing', async () => {
+	const server = createServer( ( request, response ) => {
+		if ( /Mobile/i.test( request.headers[ 'user-agent' ] ?? '' ) ) {
+			response.writeHead( 403 );
+			response.end();
+			return;
+		}
+		response.setHeader( 'content-type', 'text/html' );
+		response.end( '<!doctype html><title>Page</title><h1>Captured desktop</h1>' );
+	} );
+	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'memory-admission-degraded-' ) );
+	const urls = Array.from( { length: 4 }, ( _, index ) => `${ origin }/route-${ index }` );
+	// Deterministic headroom: exercise admission, not the host's memory pressure.
+	vi.spyOn( process, 'constrainedMemory' ).mockReturnValue( 2 * 1024 ** 3 );
+	vi.spyOn( runtimeMemory, 'availableRuntimeMemory' ).mockReturnValue( 1024 ** 3 );
+	const logs: string[] = [];
+	vi.spyOn( process.stderr, 'write' ).mockImplementation( ( chunk ) => { logs.push( String( chunk ) ); return true; } );
+	try {
+		const result = await captureScreenshots( {
+			urls, outputDir, force: true, settleMs: 0, learnFluid: false,
+			viewports: [ { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 } ],
+		} );
+		expect( result ).toMatchObject( { captured: 4, failed: 0, skipped: 0 } );
+		const failures = JSON.parse( readFileSync( join( outputDir, 'screenshots/failures.json' ), 'utf8' ) ) as Array<{ url: string; viewport: string; error: string }>;
+		expect( failures.map( failure => failure.url ).sort() ).toEqual( [ ...urls ].sort() );
+		expect( failures.every( failure => failure.viewport === 'mobile' && failure.error.includes( '403' ) ) ).toBe( true );
+		const admissions = logs.filter( line => line.startsWith( '[memory-admission] {' ) ).map( line => JSON.parse( line.slice( '[memory-admission] '.length ) ) );
+		expect( admissions[ 0 ] ).toMatchObject( { activeRoutes: 1, calibrated: { reference: false } } );
+		expect( admissions.some( admission => admission.calibrated.reference && admission.activeRoutes > 1 ) ).toBe( true );
+	} finally {
+		vi.restoreAllMocks();
+		await new Promise<void>( resolve => server.close( () => resolve() ) );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 60_000 );
 
 // Run in a real constrained runtime, not with invented available-memory values:
 // docker run --memory=2g --cpus=4 ... npx vitest run <this file> --maxWorkers=1
