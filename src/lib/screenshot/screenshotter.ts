@@ -2195,6 +2195,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const routeWorkingSet: Record< RouteKind, number > = { reference: 0, plain: 0 };
 	const activeRoutes: Record< RouteKind, number > = { reference: 0, plain: 0 };
 	const calibrated: Record< RouteKind, boolean > = { reference: false, plain: false };
+	let reportedUncalibratedAdmission = false;
 	const sampleMemory = (): number => {
 		const available = availableRuntimeMemory( memoryLimit );
 		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
@@ -2866,18 +2867,17 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			isSourceCaptureUrl( url, opts.primaryUrl )
 				? urlFailures
 				: urlFailures.filter( ( failure ) => ! isAbsentDocumentError( failure.error ) );
+		// Capture work spent the memory being measured even if a profile or
+		// stage failed. Reused artifacts, absent documents and redirect aliases
+		// do not calibrate. Plain routes calibrate only once a sample was
+		// attributed to their kind.
+		if ( memoryAdmission && ( entry.html || entry.mobileHtml || absentFailures.length === 0 ) && ! entry.redirectedTo ) {
+			sampleMemory();
+			const kind = routeKind( url );
+			if ( kind === 'reference' || routeWorkingSet.plain > 0 ) calibrated[ kind ] = true;
+		}
 		if ( urlFailures.length === 0 ) {
 			captured++;
-			// Reused artifacts, absent documents and redirect aliases do not
-			// calibrate the memory cost of a fresh successful capture. Each kind
-			// calibrates on its own routes: the entrypoint is always sampled and
-			// captured first, and a route without reference pages calibrates its
-			// kind only once a sample was attributed to that kind.
-			if ( memoryAdmission && ! entry.redirectedTo ) {
-				sampleMemory();
-				const kind = routeKind( url );
-				if ( kind === 'reference' || routeWorkingSet.plain > 0 ) calibrated[ kind ] = true;
-			}
 			sendLog( server, `[ok] ${ url }` );
 		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
 			frontier?.diagnostics.push({code: 'linked_page_outcome_unproven', url, reason: `${absentFailures[0].error}; source-error/non-HTML frozen outcome is not implemented`});
@@ -2942,6 +2942,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					for ( const runningKind of runningKinds.values() ) {
 						const estimate = routeEstimate( runningKind );
 						reserved = reserved === undefined || estimate === undefined ? undefined : reserved + estimate;
+					}
+					if ( reserved === undefined && completed > 0 && ! reportedUncalibratedAdmission ) {
+						reportedUncalibratedAdmission = true;
+						const message = '[memory-admission] limited to one route: reference memory calibration unavailable (no fresh non-absent, non-alias capture completed yet)';
+						sendLog( server, message );
+						process.stderr.write( `${ message }\n` );
 					}
 					return reserved !== undefined && available >= reserved;
 				};
