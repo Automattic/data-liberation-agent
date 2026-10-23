@@ -1,8 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { afterEach, expect, it } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanupPolicy, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
 import { capture as wixCapture } from '../adapters/wix/capture.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
@@ -658,3 +658,68 @@ it('removes Wix account identifiers mirrored into http-equiv meta tags, keeping 
     expect(report.failures).toEqual([]);
   } finally { await browser.close(); }
 }, 20_000);
+
+// Captcha providers render a status widget into the page's own forms at
+// runtime. Serialized, it is dead markup beside the submit control, and form
+// importers decline the form over the extra item. The shared default rule
+// removes each provider's widget root only; the sibling fields and the submit
+// control must come through byte-identical.
+describe('captcha widget cleanup', () => {
+  let browser: Browser;
+  beforeAll(async () => { browser = await chromium.launch(); });
+  afterAll(async () => { await browser.close(); });
+
+  const contactFormHtml = (widget: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Owner contact</title></head><body>
+<form id="contact" method="post" action="/send">
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" placeholder="you@example.com">
+  <label for="message">Message</label>
+  <textarea id="message" name="message">Say hello</textarea>
+  ${widget}
+  <div class="submit-row"><button type="submit">Send</button></div>
+</form>
+</body></html>`;
+
+  /** The form's surviving children, exactly as the browser serializes them. */
+  const keptFormHtml = (page: Page) => page.evaluate(() =>
+    [...document.querySelectorAll('#contact > *')]
+      .filter((el) => !el.matches('.frc-captcha,#frcFieldContainer,.g-recaptcha,.grecaptcha-badge,.h-captcha,.cf-turnstile'))
+      .map((el) => el.outerHTML).join('\n'));
+
+  const widgetRoots = '.frc-captcha,#frcFieldContainer,.g-recaptcha,.grecaptcha-badge,.h-captcha,.cf-turnstile';
+  const widgets: Array<[string, string]> = [
+    ['Friendly Captcha widget', '<div class="frc-captcha" data-sitekey="00000000-0000-0000-0000-000000000000"><div class="frc-container"><svg aria-hidden="true"></svg><span class="frc-caption">Friendly Captcha</span></div><input type="hidden" name="frc-captcha-solution"></div>'],
+    ['One.com Friendly Captcha wrapper', '<div id="frcFieldContainer"><div class="captcha_frcCaptchaStatusCtn__2Yovi"><svg aria-hidden="true"></svg>Friendly Captcha</div></div>'],
+    ['reCAPTCHA widget', '<div class="g-recaptcha" data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI"><div class="grecaptcha-logo"><iframe title="reCAPTCHA"></iframe></div><textarea id="g-recaptcha-response" name="g-recaptcha-response"></textarea></div>'],
+    ['reCAPTCHA badge', '<div class="grecaptcha-badge" style="position:fixed;bottom:14px;right:14px;width:256px;height:60px"><div class="grecaptcha-logo"><iframe title="reCAPTCHA"></iframe></div></div>'],
+    ['hCaptcha widget', '<div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001"><iframe title="hCaptcha challenge"></iframe><textarea id="h-captcha-response" name="h-captcha-response"></textarea></div>'],
+    ['Cloudflare Turnstile widget', '<div class="cf-turnstile" data-sitekey="0x4AAAAAAA"><input type="hidden" name="cf-turnstile-response"></div>'],
+  ];
+
+  for (const [label, widget] of widgets) {
+    it(`removes the ${label} root and keeps fields and submit byte-identical`, async () => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(contactFormHtml(widget));
+        const before = await keptFormHtml(page);
+        const report = await applySourceCleanup(page, cleanupPolicy());
+        expect(await page.locator(widgetRoots).count()).toBe(0);
+        expect(await keptFormHtml(page)).toBe(before);
+        expect(report.records.filter((record) => record.rule === 'captcha-widget')).toHaveLength(1);
+        expect(report.failures).toEqual([]);
+      } finally { await page.close(); }
+    }, 20_000);
+  }
+
+  it('leaves a page without captcha byte-identical', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent(contactFormHtml(''));
+      const before = await page.evaluate(() => document.body.innerHTML);
+      const report = await applySourceCleanup(page, cleanupPolicy());
+      expect(await page.evaluate(() => document.body.innerHTML)).toBe(before);
+      expect(report.removed).toBe(0);
+      expect(report.failures).toEqual([]);
+    } finally { await page.close(); }
+  }, 20_000);
+});
