@@ -1,5 +1,5 @@
 import type { Browser, Page } from 'playwright';
-import { sourceContextOptions } from '../browser-kit/browser-kit.js';
+import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
 
 /** Author-selected *observable* behaviors, independent of a source's scripts or a destination's blocks. */
 export interface MotionContract {
@@ -207,7 +207,7 @@ export async function verifyCandidateMotion(
 	const failures: string[] = [];
 	const observations: Record< string, unknown > = {};
 	const evidence: MotionEvidence = { route, viewport, source, candidate, capture: 'unreproduced', pass: false, failures, observations };
-	const sourcePage = await browser.newPage( { ...await sourceContextOptions( browser, source ), viewport: { width: viewport, height: 900 } } );
+	const sourcePage = await createSourcePage( browser, { ...await sourceContextOptions( browser, source ), viewport: { width: viewport, height: 900 } } );
 	const candidatePage = await browser.newPage( { viewport: { width: viewport, height: 900 } } );
 	try {
 		const [ original, copy ] = await Promise.all( [

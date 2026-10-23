@@ -1,3 +1,4 @@
+export { createSourceContext, createSourcePage } from './source-identity.js';
 export {
   getPlaywright,
   connectBrowser,

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sourceContextOptions } from './browser-kit/browser-kit.js';
+import { createSourcePage, sourceContextOptions } from './browser-kit/browser-kit.js';
 import { captureSourceBehavior } from './screenshot/behavior-capture.js';
 import { modelSourceBehavior, timeDependentTargets } from './behavior-model.js';
 import { learnMotion, type LearnedMotion } from './learned-motion.js';
@@ -28,7 +28,7 @@ export async function discoverCapturedBehavior( directory: string ): Promise< vo
 	const attempts: Array< { sandboxCanvas: boolean; promoted: boolean; failures: string[] } > = [];
 	try {
 		for ( const { url } of pages.slice( 0, 4 ) ) {
-			const open = async ( timezoneId: string ) => browser.newPage( { ...await sourceContextOptions( browser, url ), timezoneId, viewport: { width: 1440, height: 900 } } );
+			const open = async ( timezoneId: string ) => createSourcePage( browser, { ...await sourceContextOptions( browser, url ), timezoneId, viewport: { width: 1440, height: 900 } } );
 			const page = await open( FIRST_TIME.timezone );
 			const counterfactualPage = await open( SECOND_TIME.timezone );
 			try {

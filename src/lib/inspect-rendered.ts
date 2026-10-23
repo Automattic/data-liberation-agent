@@ -1,6 +1,7 @@
 import { isNonDocumentUrl } from './extraction/sitemap.js';
 import type { Browser, Page } from 'playwright';
 import { desktopContextOptions, sourceSessionCookieHeader } from './browser-kit/browser-kit.js';
+import { createSourceContext } from './browser-kit/source-identity.js';
 import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
 
 /**
@@ -136,7 +137,7 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
     async inspect(url: string, rules: CapabilityRule[] = [], residue: HostResidue[] = []): Promise<RenderedInspection> {
       signal.throwIfAborted();
       assertPublicHttpUrl(url);
-      const context = await browser!.newContext({
+      const context = await createSourceContext(browser!, {
         ...(await desktopContextOptions(browser!)),
         serviceWorkers: 'block',
         viewport: { width: 1440, height: 900 },

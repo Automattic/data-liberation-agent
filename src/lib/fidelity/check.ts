@@ -10,7 +10,7 @@ import type { Page } from 'playwright';
 import { mapPool } from '../concurrency.js';
 import * as cheerio from 'cheerio';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
-import { sourceContextOptions } from '../browser-kit/browser-kit.js';
+import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { load } from 'cheerio';
 import { documentRequestUrl } from '../url/route-key.js';
 import { spreadSample } from '../route-budget.js';
@@ -1226,7 +1226,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	try {
 		await mapPool( routes, routeConcurrency, async ( route, index ) => {
 			const { routeScores, routeOverlays, routeMotion, routeCleanup } = perRoute[ index ];
-			const page = browser ? await browser.newPage( await sourceContextOptions( browser, sourceUrl ) ) : null;
+			const page = browser ? await createSourcePage( browser, await sourceContextOptions( browser, sourceUrl ) ) : null;
 			const observe = observeFor( page, routeCleanup );
 			try {
 			const sourceHref = sources.get( route )!;

@@ -1,3 +1,5 @@
+import { createSourceContext } from './source-identity.js';
+export { createSourceContext, createSourcePage } from './source-identity.js';
 import { withTimeout } from '../concurrency.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 
@@ -76,7 +78,7 @@ const desktopContexts = new WeakMap<object, Promise<SourceBrowserIdentity>>();
 
 /**
  * Context options that give a desktop page a real desktop-browser identity.
- * Spread into every `newContext`/`newPage` that loads the source site, so
+ * Pass to createSourceContext/createSourcePage for every source load, so
  * discovery, capture and comparison all present the same browser. Resolved
  * once per browser and never throws. An explicit locale keeps Accept-Language
  * and navigator.language consistent even when the user agent is overridden.
@@ -101,7 +103,7 @@ export function desktopContextOptions(browser: object): Promise<SourceBrowserIde
             IDENTITY_TIMEOUT_MS,
             'browser version'
           );
-          const desktop = desktopUserAgent(userAgent);
+          const desktop = desktopUserAgent(userAgent) ?? userAgent;
           return desktop ? { ...defaults, userAgent: desktop } : defaults;
         } finally {
           await session.detach().catch(() => {});
@@ -178,14 +180,14 @@ function harvestSourceSession(
       let context: Awaited<ReturnType<SessionCapableBrowser['newContext']>> | undefined;
       try {
         if (publicUrlsOnly) assertPublicHttpUrl(entryUrl);
-        context = await browser.newContext(await desktopContextOptions(browser));
+        context = await createSourceContext(browser as unknown as import('playwright').Browser, await desktopContextOptions(browser));
         const page = await context.newPage();
         if (publicUrlsOnly) {
           if (!page.route) throw new Error('Public source harvest requires request routing');
           await page.route('**/*', async route => {
             try { assertPublicHttpUrl(route.request().url()); }
             catch { await route.abort(); return; }
-            await route.continue();
+            await route.fallback();
           });
         }
         await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: HARVEST_TIMEOUT_MS });
@@ -215,7 +217,7 @@ function harvestSourceSession(
  * itself, or a harvest that fails, resolves to plain desktop identity, so
  * behavior is unchanged from before this existed.
  *
- * Spread into every `newContext`/`newPage` that loads the source site,
+ * Pass to createSourceContext/createSourcePage for every source load,
  * alongside (or in place of) {@link desktopContextOptions}.
  * Public-source callers pass `publicUrlsOnly` so a new session harvest applies
  * the same request guard before its first navigation, not only on later pages.
@@ -274,7 +276,7 @@ export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }
 
   const newContext = async () =>
     withTimeout(
-      browser.newContext(await desktopContextOptions(raw)),
+      createSourceContext(raw, await desktopContextOptions(raw)),
       CREATE_TIMEOUT_MS,
       'context create'
     );

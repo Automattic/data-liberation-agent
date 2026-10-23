@@ -10,6 +10,11 @@ const mocks = vi.hoisted( () => ( {
 	getReplayableResponse: vi.fn(),
 } ) );
 
+// Mock contexts carry no wire identity; source-identity.test.ts owns that contract.
+vi.mock( '../browser-kit/source-identity.js', async ( importOriginal ) => ( {
+	...( await importOriginal< typeof import( '../browser-kit/source-identity.js' ) >() ),
+	createSourceContext: ( browser: { newContext: ( options: unknown ) => unknown }, options: unknown ) => browser.newContext( options ),
+} ) );
 vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 	...( await importOriginal< typeof import( '../browser-kit/index.js' ) >() ),
 	connectBrowser: vi.fn(),
@@ -39,7 +44,12 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 			currentUrl = url;
 			if (routedRequest) {
 				let index = routeHandlers.length - 1;
-				const next = async (): Promise<void> => { await routeHandlers[index--]!({...routedRequest, fallback: next}); };
+				const next = async (): Promise<void> => {
+					const handler = routeHandlers[index--];
+					// Falling back past the last handler reaches the network.
+					if (!handler) return (routedRequest as { continue: () => Promise<void> }).continue();
+					await handler({...routedRequest, fallback: next});
+				};
 				await next();
 			}
 			return { status: () => 200 };
