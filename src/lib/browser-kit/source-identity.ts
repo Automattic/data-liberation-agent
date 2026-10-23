@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /** Configure Chromium itself, not just context headers (Chromium adds hints later).
  * Every page is configured before its first request, including popups. Routing is
@@ -55,6 +55,14 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
     return page;
   };
   await context.route('**/*', async route => {
+    try { await applyIdentity(route); }
+    catch {
+      // Closing the page or context mid-request already handled this route;
+      // for any other failure the request proceeds rather than stalling.
+      await route.fallback().catch(() => {});
+    }
+  });
+  async function applyIdentity(route: Route): Promise<void> {
     let page: Page | undefined;
     try { page = route.request().frame().page(); } catch { /* Popup navigation precedes its frame. */ }
     if (page) await configure(page);
@@ -90,7 +98,7 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
       try { await route.fulfill({ response }); }
       finally { await response.dispose(); }
     } else await route.continue({ headers });
-  });
+  }
   if (!chrome) await context.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, 'userAgentData', { configurable: true, get: () => undefined });
     Object.defineProperty(Navigator.prototype, 'vendor', { configurable: true, get: () => 'Apple Computer, Inc.' });
