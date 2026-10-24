@@ -15,6 +15,12 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.7] - 2026-10-24
+
+### Changed
+- regenerate plugin bundles
+- Keep populated ARIA disclosures collapsed through capture and replay them offline
+
 ## [0.33.6] - 2026-10-24
 
 ### Changed
