@@ -1824,6 +1824,22 @@ function responsiveBodySignature( body: string ): string {
 			const value = node.attr( attribute );
 			if ( value && isUnstableResponsiveId( value ) ) node.removeAttr( attribute );
 		}
+		// Hydration can write an anchor's resolved .href back to its attribute
+		// in only one viewport. URL-equivalent spellings are not a second
+		// document (host casing, default ports, an empty root path). Compare
+		// them canonically in this private signature, never in the shipped DOM.
+		// Without a document base, relative and scheme-relative references must
+		// stay literal. Do not use route-key normalization: /path and /path/,
+		// query strings and fragments can name genuinely different destinations.
+		for ( const attribute of [ 'href', 'action' ] ) {
+			const value = node.attr( attribute );
+			if ( ! value || ! /^https?:\/\//i.test( value ) ) continue;
+			try {
+				node.attr( attribute, new URL( value ).href );
+			} catch {
+				// Invalid source references still compare by their authored bytes.
+			}
+		}
 		if ( node.is( 'form,iframe' ) ) {
 			for ( const attribute of [ 'id', 'name', 'target' ] ) {
 				const value = node.attr( attribute );
