@@ -34,7 +34,7 @@ export const SEGMENT_STYLE_ATTRIBUTE = 'data-blocks-engine-capture-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
 export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-blocks-engine-capture-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left', 'min-height' ] as const;
 
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'left';
 
@@ -250,8 +250,8 @@ async function learnFluidGeometry(
 				const ignorePadding = element.hasAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' );
 				element.removeAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' );
 				// Match the declarations the measurement pass can actually learn.
-				// A substring match also tagged min-height/max-width and percentages,
-				// which produced no observations but still paid for the whole sweep.
+				// Substring tagging of min-height/max-width and percentages paid for
+				// whole sweeps without observations. Only actual pixel values qualify.
 				const geometry = state.readGeometry( element );
 				const style = geometry.literal;
 				const blankParagraph = element.tagName === 'P' &&
@@ -264,6 +264,8 @@ async function learnFluidGeometry(
 					// Adapters can annotate platform-owned closed-state padding without
 					// teaching generic capture about their DOM or runtime.
 					( property !== 'padding-top' || ! ignorePadding ) &&
+					// No source scripts can rewrite an authored minimum on a static page.
+					( property !== 'min-height' || document.scripts.length > 0 ) &&
 					// Empty editorial paragraphs carry font formatting even though they
 					// have no text/glyph to size. Retain that native CSS unchanged; explicit
 					// spacer dimensions, real text and generated glyphs still qualify.
@@ -343,6 +345,7 @@ async function learnFluidGeometry(
 							! property.startsWith( '--' ) &&
 							property !== 'font-size' &&
 							property !== 'padding-top' &&
+							property !== 'min-height' &&
 							property !== 'transform-x'
 								? property === 'width' || property === 'left'
 									? parent.clientWidth
@@ -373,7 +376,7 @@ async function learnFluidGeometry(
 				const key = `${ entry.id }:${ property }`;
 				const list = observations.get( key ) ?? [];
 				if ( value === null || value === undefined ) {
-					if ( property.startsWith( '--' ) ) {
+					if ( property.startsWith( '--' ) || property === 'min-height' ) {
 						list.push( { viewport: width, value: Number.NaN } );
 						observations.set( key, list );
 					}
@@ -443,6 +446,8 @@ async function learnFluidGeometry(
 		const transformX = property === 'transform-x';
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );
+		// A constant minimum already survives serialization without learned CSS.
+		if ( property === 'min-height' && constantAcross( new Map( [ [ key, samples ] ] ), samples.length, new Set() ) ) continue;
 		const modelSamples = customProperty ? widestFiniteRun( samples ) : samples;
 		const wholeRangeModel = learnFluidModel( modelSamples );
 		const model: FluidModel = learnWidestFluidModel( modelSamples );
@@ -471,11 +476,11 @@ async function learnFluidGeometry(
 		// segment fits a viewport-expressible model, ship media-scoped rules
 		// instead of freezing.
 		const segmented =
-			wholeRangeModel.kind === 'breakpoint'
+			( wholeRangeModel.kind === 'breakpoint' || ( property === 'min-height' && samples.some( sample => ! Number.isFinite( sample.value ) ) ) )
 				? learnSegmentedFluidModel( property === 'left'
 					? modelSamples.map( ( { viewport, value } ) => ( { viewport, value } ) ) : modelSamples, customProperty
 					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
-					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
+					: { holdUnfitted: transformX || property === 'min-height', holdNarrowForBoundedAffine: true, preserveAbsence: property === 'min-height' } )
 				: null;
 		if ( customProperty && model.kind !== 'breakpoint' && modelSamples.length >= 3 ) {
 			const customModel =
@@ -558,7 +563,7 @@ async function learnFluidGeometry(
 			} );
 			continue;
 		}
-		if ( model.kind === 'breakpoint' ) {
+		if ( model.kind === 'breakpoint' || ( property === 'min-height' && samples.some( sample => ! Number.isFinite( sample.value ) ) ) ) {
 			// Leaving the frozen value is the honest outcome: a wrong formula
 			// would be worse than an admittedly fixed one.
 			unmodelled++;
@@ -1004,22 +1009,38 @@ async function inlineGeometryIsConstant(
 		const tagged = state.elements();
 		return { count: tagged.length, written: tagged.some( element => tracker.written( element ) ), reactive: tracker.viewportReactive() };
 	}, { key: RUNTIME_STYLE_WRITES_KEY } );
+	// Min-height-only pages previously paid no full sampling sweeps. Test their
+	// declarations with the existing cheap resize probe, even when script wrote
+	// them at load, so a constant equalizer still pays no scroll/rest sweep.
+	const minima = await baseline.evaluate( state => {
+		const elements = state.elements();
+		if ( ! elements.every( element => {
+			const geometry = state.readGeometry( element );
+			return [ ...geometry.style ].every( property => property === 'min-height' || state.pixel( geometry.style.getPropertyValue( property ) ) === null ) && geometry.translation === null && geometry.inset === null;
+		} ) ) return null;
+		return elements.map( element => state.readGeometry( element ).literal );
+	} );
 	const before = await observe();
-	if ( before === null || before.written ) return false;
+	if ( minima === null && ( before === null || before.written ) ) return false;
 	// The probe asks only whether script writes the tagged elements, not what
 	// geometry they rest at, so a quiet window that outlasts common resize
 	// debounces replaces the sampling sweep's scroll-and-rest readiness.
 	const { settleDocument } = await import( './page-helpers.js' );
 	const probeSettle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
-	if ( ! before.reactive ) return true;
+	if ( minima === null && ! before!.reactive ) return true;
+	let unchangedMinima = minima !== null;
 	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
 		await settleDocument( page, 'fluid-probe', probeSettle );
+		if ( minima !== null ) {
+			const current = await baseline.evaluate( state => state.elements().map( element => state.readGeometry( element ).literal ) );
+			unchangedMinima &&= JSON.stringify( current ) === JSON.stringify( minima );
+		}
 	}
 	if ( original ) await page.setViewportSize( original );
 	await settleDocument( page, 'fluid-probe', probeSettle );
 	const after = await observe();
-	const constant = after !== null && ! after.written && after.count === before.count;
+	const constant = minima !== null ? unchangedMinima : after !== null && ! after.written && after.count === before!.count;
 	// A constant document is captured at this viewport without sampling, so it
 	// owes the capture width what a sampled return does.
 	if ( constant ) await replayReplacedEntrances( page, baseline );

@@ -377,11 +377,37 @@ function viewportModelForRun( run: readonly GeometrySample[], allowBoundedAffine
  * own observed value until the next sampled regime: it is the same kind of
  * frozen constant, but taken at the width it governs rather than at the
  * capture width.
+ *
+ * `preserveAbsence` bounds fitted finite runs to where inline pixels exist.
+ * Non-finite samples then leave a gap with no emitted declaration, rather
+ * than allowing a fit to extend across widths where the runtime cleared it.
  */
 export function learnSegmentedFluidModel(
 	samples: readonly GeometrySample[],
-	options: { holdUnfitted?: boolean; holdNarrowForBoundedAffine?: boolean } = {}
+	options: { holdUnfitted?: boolean; holdNarrowForBoundedAffine?: boolean; preserveAbsence?: boolean } = {}
 ): SegmentedFluidModel | null {
+	// Missing inline pixels are a real regime: remove the captured declaration
+	// and emit nothing there, allowing authored CSS and intrinsic sizing to win.
+	if ( options.preserveAbsence && samples.some( sample => ! Number.isFinite( sample.value ) ) ) {
+		const ordered = [ ...samples ].sort( ( a, b ) => a.viewport - b.viewport );
+		const segments: FluidModelSegment[] = [];
+		for ( let start = 0; start < ordered.length; ) {
+			if ( ! Number.isFinite( ordered[ start ]!.value ) ) { start++; continue; }
+			let end = start + 1;
+			while ( end < ordered.length && Number.isFinite( ordered[ end ]!.value ) ) end++;
+			const run = ordered.slice( start, end );
+			const model = viewportModelForRun( run, options.holdNarrowForBoundedAffine );
+			const fitted = model ? [ { model, minWidth: null, maxWidth: null } ] : learnSegmentedFluidModel( run, { ...options, preserveAbsence: false } )?.segments;
+			if ( ! fitted ) return null;
+			segments.push( ...fitted.map( ( segment, index ) => ( {
+				...segment,
+				minWidth: index === 0 ? ( start === 0 ? null : run[ 0 ]!.viewport ) : segment.minWidth,
+				maxWidth: index === fitted.length - 1 ? ( end === ordered.length ? null : ordered[ end ]!.viewport - 1 ) : segment.maxWidth,
+			} ) ) );
+			start = end;
+		}
+		return segments.length ? { kind: 'segmented', segments } : null;
+	}
 	const usable = samples
 		.filter( ( sample ) => Number.isFinite( sample.value ) && Number.isFinite( sample.viewport ) )
 		.sort( ( a, b ) => a.viewport - b.viewport );
