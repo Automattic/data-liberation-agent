@@ -4277,6 +4277,57 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( diagnostics.styleHoist.diagnosticCounts ).toEqual( { unsafe_attributes: 2 } );
 	} );
 
+	it.each( [ 'device-visibility', 'disclosure', 'disclosure-base', 'fluid-rules' ] )( 'hoists device styles but keeps %s styles inline', ( marker ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-device-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const devices = [
+			[ 'desktop', 'all' ],
+			[ 'phone', 'screen' ],
+		];
+		const css = '.shared{color:red}';
+		// Each dimension participates independently, even when CSS is identical.
+		const keys = [
+			[ 'not all', 'desktop', 'all' ],
+			[ 'not all', 'phone', 'all' ],
+			[ 'not all', 'desktop', 'screen' ],
+			[ 'screen', 'desktop', 'all' ],
+		].map( ( [ media, device, sourceMedia ] ) => portableInlineStyle(
+			` media="${ media }" data-blocks-engine-capture-device-style="${ device }" data-blocks-engine-capture-source-media="${ sourceMedia }"`, css
+		)?.key );
+		expect( keys ).not.toContain( undefined );
+		expect( new Set( keys ).size ).toBe( keys.length );
+		const styles = devices.map( ( [ device, media ] ) =>
+			`<style media="not all" data-blocks-engine-capture-device-style="${ device }" data-blocks-engine-capture-source-media="${ media }">${ css }</style>`
+		).join( '' ) + `<style data-blocks-engine-capture-${ marker }="true">${ css }</style>`;
+		for ( const slug of [ 'homepage', 'about' ] )
+			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body>${ slug }</body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+			},
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.styleHoist.hoistedStylesheets ).toBe( 1 );
+		expect( diagnostics.styleHoist.diagnosticCounts ).toEqual( { unsafe_attributes: 2 } );
+		for ( const path of [ 'index.html', 'about/index.html' ] ) {
+			const $ = cheerio.load( readFileSync( join( outputDir, 'website', path ), 'utf8' ) );
+			const links = $( 'link[rel="stylesheet"]' );
+			expect( links ).toHaveLength( 2 );
+			devices.forEach( ( [ device, media ], index ) => {
+				expect( links.eq( index ).attr( 'media' ) ).toBe( 'not all' );
+				expect( links.eq( index ).attr( 'data-blocks-engine-capture-device-style' ) ).toBe( device );
+				expect( links.eq( index ).attr( 'data-blocks-engine-capture-source-media' ) ).toBe( media );
+			} );
+			expect( links.eq( 0 ).next()[ 0 ] ).toBe( links[ 1 ] );
+			expect( links.eq( 1 ).next().is( `style[data-blocks-engine-capture-${ marker }]` ) ).toBe( true );
+			expect( $( `style[data-blocks-engine-capture-${ marker }]` ).text() ).toBe( css );
+		}
+	} );
+
 	it( 'keeps unsafe and base-dependent styles inline with emitted diagnostics', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-diagnostics-' ) );
 		dirs.push( outputDir );
