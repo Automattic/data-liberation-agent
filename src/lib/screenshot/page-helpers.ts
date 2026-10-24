@@ -5,6 +5,9 @@ import { isSourcePromotion } from '../source-cleanup.js';
 /** Slack given to an in-page step beyond its own budget before Node gives up on it. */
 const EVALUATE_GRACE_MS = 5_000;
 
+/** Default bound of one quiet wait, and the longest a pending data request may hold quiet. */
+const READINESS_BOUND_MS = 5_000;
+
 export interface SettleOutcome {
   /** `quiet`: the document met every requested condition; `deadline`: the bound fired first. */
   reason: 'quiet' | 'deadline';
@@ -114,7 +117,8 @@ export async function settleDocument(
  * The network step is [[waitForNetworkQuiet]]: quiet means no render-affecting
  * request (scripts, stylesheets, fonts, images, media, same-origin fetch/xhr —
  * the predicate [[waitForRenderIdle]] trusts) has started or finished, and no
- * fetch/xhr response of any origin is still pending, for 500ms, bounded at 5s.
+ * fetch/xhr response of any origin younger than the readiness bound is still
+ * pending, for 500ms, bounded at 5s.
  * Raw Playwright networkidle counts every request, so a source whose
  * cross-origin analytics chatter never stops (GA, Intercom, Wix BI beacons)
  * never satisfies it and every capture load, device comparison and fidelity
@@ -400,8 +404,8 @@ interface PageTrafficLedger {
   renderActive: Set< Request >;
   /** When a render-affecting request last started or finished. */
   lastRenderActivity: number;
-  /** Data (fetch/xhr) responses seen but not yet landed, any origin. */
-  pendingData: Set< Request >;
+  /** Data (fetch/xhr) responses seen but not yet landed, any origin, with when each started. */
+  pendingData: Map< Request, number >;
 }
 
 const trafficLedgers = new WeakMap< Page, PageTrafficLedger >();
@@ -421,7 +425,7 @@ function trafficLedger( page: Page, telemetry?: TelemetryRequest ): PageTrafficL
   if ( ! page.on || ! page.off ) return null;
   const existing = trafficLedgers.get( page );
   if ( existing ) return existing;
-  const ledger: PageTrafficLedger = { renderActive: new Set(), lastRenderActivity: Date.now(), pendingData: new Set() };
+  const ledger: PageTrafficLedger = { renderActive: new Set(), lastRenderActivity: Date.now(), pendingData: new Map() };
   const affectsRender = ( request: Request ) => requestAffectsRenderedContent( page, request );
   const isDataRequest = ( request: Request ) => [ 'fetch', 'xhr' ].includes( request.resourceType() );
   const isTelemetry = ( request: Request ) => {
@@ -430,7 +434,7 @@ function trafficLedger( page: Page, telemetry?: TelemetryRequest ): PageTrafficL
   const onRequest = ( request: Request ) => {
     if ( isTelemetry( request ) ) return;
     if ( affectsRender( request ) ) { ledger.renderActive.add( request ); ledger.lastRenderActivity = Date.now(); }
-    if ( isDataRequest( request ) ) ledger.pendingData.add( request );
+    if ( isDataRequest( request ) ) ledger.pendingData.set( request, Date.now() );
   };
   const onSettled = ( request: Request ) => {
     if ( isTelemetry( request ) ) return;
@@ -462,17 +466,25 @@ function awaitQuiet( quiet: () => boolean, timeoutMs: number ): Promise< 'quiet'
  * window — that includes same-origin fetch/xhr, so a hydration fetch from the
  * page's own origin holds the wait from its start to its landing. And no
  * `fetch`/`xhr` response of any origin still pending, so a hydration response
- * from an embedded widget's origin is never raced either. What may pass
- * unnoticed is cross-origin chatter that is merely frequent (analytics
- * beacons): only its pending responses hold, its completed ones do not reopen
- * the window — the concurrent DOM-quiescence step is what catches whatever a
- * completed response renders, with the same bound it had before. Declared
- * telemetry (see [[observePageTraffic]]) is outside the ledger entirely: its
- * endpoint may hold a beacon open past any bound, and nothing renders from it.
+ * from an embedded widget's origin is never raced either. A pending response
+ * holds only for the readiness bound from its own start: a request whose
+ * lifecycle events are lost (under request interception, a continued
+ * cross-origin conversion POST can emit no response, finished or failed
+ * event) would otherwise hold every later wait on the page for its lifetime.
+ * What may pass unnoticed is cross-origin chatter that is merely frequent
+ * (analytics beacons): only its pending responses hold, its completed ones do
+ * not reopen the window — the concurrent DOM-quiescence step is what catches
+ * whatever a completed or late response renders. Declared telemetry (see
+ * [[observePageTraffic]]) is outside the ledger entirely: its endpoint may
+ * hold a beacon open past any bound, and nothing renders from it.
  */
 function networkQuiet( ledger: PageTrafficLedger, quietMs: number ): boolean {
-  return ledger.renderActive.size === 0 && ledger.pendingData.size === 0 &&
-    Date.now() - ledger.lastRenderActivity >= quietMs;
+  if ( ledger.renderActive.size !== 0 ) return false;
+  const now = Date.now();
+  for ( const started of ledger.pendingData.values() ) {
+    if ( now - started < READINESS_BOUND_MS ) return false;
+  }
+  return now - ledger.lastRenderActivity >= quietMs;
 }
 
 /** Run lazy-load work and wait until render-affecting requests become quiet. */
@@ -480,7 +492,7 @@ export async function waitForRenderIdle(
   page: Page,
   action: () => Promise< unknown >,
   quietMs: number = 500,
-  timeoutMs: number = 5_000,
+  timeoutMs: number = READINESS_BOUND_MS,
 ): Promise<void> {
   const ledger = trafficLedger( page );
   if ( ! ledger ) {
@@ -513,7 +525,7 @@ export async function waitForRenderIdle(
 export async function waitForNetworkQuiet(
   page: Page,
   wait: string,
-  { quietMs = 500, timeoutMs = 5_000 }: { quietMs?: number; timeoutMs?: number } = {},
+  { quietMs = 500, timeoutMs = READINESS_BOUND_MS }: { quietMs?: number; timeoutMs?: number } = {},
 ): Promise<void> {
   const started = Date.now();
   let reason: SettleOutcome['reason'] = 'deadline';

@@ -34,6 +34,10 @@ function beaconOrigin(): Server {
 			setTimeout( () => response.end(), HELD_DATA_MS );
 			return;
 		}
+		if ( request.url === '/orphan-data' ) {
+			// Never answers, like a request whose lifecycle events are lost.
+			return;
+		}
 		response.end();
 	} );
 }
@@ -72,6 +76,11 @@ function chattyOrigin( beaconPort: number ): Server {
 		response.setHeader( 'content-type', 'text/html' );
 		if ( request.url === '/hydration' ) {
 			response.end( page( mountFromData( '/slow-data' ) ) );
+			return;
+		}
+		if ( request.url === '/orphan-data' ) {
+			// An undeclared cross-origin data fetch that never settles.
+			response.end( page( `<script>fetch( '${ beacon }/orphan-data' ).catch( () => {} );</script>` ) );
 			return;
 		}
 		if ( request.url === '/cross-data' ) {
@@ -177,6 +186,24 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		// Completed beacons do not reopen the window, but a data response still
 		// in flight holds the wait until it lands (1.2s here).
 		expect( network?.ms ).toBeGreaterThanOrEqual( 900 );
+		await page.close();
+	}, 30_000 );
+
+	// An orphaned data request holds quiet only for the readiness bound from
+	// its start, not for every later wait on the page.
+	it( 'stops holding quiet for a data request once it has outlived the readiness bound', async () => {
+		const { page, waits } = await settledPage();
+		await page.goto( `${ origin }/orphan-data`, { waitUntil: 'load', timeout: 15_000 } );
+		await waitForStable( page );
+		expect( waits.find( ( w ) => w.wait === 'network-quiet' )?.ms ).toBeGreaterThanOrEqual( 4_000 );
+		const recordedBefore = waits.length;
+		const started = Date.now();
+		await waitForStable( page );
+		const elapsed = Date.now() - started;
+		const second = waits.slice( recordedBefore ).find( ( w ) => w.wait === 'network-quiet' );
+		expect( second?.reason ).toBe( 'quiet' );
+		expect( second?.ms ).toBeLessThan( 3_000 );
+		expect( elapsed ).toBeLessThan( 4_500 );
 		await page.close();
 	}, 30_000 );
 
