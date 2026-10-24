@@ -24,7 +24,7 @@ export const SERVER_HTML_IGNORED = [
 ] as const;
 
 /** Elements left out of the rendered structure comparison. */
-export const STRUCTURE_IGNORED = [ 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-lib-* probe markers or capture evidence attributes' ] as const;
+export const STRUCTURE_IGNORED = [ 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-lib-* probe markers or capture evidence attributes', 'the sibling position of empty HTML containers, elements with no child nodes other than void, replaced and form elements (their presence still counts)' ] as const;
 
 export interface DeviceModeDecision {
 	mode: DeviceMode;
@@ -109,15 +109,22 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 			( ( rect => rect.width <= 1 || rect.height <= 1 )( element.getBoundingClientRect() ) || getComputedStyle( element ).visibility === 'hidden' );
 		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) && attribute.name !== mark?.attribute );
 		const marked = mark ? new Set( mark.paths ) : undefined;
+		// An empty container is compared by presence, not by its place among its
+		// siblings, so a script reordering one at another width does not shift
+		// every content-bearing sibling. Void, replaced and form elements are
+		// content even with no child nodes and keep their position.
+		const contentless = new Set( [ 'AREA', 'AUDIO', 'BASE', 'BR', 'CANVAS', 'COL', 'EMBED', 'HR', 'IFRAME', 'IMG', 'INPUT', 'LINK', 'META', 'OBJECT', 'SELECT', 'SOURCE', 'TEXTAREA', 'TRACK', 'VIDEO', 'WBR' ] );
+		const emptyContainer = ( element: Element ) => ! element.hasChildNodes() && element.namespaceURI === 'http://www.w3.org/1999/xhtml' && ! contentless.has( element.tagName );
 		const paths: string[] = [];
 		const walk = ( element: Element, prefix: string ) => {
 			const seen = new Map< string, number >();
 			for ( const child of Array.from( element.children ) ) {
 				if ( skipped.has( child.tagName ) || owned( child ) || hiddenFrame( child ) ) continue;
 				const tag = child.tagName.toLowerCase();
-				const position = ( seen.get( tag ) ?? 0 ) + 1;
-				seen.set( tag, position );
-				const path = `${ prefix }>${ tag }[${ position }]`;
+				const empty = emptyContainer( child );
+				const position = empty ? 0 : ( seen.get( tag ) ?? 0 ) + 1;
+				if ( ! empty ) seen.set( tag, position );
+				const path = empty ? `${ prefix }>${ tag }[]` : `${ prefix }>${ tag }[${ position }]`;
 				paths.push( path );
 				if ( marked?.has( path ) ) child.setAttribute( mark!.attribute, '' );
 				walk( child, path );
@@ -154,15 +161,21 @@ export async function visibleControlPaths( page: Page ): Promise< string[] > {
 			const style = getComputedStyle( element );
 			return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
 		};
+		// Same walk as `renderedElementPaths`, so desktop-control paths name the
+		// same nodes on the phone page: an empty container is compared by presence,
+		// not by its place among its siblings.
+		const contentless = new Set( [ 'AREA', 'AUDIO', 'BASE', 'BR', 'CANVAS', 'COL', 'EMBED', 'HR', 'IFRAME', 'IMG', 'INPUT', 'LINK', 'META', 'OBJECT', 'SELECT', 'SOURCE', 'TEXTAREA', 'TRACK', 'VIDEO', 'WBR' ] );
+		const emptyContainer = ( element: Element ) => ! element.hasChildNodes() && element.namespaceURI === 'http://www.w3.org/1999/xhtml' && ! contentless.has( element.tagName );
 		const paths: string[] = [];
 		const walk = ( element: Element, prefix: string ) => {
 			const seen = new Map< string, number >();
 			for ( const child of Array.from( element.children ) ) {
 				if ( skipped.has( child.tagName ) || owned( child ) || hiddenFrame( child ) ) continue;
 				const tag = child.tagName.toLowerCase();
-				const position = ( seen.get( tag ) ?? 0 ) + 1;
-				seen.set( tag, position );
-				const path = `${ prefix }>${ tag }[${ position }]`;
+				const empty = emptyContainer( child );
+				const position = empty ? 0 : ( seen.get( tag ) ?? 0 ) + 1;
+				if ( ! empty ) seen.set( tag, position );
+				const path = empty ? `${ prefix }>${ tag }[]` : `${ prefix }>${ tag }[${ position }]`;
 				if ( child.matches( control ) && visible( child ) ) paths.push( path );
 				walk( child, path );
 			}

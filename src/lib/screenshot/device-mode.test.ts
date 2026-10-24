@@ -63,11 +63,13 @@ describe( 'device-mode evidence', () => {
 /**
  * One page per fixture. `responsive` reflows through media queries and hides a
  * hamburger menu at desktop width; `by-agent` serves phones different HTML;
- * `mixed/promo` builds a phone-only element at narrow widths; `mixed/` reflows.
+ * `mixed/promo` builds a phone-only element at narrow widths; `mixed/` reflows;
+ * each `reorder/` route moves a sibling below the nav breakpoint.
  */
 function page( fixture: string, userAgent: string, path: string ): string {
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
 	const script = fixture === 'mixed' && path === 'promo' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
+	const reorder = reorderFixture( path );
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reflow ${ path }</title><style>
 body{margin:0;font:16px Arial}header{display:flex;justify-content:space-between;padding:0;height:60px}
 .links a{margin-right:12px}.burger,.more{display:none;width:44px;height:44px}
@@ -78,11 +80,33 @@ body{margin:0;font:16px Arial}header{display:flex;justify-content:space-between;
 <button class="search" type="button" aria-haspopup="dialog" aria-controls="search">Search</button>
 <button id="menu-toggle" class="burger" type="button" aria-label="Menu" aria-haspopup="dialog">≡</button></header>
 <div id="search" role="dialog" aria-label="Site search" hidden><input aria-label="Query"></div>
-<main><h1>${ path === 'about' ? 'About us' : 'Welcome' }</h1>${ phoneHtml }<div class="row"><div class="col">One</div><div class="col">Two</div></div>
+<main><h1>${ path === 'about' ? 'About us' : 'Welcome' }</h1>${ phoneHtml }${ reorder.markup }<div class="row"><div class="col">One</div><div class="col">Two</div></div>
 <button class="more" type="button" aria-expanded="false" aria-controls="more-panel">More</button><div id="more-panel" hidden>Phone extras</div></main>
 <script>document.querySelector('.more').addEventListener('click',e=>{const d=document.getElementById('more-panel');d.hidden=!d.hidden;e.currentTarget.setAttribute('aria-expanded',String(!d.hidden))});
 document.querySelector('.search').addEventListener('click',()=>{const d=document.getElementById('search');d.hidden=!d.hidden});
-document.getElementById('menu-toggle').addEventListener('click',()=>{const open=document.getElementById('drawer');if(open){open.remove();return}const d=document.createElement('div');d.id='drawer';d.setAttribute('role','dialog');d.setAttribute('aria-label','Site menu');d.innerHTML='<a href="/${ fixture }/">Home</a><a href="/${ fixture }/about">About</a>';document.body.append(d)});</script>${ script }</body></html>`;
+document.getElementById('menu-toggle').addEventListener('click',()=>{const open=document.getElementById('drawer');if(open){open.remove();return}const d=document.createElement('div');d.id='drawer';d.setAttribute('role','dialog');d.setAttribute('aria-label','Site menu');d.innerHTML='<a href="/${ fixture }/">Home</a><a href="/${ fixture }/about">About</a>';document.body.append(d)});</script>${ script }${ reorder.script }</body></html>`;
+}
+
+/**
+ * The `reorder` routes. Each script moves a sibling below the nav breakpoint,
+ * the way a phone layout regroups its lists: `empty-ul` swaps an empty `<ul>`
+ * ahead of a populated one, `move-content` swaps two populated `<ul>`s, and
+ * `move-img` moves the photo out of its frame, ahead of it.
+ */
+function reorderFixture( path: string ): { markup: string; script: string } {
+	if ( path === 'empty-ul' ) return {
+		markup: '<nav class="lists" aria-label="Sections"><ul class="main-menu"><li><a href="/reorder/">Home</a></li></ul><ul class="ghost-menu"></ul></nav>',
+		script: '<script>if(innerWidth<600){const nav=document.querySelector(".lists");nav.insertBefore(nav.querySelector(".ghost-menu"),nav.querySelector(".main-menu"))}</script>',
+	};
+	if ( path === 'move-content' ) return {
+		markup: '<nav class="lists" aria-label="Sections"><ul class="first"><li><a href="/reorder/">Home</a></li><li><a href="/reorder/move-content">About</a></li></ul><ul class="second"><li><a href="/reorder/">Join</a></li></ul></nav>',
+		script: '<script>if(innerWidth<600){const nav=document.querySelector(".lists");nav.insertBefore(nav.querySelector(".second"),nav.querySelector(".first"))}</script>',
+	};
+	if ( path === 'move-img' ) return {
+		markup: '<figure class="photo"><img class="pic" src="/reorder/flag.svg" alt="Flag" width="120" height="80"></figure>',
+		script: '<script>if(innerWidth<600){const fig=document.querySelector(".photo");fig.parentNode.insertBefore(fig.querySelector(".pic"),fig)}</script>',
+	};
+	return { markup: '', script: '' };
 }
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode capture', () => {
@@ -92,6 +116,11 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 	let origin: string;
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
+			if ( ( request.url ?? '' ).endsWith( '.svg' ) ) {
+				response.setHeader( 'content-type', 'image/svg+xml' );
+				response.end( '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="#36c"/></svg>' );
+				return;
+			}
 			const [ , fixture = '', path = '' ] = ( request.url ?? '/' ).split( '/' );
 			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
 			const body = page( fixture, request.headers[ 'user-agent' ] ?? '', path );
@@ -219,6 +248,24 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( route( promo ).responsiveVariants ).toBeDefined();
 		expect( readFileSync( join( run.outputDir, 'website', 'promo', 'index.html' ), 'utf8' ) ).toContain( 'Phone promo' );
 		expect( readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' ) ).not.toContain( 'Phone promo' );
+	}, 120_000 );
+
+	it( 'compares an empty container by presence, so reordering one keeps the route reflow-only', async () => {
+		const run = await capture( 'reorder', { routes: [ 'empty-ul', 'move-content', 'move-img' ] } );
+		const base = `${ origin }/reorder`;
+		const expected: ReadonlyArray< readonly [ string, 'reflow-only' | 'dual' ] > = [
+			[ 'empty-ul', 'reflow-only' ],
+			[ 'move-content', 'dual' ],
+			[ 'move-img', 'dual' ],
+		];
+		for ( const [ route, mode ] of expected ) {
+			expect( run.entries[ `${ base }/${ route }` ]!.deviceMode ).toMatchObject( { mode } );
+		}
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 4, reflowOnly: 2,
+			dual: [ { url: `${ base }/move-content` }, { url: `${ base }/move-img` } ] } } );
+		// Only the empty container's reorder avoids the second capture.
+		expect( Object.keys( run.entries[ `${ base }/empty-ul` ]!.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
+		expect( Object.keys( run.entries[ `${ base }/move-content` ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
 	}, 120_000 );
 
 	it( 'keeps both captures of a route whose phone check timed out', async () => {
