@@ -66,7 +66,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 		};
 		const root = snapshot( document.documentElement );
 		const scratch = document.createElement( 'span' );
-		const geometry = [ 'width', 'height', 'font-size', 'padding-top', 'inset', 'top', 'left' ];
+		const geometry = [ 'width', 'height', 'min-height', 'font-size', 'padding-top', 'inset', 'top', 'left' ];
 		const walk = ( role: Role, element: Element | undefined, restore: boolean, matched: Set<Element>, unlearnedOnly = false ) => {
 			if ( ! element ) return;
 			// Surviving objects prove their identity. A replacement must occupy the

@@ -8,6 +8,37 @@ import {
 	segmentedCss,
 } from './fluid-model.js';
 
+describe( 'optional pixel regimes', () => {
+	it( 'bounds finite runs without filling absent narrow, middle or wide regimes', () => {
+		const result = learnSegmentedFluidModel( [
+			{ viewport: 390, value: NaN },
+			{ viewport: 600, value: 200 }, { viewport: 768, value: 200 },
+			{ viewport: 1024, value: NaN },
+			{ viewport: 1280, value: 300 }, { viewport: 1440, value: 300 },
+			{ viewport: 1920, value: NaN },
+		], { preserveAbsence: true } );
+		expect( result?.segments.map( segment => [ segment.minWidth, segment.maxWidth, segment.model.css ] ) ).toEqual( [
+			[ 600, 1023, '200px' ], [ 1280, 1919, '300px' ],
+		] );
+	} );
+
+	it( 'fits varying equalizer minima without extending across absence', () => {
+		const result = learnSegmentedFluidModel( [
+			{ viewport: 390, value: NaN }, { viewport: 600, value: NaN },
+			{ viewport: 768, value: 820 }, { viewport: 1024, value: 820 },
+			{ viewport: 1280, value: 841 },
+			{ viewport: 1440, value: 820 }, { viewport: 1920, value: 820 },
+		], { preserveAbsence: true, holdUnfitted: true } );
+		expect( result?.segments.map( segment => [ segment.minWidth, segment.maxWidth, segment.model.css ] ) ).toEqual( [
+			[ 768, 1439, 'max(820px, 65.7vw)' ], [ 1440, null, '820px' ],
+		] );
+	} );
+
+	it( 'refuses an optional regime without enough evidence to fit', () => {
+		expect( learnSegmentedFluidModel( [ { viewport: 390, value: NaN }, { viewport: 1440, value: 200 } ], { preserveAbsence: true } ) ).toBeNull();
+	} );
+} );
+
 const at = ( pairs: Array< [ number, number ] > ) =>
 	pairs.map( ( [ viewport, value ] ) => ( { viewport, value } ) );
 

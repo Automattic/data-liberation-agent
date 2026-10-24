@@ -14,6 +14,59 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
+	// One browser sweep (~8s) covers both disappearance and retained desktop sizing.
+	it( 'learns equal-height card minima only in the wide regime', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		try {
+			await page.setContent( `<style>
+				body{margin:0}.grid{display:grid;grid-template-columns:1fr 1fr;align-items:start}
+				.card{padding:10px}.content{height:120px}.tall{height:240px}
+				@media(max-width:899px){.grid{grid-template-columns:1fr}}
+			</style><div class="grid"><article class="card"><div class="content">Short</div></article>
+			<article class="card"><div class="content tall">Tall</div></article></div>
+			<script>const equalize=()=>{
+				const cards=[...document.querySelectorAll('.card')];
+				cards.forEach(card=>card.style.removeProperty('min-height'));
+				if(innerWidth>=900){const height=Math.max(...cards.map(card=>card.clientHeight-20));
+				cards.forEach(card=>card.style.minHeight=height+'px');}
+			};addEventListener('resize',equalize);equalize();</script>` );
+			const learner = process.env.DLA_FLUID_BASELINE ? ( await import( process.env.DLA_FLUID_BASELINE ) ).learnAndApplyFluidGeometry as typeof learnAndApplyFluidGeometry : learnAndApplyFluidGeometry;
+			const result = await learner( page, { settleMs: 10 } );
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			const html = await page.content();
+			await copy.setViewportSize( { width: 390, height: 900 } );
+			await copy.setContent( html );
+			const phone = await copy.locator( '.card' ).evaluateAll( nodes => nodes.map( node => ( {
+				inline: ( node as HTMLElement ).style.minHeight,
+				minimum: getComputedStyle( node ).minHeight,
+				height: node.getBoundingClientRect().height,
+				content: node.firstElementChild!.getBoundingClientRect().height,
+			} ) ) );
+			for ( const card of phone ) {
+				expect( card.inline ).toBe( '' );
+				expect( [ '0px', 'auto' ] ).toContain( card.minimum );
+				expect( card.height ).toBe( card.content + 20 );
+			}
+			expect( result.byKind.segmented ).toBe( 2 );
+			await copy.setViewportSize( { width: 1440, height: 900 } );
+			expect( await copy.locator( '.card' ).evaluateAll( nodes => nodes.map( node => getComputedStyle( node ).minHeight ) ) ).toEqual( [ '240px', '240px' ] );
+		} finally { await page.close(); await copy.close(); }
+	}, 30_000 );
+
+	it( 'does not refine constant pixel minima or tag non-pixel minima', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( '<div style="min-height:50vh">Native</div>' );
+			expect( ( await learnAndApplyFluidGeometry( page, { settleMs: 10 } ) ).sampledWidths ).toEqual( [] );
+			await page.setContent( `<div id="card">Constant</div><script>const update=()=>document.querySelector('#card').style.minHeight='200px';addEventListener('resize',update);update();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			expect( result.sampledWidths ).toEqual( [] );
+			expect( result.applied ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-fluid-rules]' ).count() ).toBe( 0 );
+		} finally { await page.close(); }
+	}, 30_000 );
+
 	it( 'leaves important-only literal insets untagged without resizing', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		const learner = process.env.DLA_FLUID_BASELINE ? ( await import( process.env.DLA_FLUID_BASELINE ) ).learnAndApplyFluidGeometry as typeof learnAndApplyFluidGeometry : learnAndApplyFluidGeometry;
