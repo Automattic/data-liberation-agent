@@ -31,12 +31,23 @@ export interface SharedStylesheetResult {
 export function portableInlineStyle(
 	attributes: string,
 	css: string
-): { key: string; media: string } | undefined {
+): { key: string; media: string; deviceAttributes?: Record< string, string > } | undefined {
 	// Exported documents carry no executable script, so identifying attributes a
 	// source runtime used to track its own style tags (Wix `id`/`data-href`, for
 	// example) cannot affect rendering once the style moves to a link. DLA's own
-	// `data-blocks-engine-capture-*` markers are selected by later export passes and stay inline.
+	// capture markers stay inline, except the two device-selection attributes:
+	// the runtime and downstream consumers support those on links as well.
+	const deviceAttributes: Record< string, string > = {};
+	let duplicateDeviceAttribute = false;
 	const significant = attributes.replace(
+		/(^|\s)(data-blocks-engine-capture-(?:device-style|source-media))\s*=\s*(["'])(.*?)\3/gi,
+		( _match, prefix: string, name: string, _quote: string, value: string ) => {
+			name = name.toLowerCase();
+			if ( name in deviceAttributes ) duplicateDeviceAttribute = true;
+			deviceAttributes[ name ] = value;
+			return prefix;
+		}
+	).replace(
 		/(^|\s)(?:id|class|rel|data-(?!blocks-engine-capture-)[\w.:-]+)\s*=\s*(["'])[\s\S]*?\2/gi,
 		'$1'
 	);
@@ -48,11 +59,17 @@ export function portableInlineStyle(
 		.replace( /\btype\s*=\s*(["'])text\/css\1/gi, '' )
 		.replace( /\bmedia\s*=\s*(["']).*?\1/gi, '' )
 		.trim();
-	return portableInlineStyleValues(
+	const style = portableInlineStyleValues(
 		mediaMatch?.[ 2 ] ?? '',
-		typeCount > 1 || mediaCount > 1 || unsupportedAttributes !== '',
+		duplicateDeviceAttribute || typeCount > 1 || mediaCount > 1 || unsupportedAttributes !== '',
 		css
 	);
+	if ( ! style || Object.keys( deviceAttributes ).length === 0 ) return style;
+	return {
+		...style,
+		key: JSON.stringify( [ style.media, deviceAttributes[ 'data-blocks-engine-capture-device-style' ], deviceAttributes[ 'data-blocks-engine-capture-source-media' ], css ] ),
+		deviceAttributes,
+	};
 }
 
 function portableInlineStyleValues(
@@ -261,6 +278,10 @@ export function materializeSharedStylesheets( input: SharedStylesheetInput ): Sh
 				if ( ! style || ! shared ) return;
 				const link = $( '<link>' ).attr( { rel: 'stylesheet', href: shared.path } );
 				if ( shared.media ) link.attr( 'media', shared.media );
+				for ( const name of Object.keys( style.deviceAttributes ?? {} ) )
+					link.attr( name, attributes[ name ] );
+				// Replace in place: the already-installed device bootstrap must follow
+				// every declaration so its parser-time query sees all device links.
 				$( element ).replaceWith( link );
 			} );
 			writeFileSync( entry.htmlPath, $.html() );
