@@ -88,10 +88,11 @@ const CHOICE_GROUP_RUNTIME = `(function(){var configs=__DLA_CHOICE_CONFIG__;func
 // in the authoring tree. The source probe marks single-open groups explicitly.
 const LOCAL_DISCLOSURE_RUNTIME = `(function(){
 function panelFor(trigger){
-  var parent=trigger.parentElement,id=trigger.getAttribute('aria-controls');
-  return parent&&Array.prototype.find.call(parent.querySelectorAll('[data-blocks-engine-capture-local-disclosure]'),function(panel){return panel.id===id;});
+  var id=trigger.getAttribute('aria-controls');
+  for(var scope=trigger.parentElement;scope;scope=scope===document.body?null:scope.parentElement){var panel=Array.prototype.find.call(scope.querySelectorAll('[data-blocks-engine-capture-local-disclosure]'),function(panel){return panel.id===id;});if(panel)return panel;}
+  return null;
 }
-function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hidden=!open;trigger.setAttribute('aria-expanded',String(open));trigger.querySelectorAll('[data-blocks-engine-capture-disclosure-open-class],[data-blocks-engine-capture-disclosure-open-style]').forEach(function(icon){['class','style'].forEach(function(name){var value=icon.getAttribute('data-blocks-engine-capture-disclosure-'+(open?'open':'closed')+'-'+name);if(value!==null)icon.setAttribute(name,value);});});}
+function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hidden=!open;if(panel.hasAttribute('aria-hidden'))panel.setAttribute('aria-hidden',String(!open));panel.toggleAttribute('inert',!open);trigger.setAttribute('aria-expanded',String(open));trigger.querySelectorAll('[data-blocks-engine-capture-disclosure-open-class],[data-blocks-engine-capture-disclosure-open-style]').forEach(function(icon){['class','style'].forEach(function(name){var value=icon.getAttribute('data-blocks-engine-capture-disclosure-'+(open?'open':'closed')+'-'+name);if(value!==null)icon.setAttribute(name,value);});});}
 function activate(event){
   var trigger=event.target.closest&&event.target.closest('[aria-controls]');
   if(!trigger||!panelFor(trigger))return;
@@ -384,6 +385,9 @@ export function wireCapturedDialogs(
 		}
 	}
 	if (localDisclosures && $('script[data-blocks-engine-capture-local-disclosure-runtime]').length === 0) {
+		if ($('style[data-blocks-engine-capture-local-disclosure]').length === 0) {
+			$('head').append('<style data-blocks-engine-capture-local-disclosure="true">[data-blocks-engine-capture-local-disclosure][hidden]{display:none!important}</style>');
+		}
 		$('head').append(`<script data-blocks-engine-capture-local-disclosure-runtime="true">${LOCAL_DISCLOSURE_RUNTIME}</script>`);
 	}
 	return $.html();

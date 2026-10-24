@@ -37,7 +37,7 @@ for (const viewport of [{width:390,height:844},{width:402,height:681},{width:144
       const top = await page.locator('#content').evaluate(el=>el.getBoundingClientRect().top);
       await expandCollapsedContent(page);
       await hydrateDisclosureContent(page);
-      expect(await page.locator('#answer').isVisible()).toBe(true);
+      expect(await page.locator('#answer').isVisible()).toBe(false);
       expect(await page.locator('#menu').getAttribute('aria-expanded')).toBe('false');
       expect(await page.locator('#content').evaluate(el=>el.getBoundingClientRect().top)).toBe(top);
       const baseline = (await page.content()).replace(/<script>[\s\S]*?<\/script>/g,'');
