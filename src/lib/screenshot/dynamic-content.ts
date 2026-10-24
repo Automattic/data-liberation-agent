@@ -50,7 +50,7 @@ const EXPAND_TOGGLE_LABELS = ['show more', 'read more'];
 /**
  * Phase 1 — hydrate statically-collapsed content. Native `<details>` retain their
  * resting state; their children are already authored HTML. Expands disclosure
- * panels (`[aria-expanded="false"][aria-controls]`),
+ * panels without authored content (`[aria-expanded="false"][aria-controls]`),
  * and clicks "load more / view all" controls. Popup controls and
  * anchors with navigable hrefs are excluded so probing cannot leave the source document.
  * "Show more" / "read more" toggles are not activated here: leaving them open
@@ -167,62 +167,35 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         }
       }));
 
-      const populatedResting: Array<{ trigger: HTMLElement; parent: HTMLElement; controls: string; expanded: boolean }> = [];
+      const populatedResting = new Set<HTMLElement>();
       for (const el of Array.from(document.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls]'))) {
-        if (!safeToActivate(el) || isExpandToggle(el) || !el.parentElement) continue;
+        if (!safeToActivate(el) || isExpandToggle(el)) continue;
+        // The panel is the nearest unique id match above the trigger: a card
+        // heading's button and its region are often cousins, not siblings.
         const controls = el.getAttribute('aria-controls') || '';
-        const panel = Array.from(el.parentElement.querySelectorAll('[id]')).find((node) => node.id === controls);
+        let panel: Element | undefined;
+        for (let scope = el.parentElement; scope && !panel; scope = scope === document.body ? null : scope.parentElement) {
+          const matches = Array.from(scope.querySelectorAll('[id]')).filter((node) => node.id === controls);
+          if (matches.length > 1) break;
+          panel = matches[0];
+        }
         if (!panel || panel.getAttribute('role') !== 'region') continue;
         if (!((panel.textContent || '').trim() || panel.querySelector('img,video,audio,picture,svg,canvas'))) continue;
-        populatedResting.push({ trigger: el, parent: el.parentElement, controls, expanded: el.getAttribute('aria-expanded') === 'true' });
+        populatedResting.add(el);
       }
-      const exclusiveSets: Array<Set<HTMLElement>> = [];
-      const linkExclusive = (left: HTMLElement, right: HTMLElement) => {
-        let leftSet = exclusiveSets.find((set) => set.has(left));
-        let rightSet = exclusiveSets.find((set) => set.has(right));
-        if (leftSet && rightSet && leftSet !== rightSet) {
-          for (const item of rightSet) leftSet.add(item);
-          exclusiveSets.splice(exclusiveSets.indexOf(rightSet), 1);
-        } else if (leftSet) leftSet.add(right);
-        else if (rightSet) rightSet.add(left);
-        else exclusiveSets.push(new Set([left, right]));
-      };
-      const restingTrigger = (entry: { trigger: HTMLElement; parent: HTMLElement; controls: string }) => {
-        if (entry.trigger.isConnected) return entry.trigger;
-        if (!entry.parent.isConnected) return entry.trigger;
-        return Array.from(entry.parent.querySelectorAll<HTMLElement>('[aria-controls]')).find((item) => item.getAttribute('aria-controls') === entry.controls) || entry.trigger;
-      };
+      // Populated editorial regions already carry their content. Opening them
+      // here used to restore only exclusive groups, leaving independent cards
+      // expanded before baseline observation. The disclosure pass owns their
+      // open → observe → restore proof and the local replay contract.
       let navigated = false;
       for (const el of Array.from(document.querySelectorAll('[aria-expanded="false"][aria-controls]'))) {
         if (navigated) break;
-        if (!safeToActivate(el) || isExpandToggle(el)) continue;
-        const openBefore = new Set(populatedResting.filter((entry) => restingTrigger(entry).getAttribute('aria-expanded') === 'true').map((entry) => entry.trigger));
+        if (!safeToActivate(el) || isExpandToggle(el) || populatedResting.has(el as HTMLElement)) continue;
         if ((await activate(el)) === 'navigated') navigated = true;
         // A panel the runtime mounts only on activation could not be checked
         // above. Once mounted, a navigation panel is a menu, not collapsed
         // content: close it so the resting chrome is what gets serialized.
         else if (!safeToActivate(el)) await activate(el);
-        else if (el instanceof HTMLElement) {
-          for (const peer of populatedResting) {
-            if (peer.trigger === el) continue;
-            if (openBefore.has(peer.trigger) && restingTrigger(peer).getAttribute('aria-expanded') !== 'true') linkExclusive(el, peer.trigger);
-          }
-        }
-      }
-      if (!navigated) {
-        for (const set of exclusiveSets) {
-          const members = populatedResting.filter((entry) => set.has(entry.trigger));
-          for (const entry of members) {
-            if (!entry.expanded) continue;
-            const live = restingTrigger(entry);
-            if (live.getAttribute('aria-expanded') !== 'true') await activate(live);
-          }
-          for (const entry of members) {
-            if (entry.expanded) continue;
-            const live = restingTrigger(entry);
-            if (live.getAttribute('aria-expanded') === 'true') await activate(live);
-          }
-        }
       }
 
       if (!navigated) {
@@ -243,7 +216,9 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
   } catch { /* page blocked our script — don't fail the capture */ }
 }
 
-const MAX_DISCLOSURE_CANDIDATES = 32;
+// Includes populated panels as well as lazy mounts; keep typical card lists
+// (including lists longer than 32 items) on the same bounded restore contract.
+const MAX_DISCLOSURE_CANDIDATES = 64;
 const MAX_EXPAND_TOGGLES = 8;
 const MAX_DISCLOSURE_HTML_BYTES = 512 * 1024;
 /** How long the restore step will wait for a runtime's own close-unmount to land
@@ -725,11 +700,13 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
       };
       const clipState = (node: HTMLElement) => {
         const style = getComputedStyle(node);
-        const overflow = style.overflowY || style.overflow;
         return {
           display: style.display,
           opacity: style.opacity,
-          heightZero: node.getBoundingClientRect().height < 1 && (overflow === 'hidden' || overflow === 'clip'),
+          // A zero-row grid can clip through an overflow-hidden child rather
+          // than the panel itself. The open/close proof below still must show
+          // that this zero geometry reverses before it is normalized.
+          heightZero: node.getBoundingClientRect().height < 1,
           className: node.getAttribute('class') || '',
           inlineDisplay: node.style.display,
           inlineOpacity: node.style.opacity,
@@ -748,7 +725,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
       for (const trigger of Array.from(root.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls]:not([aria-haspopup])'))) {
         if (populated.length >= limit - hydrated || !visible(trigger) || !safeToActivate(trigger) || isExpandToggle(trigger)) continue;
         const panel = panelForTrigger(trigger);
-        if (!panel || panel.getAttribute('role') !== 'region' || !hasContent(panel) || !trigger.parentElement?.contains(panel)) continue;
+        if (!panel || panel.getAttribute('role') !== 'region' || !hasContent(panel)) continue;
         if (panel.dataset.blocksEngineCaptureLocalDisclosure || panel.dataset.blocksEngineCaptureHydratedDisclosure) continue;
         populated.push({ trigger, panel });
       }
@@ -761,6 +738,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         expanded: trigger.getAttribute('aria-expanded') === 'true',
         hidden: panel.hasAttribute('hidden'),
         ariaHidden: panel.getAttribute('aria-hidden'),
+        inert: panel.hasAttribute('inert'),
         text: panel.textContent,
         controls: trigger.getAttribute('aria-controls') || '',
         parent: trigger.parentElement,
@@ -784,6 +762,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         else panel.removeAttribute('hidden');
         if (snap.ariaHidden === null) panel.removeAttribute('aria-hidden');
         else panel.setAttribute('aria-hidden', snap.ariaHidden);
+        panel.toggleAttribute('inert', snap.inert);
         concealmentNodes(panel, trigger).forEach((node, index) => {
           const item = snap.nodes[index];
           if (!item || !node.isConnected) return;
@@ -916,6 +895,12 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         const cluster = clusterOf(entry.trigger);
         if (cluster && exclusiveClusters.has(cluster)) cluster.dataset.blocksEngineCaptureExclusiveDisclosures = 'true';
       };
+      if (observedPopulated.length && !document.querySelector('style[data-blocks-engine-capture-local-disclosure]')) {
+        const style = document.createElement('style');
+        style.dataset.blocksEngineCaptureLocalDisclosure = 'true';
+        style.textContent = '[data-blocks-engine-capture-local-disclosure][hidden]{display:none!important}';
+        document.head.append(style);
+      }
       for (const entry of observedPopulated) applyNormalized(entry);
       await wait(450);
       for (const entry of observedPopulated) applyNormalized(entry);

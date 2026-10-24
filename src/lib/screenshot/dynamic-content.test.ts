@@ -195,7 +195,7 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('expands in-page disclosures without activating navigation menus or links', async () => {
+  it('keeps populated disclosures resting without activating navigation menus or links', async () => {
     const page = await browser.newPage();
     await page.setContent(`
       <a href="https://destination.test/menu" aria-expanded="false" aria-controls="menu" aria-haspopup="true">Menu</a>
@@ -223,8 +223,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await expandCollapsedContent(page);
 
     expect(await page.evaluate(() => (window as unknown as { linkActivations: number }).linkActivations)).toBe(0);
-    expect(await page.locator('button').getAttribute('aria-expanded')).toBe('true');
-    expect(await page.locator('#answer').isVisible()).toBe(true);
+    expect(await page.locator('button').getAttribute('aria-expanded')).toBe('false');
+    expect(await page.locator('#answer').isVisible()).toBe(false);
     await page.close();
   });
 
@@ -954,18 +954,17 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
     await page.close();
   });
 
-  it('still expands a genuine in-page disclosure that runs before the navigating control', async () => {
+  it('keeps a populated in-page disclosure resting before the navigating control', async () => {
     const page = await browser.newPage();
     await page.goto(`${baseUrl}/Home`);
     await page.setContent(spaFixture);
 
     await expandCollapsedContent(page);
 
-    // aria-controls candidates are activated before the label-text pass, so
-    // the FAQ disclosure — a real in-page toggle — must still have opened,
-    // independent of the later control that turned out to navigate.
-    expect(await page.locator('#faq-trigger').getAttribute('aria-expanded')).toBe('true');
-    expect(await page.locator('#faq-answer').isVisible()).toBe(true);
+    // Authored answers belong to the later reversible disclosure probe, not
+    // content injection, independent of a later control that navigates.
+    expect(await page.locator('#faq-trigger').getAttribute('aria-expanded')).toBe('false');
+    expect(await page.locator('#faq-answer').isVisible()).toBe(false);
     await page.close();
   });
 
