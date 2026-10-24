@@ -15,6 +15,12 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.4] - 2026-10-24
+
+### Changed
+- regenerate plugin bundles
+- Learn script-written, width-dependent inline min-height in the fluid sweep
+
 ## [0.33.3] - 2026-10-24
 
 ### Changed
