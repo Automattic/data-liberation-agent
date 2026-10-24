@@ -119,6 +119,36 @@ function evidenceMatchesTree( assembly: ResponsiveAssembly ): void {
 }
 
 describe( 'assembleResponsiveCapture', () => {
+	it( 'ships one island when captures differ only in equivalent absolute link spellings (#968)', () => {
+		// The provider evidence had identical island state, but hydration had
+		// canonicalized links in only one viewport. Assembly created the hidden
+		// second page; no duplicate existed in either source document.
+		const body = ( href: string ) => `<astro-island uid="same" client="load" await-children><main class="page"><header>Header</header><a href="${ href }">Reference</a><details><summary>Menu</summary><a href="/contact">Contact</a></details><dialog id="dialog">Closed dialog</dialog><section hidden id="tab">Hidden tab</section><footer>Footer</footer></main></astro-island>`;
+		const desktop = page( body( 'http://example.org/' ) );
+		const mobile = page( body( 'http://EXAMPLE.org' ) );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( result.html );
+		expect( result.evidence?.outcome ).toBe( 'collapsed-equivalent' );
+		expect( $( 'astro-island' ) ).toHaveLength( 1 );
+		expect( $( '.page' ) ).toHaveLength( 1 );
+		expect( $( `.${ MOBILE_DOCUMENT_CLASS }` ) ).toHaveLength( 0 );
+		// Hidden, reachable content is not a duplicate page and must survive.
+		expect( $( 'details a' ).text() ).toBe( 'Contact' );
+		expect( $( '#dialog' ).text() ).toBe( 'Closed dialog' );
+		expect( $( '#tab[hidden]' ).text() ).toBe( 'Hidden tab' );
+		expect( $( 'a' ).first().attr( 'href' ) ).toBe( 'http://example.org/' );
+	} );
+
+	it.each( [
+		[ 'https://example.org/path', 'https://example.org/path/' ],
+		[ 'https://example.org/Path', 'https://example.org/path' ],
+		[ 'https://example.org/?a=1', 'https://example.org/?a=2' ],
+		[ 'https://example.org/#one', 'https://example.org/#two' ],
+		[ '/path', 'https://example.org/path' ],
+		[ '//example.org/', 'https://example.org/' ],
+	] )( 'keeps distinct navigation identities: %s vs %s', ( desktopHref, mobileHref ) => {
+		expect( documentsDiffer( page( `<a href="${ desktopHref }">Link</a>` ), page( `<a href="${ mobileHref }">Link</a>` ) ) ).toBe( true );
+	} );
 	it.each( [
 		{ name: 'padding shorthand', important: 'padding:6px!important', desktop: 'padding-top:40px', mobile: 'padding-top:80px', padding: '6px', display: 'block' },
 		{ name: 'all reset', important: 'all:initial!important', desktop: 'display:block;width:220px;padding:40px', mobile: 'display:block;width:160px;padding:80px', padding: '0px', display: 'inline' },
@@ -434,6 +464,19 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 		);
 		expect( gated.receipt.routes[ 0 ].responsiveVariants ).toMatchObject( { variants: 2, outcome: 'dual-structural' } );
 		receiptMatchesTree( gated.html, gated.receipt.routes[ 0 ].responsiveVariants?.outcome, gated.profile );
+	} );
+
+	it( 'exports one full page for a hydrated/unhydrated link pair instead of a hidden mobile duplicate (#968)', () => {
+		const island = ( hydrated: boolean ) => `<astro-island uid="same" client="load" await-children><main class="page"><header>Header</header><a href="${ hydrated ? 'https://reference.test/' : 'https://reference.test' }">Reference</a><a href="${ hydrated ? 'http://example.org/' : 'http://EXAMPLE.org' }">Article</a><details><summary>Menu</summary>Reachable menu</details><dialog>Reachable dialog</dialog><footer>Footer</footer></main></astro-island>`;
+		const exported = exportPair( page( island( true ) ), page( island( false ) ) );
+		const $ = cheerio.load( exported.html );
+		expect( $( 'astro-island:has(.page)' ) ).toHaveLength( 1 );
+		expect( $( 'header' ) ).toHaveLength( 1 );
+		expect( $( 'footer' ) ).toHaveLength( 1 );
+		expect( $( 'details' ).text() ).toContain( 'Reachable menu' );
+		expect( $( 'dialog' ).text() ).toBe( 'Reachable dialog' );
+		expect( exported.receipt.routes[ 0 ].responsiveVariants?.outcome ).toBe( 'collapsed-equivalent' );
+		receiptMatchesTree( exported.html, 'collapsed-equivalent', exported.profile );
 	} );
 
 	it( 'records the collapsed portable tree when rendering removes the only raw structural difference', () => {
