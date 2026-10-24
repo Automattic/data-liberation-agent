@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.5] - 2026-10-24
+
+### Changed
+- regenerate plugin bundles
+- Compare empty containers by presence in the device-mode structure check
+
+### Fixed
+- Fix false responsive duplication of captured page islands
+
 ## [0.33.4] - 2026-10-24
 
 ### Changed
