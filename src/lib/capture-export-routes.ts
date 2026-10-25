@@ -48,7 +48,13 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string,
 	}
 	const cleanPath = pathname.replace( /^\/+|\/+$/g, '' );
 	if ( ! cleanPath ) return 'index.html';
-	if ( /\.[a-z0-9]+$/i.test( cleanPath ) ) return cleanPath;
+	// A captured route is always an HTML document, so only HTML extensions name
+	// its file. Any other extension describes the server that rendered the page
+	// (`index.php`, `page.aspx`), not the content, and hosts refuse or execute
+	// such files. Export the route like an extensionless one: a directory with a
+	// default document, so links, `_redirects` targets and importer slugs follow
+	// the same path shape every other document route uses.
+	if ( /\.html?$/i.test( cleanPath ) ) return cleanPath;
 	return join( cleanPath, 'index.html' );
 }
 

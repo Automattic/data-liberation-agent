@@ -5062,7 +5062,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			{ url: 'https://example.com/shop/home', path: 'website/index.html' },
 			{ url: 'https://example.com/shop/about', path: 'website/about/index.html' },
 			{ url: 'https://example.com/shop/orphan', path: 'website/orphan/index.html' },
-			{ url: 'https://example.com/downloads/guide.pdf', path: 'website/downloads/guide.pdf' },
+			{ url: 'https://example.com/downloads/guide.pdf', path: 'website/downloads/guide.pdf/index.html' },
 		] );
 		expect( receipt.excludedRoutes ).toEqual( [] );
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
@@ -5072,7 +5072,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			readFileSync( join( outputDir, 'website', 'orphan', 'index.html' ), 'utf8' )
 		).toContain( 'Unlinked draft' );
 		expect(
-			readFileSync( join( outputDir, 'website', 'downloads', 'guide.pdf' ), 'utf8' )
+			readFileSync( join( outputDir, 'website', 'downloads', 'guide.pdf', 'index.html' ), 'utf8' )
 		).toContain( 'Download guide' );
 	} );
 
