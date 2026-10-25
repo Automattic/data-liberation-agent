@@ -14,13 +14,17 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 		const pixel = ( value: string ) => /^-?\d+(?:\.\d+)?px$/.test( value.trim() ) ? Number.parseFloat( value ) : null;
 		const elements = () => [ ...document.querySelectorAll<HTMLElement>( `[${ attribute }]` ) ];
 		const element = ( id: string ) => document.querySelector<HTMLElement>( `[${ attribute }="${ id }"]` );
-		const pureXTranslation = ( transform: string ) => {
-			const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
-			if ( matrix && matrix.length === 6 && matrix.every( Number.isFinite ) &&
-				Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 1 ]! ) <= 0.01 &&
-				Math.abs( matrix[ 2 ]! ) <= 0.01 && Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 5 ]! ) <= 0.01 ) return matrix[ 4 ]!;
-			const translated = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform );
-			return translated ? Number( translated[ 1 ] ) : null;
+		const pureTranslation = ( transform: string ) => {
+			// DOMMatrix handles translate/translate3d and matrix serialization alike.
+			try {
+				const matrix = new DOMMatrix( transform );
+				if ( matrix.m13 === 0 && matrix.m14 === 0 && matrix.m23 === 0 && matrix.m24 === 0 &&
+					matrix.m31 === 0 && matrix.m32 === 0 && matrix.m33 === 1 && matrix.m34 === 0 && matrix.m43 === 0 && matrix.m44 === 1 &&
+					[ matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f ].every( Number.isFinite ) &&
+					Math.abs( matrix.a - 1 ) <= 0.01 && Math.abs( matrix.b ) <= 0.01 &&
+					Math.abs( matrix.c ) <= 0.01 && Math.abs( matrix.d - 1 ) <= 0.01 ) return { x: matrix.e, y: matrix.f };
+			} catch { /* Unsupported transforms stay authored. */ }
+			return null;
 		};
 		// Keep both views: measurement interprets literal source declarations,
 		// while tagging/rest read CSSOM and rest retains the whole transform.
@@ -31,7 +35,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			const inset = position === 'absolute' ? /(?:^|;)\s*inset\s*:\s*(-?\d+(?:\.\d+)?)px\s+auto\s+auto\s+(-?\d+(?:\.\d+)?)px\s*(?:;|$)/.exec( literal ) : null;
 			return { literal, style: node.style, position, parent: node.parentElement,
 				inset: inset ? { top: Number( inset[ 1 ] ), left: Number( inset[ 2 ] ) } : null,
-				translation: transform ? pureXTranslation( transform ) : null };
+				translation: transform ? pureTranslation( transform ) : null };
 		};
 		const translation = ( id: string ) => {
 			const node = element( id );

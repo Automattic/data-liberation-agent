@@ -858,6 +858,36 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await source.close();
 	}, 30_000 );
 
+	// One sweep (~3s): all siblings retain both coordinates across a row wrap.
+	it( 'carries every translated grid item through shared wrap bands', async () => {
+		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		try {
+			await source.setContent( `<style>body{margin:0}.grid{position:relative}.item{position:absolute;left:0;top:0;width:25vw;height:100px}@media(max-width:767px){.item{width:50vw}}</style>
+				<div class="grid"><div class="item"></div><div class="item"></div><div class="item"></div><div class="item"></div></div>
+				<script>const place=()=>{const columns=innerWidth>=768?4:2;document.querySelectorAll('.item').forEach((item,i)=>{
+				item.style.transform='translate3d('+i%columns*innerWidth/columns+'px,'+Math.floor(i/columns)*100+'px,0)';
+				})};addEventListener('resize',place);place();</script>` );
+			await learnAndApplyFluidGeometry( source, { widths: [ 390, 600, 767, 768, 1024, 1440 ], settleMs: 10 } );
+			await source.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			await copy.setContent( await source.content() );
+			for ( const width of [ 390, 600, 767, 768, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				const positions = await copy.locator( '.item' ).evaluateAll( nodes => nodes.map( node => {
+					const { x, y } = node.getBoundingClientRect(); return { x, y };
+				} ) );
+				const columns = width >= 768 ? 4 : 2;
+				positions.forEach( ( position, index ) => {
+					expect( position.x, `item ${ index + 1 } x at ${ width }` ).toBeCloseTo( index % columns * width / columns, 0 );
+					expect( position.y, `item ${ index + 1 } y at ${ width }` ).toBe( Math.floor( index / columns ) * 100 );
+				} );
+			}
+		} finally {
+			await copy.close();
+			await source.close();
+		}
+	}, 20_000 );
+
 	it( 'learns a translated positioned image owner across independent widths', async () => {
 		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await source.setContent( `
