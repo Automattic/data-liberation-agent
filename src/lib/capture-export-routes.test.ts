@@ -91,6 +91,30 @@ describe( 'capture export route stage', () => {
 		expect( routes.routePathOf( collision.url ) ).toBe( 'blog/alpha/index.html' );
 	} );
 
+	it( 'exports server-script routes and their query renditions as HTML files', () => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-server-script-routes-' ) ); dirs.push( dir );
+		// Issue #975: a PHP site whose documents live at `/index.php?r=…&id=N`
+		// must not export `.php` files; static hosts refuse to import them.
+		const table = [
+			{ url: 'https://example.com/', path: 'index.html' },
+			{ url: 'https://example.com/index.php', path: 'index.php/index.html' },
+			{ url: 'https://example.com/index.php?r=a&id=1', path: 'index.php/index-query-1.html' },
+			{ url: 'https://example.com/index.php?r=a&id=2', path: 'index.php/index-query-2.html' },
+			{ url: 'https://example.com/about.php', path: 'about.php/index.html' },
+		];
+		const entries = table.map( ( { url }, index ) => entry( dir, `page-${ index }.html`, url, `<h1>Page ${ index }</h1>` ) );
+		const first = allocateCaptureRoutes( entries, 'https://example.com/', [] );
+		const reverse = allocateCaptureRoutes( [ ...entries ].reverse(), 'https://example.com/', [] );
+		const allocated = table.map( ( { url } ) => first.routePathOf( url ) );
+		expect( allocated ).toEqual( table.map( ( { path } ) => path ) );
+		expect( allocated ).toEqual( table.map( ( { url } ) => reverse.routePathOf( url ) ) );
+		expect( allocated.every( ( path ) => /\.html$/.test( path ) ) ).toBe( true );
+		expect( new Set( allocated ).size ).toBe( table.length );
+		expect( first.pathCollisions ).toEqual( [] );
+		expect( first.retainedEntries.map( ( { url } ) => url ) ).toEqual( table.map( ( { url } ) => url ) );
+	} );
+
 	it( 'selects a query entrypoint without confusing it with other root query pages', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const dir = mkdtempSync( join( '.tmp-test', 'liberation-query-home-' ) );
