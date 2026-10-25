@@ -17,11 +17,44 @@ import {
 	learnWidestFluidModel,
 	segmentedCss,
 	type FluidModel,
+	type FluidModelSegment,
 	type GeometrySample,
 } from './fluid-model.js';
 import type { Page } from 'playwright';
 import { captureFluidBaseline } from './fluid-baseline.js';
 import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetSeries, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
+
+/** Fit paired translations only inside shared regimes, never across a wrap. */
+function translationSegments( x: GeometrySample[], y: GeometrySample[], cuts: number[] ): FluidModelSegment[] {
+	const result: FluidModelSegment[] = [];
+	const bounds = [ null, ...cuts, null ];
+	for ( let index = 0; index < bounds.length - 1; index++ ) {
+		const minWidth = bounds[ index ]!;
+		const maxWidth = bounds[ index + 1 ] === null ? null : bounds[ index + 1 ]! - 1;
+		const inside = ( sample: GeometrySample ) => ( minWidth === null || sample.viewport >= minWidth ) && ( maxWidth === null || sample.viewport <= maxWidth );
+		const xs = x.filter( inside ), ys = y.filter( inside );
+		if ( ! xs.length || ! ys.length ) continue;
+		const fit = ( samples: GeometrySample[] ) => learnFluidModel( samples.map( ( { viewport, value } ) => ( { viewport, value } ) ) );
+		const xm = fit( xs ), ym = fit( ys );
+		if ( xm.kind !== 'breakpoint' && ym.kind !== 'breakpoint' ) {
+			result.push( { minWidth, maxWidth, model: { kind: 'constant', value: 0, css: `translate(${ xm.css }, ${ ym.css })` } } );
+			continue;
+		}
+		// No credible fit: hold each band's own measured pair, not desktop inline
+		// geometry. Even a single observation must have a complete declaration.
+		for ( let sample = 0; sample < xs.length; sample++ ) {
+			const current = xs[ sample ]!;
+			const vertical = ys.find( entry => entry.viewport === current.viewport );
+			if ( ! vertical ) continue;
+			result.push( {
+				minWidth: sample === 0 ? minWidth : current.viewport,
+				maxWidth: sample === xs.length - 1 ? maxWidth : xs[ sample + 1 ]!.viewport - 1,
+				model: { kind: 'constant', value: 0, css: `translate(${ current.value }px, ${ vertical.value }px)` },
+			} );
+		}
+	}
+	return result;
+}
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-blocks-engine-capture-fluid-id';
@@ -34,7 +67,7 @@ export const SEGMENT_STYLE_ATTRIBUTE = 'data-blocks-engine-capture-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
 export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-blocks-engine-capture-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left', 'min-height' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'transform-y', 'inset-top', 'inset-left', 'min-height' ] as const;
 
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'left';
 
@@ -328,8 +361,8 @@ async function learnFluidGeometry(
 							containers[ property ] = null;
 							continue;
 						}
-						if ( property === 'transform-x' ) {
-							values[ property ] = geometry.translation;
+						if ( property === 'transform-x' || property === 'transform-y' ) {
+							values[ property ] = geometry.translation?.[ property === 'transform-x' ? 'x' : 'y' ] ?? null;
 							continue;
 						}
 						// `font-size` is excluded: CSS resolves a font
@@ -353,7 +386,7 @@ async function learnFluidGeometry(
 								: null;
 					}
 					for ( const property of elementProperties ) {
-						if ( property === 'transform-x' || property === 'inset-top' || property === 'inset-left' ) continue;
+						if ( property === 'transform-x' || property === 'transform-y' || property === 'inset-top' || property === 'inset-left' ) continue;
 						if ( property === 'left' && ! relative ) {
 							values[ property ] = null;
 							continue;
@@ -417,6 +450,30 @@ async function learnFluidGeometry(
 	}
 	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
 
+	// Sibling translations share regime boundaries: a wrap observed on one
+	// item also bounds the fits of items whose X alone looks linear there.
+	const translationGroups = await baseline.evaluate( ( state, attribute ) => {
+		const parents = new Map<Element, string[]>();
+		for ( const element of state.elements() ) {
+			if ( ! element.parentElement ) continue;
+			const ids = parents.get( element.parentElement ) ?? [];
+			ids.push( element.getAttribute( attribute )! );
+			parents.set( element.parentElement, ids );
+		}
+		return [ ...parents.values() ];
+	}, ID_ATTRIBUTE );
+	const translationCuts = new Map<string, number[]>();
+	for ( const ids of translationGroups ) {
+		const cuts = new Set<number>();
+		for ( const id of ids ) for ( const axis of [ 'x', 'y' ] ) {
+			const samples = observations.get( `${ id }:transform-${ axis }` ) ?? [];
+			if ( learnFluidModel( samples ).kind !== 'breakpoint' ) continue;
+			const segmented = learnSegmentedFluidModel( samples, { holdUnfitted: true, holdNarrowForBoundedAffine: true } );
+			for ( const segment of segmented?.segments ?? [] ) if ( segment.minWidth !== null ) cuts.add( segment.minWidth );
+		}
+		for ( const id of ids ) translationCuts.set( id, [ ...cuts ].sort( ( a, b ) => a - b ) );
+	}
+
 	const learned: Array< {
 		id: string;
 		property: string;
@@ -443,6 +500,7 @@ async function learnFluidGeometry(
 		// Any non-relative sample invalidates the entire offset relationship.
 		// Fitting the remaining relative samples would erase authored positioning.
 		if ( property === 'left' && nonRelative.has( id ) ) continue;
+		if ( property === 'transform-y' ) continue; // Both axes have one transform owner.
 		const transformX = property === 'transform-x';
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );
@@ -511,19 +569,19 @@ async function learnFluidGeometry(
 			} );
 			continue;
 		}
-		if ( transformX && ( model.kind !== 'breakpoint' || segmented !== null ) ) {
+		if ( transformX ) {
+			const vertical = observations.get( `${ id }:transform-y` ) ?? [];
+			if ( wholeRangeModel.kind === 'constant' && learnFluidModel( vertical ).kind === 'constant' && ! translationCuts.get( id )?.length ) continue;
 			// Source resize handlers can remove measured nodes; absence is final,
 			// not a reason to auto-wait for the old identity to reappear.
 			const translation = await baseline.evaluate( ( state, id ) => state.translation( id ), id );
 			if ( translation === null ) {
 				// The runtime may have switched this transform after the sweep; do not
-				// replace a newly rotated, scaled, skewed, or vertically shifted matrix.
+				// replace a newly rotated, scaled, or skewed matrix.
 				unmodelled++;
 				continue;
 			}
-			const valueFor = ( css: string ) => `translateX(${ css })`;
-			const transformSegments =
-				segmented?.segments ?? ( model.kind === 'breakpoint' ? [] : [ { model, minWidth: null, maxWidth: null } ] );
+			const transformSegments = translationSegments( samples, vertical, translationCuts.get( id ) ?? [] );
 			learned.push( {
 				id,
 				property: 'transform',
@@ -534,10 +592,7 @@ async function learnFluidGeometry(
 				segmentedCss: segmentedCss(
 					`[${ SEGMENT_ATTRIBUTE }="${ id }"]`,
 					'transform',
-					transformSegments.map( ( segment ) => ( {
-						...segment,
-						model: { ...segment.model, css: valueFor( segment.model.css ) },
-					} ) )
+					transformSegments
 				),
 			} );
 			continue;
@@ -625,7 +680,7 @@ async function learnFluidGeometry(
 	await baseline.evaluate( state => state.restore( true ) );
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
-	// transform; otherwise translateX would discard its new components.
+	// transform; otherwise the learned translation would discard its new components.
 	for ( let index = learned.length - 1; index >= 0; index-- ) {
 		const entry = learned[ index ]!;
 		if ( entry.property === 'left' && options.learnRelativeOffsets &&
