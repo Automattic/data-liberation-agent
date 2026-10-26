@@ -915,6 +915,44 @@ function equivalentInlineProjection(
 	};
 }
 
+/** Move only body compounds whose class tokens were relocated to document wrappers. */
+export function projectResponsiveBodyClassCss( source: string, moved: ReadonlyMap<string, string>, preserveBody = false ): string {
+	if ( moved.size === 0 || ! /body/i.test( source ) ) return source;
+	const css = parseCss( source );
+	css.walkRules( rule => {
+		const selectors = parseSelectorList( rule.selector );
+		if ( ! selectors ) return;
+		const originals = new Map<selectorParser.Selector, selectorParser.Selector>();
+		selectors.walkTags( tag => {
+			if ( tag.value.toLowerCase() !== 'body' ) return;
+			const siblings = tag.parent?.nodes ?? [];
+			const index = siblings.indexOf( tag );
+			let start = index;
+			let end = index + 1;
+			while ( start > 0 && siblings[ start - 1 ].type !== 'combinator' ) start--;
+			while ( end < siblings.length && siblings[ end ].type !== 'combinator' ) end++;
+			const wrapper = siblings.slice( start, end ).flatMap( node => node.type === 'class' && moved.has( node.value ) ? [ moved.get( node.value )! ] : [] )[ 0 ];
+			if ( ! wrapper ) return;
+			// Linked assets can also serve routes that did not move this class.
+			let owner = tag.parent;
+			while ( owner && owner.parent?.type !== 'root' ) owner = owner.parent;
+			if ( preserveBody && owner && selectorParser.isSelector( owner ) && ! originals.has( owner ) ) originals.set( owner, owner.clone() );
+			tag.replaceWith( selectorParser.className( { value: wrapper, spaces: tag.spaces } ) );
+		} );
+		for ( const original of originals.values() ) selectors.append( original );
+		rule.selector = selectors.toString();
+	} );
+	return css.toString();
+}
+
+/** Both wrappers retain the original classes; only their difference left body. */
+export function responsiveMovedBodyClasses( desktopClasses: readonly string[], mobileClasses: readonly string[] ): Map<string, string> {
+	const moved = new Map<string, string>();
+	for ( const token of desktopClasses ) if ( ! mobileClasses.includes( token ) ) moved.set( token, DESKTOP_DOCUMENT_CLASS );
+	for ( const token of mobileClasses ) if ( ! desktopClasses.includes( token ) ) moved.set( token, MOBILE_DOCUMENT_CLASS );
+	return moved;
+}
+
 function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, string> ): string {
 	if ( aliases.size === 0 ) return css;
 	try {
@@ -1531,6 +1569,14 @@ function assembleResponsiveHtml(
 		( cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? '' )
 			.split( /\s+/ )
 			.filter( Boolean );
+	const movedBodyClasses = responsiveMovedBodyClasses( bodyClasses( desktopBodyMatch?.attributes ?? '' ), bodyClasses( mobileBodyMatch?.attributes ?? '' ) );
+	// Use the same stylesheet projection before either shared/scoped branch.
+	// This includes styles inside the captured body content as well as head styles.
+	const rewrite = ( html: string ) => scopedStyles( html, undefined, new Set(), movedBodyClasses, onUnparseable );
+	desktopHtml = rewrite( desktopHtml );
+	mobileHtml = rewrite( mobileHtml );
+	desktopBody = rewrite( desktopBody );
+	mobileBody = rewrite( mobileBody );
 	const mobileBodyClasses = new Set( bodyClasses( mobileBodyMatch?.attributes ?? '' ) );
 	const sharedBodyClasses = [ ...new Set( bodyClasses( desktopBodyMatch?.attributes ?? '' ) ) ].filter(
 		( className ) => mobileBodyClasses.has( className )
@@ -1780,12 +1826,23 @@ function responsiveMobileStyles(
 
 function scopedStyles(
 	html: string,
-	media: string,
-	skip: ReadonlySet< string > = new Set()
+	media: string | undefined,
+	skip: ReadonlySet< string > = new Set(),
+	movedBodyClasses: ReadonlyMap<string, string> = new Map(),
+	onUnparseable?: UnparseableStylesheetSink
 ): string {
 	return html.replace(
 		/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi,
 		( match, attributes: string, css: string ) => {
+			if ( movedBodyClasses.size ) {
+				// An unparseable stylesheet is reported and kept as authored.
+				const projected = projectStylesheet( () => projectResponsiveBodyClassCss( css, movedBodyClasses ), onUnparseable );
+				if ( projected !== undefined ) {
+					css = projected;
+					match = `<style${ attributes }>${ css }</style>`;
+				}
+			}
+			if ( media === undefined ) return match;
 			// Capture-generated rules carry their own media conditions and are
 			// width-independent by construction; narrowing them to one side of
 			// the switch would strand the other regime's rule.
