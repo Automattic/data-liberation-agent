@@ -928,6 +928,30 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         clickNavigationBlocked = true;
       };
       clickNavigation?.addEventListener('navigate', keepClickDocument);
+      // Trap window.open/alert/confirm/prompt during a probe click. A page may
+      // freeze one of them (Wix makes `open` non-configurable and non-writable);
+      // that method stays untrapped and the navigate/history guards still apply.
+      // The returned restore puts back exactly what was replaced.
+      const trapBrowserMethods = (onCall: () => void) => {
+        const replaced: Array<() => void> = [];
+        for (const name of ['open', 'alert', 'confirm', 'prompt'] as const) {
+          const descriptor = Object.getOwnPropertyDescriptor(window, name);
+          const stub = () => { onCall(); return null; };
+          try {
+            if (!descriptor || descriptor.configurable) {
+              Object.defineProperty(window, name, { configurable: true, writable: true, value: stub });
+              replaced.push(() => {
+                if (descriptor) Object.defineProperty(window, name, descriptor);
+                else Reflect.deleteProperty(window, name);
+              });
+            } else if (descriptor.writable) {
+              (window as unknown as Record<string, unknown>)[name] = stub;
+              replaced.push(() => { (window as unknown as Record<string, unknown>)[name] = descriptor.value; });
+            }
+          } catch { /* left untrapped */ }
+        }
+        return () => { for (const restore of replaced) restore(); };
+      };
       try {
         const clickDeadline = Date.now() + 15_000;
         const interactive = 'a,button,input,select,textarea,summary,details,label,option,[aria-expanded],[aria-haspopup],[role="tab"],[role="option"],[role="radio"],[role="menuitem"],[role="button"]';
@@ -1051,8 +1075,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             }
           };
           const observer = new MutationObserver(observe);
-          const methods = ['open', 'alert', 'confirm', 'prompt'] as const;
-          const descriptors = methods.map(name => Object.getOwnPropertyDescriptor(window, name));
+          let restoreBrowserMethods = () => {};
           const pushDescriptor = Object.getOwnPropertyDescriptor(history, 'pushState');
           const replaceDescriptor = Object.getOwnPropertyDescriptor(history, 'replaceState');
           const originalPush = history.pushState;
@@ -1061,7 +1084,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           clickNavigationBlocked = false;
           observer.observe(document, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
           try {
-            for (const name of methods) Object.defineProperty(window, name, { configurable: true, writable: true, value: () => { inconclusive = true; return null; } });
+            restoreBrowserMethods = trapBrowserMethods(() => { inconclusive = true; });
             history.pushState = function(...args) { inconclusive = true; return originalPush.apply(this, args); };
             history.replaceState = function(...args) { inconclusive = true; return originalReplace.apply(this, args); };
             clickNavigation?.addEventListener('navigate', onNavigate);
@@ -1077,11 +1100,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           } finally {
             observer.disconnect();
             clickNavigation?.removeEventListener('navigate', onNavigate);
-            methods.forEach((name, index) => {
-              const descriptor = descriptors[index];
-              if (descriptor) Object.defineProperty(window, name, descriptor);
-              else Reflect.deleteProperty(window, name);
-            });
+            restoreBrowserMethods();
             if (pushDescriptor) Object.defineProperty(history, 'pushState', pushDescriptor);
             else Reflect.deleteProperty(history, 'pushState');
             if (replaceDescriptor) Object.defineProperty(history, 'replaceState', replaceDescriptor);
@@ -1148,9 +1167,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             }));
             const beforeGeometry = geometry();
             let geometryChanged = false;
-            const browserMethods = ['open', 'alert', 'confirm', 'prompt'] as const;
-            const originals = browserMethods.map(name => Object.getOwnPropertyDescriptor(window, name));
-            for (const name of browserMethods) Object.defineProperty(window, name, { configurable: true, writable: true, value: () => { browserEffect = true; return null; } });
+            const restoreBrowserMethods = trapBrowserMethods(() => { browserEffect = true; });
             const onNavigate = () => { browserEffect = true; };
             clickNavigation?.addEventListener('navigate', onNavigate);
             const pushDescriptor = Object.getOwnPropertyDescriptor(history, 'pushState');
@@ -1203,11 +1220,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             } finally {
               observer.disconnect();
               clickNavigation?.removeEventListener('navigate', onNavigate);
-              browserMethods.forEach((name, index) => {
-                const descriptor = originals[index];
-                if (descriptor) Object.defineProperty(window, name, descriptor);
-                else Reflect.deleteProperty(window, name);
-              });
+              restoreBrowserMethods();
               if (pushDescriptor) Object.defineProperty(history, 'pushState', pushDescriptor);
               else Reflect.deleteProperty(history, 'pushState');
               if (replaceDescriptor) Object.defineProperty(history, 'replaceState', replaceDescriptor);
