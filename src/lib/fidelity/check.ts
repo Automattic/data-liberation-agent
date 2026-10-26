@@ -776,10 +776,23 @@ export async function observePage(
 			// ancestor clip; any partly painted run remains counted. Do not use
 			// carousel selectors, aria-hidden, or viewport position.
 			bodyText = bodyText.replace( /\s+/g, ' ' ).trim();
-			const textNodes: Array< { text: string; clipped: boolean } > = [];
-			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT );
+			const textNodes: Array< { text: string; clipped: boolean; replacement?: string } > = [];
+			const closedSelect = ( element: Element ): element is HTMLSelectElement =>
+				element instanceof HTMLSelectElement && ! element.multiple && element.size <= 1;
+			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT );
 			let candidateText: Node | null;
 			while ( ( candidateText = textWalker.nextNode() ) ) {
+				// Chromium includes every option in innerText even though a closed
+				// select paints only its selected label. Treat it as one stream entry
+				// on both sides, without mutating the control or its live selection.
+				if ( candidateText instanceof Element ) {
+					if ( closedSelect( candidateText ) && candidateText.getClientRects().length && getComputedStyle( candidateText ).visibility !== 'hidden' ) {
+						textNodes.push( { text: candidateText.innerText, clipped: false, replacement: candidateText.selectedOptions[ 0 ]?.label ?? '' } );
+					}
+					continue;
+				}
+				const select = candidateText.parentElement?.closest( 'select' );
+				if ( select && closedSelect( select ) ) continue;
 				const value = candidateText.textContent ?? '';
 				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
 				const range = document.createRange(); range.selectNodeContents( candidateText );
@@ -792,7 +805,7 @@ export async function observePage(
 				textNodes.push( { text: value, clipped: ! painted } );
 			}
 			let textSearchFrom = 0;
-			for ( const { text, clipped } of textNodes ) {
+			for ( const { text, clipped, replacement } of textNodes ) {
 				// Map each DOM text node in document order to the normalized
 				// innerText stream. Advancing for visible nodes prevents identical
 				// later text from being mistaken for an earlier occurrence.
@@ -800,7 +813,11 @@ export async function observePage(
 				if ( ! normalizedText ) continue;
 				const at = bodyText.indexOf( normalizedText, textSearchFrom );
 				if ( at >= 0 ) {
-					if ( clipped ) {
+					if ( replacement !== undefined ) {
+						const label = replacement.replace( /\s+/g, ' ' ).trim();
+						bodyText = bodyText.slice( 0, at ) + label + bodyText.slice( at + normalizedText.length );
+						textSearchFrom = at + label.length;
+					} else if ( clipped ) {
 						bodyText = bodyText.slice( 0, at ) + bodyText.slice( at + normalizedText.length );
 						// The stream shrinks on deletion; preserve its own whitespace
 						// and the position of later identical visible occurrences.
