@@ -4,23 +4,29 @@ import { documentElementTags } from './screenshot/document-integrity.js';
  * Markup retains authored attributes; this versioned, inert contract carries
  * properties which HTML cannot express independently of those defaults.
  */
-export type NativeControlState =
+export type NativeControlState = { rendered?: false } & (
 	| { version: 1; kind: 'input'; type: string; value: string; defaultValue: string; checked: boolean; defaultChecked: boolean; indeterminate: boolean }
 	| { version: 1; kind: 'textarea'; value: string; defaultValue: string }
 	| { version: 1; kind: 'select'; options: Array< { selected: boolean; defaultSelected: boolean } > }
-	| { version: 1; kind: 'file' };
+	| { version: 1; kind: 'file' }
+);
 
 export const NATIVE_CONTROL_STATE_ATTRIBUTE = 'data-blocks-engine-capture-native-control-state';
 
 /** Closure-free browser primitive, also used by capture's serialization task. */
 export function observeNativeControlState( control: Element ): NativeControlState | null {
+	if ( ! ( control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement ) ) return null;
+	const style = getComputedStyle( control );
+	// Observe the live cascade, including author stylesheets and hidden ancestors.
+	const rendering: { rendered?: false } = style.display === 'none' || style.visibility === 'hidden' ||
+		style.visibility === 'collapse' || control.getClientRects().length === 0 ? { rendered: false } : {};
 	if ( control instanceof HTMLInputElement ) {
-		if ( control.type === 'file' ) return { version: 1, kind: 'file' };
-		return { version: 1, kind: 'input', type: control.type, value: control.value, defaultValue: control.defaultValue,
+		if ( control.type === 'file' ) return { version: 1, kind: 'file', ...rendering };
+		return { version: 1, kind: 'input', ...rendering, type: control.type, value: control.value, defaultValue: control.defaultValue,
 			checked: control.checked, defaultChecked: control.defaultChecked, indeterminate: control.indeterminate };
 	}
-	if ( control instanceof HTMLTextAreaElement ) return { version: 1, kind: 'textarea', value: control.value, defaultValue: control.defaultValue };
-	if ( control instanceof HTMLSelectElement ) return { version: 1, kind: 'select', options: Array.from( control.options,
+	if ( control instanceof HTMLTextAreaElement ) return { version: 1, kind: 'textarea', ...rendering, value: control.value, defaultValue: control.defaultValue };
+	if ( control instanceof HTMLSelectElement ) return { version: 1, kind: 'select', ...rendering, options: Array.from( control.options,
 		option => ( { selected: option.selected, defaultSelected: option.defaultSelected } ) ) };
 	return null;
 }

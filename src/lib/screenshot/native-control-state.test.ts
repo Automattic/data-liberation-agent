@@ -65,6 +65,29 @@ function sourceDefaults(page: Page) {
   }));
 }
 
+it('records unrendered native controls without adding a rendered key to visible controls', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const cases = [
+      {id: 'decoy', markup: '<textarea id="decoy" class="d-none"></textarea>', rendered: false},
+      {id: 'visible', markup: '<input id="visible" type="text">', rendered: undefined},
+      {id: 'hidden', markup: '<input id="hidden" style="visibility:hidden">', rendered: false},
+      {id: 'collapsed', markup: '<select id="collapsed" style="visibility:collapse"><option>Choice</option></select>', rendered: false},
+      {id: 'no-rects', markup: '<div hidden><input id="no-rects"></div>', rendered: false},
+      {id: 'file', markup: '<input id="file" type="file" class="d-none">', rendered: false},
+    ];
+    await page.setContent(`<!doctype html><style>.d-none{display:none!important}</style><form>${cases.map(test => test.markup).join('')}</form>`);
+    const html = await capturePageHtml(page);
+    await page.setContent(html);
+    for (const test of cases) {
+      const state = JSON.parse((await page.locator(`#${test.id}`).getAttribute(NATIVE_CONTROL_STATE_ATTRIBUTE))!);
+      if (test.rendered === false) expect(state, test.id).toHaveProperty('rendered', false);
+      else expect(state, test.id).not.toHaveProperty('rendered');
+    }
+  } finally { await browser.close(); }
+});
+
 it('replays observed native control properties and CSS without mutating source attributes, defaults or radio peers', async () => {
   const browser = await chromium.launch();
   try {
