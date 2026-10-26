@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import { observePage } from './check.js';
+import { scoreViewport } from './score.js';
 
 const skipped = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 describe.skipIf( skipped )( 'rendered text range visibility', () => {
@@ -50,6 +51,24 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 			await page.locator( '.focus' ).focus();
 			const focused = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
 			expect( focused.textChars ).toBe( 'Focused link Repeated label Repeated label MMMM partial text'.length );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
+	it( 'counts only the selected label of a closed select on either side without forgiving missing prose', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
+			const prose = '<p>Essential visible page content.</p>';
+			await page.setContent( `${ prose }<select><option>Other destination</option><option selected label="Current page">Internal value</option><option>Another destination</option></select>` );
+			const source = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
+			await page.setContent( `${ prose }<button>Current page</button>` );
+			const candidate = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
+			expect( source.textChars ).toBe( 'Essential visible page content. Current page'.length );
+			expect( scoreViewport( source, candidate ).failures.filter( failure => failure.startsWith( 'text ' ) ) ).toEqual( [] );
+			expect( scoreViewport( candidate, source ).failures.filter( failure => failure.startsWith( 'text ' ) ) ).toEqual( [] );
+			await page.setContent( '<button>Current page</button>' );
+			const missing = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
+			expect( scoreViewport( source, missing ).failures ).toContain( `text ${ missing.textChars } chars !== source ${ source.textChars }` );
 		} finally { await browser.close(); }
 	}, 30_000 );
 
