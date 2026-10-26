@@ -74,6 +74,33 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
+	it.each( [ false, true ] )( 'proves all 40 remainder controls across 20 components (local effect: %s)', async ( effect ) => {
+		const page = await browser.newPage();
+		await page.setContent( `<!doctype html><body><main>${ Array.from( { length: 20 }, ( _, index ) =>
+			`<section class=""><div data-action="first" ${ effect && index === 0 ? 'id="live" onclick="this.parentElement.classList.toggle(\'changed\')"' : '' }>Minimize</div><div data-action="second">Close</div><p>Component ${ index }</p></section>`
+		).join( '' ) }</main></body>` );
+		await hydrateDisclosureContent( page );
+		expect( await page.locator( '[data-blocks-engine-capture-inert-control="true"]' ).count() ).toBe( effect ? 39 : 40 );
+		if ( effect ) {
+			expect( await page.locator( '#live' ).getAttribute( 'data-blocks-engine-capture-inert-control' ) ).toBeNull();
+			expect( await page.locator( 'section.changed' ).count() ).toBe( 0 );
+		}
+		await page.close();
+	} );
+
+	it( 'falls back to solo proof for an unattributable shared-window effect', async () => {
+		const page = await browser.newPage();
+		await page.setContent( `<!doctype html><body><main>
+			<section><div data-action="global" onclick="document.body.title='changed';document.body.removeAttribute('title')">Global transient effect</div></section>
+			<section><div data-action="inert">Dead control</div></section>
+			<section><div data-action="popup" onclick="window.open('about:blank')">Popup effect</div></section>
+		</main></body>` );
+		await hydrateDisclosureContent( page );
+		expect( await page.locator( '[data-blocks-engine-capture-inert-control]' ).count() ).toBe( 1 );
+		expect( await page.locator( '[data-action="inert"]' ).getAttribute( 'data-blocks-engine-capture-inert-control' ) ).toBe( 'true' );
+		await page.close();
+	} );
+
 	it( 'captures items that toggle their own hidden answer as independent local disclosures', async () => {
 		const page = await browser.newPage();
 		await page.setContent( FAQ );

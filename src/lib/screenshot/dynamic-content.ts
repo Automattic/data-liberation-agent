@@ -1005,11 +1005,123 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             throw new Error(`${describe(members[0]!.parentElement!).selector}: click disclosure group did not return to its baseline`);
           }
         };
+        // Remainder controls share a window only when their #993 components
+        // (their immediate parents) are disjoint. At most one control per
+        // component is activated in a window, so local effects have one owner.
+        // The 4000-node scan above is also the total remainder candidate bound.
+        const proveRemainder = async () => {
+        const solo: HTMLElement[] = [];
+        let pending = ungrouped;
+        while (pending.length && Date.now() < clickDeadline) {
+          const batch: Array<{ member: HTMLElement; component: HTMLElement; baseline: string; geometry: string; effect: boolean }> = [];
+          const next: HTMLElement[] = [];
+          const geometry = (component: HTMLElement) => JSON.stringify([component, ...Array.from(component.querySelectorAll('*'))].map(node => {
+            const style = getComputedStyle(node);
+            return [node.getBoundingClientRect().toJSON(), style.display, style.visibility, style.opacity];
+          }));
+          for (const member of pending) {
+            const component = member.parentElement ?? member;
+            if (component === document.body || component === document.documentElement || concealed(member).length) {
+              solo.push(member);
+            } else if (batch.some(entry => entry.component.contains(component) || component.contains(entry.component))) {
+              next.push(member);
+            } else {
+              batch.push({ member, component, baseline: canonical(component), geometry: geometry(component), effect: false });
+            }
+          }
+          pending = next;
+          if (!batch.length) continue;
+          // A global/unattributable effect invalidates the entire shared window.
+          // It is never evidence of inertness, even if it later reverts.
+          let inconclusive = false;
+          const beforeUrl = location.href;
+          const beforeHistoryLength = history.length;
+          const beforeHistoryState = JSON.stringify(history.state);
+          const beforeState = history.state;
+          const observe = (mutations: MutationRecord[]) => {
+            for (const [index, mutation] of mutations.entries()) {
+              if (mutation.type === 'attributes' && mutation.target instanceof Element) {
+                const next = mutations.slice(index + 1).find(record => record.target === mutation.target && record.attributeName === mutation.attributeName);
+                const value = next ? next.oldValue : mutation.target.getAttribute(mutation.attributeName!);
+                if (mutation.oldValue === value) continue;
+              }
+              const owner = batch.find(entry => entry.component.contains(mutation.target));
+              if (owner && mutation.target !== document.body && mutation.target !== document.documentElement) owner.effect = true;
+              else inconclusive = true;
+            }
+          };
+          const observer = new MutationObserver(observe);
+          const methods = ['open', 'alert', 'confirm', 'prompt'] as const;
+          const descriptors = methods.map(name => Object.getOwnPropertyDescriptor(window, name));
+          const pushDescriptor = Object.getOwnPropertyDescriptor(history, 'pushState');
+          const replaceDescriptor = Object.getOwnPropertyDescriptor(history, 'replaceState');
+          const originalPush = history.pushState;
+          const originalReplace = history.replaceState;
+          const onNavigate = () => { inconclusive = true; };
+          clickNavigationBlocked = false;
+          observer.observe(document, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
+          try {
+            for (const name of methods) Object.defineProperty(window, name, { configurable: true, writable: true, value: () => { inconclusive = true; return null; } });
+            history.pushState = function(...args) { inconclusive = true; return originalPush.apply(this, args); };
+            history.replaceState = function(...args) { inconclusive = true; return originalReplace.apply(this, args); };
+            clickNavigation?.addEventListener('navigate', onNavigate);
+            for (const entry of batch) {
+              try { entry.member.click(); } catch { inconclusive = true; }
+            }
+            const activatedAt = Date.now();
+            do {
+              await wait(25);
+              for (const entry of batch) if (geometry(entry.component) !== entry.geometry) entry.effect = true;
+            } while (Date.now() - activatedAt < 400);
+            observe(observer.takeRecords());
+          } finally {
+            observer.disconnect();
+            clickNavigation?.removeEventListener('navigate', onNavigate);
+            methods.forEach((name, index) => {
+              const descriptor = descriptors[index];
+              if (descriptor) Object.defineProperty(window, name, descriptor);
+              else Reflect.deleteProperty(window, name);
+            });
+            if (pushDescriptor) Object.defineProperty(history, 'pushState', pushDescriptor);
+            else Reflect.deleteProperty(history, 'pushState');
+            if (replaceDescriptor) Object.defineProperty(history, 'replaceState', replaceDescriptor);
+            else Reflect.deleteProperty(history, 'replaceState');
+          }
+          inconclusive ||= clickNavigationBlocked || location.href !== beforeUrl || history.length !== beforeHistoryLength || JSON.stringify(history.state) !== beforeHistoryState;
+          if (location.href !== beforeUrl) {
+            try {
+              history.pushState(beforeState, '', beforeUrl);
+              window.dispatchEvent(new PopStateEvent('popstate', { state: beforeState }));
+            } catch { /* same best-effort route restoration as the solo probe */ }
+          }
+          for (const entry of batch) {
+            // Restore the component, not just the trigger: a local handler can
+            // change a sibling or its parent without changing the control itself.
+            if (canonical(entry.component) !== entry.baseline) {
+              try { entry.member.click(); } catch { /* verified below */ }
+              for (let attempt = 0; attempt < 40 && canonical(entry.component) !== entry.baseline; attempt++) await wait(25);
+              if (canonical(entry.component) !== entry.baseline) {
+                // failure-class: representability:block
+                throw new Error(`${describe(entry.component).selector}: inert control component did not return to its baseline`);
+              }
+            }
+            if (inconclusive) solo.push(entry.member);
+            else if (!entry.effect && !entry.member.matches('a,button,input,select,textarea')
+              && (entry.member.matches('[data-action],[data-toggle],[data-target]') || getComputedStyle(entry.member).cursor === 'pointer')) inertControls.add(entry.member);
+          }
+        }
+        // Ambiguous shared windows use the existing solo proof and its retry
+        // semantics. Do not let the old 24-member disclosure cap truncate them.
+        solo.push(...pending);
+        return solo;
+        };
         let groupsProbed = 0;
         for (const [parent, groupMembers] of byParent) {
           if (groupsProbed >= 8 || Date.now() >= clickDeadline) continue;
-          const tag = groupMembers[0]!.tagName;
-          const members = groupMembers.filter((member) => parent === root || member.tagName === tag).slice(0, 24);
+          const candidates = parent === root ? await proveRemainder() : groupMembers;
+          if (!candidates.length) continue;
+          const tag = candidates[0]!.tagName;
+          const members = candidates.filter((member) => parent === root || member.tagName === tag).slice(0, parent === root ? 4000 : 24);
           groupsProbed++;
           const retries = new Map<HTMLElement, number>();
           const initial = members.map(canonical);
@@ -1124,8 +1236,8 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
                 retries.set(member, (retries.get(member) ?? 0) + 1);
                 members.splice(memberIndex + 1, 0, member);
                 initial.splice(memberIndex + 1, 0, initial[memberIndex]!);
-                members.splice(24);
-                initial.splice(24);
+                members.splice(parent === root ? 12_000 : 24);
+                initial.splice(parent === root ? 12_000 : 24);
               }
               continue;
             }
