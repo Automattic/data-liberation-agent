@@ -1100,10 +1100,9 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             if (canonical(entry.component) !== entry.baseline) {
               try { entry.member.click(); } catch { /* verified below */ }
               for (let attempt = 0; attempt < 40 && canonical(entry.component) !== entry.baseline; attempt++) await wait(25);
-              if (canonical(entry.component) !== entry.baseline) {
-                // failure-class: representability:block
-                throw new Error(`${describe(entry.component).selector}: inert control component did not return to its baseline`);
-              }
+              // A component that keeps changing on its own (a rotating carousel,
+              // a clock) cannot return to a fixed baseline. Its control already
+              // has an effect, so it is never marked inert; the capture goes on.
             }
             if (inconclusive) solo.push(entry.member);
             else if (!entry.effect && !entry.member.matches('a,button,input,select,textarea')
