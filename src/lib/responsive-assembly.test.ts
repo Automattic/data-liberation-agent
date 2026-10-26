@@ -92,6 +92,24 @@ function page( body: string, head = '', bodyAttributes = '' ): string {
 	return `<html><head>${ head }</head><body${ bodyAttributes }>${ body }</body></html>`;
 }
 
+describe( 'moved body class selectors', () => {
+	it.each( [ true, false ] )( 'rewrites moved compounds with shared styles=%s', shared => {
+		const css = 'body.desk .grid{display:flex} body.mob .grid{display:block} body.page{margin:0} body.desk > .grid{gap:2px} body.page.desk[data-layout]:hover > .grid{gap:3px}';
+		const desktop = page( '<div class="grid"><div>a</div><div>b</div></div>', `<style>${ css }</style>`, ' class="page desk"' );
+		const mobile = page( '<section class="grid">a</section>', `<style>${ css }${ shared ? '' : '.grid{color:red}' }</style>`, ' class="page mob"' );
+		const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( assembly.html );
+		const styles = $( 'style' ).map( ( _, node ) => $( node ).text() ).get().join( '\n' );
+		expect( assembly.hasMobileDocument ).toBe( true );
+		expect( styles ).toContain( `.${ DESKTOP_DOCUMENT_CLASS }.desk .grid` );
+		expect( styles ).toContain( `.${ MOBILE_DOCUMENT_CLASS }.mob .grid` );
+		expect( styles ).toContain( 'body.page{margin:0}' );
+		expect( styles ).toContain( `.${ DESKTOP_DOCUMENT_CLASS }.desk > .grid` );
+		expect( styles ).toContain( `.${ DESKTOP_DOCUMENT_CLASS }.page.desk[data-layout]:hover > .grid` );
+		expect( styles ).not.toContain( 'body.desk' );
+	} );
+} );
+
 function wrappers( html: string ): { desktop: number; mobile: number } {
 	const $ = cheerio.load( html );
 	return {
@@ -404,7 +422,7 @@ describe( 'assembleResponsiveCapture', () => {
 } );
 
 describe( 'exportWebsiteCapture responsive assembly', () => {
-	function exportPair( desktop: string, mobile?: string ): { html: string; receipt: { routes: Array< { responsiveVariants?: { outcome: string; variants: number } } > }; profile: { variants: string; documentsPerRoute: number } } {
+	function exportPair( desktop: string, mobile?: string, linkedCss?: string ): { html: string; receipt: { routes: Array< { responsiveVariants?: { outcome: string; variants: number } } > }; profile: { variants: string; documentsPerRoute: number } } {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-assembly-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -418,6 +436,11 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 			join( outputDir, 'screenshots', 'manifest.json' ),
 			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
 		);
+		if ( linkedCss !== undefined ) {
+			mkdirSync( join( outputDir, 'resources' ), { recursive: true } );
+			writeFileSync( join( outputDir, 'resources', 'layout.css' ), linkedCss );
+			writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( { version: 1, resources: { 'https://example.com/layout.css': { path: 'resources/layout.css', contentType: 'text/css' } }, failures: [] } ) );
+		}
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
 		return {
 			html: readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ),
@@ -434,6 +457,22 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 		expect( outcome === 'dual-structural' ).toBe( dual );
 		expect( profile.documentsPerRoute ).toBe( dual ? 2 : 1 );
 	}
+
+	it( 'projects captured linked CSS through the export stylesheet path', () => {
+		const link = '<link rel="stylesheet" href="https://example.com/layout.css">';
+		const exported = exportPair(
+			page( '<div class="grid">Desktop</div>', link, ' class="page desk"' ),
+			page( '<section class="grid">Mobile</section>', link, ' class="page mob"' ),
+			'body.desk > .grid{display:flex} body.page.mob:hover .grid{display:block} body.page{margin:0}'
+		);
+		const $ = cheerio.load( exported.html );
+		const href = $( 'link[rel="stylesheet"]' ).attr( 'href' )!;
+		const css = readFileSync( join( dirs[ dirs.length - 1 ], 'website', href.replace( /^\//, '' ) ), 'utf8' );
+		expect( css ).toContain( `.${ DESKTOP_DOCUMENT_CLASS }.desk > .grid` );
+		expect( css ).toContain( 'body.desk > .grid' );
+		expect( css ).toContain( `.${ MOBILE_DOCUMENT_CLASS }.page.mob:hover .grid` );
+		expect( css ).toContain( 'body.page{margin:0}' );
+	} );
 
 	it( 'records the same disposition the emitted tree shows for absent, equivalent, identity-subset, and gated pairs', () => {
 		const absent = exportPair( page( '<main><h1>Only</h1></main>' ) );

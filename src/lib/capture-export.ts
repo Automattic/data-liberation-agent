@@ -40,6 +40,8 @@ import {
 	DESKTOP_DOCUMENT_CLASS,
 	MOBILE_DOCUMENT_CLASS,
 	projectResponsiveIdentityCss,
+	projectResponsiveBodyClassCss,
+	responsiveMovedBodyClasses,
 	routePhoneDocumentFragments,
 	type ResponsiveVariantEvidence,
 } from './responsive-assembly.js';
@@ -1357,6 +1359,7 @@ function buildExportCapture(
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
 	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
 	const redirectAliases: Array< { url: string; target: string } > = [];
+	const responsiveBodyClassProjections = new Map<string, ReadonlyMap<string, string>>();
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
 		// One route's non-integrity failure drops that route, not the capture. Integrity
 		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
@@ -1528,6 +1531,12 @@ function buildExportCapture(
 				switchWidth: detectedFloor,
 				onUnparseableStylesheet,
 			} );
+			if ( assembly.hasMobileDocument && ! deviceAssembly ) {
+				const $ = cheerio.load( assembly.html );
+				const classes = ( scope: string ) => ( $( `.${ scope }` ).first().attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== scope );
+				const moved = responsiveMovedBodyClasses( classes( DESKTOP_DOCUMENT_CLASS ), classes( MOBILE_DOCUMENT_CLASS ) );
+				if ( moved.size ) responsiveBodyClassProjections.set( JSON.stringify( [ ...moved ] ), moved );
+			}
 			const capturedHtml = assembly.portableNormalization === 'pending'
 				? portableDocument( assembly.html )
 				: assembly.html;
@@ -1969,7 +1978,7 @@ function buildExportCapture(
 	selfContainWebsite( websiteDir );
 	// Author identity selectors can live in linked/imported stylesheets, not
 	// only inline <style>. Project the localized copies with the same primitive.
-	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases ) {
+	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases || responsiveBodyClassProjections.size ) {
 		const projectStylesheets = ( directory: string ): void => {
 			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
 				const path = join( directory, entry.name );
@@ -1977,7 +1986,11 @@ function buildExportCapture(
 				else if ( entry.isFile() && entry.name.endsWith( '.css' ) ) {
 					const original = readFileSync( path, 'utf8' );
 					const projected = projectStylesheet(
-						() => projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases ),
+						() => {
+							let css = projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases );
+							for ( const moved of responsiveBodyClassProjections.values() ) css = projectResponsiveBodyClassCss( css, moved, true );
+							return css;
+						},
 						reason => routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url: options.sourceUrl, reason, unit: 'stylesheet', severity: 'warning', path: relative( stageDir, path ).replace( /\\/g, '/' ) } )
 					);
 					if ( projected !== undefined && original !== projected ) writeFileSync( path, projected );
