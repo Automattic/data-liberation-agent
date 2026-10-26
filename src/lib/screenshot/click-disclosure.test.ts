@@ -91,6 +91,57 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
+	it( 'captures delegated window visibility controls, including empty controls and one-way close', async () => {
+		const page = await browser.newPage();
+		await page.setContent( `<!doctype html><style>.hidden{display:none}.control{cursor:pointer;width:20px;height:20px;background:gray}</style>
+		<div id="component"><div id="placeholder" class="hidden">Restore panel</div><div id="window">
+		<header><div id="minimize" class="control"><span></span></div><div id="close" class="control"><span></span></div><div id="noop" class="control"></div></header>
+		<div id="content"><pre>example command</pre></div></div></div>
+		<script>document.addEventListener('click',event=>{const control=event.target.closest('.control');if(!control)return;
+		if(control.id==='minimize')document.querySelector('#content').classList.toggle('hidden');
+		if(control.id==='close'){document.querySelector('#window').classList.add('hidden');document.querySelector('#placeholder').classList.remove('hidden');}});</script>` );
+		const records = await hydrateDisclosureContent( page );
+		expect( records.filter( record => record.status === 'captured' ).map( record => record.trigger.id ) ).toEqual( [ 'minimize', 'close' ] );
+		expect( records.some( record => record.trigger.id === 'noop' ) ).toBe( false );
+		expect( await page.locator( '#content' ).isVisible() ).toBe( true );
+		expect( await page.locator( '#window' ).isVisible() ).toBe( true );
+		const offline = wireCapturedDialogs( portable( await page.content() ), records );
+		expect( offline ).toContain( 'data-blocks-engine-capture-disclosure-transition' );
+		const transitions = await page.locator( '[data-blocks-engine-capture-disclosure-transition]' ).evaluateAll( nodes =>
+			nodes.map( node => JSON.parse( node.getAttribute( 'data-blocks-engine-capture-disclosure-transition' )! ) ) );
+		expect( transitions[ 0 ] ).toMatchObject( { reversible: true, targets: [ { before: true, after: false } ] } );
+		expect( transitions[ 1 ] ).toMatchObject( { reversible: false, targets: [ { before: false, after: true }, { before: true, after: false } ] } );
+		expect( records.every( record => record.dialog?.html.includes( 'disclosure-transition' ) ) ).toBe( true );
+		await page.setContent( offline );
+		await page.locator( '#minimize' ).click();
+		expect( await page.locator( '#content' ).isVisible() ).toBe( false );
+		await page.locator( '#minimize' ).click();
+		expect( await page.locator( '#content' ).isVisible() ).toBe( true );
+		await page.locator( '#close' ).click();
+		expect( await page.locator( '#window' ).isVisible() ).toBe( false );
+		expect( await page.locator( '#placeholder' ).isVisible() ).toBe( true );
+		await page.close();
+	} );
+
+	it( 'does not capture navigation, content mutation or unrelated restyling as visibility transitions', async () => {
+		const page = await browser.newPage();
+		await page.route( `${ PUSH_STATE_ORIGIN }/**`, route => route.fulfill( { contentType: 'text/html', body: `<!doctype html>
+		<style>.control{cursor:pointer;width:20px;height:20px}.hidden{display:none}</style><main>
+		<section><div class="control" id="navigate"></div><p>Text</p></section>
+		<section><div class="control" id="mutate"></div><p>Original content</p></section>
+		<section><div class="control" id="restyle"></div><p>Unchanged style</p></section>
+		<script>document.addEventListener('click',event=>{const control=event.target.closest('.control');if(!control)return;
+		if(control.id==='navigate')history.pushState({},'','/different');
+		if(control.id==='mutate'){control.nextElementSibling.textContent='Changed content';control.nextElementSibling.classList.add('hidden');}
+		if(control.id==='restyle'){control.nextElementSibling.style.color='red';control.nextElementSibling.classList.add('hidden');}});</script></main>` } ) );
+		await page.goto( `${ PUSH_STATE_ORIGIN }/controls` );
+		const baseline = await page.locator( 'main' ).innerHTML();
+		expect( await hydrateDisclosureContent( page ) ).toEqual( [] );
+		expect( page.url() ).toBe( `${ PUSH_STATE_ORIGIN }/controls` );
+		expect( await page.locator( 'main' ).innerHTML() ).toBe( baseline );
+		await page.close();
+	} );
+
 	it( 'keeps an item whose icon flips its glyph as a local disclosure with the closed glyph', async () => {
 		const page = await browser.newPage();
 		await page.setContent( FAQ_ICON );

@@ -33,7 +33,7 @@ Emitters spell the full names, because many of them sit inside runtime script an
 | Family | Names (after `data-blocks-engine-capture-`) |
 |---|---|
 | Dialogs | attributes `dialog-trigger`, `dialog-panel`, `dialog-close`, `dialog-panel-state`, `dialog-ancestor-state`, `dialog-ancestor-unverified`, `dialog-css`, `existing-panel`, `observed-placement`, `resting-panel`; classes `dialog`, `dropdown`, `initial-dialog`; ids `dialog-<n>` |
-| Disclosures | `disclosure`, `disclosure-base` (attribute and cascade layer), `disclosure-label`, `disclosure-runtime`, `disclosure-open-<svg attribute>`, `disclosure-closed-<svg attribute>`, `local-disclosure`, `local-disclosure-runtime`, `exclusive-disclosures`, `hydrated-disclosure`; class `disclosure`; ids `disclosure-panel-<n>` |
+| Disclosures | `disclosure`, `disclosure-base` (attribute and cascade layer), `disclosure-label`, `disclosure-runtime`, `disclosure-open-<svg attribute>`, `disclosure-closed-<svg attribute>`, `local-disclosure`, `local-disclosure-runtime`, `exclusive-disclosures`, `hydrated-disclosure`, `disclosure-transition`; class `disclosure`; ids `disclosure-panel-<n>` |
 | Listbox, choice groups | `listbox-trigger`, `listbox-panel`, `listbox-runtime`, `choice-group`, `choice-index`, `choice-runtime` |
 | Documents | attributes `document-scope`, `device-document`, `device-style`, `device-body`, `device-selection`, `device-visibility`, `device-unavailable`, `document-unavailable`, `selected-document`, `selected-viewport`, `source-media`; classes `desktop-document`, `mobile-document`, `<profile>-document`, `desktop-only`, `mobile-only`; id suffix `--data-blocks-engine-capture-mobile` |
 | Responsive assembly | `responsive-source`, `responsive-fragment`, `responsive-fragments`, `embedded-responsive`, `embedded-document`, `anchor-fragment`, `anchor-target`, `anchor-source-id`, `anchor-alias`, `anchor-unresolved`, `fluid-id`, `fluid-segment`, `fluid-rules`, `fluid-sheet-rules`, `fluid-ignore-padding`, `geometry-id`, `visual-iframe-src`, `visual-iframe-width`, `visual-iframe-height`; classes `responsive-<hash>`, `responsive-class-<hash>`, `responsive-counterpart-<n>`, `embedded-<digest>-<document>`, `shared-<hash>`; id `fluid-specificity` |
@@ -50,6 +50,27 @@ Some names never reach `website/`:
 - DLA runtime scripts set `resting-panel`, `native-runtime-loss` and `document-unavailable` in the browser.
 
 They share the namespace anyway, so no capture name falls outside it.
+
+### Local visibility transitions
+
+A pointer control may hide initially visible content, including its own window,
+without revealing a descendant answer. These controls use the existing
+`local-disclosure` component and runtime, with `aria-controls` naming the local
+component. `disclosure-transition` on the trigger is JSON:
+
+- `targets`: `{path, before, after}` visibility evidence. Paths are zero-based
+  element-child indexes relative to the controlled component; states are booleans.
+- `swaps`: `{path, name, before, after}` observed presentation attribute values;
+  `null` means remove the attribute. Only class, style, hidden, aria-hidden and
+  inert changes inside the bounded component are admitted.
+- `reversible`: whether a second source activation returned to baseline. A
+  reversible control toggles; a one-way close always applies the after state.
+
+Each control owns its transition, so minimizing a panel and closing its containing
+window can share targets. Capture verifies visibility changes, rejects navigation,
+text/structure mutations and non-visibility restyling, and restores the baseline
+before serialization. Empty controls and delegated handlers require no special
+markup. No observable visibility change means no transition evidence.
 
 ## Sidecar schemas
 

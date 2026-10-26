@@ -1130,6 +1130,142 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             records.push({ status: 'captured', trigger: describeTrigger(member), target: describe(panel), html: panel.outerHTML });
           }
         }
+
+        // A pointer affordance need not own its panel or have a label. Observe
+        // attribute-only visibility transitions in a bounded ancestor component.
+        // Keep per-trigger states: close and minimize can share targets without
+        // overwriting each other's disclosure presentation attributes.
+        for (const trigger of pointer.slice(0, limit)) {
+          if (Date.now() >= clickDeadline || trigger.hasAttribute('aria-controls') || !visible(trigger)) continue;
+          if (Array.from(byParent.values()).some(members => members.includes(trigger))) continue;
+          let scope = trigger.parentElement;
+          for (let depth = 0; scope && depth < 5; depth++, scope = scope.parentElement) {
+            if (scope === root || scope.matches('body,html,main,article,nav,[role="main"]')) break;
+            // Pick the largest bounded local scope once, not one click per ancestor.
+            const parent: HTMLElement | null = scope.parentElement;
+            if (depth < 4 && parent && parent !== root && !parent.matches('body,html,main,article,nav,[role="main"]') && parent.querySelectorAll('*').length < 256) continue;
+            const nodes = [scope, ...Array.from(scope.querySelectorAll<HTMLElement>('*'))];
+            if (nodes.length > 256) break;
+            const attributes = nodes.map(node => Array.from(node.attributes, attr => [attr.name, attr.value] as const));
+            const beforeHtml = scope.outerHTML;
+            const beforeVisible = nodes.map(node => !clipped(node));
+            const nonVisibilityStyle = (node: HTMLElement) => {
+              const style = getComputedStyle(node);
+              // Used geometry becomes `auto` when display:none removes the
+              // layout box; that is a consequence, not an extra interaction.
+              const geometry = /^(width|height|min-width|min-height|max-width|max-height|inline-size|block-size|perspective-origin|transform-origin|grid-template-columns|grid-template-rows)$/;
+              return Array.from(style).filter(property => !geometry.test(property) && !['display', 'visibility', 'opacity'].includes(property))
+                .map(property => `${property}:${style.getPropertyValue(property)}`).join('|');
+            };
+            const beforeStyles = nodes.map(nonVisibilityStyle);
+            const route = location.href, state = history.state;
+            const mutations: MutationRecord[] = [];
+            const observer = new MutationObserver(batch => mutations.push(...batch));
+            observer.observe(document, { subtree: true, attributes: true, attributeOldValue: true, childList: true, characterData: true, characterDataOldValue: true });
+            trigger.click();
+            await wait(100);
+            observer.disconnect();
+            const changed = nodes.filter((node, index) => beforeVisible[index] !== !clipped(node));
+            const owners = outermost(changed);
+            const valid = !clickNavigationBlocked && location.href === route && owners.length > 0 &&
+              nodes.every((node, index) => nonVisibilityStyle(node) === beforeStyles[index]) &&
+              mutations.every(mutation => mutation.type === 'attributes' && nodes.includes(mutation.target as HTMLElement) &&
+                ['class', 'style', 'hidden', 'aria-hidden', 'inert'].includes(mutation.attributeName || ''));
+            const after = nodes.map(node => Array.from(node.attributes, attr => [attr.name, attr.value] as const));
+            const afterHtml = scope.outerHTML;
+            // Retain source nodes and delegated listeners while returning the
+            // serialized attributes to the exact pre-click baseline.
+            const restore = () => nodes.forEach((node, index) => {
+              for (const attr of Array.from(node.attributes)) node.removeAttribute(attr.name);
+              for (const [name, value] of attributes[index]!) node.setAttribute(name, value);
+            });
+            // Undo rejected structural/text and foreign mutations too. Restoring
+            // presentation alone must not leave an unsuccessful probe's content.
+            const undoMutations = (batch: MutationRecord[]) => {
+              for (const mutation of [...batch].reverse()) {
+                if (mutation.type === 'attributes' && mutation.target instanceof Element && mutation.attributeName) {
+                  if (mutation.oldValue === null) mutation.target.removeAttribute(mutation.attributeName);
+                  else mutation.target.setAttribute(mutation.attributeName, mutation.oldValue);
+                } else if (mutation.type === 'characterData') mutation.target.textContent = mutation.oldValue;
+                else if (mutation.type === 'childList') {
+                  for (const node of mutation.addedNodes) if (node.parentNode === mutation.target) mutation.target.removeChild(node);
+                  for (const node of mutation.removedNodes) mutation.target.insertBefore(node, mutation.nextSibling?.parentNode === mutation.target ? mutation.nextSibling : null);
+                }
+              }
+            };
+            const restoreBaseline = async (extra: MutationRecord[] = []) => {
+              undoMutations(extra);
+              undoMutations(mutations);
+              restore();
+              if (location.href !== route) {
+                history.pushState(state, '', route);
+                window.dispatchEvent(new PopStateEvent('popstate', { state }));
+                await wait(100);
+              }
+              if (scope!.outerHTML !== beforeHtml) {
+                // failure-class: representability:profile
+                throw new Error(`${describe(trigger).selector}: visibility probe could not restore baseline`);
+              }
+            };
+            if (!valid) { await restoreBaseline(); break; }
+            const swaps = nodes.flatMap((node, index) => {
+              const previous = new Map(attributes[index]);
+              const next = new Map(after[index]);
+              return [...new Set([...previous.keys(), ...next.keys()])].filter(name => previous.get(name) !== next.get(name)).map(name => ({
+                path: childPath(scope!, node), name, before: previous.get(name) ?? null, after: next.get(name) ?? null,
+              }));
+            });
+            // Reject restyling unrelated to visibility. Every changed attribute
+            // must belong to a visibility target (or its concealed descendants).
+            if (swaps.some(swap => {
+              let node: Element = scope!;
+              for (const index of swap.path) node = node.children[index]!;
+              return !owners.some(owner => owner === node || owner.contains(node));
+            })) { await restoreBaseline(); break; }
+            const reversalMutations: MutationRecord[] = [];
+            const reversalObserver = new MutationObserver(batch => reversalMutations.push(...batch));
+            reversalObserver.observe(document, { subtree: true, attributes: true, attributeOldValue: true, childList: true, characterData: true, characterDataOldValue: true });
+            // A second activation may toggle, or be a one-way close action.
+            // Do not rewind attributes between clicks: the source may keep its
+            // current state in a closure rather than reading its own DOM.
+            trigger.click();
+            await wait(100);
+            reversalObserver.disconnect();
+            const normalizedMarkup = (html: string) => {
+              const holder = document.createElement('div');
+              holder.innerHTML = html;
+              for (const node of holder.querySelectorAll('*')) {
+                for (const name of ['class', 'style']) {
+                  const value = node.getAttribute(name);
+                  if (!value?.trim()) node.removeAttribute(name);
+                  else if (name === 'class') node.setAttribute(name, tokens(value));
+                }
+              }
+              return holder.innerHTML;
+            };
+            const reversible = normalizedMarkup(scope.outerHTML) === normalizedMarkup(beforeHtml);
+            const reversedSafely = (reversible || normalizedMarkup(scope.outerHTML) === normalizedMarkup(afterHtml)) &&
+              !clickNavigationBlocked && location.href === route && reversalMutations.every(mutation =>
+              mutation.type === 'attributes' && nodes.includes(mutation.target as HTMLElement) &&
+              ['class', 'style', 'hidden', 'aria-hidden', 'inert'].includes(mutation.attributeName || ''));
+            await restoreBaseline(reversalMutations);
+            if (!reversedSafely) break;
+            if (!scope.id || document.querySelectorAll(`#${cssEscape(scope.id)}`).length !== 1) {
+              let index = 0;
+              while (document.getElementById(`data-blocks-engine-capture-disclosure-panel-${index}`)) index++;
+              scope.id = `data-blocks-engine-capture-disclosure-panel-${index}`;
+            }
+            scope.dataset.blocksEngineCaptureLocalDisclosure = 'true';
+            trigger.setAttribute('aria-controls', scope.id);
+            trigger.setAttribute('aria-expanded', 'false');
+            trigger.setAttribute('data-blocks-engine-capture-disclosure-transition', JSON.stringify({
+              swaps, reversible, targets: owners.map(node => ({ path: childPath(scope!, node), before: beforeVisible[nodes.indexOf(node)], after: !beforeVisible[nodes.indexOf(node)] })),
+            }));
+            if (!trigger.hasAttribute('tabindex')) trigger.tabIndex = 0;
+            records.push({ status: 'captured', trigger: describeTrigger(trigger), target: describe(scope), html: scope.outerHTML });
+            break;
+          }
+        }
       } finally {
         clickNavigation?.removeEventListener('navigate', keepClickDocument);
       }

@@ -96,6 +96,13 @@ function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hi
 function activate(event){
   var trigger=event.target.closest&&event.target.closest('[aria-controls]');
   if(!trigger||!panelFor(trigger))return;
+  var transition=trigger.getAttribute('data-blocks-engine-capture-disclosure-transition');
+  if(transition){
+    if(event.type==='keydown'){if(trigger.tagName==='BUTTON'||(event.key!=='Enter'&&event.key!==' '))return;event.preventDefault();}
+    var config=JSON.parse(transition),scope=panelFor(trigger),after=!config.reversible||trigger.getAttribute('aria-expanded')!=='true';
+    config.swaps.forEach(function(swap){var node=scope;swap.path.forEach(function(index){node=node&&node.children[index];});if(!node)return;var value=after?swap.after:swap.before;if(value===null)node.removeAttribute(swap.name);else node.setAttribute(swap.name,value);});
+    trigger.setAttribute('aria-expanded',String(after));return;
+  }
   if(event.type==='keydown'){if(trigger.tagName==='BUTTON'||(event.key!=='Enter'&&event.key!==' '))return;event.preventDefault();}
   var open=trigger.getAttribute('aria-expanded')!=='true',group=trigger.closest('[data-blocks-engine-capture-exclusive-disclosures]');
   if(open&&group)group.querySelectorAll('[aria-controls][aria-expanded="true"]').forEach(function(other){set(other,false);});
