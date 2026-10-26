@@ -81,7 +81,7 @@ describe( 'capture evidence vocabulary', () => {
 			'document-scope', 'device-document', 'mobile-document', 'desktop-document', 'responsive-counterpart-<n>', 'responsive-source', 'source-media',
 			'dialog-trigger', 'dialog-panel', 'dialog-close', 'dialog-panel-state', 'dialog-ancestor-state', 'dialog-ancestor-unverified', 'observed-placement',
 			'dropdown', 'dialog', 'disclosure', 'disclosure-runtime', 'disclosure-label', 'disclosure-open-<svg attribute>', 'disclosure-closed-<svg attribute>',
-			'local-disclosure', 'local-disclosure-runtime', 'exclusive-disclosures', 'listbox-trigger', 'listbox-panel',
+			'local-disclosure', 'local-disclosure-runtime', 'exclusive-disclosures', 'inert-control', 'listbox-trigger', 'listbox-panel',
 			'gallery', 'gallery-sequence', 'gallery-slot', 'gallery-stage', 'gallery-initial', 'gallery-display', 'gallery-direction', 'gallery-index',
 			'gallery-source', 'gallery-capture-width', 'gallery-runtime',
 			'collection', 'collection-field', 'collection-category-control', 'collection-index', 'collection-empty', 'collection-item', 'collection-members',
