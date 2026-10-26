@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.16] - 2026-10-26
+
+### Changed
+- regenerate plugin bundles
+- Keep capturing when an inert-probe component changes on its own
+- Batch inert-control proofs across disjoint components
+
 ## [0.33.15] - 2026-10-26
 
 ### Changed
