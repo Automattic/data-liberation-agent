@@ -555,7 +555,29 @@ export function isWixTelemetryRequest( url: string ): boolean {
 	}
 }
 
+/**
+ * The Wix Blog comments widget (`wc-root`: sort dropdown, comment box, rating
+ * stars, reply, like and "More actions" controls, plus the post header's
+ * rating summary that jumps into it) and the post engagement actions ("Like
+ * post" on the post and on recent-post cards). Their states are served by
+ * Wix's runtime and member accounts, so a copy cannot carry them; probing them
+ * cost about a minute per post route (#997). Wix tags them with `data-hook`s.
+ */
+export const WIX_PROBE_EXCLUSIONS = [
+	{
+		id: 'wix-blog-comments',
+		selector: '[data-hook~="wc-root"], button:has(> [data-hook~="ratings-display"])',
+		reason: 'Wix Blog comments widget is platform runtime',
+	},
+	{
+		id: 'wix-blog-engagement',
+		selector: '[data-hook="post-main-actions__stats"], button:has([data-hook="like-button"])',
+		reason: 'Wix Blog post engagement actions are platform runtime',
+	},
+] as const;
+
 export const capture: LiberationHooks = {
+	probeExclusions: WIX_PROBE_EXCLUSIONS,
 	documentSelection: wixDocumentSelection,
 	additionalProfiles: wixAdditionalProfiles,
 	referenceWidths: [ 390, 768, 1440 ],

@@ -40,7 +40,7 @@ const snapshotItems = ( html: string ) => snapshotCollectionItems( html ).items;
 export async function captureTypedSearchStates(
 	page: Page,
 	states: CapturedDialogInteraction[],
-	options: { settleMs?: number; maxFields?: number; maxDriveMs?: number; maxHtmlBytes?: number } = {}
+	options: { settleMs?: number; maxFields?: number; maxDriveMs?: number; maxHtmlBytes?: number; skip?: string } = {}
 ): Promise<CapturedDialogInteraction[]> {
 	const settleMs = options.settleMs ?? 600;
 	const groups = new Map<string, CapturedDialogInteraction[]>();
@@ -53,8 +53,8 @@ export async function captureTypedSearchStates(
 	const initiallyOpen: Array<{ selector: string; label: string }> = [];
 	const completeGroups = [ ...groups.values() ].filter( group => group.length === group[ 0 ]!.set!.size && group[ 0 ]!.dialog?.selector );
 	if ( ! completeGroups.length ) {
-		const orphan = await page.locator( 'input[type="search"], input[type="text"]' ).evaluateAll( elements => {
-			const element = elements.find( candidate => candidate.getBoundingClientRect().height && ! candidate.closest( 'header,footer,nav' ) );
+		const orphan = await page.locator( 'input[type="search"], input[type="text"]' ).evaluateAll( ( elements, skip ) => {
+			const element = elements.find( candidate => candidate.getBoundingClientRect().height && ! candidate.closest( 'header,footer,nav' ) && ! ( skip && candidate.matches( skip ) ) );
 			if ( ! element ) return null;
 			const parts: string[] = [];
 			for ( let node: Element | null = element; node && node !== document.body; node = node.parentElement ) {
@@ -62,7 +62,7 @@ export async function captureTypedSearchStates(
 				parts.unshift( `${ node.tagName.toLowerCase() }:nth-of-type(${ siblings.indexOf( node ) + 1 })` );
 			}
 			return { selector: `body > ${ parts.join( ' > ' ) }`, value: ( element as HTMLInputElement ).value };
-		} );
+		}, options.skip ?? '' );
 		if ( orphan ) results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: orphan.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'No complete, unambiguous selectable collection relationship was established' } );
 		return results;
 	}
@@ -71,7 +71,7 @@ export async function captureTypedSearchStates(
 		if ( driven >= ( options.maxFields ?? 2 ) ) break;
 		group.sort( ( first, second ) => first.set!.index - second.set!.index );
 		const targetSelector = group[ 0 ]!.dialog!.selector;
-		const field = await associatedField( page, targetSelector, group.map( state => state.trigger.selector ) );
+		const field = await associatedField( page, targetSelector, group.map( state => state.trigger.selector ), options.skip );
 		if ( ! field ) {
 			results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: targetSelector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'No text field shares a bounded ancestor with the collection' } );
 			continue;
@@ -222,12 +222,12 @@ function collectionState( selector: string, evidence: CapturedCollectionFilter )
 	return { status: evidence.replay === 'verified' && evidence.restoration === 'verified' ? 'captured' : 'no-dialog', kind: 'typed-search', trigger: { selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, collectionFilter: evidence };
 }
 
-async function associatedField( page: Page, targetSelector: string, triggerSelectors: string[] ): Promise<{ selector: string; value: string } | null> {
-	return page.evaluate( ( { targetSelector: targetPath } ) => {
+async function associatedField( page: Page, targetSelector: string, triggerSelectors: string[], skip = '' ): Promise<{ selector: string; value: string } | null> {
+	return page.evaluate( ( { targetSelector: targetPath, skip: skipped } ) => {
 		const target = document.querySelector( targetPath );
 		if ( ! target ) return null;
 		const inputs = [ ...document.querySelectorAll( 'input[type="search"], input[type="text"]' ) ]
-			.filter( element => element.getBoundingClientRect().height && ! element.closest( 'header,footer,nav' ) )
+			.filter( element => element.getBoundingClientRect().height && ! element.closest( 'header,footer,nav' ) && ! ( skipped && element.matches( skipped ) ) )
 			.slice( 0, 24 );
 		const scored: Array<{ element: HTMLInputElement; depth: number }> = [];
 		for ( const input of inputs ) {
@@ -253,5 +253,5 @@ async function associatedField( page: Page, targetSelector: string, triggerSelec
 			parts.unshift( `${ node.tagName.toLowerCase() }:nth-of-type(${ siblings.indexOf( node ) + 1 })` );
 		}
 		return { selector: `body > ${ parts.join( ' > ' ) }`, value: element.value };
-	}, { targetSelector, triggerSelectors } );
+	}, { targetSelector, triggerSelectors, skip } );
 }

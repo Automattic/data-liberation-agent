@@ -24,6 +24,14 @@ export interface LiberationHooks {
    * telemetry; anything uncertain must keep holding.
    */
   telemetryRequest?(url: string): boolean;
+  /**
+   * Platform-runtime regions interaction probing (dialogs, selectable sets,
+   * typed search) never drives: widgets whose states only the platform runtime
+   * can serve, so a copy cannot carry them. Their resting markup and
+   * screenshots are captured as usual; capture records each skipped region as
+   * a profile diagnostic. Recognize them from stable platform markers only.
+   */
+  probeExclusions?: readonly import('../lib/screenshot/probe-exclusions.js').ProbeExclusion[];
   /** CSS selectors removed from the DOM before portable artifacts are produced. */
   removeSelectors?: string[];
   /** Imperative escape hatch (wait-for-app, conditional removal). Runs AFTER
