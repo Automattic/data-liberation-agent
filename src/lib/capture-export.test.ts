@@ -96,6 +96,32 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'a' ).attr( 'href' ) ).toBe( 'https://example.test/?lang=de' );
 	} );
 
+	it( 'rewrites URL-valued navigation options exactly like matching anchors and preserves other values', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-option-routes-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const urls = [ 'https://example.test/fr/', 'https://example.test/fr/about/' ];
+		const destinations = [ urls[ 0 ], urls[ 1 ], '/fr/about/#team' ];
+		const unchanged = [ '', '#', 'en', '42', 'about/', 'https://external.test/fr/about/', '//external.test/fr/about/', '/uncaptured/', 'https://example.test/uncaptured/', '/fr/about/?unknown=1', 'mailto:hello@example.test' ];
+		const navigation = `<nav>${ destinations.map( value => `<a href="${ value }">Page</a>` ).join( '' ) }</nav>`;
+		const select = `<select>${ [ ...destinations, ...unchanged ].map( value => `<option value="${ value }">Page</option>` ).join( '' ) }</select>`;
+		const entries = Object.fromEntries( urls.map( ( url, index ) => {
+			const html = `html/page-${ index }.html`;
+			writeFileSync( join( outputDir, html ), `${ navigation }${ select }<main id="team"><h1>Page ${ index }</h1></main>` );
+			return [ url, { html } ];
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: urls[ 0 ], platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
+		for ( const route of receipt.routes ) {
+			const $ = cheerio.load( readFileSync( join( outputDir, route.path ), 'utf8' ) );
+			const hrefs = $( 'nav a' ).map( ( _i, node ) => $( node ).attr( 'href' ) ).get();
+			const values = $( 'option' ).map( ( _i, node ) => $( node ).attr( 'value' ) ).get();
+			expect( hrefs ).toEqual( [ '/index.html', '/about/index.html', '/about/index.html#team' ] );
+			expect( values.slice( 0, destinations.length ) ).toEqual( hrefs );
+			expect( values.slice( destinations.length ) ).toEqual( unchanged );
+		}
+	} );
+
 	it( 'exports query collections with their own content and correctly targeted portable links', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-query-collections-' ) );
 		dirs.push( outputDir );

@@ -337,14 +337,19 @@ function rewriteRouteLinksIn(
 	const comparisonRoutes = new Set([...routes.keys()].map(normalizedUrl));
 	// Document relations share navigation's route/source resolution. Resource
 	// relations keep their asset localization, including alternate stylesheets.
-	$( 'a[href],area[href],link[href]' ).each( ( _index, element ) => {
+	$( 'a[href],area[href],link[href],option[value]' ).each( ( _index, element ) => {
 		const link = $( element );
 		if ( element.tagName === 'link' ) {
 			const relations = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
 			if ( relations.some( relation => RESOURCE_LINK_RELATIONS.has( relation ) ) ||
 				! relations.some( relation => DOCUMENT_LINK_RELATIONS.has( relation ) ) ) return;
 		}
-		const href = link.attr( 'href' ) ?? '';
+		const isOption = element.tagName === 'option';
+		const attribute = isOption ? 'value' : 'href';
+		const href = link.attr( attribute ) ?? '';
+		// Options also carry application tokens. Only URL-shaped values participate,
+		// and only a captured route match below may change them.
+		if ( isOption && ! /^(?:https?:\/\/|\/)/i.test( href ) ) return;
 		const absolute = /^(?:https?:)?\/\//i.test( href );
 		// Same-document fragments, and schemes such as `mailto:` or `tel:`, mean
 		// the same thing wherever the document is served.
@@ -359,14 +364,15 @@ function rewriteRouteLinksIn(
 		// A platform link can share the origin and even the portable pathname,
 		// yet belong to a different site. Preserve its authored destination.
 		if ( !routeInScope( resolved.href, portable?.routeScope ) ) {
-			link.attr( 'href', resolved.href );
+			if ( ! isOption ) link.attr( 'href', resolved.href );
 			return;
 		}
 		const route = routes.get( documentRequestUrl( resolved.href ) );
 		if ( route ) {
-			link.attr( 'href', route.includes('#') ? route : `${ route }${ resolved.hash }` );
+			link.attr( attribute, route.includes('#') ? route : `${ route }${ resolved.hash }` );
 			return;
 		}
+		if ( isOption ) return;
 		// A comparison-key match is not evidence that a different network
 		// address names this captured document (for example /catalog vs /catalog/).
 		if (comparisonRoutes.has(normalizedUrl(resolved.href))) {
