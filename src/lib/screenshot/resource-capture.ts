@@ -385,6 +385,7 @@ export class CapturedResourceStore {
 	private readonly manifestPath: string;
 	private readonly manifest: CapturedResourceManifest;
 	private readonly captures = new Map< string, Promise< void > >();
+	private readonly browserLoadedResources = new Set< string >();
 	private readonly pageCaptures = new WeakMap< Page, Set< Promise< void > > >();
 	private readonly listeners = new WeakMap< Page, ( response: Response ) => void >();
 	private readonly replayMetadata = new Map< string, CapturedResourceReplayMetadata >();
@@ -488,12 +489,30 @@ export class CapturedResourceStore {
 
 	async captureDomDependencies( html: string, documentUrl: string ): Promise< void > {
 		const pending = new Map< string, string >();
-		const add = ( reference: string, baseUrl: string ) => {
+		const add = ( reference: string, baseUrl: string, blockable = false, upgradable = false ) => {
 			if ( ! reference || reference.startsWith( 'data:' ) || reference.startsWith( '#' ) ) return;
 			try {
 				const url = new URL( reference.replace( /&amp;/g, '&' ), baseUrl );
-				if ( url.protocol === 'http:' || url.protocol === 'https:' )
-					pending.set( url.href, url.href );
+				if ( url.protocol !== 'http:' && url.protocol !== 'https:' ) return;
+				// Responses actually captured by Chromium take precedence (for example,
+				// an explicitly allowed insecure resource). The fallback crawler must
+				// not turn blocked active mixed content into a same-origin resource.
+				// Loopback/localhost are potentially trustworthy even over HTTP.
+				const trustworthy = url.hostname === 'localhost' || url.hostname.endsWith( '.localhost' ) ||
+					url.hostname === '[::1]' || /^127\./.test( url.hostname );
+				// Chromium upgrades ordinary image/audio/video element sources,
+				// but blocks those same sources when addressed by an IP literal.
+				const ipLiteral = url.hostname.startsWith( '[' ) || /^\d+\.\d+\.\d+\.\d+$/.test( url.hostname );
+				if ( blockable && ( ! upgradable || ipLiteral ) && this.origin.startsWith( 'https:' ) &&
+					url.protocol === 'http:' && ! trustworthy && ! this.browserLoadedResources.has( url.href ) ) {
+					// A manifest from an earlier run is not evidence of a browser load.
+					delete this.manifest.resources[ url.href ];
+					const error = 'mixed-content: HTTP subresource blocked on an HTTPS document';
+					if ( ! this.manifest.failures.some( failure => failure.url === url.href && failure.error === error ) )
+						this.manifest.failures.push( { url: url.href, error } );
+					return;
+				}
+				pending.set( url.href, url.href );
 			} catch {
 				// Invalid browser values are removed by export's render-dependency pass.
 			}
@@ -506,16 +525,16 @@ export class CapturedResourceStore {
 				const node = $( element );
 				for ( const attribute of [ 'src', 'poster' ] ) {
 					const value = node.attr( attribute );
-					if ( value ) add( value, baseUrl );
+					if ( value ) add( value, baseUrl, true, true );
 				}
 				for ( const candidate of srcsetReferences( node.attr( 'srcset' ) ?? '' ) )
-					add( candidate, baseUrl );
+					add( candidate, baseUrl, true );
 			} );
 			$( 'a[href],area[href]' ).each( ( _, element ) => {
 				const href = $( element ).attr( 'href' ) ?? '';
 				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ) add( href, baseUrl );
 			} );
-			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl );
+			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl, true );
 			$( 'link[href]' ).each( ( _, element ) => {
 				const node = $( element );
 				const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
@@ -526,7 +545,7 @@ export class CapturedResourceStore {
 					rel.some( ( value ) => /(?:^|-)icon$/.test( value ) ) ||
 					( rel.includes( 'preload' ) && [ 'style', 'font', 'image', 'media' ].includes( as ) )
 				)
-					add( node.attr( 'href' ) ?? '', baseUrl );
+					add( node.attr( 'href' ) ?? '', baseUrl, true );
 			} );
 			const css = cssOnly
 				? content
@@ -541,7 +560,9 @@ export class CapturedResourceStore {
 			for ( const match of css.matchAll(
 				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s*(?:url\(\s*)?["']([^"']+)["'])/gi
 			) )
-				add( decodeCssUrl( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '' ), baseUrl );
+				// CSS images, unlike <img src>, are blockable rather than
+				// automatically upgraded mixed content; so are imports and fonts.
+				add( decodeCssUrl( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '' ), baseUrl, true );
 		};
 
 		// Declared metadata images (JSON-LD, og:image) are few and name the
@@ -564,7 +585,7 @@ export class CapturedResourceStore {
 				if ( /manifest\+json|application\/json/i.test( resource.contentType ) ) {
 					const parsed = JSON.parse( text ) as { icons?: Array<{ src?: unknown }> };
 					for ( const icon of ( Array.isArray( parsed.icons ) ? parsed.icons : [] ).slice( 0, 64 ) )
-						if ( typeof icon?.src === 'string' ) add( icon.src, url );
+						if ( typeof icon?.src === 'string' ) add( icon.src, url, true );
 				}
 			} catch {
 				// captureUrl records unavailable resources in the manifest.
@@ -856,6 +877,7 @@ export class CapturedResourceStore {
 			throw new Error( `resource body ${ body.length } bytes exceeds max ${ byteCeiling }` );
 		}
 		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType, renderCritical );
+		this.browserLoadedResources.add( requestedUrl.href );
 		const replayMetadata = replayableResponseMetadata( headers );
 		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
 	}

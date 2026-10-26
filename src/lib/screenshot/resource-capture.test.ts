@@ -35,6 +35,101 @@ afterEach( () => {
 } );
 
 describe( 'CapturedResourceStore', () => {
+	it( 'omits blocked mixed-content imports and their fonts from an HTTPS capture', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-content-' ) );
+		dirs.push( outputDir );
+		const sourceUrl = 'https://source.example/';
+		const imported = 'http://assets.example/import.css';
+		const font = 'http://assets.example/font.woff2';
+		const background = 'http://assets.example/background.png';
+		const html = '<!doctype html><link rel="stylesheet" href="/style.css"><span> Sculptures </span>';
+		const stylesheet = `@import url(${ imported }); span{font:32px Mixed,serif;background:url(${ background })}`;
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url, status: 200,
+			headers: new Headers( { 'content-type': url.endsWith( '.woff2' ) ? 'font/woff2' : 'text/css' } ),
+			body: Buffer.from( url === imported ? `@font-face{font-family:Mixed;src:url(${ font })}` : url.endsWith( '.woff2' ) ? 'font' : stylesheet ),
+		} ) );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		writeFileSync( join( outputDir, 'html/home.html' ), html );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia.mock.calls.map( ( [ url ] ) => url ) ).toEqual( [ `${ sourceUrl }style.css` ] );
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+		expect( manifest.resources[ imported ] ).toBeUndefined();
+		expect( manifest.resources[ font ] ).toBeUndefined();
+		for ( const url of [ imported, background ] )
+			expect( manifest.failures ).toContainEqual( { url, error: expect.stringContaining( 'mixed-content' ) } );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+		const css = readFileSync( join( outputDir, 'website/style.css' ), 'utf8' );
+		expect( css ).not.toContain( imported );
+		expect( css ).not.toContain( '@font-face' );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.resourceFailures ).toContainEqual( { url: imported, error: expect.stringContaining( 'mixed-content' ) } );
+	} );
+
+	it( 'blocks direct HTTP fonts and styles even with an HTTP document base', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-direct-' ) );
+		dirs.push( outputDir );
+		const fetchMedia = vi.fn();
+		const store = new CapturedResourceStore( outputDir, 'https://source.example/', fetchMedia );
+		await store.captureDomDependencies( '<link rel="stylesheet" href="style.css"><style>@font-face{src:url(font.woff2)}</style>', 'http://assets.example/' );
+		await store.flush();
+		expect( fetchMedia ).not.toHaveBeenCalled();
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+		expect( manifest.failures.map( ( failure: { url: string } ) => failure.url ).sort() ).toEqual( [ 'http://assets.example/font.woff2', 'http://assets.example/style.css' ] );
+	} );
+
+	it( 'does not treat a stale manifest as browser evidence for an insecure stylesheet', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-stale-' ) );
+		dirs.push( outputDir );
+		const url = 'http://assets.example/style.css';
+		mkdirSync( join( outputDir, 'resources' ) );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources: { [ url ]: { path: 'resources/style.css', contentType: 'text/css' } }, failures: [] } ) );
+		const fetchMedia = vi.fn();
+		const store = new CapturedResourceStore( outputDir, 'https://source.example/', fetchMedia );
+		await store.captureDomDependencies( `<link rel="stylesheet" href="${ url }">`, 'https://source.example/' );
+		await store.flush();
+		expect( fetchMedia ).not.toHaveBeenCalled();
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+		expect( manifest.resources[ url ] ).toBeUndefined();
+		expect( manifest.failures ).toContainEqual( { url, error: expect.stringContaining( 'mixed-content' ) } );
+	} );
+
+	it( 'prefers a successful browser response to the mixed-content fallback rule', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-observed-' ) );
+		dirs.push( outputDir );
+		const fetchMedia = vi.fn();
+		const store = new CapturedResourceStore( outputDir, 'https://source.example/', fetchMedia );
+		const page = new EventEmitter();
+		const url = 'http://assets.example/style.css';
+		store.observe( page as never );
+		page.emit( 'response', {
+			url: () => url, status: () => 200,
+			headers: () => ( { 'content-type': 'text/css' } ),
+			body: async () => Buffer.from( 'body{color:red}' ),
+			request: () => ( { resourceType: () => 'stylesheet', method: () => 'GET' } ),
+		} );
+		await store.settle( page as never );
+		await store.captureDomDependencies( `<link rel="stylesheet" href="${ url }">`, 'https://source.example/' );
+		await store.flush();
+		expect( fetchMedia ).not.toHaveBeenCalled();
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+		expect( manifest.resources[ url ] ).toBeDefined();
+		expect( manifest.failures ).toEqual( [] );
+	} );
+
+	it.each( [ 'http://source.example/', 'https://source.example/' ] )( 'preserves trustworthy HTTP resources for %s', async sourceUrl => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-trustworthy-' ) );
+		dirs.push( outputDir );
+		const url = sourceUrl.startsWith( 'https:' ) ? 'http://localhost/style.css' : 'http://assets.example/style.css';
+		const fetchMedia = vi.fn( async () => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ), body: Buffer.from( 'body{color:red}' ) } ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( `<link rel="stylesheet" href="${ url }">`, sourceUrl );
+		expect( fetchMedia ).toHaveBeenCalledOnce();
+	} );
 	it( 'captures and localizes metadata-only images while preserving failed references', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-metadata-images-' ) );
 		dirs.push( outputDir );
@@ -1472,8 +1567,58 @@ describe( 'CapturedResourceStore', () => {
 } );
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
-	'beacon requests in a real browser',
+	'resources in a real browser',
 	() => {
+		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async () => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-browser-' ) );
+			dirs.push( outputDir );
+			const sourceUrl = 'https://mixed-content.example/';
+			const imported = 'http://insecure.example/font.css';
+			const font = 'http://insecure.example/font.woff2';
+			const html = '<!doctype html><link rel="stylesheet" href="/style.css"><span>Sculptures</span>';
+			const css = `@import "${ imported }";span{font:32px Mixed,serif}`;
+			const fetchMedia = vi.fn( async ( url: string ) => ( {
+				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ),
+				body: Buffer.from( url === imported ? `@font-face{font-family:Mixed;src:url(${ font })}` : css ),
+			} ) );
+			const browser = await chromium.launch();
+			try {
+				const page = await browser.newPage();
+				const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+				store.observe( page );
+				const insecureRequests: string[] = [];
+				await page.route( '**/*', route => {
+					const url = route.request().url();
+					if ( url.startsWith( 'http:' ) ) insecureRequests.push( url );
+					return route.fulfill( { contentType: url === sourceUrl ? 'text/html' : 'text/css', body: url === sourceUrl ? html : url === imported ? `@font-face{font-family:Mixed;src:url(${ font })}` : css } );
+				} );
+				await page.goto( sourceUrl, { waitUntil: 'networkidle' } );
+				const advance = () => page.locator( 'span' ).evaluate( element => element.getBoundingClientRect().width );
+				const liveAdvance = await advance();
+				expect( await page.evaluate( () => document.fonts.size ) ).toBe( 0 );
+				expect( insecureRequests ).toEqual( [] );
+				await store.settle( page );
+				await store.captureDomDependencies( html, sourceUrl );
+				await store.flush();
+				expect( fetchMedia ).not.toHaveBeenCalled();
+				mkdirSync( join( outputDir, 'html' ) );
+				mkdirSync( join( outputDir, 'screenshots' ) );
+				writeFileSync( join( outputDir, 'html/home.html' ), html );
+				writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+				exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+				await page.unroute( '**/*' );
+				await page.route( '**/*', route => {
+					const path = new URL( route.request().url() ).pathname;
+					return route.fulfill( { contentType: path === '/' ? 'text/html' : 'text/css', body: readFileSync( join( outputDir, 'website', path === '/' ? 'index.html' : path ) ) } );
+				} );
+				// HTTP preview would load an accidentally retained HTTP import.
+				await page.goto( 'http://portable.example/', { waitUntil: 'networkidle' } );
+				expect( await advance() ).toBe( liveAdvance );
+				expect( await page.evaluate( () => document.fonts.size ) ).toBe( 0 );
+			} finally {
+				await browser.close();
+			}
+		}, 30_000 );
 		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-beacon-' ) );
 			dirs.push( outputDir );
