@@ -182,25 +182,52 @@ interface CapturedResourceReplayMetadata {
 	headers: Record< string, string >;
 }
 
+/** RFC 9111 §4.2.2: a heuristic lifetime is 10% of the time since Last-Modified. */
+const HEURISTIC_FRESHNESS_FRACTION = 0.1;
+
+function cacheControlSeconds( cacheControl: string, directive: string ): number | undefined {
+	const match = cacheControl.match( new RegExp( `(?:^|,)\\s*${ directive }\\s*=\\s*"?(\\d+)`, 'i' ) );
+	return match ? Number( match[ 1 ] ) : undefined;
+}
+
+/**
+ * Whether a response may be replayed from a shared cache across routes, and
+ * until when (RFC 9111 §3 storability, §4.2.1 freshness lifetime).
+ */
 function replayableResponseMetadata(
+	status: number,
 	headers: Record< string, string >
 ): CapturedResourceReplayMetadata | undefined {
 	const cacheControl = headers[ 'cache-control' ] ?? '';
 	if (
-		! /(?:^|,)\s*public\s*(?:,|$)/i.test( cacheControl ) ||
+		status !== 200 ||
 		/(?:^|,)\s*(?:no-cache|no-store|private)(?:\s*(?:,|$)|\s*=)/i.test( cacheControl ) ||
 		headers[ 'set-cookie' ]
 	) {
 		return undefined;
 	}
-	const maxAgeMatch = cacheControl.match( /(?:^|,)\s*max-age\s*=\s*"?(\d+)/i );
-	const maxAge = maxAgeMatch ? Number( maxAgeMatch[ 1 ] ) : undefined;
+	const now = Date.now();
 	const age = Number( headers.age ?? 0 );
 	const responseAge = Number.isFinite( age ) ? age : 0;
-	const expiresAt = Number.isFinite( maxAge )
-		? Date.now() + ( maxAge! - responseAge ) * 1000
-		: Date.parse( headers.expires ?? '' );
-	if ( ! Number.isFinite( expiresAt ) || expiresAt <= Date.now() ) return undefined;
+	const maxAge =
+		cacheControlSeconds( cacheControl, 's-maxage' ) ??
+		cacheControlSeconds( cacheControl, 'max-age' );
+	const date = Date.parse( headers.date ?? '' );
+	const responseDate = Number.isFinite( date ) ? date : now;
+	const expires = Date.parse( headers.expires ?? '' );
+	const lastModified = Date.parse( headers[ 'last-modified' ] ?? '' );
+	// Freshness lifetime, s-maxage → max-age → Expires → heuristic (§4.2.1).
+	let lifetimeMs = Number.NaN;
+	if ( maxAge !== undefined ) {
+		lifetimeMs = maxAge * 1000;
+	} else if ( headers.expires !== undefined ) {
+		// An unparseable Expires means already expired (§5.3).
+		lifetimeMs = expires - responseDate;
+	} else if ( Number.isFinite( lastModified ) && lastModified < responseDate ) {
+		lifetimeMs = ( responseDate - lastModified ) * HEURISTIC_FRESHNESS_FRACTION;
+	}
+	const expiresAt = now + lifetimeMs - responseAge * 1000;
+	if ( ! Number.isFinite( expiresAt ) || expiresAt <= now ) return undefined;
 
 	const vary = ( headers.vary ?? '' )
 		.split( ',' )
@@ -717,9 +744,8 @@ export class CapturedResourceStore {
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
 		const capture = ( async () => {
-			if ( response.status() < 200 || response.status() >= 300 ) return;
 			const headers = response.headers();
-			const metadata = replayableResponseMetadata( headers );
+			const metadata = replayableResponseMetadata( response.status(), headers );
 			if ( ! metadata ) return;
 			const declaredBytes = Number( headers[ 'content-length' ] );
 			if (
@@ -801,6 +827,7 @@ export class CapturedResourceStore {
 				throw new Error( 'resource path escapes the capture directory' );
 			this.storeBody( url, fetched.body, relativePath, destination, contentType, renderCritical );
 			const metadata = replayableResponseMetadata(
+				fetched.status,
 				Object.fromEntries( fetched.headers.entries() )
 			);
 			if ( metadata ) this.replayMetadata.set( url, metadata );
@@ -878,7 +905,7 @@ export class CapturedResourceStore {
 		}
 		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType, renderCritical );
 		this.browserLoadedResources.add( requestedUrl.href );
-		const replayMetadata = replayableResponseMetadata( headers );
+		const replayMetadata = replayableResponseMetadata( status, headers );
 		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
 	}
 

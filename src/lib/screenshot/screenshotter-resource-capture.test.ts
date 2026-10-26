@@ -168,7 +168,7 @@ describe( 'screenshot resource capture', () => {
 		}
 	} );
 
-	it( 'fulfills cacheable static requests from captured resources', async () => {
+	it( 'fulfills cacheable static requests from captured resources, session cookie or not', async () => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );
 		const outputDir = mkdtempSync( join( parent, 'screenshot-resource-replay-' ) );
@@ -179,7 +179,7 @@ describe( 'screenshot resource capture', () => {
 				isNavigationRequest: () => false,
 				url: () => 'https://example.com/assets/site.css',
 				method: () => 'GET',
-				headers: () => ( {} ),
+				headers: () => ( { cookie: 'laravel_session=abc' } ),
 				resourceType: () => 'stylesheet',
 			} ),
 			abort: vi.fn().mockResolvedValue( undefined ),

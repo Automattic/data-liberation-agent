@@ -791,11 +791,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				return;
 			}
 			const requestHeaders = request.headers();
+			// No cookie guard: a cookie-dependent response must declare `Vary: Cookie`, which the store already refuses.
 			if (
 				request.method() === 'GET' &&
 				! requestHeaders.range &&
-				! requestHeaders.authorization &&
-				! requestHeaders.cookie
+				! requestHeaders.authorization
 			) {
 				const replay = resourceStore.getReplayableResponse(
 					request.url(),

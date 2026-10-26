@@ -277,21 +277,32 @@ describe( 'CapturedResourceStore', () => {
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
 		store.observe( page as never );
 
-		for ( const [ url, resourceType, cacheControl, vary ] of [
+		const validatorOnly = {
+			date: 'Sat, 29 Aug 2026 00:00:00 GMT',
+			'last-modified': 'Thu, 30 Jul 2026 00:00:00 GMT',
+			etag: '"bg"',
+		};
+		for ( const [ url, resourceType, cacheControl, vary, extra, status ] of [
 			[ 'https://example.com/assets/app.js', 'script', 'public, max-age=3600', 'Accept-Encoding' ],
 			[ 'https://example.com/api/data', 'fetch', 'public, max-age=3600', '' ],
 			[ 'https://example.com/styles/private.css', 'stylesheet', 'no-store', '' ],
 			[ 'https://example.com/styles/context.css', 'stylesheet', 'private, max-age=3600', '' ],
 			[ 'https://example.com/images/variant.jpg', 'image', 'public, max-age=3600', 'User-Agent' ],
-		] ) {
+			// RFC 9111 §4.2.2: 10% of 30 days since Last-Modified is a 3-day lifetime.
+			[ 'https://example.com/images/background.png', 'image', '', '', validatorOnly ],
+			[ 'https://example.com/styles/revalidate.css', 'stylesheet', 'no-cache, max-age=3600', '' ],
+			[ 'https://example.com/fonts/shared.woff2', 'font', 's-maxage=86400, max-age=60', '' ],
+			[ 'https://example.com/images/partial.jpg', 'image', 'public, max-age=3600', '', {}, 203 ],
+		] as const ) {
 			page.emit( 'response', {
 				url: () => url,
-				status: () => 200,
+				status: () => status ?? 200,
 				headers: () => ( {
 					'content-type': resourceType === 'stylesheet' ? 'text/css' : 'application/octet-stream',
-					'cache-control': cacheControl,
+					...( cacheControl ? { 'cache-control': cacheControl } : {} ),
 					'access-control-allow-origin': 'https://example.com',
 					vary,
+					...extra,
 				} ),
 				body: vi.fn().mockResolvedValue( Buffer.from( url ) ),
 				request: () => ( { resourceType: () => resourceType } ),
@@ -326,6 +337,28 @@ describe( 'CapturedResourceStore', () => {
 		).toBeUndefined();
 		expect(
 			store.getReplayableResponse( 'https://example.com/images/variant.jpg', 'image' )
+		).toBeUndefined();
+		expect(
+			store.getReplayableResponse( 'https://example.com/styles/revalidate.css', 'stylesheet' )
+		).toBeUndefined();
+		expect(
+			store.getReplayableResponse( 'https://example.com/images/partial.jpg', 'image' )
+		).toBeUndefined();
+		// s-maxage outranks the shorter max-age.
+		expect(
+			store.getReplayableResponse( 'https://example.com/fonts/shared.woff2', 'font' )
+		).toBeDefined();
+		vi.setSystemTime( new Date( '2026-08-31T23:59:59Z' ) );
+		expect(
+			store.getReplayableResponse( 'https://example.com/images/background.png', 'image' )
+		).toEqual( {
+			path: expect.any( String ),
+			contentType: 'application/octet-stream',
+			headers: { 'access-control-allow-origin': 'https://example.com' },
+		} );
+		vi.setSystemTime( new Date( '2026-09-01T00:00:00Z' ) );
+		expect(
+			store.getReplayableResponse( 'https://example.com/images/background.png', 'image' )
 		).toBeUndefined();
 	} );
 
