@@ -88,6 +88,19 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
+	it( 'keeps capturing when a control sits in a component that changes on its own', async () => {
+		const page = await browser.newPage();
+		await page.setContent( `<!doctype html><body><main>
+			<section id="carousel"><span data-slide="0">Slide</span><div data-action="next" onclick="this.previousElementSibling.dataset.slide++">Next</div></section>
+			<section><div data-action="inert">Dead control</div></section>
+			<script>setInterval(() => document.querySelector('[data-slide]').dataset.slide++, 30)</script>
+		</main></body>` );
+		await expect( hydrateDisclosureContent( page ) ).resolves.toBeDefined();
+		expect( await page.locator( '[data-action="next"]' ).getAttribute( 'data-blocks-engine-capture-inert-control' ) ).toBeNull();
+		expect( await page.locator( '[data-action="inert"]' ).getAttribute( 'data-blocks-engine-capture-inert-control' ) ).toBe( 'true' );
+		await page.close();
+	} );
+
 	it( 'falls back to solo proof for an unattributable shared-window effect', async () => {
 		const page = await browser.newPage();
 		await page.setContent( `<!doctype html><body><main>
