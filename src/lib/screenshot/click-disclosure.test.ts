@@ -56,6 +56,24 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 	beforeAll( async () => { browser = await chromium.launch(); } );
 	afterAll( async () => { await browser?.close(); } );
 
+	it( 'marks dead pointer hooks without changing the baseline or disclosure capture (#979)', async () => {
+		const page = await browser.newPage();
+		await page.setContent( FAQ.replace( '<main>', '<main><section id="terminal"><div style="cursor:pointer" data-action="minimize">−</div><div data-target="terminal">×</div></section>' ) );
+		const baseline = await page.locator( '#terminal' ).evaluate( node => node.outerHTML );
+		const records = await hydrateDisclosureContent( page );
+		expect( await page.locator( '[data-action]' ).getAttribute( 'data-blocks-engine-capture-inert-control' ) ).toBe( 'true' );
+		expect( await page.locator( '[data-target]' ).getAttribute( 'data-blocks-engine-capture-inert-control' ) ).toBe( 'true' );
+		expect( await page.locator( '.item[data-blocks-engine-capture-inert-control]' ).count() ).toBe( 0 );
+		expect( records.filter( record => record.status === 'captured' ) ).toHaveLength( 3 );
+		expect( await page.locator( '#terminal' ).evaluate( node => {
+			const copy = node.cloneNode( true ) as Element;
+			copy.querySelectorAll( '[data-blocks-engine-capture-inert-control]' ).forEach( control => control.removeAttribute( 'data-blocks-engine-capture-inert-control' ) );
+			return copy.outerHTML;
+		} ) ).toBe( baseline );
+		expect( await page.locator( '.a' ).evaluateAll( nodes => nodes.every( node => getComputedStyle( node ).display === 'none' ) ) ).toBe( true );
+		await page.close();
+	} );
+
 	it( 'captures items that toggle their own hidden answer as independent local disclosures', async () => {
 		const page = await browser.newPage();
 		await page.setContent( FAQ );
@@ -88,6 +106,21 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		expect( await answers.nth( 0 ).isVisible() ).toBe( false );
 		expect( await answers.nth( 1 ).isVisible() ).toBe( true );
 		expect( await answers.nth( 2 ).isVisible() ).toBe( false );
+		await page.close();
+	} );
+
+	it( 'does not call delayed, transient, history or popup effects inert', async () => {
+		const page = await browser.newPage();
+		await page.setContent( `<!doctype html><body>
+			<div data-action="delayed" onclick="setTimeout(()=>{this.title='changed';this.removeAttribute('title')},250)">Delayed</div>
+			<div data-action="transient" onclick="this.title='changed';this.removeAttribute('title')">Transient</div>
+			<div data-action="history" onclick="history.replaceState({},'')">History</div>
+			<div data-action="popup" onclick="window.open('about:blank')">Popup</div>
+		</body>` );
+		const baseline = await page.content();
+		await hydrateDisclosureContent( page );
+		expect( await page.locator( '[data-blocks-engine-capture-inert-control]' ).count() ).toBe( 0 );
+		expect( await page.content() ).toBe( baseline );
 		await page.close();
 	} );
 

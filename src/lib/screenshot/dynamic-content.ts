@@ -932,9 +932,9 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         const clickDeadline = Date.now() + 15_000;
         const interactive = 'a,button,input,select,textarea,summary,details,label,option,[aria-expanded],[aria-haspopup],[role="tab"],[role="option"],[role="radio"],[role="menuitem"],[role="button"]';
         const clickable = (element: HTMLElement) => {
-          if (element.matches(interactive) || element.closest('nav,[role="navigation"],details,[data-blocks-engine-capture-local-disclosure],[data-blocks-engine-capture-hydrated-disclosure],[aria-expanded]')) return false;
+          if (element.matches(interactive) || element.closest('a,button,input,select,textarea,label,nav,[role="navigation"],details,[data-blocks-engine-capture-local-disclosure],[data-blocks-engine-capture-hydrated-disclosure],[aria-expanded]')) return false;
           if (element.querySelector('[aria-expanded],[data-blocks-engine-capture-local-disclosure],details')) return false;
-          return element.hasAttribute('onclick') || getComputedStyle(element).cursor === 'pointer';
+          return element.hasAttribute('onclick') || element.matches('[data-action],[data-toggle],[data-target]') || getComputedStyle(element).cursor === 'pointer';
         };
         const concealed = (member: HTMLElement) => Array.from(member.querySelectorAll<HTMLElement>('*'))
           .filter((node) => hasContent(node) && clipped(node));
@@ -947,6 +947,16 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           if (!parent || !concealed(element).length) continue;
           byParent.set(parent, [...(byParent.get(parent) ?? []), element]);
         }
+        // Keep the existing group probe and its budgets. Controls without a
+        // concealed descendant cannot prove a disclosure, but the same activation
+        // can prove them inert. Batch those remaining controls as one group.
+        const groupedPointers = new Set(Array.from(byParent.values()).flat());
+        const ungrouped = pointer.filter(element => !groupedPointers.has(element));
+        // Explicit hooks precede inherited pointer decoration in the bounded
+        // remainder, so a live unrelated control cannot hide all later hooks.
+        ungrouped.sort((a, b) => Number(b.matches('[data-action],[data-toggle],[data-target]')) - Number(a.matches('[data-action],[data-toggle],[data-target]')));
+        if (ungrouped.length) byParent.set(root as HTMLElement, ungrouped);
+        const inertControls = new Set<HTMLElement>();
         // Structure of an item apart from what the export can toggle (class and
         // style) and apart from leaf labels outside the panel: an icon whose
         // glyph flips (`+` to `×`) keeps its closed glyph in the copy.
@@ -997,11 +1007,11 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         };
         let groupsProbed = 0;
         for (const [parent, groupMembers] of byParent) {
-          if (groupMembers.length < 2 || groupsProbed >= 8 || Date.now() >= clickDeadline) continue;
+          if (groupsProbed >= 8 || Date.now() >= clickDeadline) continue;
           const tag = groupMembers[0]!.tagName;
-          const members = groupMembers.filter((member) => member.tagName === tag).slice(0, 24);
-          if (members.length < 2) continue;
+          const members = groupMembers.filter((member) => parent === root || member.tagName === tag).slice(0, 24);
           groupsProbed++;
+          const retries = new Map<HTMLElement, number>();
           const initial = members.map(canonical);
           const resting = members.map((member) => member.cloneNode(true) as HTMLElement);
           const startRoute = currentRoute();
@@ -1009,38 +1019,116 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           const opened: Array<{ member: HTMLElement; panel: HTMLElement; open: ReturnType<typeof presentation> }> = [];
           let failure: string | undefined;
           // Open every member in turn without closing the earlier ones.
-          for (const member of members) {
+          for (const [memberIndex, member] of members.entries()) {
+            if (Date.now() >= clickDeadline) { failure = 'probe budget exhausted'; break; }
+            clickNavigationBlocked = false;
             const hiddenBefore = concealed(member);
             const foreign: Node[] = [];
+            let mutated = false;
+            let componentMutated = false;
+            let browserEffect = false;
+            const beforeUrl = location.href;
+            const beforeHistoryLength = history.length;
+            const beforeHistoryState = JSON.stringify(history.state);
+            const component = member.parentElement ?? member;
+            const geometry = () => JSON.stringify([component, ...Array.from(component.querySelectorAll('*'))].map(node => {
+              const style = getComputedStyle(node);
+              return [node.getBoundingClientRect().toJSON(), style.display, style.visibility, style.opacity];
+            }));
+            const beforeGeometry = geometry();
+            let geometryChanged = false;
+            const browserMethods = ['open', 'alert', 'confirm', 'prompt'] as const;
+            const originals = browserMethods.map(name => Object.getOwnPropertyDescriptor(window, name));
+            for (const name of browserMethods) Object.defineProperty(window, name, { configurable: true, writable: true, value: () => { browserEffect = true; return null; } });
+            const onNavigate = () => { browserEffect = true; };
+            clickNavigation?.addEventListener('navigate', onNavigate);
+            const pushDescriptor = Object.getOwnPropertyDescriptor(history, 'pushState');
+            const replaceDescriptor = Object.getOwnPropertyDescriptor(history, 'replaceState');
+            const originalPush = history.pushState;
+            const originalReplace = history.replaceState;
+            history.pushState = function(...args) { browserEffect = true; return originalPush.apply(this, args); };
+            history.replaceState = function(...args) { browserEffect = true; return originalReplace.apply(this, args); };
             // Inside the group, anything outside this item is foreign. Elsewhere,
             // only a newly mounted element or a root/body change (a modal, a
             // scroll lock) is: unrelated runtimes keep animating the page.
-            const observer = new MutationObserver((mutations) => {
-              for (const mutation of mutations) {
+            const observeMutations = (mutations: MutationRecord[]) => {
+              for (const [index, mutation] of mutations.entries()) {
+                // Setting an attribute to its existing value queues a record too;
+                // it is not an observable change. Compare successive old values
+                // as well, so a transient change followed by a revert still counts.
+                if (mutation.type === 'attributes' && mutation.target instanceof Element) {
+                  const next = mutations.slice(index + 1).find(record => record.target === mutation.target && record.attributeName === mutation.attributeName);
+                  const value = next ? next.oldValue : mutation.target.getAttribute(mutation.attributeName!);
+                  if (mutation.oldValue === value) continue;
+                }
+                mutated = true;
+                if (component.contains(mutation.target)) componentMutated = true;
                 if (member.contains(mutation.target)) continue;
                 if (parent.contains(mutation.target)) foreign.push(mutation.target);
                 else if (mutation.target === document.body || mutation.target === document.documentElement) foreign.push(mutation.target);
                 else if (Array.from(mutation.addedNodes).some((node) => node instanceof Element)) foreign.push(mutation.target);
               }
-            });
-            observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-            try { member.click(); } catch { failure = 'activation threw'; }
+            };
+            const observer = new MutationObserver(observeMutations);
+            observer.observe(document, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
             let revealed: HTMLElement[] = [];
-            for (let attempt = 0; attempt < 40 && !failure; attempt++) {
-              await wait(25);
-              revealed = outermost(hiddenBefore.filter((node) => node.isConnected && !clipped(node)));
-              if (revealed.length) break;
+            try {
+              const activatedAt = Date.now();
+              try { member.click(); } catch { failure = 'activation threw'; }
+              for (let attempt = 0; attempt < 40 && !failure; attempt++) {
+                await wait(25);
+                if (geometry() !== beforeGeometry) geometryChanged = true;
+                revealed = outermost(hiddenBefore.filter((node) => node.isConnected && !clipped(node)));
+                if (Date.now() - activatedAt >= 400 && (revealed.length || !hiddenBefore.length)) break;
+              }
+              // Let a transition finish before the open state is read.
+              let previous = member.outerHTML;
+              for (let attempt = 0; attempt < 20 && revealed.length; attempt++) {
+                await wait(50);
+                if (member.outerHTML === previous) break;
+                previous = member.outerHTML;
+              }
+              observeMutations(observer.takeRecords());
+            } finally {
+              observer.disconnect();
+              clickNavigation?.removeEventListener('navigate', onNavigate);
+              browserMethods.forEach((name, index) => {
+                const descriptor = originals[index];
+                if (descriptor) Object.defineProperty(window, name, descriptor);
+                else Reflect.deleteProperty(window, name);
+              });
+              if (pushDescriptor) Object.defineProperty(history, 'pushState', pushDescriptor);
+              else Reflect.deleteProperty(history, 'pushState');
+              if (replaceDescriptor) Object.defineProperty(history, 'replaceState', replaceDescriptor);
+              else Reflect.deleteProperty(history, 'replaceState');
             }
-            // Let a transition finish before the open state is read.
-            let previous = member.outerHTML;
-            for (let attempt = 0; attempt < 20 && revealed.length; attempt++) {
-              await wait(50);
-              if (member.outerHTML === previous) break;
-              previous = member.outerHTML;
+            if (!failure && !mutated && !browserEffect && !clickNavigationBlocked && !geometryChanged
+              && location.href === beforeUrl && history.length === beforeHistoryLength && JSON.stringify(history.state) === beforeHistoryState
+              && !member.matches('a,button,input,select,textarea')
+              && (member.matches('[data-action],[data-toggle],[data-target]') || getComputedStyle(member).cursor === 'pointer')) {
+              inertControls.add(member);
+              continue;
             }
-            observer.disconnect();
             if (failure) break;
             if (clickNavigationBlocked || currentRoute() !== startRoute) { failure = 'activation navigated'; break; }
+            if (parent === root && !hiddenBefore.length && !clickNavigationBlocked && currentRoute() === startRoute) {
+              // A remainder control with an effect is not an inert claim or a
+              // disclosure. Restore local reversible changes using the existing
+              // baseline guard, then let later candidates have their own proof.
+              await restoreGroup([member], [initial[members.indexOf(member)]!]);
+              // A periodic unrelated mutation (for example a clock) makes this
+              // window inconclusive, not inert. Reuse this same bounded pass
+              // for another full clean window; never ignore that mutation.
+              if (mutated && !componentMutated && !browserEffect && !geometryChanged && canonical(member) === initial[members.indexOf(member)]
+                && (retries.get(member) ?? 0) < 2) {
+                retries.set(member, (retries.get(member) ?? 0) + 1);
+                members.splice(memberIndex + 1, 0, member);
+                initial.splice(memberIndex + 1, 0, initial[memberIndex]!);
+                members.splice(24);
+                initial.splice(24);
+              }
+              continue;
+            }
             if (foreign.length) { failure = 'activation changed content outside its own item'; break; }
             if (revealed.length !== 1) { failure = revealed.length ? 'activation revealed more than one region' : 'activation revealed nothing'; break; }
             if (opened.some((entry) => clipped(entry.panel))) { failure = 'opening one item closed another'; break; }
@@ -1130,6 +1218,8 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             records.push({ status: 'captured', trigger: describeTrigger(member), target: describe(panel), html: panel.outerHTML });
           }
         }
+        // Evidence writes must not contaminate a later control's mutation proof.
+        for (const control of inertControls) control.setAttribute('data-blocks-engine-capture-inert-control', 'true');
       } finally {
         clickNavigation?.removeEventListener('navigate', keepClickDocument);
       }

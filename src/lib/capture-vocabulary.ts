@@ -38,7 +38,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 	disclosures: {
 		disclosure: 'a', 'disclosure-base': 'a', 'disclosure-label': 'a', 'disclosure-runtime': 'a',
 		'disclosure-open-class': 'a', 'disclosure-closed-class': 'a', 'disclosure-open-style': 'a', 'disclosure-closed-style': 'a',
-		'local-disclosure': 'a', 'local-disclosure-runtime': 'a', 'exclusive-disclosures': 'a', 'hydrated-disclosure': 'a',
+		'local-disclosure': 'a', 'local-disclosure-runtime': 'a', 'exclusive-disclosures': 'a', 'hydrated-disclosure': 'a', 'inert-control': 'a',
 	},
 	listboxAndChoices: {
 		'listbox-trigger': 'a', 'listbox-panel': 'a', 'listbox-runtime': 'a', 'choice-group': 'a', 'choice-index': 'a', 'choice-runtime': 'a',

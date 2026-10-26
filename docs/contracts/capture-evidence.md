@@ -33,7 +33,7 @@ Emitters spell the full names, because many of them sit inside runtime script an
 | Family | Names (after `data-blocks-engine-capture-`) |
 |---|---|
 | Dialogs | attributes `dialog-trigger`, `dialog-panel`, `dialog-close`, `dialog-panel-state`, `dialog-ancestor-state`, `dialog-ancestor-unverified`, `dialog-css`, `existing-panel`, `observed-placement`, `resting-panel`; classes `dialog`, `dropdown`, `initial-dialog`; ids `dialog-<n>` |
-| Disclosures | `disclosure`, `disclosure-base` (attribute and cascade layer), `disclosure-label`, `disclosure-runtime`, `disclosure-open-<svg attribute>`, `disclosure-closed-<svg attribute>`, `local-disclosure`, `local-disclosure-runtime`, `exclusive-disclosures`, `hydrated-disclosure`; class `disclosure`; ids `disclosure-panel-<n>` |
+| Disclosures | `disclosure`, `disclosure-base` (attribute and cascade layer), `disclosure-label`, `disclosure-runtime`, `disclosure-open-<svg attribute>`, `disclosure-closed-<svg attribute>`, `local-disclosure`, `local-disclosure-runtime`, `exclusive-disclosures`, `hydrated-disclosure`, `inert-control`; class `disclosure`; ids `disclosure-panel-<n>` |
 | Listbox, choice groups | `listbox-trigger`, `listbox-panel`, `listbox-runtime`, `choice-group`, `choice-index`, `choice-runtime` |
 | Documents | attributes `document-scope`, `device-document`, `device-style`, `device-body`, `device-selection`, `device-visibility`, `device-unavailable`, `document-unavailable`, `selected-document`, `selected-viewport`, `source-media`; classes `desktop-document`, `mobile-document`, `<profile>-document`, `desktop-only`, `mobile-only`; id suffix `--data-blocks-engine-capture-mobile` |
 | Responsive assembly | `responsive-source`, `responsive-fragment`, `responsive-fragments`, `embedded-responsive`, `embedded-document`, `anchor-fragment`, `anchor-target`, `anchor-source-id`, `anchor-alias`, `anchor-unresolved`, `fluid-id`, `fluid-segment`, `fluid-rules`, `fluid-sheet-rules`, `fluid-ignore-padding`, `geometry-id`, `visual-iframe-src`, `visual-iframe-width`, `visual-iframe-height`; classes `responsive-<hash>`, `responsive-class-<hash>`, `responsive-counterpart-<n>`, `embedded-<digest>-<document>`, `shared-<hash>`; id `fluid-specificity` |
@@ -84,3 +84,5 @@ This producer previously wrote these names. Consumers read only the new ones. Pr
 | id suffix `--dla-<variant>` | `--data-blocks-engine-capture-<variant>` |
 | schema `data-liberation/<name>/v<n>` | `blocks-engine-capture/<name>/v<n>` |
 | `website/capture-findings.json` (`data-liberation-agent/capture-findings/v1`) | `website/source-findings.json` (`static-site-importer/source-findings/v1`) |
+
+`data-blocks-engine-capture-inert-control="true"` records an activated pointer or declarative-hook control with no document mutation, URL/history, dialog/popup, or component visibility/geometry effect over a 400 ms settle window. It is evidence of static markup, not a replay instruction. Unprobed controls carry no such claim.
