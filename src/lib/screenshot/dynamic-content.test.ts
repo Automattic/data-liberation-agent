@@ -8,6 +8,7 @@ import { chromium, type Browser } from 'playwright';
 import { assessBody, expandCollapsedContent, hydrateDisclosureContent, waitForAppWidgets, readPngHeight, classifyEmptyBodies, KNOWN_WIDGETS, type PageStat } from './dynamic-content.js';
 import { extractFaqsFromHtml } from '../replicate/faq-extract.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
+import { captureTriggeredDialogs } from './interaction-capture.js';
 
 // Fictional content only (no source-site data).
 const wrap = (bodyInner: string) =>
@@ -192,6 +193,42 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
         return details?.open ?? false;
       })
     ).toBe(true);
+    await page.close();
+  });
+
+  it('skips dialog-controlling triggers while hydrating empty editorial regions', async () => {
+    const page = await browser.newPage();
+    const surfaces = ['<dialog></dialog>', '<div role="dialog">Dialog</div>', '<div role="alertdialog">Alert</div>', '<div aria-modal="true">Modal</div>'];
+    await page.setContent(`
+      ${surfaces.map((surface, index) => `
+        <button aria-expanded="false" aria-controls="direct-${index}">Open popup</button>
+        ${surface.replace('>', ` id="direct-${index}" hidden>`)}
+        <button aria-expanded="false" aria-controls="nested-${index}">Open wrapped popup</button>
+        <div id="nested-${index}" role="region" hidden>${surface}</div>
+      `).join('')}
+      <button id="disclosure" aria-expanded="false" aria-controls="answer">Question</button>
+      <div id="answer" role="region" hidden></div>
+      <script>
+        document.querySelectorAll('[aria-controls]').forEach(button => {
+          button.addEventListener('click', () => {
+            const panel = document.getElementById(button.getAttribute('aria-controls'));
+            panel.hidden = !panel.hidden;
+            button.setAttribute('aria-expanded', String(!panel.hidden));
+            if (panel.id === 'answer') panel.textContent = 'Hydrated answer';
+          });
+        });
+      </script>
+    `);
+
+    await expandCollapsedContent(page);
+    await hydrateDisclosureContent(page);
+
+    expect(await page.locator('[id^="direct-"], [id^="nested-"]').evaluateAll(panels => panels.every(panel => panel.hasAttribute('hidden')))).toBe(true);
+    expect(await page.locator('button:not(#disclosure)').evaluateAll(buttons => buttons.every(button => button.getAttribute('aria-expanded') === 'false'))).toBe(true);
+    expect(await page.locator('#answer').textContent()).toBe('Hydrated answer');
+    // Observe initial dialogs without opening any triggers in the later probe.
+    const report = await captureTriggeredDialogs(page, 'https://fixture.test/', { skip: '[aria-controls]' });
+    expect(report.initialDialogs ?? []).toEqual([]);
     await page.close();
   });
 
