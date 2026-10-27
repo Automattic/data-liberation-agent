@@ -962,7 +962,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         const clickDeadline = Date.now() + 15_000;
         const interactive = 'a,button,input,select,textarea,summary,details,label,option,[aria-expanded],[aria-haspopup],[role="tab"],[role="option"],[role="radio"],[role="menuitem"],[role="button"]';
         const clickable = (element: HTMLElement) => {
-          if (element.matches(interactive) || element.closest('a,button,input,select,textarea,label,nav,[role="navigation"],details,[data-blocks-engine-capture-local-disclosure],[data-blocks-engine-capture-hydrated-disclosure],[aria-expanded]')) return false;
+          if (element.closest(`${interactive},nav,[role="navigation"],[data-blocks-engine-capture-local-disclosure],[data-blocks-engine-capture-hydrated-disclosure]`)) return false;
           if (element.querySelector('[aria-expanded],[data-blocks-engine-capture-local-disclosure],details')) return false;
           return element.hasAttribute('onclick') || element.matches('[data-action],[data-toggle],[data-target]') || getComputedStyle(element).cursor === 'pointer';
         };
