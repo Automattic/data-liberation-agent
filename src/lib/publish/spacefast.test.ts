@@ -27,6 +27,21 @@ const receipt = {
 	},
 };
 
+/** A receipt that carries everything an anonymous publish needs to republish. */
+const claimReceipt = {
+	data: {
+		space: { id: 'spc_1', liveUrl: 'https://example.view.fast/' },
+		version: { immutableUrl: 'https://v2--example.view.fast/', number: 2 },
+		activation: { outcome: 'activated' },
+		claim: {
+			claimUrl: 'https://my.spacefast.com/claim#sfc_x',
+			key: 'sfc_claimkey',
+			url: 'https://preview.my.spacefast.com/spc_1/',
+			expiresAt: '2026-08-27T09:20:12.833Z',
+		},
+	},
+};
+
 function stubFetch( status: number, body: unknown ) {
 	const fetchMock = vi.fn(
 		async ( _url: string, _init: RequestInit ) =>
@@ -95,6 +110,52 @@ describe( 'spacefastTarget', () => {
 		const [ , init ] = fetchMock.mock.calls[ 0 ]!;
 		expect( ( init.headers as Record< string, string > ).authorization ).toBe( 'Bearer sfc_secret' );
 	} );
+
+	it.each( [
+		{
+			name: 'adds a version to an existing space, carrying the bearer that may publish there',
+			space: 'spc_1',
+			token: 'sfc_claimkey',
+			expectSpaceIdField: true,
+		},
+		{
+			name: 'creates a new space when no space is named, sending no spaceId field',
+			space: undefined,
+			token: undefined,
+			expectSpaceIdField: false,
+		},
+	] )(
+		'$name',
+		async ( { space, token, expectSpaceIdField } ) => {
+			const fetchMock = stubFetch( 201, claimReceipt );
+			const result = await spacefastTarget.publish( { directory: site(), space, token } );
+
+			const [ , init ] = fetchMock.mock.calls[ 0 ]!;
+			const form = init.body as FormData;
+			expect( form.has( 'spaceId' ) ).toBe( expectSpaceIdField );
+			if ( space !== undefined ) expect( form.get( 'spaceId' ) ).toBe( space );
+			if ( token !== undefined ) {
+				expect( ( init.headers as Record< string, string > ).authorization ).toBe(
+					`Bearer ${ token }`
+				);
+			} else {
+				expect( ( init.headers as Record< string, string > ).authorization ).toBeUndefined();
+			}
+
+			// The result carries what a republish needs: the space id and, for an
+			// anonymous space, the claim key and the private preview link.
+			expect( result ).toMatchObject( {
+				target: 'spacefast',
+				liveUrl: 'https://example.view.fast/',
+				spaceId: 'spc_1',
+				claim: {
+					url: 'https://my.spacefast.com/claim#sfc_x',
+					key: 'sfc_claimkey',
+					previewUrl: 'https://preview.my.spacefast.com/spc_1/',
+				},
+			} );
+		}
+	);
 
 	it( 'reports a pending activation instead of implying the site is serving', async () => {
 		stubFetch( 201, {

@@ -34,7 +34,14 @@ interface SpacefastReceipt {
 		version?: { immutableUrl?: string; number?: number };
 		activation?: { outcome?: string };
 		next?: { action?: string; hint?: string };
-		claim?: { claimUrl?: string; expiresAt?: string };
+		claim?: {
+			claimUrl?: string;
+			expiresAt?: string;
+			/** Secret that may publish into the anonymous space again. */
+			key?: string;
+			/** Link that opens the private space before it is claimed. */
+			url?: string;
+		};
 		/**
 		 * Per-file storage outcome for the archived files. The destination
 		 * sniffs content and declines some of it regardless of extension or
@@ -127,6 +134,9 @@ export const spacefastTarget: PublishTarget = {
 
 		const form = new FormData();
 		form.set( 'archive', new Blob( [ new Uint8Array( archive ) ], { type: 'application/zip' } ), 'site.zip' );
+		// Republishing into an existing space: with a bearer that may publish
+		// there, the destination adds a version to it instead of creating a new one.
+		if ( options.space ) form.set( 'spaceId', options.space );
 
 		const response = await fetch( PUBLISH_ENDPOINT, {
 			method: 'POST',
@@ -190,6 +200,17 @@ export const spacefastTarget: PublishTarget = {
 		const accepted = summary ? ( summary.upload ?? 0 ) + ( summary.reused ?? 0 ) : undefined;
 
 		const claimUrl = data?.claim?.claimUrl;
+		const claimKey = data?.claim?.key;
+		const claimPreviewUrl = data?.claim?.url;
+		const claim =
+			claimUrl || claimKey || claimPreviewUrl
+				? {
+						...( claimUrl ? { url: claimUrl } : {} ),
+						...( claimKey ? { key: claimKey } : {} ),
+						...( claimPreviewUrl ? { previewUrl: claimPreviewUrl } : {} ),
+						...( data?.claim?.expiresAt ? { expiresAt: data.claim.expiresAt } : {} ),
+					}
+				: undefined;
 		return {
 			target: 'spacefast',
 			liveUrl,
@@ -201,7 +222,8 @@ export const spacefastTarget: PublishTarget = {
 			// New spaces are private by default, so a bare live URL 403s until access
 			// is granted. Say so rather than let it look like a broken publish.
 			private: true,
-			...( claimUrl ? { claim: { url: claimUrl, expiresAt: data?.claim?.expiresAt } } : {} ),
+			...( data?.space?.id ? { spaceId: data.space.id } : {} ),
+			...( claim ? { claim } : {} ),
 			notes,
 		};
 	},

@@ -90,14 +90,17 @@ A publish reports the same shape whichever target serves it:
 Published 1 files to spacefast.
 Live: https://gzipped-nest.view.fast/
 Version: https://v1--gzipped-nest.view.fast/
+Space: spc_gzipped-nest
 This space is private by default, so the live URL returns 403 until access is granted.
 Claim it to keep it: https://my.spacefast.com/claim#sfc_…
+Claim key: sfc_…
 Claim expires: 2026-08-28T06:58:13.658Z
+To add a version to this space, publish again with --space spc_gzipped-nest and the claim key above as --token.
 ```
 
 Give the operator every line of that. **A claim link and its deadline matter most.** When a target publishes anonymously, the space belongs to nobody until it is claimed, and it can stay private meanwhile — the run above answers 403 to everyone until the operator acts on the link. Reporting the live URL alone would tell them the publish worked and leave them looking at an error.
 
-`--token`, or the target's token environment variable such as `SPACEFAST_TOKEN`, publishes into an account they already own.
+`--token`, or the target's token environment variable such as `SPACEFAST_TOKEN`, publishes into an account they already own. `--space <id>` adds a version to an existing space instead of creating a new one — for an anonymous space, pass its claim key as `--token`.
 
 Publishing reads what is on disk, so a repaired copy or a different target can ship without touching the source site again.
 
