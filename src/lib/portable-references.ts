@@ -3,7 +3,7 @@ import { metadataImageReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
 import { isSrcsetShaped, rewriteMediaReferences, rewriteSrcset, srcsetCandidates, srcsetReferences, stripImageSetCandidates } from './srcset.js';
-import { URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
+import { URL_START_LOOKBEHIND, URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 export interface PortableDependency {
 	reference: string;
@@ -53,7 +53,7 @@ export function preparePortableReplacements(
 		.sort( ( a, b ) => b.length - a.length );
 	if ( sources.length === 0 ) return ( content ) => content;
 	const pattern = new RegExp(
-		'(?:' + sources
+		URL_START_LOOKBEHIND + '(?:' + sources
 			.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
 			.join( '|' ) + ')' + URL_TERMINATOR_LOOKAHEAD,
 		'g'
