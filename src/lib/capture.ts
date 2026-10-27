@@ -4,8 +4,8 @@ import { pathWithin } from './portable-assets.js';
 import { findAdapter } from '../adapters/index.js';
 import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
+import { normalizeTrustedOrigins, runWithTrustedOrigins, safeFetch } from './media-fetch/safe-fetch.js';
 import { downloadMedia } from './media-fetch/media.js';
-import { safeFetch } from './media-fetch/safe-fetch.js';
 import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -50,6 +50,17 @@ export const DEFAULT_REFERENCE_SAMPLE = 1;
 export interface CaptureOptions {
 	/** Opt-in source-only review capture; browser rendering remains the default. */
 	acquisition?: 'browser' | 'http';
+	/**
+	 * Origins the caller vouches for — typically its own machine: a local
+	 * development site (WordPress Studio, wp-env, Local) served at e.g.
+	 * `http://localhost:8884/`. Each entry is an absolute http(s) URL; its
+	 * exact `URL.origin` (scheme, host, port) bypasses the SSRF guard's
+	 * loopback/private-host rejection for the entry URL, discovered routes,
+	 * subresources, media and every redirect hop. A trusted origin that
+	 * redirects to another internal host stays blocked, and with no entry
+	 * named the guard behaves exactly as before. Default: nothing vouched.
+	 */
+	trustedOrigins?: string[];
 	http?: import('./capture-http.js').HttpCaptureOptions;
 	/**
 	 * Route budget shared by browser and HTTP acquisition: capture at most this
@@ -321,6 +332,19 @@ export async function downloadCaptureSectionMedia(
 export async function captureWebsite(
 	options: CaptureOptions,
 	dependencies: CaptureDependencies = defaultDependencies
+): Promise< CaptureResult > {
+	// One vouching decision for the whole run: the caller names the origins it
+	// owns (a local dev site on its own machine), and every guard check on
+	// this path — discovery, browser request routing, media, sitemap, HTTP
+	// acquisition and each redirect hop — sees exactly that set through the
+	// capture context. Malformed entries reject here, before any work starts.
+	normalizeTrustedOrigins( options.trustedOrigins );
+	return runWithTrustedOrigins( options.trustedOrigins, () => runCaptureWebsite( options, dependencies ) );
+}
+
+async function runCaptureWebsite(
+	options: CaptureOptions,
+	dependencies: CaptureDependencies
 ): Promise< CaptureResult > {
 	if ( options.acquisition !== undefined && ! [ 'browser', 'http' ].includes( options.acquisition ) ) throw new Error( 'Unknown capture acquisition mode' );
 	if ( options.acquisition === 'http' ) ( await import( './capture-http.js' ) ).validateHttpCaptureOptions( options );

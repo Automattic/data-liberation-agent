@@ -57,6 +57,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         url: { type: 'string', description: 'Site to liberate.' },
+        trustedOrigins: { type: 'array', items: { type: 'string' }, description: 'Origins the caller vouches for, e.g. http://localhost:8884/ for a local development site on this machine. Each entry is an absolute http(s) URL; its exact origin (scheme, host, port) bypasses the loopback/private-host guard for the entry URL, subresources and redirects. Other internal targets stay blocked. Default: none.' },
         outputDir: { type: 'string', description: 'Output base directory. Defaults to ~/data-liberation.' },
         resume: { type: 'boolean', description: 'Reuse artifacts already on disk instead of recapturing.' },
         screenshots: { type: 'boolean', description: 'Also capture full-page and scrolled PNGs.' },
@@ -137,6 +138,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { liberateSite } = await import('./ui/liberate.js');
       const result = await liberateSite({
         acquisition: args.acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
+        trustedOrigins: Array.isArray(args.trustedOrigins) ? args.trustedOrigins.map(String) : undefined,
         http: args.acquisition === 'http' || args.runtimeRouteLimit !== undefined ? { runtimeRouteLimit: args.runtimeRouteLimit as number | undefined } : undefined,
         routeLimit: args.routeLimit as import('./lib/capture.js').CaptureOptions['routeLimit'],
         routeSelection: args.routeSelection as import('./lib/capture.js').CaptureOptions['routeSelection'],

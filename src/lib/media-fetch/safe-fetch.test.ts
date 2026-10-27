@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   assertPublicHttpUrl,
   safeFetch,
+  runWithTrustedOrigins,
   SsrfBlockedError,
   BodyTooLargeError,
   MAX_DOWNLOAD_BYTES,
@@ -81,6 +82,90 @@ describe('assertPublicHttpUrl', () => {
   it('allows a normal public https URL', () => {
     expect(() => assertPublicHttpUrl('https://fonts.gstatic.com/s/x.woff2')).not.toThrow();
     expect(() => assertPublicHttpUrl('https://cdn.shopify.com/Larsseit.woff')).not.toThrow();
+  });
+});
+
+describe('caller-vouched trusted origins', () => {
+  // One run vouches for exactly one local origin, like a caller capturing its
+  // own machine's dev site (data-liberation-agent#1003).
+  const vouched = ['http://localhost:8884'];
+
+  it.each([
+    {
+      name: 'without vouching, the loopback origin keeps today\'s rejection',
+      url: 'http://localhost:8884/wp-json/',
+      vouched: false,
+      allowed: false,
+    },
+    {
+      name: 'the vouched origin itself is allowed',
+      url: 'http://localhost:8884/wp-json/',
+      vouched: true,
+      allowed: true,
+    },
+    {
+      name: 'another port on the same loopback host stays blocked',
+      url: 'http://localhost:8885/wp-admin/',
+      vouched: true,
+      allowed: false,
+    },
+    {
+      name: 'the same host on its default port stays blocked',
+      url: 'http://localhost/',
+      vouched: true,
+      allowed: false,
+    },
+    {
+      name: 'a different loopback hostname (literal IP) stays blocked',
+      url: 'http://127.0.0.1:8884/',
+      vouched: true,
+      allowed: false,
+    },
+    {
+      name: 'the cloud metadata address stays blocked',
+      url: 'http://169.254.169.254/latest/meta-data/',
+      vouched: true,
+      allowed: false,
+    },
+  ])('$name', ({ url, vouched: trust, allowed }) => {
+    const attempt = () => runWithTrustedOrigins(trust ? vouched : undefined, () => assertPublicHttpUrl(url));
+    if (allowed) expect(attempt).not.toThrow();
+    else expect(attempt).toThrow(SsrfBlockedError);
+  });
+
+  it('follows a redirect that stays on the vouched origin', async () => {
+    const fakeFetch = (async (url: string) => {
+      if (new URL(url).pathname === '/start') {
+        return mockResponse({ status: 302, headers: { location: '/final' } });
+      }
+      return mockResponse({ status: 200, body: new TextEncoder().encode('LOCAL') });
+    }) as unknown as typeof fetch;
+    const res = await runWithTrustedOrigins(vouched, () =>
+      safeFetch('http://localhost:8884/start', { fetchImpl: fakeFetch })
+    );
+    expect(res.body.toString()).toBe('LOCAL');
+    expect(res.finalUrl).toBe('http://localhost:8884/final');
+  });
+
+  it('blocks a vouched origin that redirects to an untrusted internal host', async () => {
+    let internalFetch = false;
+    const fakeFetch = (async (url: string) => {
+      if (new URL(url).origin === 'http://localhost:8884') {
+        return mockResponse({ status: 302, headers: { location: 'http://169.254.169.254/latest/' } });
+      }
+      internalFetch = true;
+      return mockResponse({ status: 200, body: new TextEncoder().encode('SECRET') });
+    }) as unknown as typeof fetch;
+    await expect(
+      runWithTrustedOrigins(vouched, () => safeFetch('http://localhost:8884/start', { fetchImpl: fakeFetch }))
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
+    expect(internalFetch).toBe(false);
+  });
+
+  it('rejects a malformed vouched origin before any request', () => {
+    expect(() => runWithTrustedOrigins(['not a url'], () => undefined)).toThrow(/not a valid URL/);
+    expect(() => runWithTrustedOrigins(['localhost:8884'], () => undefined)).toThrow(/http\(s\) URL/);
+    expect(() => runWithTrustedOrigins(['file:///etc/passwd'], () => undefined)).toThrow(/http\(s\) URL/);
   });
 });
 
