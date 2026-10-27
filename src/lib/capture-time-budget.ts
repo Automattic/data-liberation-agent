@@ -10,6 +10,14 @@ import { ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT } from './capture-u
  *
  * 1. Route admission closes at `admitUntil` (budget minus grace). No new route
  *    starts after that, except the entrypoint, which is always admitted first.
+ *    With `routeReserveMs`, every started route (entrypoint included) also
+ *    holds that much of the budget for downstream work — export, or a
+ *    caller's build whose cost scales with captured routes — so admission
+ *    closes once the remaining window can no longer cover all reserves plus
+ *    the candidate's. Routes left out this way are reported like other budget
+ *    skips (`route_capture_skipped_budget`), with the reserve named in the
+ *    reason. Routes already running are unaffected: `abandonAt` stays where
+ *    it is.
  * 2. Routes already running get the grace window to finish. At `abandonAt` (the
  *    end of the budget) the browser is closed and every route still running is
  *    abandoned, bounded by `CAPTURE_BUDGET_DRAIN_MS`. The entrypoint is never
@@ -25,6 +33,13 @@ export interface CaptureTimeBudgetWindow {
 	timeBudgetMs: number;
 	/** Project admission from observed route cost rather than only the clock. */
 	projectAdmission?: boolean;
+	/**
+	 * Milliseconds of the budget held per started route for downstream work
+	 * (`CaptureOptions.routeReserveMs`), so admission closes early enough that
+	 * every route started still leaves its reserve unspent. Undefined: no
+	 * per-route reserve.
+	 */
+	routeReserveMs?: number;
 	/** Epoch ms after which no route other than the entrypoint starts. */
 	admitUntil: number;
 	/** Epoch ms at which routes still running are abandoned. */
@@ -57,9 +72,19 @@ export function validateTimeBudgetMs( timeBudgetMs: unknown ): void {
 		throw new RangeError( 'timeBudgetMs must be a positive integer number of milliseconds' );
 }
 
-export function captureTimeBudgetWindow( startedAt: number, timeBudgetMs: number ): CaptureTimeBudgetWindow {
+export function validateRouteReserveMs( routeReserveMs: unknown ): void {
+	if ( routeReserveMs !== undefined && ( typeof routeReserveMs !== 'number' || ! Number.isSafeInteger( routeReserveMs ) || routeReserveMs < 0 ) )
+		throw new RangeError( 'routeReserveMs must be a non-negative integer number of milliseconds' );
+}
+
+export function captureTimeBudgetWindow( startedAt: number, timeBudgetMs: number, routeReserveMs?: number ): CaptureTimeBudgetWindow {
 	const grace = Math.min( CAPTURE_BUDGET_MAX_GRACE_MS, Math.floor( timeBudgetMs * CAPTURE_BUDGET_GRACE_FRACTION ) );
-	return { timeBudgetMs, admitUntil: startedAt + timeBudgetMs - grace, abandonAt: startedAt + timeBudgetMs };
+	return {
+		timeBudgetMs,
+		...( routeReserveMs !== undefined ? { routeReserveMs } : {} ),
+		admitUntil: startedAt + timeBudgetMs - grace,
+		abandonAt: startedAt + timeBudgetMs,
+	};
 }
 
 /**
@@ -109,7 +134,7 @@ export class RouteTimeBudget {
 	/** The entrypoint is always admitted; any other route only before admission closes. */
 	admits( url: string, admittedConcurrency = this.running.size + 1 ): boolean {
 		if ( url === this.entrypoint ) return true;
-		if ( this.abandoning || this.now() >= this.window.admitUntil ) return false;
+		if ( this.abandoning || this.now() >= this.admitDeadline() ) return false;
 		if ( ! this.window.projectAdmission ) return true;
 		// 127 seconds was the worst observed per-route duration behind the
 		// former count cap. Replace it as soon as this run supplies evidence.
@@ -118,11 +143,23 @@ export class RouteTimeBudget {
 		let work = duration;
 		for ( const startedAt of this.startTimes.values() ) work += Math.max( 0, duration - ( now - startedAt ) );
 		const projected = Math.max( duration, work / Math.max( 1, admittedConcurrency ) );
-		if ( now + projected <= this.window.admitUntil ) return true;
+		if ( now + projected <= this.admitDeadline() ) return true;
 		// Running routes can still revise the estimate; only close permanently
 		// when the pool is idle, avoiding both premature truncation and a spin.
 		if ( ! this.running.size ) this.admissionClosed = true;
 		return false;
+	}
+
+	/**
+	 * Admission deadline for one more route: `admitUntil` less each started
+	 * route's downstream reserve, counting the candidate (`routeReserveMs`).
+	 * The entrypoint holds its reserve too, so capture hands the next stage no
+	 * more routes than the reserved budget covers. Without a reserve this is
+	 * `admitUntil`.
+	 */
+	private admitDeadline(): number {
+		const reserve = this.window.routeReserveMs;
+		return reserve === undefined ? this.window.admitUntil : this.window.admitUntil - reserve * ( this.started.size + 1 );
 	}
 
 	/** Admission has closed and the entrypoint has started: start no more work. */
@@ -191,8 +228,10 @@ export class RouteTimeBudget {
 	diagnostics( urls: readonly string[] ): RouteDiagnostic[] {
 		const rows: RouteDiagnostic[] = [];
 		const seen = new Set< string >();
-		const { timeBudgetMs, admitUntil, abandonAt } = this.window;
-		const budget = `capture time budget ${ timeBudgetMs }ms`;
+		const { timeBudgetMs, routeReserveMs, admitUntil, abandonAt } = this.window;
+		const budget = routeReserveMs === undefined
+			? `capture time budget ${ timeBudgetMs }ms`
+			: `capture time budget ${ timeBudgetMs }ms with ${ routeReserveMs }ms reserved per route`;
 		for ( const url of urls ) {
 			if ( seen.has( url ) ) continue;
 			seen.add( url );
@@ -200,7 +239,10 @@ export class RouteTimeBudget {
 				? `${ budget }: route admission closed ${ timeBudgetMs - ( abandonAt - admitUntil ) }ms into the capture, before this route started`
 				: this.abandoned.has( url ) ? `${ budget }: abandoned in flight at the deadline` : undefined;
 			if ( reason ) {
-				if ( this.window.projectAdmission && ! this.started.has( url ) ) rows.push( { code: ROUTE_OMITTED_BY_BUDGET, url, reason: `${ budget }: projected route cost exceeds remaining admission window` } );
+				// A reserve bounds what capture hands downstream, so a route it
+				// leaves out is a missing route like any other budget skip, not
+				// scope omission.
+				if ( this.window.projectAdmission && routeReserveMs === undefined && ! this.started.has( url ) ) rows.push( { code: ROUTE_OMITTED_BY_BUDGET, url, reason: `${ budget }: projected route cost exceeds remaining admission window` } );
 				else rows.push( { code: ROUTE_CAPTURE_SKIPPED_BUDGET, url, reason, unit: 'route', severity: 'error', metrics: { timeBudgetMs } } );
 			}
 		}

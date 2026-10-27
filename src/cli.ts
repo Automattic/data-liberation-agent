@@ -82,6 +82,13 @@ const HELP = `
                          Unadmitted routes are route_omitted_by_budget; abandoned
                          routes are route_capture_skipped_budget. Set to your deadline
                          minus post-capture headroom. Browser capture only.
+    --route-reserve <duration>  Hold this much of the time budget per started
+                         route for downstream work, e.g. 8s (your measured
+                         per-route build cost). Admission closes so every
+                         started route still leaves its reserve unspent; routes
+                         left out are route_capture_skipped_budget, with the
+                         reserve named in the reason. No effect without a time
+                         budget. Browser capture only.
     --max-file-bytes <n> Largest file exported into the site (default 52428800,
                          50 MiB). Larger assets are not written and are reported
                          as asset_exceeds_file_limit.
@@ -305,6 +312,9 @@ if (args.includes('--help')) {
   const { parseDurationMs } = await import('./lib/duration.js');
   const timeBudgetMs = timeBudgetArg === undefined ? undefined : parseDurationMs(timeBudgetArg ?? '');
   if (timeBudgetArg !== undefined && timeBudgetMs === undefined) throw new Error('--time-budget requires a positive duration such as 13m, 780s or 780000ms');
+  const routeReserveArg = args.includes('--route-reserve') ? getArg('--route-reserve') : undefined;
+  const routeReserveMs = routeReserveArg === undefined ? undefined : parseDurationMs(routeReserveArg ?? '');
+  if (routeReserveArg !== undefined && routeReserveMs === undefined) throw new Error('--route-reserve requires a positive duration such as 8s, 5m or 8000ms');
   const maxFileBytesArg = args.includes('--max-file-bytes') ? getArg('--max-file-bytes') : undefined;
   const maxFileBytes = maxFileBytesArg === undefined ? undefined : Number(maxFileBytesArg);
   if (maxFileBytesArg !== undefined && (maxFileBytesArg === null || !Number.isSafeInteger(maxFileBytes) || (maxFileBytes as number) < 1)) {
@@ -337,6 +347,7 @@ if (args.includes('--help')) {
     learnFluid: !args.includes('--no-learn-fluid'),
     referenceSample,
     timeBudgetMs,
+    routeReserveMs,
     maxFileBytes,
     maxTotalBytes,
     maxFiles,

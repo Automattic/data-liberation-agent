@@ -32,6 +32,50 @@ describe( 'RouteTimeBudget', () => {
 		expect( budget.admits( 'https://example.test/about' ) ).toBe( true );
 	} );
 
+	it.each( [
+		[ 'without a reserve', undefined, false, 44 ],
+		[ 'with an explicit zero reserve', 0, false, 44 ],
+		[ 'with a 5s reserve, clock-only admission', 5_000, false, 6 ],
+		[ 'with a 5.5s reserve, clock-only admission', 5_500, false, 6 ],
+		[ 'with a 5s reserve, projected admission', 5_000, true, 6 ],
+		[ 'with a 5.5s reserve, projected admission', 5_500, true, 5 ],
+	] )( 'closes admission once the per-route reserve no longer fits: %s', ( _name, reserve, projectAdmission, admitted ) => {
+		let now = 0;
+		const entrypoint = 'https://example.test/';
+		const budget = new RouteTimeBudget( { timeBudgetMs: 60_000, ...( reserve !== undefined ? { routeReserveMs: reserve } : {} ), admitUntil: 45_000, abandonAt: 60_000, projectAdmission }, entrypoint, () => now );
+		// One route takes 1s; every route finishes before the next candidate is checked.
+		const capture = ( url: string ): void => {
+			budget.start( url );
+			now += 1_000;
+			budget.finish( url );
+		};
+		expect( budget.admits( entrypoint ) ).toBe( true );
+		capture( entrypoint );
+		let count = 0;
+		while ( budget.admits( `https://example.test/${ count + 1 }` ) ) {
+			count++;
+			capture( `https://example.test/${ count }` );
+			// The entrypoint stays admitted even while every other route is refused.
+			expect( budget.admits( entrypoint ) ).toBe( true );
+		}
+		expect( count ).toBe( admitted );
+		expect( budget.admits( entrypoint ) ).toBe( true );
+	} );
+
+	it( 'reports reserve-skipped routes as budget skips naming the reserve, under clock-only and projected admission', () => {
+		const entrypoint = 'https://example.test/';
+		const window = { timeBudgetMs: 60_000, routeReserveMs: 5_000, admitUntil: 45_000, abandonAt: 60_000 };
+		const budget = new RouteTimeBudget( window, entrypoint, () => 50_000 );
+		budget.start( entrypoint );
+		const reason = 'capture time budget 60000ms with 5000ms reserved per route: route admission closed 45000ms into the capture, before this route started';
+		const expected = ( url: string ) => ( { code: 'route_capture_skipped_budget', url, reason, unit: 'route', severity: 'error', metrics: { timeBudgetMs: 60_000 } } );
+		expect( budget.diagnostics( [ entrypoint, 'https://example.test/a', 'https://example.test/b' ] ) )
+			.toEqual( [ expected( 'https://example.test/a' ), expected( 'https://example.test/b' ) ] );
+		// A reserve bounds what capture hands downstream, so projected admission still reports a missing route, not scope omission.
+		expect( new RouteTimeBudget( { ...window, projectAdmission: true }, entrypoint, () => 50_000 ).diagnostics( [ 'https://example.test/a' ] ) )
+			.toEqual( [ expected( 'https://example.test/a' ) ] );
+	} );
+
 	it( 'abandons running routes at the deadline, but never while the entrypoint runs', async () => {
 		let now = 50;
 		const budget = new RouteTimeBudget( window, 'https://example.test/', () => now );
