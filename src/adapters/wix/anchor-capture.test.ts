@@ -176,6 +176,31 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 		}
 	}, 60_000 );
 
+	it( 'closes an opened menu when it contains no rendered fragment trigger', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
+				contentType: 'text/html',
+				body: `<style>nav{display:none}#drawer{display:none;position:fixed;inset:0;background:#fff}</style>
+					<nav><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></nav>
+					<button aria-label="Menu" onclick="document.getElementById('drawer').style.display = 'block'">Menu</button>
+					<div id="drawer" role="dialog"><a href="https://anchor.test/about">About</a></div>
+					<script>addEventListener('keydown', ( event ) => {
+						if (event.key === 'Escape') document.getElementById('drawer').style.display = 'none';
+					});</script>`,
+			} ) );
+			await page.goto( 'https://anchor.test/' );
+			await capture.prepare!( page, { url: page.url(), viewport: 'mobile' } );
+			for ( const fragment of [ 'pricing', 'faq' ] ) {
+				expect( await page.locator( `nav a[href="#${ fragment }"]` ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBe( 'no rendered fragment trigger' );
+			}
+			expect( await page.locator( '#drawer' ).evaluate( ( drawer ) => getComputedStyle( drawer ).display ) ).toBe( 'none' );
+		} finally {
+			await browser.close();
+		}
+	}, 30_000 );
+
 	it( 'marks a link whose trigger cannot be clicked instead of abandoning the remaining links', async () => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
