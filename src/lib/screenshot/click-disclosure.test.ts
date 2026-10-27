@@ -114,6 +114,20 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
+	it( 'probes disclosures on a page whose window.open is frozen (#998)', async () => {
+		const page = await browser.newPage( { viewport: { width: 390, height: 800 } } );
+		await page.setContent( `<!doctype html><html><head><style>#menu{display:none}#menu.open{display:block}button{cursor:pointer}.h{display:none}</style>
+<script>Object.defineProperty(window,'open',{value:window.open,writable:false,configurable:false});</script></head><body>
+<header><button type="button" aria-expanded="false" aria-controls="menu" onclick="var m=document.getElementById('menu'),o=m.classList.toggle('open');this.setAttribute('aria-expanded',String(o))">Menu</button>
+<nav id="menu"><a href="/a">Alpha</a><a href="/b">Beta</a></nav></header><main><h1>Title</h1></main>
+<div class="faq"><div class="item" style="cursor:pointer" onclick="this.querySelector('.a').classList.toggle('h')"><h3>Q?</h3><div class="a h"><p>Answer.</p></div></div></div></body></html>` );
+		const records = await hydrateDisclosureContent( page );
+		expect( records.some( record => record.status === 'captured' && record.kind === 'disclosure' && record.dialog?.html.includes( 'Answer.' ) ) ).toBe( true );
+		expect( await page.locator( '#menu' ).evaluate( node => node.classList.contains( 'open' ) ) ).toBe( false );
+		expect( await page.evaluate( () => Object.getOwnPropertyDescriptor( window, 'open' ) ) ).toMatchObject( { writable: false, configurable: false } );
+		await page.close();
+	} );
+
 	it( 'captures items that toggle their own hidden answer as independent local disclosures', async () => {
 		const page = await browser.newPage();
 		await page.setContent( FAQ );
