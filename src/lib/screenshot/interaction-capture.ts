@@ -115,6 +115,8 @@ export interface CapturedDialogInteraction {
 		ariaModal: boolean;
 		ariaLabel?: string;
 		presentation?: 'modal' | 'dropdown';
+		/** Source panel rests in normal flow at a width where its trigger is concealed. */
+		restingInline?: boolean;
 		html: string;
 		htmlBytes: number;
 		htmlTruncated: boolean;
@@ -516,6 +518,7 @@ export async function captureTriggeredDialogs(
 			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 ? observedAncestors : undefined;
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
+			const restingInline = !dropdown && await observeInlineRestingPanel( page, trigger.probeSelector, dialog.selector );
 			states.push( {
 				status: 'captured',
 				trigger: triggerRecord( trigger ),
@@ -525,6 +528,7 @@ export async function captureTriggeredDialogs(
 					...( dialog.id ? { id: dialog.id } : {} ),
 					...( dialog.role ? { role: dialog.role } : {} ),
 					ariaModal: dialog.ariaModal,
+					...( restingInline ? { restingInline: true } : {} ),
 					...( dialog.ariaLabel ? { ariaLabel: dialog.ariaLabel } : {} ),
 					...( dialog.presentation ? { presentation: dialog.presentation } : {} ),
 					html: bounded.html,
@@ -965,8 +969,15 @@ async function firstNewVisibleDialog(
 			} )
 			: undefined );
 		if ( moved && moved !== revealed ) moved.setAttribute( 'data-lib-motion-reveal', '' );
-		const dialog = moved;
+		let dialog = moved;
 		if ( ! dialog ) return undefined;
+		// Semantic dialog roles can sit inside the responsive surface that was
+		// actually revealed. Keep that outer surface: its closed-state CSS is
+		// also what makes the same content inline when the trigger is concealed.
+		while ( dialog.parentElement && dialog.parentElement !== document.body &&
+			!dialog.parentElement.hasAttribute( 'data-lib-visible-before' ) && visible( dialog.parentElement ) ) {
+			dialog = dialog.parentElement;
+		}
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
 			: '[data-lib-interaction-dialog="captured"]';
@@ -1075,6 +1086,30 @@ async function panelIntersectsViewport( page: Page, selector: string ): Promise<
 			return width > 8 && height > 8;
 		}, undefined, { timeout: 1_000 } )
 		.catch( () => false );
+}
+
+/** Observe closed source CSS at the fidelity widths, before discarding its runtime. */
+async function observeInlineRestingPanel( page: Page, trigger: string, panel: string ): Promise< boolean > {
+	const viewport = page.viewportSize();
+	if ( !viewport || await page.locator( panel ).count() !== 1 ) return false;
+	try {
+		for ( const width of new Set( [ viewport.width, 390, 768, 1440 ] ) ) {
+			if ( page.viewportSize()?.width !== width ) await page.setViewportSize( { ...viewport, width } );
+			const inline = await page.evaluate( ( { trigger, panel } ) => {
+				const control = document.querySelector( trigger ), surface = document.querySelector( panel );
+				if ( !control || !surface ) return false;
+				const buttonStyle = getComputedStyle( control ), buttonRect = control.getBoundingClientRect();
+				const concealed = buttonStyle.display === 'none' || buttonStyle.visibility === 'hidden' || buttonRect.width === 0 || buttonRect.height === 0;
+				const style = getComputedStyle( surface ), rect = surface.getBoundingClientRect();
+				return concealed && style.display !== 'none' && style.visibility !== 'hidden' &&
+					style.position !== 'fixed' && style.position !== 'absolute' && rect.width > 0 && rect.height > 0;
+			}, { trigger, panel } );
+			if ( inline ) return true;
+		}
+		return false;
+	} finally {
+		await page.setViewportSize( viewport );
+	}
 }
 
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {

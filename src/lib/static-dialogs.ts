@@ -36,7 +36,7 @@ const DISCLOSURE_CSS =
 	'details.data-blocks-engine-capture-initial-dialog>summary{position:fixed;z-index:2147483647;right:1rem;top:1rem}' +
 	'details.data-blocks-engine-capture-initial-dialog:not([open])>summary{display:none!important}' +
 	'[data-blocks-engine-capture-dialog-panel][hidden]:not([data-blocks-engine-capture-resting-panel]),[data-blocks-engine-capture-dialog-close][hidden]{display:none!important}' +
-	'[data-blocks-engine-capture-dialog-panel]:not(.data-blocks-engine-capture-dropdown):not([hidden]){display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
+	'[data-blocks-engine-capture-dialog-panel]:not(.data-blocks-engine-capture-dropdown):not([data-blocks-engine-capture-resting-panel]):not([hidden]){display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
 	'[data-blocks-engine-capture-dialog-panel].data-blocks-engine-capture-dropdown:not([data-blocks-engine-capture-existing-panel]):not([data-blocks-engine-capture-observed-placement]):not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
 	'[data-blocks-engine-capture-dialog-panel]:not([data-blocks-engine-capture-resting-panel]):not([data-blocks-engine-capture-observed-placement]):not([hidden])>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
 	'[data-blocks-engine-capture-dialog-close]:not([hidden]){position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}';
@@ -70,6 +70,14 @@ function apply(trigger){
     ['style','class'].forEach(function(name){if(state[name]===null)target.removeAttribute(name);else target.setAttribute(name,state[name]);});
     target.toggleAttribute('data-blocks-engine-capture-resting-panel',inactive);
     target.hidden=inactive?states.resting.hidden:!open;
+    if(inactive&&!target.classList.contains('data-blocks-engine-capture-dropdown')){
+      // Observe authored resting CSS, not the generated modal positioning.
+      // A concealed control only exposes a panel that is visible in normal flow.
+      var style=getComputedStyle(target),rect=target.getBoundingClientRect();
+      var inline=style.display!=='none'&&style.visibility!=='hidden'&&style.position!=='fixed'&&style.position!=='absolute'&&rect.width>0&&rect.height>0;
+      target.toggleAttribute('data-blocks-engine-capture-resting-panel',inline);
+      if(!inline)target.hidden=true;
+    }
   }else target.hidden=!open;
   var close=closeFor(trigger);if(close)close.hidden=!open;
 }
@@ -221,7 +229,7 @@ export function wireCapturedDialogs(
 		const sharedPanelId = reusedPanels.get( state.dialog!.selector );
 		const existingPanel = selectByCapturedSelector( $, state.dialog?.selector, state.dialog?.tag )
 			.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' );
-		const reusePanel = state.dialog?.presentation === 'dropdown' && existingPanel.length === 1;
+		const reusePanel = ( state.dialog?.presentation === 'dropdown' || state.dialog?.restingInline === true ) && existingPanel.length === 1;
 		if ( !reusePanel && !sharedPanelId ) removeCapturedDialog( $, state.dialog?.selector );
 		// An earlier exported panel contains a captured snapshot, not another
 		// instance of the observed source control whose ID it happens to copy.
@@ -263,21 +271,21 @@ export function wireCapturedDialogs(
 			if ( state.dialog?.ancestorState && !observed ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-unverified', state.dialog.ancestorState.reason ?? 'portable-owner-mismatch' );
 			if ( observed ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( observed.state.ancestors ) );
 			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
-			// A source can reuse one dropdown root for different trigger contents.
+			// A source can reuse one responsive panel root for different trigger contents.
 			// Retain its single DOM identity while replaying each observed state,
 			// rather than binding every trigger to the first captured contents.
-			if ( dropdown && ( reusePanel || reusedPanelId ) ) {
+			if ( reusePanel || reusedPanelId ) {
 				const snapshot = $( state.dialog!.html ).first();
 				trigger.attr( 'data-blocks-engine-capture-dialog-panel-state', JSON.stringify( {
 					html: snapshot.html() ?? '',
 					style: ( snapshot.attr( 'style' ) ?? '' ).replace( /(display\s*:[^;!]+)\s*!important/gi, '$1' ),
-					class: `${ snapshot.attr( 'class' ) ?? '' } data-blocks-engine-capture-dropdown`.trim(),
+					class: `${ snapshot.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
 				} ) );
 			}
 			if ( reusedPanelId ) {
 				trigger.attr( 'data-blocks-engine-capture-dialog-trigger', reusedPanelId ).attr( 'aria-controls', reusedPanelId ).attr( 'aria-expanded', 'false' );
 				if ( label ) trigger.attr( 'data-blocks-engine-capture-disclosure-label', label );
-				if ( !trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', 'menu' );
+				if ( !trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', dropdown ? 'menu' : 'dialog' );
 				return;
 			}
 			const panelId = reusePanel && state.dialog?.id ? state.dialog.id : nextDialogId( $ );
@@ -295,12 +303,12 @@ export function wireCapturedDialogs(
 				if ( reusePanel ) panel.attr( 'data-blocks-engine-capture-existing-panel', JSON.stringify( {
 					resting: {
 						style: existingPanel.attr( 'style' ) ?? null,
-						class: `${ existingPanel.attr( 'class' ) ?? '' } data-blocks-engine-capture-dropdown`.trim(),
+						class: `${ existingPanel.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
 						hidden: existingPanel.attr( 'hidden' ) !== undefined,
 					},
 					opened: {
 						style: panel.attr( 'style' ) ?? null,
-						class: `${ panel.attr( 'class' ) ?? '' } data-blocks-engine-capture-dropdown`.trim(),
+						class: `${ panel.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
 					},
 				} ) ).attr( 'hidden', '' );
 				if ( sourcePlaced ) panel.attr( 'data-blocks-engine-capture-observed-placement', 'true' ).attr( 'hidden', '' );
