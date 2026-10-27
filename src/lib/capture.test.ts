@@ -900,13 +900,21 @@ describe( 'captureWebsite time budget', () => {
 		expect( vi.mocked( exportWebsiteCapture ).mock.calls.at( -1 )![ 0 ].limits ).toEqual( { maxFileBytes: 1024, maxTotalBytes: 4096, maxFiles: 7, reservePostExport: true } );
 	} );
 
+	it( 'carries a per-route downstream reserve in the budget window', async () => {
+		await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 600_000, routeReserveMs: 8_000 }, adapter( [] ) );
+		expect( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] ).toHaveProperty( 'timeBudget.routeReserveMs', 8_000 );
+	} );
+
 	it( 'rejects invalid budgets and HTTP acquisition before any capture starts', async () => {
 		for ( const timeBudgetMs of [ 0, 1.5 ] )
 			await expect( captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs }, adapter( [] ) ) ).rejects.toThrow( 'timeBudgetMs must be a positive integer' );
+		for ( const routeReserveMs of [ -5, 1.5 ] )
+			await expect( captureWebsite( { url: sourceUrl, outputDir: root, routeReserveMs }, adapter( [] ) ) ).rejects.toThrow( 'routeReserveMs must be a non-negative integer' );
 		await expect( captureWebsite( { url: sourceUrl, outputDir: root, maxFileBytes: 0 }, adapter( [] ) ) ).rejects.toThrow( 'maxFileBytes must be a positive integer' );
 		await expect( captureWebsite( { url: sourceUrl, outputDir: root, maxTotalBytes: 0 }, adapter( [] ) ) ).rejects.toThrow( 'maxTotalBytes must be a positive integer' );
 		await expect( captureWebsite( { url: sourceUrl, outputDir: root, maxFiles: 1.5 }, adapter( [] ) ) ).rejects.toThrow( 'maxFiles must be a positive integer' );
 		await expect( captureWebsite( { url: sourceUrl, outputDir: root, acquisition: 'http', timeBudgetMs: 1_000 }, adapter( [] ) ) ).rejects.toThrow( 'timeBudgetMs applies to browser acquisition only' );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, acquisition: 'http', routeReserveMs: 1_000 }, adapter( [] ) ) ).rejects.toThrow( 'routeReserveMs applies to browser acquisition only' );
 		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
 	} );
 

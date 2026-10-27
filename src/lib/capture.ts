@@ -20,7 +20,7 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
 import { SourceRequestGovernors } from './source-request-governor.js';
-import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteDeadlineMs } from './capture-time-budget.js';
+import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
 
@@ -127,6 +127,21 @@ export interface CaptureOptions {
 	 * minus the post-capture headroom (README, "Capture time budget").
 	 */
 	timeBudgetMs?: number;
+	/**
+	 * Milliseconds of the capture time budget reserved per started route for
+	 * downstream work (browser acquisition only). Every route that starts —
+	 * the entrypoint included — holds this much of the budget unspent, and
+	 * admission closes once the remaining window can no longer cover all
+	 * reserves plus the candidate's; routes left out this way are
+	 * `route_capture_skipped_budget` findings whose reason names the reserve.
+	 * Use it when what follows capture costs a fixed amount per captured route
+	 * (e.g. a site build): pass the measured per-route downstream cost and
+	 * capture admits only as many routes as the reserved budget covers.
+	 * `abandonAt` is unchanged: routes already running finish or are abandoned
+	 * as before. Has no effect when no time budget governs the capture.
+	 * Default: 0 (no per-route reserve).
+	 */
+	routeReserveMs?: number;
 	/**
 	 * Per-route capture deadline in milliseconds (browser acquisition only). A
 	 * route that exceeds it is abandoned: its context closes, its slot frees
@@ -355,8 +370,10 @@ async function runCaptureWebsite(
 	validateRouteLimit( options.routeLimit );
 	validateRouteSelection( options.routeSelection );
 	validateTimeBudgetMs( options.timeBudgetMs );
+	validateRouteReserveMs( options.routeReserveMs );
 	validateRouteDeadlineMs( options.routeDeadlineMs );
 	if ( options.timeBudgetMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'timeBudgetMs applies to browser acquisition only' );
+	if ( options.routeReserveMs !== undefined && options.acquisition === 'http' ) throw new RangeError( 'routeReserveMs applies to browser acquisition only' );
 	validateMaxFileBytes( options.maxFileBytes );
 	validateMaxTotalBytes( options.maxTotalBytes );
 	validateMaxFiles( options.maxFiles );
@@ -369,7 +386,7 @@ async function runCaptureWebsite(
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	const timeBudgetMs = options.timeBudgetMs ?? ( options.acquisition !== 'http' && options.routeLimit === undefined ? DEFAULT_CAPTURE_TIME_BUDGET_MS : undefined );
-	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs ), projectAdmission: options.routeLimit === undefined };
+	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs, options.routeReserveMs ), projectAdmission: options.routeLimit === undefined };
 	// One governor per source origin for every HTTP pass of this capture (#907).
 	const sourceGovernors = new SourceRequestGovernors();
 	let phase = '';
