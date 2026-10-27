@@ -100,7 +100,8 @@ const TOOLS = [
       properties: {
         directory: { type: 'string', description: 'A liberated run directory.' },
         target: { type: 'string', description: 'Publish target. Defaults to spacefast.' },
-        token: { type: 'string', description: 'Token for the target, if publishing into an account.' },
+        token: { type: 'string', description: 'Token for the target, if publishing into an account. For an anonymous space, its claim key.' },
+        space: { type: 'string', description: 'Existing space id to add a version to, instead of creating a new space.' },
       },
       required: ['directory'],
     },
@@ -191,6 +192,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         directory: String(args.directory ?? ''),
         target: typeof args.target === 'string' ? args.target : 'spacefast',
         token: typeof args.token === 'string' ? args.token : process.env.SPACEFAST_TOKEN,
+        space: typeof args.space === 'string' ? args.space : undefined,
         log,
       });
       return textResult(result);

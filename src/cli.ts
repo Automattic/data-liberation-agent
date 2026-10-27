@@ -122,6 +122,10 @@ const HELP = `
     --to <target>        Where to publish. Targets: spacefast (default)
     --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
                          Without it the publish is anonymous and returns a claim link.
+    --space <id>         Add a version to an existing space instead of creating
+                         one: the space id from an earlier publish. For an owned
+                         space keep --token; for an anonymous one pass its claim
+                         key as --token.
 
   Environment:
     DLA_OUTPUT_DIR       Default output base directory
@@ -207,6 +211,7 @@ if (args.includes('--help')) {
       directory,
       target: getArg('--to') ?? 'spacefast',
       token: getArg('--token') ?? process.env.SPACEFAST_TOKEN ?? undefined,
+      space: getArg('--space') ?? undefined,
       log: (message) => process.stderr.write(`${message}\n`),
     });
 
@@ -219,12 +224,20 @@ if (args.includes('--help')) {
     }
     console.log(`Live: ${result.liveUrl}`);
     if (result.versionUrl) console.log(`Version: ${result.versionUrl}`);
+    if (result.spaceId) console.log(`Space: ${result.spaceId}`);
     if (result.private) {
       console.log('This space is private by default, so the live URL returns 403 until access is granted.');
     }
     if (result.claim) {
-      console.log(`Claim it to keep it: ${result.claim.url}`);
+      if (result.claim.url) console.log(`Claim it to keep it: ${result.claim.url}`);
+      if (result.claim.key) console.log(`Claim key: ${result.claim.key}`);
       if (result.claim.expiresAt) console.log(`Claim expires: ${result.claim.expiresAt}`);
+    }
+    if (result.spaceId) {
+      console.log(
+        `To add a version to this space, publish again with --space ${result.spaceId}` +
+          `${result.claim?.key ? ' and the claim key above as --token' : ' and your --token'}.`
+      );
     }
     for (const note of result.notes) console.log(`Note: ${note}`);
   } catch (error) {

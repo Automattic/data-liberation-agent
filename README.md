@@ -79,6 +79,8 @@ data-liberation publish <run-dir> --to spacefast
 
 Publishing reads what is on disk, so a repaired copy or a different target can ship without touching the source site again. Without a token the publish is anonymous and returns a one-time claim link — the space stays private until it is claimed, so the live URL answers 403 to everyone until then. `--token`, or `SPACEFAST_TOKEN`, publishes into an account you own.
 
+`--space <id>` adds a version to an existing space instead of creating a new one, so republishing a site keeps one URL. Pass the space id from an earlier publish — with `--token` for an owned space, or with that space's claim key as `--token` for an anonymous one. Every publish prints the space id and, for an anonymous space, the claim key, so it can be repeated.
+
 Naming an unknown target lists the registered ones.
 
 ## Supported platforms

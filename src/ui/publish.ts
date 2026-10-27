@@ -18,6 +18,9 @@ export interface PublishCliOptions {
 	directory: string;
 	target: string;
 	token?: string | undefined;
+	/** Existing destination space to add a version to, instead of creating a
+	 * new one. Targets that do not republish into a space ignore it. */
+	space?: string | undefined;
 	log?: ( ( message: string ) => void ) | undefined;
 }
 
@@ -58,6 +61,7 @@ export async function publishSite( options: PublishCliOptions ): Promise< Publis
 		return await target.publish( {
 			directory: staging ?? directory,
 			token: options.token,
+			space: options.space,
 			log: options.log,
 		} );
 	} finally { if (staging) rmSync(staging, { recursive: true, force: true }); }
