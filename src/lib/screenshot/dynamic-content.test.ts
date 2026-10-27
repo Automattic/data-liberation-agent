@@ -152,6 +152,35 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
   beforeAll(async () => { browser = await chromium.launch(); });
   afterAll(async () => { await browser?.close(); });
 
+  it('preserves the selected tab when tab labels have pointer cursors', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <style>.label{cursor:pointer}.panel[hidden]{display:none}</style>
+      <div role="tablist">
+        <div role="tab" tabindex="0" aria-selected="true" aria-controls="p0"><div class="label">General</div></div>
+        <div role="tab" tabindex="-1" aria-selected="false" aria-controls="p1"><div class="label">Billing</div></div>
+        <div role="tab" tabindex="-1" aria-selected="false" aria-controls="p2"><div class="label">Pricing</div></div>
+      </div>
+      <div class="panel" id="p0" role="tabpanel"><p>General answer.</p></div>
+      <div class="panel" id="p1" role="tabpanel" hidden><p>Billing answer.</p></div>
+      <div class="panel" id="p2" role="tabpanel" hidden><p>Pricing answer.</p></div>
+      <script>
+        for (const t of document.querySelectorAll('[role=tab]')) t.addEventListener('click', () => {
+          for (const o of document.querySelectorAll('[role=tab]')) {
+            const s = o === t;
+            o.setAttribute('aria-selected', s);
+            document.getElementById(o.getAttribute('aria-controls')).hidden = !s;
+          }
+        });
+      </script>
+    `);
+    await hydrateDisclosureContent(page);
+    expect(await page.locator('[role="tab"]').evaluateAll(tabs =>
+      tabs.findIndex(tab => tab.getAttribute('aria-selected') === 'true'),
+    )).toBe(0);
+    await page.close();
+  });
+
   it('preserves native disclosure state while loading its lazy content', async () => {
     const page = await browser.newPage();
     await page.setContent(`<details id="closed"><summary>Question</summary><p>Hidden answer</p><img loading="lazy" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='2' height='2'%3E%3Crect width='2' height='2' fill='blue'/%3E%3C/svg%3E"></details><details id="open" open><summary>Open question</summary><p>Visible answer</p></details>`);
