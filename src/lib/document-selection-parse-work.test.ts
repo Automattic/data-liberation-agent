@@ -46,7 +46,7 @@ describe( 'device document assembly parse work', () => {
 		expect( work.markup.filter( markup => markup.includes( '.card-0 .title' ) ) ).toEqual( [] );
 		expect( work.selectors.sort() ).toEqual( [ '.desktop', '.mobile' ] );
 		// Scoped components and real-root rules retain their projection semantics.
-		expect( assembly.html ).toContain( ':where([data-blocks-engine-capture-device-document="desktop"]) .card-39 .title{margin:39px}' );
+		expect( assembly.html ).toContain( ':where([data-blocks-engine-capture-device-document="desktop"],[data-blocks-engine-capture-device-document="mobile"]) .card-39 .title{margin:39px}' );
 		expect( assembly.html ).toContain( 'body{margin:0}:where(body).desktop{padding:1px}' );
 		expect( assembly.html ).not.toContain( ':where(body).other' );
 	} );

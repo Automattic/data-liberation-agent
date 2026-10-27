@@ -91,7 +91,8 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	const head = $( 'head' );
 	const viewports: DeviceAssembly['viewports'] = {};
 	const roots: DeviceAssembly['roots'] = {};
-	const sheets: Array<{ identity?: string; keys: string[]; copy: ReturnType<typeof $>; css?: string; rootClasses: string[] }> = [];
+	const sentinelScope = '[data-blocks-engine-capture-device-document="projection-sentinel"]';
+	const sheets: Array<{ identity?: string; keys: string[]; copy: ReturnType<typeof $>; css?: string; rootClasses: string[]; rootProjection?: string }> = [];
 	for ( const key of selection.documents ) {
 		if ( documents[ key ] === undefined ) continue;
 		const source = cheerio.load( documents[ key ] );
@@ -116,7 +117,12 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 			const original = source( node );
 			const css = original.is( 'style' ) ? original.text() : undefined;
 			const media = original.attr( 'media' ) ?? 'all';
-			const identity = css === undefined ? undefined : JSON.stringify( [ css, media, rootClasses ] );
+			const projection = css === undefined ? undefined : projectStylesheet( () => ( {
+				scoped: scopeCss( css, { scope: sentinelScope, rootClasses } ),
+				roots: rootCss( css, rootClasses ),
+			} ), onUnparseable );
+			if ( css !== undefined && projection === undefined ) continue;
+			const identity = projection === undefined ? undefined : JSON.stringify( [ projection.scoped + projection.roots, media ] );
 			const after = previous ? sheets.indexOf( previous ) + 1 : 0;
 			// Never coalesce two occurrences from the same document, or move a
 			// sheet before that document's preceding sheet (including links).
@@ -129,16 +135,16 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 			const copy = css === undefined ? $( source.html( node ) ) : $( '<style>' );
 			if ( css !== undefined ) for ( const [ name, value ] of Object.entries( ( node as Element ).attribs ) ) copy.attr( name, value );
 			copy.attr( 'data-blocks-engine-capture-device-style', key ).attr( 'data-blocks-engine-capture-source-media', media ).attr( 'media', 'not all' );
-			previous = { identity, keys: [ key ], copy, css, rootClasses };
+			previous = { identity, keys: [ key ], copy, css, rootClasses, rootProjection: projection?.roots };
 			sheets.splice( after, 0, previous );
 		}
 	}
 	for ( const sheet of sheets ) {
 		if ( sheet.css !== undefined ) {
 			const scope = sheet.keys.map( key => `[data-blocks-engine-capture-device-document="${ key }"]` ).join( ',' );
-			// Root rules ride in this same shared, runtime-gated sheet, so they
-			// are projected once too, while retaining their real-root selectors.
-			const css = projectStylesheet( () => scopeCss( sheet.css!, { scope, rootClasses: sheet.rootClasses } ) + rootCss( sheet.css!, sheet.rootClasses ), onUnparseable );
+			// Re-project once per emitted entry rather than replacing sentinel text
+			// that could also occur in authored CSS. Root projection is scope-independent.
+			const css = projectStylesheet( () => scopeCss( sheet.css!, { scope, rootClasses: sheet.rootClasses } ) + sheet.rootProjection!, onUnparseable );
 			if ( css === undefined ) continue;
 			sheet.copy.text( css );
 		}

@@ -132,10 +132,32 @@ it( 'preserves each device cascade across reversed, repeated, linked and interle
 	}
 } );
 
-it( 'does not merge sheets with different media or body root classes', () => {
+it( 'merges identical body-class projections despite different device body classes', () => {
+	const css = 'body.site .card{color:red}body{margin:7px}';
+	const document = ( classes: string ) => `<html><head><meta name="viewport" content="width=device-width"><style>${ css }</style></head><body class="${ classes }"><div class="card">Hi</div></body></html>`;
+	const $ = cheerio.load( assembleDeviceDocuments( {
+		desktop: document( 'site' ), mobile: document( 'site device-mobile-optimized' ),
+	}, selection ).html );
+	const styles = $( '[data-blocks-engine-capture-device-style]' );
+	expect( styles ).toHaveLength( 1 );
+	expect( styles.attr( 'data-blocks-engine-capture-device-style' ) ).toBe( 'desktop mobile' );
+	expect( styles.text() ).toContain( ':where([data-blocks-engine-capture-device-document="desktop"],[data-blocks-engine-capture-device-document="mobile"]).site .card{color:red}' );
+	expect( styles.text().match( /body\{margin:7px\}/g ) ).toHaveLength( 1 );
+} );
+
+it( 'keeps differing body-class projections separate', () => {
+	const document = ( classes: string ) => `<html><head><meta name="viewport" content="width=device-width"><style>.site{padding:7px}body.site .card{color:red}</style></head><body class="${ classes }"></body></html>`;
+	const $ = cheerio.load( assembleDeviceDocuments( { desktop: document( 'site' ), mobile: document( 'phone' ) }, selection ).html );
+	const styles = $( '[data-blocks-engine-capture-device-style]' );
+	expect( styles ).toHaveLength( 2 );
+	expect( styles.filter( '[data-blocks-engine-capture-device-style="desktop"]' ).text() ).toContain( ':where(body).site{padding:7px}' );
+	expect( styles.filter( '[data-blocks-engine-capture-device-style="mobile"]' ).text() ).not.toContain( ':where(body).site' );
+} );
+
+it( 'does not merge sheets with different media even when body classes do not affect projection', () => {
 	const documents = { desktop: sharedDocument( '.d{}' ), mobile: sharedDocument( '.m{}' ).replace( 'class="site"', 'class="phone"' ), tablet: sharedDocument( '.t{}' ).replace( '<style>', '<style media="print">' ) };
 	const $ = cheerio.load( assembleDeviceDocuments( documents, selection ).html );
-	expect( $( '[data-blocks-engine-capture-device-style]' ) ).toHaveLength( 6 );
+	expect( $( '[data-blocks-engine-capture-device-style]' ) ).toHaveLength( 5 );
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-owned document selection', () => {
@@ -437,7 +459,7 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 				activators: $( 'script[data-blocks-engine-capture-device-styles]' ).length, documentWrites: $( 'script' ).toArray().filter( node => /document\.write/.test( $( node ).text() ) ).length };
 		} );
 		writeFileSync( join( dir, 'device-style-counts.json' ), JSON.stringify( counts, null, 2 ) );
-		expect( counts ).toEqual( routes.map( route => ( { route: route.file, deviceStyles: keys.length * 6, runtimes: 1, activators: 0, documentWrites: 0 } ) ) );
+		expect( counts ).toEqual( routes.map( route => ( { route: route.file, deviceStyles: keys.length * 6 - 2, runtimes: 1, activators: 0, documentWrites: 0 } ) ) );
 
 		const origin = createServer( ( request, response ) => {
 			const [ path ] = ( request.url ?? '/' ).split( '?' );
@@ -490,7 +512,7 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 				const declared = media.filter( node => node.device );
 				expect( declared.every( node => node.media === 'not all' ) ).toBe( true );
 				const active = media.filter( node => ! node.device );
-				expect( active ).toEqual( declared.filter( node => node.device === profile.key ).map( node => ( { device: null, media: node.source, source: node.source } ) ) );
+				expect( active ).toEqual( declared.filter( node => node.device!.split( /\s+/ ).includes( profile.key ) ).map( node => ( { device: null, media: node.source, source: node.source } ) ) );
 				rows.push( { profile: profile.key, width, route: route.file, actual } );
 				await context.close();
 			}
