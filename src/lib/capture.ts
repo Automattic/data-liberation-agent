@@ -481,6 +481,7 @@ export async function captureWebsite(
 		force: options.resume !== true,
 		removeSelectors: adapter.liberation?.removeSelectors,
 		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
+		probeExclusions: adapter.liberation?.probeExclusions,
 		cleanupPolicy: (await import('./source-cleanup.js')).cleanupPolicy(adapter.liberation?.cleanupRules),
 		prepareCapture: adapter.liberation?.prepare,
 		telemetryRequest,

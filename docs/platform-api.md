@@ -58,6 +58,11 @@ interface LiberationHooks {
    * `html#__next_error__`). A page whose captured HTML matches one is not
    * saved; the route fails and names the page instead (#917). */
   clientErrorShellSelectors?: string[];
+  /** Platform-runtime regions interaction probing never drives (dialogs,
+   * selectable sets, typed search). Resting markup is still captured; each
+   * region found is recorded as an `interaction_probe_region_excluded`
+   * profile diagnostic. */
+  probeExclusions?: Array<{ id: string; selector: string; reason: string }>;
 }
 ```
 

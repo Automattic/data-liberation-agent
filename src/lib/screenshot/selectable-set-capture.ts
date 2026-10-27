@@ -27,6 +27,8 @@ export interface SelectableSetCaptureOptions {
 	maxCandidateScan?: number;
 	maxPointerCandidates?: number;
 	maxProbeGroups?: number;
+	/** Selector of elements never treated as selectable members (see probe-exclusions.ts). */
+	skip?: string;
 }
 
 interface RawSelectableRecord {
@@ -108,6 +110,7 @@ export async function captureSelectableSetStates(
 				maxCandidateScan: number;
 				maxPointerCandidates: number;
 				maxProbeGroups: number;
+				skip?: string;
 			} ) => {
 				const globalWithName = globalThis as typeof globalThis & {
 					__name?: ( fn: unknown ) => unknown;
@@ -206,6 +209,7 @@ export async function captureSelectableSetStates(
 					element.hasAttribute( 'data-blocks-engine-capture-pager-control' ) ||
 					Boolean( element.closest( '[data-blocks-engine-capture-pager-stage],[data-blocks-engine-capture-gallery-capture-width]' ) );
 				const looksSelectable = ( element: Element ): boolean => {
+					if ( limits.skip !== undefined && element.matches( limits.skip ) ) return false;
 					if ( ! visible( element ) ) return false;
 					if ( element.getAttribute( 'aria-disabled' ) === 'true' || element.hasAttribute( 'disabled' ) ) {
 						return false;
@@ -1051,6 +1055,7 @@ export async function captureSelectableSetStates(
 				maxCandidateScan,
 				maxPointerCandidates,
 				maxProbeGroups,
+				...( options.skip ? { skip: options.skip } : {} ),
 			}
 		);
 		raw = Array.isArray( result ) ? ( result as RawSelectableRecord[] ) : [];

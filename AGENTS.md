@@ -62,6 +62,7 @@ interface PlatformAdapter {
 - `removeSelectors` — chrome removed from the live page before anything is captured, so one removal cleans every artifact.
 - `prepare(page, ctx)` — imperative escape hatch, run after removals. Wix uses it to resolve same-page anchors, which its click runtime handles rather than authored targets: the page is observed settling, and a real target is left behind so the copy can scroll there once the runtime is gone.
 - `responsiveImages(page, ctx)` — the per-viewport image variants a platform's runtime swapped in, as `{media id → url}`. The browser step stays generic and reads what the runtime settled on; recognising which URLs are that platform's CDN is adapter knowledge, and lives where it can be unit-tested.
+- `probeExclusions` — platform-runtime regions (`{ id, selector, reason }`) whose subtrees dialog, selectable-set and typed-search probing never drive, through the same `skip` selector shared-chrome reuse uses (`src/lib/screenshot/probe-exclusions.ts`). Resting markup and screenshots are unchanged; each region found is an `interaction_probe_region_excluded` profile diagnostic. Wix declares its Blog comments widget and like/rating controls.
 - `telemetryRequest(url)` — the platform's own logging endpoints. Readiness waits leave them out of the traffic ledger, so a beacon its endpoint holds open cannot hold network quiet to its bound. Only declare endpoints shown to be telemetry; core never guesses.
 
 The hooks are best-effort: a throw is swallowed and capture continues.

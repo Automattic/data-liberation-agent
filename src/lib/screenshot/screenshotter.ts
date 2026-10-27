@@ -45,6 +45,7 @@ import { observeViewportWork } from './viewport-work.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
+import { combineSkips, resolveProbeExclusions } from './probe-exclusions.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
@@ -205,6 +206,7 @@ interface CapturePerViewportArgs {
 	observeSource?: ScreenshotOpts['observeSource'];
 	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	canonicalizeHtml?: ( html: string ) => string;
+	probeExclusions?: ScreenshotOpts['probeExclusions'];
 	/** The entrypoint's one-time chrome probe for this profile; see chrome-reuse.ts. */
 	sharedChrome?: SharedChromeProbe;
 	/**
@@ -1454,9 +1456,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			entry.sharedChrome = chrome.decision;
 			args.phases?.enter( 'dialogs' );
 		}
+		// Adapter-declared platform runtime is never driven by any probe below.
+		const excluded = await resolveProbeExclusions( page, args.probeExclusions ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
+		args.diagnostics?.push( ...excluded.diagnostics );
+		const skip = combineSkips( chrome?.skip, excluded.skip );
 		let interactions: InteractionStatesReport;
 		try {
-			interactions = chrome?.skip ? await captureTriggeredDialogs( page, url, { skip: chrome.skip } ) : await captureTriggeredDialogs( page, url );
+			interactions = skip ? await captureTriggeredDialogs( page, url, { skip } ) : await captureTriggeredDialogs( page, url );
 		} finally {
 			if ( chrome?.skip ) await clearChromeMarks( page );
 		}
@@ -1481,7 +1487,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		interactions.states = [ ...galleryStates, ...disclosureStates, ...interactions.states ];
 		try {
 			args.phases?.enter( 'selectable' );
-			const selectableStates = await captureSelectableSetStates( page );
+			const selectableStates = await captureSelectableSetStates( page, { skip: excluded.skip } );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
@@ -1492,7 +1498,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			}
 			try {
 				await dismissOverlays( page );
-				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000 } ) );
+				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000, skip: excluded.skip } ) );
 			} catch {
 				/* A failed input probe must not misreport a successful selectable drive. */
 			}
@@ -2698,6 +2704,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							beforeSerialize: opts.beforeSerialize,
 							observeSource: opts.observeSource,
 							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
+							...( opts.probeExclusions ? { probeExclusions: opts.probeExclusions } : {} ),
 						} );
 					} finally {
 						phases.enter( 'record' );
