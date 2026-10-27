@@ -6781,6 +6781,48 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		}
 	} );
 
+	it( 'keeps a CSS background that is also the og:image and an img', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-og-image-background-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'media', 'resources/media' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const imageUrl = 'https://example.com/media/photo.jpg';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><meta property="og:image" content="media/photo.jpg"><style>.hero .bg{background:url("media/photo.jpg") center/cover}</style></head><body><section class="hero"><div class="bg"></div><h1>Hero</h1></section><p><img src="media/photo.jpg" alt="Photo"></p></body></html>'
+		);
+		writeFileSync( join( outputDir, 'resources', 'media', 'photo.jpg' ), 'image-bytes' );
+		writeFileSync( join( outputDir, 'media', 'photo.jpg' ), 'image-bytes' );
+		writeFileSync(
+			join( outputDir, 'resources', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				resources: { [ imageUrl ]: { path: 'resources/media/photo.jpg', contentType: 'image/jpeg' } },
+				failures: [],
+			} )
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': {
+				html: 'html/homepage.html',
+				documents: { desktop: { url: 'https://example.com/', baseUrl: 'https://example.com/' } },
+			} } } )
+		);
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( imageUrl, join( outputDir, 'media', 'photo.jpg' ) );
+		media.flush();
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const homepage = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( homepage );
+		expect( $( 'style' ).text() ).toContain( 'url("/media/photo.jpg")' );
+		expect( homepage ).not.toContain( 'about:blank' );
+		expect( homepage ).not.toContain( '//media/photo.jpg' );
+		expect( $( 'img' ).attr( 'src' ) ).toBe( '/media/photo.jpg' );
+		expect( $( 'meta[property="og:image"]' ).attr( 'content' ) ).toBe( '/media/photo.jpg' );
+	} );
+
 	it( 'drops leftover remote asset requests while keeping editorial links', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-self-contain-export-' ) );
 		dirs.push( outputDir );

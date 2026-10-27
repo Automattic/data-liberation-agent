@@ -268,3 +268,10 @@ function escapeRegex(input: string): string {
 // longer URL.
 export const URL_TERMINATOR_LOOKAHEAD =
   '(?=$|[\\s"\'()<>]|&(?:amp;)?(?:quot|apos|#3[49]|#x2[27]);?)';
+
+// The same boundary before the match. A relative reference such as
+// `media/photo.jpg` is also the tail of `/media/photo.jpg`, the local path an
+// earlier replacement map already wrote. Matching there again turns it into
+// `//media/photo.jpg`, a protocol-relative URL on another host.
+export const URL_START_LOOKBEHIND =
+  '(?<=^|[\\s"\'()<>]|&(?:amp;)?(?:quot|apos|#3[49]|#x2[27]);)';
