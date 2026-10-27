@@ -90,6 +90,9 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
         if (controlled?.closest('nav,[role="navigation"]') || controlled?.querySelector('nav,[role="navigation"]')) return false;
         if (inSiteChrome(controlled)) return false;
+        // Dialogs are popup interaction state, not collapsed editorial content.
+        const dialogSurface = 'dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]';
+        if (controlled?.matches(dialogSurface) || controlled?.querySelector(dialogSurface)) return false;
         // A submit control is never a disclosure: activating it submits its
         // form and unloads the page (a store's "View all" search button, for
         // one), which the route-revert below cannot undo.
@@ -365,6 +368,9 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         if (element.closest('nav,[role="navigation"]')) return false;
         const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
         if (controlled?.closest('nav,[role="navigation"]') || controlled?.querySelector('nav,[role="navigation"]')) return false;
+        // Keep dialog open states owned by interaction capture in this pass too.
+        const dialogSurface = 'dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]';
+        if (controlled?.matches(dialogSurface) || controlled?.querySelector(dialogSurface)) return false;
         if ((element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
           && element.type === 'submit' && element.form) return false;
         if (element.tagName !== 'A') return true;
