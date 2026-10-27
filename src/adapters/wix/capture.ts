@@ -404,6 +404,7 @@ async function openCollapsedMenu( page: Page ): Promise< boolean > {
 			);
 			return true;
 		} catch {
+			await closeOpenedMenu( page );
 			return false;
 		}
 	}
