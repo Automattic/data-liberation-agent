@@ -7,7 +7,7 @@ import { chromium, devices, type Page } from 'playwright';
 import * as cheerio from 'cheerio';
 import { exportWebsiteCapture } from './capture-export.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
-import type { DeviceDocumentSelection } from './document-selection.js';
+import { assembleDeviceDocuments, installDeviceSelection, type DeviceDocumentSelection } from './document-selection.js';
 
 const directories: string[] = [];
 afterAll( () => { if ( ! process.env.DLA_KEEP_DEVICE_EVIDENCE ) for ( const dir of directories ) rmSync( dir, { recursive: true, force: true } ); } );
@@ -105,7 +105,62 @@ it.each( [ false, true ] )( 'normalizes each distinct captured document once for
 	} finally { session.disconnect(); }
 } );
 
+const sharedDocument = ( own: string, extra = '' ) => `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>.card{color:red;padding:4px}body{margin:7px}</style><style>${ own }</style>${ extra }</head><body class="site"><div class="card">Hi</div></body></html>`;
+
+it( 'emits shared CSS and root CSS once with a multi-device zero-specificity gate', () => {
+	const { html } = assembleDeviceDocuments( { desktop: sharedDocument( '.d{}' ), tablet: sharedDocument( '.t{}' ), mobile: sharedDocument( '.m{}' ) }, selection );
+	const $ = cheerio.load( html );
+	const styles = $( '[data-blocks-engine-capture-device-style]' );
+	expect( styles ).toHaveLength( 4 );
+	expect( styles.first().attr( 'data-blocks-engine-capture-device-style' ) ).toBe( 'desktop mobile tablet' );
+	expect( styles.first().text() ).toContain( ':where([data-blocks-engine-capture-device-document="desktop"],[data-blocks-engine-capture-device-document="mobile"],[data-blocks-engine-capture-device-document="tablet"]) .card' );
+	expect( html.match( /color:red;padding:4px/g ) ).toHaveLength( 1 );
+	expect( html.match( /body\{margin:7px\}/g ) ).toHaveLength( 1 );
+	for ( const rule of [ '.d{}', '.t{}', '.m{}' ] ) expect( styles.text().split( rule ) ).toHaveLength( 2 );
+} );
+
+it( 'preserves each device cascade across reversed, repeated, linked and interleaved sheets', () => {
+	const sequences = { desktop: [ 'a', 'b', 'a', 'link', 'c' ], mobile: [ 'b', 'a', 'c', 'link', 'c' ], tablet: [ 'c', 'a', 'b', 'link', 'a' ] };
+	const documents = Object.fromEntries( Object.entries( sequences ).map( ( [ key, sheets ] ) => [ key,
+		`<html><head><meta name="viewport" content="width=device-width">${ sheets.map( sheet => sheet === 'link' ? '<link rel="stylesheet" href="/test.css">' : `<style>.${ sheet }{color:red}</style>` ).join( '' ) }</head><body></body></html>`,
+	] ) );
+	const $ = cheerio.load( assembleDeviceDocuments( documents, selection ).html );
+	for ( const [ key, expected ] of Object.entries( sequences ) ) {
+		const actual = $( '[data-blocks-engine-capture-device-style]' ).toArray().filter( node => $( node ).attr( 'data-blocks-engine-capture-device-style' )!.split( /\s+/ ).includes( key ) )
+			.map( node => node.name === 'link' ? 'link' : /\.([abc])\{/.exec( $( node ).text() )![ 1 ] );
+		expect( actual, key ).toEqual( expected );
+	}
+} );
+
+it( 'does not merge sheets with different media or body root classes', () => {
+	const documents = { desktop: sharedDocument( '.d{}' ), mobile: sharedDocument( '.m{}' ).replace( 'class="site"', 'class="phone"' ), tablet: sharedDocument( '.t{}' ).replace( '<style>', '<style media="print">' ) };
+	const $ = cheerio.load( assembleDeviceDocuments( documents, selection ).html );
+	expect( $( '[data-blocks-engine-capture-device-style]' ) ).toHaveLength( 6 );
+} );
+
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-owned document selection', () => {
+	it( 'activates shared and device-only styles once for each selected identity', async () => {
+		const assembly = assembleDeviceDocuments( {
+			desktop: sharedDocument( '.card{border-top:1px solid blue}' ), mobile: sharedDocument( '.card{border-top:2px solid blue}' ), tablet: sharedDocument( '.card{border-top:3px solid blue}' ),
+		}, selection );
+		const html = installDeviceSelection( assembly.html, assembly );
+		const browser = await chromium.launch();
+		try {
+			for ( const [ key, userAgent, border ] of [ [ 'desktop', 'NeutralDesktop', '1px' ], [ 'mobile', 'iPhone', '2px' ], [ 'tablet', 'iPad', '3px' ] ] ) {
+				const page = await browser.newPage( { userAgent } );
+				await page.setContent( html );
+				const actual = await page.evaluate( () => {
+					const key = document.documentElement.getAttribute( 'data-blocks-engine-capture-selected-document' );
+					const card = document.querySelector( `[data-blocks-engine-capture-device-document="${ key }"] .card` )!;
+					const style = getComputedStyle( card );
+					return { key, color: style.color, padding: style.padding, border: style.borderTopWidth, margin: getComputedStyle( document.body ).margin,
+						active: document.querySelectorAll( 'style[data-blocks-engine-capture-source-media]:not([data-blocks-engine-capture-device-style])' ).length };
+				} );
+				expect( actual ).toEqual( { key, color: 'rgb(255, 0, 0)', padding: '4px', border, margin: '7px', active: 2 } );
+				await page.close();
+			}
+		} finally { await browser.close(); }
+	} );
 	it( 'preserves class-only body box styling on the real selected body', async () => {
 		const decorate = ( html: string, key: string ) => {
 			const $ = cheerio.load( html );
