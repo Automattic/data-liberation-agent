@@ -91,6 +91,8 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	const head = $( 'head' );
 	const viewports: DeviceAssembly['viewports'] = {};
 	const roots: DeviceAssembly['roots'] = {};
+	const sentinelScope = '[data-blocks-engine-capture-device-document="projection-sentinel"]';
+	const sheets: Array<{ identity?: string; keys: string[]; copy: ReturnType<typeof $>; css?: string; rootClasses: string[]; rootProjection?: string }> = [];
 	for ( const key of selection.documents ) {
 		if ( documents[ key ] === undefined ) continue;
 		const source = cheerio.load( documents[ key ] );
@@ -109,24 +111,44 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		wrapper.addClass( `data-blocks-engine-capture-${ key }-document` );
 		wrapper.html( body.html() ?? '' ).find( 'script,style' ).remove();
 		$( 'body' ).append( wrapper );
-		const scope = `[data-blocks-engine-capture-device-document="${ key }"]`;
+		let previous: ( typeof sheets )[number] | undefined;
 		const rootClasses = ( body.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 		for ( const node of source( 'style,link[rel~="stylesheet"]' ).toArray() ) {
 			const original = source( node );
-			let copy;
-			if ( original.is( 'style' ) ) {
-				const css = original.text();
-				const scoped = projectStylesheet( () => scopeCss( css, { scope, rootClasses } ) + rootCss( css, rootClasses ), onUnparseable );
-				// An unparseable stylesheet stays out of the assembled document.
-				if ( scoped === undefined ) continue;
-				// The scoped text replaces the source text, so copy only the attributes.
-				copy = $( '<style>' );
-				for ( const [ name, value ] of Object.entries( ( node as Element ).attribs ) ) copy.attr( name, value );
-				copy.text( scoped );
-			} else copy = $( source.html( node ) );
-			copy.attr( 'data-blocks-engine-capture-device-style', key ).attr( 'data-blocks-engine-capture-source-media', original.attr( 'media' ) ?? 'all' ).attr( 'media', 'not all' );
-			head.append( copy );
+			const css = original.is( 'style' ) ? original.text() : undefined;
+			const media = original.attr( 'media' ) ?? 'all';
+			const projection = css === undefined ? undefined : projectStylesheet( () => ( {
+				scoped: scopeCss( css, { scope: sentinelScope, rootClasses } ),
+				roots: rootCss( css, rootClasses ),
+			} ), onUnparseable );
+			if ( css !== undefined && projection === undefined ) continue;
+			const identity = projection === undefined ? undefined : JSON.stringify( [ projection.scoped + projection.roots, media ] );
+			const after = previous ? sheets.indexOf( previous ) + 1 : 0;
+			// Never coalesce two occurrences from the same document, or move a
+			// sheet before that document's preceding sheet (including links).
+			const existing = identity === undefined ? undefined : sheets.slice( after ).find( sheet => sheet.identity === identity && ! sheet.keys.includes( key ) );
+			if ( existing ) {
+				existing.keys.push( key );
+				previous = existing;
+				continue;
+			}
+			const copy = css === undefined ? $( source.html( node ) ) : $( '<style>' );
+			if ( css !== undefined ) for ( const [ name, value ] of Object.entries( ( node as Element ).attribs ) ) copy.attr( name, value );
+			copy.attr( 'data-blocks-engine-capture-device-style', key ).attr( 'data-blocks-engine-capture-source-media', media ).attr( 'media', 'not all' );
+			previous = { identity, keys: [ key ], copy, css, rootClasses, rootProjection: projection?.roots };
+			sheets.splice( after, 0, previous );
 		}
+	}
+	for ( const sheet of sheets ) {
+		if ( sheet.css !== undefined ) {
+			const scope = sheet.keys.map( key => `[data-blocks-engine-capture-device-document="${ key }"]` ).join( ',' );
+			// Re-project once per emitted entry rather than replacing sentinel text
+			// that could also occur in authored CSS. Root projection is scope-independent.
+			const css = projectStylesheet( () => scopeCss( sheet.css!, { scope, rootClasses: sheet.rootClasses } ) + sheet.rootProjection!, onUnparseable );
+			if ( css === undefined ) continue;
+			sheet.copy.text( css );
+		}
+		head.append( sheet.copy.attr( 'data-blocks-engine-capture-device-style', sheet.keys.join( ' ' ) ) );
 	}
 	// Kept inline by the export's existing data-blocks-engine-capture-* style handling.
 	// The selection runtime is what sets data-blocks-engine-capture-selected-document, and it only
@@ -167,7 +189,7 @@ for(var i=0;i<parser.style.length;i++){var property=parser.style.item(i);node.st
 export function installDeviceSelection( html: string, assembly: Omit<DeviceAssembly, 'html'> ): string {
 	const $ = cheerio.load( html );
 	const config = JSON.stringify( { selection: assembly.selection, viewports: assembly.viewports, roots: assembly.roots } ).replace( /</g, '\\u003c' );
-	const bootstrap = `(function(){${ ROOT_OVERLAY_RUNTIME }var c=${ config },s=c.selection,ua=navigator.userAgent,key=s.defaultDocument;for(var i=0;i<s.rules.length;i++){var r=s.rules[i];if(new RegExp(r.userAgent,r.flags||'').test(ua)){key=r.document;break;}}var root=document.documentElement;root.setAttribute('data-blocks-engine-capture-selected-document',key);var vp=c.viewports[key],meta=document.querySelector('meta[data-blocks-engine-capture-selected-viewport]');meta.removeAttribute('content');meta.removeAttribute('id');if(vp){overlayRoot(root,c.roots,'html',key);Object.keys(vp).forEach(function(k){meta.setAttribute(k,vp[k]);});root.removeAttribute('data-blocks-engine-capture-document-unavailable');}else{root.setAttribute('data-blocks-engine-capture-document-unavailable',key);}var styles=document.querySelectorAll('[data-blocks-engine-capture-device-style]');for(var j=0;j<styles.length;j++){var node=styles[j];if(node.getAttribute('data-blocks-engine-capture-device-style')!==key)continue;var copy=node.cloneNode(true);copy.setAttribute('media',node.getAttribute('data-blocks-engine-capture-source-media'));copy.removeAttribute('data-blocks-engine-capture-device-style');copy.setAttribute('blocking','render');node.after(copy);}})();`;
+	const bootstrap = `(function(){${ ROOT_OVERLAY_RUNTIME }var c=${ config },s=c.selection,ua=navigator.userAgent,key=s.defaultDocument;for(var i=0;i<s.rules.length;i++){var r=s.rules[i];if(new RegExp(r.userAgent,r.flags||'').test(ua)){key=r.document;break;}}var root=document.documentElement;root.setAttribute('data-blocks-engine-capture-selected-document',key);var vp=c.viewports[key],meta=document.querySelector('meta[data-blocks-engine-capture-selected-viewport]');meta.removeAttribute('content');meta.removeAttribute('id');if(vp){overlayRoot(root,c.roots,'html',key);Object.keys(vp).forEach(function(k){meta.setAttribute(k,vp[k]);});root.removeAttribute('data-blocks-engine-capture-document-unavailable');}else{root.setAttribute('data-blocks-engine-capture-document-unavailable',key);}var styles=document.querySelectorAll('[data-blocks-engine-capture-device-style]');for(var j=0;j<styles.length;j++){var node=styles[j];if(node.getAttribute('data-blocks-engine-capture-device-style').split(/\\s+/).indexOf(key)===-1)continue;var copy=node.cloneNode(true);copy.setAttribute('media',node.getAttribute('data-blocks-engine-capture-source-media'));copy.removeAttribute('data-blocks-engine-capture-device-style');copy.setAttribute('blocking','render');node.after(copy);}})();`;
 	// The generated bytes are UTF-8; keep the encoding declaration within the
 	// first 1024 bytes rather than putting a large predicate/config in front of it.
 	$( 'meta[charset]' ).remove();

@@ -67,7 +67,7 @@ export function portableInlineStyle(
 	if ( ! style || Object.keys( deviceAttributes ).length === 0 ) return style;
 	return {
 		...style,
-		key: JSON.stringify( [ style.media, deviceAttributes[ 'data-blocks-engine-capture-device-style' ], deviceAttributes[ 'data-blocks-engine-capture-source-media' ], css ] ),
+		key: JSON.stringify( [ style.media, deviceAttributes[ 'data-blocks-engine-capture-device-style' ]?.split( /\s+/ ).filter( Boolean ).sort(), deviceAttributes[ 'data-blocks-engine-capture-source-media' ], css ] ),
 		deviceAttributes,
 	};
 }

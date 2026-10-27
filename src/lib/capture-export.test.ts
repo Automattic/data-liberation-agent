@@ -4308,7 +4308,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
 		const devices = [
-			[ 'desktop', 'all' ],
+			[ 'desktop tablet', 'all' ],
 			[ 'phone', 'screen' ],
 		];
 		const css = '.shared{color:red}';
@@ -4323,6 +4323,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		)?.key );
 		expect( keys ).not.toContain( undefined );
 		expect( new Set( keys ).size ).toBe( keys.length );
+		expect( portableInlineStyle( ' data-blocks-engine-capture-device-style="tablet desktop"', css )?.key )
+			.toBe( portableInlineStyle( ' data-blocks-engine-capture-device-style="desktop tablet"', css )?.key );
 		const styles = devices.map( ( [ device, media ] ) =>
 			`<style media="not all" data-blocks-engine-capture-device-style="${ device }" data-blocks-engine-capture-source-media="${ media }">${ css }</style>`
 		).join( '' ) + `<style data-blocks-engine-capture-${ marker }="true">${ css }</style>`;
