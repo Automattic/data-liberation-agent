@@ -16,6 +16,8 @@ import { authorPortableMotion, type PortableMotionRecipe } from '../lib/portable
 
 export interface LiberateOptions {
 	acquisition?: CaptureOptions['acquisition'];
+	/** Origins the caller vouches for (a local dev site on this machine); see `CaptureOptions.trustedOrigins`. */
+	trustedOrigins?: CaptureOptions['trustedOrigins'];
 	http?: CaptureOptions['http'];
 	/** Route budget shared by browser and HTTP capture. Browser default: 17-minute time window; explicit limits override it. */
 	routeLimit?: CaptureOptions['routeLimit'];
@@ -80,7 +82,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 	const outputDir = siteOutputDir( options.outputBase, options.url );
 
 	const capture = await captureWebsite( {
-		acquisition: options.acquisition, http: options.http, routeLimit: options.routeLimit,
+		acquisition: options.acquisition, trustedOrigins: options.trustedOrigins, http: options.http, routeLimit: options.routeLimit,
 		...( options.routeSelection !== undefined ? { routeSelection: options.routeSelection } : {} ),
 		...( options.templateClusters !== undefined ? { templateClusters: options.templateClusters } : {} ),
 		url: options.url,

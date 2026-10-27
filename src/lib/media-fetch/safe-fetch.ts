@@ -16,6 +16,72 @@
 // byte counter while reading. Every source-derived download path routes
 // through here.
 //
+// Caller-vouched origins (the capture context) are the one exception: the
+// caller that owns the source — a local development site on its own machine —
+// can name the origin(s) it vouches for, and exactly those origins bypass the
+// internal-host checks. The decision lives here and nowhere else, keyed on
+// exact `URL.origin` equality; every caller of the guard reaches it through
+// the context set by {@link runWithTrustedOrigins}, not a global or an
+// environment variable. Redirects re-run the same check per hop, so a trusted
+// origin that redirects to another internal host is still blocked.
+//
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+/** The empty trust set every run starts with. Never mutated. */
+const NO_TRUSTED_ORIGINS: ReadonlySet<string> = new Set();
+
+/**
+ * The capture context: origins the current run's caller vouched for, visible
+ * to every guard check made under {@link runWithTrustedOrigins} — capture,
+ * media, screenshots, sitemap, HTTP acquisition, inspect, source navigation
+ * and browser request routing alike. Scoped to the async execution of one
+ * run, never a module global.
+ */
+const trustedOriginsStore = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/**
+ * Normalize caller-supplied vouched origins to exact `URL.origin` strings.
+ * Each entry must be an absolute http(s) URL (`http://localhost:8884/`); its
+ * origin (scheme, host, port) is what the guard compares against. Throws on a
+ * malformed entry so a caller learns about it before any work starts.
+ */
+export function normalizeTrustedOrigins( origins: readonly string[] | undefined ): ReadonlySet<string> {
+	if ( origins === undefined || origins.length === 0 ) return NO_TRUSTED_ORIGINS;
+	const trusted = new Set<string>();
+	for ( const raw of origins ) {
+		let parsed: URL;
+		try {
+			parsed = new URL( raw );
+		} catch {
+			// A malformed entry is a caller input bug, rejected before any work starts.
+			throw new Error( `trustedOrigins entry is not a valid URL: ${ JSON.stringify( String( raw ) ) }` ); // failure-class: programmer
+		}
+		if ( parsed.protocol !== 'http:' && parsed.protocol !== 'https:' ) {
+			throw new Error( `trustedOrigins entry must be an http(s) URL: ${ JSON.stringify( String( raw ) ) }` ); // failure-class: programmer
+		}
+		trusted.add( parsed.origin );
+	}
+	return trusted;
+}
+
+/**
+ * Run `fn` with `origins` vouched for by the caller. Every
+ * {@link assertPublicHttpUrl} check inside `fn` — the entry URL, discovered
+ * routes, subresources, media, sitemap, browser request routing and every
+ * redirect hop — allows exactly these origins through the internal-host
+ * checks and nothing else. An empty or undefined list runs `fn` unchanged,
+ * so default behavior is byte-for-byte identical.
+ */
+export function runWithTrustedOrigins<T>( origins: readonly string[] | undefined, fn: () => T ): T {
+	const trusted = normalizeTrustedOrigins( origins );
+	if ( trusted.size === 0 ) return fn();
+	return trustedOriginsStore.run( trusted, fn );
+}
+
+/** The origins vouched for in the current (async) capture context, if any. */
+function currentTrustedOrigins(): ReadonlySet<string> {
+	return trustedOriginsStore.getStore() ?? NO_TRUSTED_ORIGINS;
+}
 
 /** Max bytes any single download may produce. Bounds OOM (buffered) + disk-fill (streamed). */
 export const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -98,6 +164,12 @@ function isInternalIpv6(ip: string): boolean {
  *   - literal loopback/private/link-local/unspecified IPs (v4 + v6)
  *   - `localhost`, `*.local`, and bare single-label hostnames (no dot)
  *
+ * One exception: an origin the caller vouched for via
+ * {@link runWithTrustedOrigins} (its own machine — a local development site)
+ * bypasses the internal-host checks, keyed on exact `URL.origin` equality
+ * (scheme, host, port). Every redirect hop re-runs this function, so a
+ * trusted origin that redirects to an untrusted internal host stays blocked.
+ *
  * Hostname (non-literal) resolution is best-effort by design — we block the
  * literal-IP and localhost/.local/bare-host cases without a DNS lookup so the
  * check stays synchronous and side-effect-free. Returns the parsed URL.
@@ -112,6 +184,13 @@ export function assertPublicHttpUrl(rawUrl: string): URL {
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new SsrfBlockedError(`disallowed URL scheme "${url.protocol}" (only http/https)`);
+  }
+
+  // Caller-vouched origin (the capture context): a source the caller owns on
+  // this machine. Exact origin equality only — another port, another loopback
+  // host or an internal IP is still untrusted. Redirects re-check here.
+  if (currentTrustedOrigins().has(url.origin)) {
+    return url;
   }
 
   const host = url.hostname.toLowerCase();

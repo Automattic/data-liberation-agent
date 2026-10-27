@@ -42,6 +42,12 @@ const HELP = `
 
   Liberate options:
     --acquisition <mode> browser (default), or http for an unverified review candidate
+    --trusted-origin <url>  Vouch for an origin you own, e.g. http://localhost:8884,
+                         so capture can run against a site served on this machine
+                         (a local WordPress site, wp-env, Local). Repeatable. Exact
+                         origin match (scheme, host, port); redirects to any other
+                         internal host stay blocked. Without it, loopback and private
+                         hosts are refused
     --route-limit <n|all> Capture at most n routes, homepage included: the
                          homepage plus an even spread of the rest, linked pages
                          counted (browser default: 17-minute time window; http default all). Omitted
@@ -253,6 +259,13 @@ if (args.includes('--help')) {
   const portableMotion = portablePath ? JSON.parse((await import('node:fs')).readFileSync(portablePath, 'utf8')) : undefined;
   const acquisition = getArg('--acquisition') ?? undefined;
   if (args.includes('--acquisition') && !acquisition) throw new Error('--acquisition requires browser or http');
+  const trustedOrigins: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== '--trusted-origin') continue;
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith('--')) throw new Error('--trusted-origin requires an origin URL, e.g. http://localhost:8884');
+    trustedOrigins.push(value);
+  }
   const httpNumber = (name: string) => {
     if (!args.includes(name)) return undefined;
     const value = getArg(name);
@@ -299,6 +312,7 @@ if (args.includes('--help')) {
   const maxFiles = positiveIntegerArg('--max-files');
   const result = await liberateSite({
     acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
+    trustedOrigins,
     http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
     routeLimit,
     routeSelection,
