@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { chromium as playwrightChromium } from 'playwright';
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
-import { captureGalleries } from './gallery-capture.js';
+import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedGalleries } from '../static-galleries.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
@@ -275,6 +275,22 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{initial:0,coverage:'complete',restoration:'verified'}}});
 	}finally{await browser.close();}
 },15_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'marks alignment unverified promptly when a reloaded document reassigned the gallery root id', async () => {
+		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
+		await page.setContent(fixture.replace("document.getElementById('overlay').classList.add('visible');", ''));
+		const states = await captureGalleries(page);
+		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
+		// A reload of a source that assigns random ids hands the same carousel a
+		// fresh id, so the captured selector no longer matches anything.
+		await page.evaluate(() => { document.getElementById('gallery')!.id = 'carousel_petit_widget_album_photo_941'; });
+		const started = Date.now();
+		await alignCapturedGalleries(page, states);
+		expect(Date.now() - started).toBeLessThan(5_000);
+		expect(states[0]?.gallery?.inline.restoration).toBe('unverified');
+	}, 15_000,
+);
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executablePath()))('retains gallery evidence through real dual-viewport capture, export and offline replay',async()=>{
 	const parent=join(process.cwd(),'.tmp-test');mkdirSync(parent,{recursive:true});
