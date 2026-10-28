@@ -474,6 +474,13 @@ export async function alignCapturedGalleries(page: Page, states: CapturedDialogI
 	for (const state of states) {
 		const gallery = state.gallery?.inline;
 		if (!gallery || gallery.coverage !== 'complete') continue;
+		// A reloaded document can reassign the root's id, leaving the captured
+		// selector without a match. count() is bounded, where locator.evaluate
+		// would wait out the default actionability timeout for a vanished root.
+		if ((await page.locator(gallery.selector).count()) === 0) {
+			gallery.restoration = 'unverified';
+			continue;
+		}
 		for (let sample = 0; sample < 30; sample++) {
 			const frame = await snapshot(page, gallery);
 			const index = frame ? gallery.frames.findIndex(item => item.key === frame.key) : -1;
