@@ -71,6 +71,8 @@ export interface ScreenshotOpts {
 	/** Capture full-page and scrolled PNGs. Default: false; HTML/CSS and sidecars remain enabled. */
 	captureImages?: boolean;
 	evaluateTimeoutMs?: number; // default: 5_000
+	/** Per-profile uncaught-error ceiling in a one-second bucket (default 2,000). */
+	maxPageErrorsPerSecond?: number;
 	settleMs?: number; // default: 1_000
 	server?: CaptureLogSink;
 	verbose?: boolean;
