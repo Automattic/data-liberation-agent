@@ -9,6 +9,7 @@ type Node = Record<string, any>;
 const MAX_SCRIPT = 64 * 1024;
 const MAX_TOTAL = 256 * 1024;
 const MAX_SCRIPTS = 16;
+const PRODUCT_ROUTE = /^\/(?:(?<locale>[a-z]{2,3}(?:-[a-z0-9]{2,8})*)\/)?products\/[^/]+\/?$/i;
 const requests = new WeakMap<object, Map<string, Promise<ShopifyProductJson | null>>>();
 
 function object(value: unknown): value is Node {
@@ -99,6 +100,10 @@ export function completeProductJsonLd(scripts: string[], product: ShopifyProduct
   try {
     if (!Array.isArray(product.variants) || !Array.isArray(product.options) ||
         !Array.isArray(product.images) || !Array.isArray(product.tags)) return { scripts };
+    const page = new URL(pageUrl);
+    page.search = '';
+    page.hash = '';
+    const locale = PRODUCT_ROUTE.exec(page.pathname)?.groups?.locale;
     let found = false;
     const visit = (value: unknown): void => {
       if (Array.isArray(value)) { value.forEach(visit); return; }
@@ -109,6 +114,8 @@ export function completeProductJsonLd(scripts: string[], product: ShopifyProduct
         const ownVariant = product.variants.find(v => String(v.id) === variantId(value, pageUrl));
         if (ownVariant && types.includes('Product')) completeVariant(value, ownVariant, product, pageUrl);
         else {
+          if (value.url === undefined) value.url = page.href;
+          if (locale && value.inLanguage === undefined) value.inLanguage = locale;
           const offerCurrency = list(value.offers).find(offer => typeof offer?.priceCurrency === 'string')?.priceCurrency ?? currency;
           if (value.hasVariant === undefined) value.hasVariant = product.variants.map(v => newVariant(v, product, pageUrl, offerCurrency));
           for (const child of list(value.hasVariant)) {
@@ -176,7 +183,7 @@ export function completeProductJsonLd(scripts: string[], product: ShopifyProduct
 /** A browser is capture-owned: route/profile contexts share one bounded request. */
 export async function preserveShopifyProductJsonLd(page: Page, context: LiberationContext): Promise<void> {
   const url = new URL(context.url);
-  if (!/^\/products\/[^/]+\/?$/.test(url.pathname) || new URL(page.url()).origin !== url.origin) return;
+  if (!PRODUCT_ROUTE.test(url.pathname) || new URL(page.url()).origin !== url.origin) return;
   const endpoint = new URL(`${url.pathname.replace(/\/$/, '')}.js`, url.origin).href;
   const owner = page.context().browser() ?? page.context();
   let cache = requests.get(owner);
