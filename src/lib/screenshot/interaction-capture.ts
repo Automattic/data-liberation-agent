@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { randomUUID } from 'node:crypto';
 import type { CapturedGallery } from './gallery-capture.js';
 import { settleDocument } from './page-helpers.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
@@ -1040,6 +1041,23 @@ async function firstNewVisibleDialog(
 		surfaceSelector: POPUP_SURFACE_SELECTOR,
 		semanticSelector: SEMANTIC_POPUP_SELECTOR,
 	} ) as Promise< DialogDescriptor | undefined >;
+}
+
+// Selectable probes run inside evaluate; bridge back to the same real-keyboard
+// dismissal path used by the dialog probe. Keep one binding per page.
+const dialogDismissalBindings = new WeakMap< Page, Promise< string > >();
+export function dialogDismissalBinding( page: Page ): Promise< string > {
+	let binding = dialogDismissalBindings.get( page );
+	if ( ! binding ) {
+		binding = ( async () => {
+			const name = `__dialogDismiss_${ randomUUID().replaceAll( '-', '' ) }`;
+			await page.exposeBinding( name, ( _source, selector: string, triggerSelector: string ) =>
+				closeCapturedDialog( page, selector, triggerSelector ) );
+			return name;
+		} )();
+		dialogDismissalBindings.set( page, binding );
+	}
+	return binding;
 }
 
 async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string ): Promise< void > {
