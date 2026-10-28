@@ -4,6 +4,7 @@ import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { ROUTE_OMITTED_BY_BUDGET, routeBudgetReason } from '../route-budget.js';
 import type { CanonicalRouteAlias } from '../route-aliases.js';
 import { actionUrlExclusion } from '../url/action-url.js';
+import { isNonDocumentUrl } from '../extraction/sitemap.js';
 
 export interface LinkedPageLimits {
 	maxPages?: number;
@@ -69,6 +70,10 @@ export class LinkedFrontier {
 		const action = actionUrlExclusion(url);
 		if (action) {
 			this.omit(url, action.code, action.reason);
+			return false;
+		}
+		if (isNonDocumentUrl(url)) {
+			this.omit(url, 'non_document_url', 'URL identifies a non-document resource');
 			return false;
 		}
 		if (this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;

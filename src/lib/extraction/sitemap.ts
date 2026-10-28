@@ -62,11 +62,7 @@ export interface SitemapFetchResult {
 
 // Extensions that cannot be a document, so a URL carrying one is never a page.
 //
-// `resolvePageLink` below keeps its own list and it is a strict subset of this
-// one -- no `webp`, no video or audio, no archives, no feeds, no fonts. Capture
-// and the adapters go through it; inspection goes through this. Widening either
-// does not widen the other, so a new extension belongs in both unless the
-// asymmetry is meant.
+// Shared by inspection, link resolution and capture frontier admission.
 // Deliberately a denylist: an unknown or absent extension still gets inspected,
 // because `.php`, `.aspx` and extensionless paths are all ordinary pages. Only
 // file types we are confident about are excluded.
@@ -618,9 +614,7 @@ export function resolvePageLink(href: string, baseUrl: string, baseOrigin: strin
     const resolved = new URL(href, baseUrl);
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
     if (resolved.origin !== baseOrigin) return null;
-    if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|docx?|zip|xml|json)$/i.test(resolved.pathname)) return null;
-    // An attachment viewer link is a media view, not a route.
-    if (isAttachmentViewerUrl(resolved.href)) return null;
+    if (isNonDocumentUrl(resolved.href)) return null;
     resolved.hash = '';
     return resolved.href;
   } catch {
