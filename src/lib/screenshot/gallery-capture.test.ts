@@ -70,7 +70,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0],JSON.stringify(states[0])).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete',restoration:'verified'},closed:true,selection:[0,1,2],viewportRestoration:'verified'}});
 		expect(await root!.evaluate(node=>node===document.getElementById('overlay'))).toBe(true);
 		expect(await stage!.evaluate(node=>node===document.getElementById('large'))).toBe(true);
-	}, 60_000,
+	}, 20_000,
 );
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(

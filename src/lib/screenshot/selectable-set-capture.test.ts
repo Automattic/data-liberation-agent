@@ -197,8 +197,18 @@ const CLOSURE_ABSOLUTE_PAGE = `<!doctype html><html><body>
 </body></html>`;
 
 describe( 'captureSelectableSetStates', () => {
-	it( 'dismisses member-opened modals and releases their focus trap', async () => {
+	let browser: Browser;
+
+	beforeAll( async () => {
 		if ( skipBrowser ) return;
+		browser = await chromium.launch( { headless: true } );
+	} );
+
+	afterAll( async () => {
+		await browser?.close();
+	} );
+
+	it.skipIf( skipBrowser )( 'dismisses member-opened modals and releases their focus trap', async () => {
 		const page = await browser.newPage();
 		try {
 			await serve( page, `<div class="thumbs"><button>A</button><button>B</button><button>C</button></div>
@@ -217,16 +227,6 @@ describe( 'captureSelectableSetStates', () => {
 		} finally {
 			await page.close();
 		}
-	} );
-	let browser: Browser;
-
-	beforeAll( async () => {
-		if ( skipBrowser ) return;
-		browser = await chromium.launch( { headless: true } );
-	} );
-
-	afterAll( async () => {
-		await browser?.close();
 	} );
 
 	it.skipIf( skipBrowser )( 'captures every panel of a roving-focus tablist that selects on mousedown and mounts only the active panel', async () => {
