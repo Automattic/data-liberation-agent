@@ -554,11 +554,31 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			if (!selected) continue;
 			const opener = root + inline.stage.replace(':scope', '') + ` > :nth-child(${selected.slot + 1}) img`;
 			let before: string[] = [];
+			// The opener can sit inside a plain link to another document, and
+			// activating it for a lightbox would then steer this route away during
+			// baseline capture. Cancel only a link navigation the page itself leaves
+			// unhandled: a lightbox that preventDefaults its own link click still
+			// opens, and an unhandled album link cannot navigate the route.
+			await page.evaluate(() => {
+				const guard = (event: Event) => {
+					if (event.defaultPrevented) return;
+					if (event.composedPath().some(node => node instanceof Element && node.closest('a[href]'))) event.preventDefault();
+				};
+				window.addEventListener('click', guard);
+				(globalThis as typeof globalThis & { __dlaGalleryLinkGuard?: EventListener }).__dlaGalleryLinkGuard = guard;
+			});
 			try {
 				await activateTrigger(page, opener, async () => { before = await visibleGallerySurfaces(page); });
 			} catch (error) {
 				state.error = String(error).slice(0, 500);
 				continue;
+			} finally {
+				// A navigation can have destroyed this document along with its guard.
+				await page.evaluate(() => {
+					const global = globalThis as typeof globalThis & { __dlaGalleryLinkGuard?: EventListener };
+					if (global.__dlaGalleryLinkGuard) window.removeEventListener('click', global.__dlaGalleryLinkGuard);
+					delete global.__dlaGalleryLinkGuard;
+				}).catch(() => undefined);
 			}
 			let overlay: string | undefined;
 			for (let sample = 0; !overlay && sample < 30; sample++) {
