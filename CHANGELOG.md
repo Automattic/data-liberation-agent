@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.26] - 2026-10-28
+
+### Changed
+- regenerate plugin bundles
+- Gallery alignment reports an absent root unverified instead of timing out the route
+- Gallery lightbox probe no longer follows slide links to other documents
+
+### Fixed
+- dismiss modals opened by selectable-set probes
+- contain per-profile page-error storms
+
 ## [0.33.25] - 2026-10-28
 
 ### Changed
