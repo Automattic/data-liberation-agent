@@ -996,6 +996,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	};
 	if ( ! ( await loadBaseline() ) ) return;
 
+	// Galleries and disclosure hydration probe before serialization; keep the
+	// guard through the remaining probes, until this capture page closes.
+	await installReadOnlyProbeGuard( page, diagnostic => args.diagnostics?.push( diagnostic ) );
+
 	// --- responsive image map (mobile only) -----------------------------------
 	// Some platforms swap each image for a viewport-specific crop at runtime.
 	// Recording {media id → variant URL} lets the export serve that crop via
@@ -1819,6 +1823,7 @@ interface DeviceComparisonArgs {
 	removeSelectors?: string[];
 	prepareCapture?: ScreenshotOpts['prepareCapture'];
 	telemetryRequest?: ScreenshotOpts['telemetryRequest'];
+	probeDiagnostic?: ( diagnostic: ProfileDiagnostic ) => void;
 }
 
 interface DeviceModeProbeArgs extends DeviceComparisonArgs {
@@ -1892,6 +1897,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 		await waitForStable( page, 2_000 );
 	}
 	await applyCaptureRemovals( page, { removeSelectors: args.removeSelectors, prepare: args.prepareCapture, ctx: { url: target, viewport } } );
+	if ( mode === 'probe' ) await installReadOnlyProbeGuard( page, diagnostic => args.probeDiagnostic?.( diagnostic ) );
 	return { page, html, target, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
 }
 
@@ -2431,7 +2437,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			telemetryRequest: opts.telemetryRequest,
 		};
 		const probed = await probeDeviceMode( {
-			...comparison, browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
+			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
 			deviceDocuments: [
 				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
 				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
@@ -2465,6 +2471,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) : undefined;
 		await Promise.all( profiles.map( async viewport => {
 			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
+				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
 				publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
@@ -3132,6 +3139,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	};
 }
 
+const READ_ONLY_METHODS = new Set( [ 'GET', 'HEAD', 'OPTIONS' ] );
+const readOnlyProbePages = new WeakSet< Page >();
+
+/** Installed after baseline loading, before any interaction drive; the page owns its lifetime. */
+export async function installReadOnlyProbeGuard( page: Page, record: ( diagnostic: ProfileDiagnostic ) => void ): Promise< void > {
+	if ( ! page.route ) return;
+	readOnlyProbePages.add( page );
+	await page.route( '**/*', async route => {
+		const request = route.request();
+		if ( READ_ONLY_METHODS.has( request.method() ) ) { await route.fallback(); return; }
+		record( { code: 'interaction_request_blocked', reason: `${ request.method() } ${ new URL( request.url() ).pathname } blocked during interaction probing` } );
+		await route.fulfill( { status: 204, body: '' } );
+	} );
+}
+
 /**
  * Keep the page on its route while post-baseline probes drive it. A probe can
  * trigger a navigation no click handler can cancel -- a script assigning
@@ -3147,6 +3169,8 @@ export async function lockMainFrameNavigation( page: Page, onAttempt?: () => voi
 	const deadline = Date.now() + SOURCE_NAVIGATION_LIMITS.timeoutMs;
 	const guard = async ( route: Route ) => {
 		const request = route.request();
+		// Let the read-only guard record and block unsafe form submissions too.
+		if ( readOnlyProbePages.has( page ) && ! READ_ONLY_METHODS.has( request.method() ) ) { await route.fallback(); return; }
 		if ( request.isNavigationRequest() && request.frame() === page.mainFrame() ) {
 			if (allowReload && request.method() === 'GET' && reloads < SOURCE_NAVIGATION_LIMITS.hops && Date.now() < deadline) {
 				const current = new URL(page.url()); current.hash = '';

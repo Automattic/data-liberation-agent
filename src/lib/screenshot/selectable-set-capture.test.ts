@@ -1,5 +1,6 @@
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { installReadOnlyProbeGuard, lockMainFrameNavigation } from './screenshotter.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../source-cleanup.js';
 import {
@@ -206,6 +207,26 @@ describe( 'captureSelectableSetStates', () => {
 
 	afterAll( async () => {
 		await browser?.close();
+	} );
+
+	it.skipIf( skipBrowser )( 'blocks probe POSTs without reaching the source and records evidence', async () => {
+		const page = await browser.newPage();
+		const posts: string[] = [];
+		const diagnostics: { code: string; reason: string }[] = [];
+		try {
+			await page.route( `${ ORIGIN }/**`, route => {
+				if ( route.request().method() === 'POST' ) posts.push( route.request().url() );
+				return route.fulfill( { contentType: 'text/html', body: `<main><div>
+					<button type="button" onclick="fetch('/cart/add', {method:'POST'})">Add item</button>
+					<button type="button">Other item</button></div></main>` } );
+			} );
+			await page.goto( ORIGIN );
+			await installReadOnlyProbeGuard( page, diagnostic => diagnostics.push( diagnostic ) );
+			const release = await lockMainFrameNavigation( page );
+			try { await captureSelectableSetStates( page ); } finally { await release(); }
+			expect( posts ).toEqual( [] );
+			expect( diagnostics ).toContainEqual( { code: 'interaction_request_blocked', reason: 'POST /cart/add blocked during interaction probing' } );
+		} finally { await page.close(); }
 	} );
 
 	it.skipIf( skipBrowser )( 'captures every panel of a roving-focus tablist that selects on mousedown and mounts only the active panel', async () => {
