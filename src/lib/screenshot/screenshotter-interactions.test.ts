@@ -25,7 +25,8 @@ vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 	connectBrowser: vi.fn(),
 } ) );
 
-vi.mock( './interaction-capture.js', () => ( {
+vi.mock( './interaction-capture.js', async ( importOriginal ) => ( {
+	...( await importOriginal< typeof import( './interaction-capture.js' ) >() ),
 	captureTriggeredDialogs: vi.fn(),
 	captureRouteNavigation: vi.fn(),
 } ) );
