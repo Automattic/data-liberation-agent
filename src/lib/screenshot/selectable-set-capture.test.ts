@@ -1,5 +1,6 @@
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { installReadOnlyProbeGuard, lockMainFrameNavigation, withReadOnlyProbes } from './screenshotter.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../source-cleanup.js';
 import {
@@ -206,6 +207,61 @@ describe( 'captureSelectableSetStates', () => {
 
 	afterAll( async () => {
 		await browser?.close();
+	} );
+
+	it.skipIf( skipBrowser )( 'blocks probe POSTs without reaching the source and records evidence', async () => {
+		const page = await browser.newPage();
+		const posts: string[] = [];
+		const diagnostics: { code: string; reason: string }[] = [];
+		try {
+			await page.route( `${ ORIGIN }/**`, route => {
+				if ( route.request().method() === 'POST' ) posts.push( route.request().url() );
+				return route.fulfill( { contentType: 'text/html', body: `<main><div>
+					<button type="button" onclick="fetch('/cart/add', {method:'POST'})">Add item</button>
+					<button type="button">Other item</button></div></main>` } );
+			} );
+			await page.goto( ORIGIN );
+			await installReadOnlyProbeGuard( page, diagnostic => diagnostics.push( diagnostic ) );
+			await page.evaluate( () => fetch( '/baseline', { method: 'POST' } ).then( response => response.text() ) );
+			expect( posts ).toEqual( [ `${ ORIGIN }/baseline` ] );
+			expect( diagnostics ).toEqual( [] );
+			posts.length = 0;
+			const release = await lockMainFrameNavigation( page );
+			try { await withReadOnlyProbes( page, () => captureSelectableSetStates( page ) ); } finally { await release(); }
+			expect( posts ).toEqual( [] );
+			expect( diagnostics ).toContainEqual( { code: 'interaction_request_blocked', reason: 'POST /cart/add blocked during interaction probing' } );
+			await page.evaluate( () => fetch( '/after-probe', { method: 'POST' } ).then( response => response.text() ) );
+			expect( posts ).toEqual( [ `${ ORIGIN }/after-probe` ] );
+		} finally { await page.close(); }
+	} );
+
+	it.skipIf( skipBrowser )( 'blocks unsafe form navigation without drift and releases the guard after a failed probe', async () => {
+		const page = await browser.newPage();
+		const posts: string[] = [];
+		const diagnostics: { code: string; reason: string }[] = [];
+		let drift = false;
+		try {
+			await page.route( `${ ORIGIN }/**`, route => {
+				if ( route.request().method() === 'POST' ) posts.push( route.request().url() );
+				return route.fulfill( { contentType: 'text/html', body: '<form method="post" action="/cart/add"><button>Submit</button></form>' } );
+			} );
+			await page.goto( ORIGIN );
+			await installReadOnlyProbeGuard( page, diagnostic => diagnostics.push( diagnostic ) );
+			const release = await lockMainFrameNavigation( page, () => { drift = true; } );
+			try {
+				await expect( withReadOnlyProbes( page, async () => {
+					const response = page.waitForResponse( response => response.url().endsWith( '/cart/add' ) );
+					await page.locator( 'button' ).click();
+					await response;
+					throw new Error( 'probe failed' );
+				} ) ).rejects.toThrow( 'probe failed' );
+			} finally { await release(); }
+			expect( drift ).toBe( false );
+			expect( posts ).toEqual( [] );
+			expect( diagnostics ).toContainEqual( { code: 'interaction_request_blocked', reason: 'POST /cart/add blocked during interaction probing' } );
+			await page.evaluate( () => fetch( '/after-failure', { method: 'POST' } ).then( response => response.text() ) );
+			expect( posts ).toEqual( [ `${ ORIGIN }/after-failure` ] );
+		} finally { await page.close(); }
 	} );
 
 	it.skipIf( skipBrowser )( 'dismisses member-opened modals and releases their focus trap', async () => {

@@ -999,6 +999,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	};
 	if ( ! ( await loadBaseline() ) ) return;
 
+	// Install once, inactive outside the scoped interaction drives below.
+	await installReadOnlyProbeGuard( page, diagnostic => args.diagnostics?.push( diagnostic ) );
+
 	// --- responsive image map (mobile only) -----------------------------------
 	// Some platforms swap each image for a viewport-specific crop at runtime.
 	// Recording {media id → variant URL} lets the export serve that crop via
@@ -1048,8 +1051,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Observe actions while source geometry and lazy-image owners are still live.
 	// Width learning can freeze hidden overlay boxes; it cannot be the input to an action drive.
 	args.phases?.enter( 'galleries' );
-	const galleryStates = await captureGalleries(page).catch(() => []);
-	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
+	const galleryStates = await withReadOnlyProbes( page, () => captureGalleries( page ) ).catch(() => []);
+	const pagerSlideshows = await withReadOnlyProbes( page, () => collectPagerSlideshowStates( page ) ).catch( () => [] );
 	// Browser probes can scroll an offscreen control into view. Native view
 	// animations legitimately report finished there; observe the capture's
 	// at-top baseline, not the incidental position left by a probe click.
@@ -1160,7 +1163,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
 		args.phases?.enter( 'hydrate-disclosures' );
 		try {
-			disclosureStates = await hydrateDisclosureContent(page);
+			disclosureStates = await withReadOnlyProbes( page, () => hydrateDisclosureContent( page ) );
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String( error );
 			// Reload owns recovery: Escape can also close unrelated overlays that
@@ -1448,7 +1451,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// whose evidence is replayed against the top-of-document portable baseline.
 		args.phases?.enter( 'dialogs' );
 		await restoreTopScrollState( page );
-		await dismissOverlays( page );
+		await withReadOnlyProbes( page, () => dismissOverlays( page ) );
 		// Shared chrome the entrypoint already probed is not clicked again: its
 		// rebased, verified states join this route's report instead.
 		let chrome: ChromeReuse | undefined;
@@ -1466,14 +1469,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		const skip = combineSkips( chrome?.skip, excluded.skip );
 		let interactions: InteractionStatesReport;
 		try {
-			interactions = skip ? await captureTriggeredDialogs( page, url, { skip } ) : await captureTriggeredDialogs( page, url );
+			interactions = await withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip } ) : captureTriggeredDialogs( page, url ) );
 		} finally {
 			if ( chrome?.skip ) await clearChromeMarks( page );
 		}
 		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
 		if ( isDesktop && args.reflowPhoneViewport && chrome?.unmatchedRoots?.length ) {
 			args.phases?.enter( 'shared-chrome' );
-			const phoneStates = await probePhoneOnlyChrome( page, url, chrome.unmatchedRoots, args.reflowPhoneViewport ).catch( () => [] );
+			const phoneStates = await withReadOnlyProbes( page, () => probePhoneOnlyChrome( page, url, chrome!.unmatchedRoots!, args.reflowPhoneViewport! ) ).catch( () => [] );
 			if ( phoneStates.length ) interactions.states.push( ...phoneStates );
 			args.phases?.enter( 'dialogs' );
 		}
@@ -1481,7 +1484,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Route-tab observation is evidence, not a baseline artifact: its failure
 		// must not discard the dialog states captured before it.
 		try {
-			interactions.routeNavigation = await captureRouteNavigation( page, url );
+			interactions.routeNavigation = await withReadOnlyProbes( page, () => captureRouteNavigation( page, url ) );
 		} catch {
 			/* best-effort: capture proceeds with dialog evidence alone */
 		}
@@ -1493,7 +1496,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		if ( args.rendererCrashed() ) return;
 		try {
 			args.phases?.enter( 'selectable' );
-			const selectableStates = await captureSelectableSetStates( page, { skip: excluded.skip } );
+			const selectableStates = await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: excluded.skip } ) );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
@@ -1504,8 +1507,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			}
 			if ( args.rendererCrashed() ) return;
 			try {
-				await dismissOverlays( page );
-				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000, skip: excluded.skip } ) );
+				await withReadOnlyProbes( page, () => dismissOverlays( page ) );
+				interactions.states.push( ...await withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000, skip: excluded.skip } ) ) );
 			} catch {
 				/* A failed input probe must not misreport a successful selectable drive. */
 			}
@@ -1539,7 +1542,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( ! args.rendererCrashed() && ! entry.scrollStates?.toggles.length ) {
 		try {
 			args.phases?.enter( 'scroll-states' );
-			const scrollStates = await captureScrollStates( page, url );
+			const scrollStates = await withReadOnlyProbes( page, () => captureScrollStates( page, url ) );
 			if ( scrollStates.toggles.length > 0 ) {
 				entry.scrollStates = scrollStates;
 			}
@@ -1826,6 +1829,7 @@ interface DeviceComparisonArgs {
 	removeSelectors?: string[];
 	prepareCapture?: ScreenshotOpts['prepareCapture'];
 	telemetryRequest?: ScreenshotOpts['telemetryRequest'];
+	probeDiagnostic?: ( diagnostic: ProfileDiagnostic ) => void;
 }
 
 interface DeviceModeProbeArgs extends DeviceComparisonArgs {
@@ -1899,6 +1903,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 		await waitForStable( page, 2_000 );
 	}
 	await applyCaptureRemovals( page, { removeSelectors: args.removeSelectors, prepare: args.prepareCapture, ctx: { url: target, viewport } } );
+	if ( mode === 'probe' ) await installReadOnlyProbeGuard( page, diagnostic => args.probeDiagnostic?.( diagnostic ) );
 	return { page, html, target, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
 }
 
@@ -2018,13 +2023,13 @@ async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision
 				// Order as in a phone pass: disclosures are restored in place first, so
 				// the dialog probe sees what that pass saw. The desktop pass restores
 				// the same disclosures in the shared document, so these states are not kept.
-				await hydrateDisclosureContent( phone.page ).catch( () => [] );
+				await withReadOnlyProbes( phone.page, () => hydrateDisclosureContent( phone.page ) ).catch( () => [] );
 				await restoreTopScrollState( phone.page );
-				await dismissOverlays( phone.page );
+				await withReadOnlyProbes( phone.page, () => dismissOverlays( phone.page ) );
 				const release = await lockMainFrameNavigation( phone.page );
 				let report: InteractionStatesReport;
 				try {
-					report = await captureTriggeredDialogs( phone.page, url, { skip: `[${ DESKTOP_CONTROL_ATTRIBUTE }]` } );
+					report = await withReadOnlyProbes( phone.page, () => captureTriggeredDialogs( phone.page, url, { skip: `[${ DESKTOP_CONTROL_ATTRIBUTE }]` } ) );
 				} finally {
 					await release();
 				}
@@ -2080,15 +2085,15 @@ async function probeChromeOnPage(
 ): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
 	// Prepared as a route is before its probe: disclosures restored in place,
 	// resting scroll, overlays dismissed.
-	await hydrateDisclosureContent( page ).catch( () => [] );
+	await withReadOnlyProbes( page, () => hydrateDisclosureContent( page ) ).catch( () => [] );
 	await restoreTopScrollState( page );
-	await dismissOverlays( page );
+	await withReadOnlyProbes( page, () => dismissOverlays( page ) );
 	const landmarks = await readChromeLandmarks( page, true );
 	let states: CapturedDialogInteraction[] = [];
 	if ( landmarks.length ) {
 		const release = await lockMainFrameNavigation( page );
 		try {
-			states = ( await captureTriggeredDialogs( page, url, { skip: OUTSIDE_CHROME } ) ).states;
+			states = ( await withReadOnlyProbes( page, () => captureTriggeredDialogs( page, url, { skip: OUTSIDE_CHROME } ) ) ).states;
 		} finally {
 			await release();
 			await clearChromeMarks( page );
@@ -2438,7 +2443,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			telemetryRequest: opts.telemetryRequest,
 		};
 		const probed = await probeDeviceMode( {
-			...comparison, browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
+			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
 			deviceDocuments: [
 				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
 				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
@@ -2472,6 +2477,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) : undefined;
 		await Promise.all( profiles.map( async viewport => {
 			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
+				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
 				publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
@@ -3145,6 +3151,32 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	};
 }
 
+const READ_ONLY_METHODS = new Set( [ 'GET', 'HEAD', 'OPTIONS' ] );
+const readOnlyProbePages = new WeakMap< Page, { active: number } >();
+
+/** One page-owned handler; baseline and lazy-load requests pass through unchanged. */
+export async function installReadOnlyProbeGuard( page: Page, record: ( diagnostic: ProfileDiagnostic ) => void ): Promise< void > {
+	if ( ! page.route ) return;
+	if ( readOnlyProbePages.has( page ) ) return;
+	const state = { active: 0 };
+	readOnlyProbePages.set( page, state );
+	await page.route( '**/*', async route => {
+		const request = route.request();
+		if ( ! state.active || READ_ONLY_METHODS.has( request.method() ) ) { await route.fallback(); return; }
+		record( { code: 'interaction_request_blocked', reason: `${ request.method() } ${ new URL( request.url() ).pathname } blocked during interaction probing` } );
+		await route.fulfill( { status: 204, body: '' } );
+	} );
+}
+
+/** Scope protection to an interaction drive, including nested probes and failure paths. */
+export async function withReadOnlyProbes< T >( page: Page, probe: () => Promise< T > ): Promise< T > {
+	const state = readOnlyProbePages.get( page );
+	if ( ! state ) return probe();
+	state.active++;
+	try { return await probe(); }
+	finally { state.active--; }
+}
+
 /**
  * Keep the page on its route while post-baseline probes drive it. A probe can
  * trigger a navigation no click handler can cancel -- a script assigning
@@ -3160,6 +3192,8 @@ export async function lockMainFrameNavigation( page: Page, onAttempt?: () => voi
 	const deadline = Date.now() + SOURCE_NAVIGATION_LIMITS.timeoutMs;
 	const guard = async ( route: Route ) => {
 		const request = route.request();
+		// Let the read-only guard record and block unsafe form submissions too.
+		if ( readOnlyProbePages.get( page )?.active && ! READ_ONLY_METHODS.has( request.method() ) ) { await route.fallback(); return; }
 		if ( request.isNavigationRequest() && request.frame() === page.mainFrame() ) {
 			if (allowReload && request.method() === 'GET' && reloads < SOURCE_NAVIGATION_LIMITS.hops && Date.now() < deadline) {
 				const current = new URL(page.url()); current.hash = '';
