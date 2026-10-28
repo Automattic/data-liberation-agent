@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { dialogDismissalBinding, type CapturedDialogInteraction } from './interaction-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 
 export const SELECTABLE_SET_KIND = 'selectable-set' as const;
@@ -99,8 +99,10 @@ export async function captureSelectableSetStates(
 
 	let raw: RawSelectableRecord[];
 	try {
+		const dismissBinding = await dialogDismissalBinding( page );
 		const result = await page.evaluate(
 			async ( limits: {
+				dismissBinding: string;
 				maxSets: number;
 				maxMembers: number;
 				maxDriveMs: number;
@@ -430,6 +432,9 @@ export async function captureSelectableSetStates(
 				const activate = async (
 					element: Element
 				): Promise< { ok: true } | { ok: false; error: string; navigated?: boolean } > => {
+					const modalSelector = 'dialog,[role="dialog"],[aria-modal="true"]';
+					const openBefore = new Set( Array.from( document.querySelectorAll( modalSelector ) ).filter( visible ) );
+					const focusBefore = document.activeElement;
 					const before = currentRoute();
 					const beforeState = history.state;
 					let clickError: string | undefined;
@@ -465,8 +470,22 @@ export async function captureSelectableSetStates(
 						clickError = ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 );
 					} finally {
 						settle?.stop();
-						document.removeEventListener( 'click', preventNavigation );
-						document.removeEventListener( 'submit', preventNavigation );
+						// A member can be a modal opener rather than a shared-region driver.
+						// Undo that side effect even when activation failed or changed route,
+						// before another member (including a restoration action) is driven.
+						const opened = Array.from( document.querySelectorAll( modalSelector ) )
+							.filter( element => visible( element ) && ! openBefore.has( element ) );
+						try {
+							const dismiss = ( window as unknown as Record< string, ( selector: string, trigger: string ) => Promise< void > > )[ limits.dismissBinding ];
+							for ( const modal of opened ) {
+								if ( visible( modal ) ) await dismiss( sourceSelector( modal ), sourceSelector( element ) );
+							}
+							if ( opened.length && opened.every( modal => ! modal.isConnected || ! visible( modal ) ) &&
+								focusBefore instanceof HTMLElement && focusBefore.isConnected ) focusBefore.focus( { preventScroll: true } );
+						} finally {
+							document.removeEventListener( 'click', preventNavigation );
+							document.removeEventListener( 'submit', preventNavigation );
+						}
 					}
 					if ( clickError !== undefined ) return { ok: false, error: clickError };
 					if ( currentRoute() !== before ) {
@@ -1046,6 +1065,7 @@ export async function captureSelectableSetStates(
 				return records;
 			},
 			{
+				dismissBinding,
 				maxSets,
 				maxMembers,
 				maxDriveMs,

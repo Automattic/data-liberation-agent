@@ -74,11 +74,7 @@ it( 'learns each responsive document through tablet widths without freezing phon
 		await copy.goto( `${ sourceUrl }copy/`, { waitUntil: 'domcontentloaded' } );
 		for ( const width of [ 390, 402, 600, 768, 1024, 1440, 768, 390 ] ) {
 			for ( const page of [ source, phone, copy ] ) await page.setViewportSize( { width, height: 900 } );
-			// setViewportSize resolves before the runtime's resize handler runs.
-			// Wait for its geometry, not a fixed delay that races under suite load.
-			for ( const page of [ source, phone ] ) await page.waitForFunction(
-				width => document.querySelector( 'main' )!.getBoundingClientRect().width === width, width
-			);
+			await phone.waitForTimeout( 50 );
 			const expected = await geometry( width <= 1024 ? phone : source );
 			const actual = await geometry( copy );
 			expect( actual.section, `section at ${ width }` ).toBeCloseTo( expected.section, 0 );

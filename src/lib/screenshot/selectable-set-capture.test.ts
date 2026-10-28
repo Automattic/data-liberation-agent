@@ -264,6 +264,27 @@ describe( 'captureSelectableSetStates', () => {
 		} finally { await page.close(); }
 	} );
 
+	it.skipIf( skipBrowser )( 'dismisses member-opened modals and releases their focus trap', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<div class="thumbs"><button>A</button><button>B</button><button>C</button></div>
+				<div class="box" tabindex="-1" role="dialog" aria-modal="true" style="position:fixed;inset:0;display:none"><p></p><button class="close">Close</button></div>
+				<script>
+				const box = document.querySelector('.box');
+				document.querySelectorAll('.thumbs button').forEach(b => b.onclick = () => { box.querySelector('p').textContent = 'Photo ' + b.textContent; box.style.display = 'flex'; box.focus(); });
+				box.querySelector('.close').onclick = () => box.style.display = 'none';
+				document.addEventListener('keydown', e => { if (e.key === 'Escape') box.style.display = 'none'; });
+				document.addEventListener('focusin', e => { if (box.style.display === 'flex' && !box.contains(e.target)) box.focus(); });
+				</script>` );
+			await captureSelectableSetStates( page );
+			expect( await page.locator( '.box' ).isVisible() ).toBe( false );
+			await page.locator( '.thumbs button' ).first().focus();
+			expect( await page.locator( '.thumbs button' ).first().evaluate( el => el === document.activeElement ) ).toBe( true );
+		} finally {
+			await page.close();
+		}
+	} );
+
 	it.skipIf( skipBrowser )( 'captures every panel of a roving-focus tablist that selects on mousedown and mounts only the active panel', async () => {
 		const page = await browser.newPage();
 		try {

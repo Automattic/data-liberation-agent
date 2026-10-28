@@ -25,7 +25,8 @@ vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 	connectBrowser: vi.fn(),
 } ) );
 
-vi.mock( './interaction-capture.js', () => ( {
+vi.mock( './interaction-capture.js', async ( importOriginal ) => ( {
+	...( await importOriginal< typeof import( './interaction-capture.js' ) >() ),
 	captureTriggeredDialogs: vi.fn(),
 	captureRouteNavigation: vi.fn(),
 } ) );
@@ -45,6 +46,8 @@ function makePage() {
 		unroute: vi.fn().mockResolvedValue(undefined),
 		exposeBinding: vi.fn().mockResolvedValue(undefined),
 		once: vi.fn(),
+		on: vi.fn(),
+		off: vi.fn(),
 		goto: vi.fn().mockImplementation( async ( url: string ) => {
 			currentUrl = url;
 			return { status: () => 200 };
