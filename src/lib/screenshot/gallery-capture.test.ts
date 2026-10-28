@@ -330,6 +330,32 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}, 20_000,
 );
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'does not follow slide links to other documents while probing for a lightbox', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+			// Each slide image sits inside a plain link to another document, the
+			// album-carousel markup; the page handles no click of its own.
+			await page.setContent(`<!doctype html><html><head><base href="https://albums.test/"><style>
+.frame{display:none;width:100%}.frame.chosen{display:block}img{width:100%;height:200px;object-fit:contain}
+</style></head><body><section id="gallery"><div aria-label="Image gallery carousel"><div id="stage">${[0, 1, 2].map((i) => `<div class="frame ${i === 0 ? 'chosen' : ''}"><a href="/album-${i}"><div role="img" data-src="${image(i, true)}"><img src="${image(i)}"></div></a></div>`).join('')}</div></div><button aria-label="Previous image">Previous</button><button aria-label="Next image">Next</button></section>
+<script>let current=0;function show(index){document.querySelectorAll('#stage .frame').forEach((node,i)=>node.classList.toggle('chosen',i===index));}
+document.querySelector('[aria-label="Next image"]').onclick=()=>{current=(current+1)%3;show(current);};document.querySelector('[aria-label="Previous image"]').onclick=()=>{current=(current+2)%3;show(current);};</script></body></html>`);
+			const navigations: string[] = [];
+			page.on('request', (request) => {
+				if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations.push(request.url());
+			});
+			await page.route('**/*', (route) => route.abort());
+			const states = await captureGalleries(page);
+			expect(states[0], JSON.stringify(states[0]).slice(0, 2000)).toMatchObject({ status: 'no-dialog', gallery: { inline: { coverage: 'complete', restoration: 'verified' } } });
+			expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
+			expect(states[0]?.dialog).toBeUndefined();
+			expect(navigations, JSON.stringify(navigations)).toEqual([]);
+		} finally { await browser.close(); }
+	}, 30_000,
+);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('activates an image-opened lightbox through the source touch contract',async()=>{
 	const browser=await chromium.launch();
 	try{
