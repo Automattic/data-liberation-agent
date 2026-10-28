@@ -24,6 +24,21 @@ it('names concrete page, depth and time omissions without merging query or slash
 	]);
 });
 
+it('rejects non-document links once without spending page budgets or requiring evidence', () => {
+	const frontier = new LinkedFrontier({maxPages: 2, capturePageLimit: 2}, 0);
+	const files = ['/media/a.mp4', '/media/b.zip', '/media/c.pdf'];
+	for (const [path, admitted] of [...files.map(path => [path, false] as const), ['/about/', true], ['/page.aspx', true]] as const) {
+		const url = `https://source.test${path}`;
+		expect(frontier.admit(url, 1, 0)).toBe(admitted);
+		expect(frontier.admit(`${url}#again`, 1, 0)).toBe(false);
+	}
+	expect(frontier.coverage()).toMatchObject({
+		requiredUrls: ['https://source.test/about/', 'https://source.test/page.aspx'],
+		scheduled: 2,
+		diagnostics: files.map(path => ({code: 'non_document_url', url: `https://source.test${path}`, reason: expect.any(String)})),
+	});
+});
+
 it('records the exact omitted addresses at a four-page frontier budget', () => {
 	const frontier = new LinkedFrontier({maxPages: 4, maxDepth: 3, timeoutMs: 100}, 0);
 	for (const [index, path] of ['/', '/second/', '/administration/', '/accounting/', '/apiary/', '/search/'].entries()) {
@@ -313,9 +328,9 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
 			if (request.url === '/absent') {response.writeHead(404, {'content-type': 'text/html'}); response.end('<h1>404</h1>'); return;}
-			if (request.url === '/api/data.json') {response.writeHead(200, {'content-type': 'text/plain'}); response.end('not an HTML page'); return;}
+			if (request.url === '/api/data') {response.writeHead(200, {'content-type': 'text/plain'}); response.end('not an HTML page'); return;}
 			response.setHeader('content-type', 'text/html');
-			response.end('<meta name="viewport" content="width=device-width,initial-scale=1">' + (request.url === '/' ? '<h1>Home</h1><a href="/local/">Local</a><a href="/absent">Absent</a><a href="/api/data.json">Non HTML</a>' : '<h1>Local</h1>'));
+			response.end('<meta name="viewport" content="width=device-width,initial-scale=1">' + (request.url === '/' ? '<h1>Home</h1><a href="/local/">Local</a><a href="/absent">Absent</a><a href="/api/data">Non HTML</a>' : '<h1>Local</h1>'));
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const url = `http://127.0.0.1:${(source.address() as {port: number}).port}/`;
@@ -328,7 +343,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(capture.captured).toBe(2);
 			expect(capture.linkedPageCoverage?.requiredUrls).toHaveLength(4);
 			expect(capture.linkedPageCoverage?.diagnostics).toHaveLength(2);
-			expect(requests).toEqual(expect.arrayContaining(['/absent', '/api/data.json']));
+			expect(requests).toEqual(expect.arrayContaining(['/absent', '/api/data']));
 			expect(capture.linkedPageCoverage!.diagnostics.map(row => row.reason)).toEqual(expect.arrayContaining([expect.stringContaining('HTTP 404'), expect.stringContaining('Not an HTML document (text/plain)')]));
 			const failuresPath = join(directory, 'screenshots/failures.json');
 			const failures = existsSync(failuresPath) ? JSON.parse(readFileSync(failuresPath, 'utf8')) : [];
@@ -343,7 +358,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const report = await checkFidelity({directory, widths: [390]});
 			expect(report.pass).toBe(false);
 			expect(report.pending).toHaveLength(2);
-			expect(report.pending!.map(row => row.route)).toEqual(expect.arrayContaining([`${url}absent`, `${url}api/data.json`]));
+			expect(report.pending!.map(row => row.route)).toEqual(expect.arrayContaining([`${url}absent`, `${url}api/data`]));
 		} finally {
 			if (!closed) {source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));}
 			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
