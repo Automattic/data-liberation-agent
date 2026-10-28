@@ -14,6 +14,7 @@ async function capture( mode: string ) {
 		maxBuffer: 1024 * 1024,
 	} );
 	expect( stderr ).not.toMatch( /Assertion|uncaught|chrome-fidelity.*skipped/ );
+	expect( stderr ).toContain( '[retry] renderer crashed' );
 	return JSON.parse( stdout.trim().split( '\n' ).at( -1 )! );
 }
 

@@ -36,6 +36,8 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 	return {
 		exposeBinding: vi.fn().mockResolvedValue(undefined),
 		once: vi.fn(),
+		on: vi.fn(),
+		off: vi.fn(),
 		route: vi.fn().mockImplementation( async ( _pattern, handler ) => {
 			routeHandlers.push(handler);
 		} ),

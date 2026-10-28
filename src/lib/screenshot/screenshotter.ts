@@ -69,6 +69,7 @@ import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
+import { guardPageErrors, PAGE_ERROR_STORM } from './page-error-guard.js';
 
 /** Alias request identity → its canonical route's identity, for link counting. */
 function linkedAliasMap( aliases?: readonly import('../route-aliases.js').CanonicalRouteAlias[] ): Map< string, string > {
@@ -170,6 +171,7 @@ async function withScreenshotTimeout< T >( p: Promise< T >, ms: number ): Promis
 
 /** Best-effort log forwarder — never throws into the capture loop. */
 function sendLog( server: CaptureLogSink | undefined, message: string ): void {
+	if ( /^\[(?:restart|retry)\]/.test( message ) ) console.error( message );
 	if ( ! server ) return;
 	try {
 		void server.sendLoggingMessage( { level: 'info', data: message } );
@@ -182,7 +184,7 @@ interface CapturePerViewportArgs {
 	page: Page;
 	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
 	phases?: PhaseLedger;
-	/** Stop best-effort stages after a crash; recovery belongs to the viewport loop. */
+	/** Stop best-effort stages after a crash or page-error storm. */
 	rendererCrashed: () => boolean;
 	learnFluid?: boolean;
 	fluidWidths?: number[];
@@ -780,7 +782,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	resourceStore.observe( page );
 	const sourceErrors: string[] = [];
 	if ( args.observeSource ) {
-		page.on( 'pageerror', error => { if ( ! isMediaPlaybackLifecycleAbort( error ) ) sourceErrors.push( `source runtime error: ${ error.message }` ); } );
+		page.on( 'pageerror', error => { if ( sourceErrors.length < 100 && ! isMediaPlaybackLifecycleAbort( error ) ) sourceErrors.push( `source runtime error: ${ error.message }` ); } );
 		page.on( 'crash', () => sourceErrors.push( 'source renderer crashed' ) );
 	}
 	if ( publicUrlsOnly && page.route ) {
@@ -884,6 +886,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				navigated = true;
 				break;
 			} catch ( err ) {
+				if ( args.rendererCrashed() ) return false;
 				if ( isNavigationTimeout( err ) ) {
 					if ( mayRetry() ) {
 						timedOut = { budgetMs, error: err instanceof Error ? err.message.split( '\n' )[ 0 ]! : String( err ) };
@@ -1433,6 +1436,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			await releaseNavigationLock();
 		}
 	}
+	if ( args.rendererCrashed() ) return;
 	args.phases?.enter( 'cleanup-audit' );
 	const cleanup = await readSourceCleanup(page, sourcePolicy);
 	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
@@ -1473,6 +1477,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( phoneStates.length ) interactions.states.push( ...phoneStates );
 			args.phases?.enter( 'dialogs' );
 		}
+		if ( args.rendererCrashed() ) return;
 		// Route-tab observation is evidence, not a baseline artifact: its failure
 		// must not discard the dialog states captured before it.
 		try {
@@ -1485,6 +1490,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// diagnostics, using the same states array + totals the dialog/menu path
 		// already reports through, rather than a parallel reporting system.
 		interactions.states = [ ...galleryStates, ...disclosureStates, ...interactions.states ];
+		if ( args.rendererCrashed() ) return;
 		try {
 			args.phases?.enter( 'selectable' );
 			const selectableStates = await captureSelectableSetStates( page, { skip: excluded.skip } );
@@ -1496,6 +1502,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			for ( const loss of choiceGroupInteractionLosses( selectableStates ) ) {
 				( entry.blockLosses ??= [] ).push( { ...loss, unit: 'block', profile: viewport.id } );
 			}
+			if ( args.rendererCrashed() ) return;
 			try {
 				await dismissOverlays( page );
 				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000, skip: excluded.skip } ) );
@@ -1529,7 +1536,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// the page scrolls past some offset) is a distinct trigger from clicks, so it
 	// gets its own probe. Also runs only after baseline artifacts, and is
 	// best-effort: a failed probe must not invalidate the rest of the capture.
-	if ( ! entry.scrollStates?.toggles.length ) {
+	if ( ! args.rendererCrashed() && ! entry.scrollStates?.toggles.length ) {
 		try {
 			args.phases?.enter( 'scroll-states' );
 			const scrollStates = await captureScrollStates( page, url );
@@ -2631,6 +2638,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const failuresBefore = profileFailures.length;
 				let context: BrowserContext | undefined;
 				let rendererCrashed = false;
+				let errorGuard: ReturnType< typeof guardPageErrors > | undefined;
 				// A stalled route names the step it entered last (#817) through the
 				// per-route deadline's abandonment reason; `route-phases` times the rest.
 				const phases = createPhaseLedger( Date.now, ( phase ) => routeDeadlinesNote( url, viewport.id, phase ) );
@@ -2659,13 +2667,17 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeRuntimeStyleWrites );
 					await context.addInitScript( observeViewportWork );
 					const page = await context.newPage();
+					errorGuard = guardPageErrors( page, reason => {
+						profileDiagnostics.push( { code: PAGE_ERROR_STORM, reason } );
+						profileFailures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `${ PAGE_ERROR_STORM }: ${ reason }`, timestamp: new Date().toISOString(), attempt: 1 } );
+					}, opts.maxPageErrorsPerSecond );
 					reportReadiness( page, ( name, outcome ) => phases.wait( name, outcome ), opts.telemetryRequest );
 					page.once( 'crash', () => { rendererCrashed = true; } );
 					try {
 						await capturePerViewport( {
 							page,
 							phases,
-							rendererCrashed: () => rendererCrashed,
+							rendererCrashed: () => rendererCrashed || Boolean( errorGuard?.stopped() ),
 							browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
 							viewport: { ...viewport, context: identity },
 							plan: vpPlan,
@@ -2738,6 +2750,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						attempt: 1,
 					} );
 				} finally {
+					errorGuard?.dispose();
 					if ( context ) {
 						phases.enter( 'resource-settle' );
 						try {
@@ -2774,7 +2787,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					failure.attempt = crashRetry ? 2 : failure.attempt;
 				}
 				const failed = profileFailures.length > failuresBefore;
-				if ( ! failed || crashRetry ) break;
+				if ( ! failed || crashRetry || errorGuard?.stopped() ) break;
 				if ( attemptBrowser.isConnected() ) {
 					if ( ! rendererCrashed ) break;
 					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );

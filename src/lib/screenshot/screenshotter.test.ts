@@ -65,6 +65,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     exposeBinding: vi.fn().mockResolvedValue(undefined),
     once: vi.fn(),
     on: vi.fn(),
+    off: vi.fn(),
     goto: vi.fn().mockImplementation(async (url: string) => {
       currentUrl = url;
       return { status: () => statusOf(currentUrl) };
@@ -500,6 +501,7 @@ describe('captureScreenshots', () => {
 
   it('relaunches a browser that disconnects mid-segment and captures the remaining routes', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const connect = connectBrowser as ReturnType<typeof vi.fn>;
       connect.mockReset();
@@ -511,11 +513,13 @@ describe('captureScreenshots', () => {
       expect(result.failed).toBe(0);
       expect(result.captured).toBe(4);
       expect(result.browserRestarts).toBe(1);
+      expect(log).toHaveBeenCalledWith('[restart] browser disconnected mid-segment; relaunching');
       expect(connect).toHaveBeenCalledTimes(2);
       for (const p of ['a', 'b', 'c', 'd']) expect(existsSync(join(dir, 'html', `${p}.html`))).toBe(true);
       const manifest = JSON.parse(readFileSync(join(dir, 'screenshots', 'manifest.json'), 'utf8'));
       expect(JSON.stringify(manifest)).not.toContain(CLOSED);
     } finally {
+      log.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
   });
