@@ -1230,29 +1230,34 @@ describe( 'captureSelectableSetStates', () => {
 	it.skipIf( skipBrowser )(
 		'records no-dialog with a reason when a weak button set does not mutate a region',
 		async () => {
-			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
-			try {
-				await page.setContent( `<!doctype html><html><body>
-					<div id="layout">
-						<div id="chips">
-							<button type="button" id="a">Alpha</button>
-							<button type="button" id="b">Beta</button>
-							<button type="button" id="c">Gamma</button>
+			// Plain chips get two inert probes; share buttons stop after the first one opens a window, which never opens.
+			for ( const [ handler, activations ] of [ [ '', 2 ], [ "window.open('https://share.example/?u=1')", 1 ] ] as const ) {
+				const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+				try {
+					await page.setContent( `<!doctype html><html><body>
+						<div id="layout">
+							<div id="chips" onclick="window.activations = (window.activations || 0) + 1; ${ handler }">
+								<button type="button" id="a">Alpha</button>
+								<button type="button" id="b">Beta</button>
+								<button type="button" id="c">Gamma</button>
+							</div>
+							<div id="panel">Static copy that never changes for any chip.</div>
 						</div>
-						<div id="panel">Static copy that never changes for any chip.</div>
-					</div>
-				</body></html>` );
-				const states = await captureSelectableSetStates( page );
-				expect( states ).toHaveLength( 1 );
-				expect( states[ 0 ] ).toMatchObject( {
-					status: 'no-dialog',
-					kind: SELECTABLE_SET_KIND,
-					trigger: { id: 'a' },
-					set: { size: 3, index: 0 },
-					error: 'shared region did not vary',
-				} );
-			} finally {
-				await page.close();
+					</body></html>` );
+					const states = await captureSelectableSetStates( page );
+					expect( states ).toHaveLength( 1 );
+					expect( states[ 0 ] ).toMatchObject( {
+						status: 'no-dialog',
+						kind: SELECTABLE_SET_KIND,
+						trigger: { id: 'a' },
+						set: { size: 3, index: 0 },
+						error: 'shared region did not vary',
+					} );
+					expect( await page.evaluate( () => ( window as unknown as { activations: number } ).activations ) ).toBe( activations );
+					expect( page.context().pages() ).toHaveLength( 1 );
+				} finally {
+					await page.close();
+				}
 			}
 		},
 		30_000

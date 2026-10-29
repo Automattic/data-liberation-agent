@@ -430,7 +430,18 @@ export async function captureSelectableSetStates(
 				};
 				const activate = async (
 					element: Element
-				): Promise< { ok: true } | { ok: false; error: string; navigated?: boolean } > => {
+				): Promise< { ok: true; external: boolean } | { ok: false; error: string; navigated?: boolean } > => {
+					// A member that opens another window (a share or print button) acts
+					// outside this document. The trap also keeps the probe from opening it.
+					let external = false;
+					const openDescriptor = Object.getOwnPropertyDescriptor( window, 'open' );
+					let restoreOpen = () => {};
+					try {
+						if ( ! openDescriptor || openDescriptor.configurable ) {
+							Object.defineProperty( window, 'open', { configurable: true, writable: true, value: () => { external = true; return null; } } );
+							restoreOpen = () => { if ( openDescriptor ) Object.defineProperty( window, 'open', openDescriptor ); else Reflect.deleteProperty( window, 'open' ); };
+						}
+					} catch { /* a frozen window.open stays untrapped */ }
 					const modalSelector = 'dialog,[role="dialog"],[aria-modal="true"]';
 					const openBefore = new Set( Array.from( document.querySelectorAll( modalSelector ) ).filter( visible ) );
 					const focusBefore = document.activeElement;
@@ -469,6 +480,7 @@ export async function captureSelectableSetStates(
 						clickError = ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 );
 					} finally {
 						settle?.stop();
+						restoreOpen();
 						// A member can be a modal opener rather than a shared-region driver.
 						// Undo that side effect even when activation failed or changed route,
 						// before another member (including a restoration action) is driven.
@@ -496,7 +508,7 @@ export async function captureSelectableSetStates(
 						}
 						return { ok: false, error: 'navigated', navigated: true };
 					}
-					return { ok: true };
+					return { ok: true, external };
 				};
 				/*
 				 * A panel mounted by a click starts in its pre-reveal pose, and the page-level
@@ -829,8 +841,9 @@ export async function captureSelectableSetStates(
 							continue;
 						}
 						// Re-activating the selected member is not expected to change anything,
-						// so it must not burn the observation window.
-						const observationDeadline = observedSelection( group.members[ index ]! ) === true && initialSelected[ index ] === true
+						// and a member that opened another window acted outside this document,
+						// so neither burns the observation window.
+						const observationDeadline = result.external || observedSelection( group.members[ index ]! ) === true && initialSelected[ index ] === true
 							? 0
 							: Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
 						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
@@ -845,6 +858,8 @@ export async function captureSelectableSetStates(
 						observations.push( observation );
 						if ( observationDeadline && observation.groupHtml === initialGroupHtml &&
 							observation.fps.every( ( fp, candidateIndex ) => fp === initialFp[ candidateIndex ] ) ) inertProbes++;
+						// Its peers hand off the same way; probing them would only repeat it.
+						if ( result.external ) break;
 					}
 
 					let regionIdx = -1;
