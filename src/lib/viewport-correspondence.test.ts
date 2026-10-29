@@ -17,6 +17,19 @@ describe( 'viewport URL correspondence', () => {
 		expect( $( 'a' ).map( ( _, node ) => $( node ).attr( 'href' ) ).get() ).toEqual( [
 			'https://source.test/assets/next', 'https://source.test/phone-assets/next',
 		] );
+		// Only the component that differs ships per viewport; the page stays one document.
+		expect( assembly.hasMobileDocument ).toBe( false );
+		expect( assembly.evidence ).toMatchObject( { outcome: 'collapsed-identity-subset', divergedComponents: 1 } );
+	} );
+
+	it( 'pairs script-owned triggers across viewport spellings of no destination', () => {
+		const page = ( href: string ) => `<html><body><main id="main"><h1>Shared</h1><a id="menu" href="${ href }">Menu</a></main></body></html>`;
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: page( 'javascript:void(0)' ), rawMobileHtml: page( '#' ),
+			portableDesktopHtml: page( 'javascript:void(0)' ), portableMobileHtml: page( '#' ),
+		} );
+		expect( assembly.hasMobileDocument ).toBe( false );
+		expect( cheerio.load( assembly.html )( 'a' ).length ).toBe( 1 );
 	} );
 
 	it( 'keeps destinations resolved against distinct browser bases unique, even when children match', () => {

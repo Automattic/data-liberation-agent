@@ -194,7 +194,15 @@ function ownText( element: Element ): string {
 }
 
 /** Absolute spellings compare canonically; relative references stay literal. */
+/**
+ * A link that navigates nowhere: a bare `#` or a `javascript:void(0)` trigger
+ * whose script owns the click. Builders spell the same trigger differently per
+ * viewport, so it carries no destination identity.
+ */
+const INERT_REFERENCE = /^(?:#|javascript:\s*(?:void\s*\(?\s*0\s*\)?)?\s*;?)$/i;
+
 function canonicalReference( value: string ): string {
+	if ( INERT_REFERENCE.test( value ) ) return '';
 	if ( ! /^https?:\/\//i.test( value ) ) return value;
 	try {
 		return new URL( value ).href;
@@ -210,7 +218,7 @@ export function referenceOf( element: Element ): string {
 	const values = attributes
 		.map( ( attribute ) => ( element.attribs?.[ attribute ] ?? '' ).trim() )
 		.filter( Boolean );
-	return values.length === 0 ? '' : values.map( canonicalReference ).join( '|' );
+	return values.map( canonicalReference ).filter( Boolean ).join( '|' );
 }
 
 /**
