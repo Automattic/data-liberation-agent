@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { srcsetCandidates } from './srcset.js';
-import { downloadMedia, extensionFromContentType, safeFilename } from './media-fetch/media.js';
+import { deriveFilenameFromUrl, downloadMedia, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { MediaStubStore } from './resume-state/index.js';
+import { pathWithin } from './portable-assets.js';
+import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 
 /** Capture-owned resource identity. Export copies these bytes, never a substitute. */
 export interface AssetRecord {
@@ -260,6 +262,9 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	const images = collectAssets( documents, resolve );
 	mkdirSync( root, { recursive: true } );
 	const stubs = MediaStubStore.load( root );
+	const manifestPath = join( root, 'resources', 'manifest.json' );
+	const resources: CapturedResourceManifest['resources'] = existsSync( manifestPath )
+		? JSON.parse( readFileSync( manifestPath, 'utf8' ) ).resources ?? {} : {};
 	const names = new Map<string, number>();
 	const mediaDir = join( root, 'media' );
 	if ( existsSync( mediaDir ) ) for ( const name of readdirSync( mediaDir ) ) names.set( name, 1 );
@@ -270,11 +275,28 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 			for ( const record of images ) {
 				const source = record.resolved_original;
 				try {
-					if ( deadline !== undefined && Date.now() >= deadline )
-						throw new Error( 'resource acquisition deadline reached' ); // failure-class: operational
 					if ( /\/_missing-media\/|\/(?:placeholder|missing-image)\.(?:svg|png|gif|webp)(?:[?#]|$)/i.test( source ) )
 						throw new Error( 'source references a known image placeholder' ); // failure-class: operational
-					const result = await downloadMedia( source, mediaDir, names, undefined, { preserveOriginal: true } );
+					// Reuse the URL-owned file, never a filename guess or a different rendition.
+					const cachedPath = [ resources[ source ]?.path, stubs.get( source )?.localPath ]
+						.filter( ( path ): path is string => Boolean( path ) )
+						.map( path => resolvePath( root, path ) )
+						.find( path => pathWithin( root, path ) && existsSync( path ) );
+					if ( ! cachedPath && deadline !== undefined && Date.now() >= deadline )
+						throw new Error( 'resource acquisition deadline reached' ); // failure-class: operational
+					// Keep verification/extension correction in media/, without mutating captured resources.
+					let result: Pick<DownloadResult, 'localPath' | 'filename' | 'error'>;
+					if ( cachedPath && pathWithin( mediaDir, cachedPath ) ) {
+						result = { localPath: cachedPath, filename: basename( cachedPath ), error: null };
+					} else if ( cachedPath ) {
+						mkdirSync( mediaDir, { recursive: true } );
+						const filename = safeFilename( deriveFilenameFromUrl( new URL( source ) ) || basename( cachedPath ), names );
+						const destination = join( mediaDir, filename );
+						copyFileSync( cachedPath, destination );
+						result = { localPath: destination, filename, error: null };
+					} else {
+						result = await downloadMedia( source, mediaDir, names, undefined, { preserveOriginal: true } );
+					}
 					if ( ! result.localPath ) throw new Error( result.error ?? 'resource download failed' ); // failure-class: operational
 					const bytes = readFileSync( result.localPath );
 					const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind! );
