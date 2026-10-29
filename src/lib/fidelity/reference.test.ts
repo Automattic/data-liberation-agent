@@ -17,6 +17,46 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 	let sharedBrowser: Awaited< ReturnType< typeof chromium.launch > >;
 	beforeAll( async () => { sharedBrowser = await chromium.launch(); } );
 	afterAll( async () => { await sharedBrowser?.close(); }, 30_000 );
+	it( 'ignores unreachable lazy marquee images but rejects a visible broken image', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-clipped-images-' ) );
+		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
+		const html = `<meta name="viewport" content="width=device-width,initial-scale=1"><title>Marquee</title>
+			<style>.track{overflow:hidden;width:100%}.row{display:flex;width:max-content}.row img{width:500px;height:500px;flex:none}</style>
+			<main><h1>Marquee</h1><div class="track"><div class="row">
+			${ Array.from( { length: 14 }, ( _, i ) => `<img src="/image-${ i }.png" ${ i >= 4 ? 'loading="lazy"' : '' } alt="">` ).join( '' ) }
+			</div></div><img src="/outside.png" loading="lazy" style="position:absolute;left:-10000px;top:0;width:500px;height:500px" alt=""></main>`;
+		const source = createServer( ( request, response ) => {
+			response.setHeader( 'content-type', request.url?.endsWith( '.png' ) ? 'image/png' : 'text/html' );
+			response.end( request.url?.endsWith( '.png' ) ? image : html );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		const page = await sharedBrowser.newPage();
+		try {
+			const collect = async ( broken: boolean ) => {
+				const collector = createReferenceCollector( directory, url, [ url ], { prepareCapture: async cell => {
+					if ( broken ) await cell.evaluate( () => { document.images[ 0 ].src = 'data:image/png,broken'; } );
+				} } );
+				await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
+				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+				return ( JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference ).entries[ 0 ];
+			};
+			const clipped = await collect( false );
+			// Prove this fixture still has unfetched, full-size lazy duplicates.
+			expect( await page.evaluate( () => [ ...document.images ].some( image => ! image.complete && image.getBoundingClientRect().left > innerWidth ) ) ).toBe( true );
+			expect( await page.evaluate( () => document.images[ document.images.length - 1 ].complete ) ).toBe( false );
+			expect( clipped.readiness.mediaReady ).toBe( true );
+			expect( () => readFrozenObservation( directory, clipped ) ).not.toThrow();
+			const broken = await collect( true );
+			expect( broken.readiness.mediaReady ).toBe( false );
+			expect( broken.readiness.reasons ).toContain( 'source images pending or failed' );
+		} finally {
+			await page.close(); source.closeAllConnections();
+			await new Promise<void>( resolve => source.close( () => resolve() ) );
+			rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 60_000 );
 	it.each( [ 'profile', 'sibling', 'borrowed', 'persistent' ] as const )( 'releases only owned %s resources on success and navigation failure', async mode => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, `reference-lifetime-${ mode }-` ) );

@@ -9,7 +9,7 @@ import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-
 import type { LayoutObservation } from './score.js';
 import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
-import { observePageTraffic, type TelemetryRequest } from '../screenshot/page-helpers.js';
+import { installImageReachability, observePageTraffic, type TelemetryRequest } from '../screenshot/page-helpers.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
@@ -204,10 +204,14 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// Freeze the same route identity capture accepts: query/hash
 						// renditions do not become different origin/path documents.
 						if ( isRouteDrift( referencePage.url(), navigationUrl ) ) entry.readiness.reasons.push( 'source route drift' );
-						const mediaReady = await referencePage.evaluate( () => [ ...document.images ].every( image => {
-							const rect = image.getBoundingClientRect();
-							return rect.width <= 50 || rect.height <= 50 || ( image.complete && image.naturalWidth > 0 );
-						} ) );
+						const reachabilityKey = await installImageReachability( referencePage );
+						const mediaReady = await referencePage.evaluate( key => {
+							const unreachable = ( window as unknown as Record<symbol, ( image: HTMLImageElement ) => boolean> )[ Symbol.for( key ) ];
+							return [ ...document.images ].every( image => {
+								const rect = image.getBoundingClientRect();
+								return rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && image.naturalWidth > 0 );
+							} );
+						}, reachabilityKey );
 						if ( ! mediaReady ) entry.readiness.reasons.push( 'source images pending or failed' );
 						entry.readiness.mediaReady = mediaReady;
 						entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
