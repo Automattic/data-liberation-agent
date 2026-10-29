@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
-import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, type FluidSeriesMemo, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 	let browser: Browser;
@@ -683,6 +683,33 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( await page.locator( '#portfolio' ).getAttribute( 'style' ) ).toContain( 'font-size: 23.3vw' );
 		await page.close();
 	} );
+
+	it( 'reuses a swept series on a later route only when its element answers the probe widths identically', async () => {
+		// A script-sized banner repeats on every route; the article beside it differs.
+		const route = ( ratio: number, article: string ) => `
+			<section id="banner" style="height: 10px"></section><article><p>${ article }</p></article>
+			<script>
+				const update = () => document.querySelector('#banner').style.height = (innerWidth * ${ ratio }) + 'px';
+				addEventListener('resize', update);
+				update();
+			</script>`;
+		const memo: FluidSeriesMemo = new Map();
+		const learned: Array< [ number, string | null ] > = [];
+		// The second route reuses the first's sweep; the third's banner differs, so it sweeps and learns its own rule.
+		for ( const html of [ route( 0.1754, 'First' ), route( 0.1754, 'Second, longer article' ), route( 0.2, 'Third' ) ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( html );
+			const result = await learnAndApplyFluidGeometry( page, { document: 'desktop', settleMs: 50, memo } );
+			await page.setViewportSize( { width: 390, height: 900 } );
+			learned.push( [ result.sampledWidths.length, await page.locator( '#banner' ).evaluate( element => `${ element.getAttribute( 'style' ) } ${ getComputedStyle( element ).height }` ) ] );
+			await page.close();
+		}
+		expect( learned[ 0 ]![ 0 ] ).toBeGreaterThan( 3 );
+		expect( learned[ 1 ] ).toEqual( [ 3, learned[ 0 ]![ 1 ] ] );
+		expect( learned[ 0 ]![ 1 ] ).toBe( 'height: 17.54vw; 68.3906px' );
+		expect( learned[ 2 ]![ 0 ] ).toBeGreaterThan( 3 );
+		expect( learned[ 2 ]![ 1 ] ).toBe( 'height: 20vw; 78px' );
+	}, 60_000 );
 
 	it( 'learns the ceiling when the widest sample is capped', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
