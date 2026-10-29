@@ -54,6 +54,35 @@ function observeRuntimeWidgets(): void {
 		append.apply(this, nodes);
 		for (const node of nodes) if (node instanceof Node) remember(node);
 	};
+	const prepend = Element.prototype.prepend;
+	Element.prototype.prepend = function (...nodes: (Node | string)[]): void {
+		prepend.apply(this, nodes);
+		for (const node of nodes) if (node instanceof Node) remember(node);
+	};
+	const insertAdjacentElement = Element.prototype.insertAdjacentElement;
+	Element.prototype.insertAdjacentElement = function (position: InsertPosition, element: Element): Element | null {
+		const result = insertAdjacentElement.call(this, position, element);
+		if (result) remember(result);
+		return result;
+	};
+	const insertAdjacentHTML = Element.prototype.insertAdjacentHTML;
+	Element.prototype.insertAdjacentHTML = function (position: InsertPosition, text: string): void {
+		// Native HTML parsing bypasses createElement. Bound the inserted sibling
+		// range so existing children (including authored markup) gain no owner.
+		const where = position.toLowerCase();
+		const parent = where === 'beforebegin' || where === 'afterend' ? this.parentElement : this;
+		const previous = where === 'beforebegin' ? this.previousSibling : where === 'afterend' ? this : where === 'afterbegin' ? null : this.lastChild;
+		const next = where === 'beforebegin' ? this : where === 'afterend' ? this.nextSibling : where === 'afterbegin' ? this.firstChild : null;
+		const source = scriptUrl();
+		insertAdjacentHTML.call(this, position, text);
+		if (parent !== document.body || !source) return;
+		for (let node = previous ? previous.nextSibling : parent.firstChild; node && node !== next; node = node.nextSibling) {
+			if (node instanceof Element && node.parentElement === document.body) {
+				owners.set(node, source);
+				roots.set(node, source);
+			}
+		}
+	};
 	const state = {
 		origins: () => [...new Set([...roots.values()].map(source => new URL(source).origin))],
 		remove: (origins: string[]) => {

@@ -25,12 +25,23 @@ it('removes third-party runtime islands but preserves authored and first-party f
 				root.id = 'neutral-widget'; root.style.position = 'fixed';
 				root.innerHTML = '<form id="external-survey"><input name="feedback"></form>';
 				document.body.appendChild(root);
+				document.body.insertAdjacentHTML('beforeend', '<div id="html-widget" style="position:fixed"><form id="html-widget-form"></form></div>');
+				document.body.insertAdjacentHTML('beforeend', '<section id="html-in-flow">Legitimate embedded HTML</section>');
 				// An empty in-flow root whose only rendered content is fixed.
 				const shell = document.createElement('div'); shell.id = 'neutral-shell';
 				shell.innerHTML = '<div style="position:fixed;bottom:0"><form id="external-shell-form"><fieldset><input name="rating"></fieldset></form></div>';
 				document.body.appendChild(shell);
-				// Moving an authored node is not ownership.
-				document.body.appendChild(document.getElementById('authored'));
+				for (const method of ['prepend', 'insertAdjacentElement']) {
+					const overlay = document.createElement('div');
+					overlay.id = method + '-widget'; overlay.style.position = 'fixed';
+					if (method === 'prepend') document.body.prepend(overlay);
+					else document.body.insertAdjacentElement('beforeend', overlay);
+				}
+				// Moving an authored node is not ownership, through any node API.
+				const authored = document.getElementById('authored');
+				document.body.prepend(authored);
+				document.body.insertAdjacentElement('beforeend', authored);
+				document.body.appendChild(authored);
 				const content = document.createElement('section'); content.id = 'in-flow';
 				content.textContent = 'Legitimate embedded content'; document.body.append(content);
 			});`);
@@ -40,6 +51,7 @@ it('removes third-party runtime islands but preserves authored and first-party f
 			response.end(`<!doctype html><html><body><h1>Authored page</h1>
 				<form id="authored" style="position:fixed"><input name="newsletter"></form>
 				<script>const own = document.createElement('div'); own.id = 'own-widget'; own.style.position = 'fixed'; own.innerHTML = '<form id="own-form"></form>'; document.body.append(own);</script>
+				<script>document.body.insertAdjacentHTML('beforeend', '<div id="own-html-widget" style="position:fixed"><form id="own-html-form"></form></div>');</script>
 				<script src="http://127.0.0.1:${port}/widget.js"></script></body></html>`);
 		}
 	});
@@ -57,11 +69,21 @@ it('removes third-party runtime islands but preserves authored and first-party f
 			expect(html).toContain('<form id="authored"');
 			expect(html).toContain('<form id="own-form"');
 			expect(html).toContain('<section id="in-flow"');
+			expect(html).toContain('<section id="html-in-flow"');
+			expect(html).toContain('<form id="own-html-form"');
 			// Scripts remain in this intermediate capture, so match markup only.
 			expect(html).not.toContain('<div id="neutral-widget"');
 			expect(html).not.toContain('<div id="neutral-shell"');
+			expect(html).not.toContain('<div id="html-widget"');
+			for (const method of ['prepend', 'insertAdjacentElement']) {
+				expect(html).not.toContain('<div id="' + method + '-widget"');
+			}
 		}
 		for (const profile of ['desktop', 'mobile']) {
+			expect(entry.profiles[profile].diagnostics).toContainEqual({
+				code: 'third_party_runtime_widget_removed',
+				reason: expect.stringMatching(/removed div#html-widget; runtime script origin http:\/\/127\.0\.0\.1:/),
+			});
 			expect(entry.profiles[profile].diagnostics).toContainEqual({
 				code: 'third_party_runtime_widget_removed',
 				reason: expect.stringMatching(/removed div#neutral-widget; runtime script origin http:\/\/127\.0\.0\.1:/),
