@@ -1207,7 +1207,9 @@ function markResponsiveCounterparts(
  * menu) is added after responsive assembly namespaced that document's anchors,
  * so its section links still name the desktop targets, which are hidden at
  * phone width. Point each same-page fragment link inside the phone document at
- * the phone copy of the section the desktop target resolved to.
+ * the phone copy of the section the desktop target resolved to. The link's own
+ * resolved URL parts identify a same-page fragment, so the runtime constructs
+ * no URLs an importer would have to prove.
  */
 const RESPONSIVE_FRAGMENT_RUNTIME = `(function(){
 function resolve(){var fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}
@@ -1215,7 +1217,7 @@ var targets=Array.prototype.filter.call(document.querySelectorAll('[data-blocks-
 if(targets.length===1)targets[0].scrollIntoView();}
 function schedule(){requestAnimationFrame(resolve);}
 window.addEventListener('hashchange',schedule);
-document.addEventListener('click',function(event){var link=event.target.closest&&event.target.closest('a[href]');if(!link)return;var url;try{url=new URL(link.href);}catch(_){return;}if(url.origin===location.origin&&url.pathname===location.pathname&&url.hash)schedule();});
+document.addEventListener('click',function(event){var link=event.target.closest&&event.target.closest('a[href]');if(!link)return;if(link.origin===location.origin&&link.pathname===location.pathname&&link.hash)schedule();});
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',schedule);else schedule();
 })();`;
 
