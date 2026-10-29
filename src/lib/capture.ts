@@ -21,6 +21,7 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
 import { SourceRequestGovernors } from './source-request-governor.js';
+import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
@@ -531,6 +532,7 @@ async function runCaptureWebsite(
 		prepareCapture: adapter.liberation?.prepare,
 		referenceSample,
 	} );
+	const assetQueue = new AssetAcquisitionQueue( outputDir, sourceGovernors, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ) );
 	const screenshotResult = await captureScreenshots( {
 		urls,
 		routeScope,
@@ -572,7 +574,9 @@ async function runCaptureWebsite(
 		...( timeBudget ? { timeBudget } : {} ),
 		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
+		onRouteCaptured: ( url, documents, stored ) => assetQueue.enqueueRoute( url, documents, stored ),
 	} );
+	await assetQueue.drain();
 	process.stderr.write(
 		`[timing] browser-capture ${ screenshotResult.durationMs }ms (${ screenshotResult.captured } captured, ${ screenshotResult.failed } failed)\n`
 	);

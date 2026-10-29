@@ -2857,6 +2857,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			failedRoutes.add( url );
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
+		if ( ( entry.html || entry.mobileHtml ) && ! entry.redirectedTo ) {
+			const documents = [ entry.html, entry.mobileHtml, ...Object.values( entry.profiles ?? {} ).map( profile => profile.html ) ];
+			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ) );
+		}
 		completed++;
 		const routeMs = Date.now() - routeStartedAt;
 		const routePhases = routePhaseBreakdown( Object.values( entry.profiles ?? {} ).map( profile => profile.phases ), routeMs );
