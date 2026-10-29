@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
 import { isInlineUrl } from './self-contain.js';
@@ -62,11 +62,49 @@ export interface PortableResourceResult {
 	assets: Array< { sourceUrl: string; path: string } >;
 	mediaReplacements: Map< string, string >;
 	resourceReplacements: Map< string, string >;
+	/** Source byte identities keyed by served URL, for integrity projection after all transformations. */
+	sourceHashesByPortablePath: Map< string, string >;
 	portablePathsBySource: Map< string, string >;
 	unresolvedDependencies: Array< { url: string; sourceUrl: string; error: string } >;
 	rejectedReplacementKeys: Set< string >;
 	/** Captured dependencies over `maxFileBytes`, one per URL. */
 	oversizedResources: Array< { url: string; bytes: number } >;
+}
+
+/** Drop source integrity only when the final served resource no longer has source bytes.
+ * Run after self-containment and stylesheet projection, before evidence and shared parts.
+ * Keeping unchanged metadata verbatim also preserves authored multi-digest semantics.
+ */
+export function projectPortableResourceIntegrity( websiteDir: string, sourceHashes: ReadonlyMap< string, string > ): void {
+	const changedPaths = new Set< string >();
+	for ( const [ url, sourceHash ] of sourceHashes ) {
+		const path = resolve( websiteDir, `.${ decodeURIComponent( url ) }` );
+		if ( pathWithin( websiteDir, path ) && existsSync( path ) && fileHash( path ) !== sourceHash ) changedPaths.add( url );
+	}
+	if ( ! changedPaths.size ) return;
+	const visit = ( directory: string ): void => {
+		for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
+			const path = join( directory, entry.name );
+			if ( entry.isDirectory() ) { visit( path ); continue; }
+			if ( ! entry.isFile() || ! entry.name.endsWith( '.html' ) ) continue;
+			const html = readFileSync( path, 'utf8' );
+			const $ = cheerio.load( html, { sourceCodeLocationInfo: true } );
+			const ranges: Array< { startOffset: number; endOffset: number } > = [];
+			$( 'link[integrity],script[integrity]' ).each( ( _, element ) => {
+				const node = $( element );
+				const reference = node.attr( element.tagName === 'link' ? 'href' : 'src' );
+				if ( ! reference || ! changedPaths.has( reference ) ) return;
+				const location = ( element.sourceCodeLocation as { attrs?: Record< string, { startOffset: number; endOffset: number } > } | undefined )?.attrs?.integrity;
+				if ( location ) ranges.push( location );
+			} );
+			let projected = html;
+			for ( const range of ranges.sort( ( a, b ) => b.startOffset - a.startOffset ) ) {
+				projected = projected.slice( 0, range.startOffset ) + projected.slice( range.endOffset );
+			}
+			if ( projected !== html ) writeFileSync( path, projected );
+		}
+	};
+	visit( websiteDir );
 }
 
 /** Materialize captured dependencies into the private portable generation.
@@ -88,6 +126,8 @@ export function materializePortableResources( options: PortableResourceOptions )
 	const copyingResources = new Set< string >();
 	const resourceReplacements = new Map< string, string >();
 	const oversizedResources = new Map< string, number >();
+	const sourceHashesByPortablePath = new Map< string, string >();
+	const sourceHashesByFile = new Map< string, string >();
 	const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
 	const promoteCapturedMediaReplacement = ( dependencyUrl: string, documentUrl: string ) => {
 		const portablePath = resourceReplacements.get( dependencyUrl );
@@ -178,6 +218,11 @@ export function materializePortableResources( options: PortableResourceOptions )
 			} );
 			return false;
 		}
+		const sourceHash = sourceHashesByFile.get( source ) ?? ( contentHash || fileHash( source ) );
+		sourceHashesByFile.set( source, sourceHash );
+		const previousHash = sourceHashesByPortablePath.get( portablePath );
+		// An ambiguous collision cannot establish unchanged bytes for every reference.
+		sourceHashesByPortablePath.set( portablePath, previousHash === undefined || previousHash === sourceHash ? sourceHash : '' );
 		resourceReplacements.set( dependency.reference, portablePath );
 		resourceReplacements.set( dependency.url, portablePath );
 		portablePathsBySource.set( dependency.url, `website/${ relativePath.replace( /\\/g, '/' ) }` );
@@ -286,7 +331,7 @@ export function materializePortableResources( options: PortableResourceOptions )
 	}
 
 	return {
-		assets, mediaReplacements, resourceReplacements, portablePathsBySource, unresolvedDependencies, rejectedReplacementKeys,
+		assets, mediaReplacements, resourceReplacements, portablePathsBySource, unresolvedDependencies, rejectedReplacementKeys, sourceHashesByPortablePath,
 		oversizedResources: [ ...oversizedResources ].map( ( [ url, bytes ] ) => ( { url, bytes } ) ),
 	};
 }
