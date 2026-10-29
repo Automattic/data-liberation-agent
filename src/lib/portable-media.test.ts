@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -5,6 +6,28 @@ import { planPortableMediaFamilies, type PortableMediaCandidate } from './portab
 import { materializePortableMedia } from './portable-media.js';
 import { materializePortableResources } from './portable-resources.js';
 import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
+
+it( 'never substitutes image bytes for failed, oversized or budget-excluded non-images', () => {
+ mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
+ const root = mkdtempSync( join( process.cwd(), '.tmp-test/non-image-limits-' ) );
+ try {
+  const localPath = join( root, 'font.woff2' );
+  writeFileSync( localPath, 'verified bytes' );
+  const sha256 = createHash( 'sha256' ).update( 'verified bytes' ).digest( 'hex' );
+  const sourceUrl = 'https://example.com/font.woff2';
+  const htmlPath = join( root, 'index.html' );
+  writeFileSync( htmlPath, '<style>@font-face{src:url(/font.woff2)}</style>' );
+  const candidate: PortableMediaCandidate = { sourceUrl, localPath, references: [ '/font.woff2' ], exactReferences: [ '/font.woff2' ], bytes: 14, dimension: 0,
+   imageAsset: { kind: 'font', destination_owner: 'theme', source_urls: [sourceUrl], references: [], resolved_original: sourceUrl, original: {source_url:sourceUrl, content_type:'font/woff2', sha256} } };
+  for ( const scenario of ['budget', 'limit', 'failure'] ) {
+   const plan = planPortableMediaFamilies( scenario === 'failure' ? [] : [{family:sourceUrl, candidates:[{...candidate, bytes:scenario === 'limit' ? 10_000_000 : 14}]}], 0, htmlPath );
+   const result = materializePortableMedia({websiteDir:join(root,'website'), plan, maxBytes:0, retainedReferences:new Map([[sourceUrl, ['/font.woff2']]]), failedMedia:scenario === 'failure' ? [{family:sourceUrl, sourceUrl, error:'failed', references:['/font.woff2'], nonImage:true}] : []});
+   expect(result.assets).toEqual([]);
+   expect(result.mediaReplacements.size).toBe(0);
+   expect(result.unresolvedMedia).toHaveLength(1);
+  }
+ } finally { rmSync(root, {recursive:true, force:true}); }
+});
 
 it( 'hands collision/deduplication identities and failed-media replacements to resource fallback without mutating its seeds', () => {
 	const tempRoot = join( process.cwd(), '.tmp-test' );

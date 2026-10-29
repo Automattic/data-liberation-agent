@@ -217,6 +217,14 @@ export function extensionFromContentType(contentType: string): string {
     case 'image/bmp': return '.bmp';
     case 'image/tiff': return '.tiff';
     case 'image/x-icon': case 'image/vnd.microsoft.icon': return '.ico';
+    case 'application/pdf': return '.pdf';
+    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': return '.docx';
+    case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': return '.xlsx';
+    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation': return '.pptx';
+    case 'application/gzip': return '.gz';
+    case 'application/x-7z-compressed': return '.7z';
+    case 'application/zip': return '.zip';
+    case 'application/rtf': return '.rtf';
     case 'video/mp4': return '.mp4';
     case 'video/webm': return '.webm';
     case 'video/ogg': return '.ogv';

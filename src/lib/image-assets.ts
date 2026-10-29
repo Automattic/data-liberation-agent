@@ -9,31 +9,39 @@ import { isIntegrityError } from './failure-class.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { MediaStubStore } from './resume-state/index.js';
 
-/** Capture-owned identity. Export copies these bytes, never a negotiated rendition. */
-export interface ImageAssetRecord {
+/** Capture-owned resource identity. Export copies these bytes, never a substitute. */
+export interface AssetRecord {
+	kind?: 'image' | 'font' | 'document' | 'video';
+	destination_owner?: 'theme' | 'media-library';
 	source_urls: string[];
 	/** Each captured use resolves via source_url to this record's exported bytes. */
-	references: ImageAssetReference[];
+	references: AssetReference[];
 	resolved_original: string;
 	original: {
 		source_url: string;
 		content_type: string;
-		width: number;
-		height: number;
+		width?: number;
+		height?: number;
 		/** At least one non-opaque decoded pixel; not inferred from a file extension. */
-		alpha: boolean;
+		alpha?: boolean;
 		sha256: string;
 	} | null;
 	local_path?: string;
 	error?: string;
 }
 
-export interface ImageAssetReference {
+/** @deprecated Use AssetRecord. */
+export type ImageAssetRecord = AssetRecord;
+/** @deprecated Use AssetReference. */
+export type ImageAssetReference = AssetReference;
+
+export interface AssetReference {
 	kind: 'content' | 'navigation' | 'head' | 'CSS';
 	document_url: string;
 	/** Element index in the captured document, or a stylesheet declaration index. */
 	location: string;
 	source_url: string;
+	font_face?: { family?: string; weight?: string; style?: string; unicode_range?: string; format?: string };
 }
 
 type ImageDocuments = Iterable<{ html: string; url: string }>;
@@ -63,33 +71,72 @@ export function imageContentType( bytes: Buffer ): string | undefined {
 	return undefined;
 }
 
-export function readImageAssets( root: string ): ImageAssetRecord[] {
-	const path = join( root, 'image-assets.json' );
-	return existsSync( path ) ? JSON.parse( readFileSync( path, 'utf8' ) ).images.map( ( record: ImageAssetRecord ) => ( { ...record, references: record.references ?? [] } ) ) : [];
+/** Fail closed on unknown signatures; response headers and extensions are not evidence. */
+export function resourceContentType( bytes: Buffer, kind: NonNullable<ImageAssetRecord['kind']> ): string | undefined {
+	const magic = bytes.toString( 'latin1', 0, 4 );
+	if ( kind === 'font' ) {
+		if ( bytes.length < 12 ) return undefined;
+		const tables = bytes.readUInt16BE( 4 );
+		if ( bytes.length >= 48 && bytes.readUInt16BE( 12 ) > 0 && bytes.readUInt32BE( 8 ) === bytes.length ) {
+			if ( magic === 'wOF2' ) return 'font/woff2';
+			if ( magic === 'wOFF' ) return 'font/woff';
+		}
+		if ( tables > 0 && tables <= 512 && bytes.length >= 12 + tables * 16 ) {
+			if ( magic === 'OTTO' ) return 'font/otf';
+			if ( bytes.readUInt32BE( 0 ) === 0x00010000 || magic === 'true' ) return 'font/ttf';
+		}
+	}
+	if ( kind === 'document' ) {
+		if ( bytes.subarray( 0, 5 ).toString() === '%PDF-' && bytes.subarray( -1024 ).includes( Buffer.from( '%%EOF' ) ) ) return 'application/pdf';
+		if ( bytes.length >= 22 && bytes.readUInt32LE( 0 ) === 0x04034b50 ) {
+			// OOXML packages declare their document kind in the ZIP member inventory.
+			if ( bytes.includes( Buffer.from( '[Content_Types].xml' ) ) ) {
+				if ( bytes.includes( Buffer.from( 'word/document.xml' ) ) ) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+				if ( bytes.includes( Buffer.from( 'xl/workbook.xml' ) ) ) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+				if ( bytes.includes( Buffer.from( 'ppt/presentation.xml' ) ) ) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+			}
+			return 'application/zip';
+		}
+		if ( bytes.subarray( 0, 2 ).equals( Buffer.from( [ 0x1f, 0x8b ] ) ) ) return 'application/gzip';
+		if ( bytes.subarray( 0, 6 ).equals( Buffer.from( [ 0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c ] ) ) ) return 'application/x-7z-compressed';
+		if ( bytes.toString( 'ascii', 0, 5 ) === '{\\rtf' ) return 'application/rtf';
+	}
+	if ( kind === 'video' ) {
+		if ( bytes.length >= 16 && bytes.toString( 'ascii', 4, 8 ) === 'ftyp' ) return 'video/mp4';
+		if ( bytes.length >= 16 && bytes.readUInt32BE( 0 ) === 0x1a45dfa3 && bytes.subarray( 0, 4096 ).includes( Buffer.from( 'webm' ) ) ) return 'video/webm';
+		if ( magic === 'OggS' && bytes.includes( Buffer.from( 'theora' ) ) ) return 'video/ogg';
+	}
+	return undefined;
 }
 
-/** Group explicit srcset relationships, optimizer targets and CSS references before fetching.
+export function readAssets( root: string ): ImageAssetRecord[] {
+	const path = join( root, 'image-assets.json' );
+	return existsSync( path ) ? JSON.parse( readFileSync( path, 'utf8' ) ).images.map( ( record: ImageAssetRecord ) => ( { ...record, kind: record.kind ?? 'image', destination_owner: record.destination_owner ?? ( record.kind === 'font' ? 'theme' : 'media-library' ), references: record.references ?? [] } ) ) : [];
+}
+
+/** Inventory all retained resource uses. Explicit image relationships join before fetching;
+ * other URL aliases join only after their hashes verify identical bytes.
  * Documents are streamed: only the identity inventory outlives each parsed page.
  */
-export function collectImageAssets( documents: ImageDocuments, resolve?: ImageResolver ): ImageAssetRecord[] {
-	const groups: Array<{ urls: Set<string>; original: string; size: number; references: ImageAssetReference[] }> = [];
-	const add = ( values: string[], preferred: string, base: string, references: ImageAssetReference[], size = 0 ) => {
+export function collectAssets( documents: ImageDocuments, resolve?: ImageResolver ): ImageAssetRecord[] {
+	const groups: Array<{ urls: Set<string>; original: string; size: number; references: ImageAssetReference[]; kind: NonNullable<ImageAssetRecord['kind']> }> = [];
+	const add = ( values: string[], preferred: string, base: string, references: ImageAssetReference[], size = 0, kind: NonNullable<ImageAssetRecord['kind']> = 'image' ) => {
 		const urls = new Set<string>();
 		for ( const value of values ) {
 			try {
 				const url = new URL( value, base );
 				if ( /^https?:$/.test( url.protocol ) ) {
 					urls.add( url.href );
-					urls.add( resolvedImageOriginal( url.href, resolve ) );
+					urls.add( kind === 'image' ? resolvedImageOriginal( url.href, resolve ) : url.href );
 				}
 			} catch { /* Invalid references cannot be fetched. */ }
 		}
 		if ( ! urls.size ) return;
 		let original: string;
-		try { original = resolvedImageOriginal( new URL( preferred, base ).href, resolve ); }
+		try { original = kind === 'image' ? resolvedImageOriginal( new URL( preferred, base ).href, resolve ) : new URL( preferred, base ).href; }
 		catch { original = [ ...urls ][ 0 ]; }
 		if ( ! urls.has( original ) ) original = [ ...urls ][ 0 ];
-		const overlapping = groups.filter( group => [ ...urls ].some( url => group.urls.has( url ) ) );
+		const overlapping = groups.filter( group => group.kind === kind && [ ...urls ].some( url => group.urls.has( url ) ) );
 		for ( const group of overlapping ) {
 			for ( const url of group.urls ) urls.add( url );
 			references.push( ...group.references );
@@ -97,7 +144,7 @@ export function collectImageAssets( documents: ImageDocuments, resolve?: ImageRe
 			if ( group.size > size ) { original = group.original; size = group.size; }
 			groups.splice( groups.indexOf( group ), 1 );
 		}
-		groups.push( { urls, original, size, references } );
+		groups.push( { urls, original, size, references, kind } );
 	};
 	for ( const { html, url: documentUrl } of documents ) {
 		const $ = cheerio.load( html );
@@ -135,6 +182,21 @@ export function collectImageAssets( documents: ImageDocuments, resolve?: ImageRe
 			const kind = $( node ).closest( 'nav,[role=navigation]' ).length ? 'navigation' : 'content';
 			add( [ href ], href, url, reference( href, kind, `anchor:${ i }:href` ) );
 		} );
+		$( 'a[href]' ).each( ( i, node ) => {
+			const href = $( node ).attr( 'href' )!;
+			if ( /\.(?:avif|webp|png|jpe?g|gif|svg)(?:[?#]|$)/i.test( href ) ) return;
+			if ( ! $( node ).is( '[download]' ) && ! /\.(?:pdf|docx?|xlsx?|pptx?|odt|ods|odp|zip|gz|7z|txt|csv|rtf|epub)(?:[?#]|$)/i.test( href ) ) return;
+			const kind = $( node ).closest( 'nav,[role=navigation]' ).length ? 'navigation' : 'content';
+			add( [ href ], href, url, reference( href, kind, `download:${ i }:href` ), 0, 'document' );
+		} );
+		$( 'video' ).each( ( i, node ) => {
+			const poster = $( node ).attr( 'poster' );
+			if ( poster ) add( [ poster ], poster, url, reference( poster, 'content', `video:${ i }:poster` ) );
+		} );
+		$( 'video[src],video source[src]' ).each( ( i, node ) => {
+			const src = $( node ).attr( 'src' )!;
+			add( [ src ], src, url, reference( src, 'content', `video:${ i }:src` ), 0, 'video' );
+		} );
 		$( 'link[href]' ).each( ( i, node ) => {
 			if ( ! /(?:^|\s)(?:icon|apple-touch-icon|apple-touch-icon-precomposed)(?:\s|$)/i.test( $( node ).attr( 'rel' ) ?? '' ) ) return;
 			const href = $( node ).attr( 'href' )!;
@@ -147,6 +209,17 @@ export function collectImageAssets( documents: ImageDocuments, resolve?: ImageRe
 		for ( const css of styles ) {
 			try {
 				postcss.parse( css ).walkDecls( declaration => {
+					if ( declaration.prop.toLowerCase() === 'src' && declaration.parent?.type === 'atrule' && declaration.parent.name.toLowerCase() === 'font-face' ) {
+						const location = `declaration:${ declarationIndex++ }:src`;
+						const descriptors = new Map<string, string>();
+						declaration.parent.walkDecls( descriptor => { descriptors.set( descriptor.prop.toLowerCase(), descriptor.value ); } );
+						for ( const match of declaration.value.matchAll( /url\(\s*["']?([^\s"')]+)["']?\s*\)(?:\s*format\(\s*["']?([^"')]+)["']?\s*\))?/gi ) ) {
+							const refs = reference( match[ 1 ], 'CSS', location );
+							for ( const ref of refs ) ref.font_face = { family: descriptors.get( 'font-family' ), weight: descriptors.get( 'font-weight' ), style: descriptors.get( 'font-style' ), unicode_range: descriptors.get( 'unicode-range' ), format: match[ 2 ] };
+							add( [ match[ 1 ] ], match[ 1 ], url, refs, 0, 'font' );
+						}
+						return;
+					}
 					if ( ! /^(?:background(?:-image)?|(?:-webkit-)?mask(?:-image)?|border-image(?:-source)?|list-style(?:-image)?|content)$/i.test( declaration.prop ) ) return;
 					const location = `declaration:${ declarationIndex++ }:${ declaration.prop }`;
 					for ( const match of declaration.value.matchAll( /url\(\s*["']?([^\s"')]+)["']?\s*\)/gi ) ) add( [ match[ 1 ] ], match[ 1 ], url, reference( match[ 1 ], 'CSS', location ) );
@@ -155,8 +228,9 @@ export function collectImageAssets( documents: ImageDocuments, resolve?: ImageRe
 		}
 	}
 	return groups.map( group => ( {
+		kind: group.kind, destination_owner: group.kind === 'font' ? 'theme' : 'media-library',
 		source_urls: [ ...group.urls ], references: [ ...new Map( group.references.map( ref => [ JSON.stringify( ref ), ref ] ) ).values() ], resolved_original: group.original, original: null,
-		error: `unresolved image original: ${ group.original }`,
+		error: `unresolved ${ group.kind } original: ${ group.original }`,
 	} ) );
 }
 
@@ -182,8 +256,8 @@ async function decodeImage( page: import('playwright').Page, bytes: Buffer, cont
 }
 
 /** One acquisition per record; stub aliases are a compatibility projection, not identity owners. */
-export async function captureImageAssets( root: string, documents: ImageDocuments, deadline?: number, resolve?: ImageResolver ): Promise<ImageAssetRecord[]> {
-	const images = collectImageAssets( documents, resolve );
+export async function captureAssets( root: string, documents: ImageDocuments, deadline?: number, resolve?: ImageResolver ): Promise<ImageAssetRecord[]> {
+	const images = collectAssets( documents, resolve );
 	mkdirSync( root, { recursive: true } );
 	const stubs = MediaStubStore.load( root );
 	const names = new Map<string, number>();
@@ -192,23 +266,31 @@ export async function captureImageAssets( root: string, documents: ImageDocument
 	let browser: import('playwright').Browser | undefined;
 	try {
 		if ( images.length ) {
-			const pw = await getPlaywright();
-			browser = await pw.chromium.launch( { headless: true, timeout: 30000 } );
-			const page = await browser.newPage();
-			await page.route( '**/*', route => route.abort() );
+			let page: import('playwright').Page | undefined;
 			for ( const record of images ) {
 				const source = record.resolved_original;
 				try {
 					if ( deadline !== undefined && Date.now() >= deadline )
-						throw new Error( 'image acquisition deadline reached' ); // failure-class: operational
+						throw new Error( 'resource acquisition deadline reached' ); // failure-class: operational
 					if ( /\/_missing-media\/|\/(?:placeholder|missing-image)\.(?:svg|png|gif|webp)(?:[?#]|$)/i.test( source ) )
 						throw new Error( 'source references a known image placeholder' ); // failure-class: operational
 					const result = await downloadMedia( source, mediaDir, names, undefined, { preserveOriginal: true } );
-					if ( ! result.localPath ) throw new Error( result.error ?? 'image download failed' ); // failure-class: operational
+					if ( ! result.localPath ) throw new Error( result.error ?? 'resource download failed' ); // failure-class: operational
 					const bytes = readFileSync( result.localPath );
-					const contentType = imageContentType( bytes );
-					if ( ! contentType ) throw new Error( 'unverified image bytes or placeholder' ); // failure-class: operational
-					const metadata = await decodeImage( page, bytes, contentType );
+					const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind! );
+					if ( ! contentType ) throw new Error( 'unverified resource bytes or placeholder' ); // failure-class: operational
+					if ( record.kind === 'font' && record.references.some( ref => {
+						const format = ref.font_face?.format?.toLowerCase();
+						const expected = { woff: 'font/woff', woff2: 'font/woff2', truetype: 'font/ttf', opentype: 'font/otf' }[ format ?? '' ];
+						return expected && expected !== contentType;
+					} ) ) throw new Error( 'font bytes do not match declared format' ); // failure-class: operational
+					if ( record.kind === 'image' && ! page ) {
+						const pw = await getPlaywright();
+						browser ??= await pw.chromium.launch( { headless: true, timeout: 30000 } );
+						page = await browser.newPage();
+						await page.route( '**/*', route => route.abort() );
+					}
+					const metadata = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : {};
 					// Even a lying response header's extension follows the verified bytes.
 					const extension = extensionFromContentType( contentType );
 					const currentExtension = extname( result.localPath );
@@ -232,10 +314,23 @@ export async function captureImageAssets( root: string, documents: ImageDocument
 	} catch ( error ) {
 		if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
 		for ( const record of images ) if ( ! record.original ) {
-			record.error = `Image verification unavailable: ${ String( error ) }`;
+			record.error = `Resource verification unavailable: ${ String( error ) }`;
 			for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
 		}
 	} finally { await browser?.close().catch( () => {} ); }
+	// Query aliases collapse only after verification: query parameters can select different bytes.
+	const verified = new Map<string, ImageAssetRecord>();
+	for ( let i = 0; i < images.length; i++ ) {
+		const record = images[ i ];
+		if ( ! record.original || record.kind === 'image' ) continue;
+		const key = `${ record.kind }:${ record.original.sha256 }`;
+		const previous = verified.get( key );
+		if ( ! previous ) { verified.set( key, record ); continue; }
+		previous.source_urls = [ ...new Set( [ ...previous.source_urls, ...record.source_urls ] ) ];
+		previous.references.push( ...record.references );
+		for ( const url of record.source_urls ) stubs.markSuccess( url, previous.local_path! );
+		images.splice( i--, 1 );
+	}
 	stubs.flush();
 	const path = join( root, 'image-assets.json' );
 	writeFileSync( `${ path }.tmp`, JSON.stringify( { version: 1, images }, null, 2 ) + '\n' );

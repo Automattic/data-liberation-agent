@@ -4,6 +4,7 @@ import type { PortableMediaCandidate, PortableMediaPlan } from './portable-media
 import { portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 
 export interface FailedPortableMedia {
+	nonImage?: boolean;
 	family: string;
 	sourceUrl: string;
 	error: string;
@@ -24,7 +25,7 @@ export interface PortableMediaMaterialization {
 	assetPathsByHash: Map< string, string >;
 	assetHashesByPath: Map< string, string >;
 	portablePathsBySource: Map< string, string >;
-	assets: Array< { sourceUrl: string; source_url?: string; source_urls?: string[]; references?: import('./image-assets.js').ImageAssetReference[]; original?: import('./image-assets.js').ImageAssetRecord['original']; path: string } >;
+	assets: Array< { sourceUrl: string; source_url?: string; source_urls?: string[]; references?: import('./image-assets.js').ImageAssetReference[]; original?: import('./image-assets.js').ImageAssetRecord['original']; kind?: import('./image-assets.js').ImageAssetRecord['kind']; destination_owner?: import('./image-assets.js').ImageAssetRecord['destination_owner']; path: string } >;
 	unresolvedMedia: Array< { url: string; error: string } >;
 	portableMedia: {
 		selected_count: number;
@@ -75,10 +76,10 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 	for ( const decision of plan.families ) {
 		const { family, candidates, eligible, admitted } = decision;
 		if ( decision.outcome === 'limit-excluded' ) {
-			for ( const reference of retainedReferences.get( family ) ?? [] )
+			if ( candidates.every( candidate => ! candidate.imageAsset?.kind || candidate.imageAsset.kind === 'image' ) ) for ( const reference of retainedReferences.get( family ) ?? [] )
 				mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 			for ( const candidate of candidates ) {
-				for ( const reference of candidate.references ) {
+				if ( ! candidate.imageAsset?.kind || candidate.imageAsset.kind === 'image' ) for ( const reference of candidate.references ) {
 					mediaReplacements.set( reference, candidate.sourceUrl );
 				}
 				unresolvedMedia.push( {
@@ -91,7 +92,7 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 		}
 		if ( decision.outcome === 'budget-excluded' ) {
 			for ( const candidate of candidates ) {
-				for ( const reference of candidate.references ) {
+				if ( ! candidate.imageAsset?.kind || candidate.imageAsset.kind === 'image' ) for ( const reference of candidate.references ) {
 					mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 				}
 			}
@@ -120,7 +121,7 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				assets.push( {
 					sourceUrl: candidate.sourceUrl,
 					source_url: candidate.sourceUrl,
-					...( candidate.imageAsset ? { source_urls: candidate.imageAsset.source_urls, references: candidate.imageAsset.references, original: candidate.imageAsset.original } : {} ),
+					...( candidate.imageAsset ? { kind: candidate.imageAsset.kind, destination_owner: candidate.imageAsset.destination_owner, source_urls: candidate.imageAsset.source_urls, references: candidate.imageAsset.references, original: candidate.imageAsset.original } : {} ),
 					path: join( 'website', assetPath ).replace( /\\/g, '/' ),
 				} );
 			}
@@ -147,8 +148,9 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 		max_bytes: input.maxBytes,
 		reserved_bytes: 0,
 	};
-	for ( const { family, sourceUrl, error, references } of failedMedia ) {
+	for ( const { family, sourceUrl, error, references, nonImage } of failedMedia ) {
 		if ( localizedMediaFamilies.has( family ) ) continue;
+		if ( nonImage ) { unresolvedMedia.push( { url: sourceUrl, error } ); continue; }
 		for ( const reference of retainedReferences.get( family ) ?? [] )
 			mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 		for ( const reference of references )

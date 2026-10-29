@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { getPlaywright } from './browser-kit/index.js';
-import { collectImageAssets, imageContentType, resolvedImageOriginal } from './image-assets.js';
+import { collectAssets as collectImageAssets, imageContentType, resolvedImageOriginal } from './image-assets.js';
 
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
@@ -39,10 +39,12 @@ it('prefers an enclosing lightbox original across documents without merging ordi
  expect(image.references).toContainEqual({ kind: 'content', document_url: 'https://example.com/gallery', location: 'anchor:0:href', source_url: 'https://example.com/original?id=1' });
 });
 
-it('records extensionless CSS backgrounds with document bases but not font sources or video sources', () => {
+it('records extensionless font, CSS background and video sources with document bases', () => {
  const records = collectImageAssets([{ url: 'https://example.com/page/', html: '<base href="/assets/"><style>@font-face{src:url(font-proxy?id=1)}.hero{background-image:url(image-proxy?id=2)}</style><video><source src="movie.mp4"></video><div style="background:url(&quot;image-proxy?id=2&quot;)"></div>' }]);
- expect(records).toHaveLength(1);
- expect(records[0].source_urls).toEqual(['https://example.com/assets/image-proxy?id=2']);
+ expect(records).toHaveLength(3);
+ expect(records.find(record => record.kind === 'image')!.source_urls).toEqual(['https://example.com/assets/image-proxy?id=2']);
+ expect(records.find(record => record.kind === 'font')!.destination_owner).toBe('theme');
+ expect(records.find(record => record.kind === 'video')!.destination_owner).toBe('media-library');
  expect(imageContentType(Buffer.from('<html>placeholder</html>'))).toBeUndefined();
 });
 
