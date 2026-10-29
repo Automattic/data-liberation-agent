@@ -16,6 +16,10 @@ export default defineConfig({
     globalSetup: ['./vitest.global-setup.ts'],
     include: ['**/*.test.ts'],
     exclude: [...configDefaults.exclude, '**/worktrees/**', '**/.claude/**', 'test/canary/**'],
+    // Most suites launch Chromium (or CLI subprocesses). CPU-count concurrency
+    // oversubscribes high-core runners and makes unrelated tests/teardown time out.
+    // Bound simultaneous suites rather than weakening their timeout assertions.
+    maxWorkers: 2,
     testTimeout: 15_000,
   },
 });

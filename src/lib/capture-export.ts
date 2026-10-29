@@ -79,7 +79,7 @@ import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
 import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
 import { elementSrcReferences, localizeMetadataImageReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
-import { materializePortableResources } from './portable-resources.js';
+import { materializePortableResources, projectPortableResourceIntegrity } from './portable-resources.js';
 import { assertPageWithinFileLimit, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, routeExceedsTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
 import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
@@ -2014,6 +2014,7 @@ function buildExportCapture(
 		};
 		projectStylesheets( websiteDir );
 	}
+	projectPortableResourceIntegrity( websiteDir, resourceStage.sourceHashesByPortablePath );
 	const portableTexts = portableTextReferences( websiteDir );
 	if ( portableTexts ) for ( const entry of retainedEntries ) {
 		const path = join( websiteDir, routePathOf( entry.url ) );
