@@ -6,6 +6,9 @@ import { captureWebsite } from '../index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { captureAssets, collectAssets as collectImageAssets, imageContentType, resolvedImageOriginal } from './image-assets.js';
+import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
+import { SourceRequestGovernors } from './source-request-governor.js';
+import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
 
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
@@ -81,6 +84,35 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    expect(remote.local_path).toBeUndefined();
    expect(remote.error).toBe('Error: resource acquisition deadline reached');
   } finally {
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
+ it('fetches a captured route\'s lightbox original before the deadline so assets admit it afterwards', async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20"/></svg>';
+  let hits = 0;
+  const server = createServer((request, response) => { hits++; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'asset-queue-'));
+  try {
+   const html = '<a href="/full.svg"><img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="></a>';
+   mkdirSync(join(root, 'html'), { recursive: true });
+   writeFileSync(join(root, 'html/index.html'), html);
+   await runWithTrustedOrigins([url], async () => {
+    // Routes finish inside the budget; the asset stage starts after it.
+    const queue = new AssetAcquisitionQueue(root, new SourceRequestGovernors(), Date.now() + 60_000);
+    queue.enqueueRoute(url, ['html/index.html', 'html/index.html']);
+    await queue.drain();
+    const [record] = await captureAssets(root, [{ url, html }], Date.now() - 1000);
+    expect(record.resolved_original).toBe(`${url}full.svg`);
+    expect(record.error).toBeUndefined();
+    expect(record.original).toMatchObject({ width: 40, height: 20 });
+   });
+   expect(hits).toBe(1);
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
    rmSync(root, { recursive: true, force: true });
   }
  });

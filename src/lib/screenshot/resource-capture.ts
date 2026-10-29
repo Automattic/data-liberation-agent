@@ -484,6 +484,11 @@ export class CapturedResourceStore {
 		page.on?.( 'response', listener );
 	}
 
+	/** True when bytes for `url` are already stored. */
+	has( url: string ): boolean {
+		return Boolean( this.manifest.resources[ url ] );
+	}
+
 	async settle( page: Page ): Promise< void > {
 		const listener = this.listeners.get( page );
 		if ( listener ) page.off?.( 'response', listener );

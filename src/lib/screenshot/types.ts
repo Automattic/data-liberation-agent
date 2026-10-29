@@ -86,6 +86,11 @@ export interface ScreenshotOpts {
 	 */
 	onProgress?: ( current: number, total: number, url: string ) => void;
 	/**
+	 * Fired once per route whose documents were saved, with their paths
+	 * relative to `outputDir` and whether the capture already stored a URL's bytes.
+	 */
+	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean ) => void;
+	/**
 	 * Learn how the source sizes itself by sweeping viewport widths with its
 	 * runtime alive, then emit the learned CSS instead of the pixels that
 	 * runtime happened to compute at the capture width. Costs one sweep per
