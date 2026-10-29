@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { IntegrityError } from './failure-class.js';
 
 /**
  * Portable media selection plan. One pass records which known reference strings
@@ -13,6 +14,7 @@ const MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 
 export interface PortableMediaCandidate {
+	imageAsset?: import('./image-assets.js').ImageAssetRecord;
 	sourceUrl: string;
 	localPath: string;
 	references: string[];
@@ -191,6 +193,8 @@ export function planPortableMediaFamilies(
 	for ( const family of admissionOrder ) {
 		for ( const candidate of family.eligible ) {
 			const contentHash = fileHash( candidate.localPath );
+			if ( candidate.imageAsset?.original && contentHash !== candidate.imageAsset.original.sha256 )
+				throw new IntegrityError( `Image original changed after verification: ${ candidate.sourceUrl }` );
 			const needsFile = ! hashes.has( contentHash );
 			if ( ! needsFile || selectedBytes + candidate.bytes <= budget ) {
 				admitted.set( candidate, { candidate, contentHash } );

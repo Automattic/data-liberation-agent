@@ -636,7 +636,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 					...deviceSelections.flatMap( row => row.documents.filter( key => ! row.missing.includes( key ) ).map( key => `data-blocks-engine-capture-${ key }-document` ) ),
 				] ) ],
 				routes,
-				assets,
+				assets: assets.map( asset => ( { ...asset, source_url: asset.sourceUrl } ) ),
 				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
 				portableMedia,
 				interactions: interactionSummary,

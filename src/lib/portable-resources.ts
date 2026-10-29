@@ -39,6 +39,8 @@ function recognizedBinaryContentType( path: string ): string | undefined {
 
 export interface PortableResourceOptions {
 	sourceRoot: string;
+	/** Capture-owned images must never fall back to an unverified proxy response. */
+	imageUrls?: ReadonlySet<string>;
 	websiteDir: string;
 	entries: ReadonlyArray< { url: string; htmlPath: string } >;
 	resourceManifest: CapturedResourceManifest;
@@ -101,6 +103,7 @@ export function materializePortableResources( options: PortableResourceOptions )
 		}
 	};
 	const copyResource = ( dependency: PortableDependency, sourceUrl: string ): boolean => {
+		if ( options.imageUrls?.has( dependency.url ) ) return false;
 		const resource = resourceManifest.resources[ dependency.url ];
 		if ( ! resource ) {
 			unresolvedDependencies.push( {
@@ -204,8 +207,10 @@ export function materializePortableResources( options: PortableResourceOptions )
 						mediaReplacement &&
 						mediaReplacement !== TRANSPARENT_IMAGE_DATA_URL &&
 						! /^(?:https?:)?\/\//i.test( mediaReplacement )
-					)
+					) {
+						mediaReplacements.set( nested.reference, mediaReplacement );
 						continue;
+					}
 					if ( copyResource( nested, dependency.url ) ) {
 						if ( mediaReplacement === TRANSPARENT_IMAGE_DATA_URL ) {
 							promoteCapturedMediaReplacement( nested.url, dependency.url );
@@ -247,13 +252,15 @@ export function materializePortableResources( options: PortableResourceOptions )
 			? stripExcludedRenditionReferences( originalHtml, entry.url, options.excludedRenditions )
 			: originalHtml;
 		for ( const dependency of dependencyReferences( html, entry.url, false, embeddedSources ) ) {
-			const mediaReplacement = mediaReplacements.get( dependency.reference );
+			const mediaReplacement = mediaReplacements.get( dependency.reference ) ?? mediaReplacements.get( dependency.url );
 			if (
 				mediaReplacement &&
 				mediaReplacement !== TRANSPARENT_IMAGE_DATA_URL &&
 				! /^(?:https?:)?\/\//i.test( mediaReplacement )
-			)
+			) {
+				mediaReplacements.set( dependency.reference, mediaReplacement );
 				continue;
+			}
 			if ( copyResource( dependency, entry.url ) ) {
 				// A browser-captured response is a faithful bounded fallback when the
 				// independent media fetch failed. Let its local replacement win.

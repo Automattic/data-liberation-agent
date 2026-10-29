@@ -44,6 +44,7 @@ describe( 'source findings (static-site-importer/source-findings/v1)', () => {
 			route_profile_uncaptured: { loss_class: 'omitted_unit', unit: 'profile' },
 			route_capture_skipped_budget: { loss_class: 'omitted_unit', unit: 'route' },
 			route_capture_timeout: { loss_class: 'omitted_unit', unit: 'route' },
+			image_resource_unresolved: { loss_class: 'omitted_unit', unit: 'asset' },
 			asset_exceeds_file_limit: { loss_class: 'omitted_unit', unit: 'asset' },
 			asset_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'asset' },
 			route_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'route' },

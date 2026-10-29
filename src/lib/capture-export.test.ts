@@ -6653,8 +6653,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', 'media', 'background.jpg' ), 'utf8' ) ).toBe( 'desktop-image' );
 		expect( readFileSync( join( outputDir, 'website', 'media', 'background-mobile.webp' ), 'utf8' ) ).toBe( 'mobile-image' );
 		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).assets ).toEqual( expect.arrayContaining( [
-			{ sourceUrl, path: 'website/media/background.jpg' },
-			{ sourceUrl: mobileUrl, path: 'website/media/background-mobile.webp' },
+			{ sourceUrl, source_url: sourceUrl, path: 'website/media/background.jpg' },
+			{ sourceUrl: mobileUrl, source_url: mobileUrl, path: 'website/media/background-mobile.webp' },
 		] ) );
 	} );
 

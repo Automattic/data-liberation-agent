@@ -27,6 +27,8 @@ export interface DownloadResult {
 }
 
 export interface DownloadMediaOpts {
+  /** Asset-original acquisition must not negotiate away alpha or upgrade a rendition. */
+  preserveOriginal?: boolean;
   /**
    * Rasterize a PNG sibling (and run the risky <use>/<defs> scan) for fetched
    * SVGs. Opt-in: only the media-LIBRARY download path (extraction loop in
@@ -272,14 +274,14 @@ export function isFontUrl(url: string): boolean {
  * recomputed for EACH hop's own origin so a redirect off the source can't
  * receive credentials meant only for it.
  */
-async function fetchMediaResponse(rawUrl: string): Promise<Response> {
+async function fetchMediaResponse(rawUrl: string, preserveOriginal = false): Promise<Response> {
   let currentUrl = assertPublicHttpUrl(rawUrl).toString();
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const cookie = await sourceSessionCookieHeader(new URL(currentUrl).origin);
     const res = await fetch(currentUrl, {
       signal: AbortSignal.timeout(30000),
       redirect: 'manual',
-      headers: { accept: BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
+      headers: { accept: preserveOriginal ? '*/*' : BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
     });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
@@ -326,7 +328,7 @@ export async function downloadMedia(
     // size (e.g. Wix fill transforms), but keep the filename/key derived from the
     // ORIGINAL url so the source→local rewrite map stays consistent. No-op for
     // URLs without a known upgrade rule.
-    const response = await fetchMediaResponse(upgradeMediaUrl(url));
+    const response = await fetchMediaResponse(opts?.preserveOriginal ? url : upgradeMediaUrl(url), opts?.preserveOriginal);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -350,7 +352,7 @@ export async function downloadMedia(
     // extension, storing megabytes of HTML as a "successful" image.
     const rawContentType = response.headers.get('content-type') || '';
     const contentType = canonicalMediaContentType(rawContentType);
-    if (contentType && !isSupportedMediaContentType(contentType)) {
+    if (!opts?.preserveOriginal && contentType && !isSupportedMediaContentType(contentType)) {
       try { await response.body?.cancel(); } catch { /* ignore */ }
       throw new Error(`non-media content-type "${rawContentType}" for ${url}`);
     }
@@ -369,7 +371,7 @@ export async function downloadMedia(
     const urlExtension = extname(rawFilename);
     const negotiatedExtension = extensionFromContentType(contentType);
     if (!urlExtension) {
-      if (!negotiatedExtension) {
+      if (!negotiatedExtension && !opts?.preserveOriginal) {
         try { await response.body?.cancel(); } catch { /* ignore */ }
         throw new Error(`non-media content-type "${rawContentType || 'unknown'}" for ${url}`);
       }
