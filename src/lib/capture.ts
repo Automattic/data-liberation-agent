@@ -285,7 +285,8 @@ interface CaptureInventory {
 export async function downloadCaptureSectionMedia(
 	outputDir: string,
 	urls: string[],
-	deadline?: number
+	deadline?: number,
+	resolveImageOriginal?: import('../platform/types.js').Platform['resolveImageOriginal']
 ): Promise< number > {
 	const pageRoutes = new Set(
 		urls.flatMap( ( url ) => {
@@ -352,7 +353,7 @@ export async function downloadCaptureSectionMedia(
 			yield { url: document.url, html: document.css ? `<style>${ text }</style>` : text };
 		}
 	}
-	const imageAssets = await captureImageAssets( outputDir, imageDocuments(), deadline );
+	const imageAssets = await captureImageAssets( outputDir, imageDocuments(), deadline, resolveImageOriginal );
 	const recordedImageUrls = new Set( imageAssets.flatMap( record => record.source_urls ) );
 	const stubs = MediaStubStore.load( outputDir );
 	const mediaDir = join( outputDir, 'media' );
@@ -577,7 +578,7 @@ async function runCaptureWebsite(
 	);
 	progress( { phase: 'media', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const mediaStartedAt = Date.now();
-	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt );
+	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ) );
 	process.stderr.write(
 		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
 	);

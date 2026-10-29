@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readImageAssets, resolvedImageOriginal, type ImageAssetRecord } from './image-assets.js';
+import { readImageAssets, type ImageAssetRecord } from './image-assets.js';
 import { assembleDeviceDocuments, installDeviceSelection, type DocumentSelection } from './document-selection.js';
 import type { AccessGateEvidence } from './access-gate.js';
 import {
@@ -790,7 +790,6 @@ function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 }
 
 function mediaFamily( sourceUrl: string ): string {
-	sourceUrl = resolvedImageOriginal( sourceUrl );
 	const url = new URL( sourceUrl );
 	const transformedPath = /^(.*?)\/v1\/(?:fill|fit|crop)\//i.exec( url.pathname )?.[ 1 ];
 	if ( transformedPath ) return `${ url.origin }${ transformedPath }`;

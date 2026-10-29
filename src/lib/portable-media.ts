@@ -24,7 +24,7 @@ export interface PortableMediaMaterialization {
 	assetPathsByHash: Map< string, string >;
 	assetHashesByPath: Map< string, string >;
 	portablePathsBySource: Map< string, string >;
-	assets: Array< { sourceUrl: string; source_url?: string; source_urls?: string[]; original?: import('./image-assets.js').ImageAssetRecord['original']; path: string } >;
+	assets: Array< { sourceUrl: string; source_url?: string; source_urls?: string[]; references?: import('./image-assets.js').ImageAssetReference[]; original?: import('./image-assets.js').ImageAssetRecord['original']; path: string } >;
 	unresolvedMedia: Array< { url: string; error: string } >;
 	portableMedia: {
 		selected_count: number;
@@ -120,7 +120,7 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				assets.push( {
 					sourceUrl: candidate.sourceUrl,
 					source_url: candidate.sourceUrl,
-					...( candidate.imageAsset ? { source_urls: candidate.imageAsset.source_urls, original: candidate.imageAsset.original } : {} ),
+					...( candidate.imageAsset ? { source_urls: candidate.imageAsset.source_urls, references: candidate.imageAsset.references, original: candidate.imageAsset.original } : {} ),
 					path: join( 'website', assetPath ).replace( /\\/g, '/' ),
 				} );
 			}
