@@ -50,7 +50,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 		const evidence = JSON.parse(readFileSync(join(root, 'interaction-states.json'), 'utf8')) as { pages: InteractionStatesReport[] };
 		const entry = evidence.pages.find(page => page.sourceUrl === url)!;
 		for (const id of ['country', 'region']) {
-			expect(entry.states.find(state => state.trigger.id === id)?.dialog?.role).toBe('listbox');
+			expect(entry.components?.find(node => node.selector === `#${id}` || node.states.some(state => state.evidence?.trigger.id === id))?.kind).toBe('listbox');
 		}
 		expect(entry.routeNavigation?.find(route => route.id === 'about')?.url).toBe(`${url}about`);
 		expect(entry.routeNavigation?.find(route => route.id === 'contact')?.url).toBe(`${url}contact`);

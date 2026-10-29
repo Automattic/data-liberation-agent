@@ -26,7 +26,9 @@ import {
 	serverRedirectTarget,
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
-import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
+import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
+import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline } from './component-states.js';
+import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
@@ -36,12 +38,10 @@ import {
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
 } from './interaction-capture.js';
-import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-slideshow.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
-import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { combineSkips, resolveProbeExclusions } from './probe-exclusions.js';
@@ -968,7 +968,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
 		args.phases?.enter( 'lazy-load' );
 		const dismissedEarly = await dismissOverlays( page );
-		await triggerLazyLoad( page, args.learnFluid === true );
+		await triggerLazyLoad( page, args.learnFluid === true, { expandContent: false } );
 		const dismissedLate = await dismissOverlays( page );
 		const dismissedHere = [ ...dismissedEarly, ...dismissedLate ];
 		if ( dismissedHere.length > 0 ) {
@@ -1034,25 +1034,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		writeFileSync( plan.paths.geometry, `${ JSON.stringify( capture, null, 2 ) }\n` );
 	}
 
-	// Disclosure/accordion panels a runtime unmounts while collapsed (Radix,
-	// shadcn/ui, etc.) so the served static markup has no answer text at all —
-	// restored here, BEFORE serialization, so the captured HTML carries it.
-	// Diagnostics are held until the interaction-states merge below rather than
-	// dropped, so the fix is observable in interaction-states.json.
-	let disclosureStates: CapturedDialogInteraction[] = [];
+	// Initial component states are immutable evidence, read before exploration.
+	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
+	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
+	if ( args.beforeSerialize ) await args.beforeSerialize( page, { url, viewport: viewport.id, serverHtml } ).catch( () => undefined );
+	const snapshot = await snapshotComponents( page ).catch( () => undefined );
+	const componentBaseline: ComponentBaseline = snapshot && Array.isArray( snapshot.components ) ? snapshot : { components: [], controls: [] };
+	await markGalleryRoots( page ).catch( () => undefined );
+	await markInitialDocument( page );
+	const initialDocument = await capturePageHtml( page );
 
 	// Seam 1b: replace runtime-computed pixel geometry with the relationship the
 	// source actually obeys, learned by resizing while its runtime still runs.
 	// Must happen after removals (so stripped chrome is never modelled) and
 	// before serialization (so the learned CSS is what gets written).
-	// A slideshow driven by its own thumbnails only advances while the source's
-	// script is running, so read its states before any layout measurement.
-	// Observe actions while source geometry and lazy-image owners are still live.
-	// Width learning can freeze hidden overlay boxes; it cannot be the input to an action drive.
-	args.phases?.enter( 'galleries' );
-	const galleryStates = await withReadOnlyProbes( page, () => captureGalleries( page ) ).catch(() => []);
-	const pagerSlideshows = await withReadOnlyProbes( page, () => collectPagerSlideshowStates( page ) ).catch( () => [] );
-	// Browser probes can scroll an offscreen control into view. Native view
+	// Source preparation can scroll an offscreen control into view. Native view
 	// animations legitimately report finished there; observe the capture's
 	// at-top baseline, not the incidental position left by a probe click.
 	try { await withEvaluateTimeout( page.evaluate( async () => {
@@ -1133,11 +1129,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	if ( args.rendererCrashed() ) return;
 
-	args.phases?.enter( 'slideshows' );
-	await applyPagerSlideshowStates( page, pagerSlideshows ).catch( () => {
-		/* best-effort — a picker that will not advance must not block capture */
-	} );
-
 	// Remove attributed non-content islands before interaction evidence and HTML.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 	// Restore runtime emoji replacement images to their authored text (#954),
@@ -1145,51 +1136,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// source's emoji script had swapped in Twemoji images.
 	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 	args.phases?.enter( 'before-serialize' );
-	if ( args.beforeSerialize ) {
-		await args.beforeSerialize( page, {
-			url,
-			viewport: viewport.id,
-			serverHtml,
-		} ).catch( () => {
-			/* best-effort — never block capture on a late platform widget */
-		} );
-	}
 	if ( args.rendererCrashed() ) return;
-
-	// Hydrated panels belong to the serialization transaction. Browser probes
-	// and width learning can rerender their source items, discarding injected
-	// answers or mistaking the new controls for another interactive component.
-	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
-		args.phases?.enter( 'hydrate-disclosures' );
-		try {
-			disclosureStates = await withReadOnlyProbes( page, () => hydrateDisclosureContent( page ) );
-		} catch (error) {
-			const reason = error instanceof Error ? error.message : String( error );
-			// Reload owns recovery: Escape can also close unrelated overlays that
-			// were already open at baseline. A fingerprint mismatch does not prove
-			// the probe's own mutation remains, nor is the live DOM safe to save.
-			// Reuse source preparation, then serialize without disclosure hydration.
-			try {
-				await releaseBaselineNavigation();
-				if ( captureViewport ) await page.setViewportSize( captureViewport );
-				const failuresBeforeReload = failures.length;
-				if ( ! ( await loadBaseline( true ) ) ) {
-					if ( failures.length === failuresBeforeReload ) fail( 'content', `disclosure_unrestored: ${ reason }; baseline reload did not restore the route` );
-					return;
-				}
-			} catch ( reloadError ) {
-				fail( 'content', `disclosure_unrestored: ${ reason }; baseline reload failed: ${ String( reloadError ) }` );
-				return;
-			}
-			// Learned rules belonged to the discarded document, not this baseline.
-			delete entry[ isDesktop ? 'fluid' : 'fluidMobile' ];
-			if ( ! ( await loseBlock( 'content', { code: 'disclosure_unrestored', reason, severity: 'error' } ) ) ) return;
-		}
-	}
-	// Gallery cycles are part of this viewport's serialization transaction, not
-	// a later drive after the baseline HTML has already been saved.
-	args.phases?.enter( 'align-galleries' );
-	await alignCapturedGalleries(page, galleryStates);
 
 	// Capture only after every operation that can change the live DOM, then
 	// serialize immediately below. This keeps runtime-driven components in the
@@ -1231,12 +1178,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-		// Last normalization before the document is read: disclosure-hydration
-		// recovery can reload the baseline, and the fresh document's emoji script
-		// re-creates the replacement images this route already restored (#954).
+		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
-		const captured = await capturePageHtml( page );
-		const html = canonicalize( wireCapturedDialogs( frozen ? sanitizeFrozenHtml( captured ) : captured, galleryStates ) );
+		const learned = await capturePageHtml( page );
+		const captured = projectInitialDocument( initialDocument, learned );
+		const html = canonicalize( frozen ? sanitizeFrozenHtml( captured ) : captured );
 		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
 		await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
 		return { html, documentUrl };
@@ -1465,7 +1411,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Adapter-declared platform runtime is never driven by any probe below.
 		const excluded = await resolveProbeExclusions( page, args.probeExclusions ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
 		args.diagnostics?.push( ...excluded.diagnostics );
-		const skip = combineSkips( chrome?.skip, excluded.skip );
+		const components = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip ) );
+		for ( const component of components ) for ( const state of component.states ) {
+			await resourceStore.captureDomDependencies( state.html, navigationUrl );
+		}
+		const galleryStates = await withReadOnlyProbes( page, () => captureGalleries( page ) ).catch( () => [] );
+		const skip = combineSkips( combineSkips( chrome?.skip, excluded.skip ), componentBaseline.skip );
 		let interactions: InteractionStatesReport;
 		try {
 			interactions = await withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip } ) : captureTriggeredDialogs( page, url ) );
@@ -1480,15 +1431,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			args.phases?.enter( 'dialogs' );
 		}
 		if ( args.rendererCrashed() ) return;
-		// Disclosure/accordion candidates were already resolved (opened, captured,
-		// reclosed) before serialization above — folded in here purely as
-		// diagnostics, using the same states array + totals the dialog/menu path
-		// already reports through, rather than a parallel reporting system.
-		interactions.states = [ ...galleryStates, ...disclosureStates, ...interactions.states ];
+		// Probes contribute replay evidence; they cannot replace the initial tree.
+		interactions.components = popupComponents( interactions.states, components );
+		interactions.states = [ ...galleryStates, ...interactions.states ];
 		if ( args.rendererCrashed() ) return;
 		try {
 			args.phases?.enter( 'selectable' );
-			const selectableStates = await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: excluded.skip } ) );
+			const selectableStates = await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( excluded.skip, componentBaseline.skip ) } ) );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
@@ -1518,7 +1467,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} );
 		}
 		if (
-			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
+			( interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
 			hasPromotableInteractionEvidence( entry.interactions, interactions )
 		) {
 			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
@@ -1552,7 +1501,7 @@ function isProvenInlineGallery( state: CapturedDialogInteraction ): boolean {
 }
 
 function hasPromotableInteractionEvidence( previous: InteractionStatesReport | undefined, latest: InteractionStatesReport ): boolean {
-	return ! previous || latest.states.some( state => state.status === 'captured' || isProvenInlineGallery( state ) ) ||
+	return ! previous || ( latest.components?.length ?? 0 ) > 0 || latest.states.some( state => state.status === 'captured' || isProvenInlineGallery( state ) ) ||
 		( latest.routeNavigation?.length ?? 0 ) > 0 || latest.initialDialogs?.some( state => state.status === 'captured' ) === true;
 }
 
@@ -1609,6 +1558,7 @@ function mergeInteractionReports(
 	);
 	return {
 		...latest,
+		components: [ ...new Map( [ ...( previous.components ?? [] ), ...( latest.components ?? [] ) ].map( component => [ component.selector, component ] ) ).values() ],
 		states,
 		routeNavigation: [ ...new Map( [ ...( previous.routeNavigation ?? [] ), ...( latest.routeNavigation ?? [] ) ]
 			.map( route => [ route.selector, route ] ) ).values() ],
@@ -2012,10 +1962,6 @@ async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision
 				// Controls visible at desktop width are the desktop pass's to probe.
 				const desktopControls = await withEvaluateTimeout( visibleControlPaths( desktop.page ), 10_000 );
 				await renderedElementPaths( phone.page, { attribute: DESKTOP_CONTROL_ATTRIBUTE, paths: desktopControls } );
-				// Order as in a phone pass: disclosures are restored in place first, so
-				// the dialog probe sees what that pass saw. The desktop pass restores
-				// the same disclosures in the shared document, so these states are not kept.
-				await withReadOnlyProbes( phone.page, () => hydrateDisclosureContent( phone.page ) ).catch( () => [] );
 				await restoreTopScrollState( phone.page );
 				await withReadOnlyProbes( phone.page, () => dismissOverlays( phone.page ) );
 				const release = await lockMainFrameNavigation( phone.page );
@@ -2075,9 +2021,7 @@ async function probeChromeOnPage(
 	url: string,
 	options: { canonicalizeHtml?: ( html: string ) => string; additionalStates?: CapturedDialogInteraction[] }
 ): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
-	// Prepared as a route is before its probe: disclosures restored in place,
-	// resting scroll, overlays dismissed.
-	await withReadOnlyProbes( page, () => hydrateDisclosureContent( page ) ).catch( () => [] );
+	// Read the resting landmark identity before any exploration.
 	await restoreTopScrollState( page );
 	await withReadOnlyProbes( page, () => dismissOverlays( page ) );
 	const landmarks = await readChromeLandmarks( page, true );

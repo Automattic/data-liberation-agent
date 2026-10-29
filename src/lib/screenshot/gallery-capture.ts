@@ -469,35 +469,13 @@ async function visibleGallerySurfaces(page: Page): Promise<string[]> {
 	});
 }
 
-/** Bind an observed cycle to the actual state at this viewport's serialization boundary. */
-export async function alignCapturedGalleries(page: Page, states: CapturedDialogInteraction[]): Promise<void> {
-	for (const state of states) {
-		const gallery = state.gallery?.inline;
-		if (!gallery || gallery.coverage !== 'complete') continue;
-		// A reloaded document can reassign the root's id, leaving the captured
-		// selector without a match. count() is bounded, where locator.evaluate
-		// would wait out the default actionability timeout for a vanished root.
-		if ((await page.locator(gallery.selector).count()) === 0) {
-			gallery.restoration = 'unverified';
-			continue;
-		}
-		for (let sample = 0; sample < 30; sample++) {
-			const frame = await snapshot(page, gallery);
-			const index = frame ? gallery.frames.findIndex(item => item.key === frame.key) : -1;
-			if (frame && index >= 0) { gallery.initial = index; gallery.frames[index]!.text = frame.text; break; }
-			if (sample === 29) gallery.restoration = 'unverified';
-			await page.waitForTimeout(100);
-		}
-	}
-}
-
 /** Gallery evidence travels through interaction-states and its existing HTML/media export. */
-export async function captureGalleries(page: Page): Promise<CapturedDialogInteraction[]> {
+export async function markGalleryRoots(page: Page): Promise<string[]> {
 	await page.evaluate(() => {
 		(globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown }).__name ??= (fn) => fn;
 	});
 	await page.evaluate(installDirection, DIRECTION);
-	const roots = await page.evaluate((key) => {
+	return page.evaluate((key) => {
 		const direction = (globalThis as unknown as Record<string, Direction>)[key]!;
 		const controls = Array.from(document.querySelectorAll('body *'));
 		const visible = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
@@ -518,6 +496,10 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 		}
 		return roots;
 	}, DIRECTION);
+}
+
+export async function captureGalleries(page: Page): Promise<CapturedDialogInteraction[]> {
+	const roots = await markGalleryRoots(page);
 	const states: CapturedDialogInteraction[] = [];
 	for (const root of roots) {
 		// Activation moves nested scrollports as well as the window. Keep actual

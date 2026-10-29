@@ -208,8 +208,7 @@ export async function captureSelectableSetStates(
 					return Boolean( target && target.getAttribute( 'role' ) === 'region' );
 				};
 				const isPagerControl = ( element: Element ) =>
-					element.hasAttribute( 'data-blocks-engine-capture-pager-control' ) ||
-					Boolean( element.closest( '[data-blocks-engine-capture-pager-stage],[data-blocks-engine-capture-gallery-capture-width]' ) );
+					Boolean( element.closest( '[data-blocks-engine-capture-gallery-capture-width]' ) );
 				const looksSelectable = ( element: Element ): boolean => {
 					if ( limits.skip !== undefined && element.matches( limits.skip ) ) return false;
 					if ( ! visible( element ) ) return false;

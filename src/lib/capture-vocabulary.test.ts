@@ -92,7 +92,7 @@ describe( 'capture evidence vocabulary', () => {
 		];
 		const known = [ ...names, ...Object.keys( CAPTURE_EVIDENCE_FAMILIES ) ];
 		expect( published.filter( name => ! known.includes( name ) ) ).toEqual( [] );
-		for ( const schema of [ 'captured-interactions/v1', 'capture-receipt/v1', 'source-interactivity/v1', 'finite-bootstrap/v1', 'collection-status/v1' ] ) {
+		for ( const schema of [ 'captured-interactions/v2', 'capture-receipt/v1', 'source-interactivity/v1', 'finite-bootstrap/v1', 'collection-status/v1' ] ) {
 			expect( CAPTURE_SCHEMAS ).toContain( schema );
 		}
 		// Blocks Engine CaptureEvidence::DISCLOSURE_RUNTIME_SHA256.
@@ -192,7 +192,7 @@ describe( 'capture evidence vocabulary', () => {
 		expect( digest( 'gallery-runtime' ) ).toBe( CAPTURE_RUNTIME_SHA256.gallery );
 
 		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) );
-		expect( states.schema ).toBe( `${ CAPTURE_SCHEMA_NAMESPACE }captured-interactions/v1` );
+		expect( states.schema ).toBe( `${ CAPTURE_SCHEMA_NAMESPACE }captured-interactions/v2` );
 		expect( JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ).schema ).toBe( `${ CAPTURE_SCHEMA_NAMESPACE }capture-receipt/v1` );
 		expect( statSync( join( outputDir, 'website', 'index.html' ) ).size ).toBeGreaterThan( 0 );
 	} );

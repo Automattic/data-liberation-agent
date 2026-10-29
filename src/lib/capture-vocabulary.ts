@@ -67,9 +67,10 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		gallery: 'a', 'gallery-direction': 'a', 'gallery-index': 'a', 'gallery-initial': 'a', 'gallery-sequence': 'a', 'gallery-slot': 'a',
 		'gallery-stage': 'a', 'gallery-source': 'a', 'gallery-frame': 'a', 'gallery-image': 'a', 'gallery-full-image': 'a', 'gallery-text': 'a',
 		'gallery-display': 'a', 'gallery-close': 'a', 'gallery-capture-width': 'a', 'gallery-runtime': 'a', 'gallery-visibility': 'a',
-		'captured-slide': 'a', 'captured-slideshow': 'a', 'captured-slide-count': 'a', 'advertised-slide-count': 'a', 'expected-slide-count': 'a',
-		'capture-error': 'a', 'pager-stage': 'a', 'pager-control': 'a', 'video-frame': 'a', 'squarespace-video': 'a',
-		slideshow: 'c', 'slideshow-track': 'c', 'slideshow-css': 'i', 'captured-slideshow-css': 'i', 'wix-captured-slideshow-css': 'i',
+		'captured-slide': 'a', 'captured-slideshow': 'a', 'captured-slide-count': 'a', 'expected-slide-count': 'a',
+		'capture-error': 'a', 'video-frame': 'a', 'squarespace-video': 'a',
+		'tabs': 'a', 'component-runtime': 'a', 'initial-node': 'a', 'component-disclosure': 'a', 'component-disclosure-runtime': 'a', 'component-carousel-runtime': 'a',
+		slideshow: 'c', 'slideshow-track': 'c', 'slideshow-css': 'i', 'wix-captured-slideshow-css': 'i',
 	},
 	presentation: {
 		'glyph-color': 'a', 'glyph-pending': 'a', 'glyph-probe': 'a', 'glyph-probe-candidate': 'a', 'glyph-probe-style': 'a',
@@ -109,7 +110,7 @@ export const CAPTURE_EVIDENCE_FAMILIES = {
 /** Sidecar schemas, under `CAPTURE_SCHEMA_NAMESPACE`. */
 export const CAPTURE_SCHEMAS = [
 	'asset-evidence/v1', 'behavior-model/v1', 'candidate-motion/v1', 'capture-diagnostics/v1', 'capture-receipt/v1',
-	'captured-interactions/v1', 'captured-scroll-states/v1', 'captured-semantic-evidence/v2',
+	'captured-interactions/v2', 'captured-scroll-states/v1', 'captured-semantic-evidence/v2',
 	'collection-status/v1', 'compare-overlays/v1', 'embedded-documents/v1', 'engagement-stats/v1', 'export-publication-lock/v1', 'fidelity-reference/v1',
 	'finite-bootstrap/v1', 'http-acquisition/v1', 'interaction-states/v1', 'interaction-states/v2', 'layout-geometry-capture/v1',
 	'layout-geometry-proof/v1', 'learned-motion/v1', 'native-view-timelines/v1', 'portable-motion/v1', 'runtime-observations/v1',

@@ -38,7 +38,7 @@ Emitters spell the full names, because many of them sit inside runtime script an
 | Documents | attributes `document-scope`, `device-document`, `device-style`, `device-body`, `device-selection`, `device-visibility`, `device-unavailable`, `document-unavailable`, `selected-document`, `selected-viewport`, `source-media`; classes `desktop-document`, `mobile-document`, `<profile>-document`, `desktop-only`, `mobile-only`; id suffix `--data-blocks-engine-capture-mobile` |
 | Responsive assembly | `responsive-source`, `responsive-fragment`, `responsive-fragments`, `embedded-responsive`, `embedded-document`, `anchor-fragment`, `anchor-target`, `anchor-source-id`, `anchor-alias`, `anchor-unresolved`, `fluid-id`, `fluid-segment`, `fluid-rules`, `fluid-sheet-rules`, `fluid-ignore-padding`, `geometry-id`, `visual-iframe-src`, `visual-iframe-width`, `visual-iframe-height`; classes `responsive-<hash>`, `responsive-class-<hash>`, `responsive-counterpart-<n>`, `embedded-<digest>-<document>`, `shared-<hash>`; id `fluid-specificity` |
 | Collections | `collection`, `collection-item`, `collection-members`, `collection-category`, `collection-category-control`, `collection-index`, `collection-mode`, `collection-field`, `collection-empty`, `collection-status`, `collection-runtime`, `collection-visibility`, `status-template`, `status-hide-zero`; tokens `no-match`, `no-match-7f39b2`, `no-match-2c81e4`, `finite-probe`, `finite-probe-7f39b2`, `finite-follow-up` |
-| Galleries, slideshows | `gallery`, `gallery-direction`, `gallery-index`, `gallery-initial`, `gallery-sequence`, `gallery-slot`, `gallery-stage`, `gallery-source`, `gallery-frame`, `gallery-image`, `gallery-full-image`, `gallery-text`, `gallery-display`, `gallery-close`, `gallery-capture-width`, `gallery-runtime`, `gallery-visibility`, `captured-slide`, `captured-slideshow`, `captured-slide-count`, `advertised-slide-count`, `expected-slide-count`, `capture-error`, `pager-stage`, `pager-control`, `video-frame`, `squarespace-video`; classes `slideshow` (also the keyframes name), `slideshow-track`; ids `gallery-<n>`, `slideshow-css`, `captured-slideshow-css`, `wix-captured-slideshow-css` |
+| Galleries, slideshows | `gallery`, `gallery-direction`, `gallery-index`, `gallery-initial`, `gallery-sequence`, `gallery-slot`, `gallery-stage`, `gallery-source`, `gallery-frame`, `gallery-image`, `gallery-full-image`, `gallery-text`, `gallery-display`, `gallery-close`, `gallery-capture-width`, `gallery-runtime`, `gallery-visibility`, `captured-slide`, `captured-slideshow`, `captured-slide-count`, `expected-slide-count`, `capture-error`, `video-frame`, `squarespace-video`; classes `slideshow` (also the keyframes name), `slideshow-track`; ids `gallery-<n>`, `slideshow-css`, `wix-captured-slideshow-css` |
 | Presentation, motion | `glyph-color` ([glyph-color.md](glyph-color.md)), `glyph-probe`, `glyph-probe-style`, `native-control-state`, `native-control-runtime`, `native-effects`, `native-node`, `native-profile`, `native-losses`, `native-runtime-loss`, `native-view-timeline-runtime`, `viewport-entrance`, `viewport-entrances`, `viewport-entrance-loss`, `source-canvas`; classes `replica`, `content-desktop`, `content-mobile`, `content-mobile-inner`, `page-<slug>` |
 | Platform evidence | `access-gate`, `member-login` (attribute; class `member-login-<provider>`), `source-evidence`, `reclaimed-space`, `constructed-stylesheet`, `ported-embed`, `unported-embed`, `google-map-marker`, `squarespace-header-style`, `check-route-tab`; class `google-map-embed`; id `squarespace-header-visible` |
 
@@ -55,13 +55,41 @@ They share the namespace anyway, so no capture name falls outside it.
 
 Every sidecar schema is `blocks-engine-capture/<name>/v<n>`. The full list is `CAPTURE_SCHEMAS`. Blocks Engine reads five of them:
 
-- `captured-interactions/v1` (`interaction-states.json`)
+- `captured-interactions/v2` (`interaction-states.json`; replaces the flat v1 interaction inventory with component nodes)
 - `capture-receipt/v1` — its `reports` array names the capture-root JSON sidecars to forward to an importer (additive; schema stays `v1`)
 - `source-interactivity/v1`
 - `finite-bootstrap/v1`
 - `collection-status/v1`
 
 `website/source-findings.json` uses Static Site Importer's own schema, `static-site-importer/source-findings/v1` ([loss-ledger.md](loss-ledger.md) section 5.1).
+
+## Route component states (Refs #1034)
+
+Each route's `components` array groups a surface's `initial` state, bounded observed
+`states` (id and HTML), and `transitions` (from/to state ids and a click trigger
+selector). Tabs, disclosures, dialogs, listboxes, carousels and menus are classified
+from semantic roles and ownership. Unclassified surfaces have `status: unsupported`
+and are not materialized as hidden panels. Partial exploration is evidence, not a
+claim of complete coverage. Probe-specific replay evidence belongs to a component
+state, not a second exported trigger inventory.
+
+The settled, cleaned route document is snapshotted before component exploration.
+Only learned geometry and capture annotations may be projected back onto that
+initial tree; exploring another tab or slide never replaces it. Lazy tab panels
+are obtained by clicking their triggers and materialized hidden beside the initial
+panel. Native details retain their authored `open` state.
+
+`tabs`, `component-runtime`, `component-disclosure` and
+`component-disclosure-runtime` and `component-carousel-runtime` are portable replay attributes. `initial-node` is
+private correspondence used during geometry projection and removed before export.
+The old pager-slideshow expansion and post-exploration gallery initial-state
+realignment are retired. Existing v1/v2 capture-cache probe records are accepted as
+inputs, but the published sidecar has one component inventory.
+
+Follow-up slices remain: cross-viewport node reconciliation (point 5), normalized
+scroll/animation/generated identities (point 6), declared motion (point 7), and
+broader filter/pagination and deep-link fixture coverage. This slice does not
+claim those contracts.
 
 ## Recognized capture runtimes
 

@@ -96,7 +96,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       for (const id of ['desktop', 'mobile']) {
         const phases = manifest.entries[`http://127.0.0.1:${port}/a.html`].profiles[id].phases as Array<{ phase: string; ms: number }>;
         expect(phases[0].phase).toBe('context');
-        expect(phases.map((entry) => entry.phase)).toEqual(expect.arrayContaining(['navigate', 'settle', 'lazy-load', 'galleries', 'slideshows', 'before-serialize', 'hydrate-disclosures', 'align-galleries', 'record', 'context-close']));
+        expect(phases.map((entry) => entry.phase)).toEqual(expect.arrayContaining(['navigate', 'settle', 'lazy-load', 'before-serialize', 'serialize', 'dialogs', 'record', 'context-close']));
         expect(phases.every((entry) => Number.isInteger(entry.ms) && entry.ms >= 0)).toBe(true);
         const readiness = manifest.entries[`http://127.0.0.1:${port}/a.html`].profiles[id].readiness;
         expect(readiness.stable).toMatchObject({ count: expect.any(Number), deadline: expect.any(Number) });

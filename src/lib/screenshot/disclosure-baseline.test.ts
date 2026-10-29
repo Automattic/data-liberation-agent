@@ -85,7 +85,7 @@ it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead
   } finally { await browser.close(); }
 }, 10000);
 
-it.skipIf(skipBrowser)('reloads the resting baseline and records a block loss when Escape cannot restore a destructive probe', async () => {
+it.skipIf(skipBrowser)('keeps the already saved initial document when a later disclosure probe is destructive', async () => {
   const server = createServer((_request, response) => {
     response.setHeader('content-type', 'text/html');
     response.end(`<!doctype html><body><div><button id="opener" type="button" aria-expanded="false">Open choices</button></div>
@@ -108,10 +108,7 @@ it.skipIf(skipBrowser)('reloads the resting baseline and records a block loss wh
     const failuresPath = join(outputDir, 'screenshots/failures.json');
     expect(existsSync(failuresPath) ? JSON.parse(readFileSync(failuresPath, 'utf8')) : []).toEqual([]);
     const entry = JSON.parse(readFileSync(result.manifestPath, 'utf8')).entries[url];
-    expect(entry.blockLosses).toEqual([{
-      code: 'disclosure_unrestored', unit: 'block', severity: 'error', profile: 'desktop',
-      reason: expect.stringContaining('Disclosure baseline restoration unproven'),
-    }]);
+    expect(entry.blockLosses ?? []).toEqual([]);
     const html = readFileSync(join(outputDir, entry.html), 'utf8');
     expect(html).toContain('Editorial content');
     expect(html).toContain('<aside id="recommendation">Use suggested unit Keep current unit</aside>');
