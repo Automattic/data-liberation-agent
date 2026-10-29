@@ -6,7 +6,7 @@ import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
 import { normalizeTrustedOrigins, runWithTrustedOrigins, safeFetch } from './media-fetch/safe-fetch.js';
 import { downloadMedia } from './media-fetch/media.js';
-import { captureImageAssets } from './image-assets.js';
+import { captureAssets } from './image-assets.js';
 import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -353,7 +353,7 @@ export async function downloadCaptureSectionMedia(
 			yield { url: document.url, html: document.css ? `<style>${ text }</style>` : text };
 		}
 	}
-	const imageAssets = await captureImageAssets( outputDir, imageDocuments(), deadline, resolveImageOriginal );
+	const imageAssets = await captureAssets( outputDir, imageDocuments(), deadline, resolveImageOriginal );
 	const recordedImageUrls = new Set( imageAssets.flatMap( record => record.source_urls ) );
 	const stubs = MediaStubStore.load( outputDir );
 	const mediaDir = join( outputDir, 'media' );
