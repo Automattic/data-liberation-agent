@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.37] - 2026-10-29
+
+### Changed
+- regenerate plugin bundles
+- Respect viewport URL identity in single-tree correspondence
+- Stop probing a selectable set whose member opens another window
+
+### Fixed
+- match clipped text in the case text-transform renders
+
 ## [0.33.36] - 2026-10-29
 
 ### Changed
