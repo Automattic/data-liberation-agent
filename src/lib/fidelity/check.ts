@@ -802,7 +802,13 @@ export async function observePage(
 				if ( ! parent ) continue;
 				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
 				const painted = paintedTextRects( range, parent ).length > 0;
-				textNodes.push( { text: value, clipped: ! painted } );
+				// innerText reports the case text-transform renders, so a node
+				// must be found in that case, or an unpainted uppercase label
+				// would instead delete a later visible run of the same word.
+				const transform = getComputedStyle( parent ).textTransform;
+				const rendered = transform === 'uppercase' ? value.toLocaleUpperCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined )
+					: transform === 'lowercase' ? value.toLocaleLowerCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined ) : value;
+				textNodes.push( { text: rendered.length === value.length ? rendered : value, clipped: ! painted } );
 			}
 			let textSearchFrom = 0;
 			for ( const { text, clipped, replacement } of textNodes ) {

@@ -72,6 +72,20 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 		} finally { await browser.close(); }
 	}, 30_000 );
 
+	it( 'removes a clipped label in the case its text-transform renders', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
+			const css = '<style>header{text-transform:uppercase}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style>';
+			// Without a later visible run of the word, a case-blind lookup keeps the label.
+			await page.setContent( `${ css }<header><a href="/"><span class="sr">Brand</span>Home</a></header><p>Animals matter.</p>` );
+			expect( ( await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true ) ).textChars ).toBe( 'HOME Animals matter.'.length );
+			// With one, it must not delete that visible run instead.
+			await page.setContent( `${ css }<header><a href="/"><span class="sr">Brand</span>Home</a></header><p>Brand cares.</p>` );
+			expect( ( await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true ) ).textChars ).toBe( 'HOME Brand cares.'.length );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it( 'does not insert phantom separators when unpainted inline text is removed', async () => {
 		const browser = await chromium.launch();
 		const page = await browser.newPage();
