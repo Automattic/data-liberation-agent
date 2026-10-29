@@ -55,8 +55,8 @@ describe( 'responsive assembly with document markup inside script text', () => {
 		expect( $( `.${ MOBILE_DOCUMENT_CLASS }` ) ).toHaveLength( 0 );
 		expect( $( '#after' ) ).toHaveLength( 1 );
 		expect( $( 'footer' ) ).toHaveLength( 1 );
-		expect( visibleText( $, 'body' ) ).toBe( 'Phone title Desktop title Phone menu Content after the script Footer' );
-		const [ phoneHeading, desktopHeading ] = $( 'h1' ).toArray().map( ( node ) => $( node ) );
+		expect( visibleText( $, 'body' ) ).toBe( 'Desktop title Phone title Phone menu Content after the script Footer' );
+		const [ desktopHeading, phoneHeading ] = $( 'h1' ).toArray().map( ( node ) => $( node ) );
 		expect( phoneHeading!.hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
 		expect( desktopHeading!.hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( true );
 		expect( $( 'aside' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );

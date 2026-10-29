@@ -157,7 +157,9 @@ export interface ViewportTreeReconciliation {
 /** Inert containers whose per-viewport copies carry no content identity. */
 const RECONCILE_SKIP = new Set( [ 'script', 'style', 'noscript', 'template' ] );
 
-const MEDIA_SOURCE_ATTRIBUTES: Record< string, readonly string[] > = {
+const SOURCE_REFERENCE_ATTRIBUTES: Record< string, readonly string[] > = {
+	a: [ 'href' ],
+	area: [ 'href' ],
 	img: [ 'src', 'srcset' ],
 	video: [ 'src', 'poster' ],
 	audio: [ 'src' ],
@@ -201,9 +203,9 @@ function canonicalReference( value: string ): string {
 	}
 }
 
-/** The media identity an element carries, or '' when it carries none. */
-function referenceOf( element: Element ): string {
-	const attributes = MEDIA_SOURCE_ATTRIBUTES[ element.tagName ];
+/** Resolved navigation or media identity, or '' when the element carries none. */
+export function referenceOf( element: Element ): string {
+	const attributes = SOURCE_REFERENCE_ATTRIBUTES[ element.tagName ];
 	if ( ! attributes ) return '';
 	const values = attributes
 		.map( ( attribute ) => ( element.attribs?.[ attribute ] ?? '' ).trim() )
@@ -293,6 +295,9 @@ export function correspondenceMerge(
 	const mobileToDesktop = new Map< Element, Element >();
 	const pair = ( desktopElement: Element, mobileElement: Element ): boolean => {
 		if ( desktopToMobile.has( desktopElement ) || mobileToDesktop.has( mobileElement ) ) return false;
+		// Children can establish a container correspondence, but must not erase
+		// that container's own destination (including viewport-specific bases).
+		if ( referenceOf( desktopElement ) !== referenceOf( mobileElement ) ) return false;
 		desktopToMobile.set( desktopElement, mobileElement );
 		mobileToDesktop.set( mobileElement, desktopElement );
 		return true;
@@ -483,24 +488,25 @@ export function correspondenceMerge(
 		if ( id && desktopIdValues.has( id ) ) return true;
 		return childElements( element ).some( carriesUsedId );
 	};
-	const insertions: Array< { parent: Element; index: number; html: string } > = [];
+	const insertions: Array< { parent: Element; before?: Element; html: string } > = [];
 	for ( const insertion of mobileOnlyInsertions ) {
 		if ( carriesUsedId( insertion.element ) ) return undefined;
 		$m( insertion.element ).addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
+		// Raw sibling indexes include viewport-only and inert nodes. Anchor to
+		// the next corresponding sibling instead, preserving the phone order.
+		const siblings = childElements( parentOf( insertion.element )! );
+		const following = siblings.slice( siblings.indexOf( insertion.element ) + 1 );
+		const before = following.map( node => mobileToDesktop.get( node ) )
+			.find( node => node !== undefined && parentOf( node ) === insertion.parent );
 		insertions.push( {
 			parent: insertion.parent,
-			index: $m( insertion.element ).index(),
+			before,
 			html: $m.html( insertion.element ) ?? '',
 		} );
 	}
-	// Descending sibling positions keep earlier insertions from shifting a
-	// later one's reference child.
-	insertions.sort( ( a, b ) => b.index - a.index );
 	for ( const insertion of insertions ) {
-		const parent = $d( insertion.parent );
-		const children = parent.children();
-		if ( insertion.index < children.length ) children.eq( insertion.index ).before( insertion.html );
-		else parent.append( insertion.html );
+		if ( insertion.before ) $d( insertion.before ).before( insertion.html );
+		else $d( insertion.parent ).append( insertion.html );
 	}
 
 	// One element now serves both viewports, but each capture rendered it with

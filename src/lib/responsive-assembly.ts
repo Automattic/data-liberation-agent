@@ -21,6 +21,7 @@ import {
 	RESPONSIVE_MOBILE_ONLY_CLASS,
 	RESPONSIVE_PROJECTION_CLASS_PREFIX,
 	RESPONSIVE_SOURCE_ID,
+	referenceOf,
 	type ViewportTreeReconciliation,
 	withoutTransform,
 } from './viewport-correspondence.js';
@@ -339,6 +340,7 @@ function identitySubsetMerge(
 		( $d( node ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) )
 	);
 	let unsafeClassAlias = false;
+	let differingReferences = false;
 	const bodyClasses = ( html: string ) => {
 		const attributes = bodyAttributes( html );
 		return ( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
@@ -508,6 +510,8 @@ function identitySubsetMerge(
 		m: cheerio.Cheerio< Element >,
 		path: string
 	): void => {
+		// Stable ids cannot override each document's resolved URL identity.
+		if ( referenceOf( d.get( 0 )! ) !== referenceOf( m.get( 0 )! ) ) differingReferences = true;
 		let projected = false;
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
@@ -620,7 +624,7 @@ function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
-	if ( unsafeClassAlias ) return undefined;
+	if ( unsafeClassAlias || differingReferences ) return undefined;
 	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds );
 	if ( divergedComponents === undefined ) return undefined;
 	$d( '[class]' ).each( ( _index, node ) => {
