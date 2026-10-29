@@ -6,6 +6,7 @@ import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
 import { normalizeTrustedOrigins, runWithTrustedOrigins, safeFetch } from './media-fetch/safe-fetch.js';
 import { downloadMedia } from './media-fetch/media.js';
+import { captureImageAssets } from './image-assets.js';
 import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -326,12 +327,39 @@ export async function downloadCaptureSectionMedia(
 		}
 	}
 
+	// Serialized documents retain every srcset candidate, not just currentSrc.
+	const documents: Array<{ path: string; url: string; css?: boolean }> = [];
+	if ( existsSync( manifestPath ) ) {
+		const manifest = JSON.parse( readFileSync( manifestPath, 'utf8' ) ) as { entries?: Record<string, ManifestEntry> };
+		for ( const [ url, entry ] of Object.entries( manifest.entries ?? {} ) ) {
+			for ( const path of new Set( [ entry.html, entry.mobileHtml, ...Object.values( entry.profiles ?? {} ).map( profile => profile.html ) ] ) ) {
+				if ( path && existsSync( join( outputDir, path ) ) ) documents.push( { path: join( outputDir, path ), url } );
+			}
+		}
+	}
+	const resourceManifestPath = join( outputDir, 'resources', 'manifest.json' );
+	if ( existsSync( resourceManifestPath ) ) {
+		const resources = JSON.parse( readFileSync( resourceManifestPath, 'utf8' ) ).resources ?? {};
+		for ( const [ url, resource ] of Object.entries( resources ) as Array<[string, { path: string; contentType: string }]> ) {
+			if ( /^text\/css/.test( resource.contentType ) && pathWithin( outputDir, resolve( outputDir, resource.path ) ) && existsSync( join( outputDir, resource.path ) ) ) {
+				documents.push( { url, path: join( outputDir, resource.path ), css: true } );
+			}
+		}
+	}
+	function* imageDocuments() {
+		for ( const document of documents ) {
+			const text = readFileSync( document.path, 'utf8' );
+			yield { url: document.url, html: document.css ? `<style>${ text }</style>` : text };
+		}
+	}
+	const imageAssets = await captureImageAssets( outputDir, imageDocuments(), deadline );
+	const recordedImageUrls = new Set( imageAssets.flatMap( record => record.source_urls ) );
 	const stubs = MediaStubStore.load( outputDir );
 	const mediaDir = join( outputDir, 'media' );
 	const seenNames = new Map< string, number >();
 	const { downloaded } = await downloadSectionMedia( {
 		srcUrls: sectionUrls,
-		isAlreadyDone: ( url ) => ! stubs.shouldAttempt( url ),
+		isAlreadyDone: ( url ) => recordedImageUrls.has( url ) || ! stubs.shouldAttempt( url ),
 		download: async ( url ) => {
 			if ( deadline !== undefined && Date.now() >= deadline ) return null;
 			const result = await downloadMedia( url, mediaDir, seenNames );

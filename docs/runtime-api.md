@@ -16,6 +16,10 @@ import {
 
 `data-liberation` and `data-liberation/runtime` resolve to the **same module**, including the same platform and publish registries. The runtime uses the implementations used by the CLI and MCP, with no separate pipeline, destination policy or sandbox configuration.
 
+Browser captures also persist [capture-owned image asset records](image-assets.md).
+The receipt's exported assets carry `source_url`; verified image entries retain
+all variant URLs and byte-verified original metadata.
+
 ## Standalone distribution
 
 `await serveCapture(directory)` serves the owned portable `website/` using the

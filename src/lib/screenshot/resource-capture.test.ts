@@ -1010,7 +1010,7 @@ describe( 'CapturedResourceStore', () => {
 			expect( href ).toMatch( /^\// );
 			const path = decodeURIComponent( new URL( href, 'https://portable.test/' ).pathname );
 			expect( readFileSync( join( outputDir, 'website', path ), 'utf8' ) ).toBe( bodies[ source ][ 1 ] );
-			expect( receipt.assets ).toContainEqual( { sourceUrl: source, path: `website${ path }` } );
+			expect( receipt.assets ).toContainEqual( { sourceUrl: source, source_url: source, path: `website${ path }` } );
 		}
 		expect( $( '#duplicate' ).attr( 'href' ) ).toBe( $( '#mp3' ).attr( 'href' ) );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
@@ -1120,7 +1120,7 @@ describe( 'CapturedResourceStore', () => {
 			[ poster, attrPoster ],
 			[ webm, childSrc ],
 		] ) {
-			expect( receipt.assets ).toContainEqual( { sourceUrl: source, path: `website${ path }` } );
+			expect( receipt.assets ).toContainEqual( { sourceUrl: source, source_url: source, path: `website${ path }` } );
 		}
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );

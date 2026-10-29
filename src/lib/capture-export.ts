@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readImageAssets, resolvedImageOriginal, type ImageAssetRecord } from './image-assets.js';
 import { assembleDeviceDocuments, installDeviceSelection, type DocumentSelection } from './document-selection.js';
 import type { AccessGateEvidence } from './access-gate.js';
 import {
@@ -789,6 +790,7 @@ function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 }
 
 function mediaFamily( sourceUrl: string ): string {
+	sourceUrl = resolvedImageOriginal( sourceUrl );
 	const url = new URL( sourceUrl );
 	const transformedPath = /^(.*?)\/v1\/(?:fill|fit|crop)\//i.exec( url.pathname )?.[ 1 ];
 	if ( transformedPath ) return `${ url.origin }${ transformedPath }`;
@@ -1648,6 +1650,9 @@ function buildExportCapture(
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
 	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
 		retainedMediaReferenceInventory( retainedEntries );
+	const imageAssets = readImageAssets( outputDir );
+	const imageByUrl = new Map( imageAssets.flatMap( record => record.source_urls.map( url => [ url, record ] as const ) ) );
+	const seenImageAssets = new Set<ImageAssetRecord>();
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
 	const failedMedia: FailedPortableMedia[] = [];
 	const capturedPages = new Set(
@@ -1697,24 +1702,28 @@ function buildExportCapture(
 		// A rendition the budget dropped is skipped: build stripped it from every
 		// srcset that retains another candidate, so nothing references it here.
 		if ( exclusions.renditions.has( sourceUrl ) ) continue;
-		const references = mediaReferences( sourceUrl, options.sourceUrl );
-		const family = mediaFamily( sourceUrl );
+		const imageAsset = imageByUrl.get( sourceUrl );
+		const references = imageAsset ? [ ...new Set( imageAsset.source_urls.flatMap( url => mediaReferences( url, options.sourceUrl ) ) ) ] : mediaReferences( sourceUrl, options.sourceUrl );
+		const family = mediaFamily( imageAsset?.original?.source_url ?? sourceUrl );
 		const exactReferences = references.filter( ( reference ) =>
-			mediaReferenceMatched( referenceIndex, reference )
+			referenceIndex.indexed.has( reference ) && mediaReferenceMatched( referenceIndex, reference )
 		);
 		const isReferenced = retainedMediaFamilies.has( family ) || interactionMediaFamilies.has( family ) || exactReferences.length > 0;
-		if ( stub.status === 'error' && isReferenced ) {
+		if ( imageAsset && seenImageAssets.has( imageAsset ) ) continue;
+		if ( imageAsset && isReferenced ) seenImageAssets.add( imageAsset );
+		if ( ( stub.status === 'error' || ( imageAsset && ! imageAsset.original ) ) && isReferenced ) {
 			failedMedia.push( { family, sourceUrl, error: stub.error ?? 'media download failed', references } );
 			continue;
 		}
+		const localPath = imageAsset?.local_path ?? stub.localPath;
 		if (
 			stub.status !== 'success' ||
-			! stub.localPath ||
-			! existsSync( stub.localPath ) ||
+			! localPath ||
+			! existsSync( localPath ) ||
 			! isReferenced
 		)
 			continue;
-		const bytes = statSync( stub.localPath ).size;
+		const bytes = statSync( localPath ).size;
 		if ( exclusions.assets.has( sourceUrl ) ) {
 			failedMedia.push( { family, sourceUrl, error: 'removed because the website exceeds the total export budget', references } );
 			continue;
@@ -1725,15 +1734,16 @@ function buildExportCapture(
 			continue;
 		}
 		const candidate: MediaCandidate = {
-			sourceUrl,
-			localPath: stub.localPath,
+			sourceUrl: imageAsset?.original?.source_url ?? sourceUrl,
+			...( imageAsset ? { imageAsset } : {} ),
+			localPath,
 			references: [
 				...new Set( [ ...references, ...( renderedMediaReferences.get( family ) ?? [] ) ] ),
 			],
 			exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
 			...( interactionMediaReferences.has( family ) ? { galleryFrame: true } : {} ),
 			bytes,
-			dimension: mediaDimension( sourceUrl ),
+			dimension: imageAsset?.original ? Math.max( imageAsset.original.width, imageAsset.original.height ) : mediaDimension( sourceUrl ),
 		};
 		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate ] );
 	}
@@ -1758,6 +1768,7 @@ function buildExportCapture(
 
 	const resourceStage = materializePortableResources( {
 		sourceRoot: outputDir,
+		imageUrls: new Set( imageByUrl.keys() ),
 		websiteDir,
 		entries: retainedEntries,
 		resourceManifest,
@@ -1778,6 +1789,9 @@ function buildExportCapture(
 	for ( const [ url, bytes ] of exclusions.renditions ) routeCaptureDiagnostics.push( redundantRenditionDropped( url, bytes, budget ) );
 	mediaReplacements = resourceStage.mediaReplacements;
 	portablePathsBySource = resourceStage.portablePathsBySource;
+	for ( const record of imageAssets ) {
+		if ( ! record.original || ! portablePathsBySource.has( record.original.source_url ) ) routeCaptureDiagnostics.push( { code: 'image_resource_unresolved', url: record.source_urls[ 0 ], reason: record.error ?? 'Verified image original could not be exported within the portable limits', unit: 'asset', severity: 'error' } );
+	}
 	assets.push( ...resourceStage.assets );
 	const { resourceReplacements, unresolvedDependencies, rejectedReplacementKeys } = resourceStage;
 	const stylesheetStage = materializeSharedStylesheets( {

@@ -24,7 +24,7 @@ export interface PortableMediaMaterialization {
 	assetPathsByHash: Map< string, string >;
 	assetHashesByPath: Map< string, string >;
 	portablePathsBySource: Map< string, string >;
-	assets: Array< { sourceUrl: string; path: string } >;
+	assets: Array< { sourceUrl: string; source_url?: string; source_urls?: string[]; original?: import('./image-assets.js').ImageAssetRecord['original']; path: string } >;
 	unresolvedMedia: Array< { url: string; error: string } >;
 	portableMedia: {
 		selected_count: number;
@@ -119,6 +119,8 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				assetHashesByPath.set( assetPath, contentHash );
 				assets.push( {
 					sourceUrl: candidate.sourceUrl,
+					source_url: candidate.sourceUrl,
+					...( candidate.imageAsset ? { source_urls: candidate.imageAsset.source_urls, original: candidate.imageAsset.original } : {} ),
 					path: join( 'website', assetPath ).replace( /\\/g, '/' ),
 				} );
 			}
@@ -126,8 +128,9 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				candidate.sourceUrl,
 				`website/${ assetPath.replace( /\\/g, '/' ) }`
 			);
+			for ( const url of candidate.imageAsset?.source_urls ?? [] ) portablePathsBySource.set( url, `website/${ assetPath.replace( /\\/g, '/' ) }` );
 			fallbackAssetPath ||= assetPath;
-			for ( const reference of candidate.exactReferences ) {
+			for ( const reference of candidate.imageAsset ? candidate.references : candidate.exactReferences ) {
 				mediaReplacements.set( reference, portableAssetUrl( assetPath ) );
 			}
 		}
