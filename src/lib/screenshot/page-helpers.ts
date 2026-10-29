@@ -305,8 +305,8 @@ const UNREACHABLE_LAZY_IMAGE = 'data-liberation.unreachable-lazy-image';
  * Install the page's `unreachableLazyImage( image )` readiness predicate and
  * return its global symbol key.
  *
- * A pending native-lazy image whose box lies outside an ancestor's overflow
- * clip (an image beyond the visible part of a horizontal rail, for example) is
+ * A pending native-lazy image whose box lies outside the document's scrollable
+ * area or an ancestor's overflow clip (a horizontal rail, for example) is
  * never fetched by a vertical document sweep. It therefore cannot change the
  * geometry being waited for, and waiting on it can only spend the deadline.
  * Images the sweep can reach still gate readiness, and revealing one later
@@ -324,11 +324,17 @@ export async function installImageReachability(page: Page): Promise<string> {
       value: (image: HTMLImageElement): boolean => {
         if (image.complete || image.loading !== 'lazy') return false;
         const box = image.getBoundingClientRect();
+        const root = document.scrollingElement ?? document.documentElement;
+        // Document coordinates, not the current viewport: below-fold images
+        // still gate readiness after the vertical lazy-load sweep.
+        if (box.right + scrollX <= 0 || box.left + scrollX >= root.scrollWidth ||
+            box.bottom + scrollY <= 0 || box.top + scrollY >= root.scrollHeight) return true;
         for (let node = image.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
           const style = getComputedStyle(node);
           if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
           const clip = node.getBoundingClientRect();
-          if (box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom) return true;
+          if (style.overflowX !== 'visible' && (box.right <= clip.left || box.left >= clip.right)) return true;
+          if (style.overflowY !== 'visible' && (box.bottom <= clip.top || box.top >= clip.bottom)) return true;
         }
         return false;
       },
