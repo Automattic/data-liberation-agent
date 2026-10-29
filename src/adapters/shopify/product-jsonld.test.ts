@@ -56,6 +56,30 @@ describe('Shopify product JSON-LD', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('creates the same product group on locale routes with page URL and language', async () => {
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify(product)));
+    vi.stubGlobal('fetch', fetch);
+    const defaultGroup = JSON.parse(completeProductJsonLd([], product, url, 'USD').scripts[0]!);
+    for (const locale of ['fr', 'en-ca']) {
+      const localizedUrl = `https://store.example/${locale}/products/field-jacket`;
+      const { page, evaluate } = mockPage();
+      vi.spyOn(page, 'url').mockReturnValue(localizedUrl);
+      evaluate.mockReset().mockResolvedValueOnce({ scripts: [], currency: 'USD' }).mockResolvedValue(undefined);
+      await capture.beforeSerialize!(page, { url: localizedUrl, viewport: 'desktop' });
+      expect(fetch).toHaveBeenCalledWith(`${localizedUrl}.js`, expect.objectContaining({ redirect: 'error' }));
+      const group = JSON.parse(evaluate.mock.calls[1]![1][0]);
+      expect(group).toMatchObject({
+        '@type': 'ProductGroup', productGroupID: String(product.id),
+        inLanguage: locale, url: localizedUrl,
+      });
+      expect(group.productGroupID).toBe(defaultGroup.productGroupID);
+      expect(group.hasVariant).toHaveLength(product.variants.length);
+      expect(group.hasVariant[0].additionalProperty).toEqual(defaultGroup.hasVariant[0].additionalProperty);
+    }
+    expect(defaultGroup.url).toBe(url);
+    expect(defaultGroup.inLanguage).toBeUndefined();
+  });
+
   it('leaves the page unchanged when fetching fails and ignores non-product routes', async () => {
     const fetch = vi.fn().mockRejectedValue(new Error('offline'));
     vi.stubGlobal('fetch', fetch);
