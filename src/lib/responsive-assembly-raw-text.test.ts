@@ -39,7 +39,7 @@ function expectIntactDocument( html: string ): cheerio.CheerioAPI {
 }
 
 describe( 'responsive assembly with document markup inside script text', () => {
-	it( 'keeps the content after the script when both documents ship', () => {
+	it( 'keeps the content after the script when the pair reconciles into one tree', () => {
 		const desktop = page( `<main><h1>Desktop title</h1>${ POPUP_SCRIPT }<p id="after">Content after the script</p></main><footer>Footer</footer>` );
 		const mobile = page( '<main><h1>Phone title</h1><aside>Phone menu</aside><p id="after">Content after the script</p></main><footer>Footer</footer>', '', ' class="phone"' );
 		const assembly = assembleResponsiveCapture( {
@@ -48,15 +48,18 @@ describe( 'responsive assembly with document markup inside script text', () => {
 			portableDesktopHtml: desktop,
 			portableMobileHtml: mobile,
 		} );
-		expect( assembly.evidence?.outcome ).toBe( 'dual-structural' );
+		expect( assembly.evidence?.outcome ).toBe( 'collapsed-identity-subset' );
 		const $ = expectIntactDocument( assembly.html );
-		expect( visibleText( $, `.${ DESKTOP_DOCUMENT_CLASS }` ) ).toBe( 'Desktop title Content after the script Footer' );
-		expect( visibleText( $, `.${ MOBILE_DOCUMENT_CLASS }` ) ).toBe( 'Phone title Phone menu Content after the script Footer' );
-		// Nothing of the source document is left outside the two copies.
-		const children = $( 'body' ).children().toArray().map( ( node ) => $( node ) );
-		expect( children ).toHaveLength( 2 );
-		expect( children[ 0 ]!.hasClass( DESKTOP_DOCUMENT_CLASS ) ).toBe( true );
-		expect( children[ 1 ]!.hasClass( MOBILE_DOCUMENT_CLASS ) ).toBe( true );
+		// One tree: the shared copy appears once, each capture's unique content once.
+		expect( $( `.${ DESKTOP_DOCUMENT_CLASS }` ) ).toHaveLength( 0 );
+		expect( $( `.${ MOBILE_DOCUMENT_CLASS }` ) ).toHaveLength( 0 );
+		expect( $( '#after' ) ).toHaveLength( 1 );
+		expect( $( 'footer' ) ).toHaveLength( 1 );
+		expect( visibleText( $, 'body' ) ).toBe( 'Phone title Desktop title Phone menu Content after the script Footer' );
+		const [ phoneHeading, desktopHeading ] = $( 'h1' ).toArray().map( ( node ) => $( node ) );
+		expect( phoneHeading!.hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
+		expect( desktopHeading!.hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( true );
+		expect( $( 'aside' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
 	} );
 
 	it( 'keeps the content after the script when equivalent documents collapse with projected inline styles', () => {

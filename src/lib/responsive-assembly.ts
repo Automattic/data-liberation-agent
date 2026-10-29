@@ -9,13 +9,30 @@ import { parseCss, parseSelectorList, projectStylesheet, scopeCss, type Unparsea
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { documentElementTags } from './screenshot/document-integrity.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
+import {
+	correspondenceMerge,
+	hasLearnedTransform,
+	importantRule,
+	inlineDeclarations,
+	isStableIdentityId,
+	isUnstableResponsiveId,
+	learnedTransformSelectors,
+	RESPONSIVE_DESKTOP_ONLY_CLASS,
+	RESPONSIVE_MOBILE_ONLY_CLASS,
+	RESPONSIVE_PROJECTION_CLASS_PREFIX,
+	RESPONSIVE_SOURCE_ID,
+	type ViewportTreeReconciliation,
+	withoutTransform,
+} from './viewport-correspondence.js';
 
 /**
  * Responsive document assembly. The source pair is the raw captures. It chooses
  * which documents to assemble and owns a binding phone-only body-class gate.
  * Receipt evidence describes the tree that assembly emitted: the same raw
  * analysis when that pair is rendered, or one analysis of the portable pair
- * when that different pair is what ships.
+ * when that different pair is what ships. A pair neither the structural
+ * signature nor stable ids reconcile is reconciled by node correspondence on
+ * the portable pair that ships (#1034 point 5).
  */
 
 /**
@@ -33,19 +50,6 @@ const RESPONSIVE_DOCUMENT_CSS = `html,body{margin:0;padding:0}.${ MOBILE_DOCUMEN
 
 const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-blocks-engine-capture-responsive-counterpart-';
 const RESPONSIVE_COUNTERPART_TAGS = 'p,h1,h2,h3,h4,h5,h6,a,button';
-const RESPONSIVE_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
-
-/**
- * Class tokens marking elements only one responsive capture rendered inside an
- * identity-subset collapse: a mobile-only element joins the desktop tree but
- * stays hidden above the switch width, a desktop-only element stays hidden at
- * or below it. Both are declared with the visibility stylesheet that collapse
- * emits, so no consumer needs to know the naming.
- */
-const RESPONSIVE_MOBILE_ONLY_CLASS = 'data-blocks-engine-capture-mobile-only';
-const RESPONSIVE_DESKTOP_ONLY_CLASS = 'data-blocks-engine-capture-desktop-only';
-/** Hook class for an id-less element whose per-viewport inline style is projected into width-scoped rules. */
-const RESPONSIVE_PROJECTION_CLASS_PREFIX = 'data-blocks-engine-capture-responsive-';
 
 /** Switches which captured document is shown, at the detected width. */
 function documentSwitchCss( switchWidth: number ): string {
@@ -114,31 +118,6 @@ function withHeadElement( html: string ): string {
  */
 export const DEFAULT_SWITCH_WIDTH = 767;
 
-function learnedTransformSelectors( html: string ): string[] {
-	const selectors: string[] = [];
-	for ( const match of html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ) {
-		if ( ! FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) ) continue;
-		try {
-			postcss.parse( match[ 2 ] ?? '' ).walkRules( ( rule ) => {
-				if ( rule.nodes?.some( ( node ) => node.type === 'decl' && node.prop.toLowerCase() === 'transform' ) ) selectors.push( rule.selector );
-			} );
-		} catch {
-			// Malformed capture-owned CSS is not evidence of a usable model.
-		}
-	}
-	return selectors;
-}
-
-function hasLearnedTransform( selectors: string[], segment: string | undefined ): boolean {
-	return !!segment && selectors.some( selector => selector.includes( `[data-blocks-engine-capture-fluid-segment="${ segment }"]` ) );
-}
-
-function withoutTransform( style: string ): string {
-	return inlineDeclarations( style )
-		.filter( ( declaration ) => declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase() !== 'transform' )
-		.join( '; ' );
-}
-
 /**
  * Attributes DLA's own capture infrastructure writes to mark that two
  * elements correspond across viewports: fluid-learning identities
@@ -149,27 +128,6 @@ function withoutTransform( style: string ): string {
  */
 const CORRESPONDENCE_ATTRIBUTES = [ 'data-blocks-engine-capture-geometry-id', 'data-blocks-engine-capture-responsive-source' ];
 const STRUCTURAL_SIGNATURE_ATTRIBUTES = new Set( [ 'id', 'href', 'name', 'type', 'for', 'action' ] );
-const CAPTURE_GEOMETRY_ID = /^(?:desktop|mobile)-(?:target|wrapper)-\d+/i;
-const UUID_ID =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isUnstableResponsiveId( id: string ): boolean {
-	return id
-		.split( /\s+/ )
-		.some(
-			( token ) =>
-				isYuiRuntimeId( token ) || CAPTURE_GEOMETRY_ID.test( token ) || UUID_ID.test( token )
-		);
-}
-
-/**
- * Whether an id can stand for element identity across responsive captures.
- * Runtime-generated ids name a hydration or a capture artifact, not a
- * component, so they are transparent to identity reconciliation.
- */
-function isStableIdentityId( id: string ): boolean {
-	return RESPONSIVE_SOURCE_ID.test( id ) && ! isUnstableResponsiveId( id );
-}
 
 function childNodes( node: AnyNode ): AnyNode[] {
 	return 'children' in node ? node.children : [];
@@ -209,6 +167,8 @@ export interface ResponsiveVariantEvidence {
 	desktopOnlyElements?: number;
 	/** Elements only the mobile capture rendered, inserted under their mapped parent and hidden above the switch width. Present only for an identity-subset collapse. */
 	mobileOnlyElements?: number;
+	/** Matched node pairs the reconciliation established across the two captures. Present when a collapse records the correspondence. */
+	matchedNodes?: number;
 	/** Shared components the phone layout re-parents, shipped once per viewport inside the collapsed document. */
 	divergedComponents?: number;
 	/** Shared elements whose per-viewport inline styles were projected into width-scoped rules. Present only when an equivalent collapse found differing inline styles. */
@@ -223,7 +183,7 @@ interface ResolvedResponsivePair {
 	missingBody: boolean;
 	gate?: string;
 	/** Reused when this same pair is rendered. Not applied to a different pair. */
-	merge?: IdentitySubsetMerge;
+	merge?: ViewportTreeReconciliation;
 	projection?: EquivalentInlineProjection;
 	evidence: ResponsiveVariantEvidence;
 	dual: boolean;
@@ -256,58 +216,6 @@ function mobileBodyClassGatesDesktopCss(
 		! desktopClasses.has( className ) &&
 		new RegExp( `\\bbody\\s*:not\\(\\s*\\.${ className.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) }\\s*\\)` ).test( desktopCss )
 	);
-}
-
-interface IdentitySubsetMerge {
-	/** The reconciled single body: the desktop tree plus inserted mobile-only elements. */
-	body: string;
-	desktopOnlyElements: number;
-	mobileOnlyElements: number;
-	/** Shared elements whose per-viewport presentation was projected into width-scoped rules. */
-	projectedElements: number;
-	/** Width-scoped rules carrying each viewport's inline presentation for shared elements. */
-	css: string;
-	classAliases: Map<string, string>;
-	/** Shared components the phone layout re-parents, shipped as one rendering per viewport. */
-	divergedComponents: number;
-}
-
-/**
- * Split an inline style attribute into declarations, honouring parentheses and
- * quotes so `url(data:…;base64,…)` stays one declaration.
- */
-function inlineDeclarations( style: string ): string[] {
-	const declarations: string[] = [];
-	let current = '';
-	let depth = 0;
-	let quote = '';
-	for ( const character of style ) {
-		if ( quote ) {
-			if ( character === quote ) quote = '';
-		} else if ( character === '"' || character === "'" ) quote = character;
-		else if ( character === '(' ) depth++;
-		else if ( character === ')' && depth > 0 ) depth--;
-		else if ( character === ';' && depth === 0 ) {
-			if ( current.trim() ) declarations.push( current.trim() );
-			current = '';
-			continue;
-		}
-		current += character;
-	}
-	if ( current.trim() ) declarations.push( current.trim() );
-	return declarations;
-}
-
-/**
- * An inline style moved into a stylesheet keeps its cascade position by
- * becoming important: inline declarations outrank every normal author rule,
- * and so does an important id rule.
- */
-function importantRule( selector: string, style: string ): string {
-	const declarations = inlineDeclarations( style ).map( ( declaration ) =>
-		/!\s*important\s*$/i.test( declaration ) ? declaration : `${ declaration }!important`
-	);
-	return declarations.length > 0 ? `${ selector }{${ declarations.join( ';' ) }}` : '';
 }
 
 /** Inline normal declarations cannot be promoted above matching author-important
@@ -378,7 +286,7 @@ function identitySubsetMerge(
 	desktopHtml: string,
 	mobileHtml: string,
 	switchWidth: number = DEFAULT_SWITCH_WIDTH
-): IdentitySubsetMerge | undefined {
+): ViewportTreeReconciliation | undefined {
 	const desktopBody = responsiveBodyContent( desktopHtml );
 	const learnedTransforms = learnedTransformSelectors( desktopHtml );
 	const mobileBody = responsiveBodyContent( mobileHtml );
@@ -726,12 +634,14 @@ function identitySubsetMerge(
 		( mobileRules.length > 0 ? `@media(max-width:${ switchWidth }px){${ mobileRules.join( '' ) }}` : '' );
 	return {
 		body: $d( 'body' ).html() ?? desktopBody,
+		matchedNodes: sharedIdCount,
 		desktopOnlyElements: hiddenDesktopOnly,
 		mobileOnlyElements: insertions.length,
 		projectedElements,
 		css,
 		classAliases,
 		divergedComponents,
+		identityBasis: 'ids',
 	};
 }
 
@@ -1643,12 +1553,17 @@ function equivalentEvidence(
 	projection: EquivalentInlineProjection | undefined
 ): ResponsiveVariantEvidence {
 	const sharedStyles = styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
+	// Structural equivalence is total correspondence: every element of the one
+	// tree has its counterpart in both captures.
+	const desktopBody = responsiveBodyContent( desktopHtml );
+	const matchedNodes = desktopBody === undefined ? 0 : cheerio.load( `<body>${ desktopBody }</body>` )( 'body *' ).length;
 	return {
 		variants: 1,
 		outcome: 'collapsed-equivalent',
 		reason:
 			'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
 		css: sharedStyles ? 'shared' : 'viewport-scoped',
+		...( matchedNodes > 0 ? { matchedNodes } : {} ),
 		...( projection && projection.projectedElements > 0
 			? { projectedInlineStyles: projection.projectedElements }
 			: {} ),
@@ -1658,16 +1573,17 @@ function equivalentEvidence(
 function identitySubsetEvidence(
 	desktopHtml: string,
 	mobileHtml: string,
-	merge: IdentitySubsetMerge
+	merge: ViewportTreeReconciliation
 ): ResponsiveVariantEvidence {
 	const sharedStyles = styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
 	return {
 		variants: 1,
 		outcome: 'collapsed-identity-subset',
-		reason: `mobile document reconciles with desktop by element identity (${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements${
+		reason: `mobile document reconciles with desktop by ${ merge.identityBasis === 'ids' ? 'element identity' : 'node correspondence (text and media identity)' } (${ merge.matchedNodes } matched nodes; ${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements${
 			merge.divergedComponents > 0 ? `, ${ merge.divergedComponents } re-parented component${ merge.divergedComponents === 1 ? '' : 's' } shipped per viewport` : ''
 		}); shipped one document`,
 		css: sharedStyles ? 'shared' : 'viewport-scoped',
+		matchedNodes: merge.matchedNodes,
 		desktopOnlyElements: merge.desktopOnlyElements,
 		mobileOnlyElements: merge.mobileOnlyElements,
 		...( merge.divergedComponents > 0 ? { divergedComponents: merge.divergedComponents } : {} ),
@@ -1752,7 +1668,11 @@ function resolveResponsivePair(
 			evidence: equivalentEvidence( desktopHtml, mobileHtml, projection ),
 		};
 	}
-	const merge = identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
+	// Node correspondence (#1034 point 5) reconciles the pair that ships: the
+	// source pair keeps the honest dual verdict, because rendering normalization
+	// may still remove the very difference a raw-tree match would have recorded.
+	const merge = identitySubsetMerge( desktopHtml, mobileHtml, switchWidth ) ??
+		( role === 'emitted' ? correspondenceMerge( desktopHtml, mobileHtml, switchWidth ) : undefined );
 	if ( merge ) {
 		return {
 			role,
