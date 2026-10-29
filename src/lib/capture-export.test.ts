@@ -653,9 +653,13 @@ describe( 'exportWebsiteCapture', () => {
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'default', summary: {}, failures: [] } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
+		// The captures correspond (the Skip link and <main> pair up), so the
+		// fragment target exists once, under its source id — no mobile namespace.
 		expect( $( '#main' ) ).toHaveLength( 1 );
-		expect( $( '#main--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
-		expect( $( '.data-blocks-engine-capture-mobile-document a' ).attr( 'aria-controls' ) ).toBe( 'main--data-blocks-engine-capture-mobile' );
+		expect( $( '#main--data-blocks-engine-capture-mobile' ) ).toHaveLength( 0 );
+		expect( $( 'a' ).attr( 'aria-controls' ) ).toBe( 'main' );
+		expect( $( 'main > p' ).hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( true );
+		expect( $( 'main > section' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( [ [ '/', 'index.html' ] ] ) ).findings ).toEqual( [] );
 		const browser = await chromium.launch();
 		const server = await startStaticServer( join( outputDir, 'website' ) );
@@ -664,7 +668,7 @@ describe( 'exportWebsiteCapture', () => {
 				const page = await browser.newPage( { viewport: { width, height: 900 } } );
 				await page.goto( server.url );
 				await page.getByRole( 'link', { name: 'Skip' } ).click();
-				const target = width < 768 ? '#main--data-blocks-engine-capture-mobile' : '#main';
+				const target = '#main';
 				expect( await page.locator( target ).evaluate( el => getComputedStyle( el ).color ) ).toBe( 'rgb(11, 22, 33)' );
 				expect( await page.locator( target ).evaluate( el => getComputedStyle( el ).paddingTop ) ).toBe( '700px' );
 				expect( new URL( page.url() ).hash ).toBe( target );
@@ -930,7 +934,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><section id="hero"><div><h1>Mobile title</h1></div><div><a href="/quote">Quote mobile</a></div></section><p>Unproven equal copy</p><div id="duplicate"><p>First</p></div><div id="duplicate"><p>Second</p></div></main></body></html>'
+			'<html><body><main><section id="hero"><div><h1>Mobile title</h1></div><div><a href="/quote">Quote mobile</a></div></section><div><p>Unproven equal copy</p></div><div id="duplicate"><p>First</p></div><div id="duplicate"><p>Second</p></div></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -961,9 +965,11 @@ describe( 'exportWebsiteCapture', () => {
 				desktop.attr( 'data-blocks-engine-capture-responsive-source' )
 			);
 		}
-		expect( $( '.data-blocks-engine-capture-desktop-document main > p, .data-blocks-engine-capture-mobile-document main > p' ) ).toHaveLength( 2 );
-		expect( $( 'main > p[class*="responsive-counterpart"]' ) ).toHaveLength( 0 );
-		expect( $( '#duplicate p[class*="responsive-counterpart"]' ) ).toHaveLength( 0 );
+		// Equal copy re-parented on the phone keeps both documents, and text
+		// identity alone never mints an editing counterpart.
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( 'p[class*="responsive-counterpart"]' ) ).toHaveLength( 0 );
 	} );
 
 	it( 'switches documents at the width the source stops adapting at, not a hardcoded one', () => {
@@ -1490,6 +1496,7 @@ describe( 'exportWebsiteCapture', () => {
 			reason:
 				'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
 			css: 'shared',
+			matchedNodes: 4,
 			projectedInlineStyles: 1,
 		} );
 	} );
@@ -1593,6 +1600,7 @@ describe( 'exportWebsiteCapture', () => {
 			reason:
 				'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
 			css: 'shared',
+			matchedNodes: 4,
 		} );
 	} );
 
@@ -1675,6 +1683,7 @@ describe( 'exportWebsiteCapture', () => {
 			reason:
 				'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
 			css: 'shared',
+			matchedNodes: 5,
 			projectedInlineStyles: 2,
 		} );
 
@@ -1719,7 +1728,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section><aside id="mobile-menu">Mobile only</aside></div></main></body></html>'
+			'<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About us</h1><section id="gallery"><img src="/media/b.jpg" alt="a"></section><aside id="mobile-menu">Mobile only</aside></div></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -1818,8 +1827,9 @@ describe( 'exportWebsiteCapture', () => {
 			variants: 1,
 			outcome: 'collapsed-identity-subset',
 			reason:
-				'mobile document reconciles with desktop by element identity (1 mobile-only, 1 desktop-only elements); shipped one document',
+				'mobile document reconciles with desktop by element identity (2 matched nodes; 1 mobile-only, 1 desktop-only elements); shipped one document',
 			css: 'viewport-scoped',
+			matchedNodes: 2,
 			desktopOnlyElements: 1,
 			mobileOnlyElements: 1,
 		} );
@@ -2292,7 +2302,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( receipt.routes[ 0 ].responsiveVariants.outcome ).toBe( 'dual-structural' );
 	} );
 
-	it( 'keeps dual documents when mobile text has no mapped parent to reconcile into', () => {
+	it( 'reconciles mobile-only content into the matched parent as one tree', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-unmapped-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
@@ -2329,15 +2339,20 @@ describe( 'exportWebsiteCapture', () => {
 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
-		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
-		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 1 );
+		// The matched wrappers correspond, so the stray note joins its parent on
+		// the one tree and each side's unique block is width-scoped in place.
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( '#comp-mobile-menu' ) ).toHaveLength( 1 );
+		expect( $( '#comp-mobile-menu' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
+		expect( $( '#comp-desktop-map' ).hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( true );
+		expect( $( 'main > p' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
 		const receipt = JSON.parse(
 			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
 		);
 		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
-			variants: 2,
-			outcome: 'dual-structural',
+			variants: 1,
+			outcome: 'collapsed-identity-subset',
 		} );
 	} );
 
@@ -3932,14 +3947,20 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		const $ = cheerio.load( html );
 
 		expect( html ).toContain( '<title>Example Studio</title>' );
+		// The captures' content survives on one reconciled tree; section
+		// reconstruction without visual proof changes nothing about it.
 		expect( html ).toContain( 'Desktop duplicate' );
 		expect( html ).toContain( 'Mobile duplicate' );
 		expect( html ).toContain( 'src="/media/hero.jpg"' );
 		expect( html ).not.toContain( '<!-- wp:' );
-		expect( html ).toContain( 'data-blocks-engine-capture-desktop-document' );
-		expect( html ).toContain( 'data-blocks-engine-capture-mobile-document' );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'main h1.data-blocks-engine-capture-desktop-only' ) ).toHaveLength( 1 );
+		expect( $( 'main h1.data-blocks-engine-capture-mobile-only' ) ).toHaveLength( 1 );
+		expect( $( 'main img.data-blocks-engine-capture-desktop-only' ) ).toHaveLength( 1 );
 		expect( receipt.assets ).not.toContainEqual(
 			expect.objectContaining( { sourceUrl: expect.stringContaining( '#generated-icon-' ) } )
 		);
@@ -4148,8 +4169,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).toContain( 'data-blocks-engine-capture-desktop-document' );
-		expect( html ).toContain( 'data-blocks-engine-capture-mobile-document' );
+		// The pairs reconcile (the heading and About link correspond), so one
+		// tree carries both viewports' content and no authoring body is needed.
+		const $ = cheerio.load( html );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'button' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
+		expect( $( 'aside' ).hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( true );
 		expect( html.match( /capture-[a-f0-9]{64}\.css/g ) ).toHaveLength( 2 );
 		expect( html ).toContain( 'media="screen and (min-width: 1px)"' );
 		expect( html ).not.toContain( ':where(.data-blocks-engine-capture-mobile-document) .layout' );
@@ -4187,14 +4213,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		expect( html ).toContain( 'data-blocks-engine-capture-desktop-document' );
-		expect( html ).toContain( 'data-blocks-engine-capture-mobile-document' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		// Present in both captures: must apply at every width, not be gated to desktop.
 		expect( html ).toContain( '<style>.shared{color:green}</style>' );
 		expect( html ).not.toContain( '<style media="(min-width:768px)">.shared{color:green}</style>' );
-		// Unique to one capture: stays scoped to the branch that produced it.
+		// Unique to one capture: applies only in that capture's width regime.
 		expect( html ).toContain( '<style media="(min-width:768px)">.desktop-only{color:blue}</style>' );
-		expect( html ).toContain( ':where(.data-blocks-engine-capture-mobile-document) .mobile-only{color:red}' );
+		expect( html ).toContain( '<style media="(max-width:767px)">.mobile-only{color:red}</style>' );
 	} );
 
 	it.each( [ false, true ] )( 'preserves mobile linked styles and their cascade when dual documents are %s', async ( dual ) => {
