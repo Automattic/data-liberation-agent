@@ -6785,6 +6785,31 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		}
 	} );
 
+	it.each( [ true, false ] )( 'preserves social image identities across HTTP/HTTPS (captured: %s)', captured => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-social-image-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'resources/media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const pageUrl = 'https://example.com/item';
+		const imageUrl = 'https://example.com/cdn/files/item.jpg?v=1';
+		const fields = [ 'og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src' ];
+		const authoredUrl = ( field: string ) => field === 'og:image' ? imageUrl.replace( 'https:', 'http:' ) : imageUrl;
+		writeFileSync( join( outputDir, 'html/page.html' ), `<html><head>${ fields.map( field => `<meta ${ field.startsWith( 'twitter' ) ? 'name' : 'property' }="${ field }" content="${ authoredUrl( field ) }">` ).join( '' ) }</head><body><img src="/cdn/files/item.jpg?v=1"><h1>Item</h1></body></html>` );
+		writeFileSync( join( outputDir, 'resources/media/item.jpg' ), 'image-bytes' );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
+			version: 1, resources: captured ? { [ imageUrl ]: { path: 'resources/media/item.jpg', contentType: 'image/jpeg' } } : {}, failures: [],
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			[ pageUrl ]: { html: 'html/page.html', documents: { desktop: { url: pageUrl, baseUrl: pageUrl } } },
+		} } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: pageUrl, platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
+		fields.forEach( field => {
+			expect( $( `meta[property="${ field }"],meta[name="${ field }"]` ).attr( 'content' ) ).toBe(
+				captured ? '/media/item.jpg' : authoredUrl( field )
+			);
+		} );
+	} );
+
 	it( 'keeps a CSS background that is also the og:image and an img', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-og-image-background-' ) );
 		dirs.push( outputDir );

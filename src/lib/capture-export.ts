@@ -78,7 +78,7 @@ import { isSrcsetShaped, srcsetCandidates, srcsetReferences } from './srcset.js'
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
 import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
-import { elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
+import { elementSrcReferences, localizeMetadataImageReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
 import { assertPageWithinFileLimit, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, routeExceedsTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
@@ -1955,17 +1955,17 @@ function buildExportCapture(
 		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, options.routeScope ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
-		const identityHtml = bindSrcsetShapedImageSrc(
+		const identityHtml = localizeMetadataImageReferences( originalHtml, url, portablePathsBySource, content => bindSrcsetShapedImageSrc(
 			localizeDataAttributeMedia(
 				replaceResources(
 					rewriteMediaUrls(
-						originalHtml,
+						content,
 						portableMediaReplacements
 					)
 				),
 				portableUrlByFamily
 			)
-		);
+		) );
 		const normalizedHtml = routePhoneDocumentFragments(
 			rewriteCapturedRouteLinks(
 				wireCapturedRouteNavigation(

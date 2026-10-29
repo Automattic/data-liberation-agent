@@ -65,6 +65,57 @@ export function preparePortableReplacements(
 	);
 }
 
+/** Social images are inert metadata, not visual media: never apply image stubs
+ * or substring substitutions to their content. Only verified emitted files win.
+ * Source locations keep script text and unrelated markup out of this policy. */
+export function localizeMetadataImageReferences(
+	html: string,
+	documentUrl: string,
+	portablePathsBySource: ReadonlyMap<string, string>,
+	rewriteOther: ( html: string ) => string
+): string {
+	const page = new URL( documentUrl );
+	const key = ( url: URL ): string => {
+		// Scheme equivalence is deliberately limited to the page's own host.
+		if ( /^https?:$/.test( url.protocol ) && url.host === page.host ) url.protocol = page.protocol;
+		return url.href;
+	};
+	const localPaths = new Map<string, string>();
+	for ( const [ source, path ] of portablePathsBySource ) {
+		try { localPaths.set( key( new URL( source, documentUrl ) ), path ); }
+		catch { /* Not a URL identity. */ }
+	}
+	return rewriteAroundMetadataImages( html, rewriteOther, value => {
+		try {
+			const absolute = new URL( value, documentUrl );
+			const path = localPaths.get( key( new URL( absolute.href ) ) );
+			return path?.startsWith( 'website/' ) ? `/${ path.slice( 'website/'.length ) }` : absolute.href;
+		} catch { return value; } // Invalid authored metadata is not a resource.
+	} );
+}
+
+function rewriteAroundMetadataImages(
+	html: string,
+	rewriteOther: ( html: string ) => string,
+	mapUrl: ( url: string ) => string = url => url
+): string {
+	const $ = cheerio.load( html, { sourceCodeLocationInfo: true } );
+	let result = '';
+	let offset = 0;
+	$( 'meta[property],meta[name]' ).each( ( _, element ) => {
+		const node = $( element );
+		const field = ( node.attr( 'property' ) ?? node.attr( 'name' ) ?? '' ).toLowerCase();
+		if ( ! [ 'og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src' ].includes( field ) ) return;
+		const location = element.sourceCodeLocation;
+		const value = node.attr( 'content' );
+		if ( ! location || ! value ) return;
+		node.attr( 'content', mapUrl( value ) );
+		result += rewriteOther( html.slice( offset, location.startOffset ) ) + $.html( element );
+		offset = location.endOffset;
+	} );
+	return result + rewriteOther( html.slice( offset ) );
+}
+
 export function elementSrcReferences( tag: string, value: string ): string[] {
 	const normalized = value.replace( /&amp;/g, '&' ).trim();
 	if ( ! normalized ) return [];
@@ -223,6 +274,18 @@ export function removeDanglingMediaSource(
 	resolvedUrl: string,
 	mediaReplacements: Map< string, string >,
 	rejectedKeys?: Set< string >
+): string {
+	return rewriteAroundMetadataImages( html, content =>
+		removeDanglingVisualMediaSource( content, reference, resolvedUrl, mediaReplacements, rejectedKeys )
+	);
+}
+
+function removeDanglingVisualMediaSource(
+	html: string,
+	reference: string,
+	resolvedUrl: string,
+	mediaReplacements: Map<string, string>,
+	rejectedKeys?: Set<string>
 ): string {
 	const normalizedReference = reference.replace( /&amp;/g, '&' );
 	// A video/source/audio `src` that could not be localized must keep naming
