@@ -6,6 +6,7 @@ import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { buildLayoutGeometryProof, type GeometryCapture } from './screenshot/layout-geometry-proof.js';
 import { SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
+import { routeComponents } from './screenshot/component-states.js';
 import type { ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import { DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, type ResponsiveVariantEvidence } from './responsive-assembly.js';
 import { pathWithin } from './portable-assets.js';
@@ -110,7 +111,7 @@ const MAX_ASSET_EVIDENCE_ASSETS = 10_000;
 const MAX_ASSET_EVIDENCE_REFERENCES = 100;
 const MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE = 10_000;
 
-export const CAPTURED_INTERACTIONS_SCHEMA = 'blocks-engine-capture/captured-interactions/v1';
+export const CAPTURED_INTERACTIONS_SCHEMA = 'blocks-engine-capture/captured-interactions/v2';
 export const CAPTURED_SCROLL_STATES_SCHEMA = 'blocks-engine-capture/captured-scroll-states/v1';
 /** Indexed semantic evidence sidecar schema. */
 export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'blocks-engine-capture/captured-semantic-evidence/v2';
@@ -431,9 +432,15 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			`${ JSON.stringify( geometry.proof, null, 2 ) }\n`
 		);
 
+	const componentPages = interactionPages.map( ( { states, initialDialogs, ...page } ) => ( { ...page, components: routeComponents( { ...page, states, initialDialogs } ) } ) );
+	const components = componentPages.flatMap( page => page.components );
 	const interactionStates = interactionPages.flatMap( ( page ) => page.states );
 	const initialDialogs = interactionPages.flatMap( ( page ) => page.initialDialogs ?? [] );
 	const interactionSummary = {
+		component_count: components.length,
+		component_captured_count: components.filter( node => node.status === 'captured' ).length,
+		component_unsupported_count: components.filter( node => node.status === 'unsupported' ).length,
+		component_partial_count: components.filter( node => node.status === 'partial' ).length,
 		candidate_count: interactionStates.length,
 		captured_count: interactionStates.filter( ( state ) => state.status === 'captured' ).length,
 		no_dialog_count: interactionStates.filter( ( state ) => state.status === 'no-dialog' ).length,
@@ -476,7 +483,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			`${ JSON.stringify(
 				{
 					schema: CAPTURED_INTERACTIONS_SCHEMA,
-					pages: interactionPages,
+					pages: componentPages,
 					totals: interactionSummary,
 				},
 				null,

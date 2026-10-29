@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { chromium as playwrightChromium } from 'playwright';
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
-import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
+import { captureGalleries } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedGalleries } from '../static-galleries.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
@@ -276,22 +276,6 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}finally{await browser.close();}
 },15_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'marks alignment unverified promptly when a reloaded document reassigned the gallery root id', async () => {
-		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
-		await page.setContent(fixture.replace("document.getElementById('overlay').classList.add('visible');", ''));
-		const states = await captureGalleries(page);
-		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
-		// A reload of a source that assigns random ids hands the same carousel a
-		// fresh id, so the captured selector no longer matches anything.
-		await page.evaluate(() => { document.getElementById('gallery')!.id = 'carousel_petit_widget_album_photo_941'; });
-		const started = Date.now();
-		await alignCapturedGalleries(page, states);
-		expect(Date.now() - started).toBeLessThan(5_000);
-		expect(states[0]?.gallery?.inline.restoration).toBe('unverified');
-	}, 15_000,
-);
-
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executablePath()))('retains gallery evidence through real dual-viewport capture, export and offline replay',async()=>{
 	const parent=join(process.cwd(),'.tmp-test');mkdirSync(parent,{recursive:true});
 	const outputDir=mkdtempSync(join(parent,'gallery-pipeline-'));
@@ -300,7 +284,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 	const url=`http://127.0.0.1:${(server.address() as {port:number}).port}/`;
 	const browser=await chromium.launch();
 	try{
-		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,beforeSerialize:async page=>{await page.evaluate(()=>{document.getElementById('overlay')!.remove();(document.querySelector('[aria-label="Next image"]') as HTMLElement).click();});},viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
+		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,beforeSerialize:async page=>{await page.evaluate(()=>{(document.querySelector('[aria-label="Next image"]') as HTMLElement).click();});},viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
 		const manifest=JSON.parse(readFileSync(join(outputDir,'screenshots','manifest.json'),'utf8'));
 		const galleries=manifest.entries[url].interactions.states.filter((state:{kind:string})=>state.kind==='gallery');
 		expect(galleries).toHaveLength(2);
@@ -487,7 +471,9 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 		const entry=manifest.entries[url];
 		const galleries=entry.interactions.states.filter((state:{kind:string})=>state.kind==='gallery');
 		expect(galleries.map((state:{gallery:{inline:{viewport:{width:number};coverage:string;restoration:string}}})=>[state.gallery.inline.viewport.width,state.gallery.inline.coverage,state.gallery.inline.restoration]).sort()).toEqual([[1440,'complete','verified'],[390,'complete','verified']].sort());
-		for(const file of [entry.html,entry.mobileHtml].filter(Boolean)) expect(readFileSync(join(outputDir,file),'utf8')).toContain('data-blocks-engine-capture-gallery-stage');
+		for(const file of [entry.html,entry.mobileHtml].filter(Boolean)) expect(readFileSync(join(outputDir,file),'utf8')).not.toContain('data-blocks-engine-capture-gallery-stage');
+		exportWebsiteCapture({outputDir,sourceUrl:url,platform:'default',summary:{},failures:[]});
+		expect(readFileSync(join(outputDir,'website/index.html'),'utf8')).toContain('data-blocks-engine-capture-gallery-stage');
 		expect(entry.mobileHtml ?? entry.html).toBeTruthy();
 	}finally{await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
 },180_000);

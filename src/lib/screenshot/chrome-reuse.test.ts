@@ -68,8 +68,8 @@ function page( path: string ): string {
 <button type="button" class="contact" aria-haspopup="dialog" data-control="header">Contact</button>
 <div class="contact-dialog" role="dialog" aria-modal="true" aria-label="Contact us" hidden><p>Write to us any time.</p><button type="button" class="close" aria-label="Close" data-control="header">×</button></div>
 <button type="button" class="info" aria-haspopup="dialog" data-control="header">Info</button></header>`;
-	const main = `<main><h1>${ path || 'home' }</h1><div class="tabs"><div role="tablist"><button role="tab" aria-selected="true" data-control="tab">Overview</button><button role="tab" aria-selected="false" data-control="tab">Details</button><button role="tab" aria-selected="false" data-control="tab">Pricing</button></div>
-<div class="tab-region">The overview of ${ path || 'home' } is short.</div></div></main>`;
+	const main = `<main><h1>${ path || 'home' }</h1><div class="tabs"><div role="tablist"><button role="tab" aria-controls="tab-region" aria-selected="true" data-control="tab">Overview</button><button role="tab" aria-controls="tab-region" aria-selected="false" data-control="tab">Details</button><button role="tab" aria-controls="tab-region" aria-selected="false" data-control="tab">Pricing</button></div>
+<div id="tab-region" role="tabpanel" class="tab-region">The overview of ${ path || 'home' } is short.</div></div></main>`;
 	const body = path === '' ? `<div class="wrap"><div class="promo">Sale this week</div>${ header }${ main }</div>` : `${ header }${ main }<footer>Footer</footer>`;
 	// The Info control's panel lives in the site chrome (its trigger is in the
 	// header) but renders as a body-level portal, outside the landmark.
@@ -194,7 +194,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 	it( 'still probes the tab set in each route\'s main content', () => {
 		for ( const path of [ '', 'about', 'landing' ] ) {
 			expect( clicksOn( path, 'tab' ).length ).toBeGreaterThan( 0 );
-			expect( entries[ url( path ) ]!.interactions!.states.some( state => ( state.kind === 'selectable-set' || state.kind === 'choice-group' ) && state.status === 'captured' && ! state.reusedFrom ) ).toBe( true );
+			expect( entries[ url( path ) ]!.interactions!.components?.some( node => node.kind === 'tabs' && node.status === 'captured' && node.states.length > 1 ) ).toBe( true );
 		}
 	} );
 

@@ -84,7 +84,7 @@ const SEMANTIC_POPUP_SELECTOR =
 
 export interface CapturedDialogInteraction {
 	/** An opened surface whose bounded interaction proof is incomplete is not an absent dialog. */
-	status: 'captured' | 'observed-incomplete' | 'no-dialog' | 'click-failed';
+	status: 'captured' | 'observed-incomplete' | 'no-dialog' | 'click-failed' | 'unsupported';
 	/**
 	 * Distinguishes an in-page disclosure/accordion panel (content restored in
 	 * place, before HTML serialization — see `hydrateDisclosureContent`) from a
@@ -206,6 +206,7 @@ export interface InteractionStatesReport {
 	viewport: { width: number; height: number };
 	capturedAt: string;
 	states: CapturedDialogInteraction[];
+	components?: import('./component-states.js').CapturedComponent[];
 	routeNavigation?: CapturedRouteNavigation[];
 	/** Dialogs already visible after the page's normal runtime settling. */
 	initialDialogs?: CapturedInitialDialog[];
@@ -533,14 +534,17 @@ export async function captureTriggeredDialogs(
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			const restingInline = !dropdown && await observeInlineRestingPanel( page, trigger.probeSelector, dialog.selector );
+			const resolvedRole = dialog.role === 'navigation' ? 'menu' : dialog.role ?? ( [ 'dialog', 'listbox', 'menu' ].includes( trigger.ariaHaspopup ) ? trigger.ariaHaspopup : undefined );
+			const classified = dialog.tag === 'dialog' || [ 'dialog', 'listbox', 'menu' ].includes( resolvedRole ?? '' );
 			states.push( {
-				status: 'captured',
+				status: classified ? 'captured' : 'unsupported',
+				...( classified ? {} : { error: 'Surface has no supported semantic role' } ),
 				trigger: triggerRecord( trigger ),
 				dialog: {
 					selector: baselineSelector ?? dialog.selector,
 					tag: dialog.tag,
 					...( dialog.id ? { id: dialog.id } : {} ),
-					...( dialog.role ? { role: dialog.role } : {} ),
+					...( resolvedRole ? { role: resolvedRole } : {} ),
 					ariaModal: dialog.ariaModal,
 					...( restingInline ? { restingInline: true } : {} ),
 					...( dialog.ariaLabel ? { ariaLabel: dialog.ariaLabel } : {} ),
@@ -999,7 +1003,9 @@ async function firstNewVisibleDialog(
 			dialog = dialog.parentElement;
 		}
 		const semanticSurface = ownedSurface ?? ( surface?.matches( semanticSelector ) ? surface : surface?.querySelector( semanticSelector ) );
-		const surfaceRole = semanticSurface?.getAttribute( 'role' ) ?? dialog.getAttribute( 'role' );
+		const surfaceRole = semanticSurface?.getAttribute( 'role' ) ?? dialog.getAttribute( 'role' ) ??
+			( dialog.tagName === 'DIALOG' || dialog.getAttribute( 'aria-modal' ) === 'true' ? 'dialog' :
+				dialog.matches( 'nav,[role="navigation"]' ) || dialog.querySelector( 'a[href]' ) && document.querySelector( triggerSelector )?.closest( 'header,nav,[role="banner"],[role="navigation"]' ) ? 'menu' : undefined );
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
 			: '[data-lib-interaction-dialog="captured"]';

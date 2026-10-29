@@ -57,21 +57,12 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps filterable grid disclosures clo
     expect(capture.failed).toBe(0);
     exportWebsiteCapture({outputDir:directory, sourceUrl:url, platform:'default', summary:{routesFailed:capture.failed}, failures:[]});
     const copy = await browser.newPage();
-    const html = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
     preview = await startStaticServer(join(directory, 'website'));
     await copy.goto(`${preview.url}/`);
     expect(await cards(copy)).toEqual(Array(4).fill({expanded:'false', height:0}));
     const manifest = JSON.parse(readFileSync(capture.manifestPath, 'utf8'));
     const evidence = manifest.entries[url].interactions;
-    expect(evidence.states.filter((state: {kind:string;status:string}) => state.kind === 'disclosure' && state.status === 'captured')).toHaveLength(4);
-    const selectable = evidence.states.filter((state: {kind:string;status:string}) => state.kind === 'selectable-set' && state.status === 'captured');
-    expect(selectable.length).toBeGreaterThan(0);
-    for (const state of selectable) {
-      await source.setContent(`<head>${html.match(/<head>([\s\S]*?)<\/head>/)![1]}</head><body>${state.dialog.html}</body>`);
-      const observed = await cards(source);
-      expect(observed.length).toBeGreaterThan(0);
-      expect(observed.every(item => item.expanded === 'false' && item.height === 0)).toBe(true);
-    }
+    expect(evidence.components.filter((state: {kind:string;status:string}) => state.kind === 'disclosure' && state.status === 'captured')).toHaveLength(4);
     for (const width of [390, 1440]) {
       await copy.setViewportSize({width, height:900});
       await copy.locator('#button-0').click();

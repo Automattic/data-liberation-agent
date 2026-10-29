@@ -56,6 +56,8 @@ import {
 } from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
+import { wireCapturedComponents } from './static-components.js';
+import { routeComponents, componentReplayStates } from './screenshot/component-states.js';
 import { wireNativeViewTimelines } from './native-view-timelines.js';
 import { wireNativeControlState } from './native-control-state.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
@@ -1968,8 +1970,8 @@ function buildExportCapture(
 			rewriteCapturedRouteLinks(
 				wireCapturedRouteNavigation(
 					wireCapturedDialogs(
-						withoutGeometryIdentities( identityHtml ),
-						entry.interactions?.states ?? [],
+						wireCapturedComponents( withoutGeometryIdentities( identityHtml ), entry.interactions ? routeComponents( entry.interactions ) : [] ),
+						entry.interactions ? componentReplayStates( routeComponents( entry.interactions ) ) : [],
 						entry.interactions?.initialDialogs ?? []
 					),
 					verifiedRouteObservations

@@ -38,14 +38,14 @@ it.skipIf( skipBrowser )( 'keeps a scroll-reveal section in the baseline of a pl
 	}
 }, 30000 );
 
-it.skipIf( skipBrowser )( 'still captures the panel a plain action button reveals beside a scroll-reveal section', async () => {
+it.skipIf( skipBrowser )( 'records an unclassified plain-action surface as unsupported rather than a hidden dialog', async () => {
 	const browser = await chromium.launch( { headless: true } );
 	try {
 		const tab = await browser.newPage( { viewport: { width: 1280, height: 800 } } );
 		await tab.setContent( page( observer, `extra.classList.add( 'open' );` ) );
 		const report = await captureTriggeredDialogs( tab, 'https://fixture.test/' );
 		const send = report.states.find( state => state.trigger.label === 'Send' );
-		expect( send?.status ).toBe( 'captured' );
+		expect( send?.status ).toBe( 'unsupported' );
 		expect( send?.dialog?.html ).toContain( 'Thanks' );
 		expect( send?.dialog?.html ).not.toContain( 'Customer review' );
 	} finally {

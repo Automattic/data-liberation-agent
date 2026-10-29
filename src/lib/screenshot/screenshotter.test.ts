@@ -192,11 +192,9 @@ describe('captureScreenshots', () => {
 			expect( stderr ).not.toContain( '[timing] phase ' );
 			// Keys keep the order each phase was first entered.
 			const phases = Object.keys( breakdown );
-			expect( phases ).toEqual( expect.arrayContaining( [ 'galleries', 'observe-source', 'slideshows', 'before-serialize', 'hydrate-disclosures', 'align-galleries' ] ) );
-			expect( phases.indexOf( 'galleries' ) ).toBeLessThan( phases.indexOf( 'observe-source' ) );
-			expect( phases.indexOf( 'slideshows' ) ).toBeLessThan( phases.indexOf( 'before-serialize' ) );
-			expect( phases.indexOf( 'before-serialize' ) ).toBeLessThan( phases.indexOf( 'hydrate-disclosures' ) );
-			expect( phases.indexOf( 'hydrate-disclosures' ) ).toBeLessThan( phases.indexOf( 'align-galleries' ) );
+			expect( phases ).toEqual( expect.arrayContaining( [ 'observe-source', 'before-serialize', 'serialize', 'dialogs' ] ) );
+			expect( phases.indexOf( 'before-serialize' ) ).toBeLessThan( phases.indexOf( 'serialize' ) );
+			expect( phases.indexOf( 'serialize' ) ).toBeLessThan( phases.indexOf( 'dialogs' ) );
 		} finally {
 			write.mockRestore();
 			rmSync( outputDir, { recursive: true, force: true } );
@@ -524,7 +522,7 @@ describe('captureScreenshots', () => {
     }
   });
 
-  it('captures the prepared visual reference immediately before serializing HTML', async () => {
+  it('snapshots the initial document before learning and captures the prepared visual reference before final serialization', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     const pages: ReturnType<typeof makeGoodPage>[] = [];
     try {
@@ -552,7 +550,11 @@ describe('captureScreenshots', () => {
 	  const serializationOrder = pages[0].evaluate.mock.invocationCallOrder.find(
 		(_: number, index: number) => String(pages[0].evaluate.mock.calls[index][0]).includes('DOCTYPE'),
 	  );
-      expect(pages[0].screenshot.mock.invocationCallOrder[0]).toBeLessThan(serializationOrder!);
+      expect(serializationOrder!).toBeLessThan(learnAndApplyFluidGeometryMock.mock.invocationCallOrder[0]);
+      const finalSerialization = pages[0].evaluate.mock.invocationCallOrder.filter(
+        (_: number, index: number) => String(pages[0].evaluate.mock.calls[index][0]).includes('DOCTYPE'),
+      ).at(-1);
+      expect(pages[0].screenshot.mock.invocationCallOrder[0]).toBeLessThan(finalSerialization!);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -793,7 +795,7 @@ describe('captureScreenshots', () => {
     }
   });
 
-  it('fails content without saving HTML or a screenshot when disclosure baseline reload fails', async () => {
+  it('never reloads or rewrites baseline artifacts after a failed disclosure exploration', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     const page = Object.assign(makeGoodPage(), { setViewportSize: vi.fn().mockResolvedValue(undefined) });
     const evaluate = page.evaluate.getMockImplementation()!;
@@ -816,14 +818,12 @@ describe('captureScreenshots', () => {
     try {
       const result = await captureScreenshots({
         urls: ['https://example.com/home'], outputDir: dir, concurrency: 1, settleMs: 0,
-        viewports: [{ id: 'desktop', width: 1440, height: 900 }], learnFluid: false,
+        viewports: [{ id: 'desktop', width: 1440, height: 900 }], learnFluid: false, captureImages: true,
       });
-      expect(result).toMatchObject({ captured: 0, failed: 1 });
-      expect(reloads).toBe(1);
-      expect(page.screenshot).not.toHaveBeenCalled();
-      expect(existsSync(join(dir, 'html', 'home.html'))).toBe(false);
-      const failures = JSON.parse(readFileSync(join(dir, 'screenshots', 'failures.json'), 'utf8'));
-      expect(failures).toContainEqual(expect.objectContaining({ stage: 'content', error: 'HTTP 403' }));
+      expect(result).toMatchObject({ captured: 1, failed: 0 });
+      expect(reloads).toBe(0);
+      expect(page.screenshot).toHaveBeenCalled();
+      expect(existsSync(join(dir, 'html', 'home.html'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

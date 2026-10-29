@@ -2599,7 +2599,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( '#good' ).attr( 'href' ) ).toBe( '/treatments/index.html?tab=oral-habits' );
 		expect( $( '#unknown' ).attr( 'href' ) ).toBe( 'https://example.com/treatments?tab=bogus' );
 		expect( $( '#other' ).attr( 'href' ) ).toBe( 'https://example.com/treatments?page=2' );
-		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].states;
+		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].components.flatMap( (component: { states: Array<{ evidence?: unknown }> }) => component.states.flatMap( state => state.evidence ? [state.evidence] : [] ) );
 		expect( states.map( ( state: { trigger: { tabKey?: string } } ) => state.trigger.tabKey ) ).toEqual( [ 'braces', 'oral-habits' ] );
 	} );
 
@@ -2804,7 +2804,7 @@ describe( 'exportWebsiteCapture', () => {
 			failures: [],
 		} );
 
-		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].states;
+		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].components.flatMap( (component: { states: Array<{ evidence?: unknown }> }) => component.states.flatMap( state => state.evidence ? [state.evidence] : [] ) );
 		expect( states[ 0 ].dialog.html ).not.toContain( 'cdn.example' );
 		expect( states[ 0 ].dialog.htmlBytes ).toBe( Buffer.byteLength( states[ 0 ].dialog.html ) );
 		expect( states[ 1 ].dialog.html ).not.toContain( 'cdn.example' );
@@ -3552,6 +3552,10 @@ describe( 'exportWebsiteCapture', () => {
 			excludedRoutes: [],
 		} );
 		expect( receipt.interactions ).toEqual( {
+			component_count: 2,
+			component_captured_count: 2,
+			component_unsupported_count: 0,
+			component_partial_count: 0,
 			ancestor_state_unverified_count: 0,
 			candidate_count: 1,
 			captured_count: 1,
