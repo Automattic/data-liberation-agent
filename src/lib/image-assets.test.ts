@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { getPlaywright } from './browser-kit/index.js';
-import { collectAssets as collectImageAssets, imageContentType, resolvedImageOriginal } from './image-assets.js';
+import { captureAssets, collectAssets as collectImageAssets, imageContentType, resolvedImageOriginal } from './image-assets.js';
 
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
@@ -59,6 +59,32 @@ it('joins overlapping srcsets without losing the largest original when another d
 });
 
 describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public capture fixture (~15s)', () => {
+ it('admits locally captured bytes after the deadline but records new downloads as deadline-skipped', async () => {
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'image-deadline-'));
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>';
+  try {
+   mkdirSync(join(root, 'resources'), { recursive: true });
+   writeFileSync(join(root, 'resources/logo.svg'), svg);
+   writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({ version: 1, resources: {
+    'https://example.com/logo.svg': { path: 'resources/logo.svg', contentType: 'image/svg+xml' },
+   }, failures: [] }));
+   const records = await captureAssets(root, [{ url: 'https://example.com/', html: '<img src="/logo.svg"><img src="/uncaptured.svg">' }], Date.now() - 1000);
+   const local = records.find(record => record.resolved_original.endsWith('/logo.svg'))!;
+   expect(local.original).toMatchObject({ content_type: 'image/svg+xml', width: 20, height: 10 });
+   expect(local.local_path).toBe(join(root, 'media/logo.svg'));
+   expect(readFileSync(local.local_path!, 'utf8')).toBe(svg);
+   expect(local.error).toBeUndefined();
+   expect(local.references[0].source_url).toBe('https://example.com/logo.svg');
+   const remote = records.find(record => record.resolved_original.endsWith('/uncaptured.svg'))!;
+   expect(remote.original).toBeNull();
+   expect(remote.local_path).toBeUndefined();
+   expect(remote.error).toBe('Error: resource acquisition deadline reached');
+  } finally {
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
  it('exports one alpha-preserving original with every srcset/proxy/CSS URL and flags unresolved images', async () => {
   const pw = await getPlaywright(), browser = await pw.chromium.launch({ headless: true });
   const page = await browser.newPage();
