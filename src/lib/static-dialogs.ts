@@ -258,6 +258,10 @@ export function wireCapturedDialogs(
 				trigger.attr( 'data-blocks-engine-capture-dialog-trigger' )
 			) return;
 			if ( state.dialog?.role?.toLowerCase() === 'listbox' || state.trigger.ariaHaspopup.toLowerCase() === 'listbox' ) {
+				// Listboxes use their own replay surface, never the dialog reuse
+				// path. Remove a retained source box rather than duplicating its IDs
+				// and options alongside the captured opened state.
+				existingPanel.remove();
 				const key = String( listboxes++ );
 				const panel = $( '<div hidden></div>' );
 				panel.attr( 'data-blocks-engine-capture-listbox-panel', key ).html( state.dialog!.html );
@@ -410,7 +414,7 @@ export function wireCapturedRouteNavigation( html: string, routes: CapturedRoute
 		if ( route.siblings.length < 2 ) continue;
 		// Responsive document merging may add wrappers or retain two device copies.
 		// The observed sibling group, not a bare label, identifies those copies.
-		$( 'nav button,[role="navigation"] button' ).each( ( _, element ) => {
+		$( 'header button,[role="banner"] button,nav button,[role="navigation"] button' ).each( ( _, element ) => {
 			const button = $( element );
 			if ( button.closest( 'form,a,details' ).length ) return;
 			if ( normalizedText( button.attr( 'aria-label' ) || button.text() ) !== route.label ) return;

@@ -28,7 +28,6 @@ vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 vi.mock( './interaction-capture.js', async ( importOriginal ) => ( {
 	...( await importOriginal< typeof import( './interaction-capture.js' ) >() ),
 	captureTriggeredDialogs: vi.fn(),
-	captureRouteNavigation: vi.fn(),
 } ) );
 
 const LOCAL_TMP = join( process.cwd(), '.tmp-test' );
