@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.29] - 2026-10-29
+
+### Changed
+- regenerate plugin bundles
+- Add image asset records keyed by source resource
+- Classify owned listboxes and record client-routed destinations
+
+### Fixed
+- Fix Shopify product JSON-LD on locale-prefixed routes
+
 ## [0.33.28] - 2026-10-28
 
 ### Changed
