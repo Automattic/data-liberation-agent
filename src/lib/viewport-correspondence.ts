@@ -195,11 +195,11 @@ function ownText( element: Element ): string {
 
 /** Absolute spellings compare canonically; relative references stay literal. */
 /**
- * A link that navigates nowhere: a bare `#` or a `javascript:void(0)` trigger
- * whose script owns the click. Builders spell the same trigger differently per
- * viewport, so it carries no destination identity.
+ * A script-owned trigger: an empty fragment (`#`, or `…#` once a document base
+ * resolved it) or `javascript:void(0)`. Builders spell the same trigger
+ * differently per viewport, so it carries no destination identity.
  */
-const INERT_REFERENCE = /^(?:#|javascript:\s*(?:void\s*\(?\s*0\s*\)?)?\s*;?)$/i;
+const INERT_REFERENCE = /^(?:[^#]*#|javascript:\s*(?:void\s*\(?\s*0\s*\)?)?\s*;?)$/i;
 
 function canonicalReference( value: string ): string {
 	if ( INERT_REFERENCE.test( value ) ) return '';

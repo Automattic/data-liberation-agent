@@ -22,11 +22,11 @@ describe( 'viewport URL correspondence', () => {
 		expect( assembly.evidence ).toMatchObject( { outcome: 'collapsed-identity-subset', divergedComponents: 1 } );
 	} );
 
-	it( 'pairs script-owned triggers across viewport spellings of no destination', () => {
+	it.each( [ '#', 'https://source.test/#' ] )( 'pairs a javascript:void(0) trigger with its %s phone spelling', ( phoneHref ) => {
 		const page = ( href: string ) => `<html><body><main id="main"><h1>Shared</h1><a id="menu" href="${ href }">Menu</a></main></body></html>`;
 		const assembly = assembleResponsiveCapture( {
-			rawDesktopHtml: page( 'javascript:void(0)' ), rawMobileHtml: page( '#' ),
-			portableDesktopHtml: page( 'javascript:void(0)' ), portableMobileHtml: page( '#' ),
+			rawDesktopHtml: page( 'javascript:void(0)' ), rawMobileHtml: page( phoneHref ),
+			portableDesktopHtml: page( 'javascript:void(0)' ), portableMobileHtml: page( phoneHref ),
 		} );
 		expect( assembly.hasMobileDocument ).toBe( false );
 		expect( cheerio.load( assembly.html )( 'a' ).length ).toBe( 1 );
