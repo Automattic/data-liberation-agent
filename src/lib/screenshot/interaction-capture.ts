@@ -30,10 +30,11 @@ export interface CapturedRouteNavigation {
 }
 
 /** Observe the result of clicking visible navigation buttons, never infer a route from a label. */
-export async function captureRouteNavigation( page: Page, sourceUrl: string ): Promise< CapturedRouteNavigation[] > {
-	const candidates = await page.evaluate( ( limit: number ) => {
-		return Array.from( document.querySelectorAll< HTMLButtonElement >( 'nav button,[role="navigation"] button' ) )
+export async function captureRouteNavigation( page: Page, sourceUrl: string, options: { skip?: string } = {} ): Promise< CapturedRouteNavigation[] > {
+	const candidates = await page.evaluate( ( { limit, skip }: { limit: number; skip?: string } ) => {
+		return Array.from( document.querySelectorAll< HTMLButtonElement >( 'header button,[role="banner"] button,nav button,[role="navigation"] button' ) )
 			.filter( button => {
+				if ( skip && button.matches( skip ) ) return false;
 				const rect = button.getBoundingClientRect();
 				const style = getComputedStyle( button );
 				return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
@@ -55,7 +56,7 @@ export async function captureRouteNavigation( page: Page, sourceUrl: string ): P
 						.map( child => ( child.getAttribute( 'aria-label' ) || child.textContent || '' ).replace( /\s+/g, ' ' ).trim() ),
 				};
 			} );
-	}, MAX_ROUTE_CONTROLS );
+	}, { limit: MAX_ROUTE_CONTROLS, skip: options.skip } );
 	const original = new URL( sourceUrl );
 	const routes: CapturedRouteNavigation[] = [];
 	for ( const candidate of candidates ) {
@@ -112,6 +113,7 @@ export interface CapturedDialogInteraction {
 		selector: string;
 		tag: string;
 		id?: string;
+		/** Semantic surface role resolved through aria-controls, independent of the serialized outer box. */
 		role?: string;
 		ariaModal: boolean;
 		ariaLabel?: string;
@@ -251,6 +253,10 @@ export async function captureTriggeredDialogs(
 	options: { skip?: string } = {}
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
+	// Route transitions and popup transitions share controls. Observe routes
+	// first, restore them, then exclude proven destinations from popup clicks.
+	const routeNavigation = await captureRouteNavigation( page, sourceUrl, options ).catch( () => [] );
+	const skip = [ options.skip, ...routeNavigation.map( route => route.selector ) ].filter( Boolean ).join( ',' ) || undefined;
 	await rememberBaselinePanels( page );
 	const initialDialogs = await captureInitiallyVisibleDialogs( page );
 	const triggers = ( await page.evaluate( ( { limit, popupTypes, plainLimit, navLimit, skip }: { limit: number; popupTypes: string[]; plainLimit: number; navLimit: number; skip?: string } ) => {
@@ -369,6 +375,11 @@ export async function captureTriggeredDialogs(
 				if ( href && href !== '#' && ! href.startsWith( '#' ) && ! hasBinding ) return false;
 				return true;
 			}
+			const controlsSurface = ( element.getAttribute( 'aria-controls' ) ?? '' ).split( /\s+/ ).some( id => {
+				const target = document.getElementById( id );
+				return target?.matches( '[role="listbox"],[role="dialog"]' ) || target?.querySelector( '[role="listbox"],[role="dialog"]' );
+			} );
+			if ( controlsSurface ) return true;
 			// A menu control is a menu control whether authored as <button> or as
 			// role="button" (site builders often render the latter).
 			const isButton = element.tagName === 'BUTTON' || element.getAttribute( 'role' ) === 'button';
@@ -412,7 +423,7 @@ export async function captureTriggeredDialogs(
 				dataBindings,
 			};
 		} );
-	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES, skip: options.skip } ) ) as TriggerDescriptor[];
+	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES, skip } ) ) as TriggerDescriptor[];
 
 	const states: CapturedDialogInteraction[] = [];
 	// Keep navigation defaults suppressed for the complete popup probe transaction,
@@ -506,7 +517,9 @@ export async function captureTriggeredDialogs(
 				if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 				continue;
 			}
-			dialog = snapshot;
+			// Re-snapshotting the serialization box must not erase the role
+			// resolved through the trigger's ownership relationship.
+			dialog = { ...snapshot, ...( dialog.role ? { role: dialog.role } : {} ) };
 			if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
 
 			const bounded = boundHtml( dialog.html );
@@ -575,6 +588,7 @@ export async function captureTriggeredDialogs(
 	return {
 		schema: INTERACTION_STATES_SCHEMA,
 		sourceUrl,
+		routeNavigation,
 		viewport,
 		capturedAt: new Date().toISOString(),
 		states,
@@ -924,6 +938,11 @@ async function firstNewVisibleDialog(
 		const marked = document.querySelector( '[data-lib-visible-before]' ) !== null;
 		const wasVisible = ( element: Element, index: number ): boolean =>
 			marked ? element.hasAttribute( 'data-lib-visible-before' ) : existing.includes( selector( element, index ) );
+		// Ownership and semantic identity are separate from the outer box we
+		// serialize. Portals (notably Select poppers) wrap the ARIA surface.
+		const ownedSurface = controlled.filter( ( element ): element is HTMLElement => !!element )
+			.map( element => element.matches( semanticSelector ) ? element : element.querySelector( semanticSelector ) )
+			.find( element => element && visible( element ) );
 		let owned = controlled.find( ( element ) => element && visible( element ) && !element.hasAttribute( 'data-lib-visible-before' ) );
 		while ( owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) ) owned = owned.parentElement;
 		const surface = owned ?? candidates.find( ( element, index ) => {
@@ -979,6 +998,8 @@ async function firstNewVisibleDialog(
 			!dialog.parentElement.hasAttribute( 'data-lib-visible-before' ) && visible( dialog.parentElement ) ) {
 			dialog = dialog.parentElement;
 		}
+		const semanticSurface = ownedSurface ?? ( surface?.matches( semanticSelector ) ? surface : surface?.querySelector( semanticSelector ) );
+		const surfaceRole = semanticSurface?.getAttribute( 'role' ) ?? dialog.getAttribute( 'role' );
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
 			: '[data-lib-interaction-dialog="captured"]';
@@ -1022,7 +1043,7 @@ async function firstNewVisibleDialog(
 			selector: dialogSelector,
 			tag: dialog.tagName.toLowerCase(),
 			...( dialog.id ? { id: dialog.id } : {} ),
-			...( dialog.getAttribute( 'role' ) ? { role: dialog.getAttribute( 'role' )! } : {} ),
+			...( surfaceRole ? { role: surfaceRole } : {} ),
 			ariaModal: dialog.getAttribute( 'aria-modal' ) === 'true',
 			...( dialog.getAttribute( 'aria-label' )
 				? { ariaLabel: dialog.getAttribute( 'aria-label' )! }

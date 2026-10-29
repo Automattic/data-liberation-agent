@@ -342,17 +342,17 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
-		'preserves a generic combobox listbox selection and keyboard dismissal offline',
+		'classifies an aria-controls wrapper by its listbox descendant without popup hints',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
 			const page = await browser.newPage();
 			try {
-				await page.setContent( `<!doctype html><form><button id="country" role="combobox" aria-expanded="false">Select country</button></form><script>country.onclick=()=>{country.setAttribute('aria-expanded','true');const box=document.createElement('div');box.id='countries';box.setAttribute('role','listbox');box.innerHTML='<div role="option">Canada</div><div role="option">Ghana</div>';document.body.append(box)};</script>` );
+				await page.setContent( `<!doctype html><form><button id="country" type="button" aria-controls="country-popper" aria-expanded="false">Select country</button></form><div id="country-popper" hidden><div role="listbox"><div role="option">Canada</div><div role="option">Ghana</div></div></div><script>country.onclick=()=>{country.setAttribute('aria-expanded','true');document.getElementById('country-popper').hidden=false;};addEventListener('keydown',event=>{if(event.key==='Escape'){document.getElementById('country-popper').hidden=true;country.setAttribute('aria-expanded','false');}});</script>` );
 				const report = await captureTriggeredDialogs( page, 'https://example.test/registration/' );
 				const state = report.states.find( ( candidate ) => candidate.status === 'captured' );
 				expect( state?.dialog?.role ).toBe( 'listbox' );
 				const portable = wireCapturedDialogs(
-					'<!doctype html><html><head></head><body><form><button id="country" role="combobox" aria-expanded="false">Select country</button></form></body></html>',
+					'<!doctype html><html><head></head><body><form><button id="country" type="button" aria-controls="country-popper" aria-expanded="false">Select country</button></form></body></html>',
 					report.states
 				);
 				await page.setContent( portable );

@@ -32,7 +32,6 @@ import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
-	captureRouteNavigation,
 	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
@@ -1481,13 +1480,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			args.phases?.enter( 'dialogs' );
 		}
 		if ( args.rendererCrashed() ) return;
-		// Route-tab observation is evidence, not a baseline artifact: its failure
-		// must not discard the dialog states captured before it.
-		try {
-			interactions.routeNavigation = await withReadOnlyProbes( page, () => captureRouteNavigation( page, url ) );
-		} catch {
-			/* best-effort: capture proceeds with dialog evidence alone */
-		}
 		// Disclosure/accordion candidates were already resolved (opened, captured,
 		// reclosed) before serialization above — folded in here purely as
 		// diagnostics, using the same states array + totals the dialog/menu path
