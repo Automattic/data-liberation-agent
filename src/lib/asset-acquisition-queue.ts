@@ -12,7 +12,9 @@ import type { SourceRequestGovernors } from './source-request-governor.js';
  * are saved, so bytes arrive while later routes are still in the browser
  * instead of after the time budget is spent. Fetches go through the source
  * origin's governor and land in the MediaStubStore under media/, where
- * `captureAssets()` reuses URL-owned local bytes. Verification, decoding and
+ * `captureAssets()` reuses URL-owned local bytes. At most `concurrency`
+ * fetches run at once, below the governor's limit, so route navigation keeps
+ * priority on the source. Verification, decoding and
  * portability stay with `captureAssets()`; this queue only fetches.
  */
 export class AssetAcquisitionQueue {
@@ -20,6 +22,7 @@ export class AssetAcquisitionQueue {
 	private readonly names = new Map< string, number >();
 	private readonly stubs: MediaStubStore;
 	private readonly seen = new Set< string >();
+	private readonly waiting: string[] = [];
 	private readonly pending = new Set< Promise< void > >();
 	private fetched = 0;
 	private failed = 0;
@@ -29,7 +32,8 @@ export class AssetAcquisitionQueue {
 		private readonly outputDir: string,
 		private readonly governors: SourceRequestGovernors,
 		private readonly deadline?: number,
-		private readonly resolve?: Parameters< typeof collectAssets >[ 1 ]
+		private readonly resolve?: Parameters< typeof collectAssets >[ 1 ],
+		private readonly concurrency = 2
 	) {
 		this.mediaDir = join( outputDir, 'media' );
 		if ( existsSync( this.mediaDir ) ) for ( const name of readdirSync( this.mediaDir ) ) this.names.set( name, 1 );
@@ -47,7 +51,17 @@ export class AssetAcquisitionQueue {
 			if ( this.seen.has( source ) ) continue;
 			this.seen.add( source );
 			if ( stored( source ) || this.stubs.get( source )?.status === 'success' ) continue;
-			const task = this.fetch( source ).finally( () => this.pending.delete( task ) );
+			this.waiting.push( source );
+		}
+		this.pump();
+	}
+
+	private pump(): void {
+		while ( this.pending.size < this.concurrency && this.waiting.length ) {
+			const task = this.fetch( this.waiting.shift()! ).finally( () => {
+				this.pending.delete( task );
+				this.pump();
+			} );
 			this.pending.add( task );
 		}
 	}
