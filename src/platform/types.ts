@@ -82,6 +82,9 @@ export interface Platform {
 	detection?: PlatformDetection;
 	/** Inventory a site: sitemap/routes/navigation. Required. */
 	discover( url: string, opts: Record< string, unknown > ): Promise< unknown >;
+	/** Resolve an image optimizer/proxy URL to its underlying HTTP(S) resource.
+	 * Return undefined for ordinary URLs. Capture owns grouping and byte verification. */
+	resolveImageOriginal?( url: string ): string | undefined;
 	/** Optional platform-specific hooks applied while liberating each page. */
 	liberation?: LiberationHooks;
 	/** Optional server-document acquisition profile; rendered fidelity remains separate. */

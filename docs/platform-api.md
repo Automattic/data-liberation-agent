@@ -32,6 +32,8 @@ interface Platform {
   detection?: PlatformDetection;
   /** Inventory a site: sitemap/routes/navigation. THE required capability. */
   discover(url: string, opts: Record<string, unknown>): Promise<unknown>;
+  /** Optional optimizer/proxy unwrapping; undefined means an ordinary URL. */
+  resolveImageOriginal?(url: string): string | undefined;
   /** Optional source-specific hooks applied during liberation. */
   liberation?: LiberationHooks;
 }
@@ -41,6 +43,12 @@ interface SiteRouteScope {
   pathPrefixes: string[];
 }
 ```
+
+`resolveImageOriginal` is synchronous and source-only. Capture repeatedly applies
+it (bounded to 32 steps, stopping cycles and non-HTTP(S) targets), groups aliases
+with inline/CSS/lightbox/head uses, then acquires and verifies the chosen original.
+It does not choose a destination or transcode bytes. Next.js owns its `/_next/image`
+resolver; generic platforms leave such URLs unchanged. See [image assets](image-assets.md).
 
 `LiberationHooks` (optional) mirrors the hooks built-in platforms use:
 

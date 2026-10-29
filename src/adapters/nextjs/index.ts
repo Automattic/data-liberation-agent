@@ -6,6 +6,11 @@ export const nextjsAdapter: PlatformAdapter = {
 	id: 'nextjs',
 	detection,
 	discover: discoverDefault,
+	resolveImageOriginal( value ) {
+		const url = new URL( value );
+		const target = url.pathname === '/_next/image' ? url.searchParams.get( 'url' ) : null;
+		return target ? new URL( target, url ).href : undefined;
+	},
 	liberation: {
 		// App Router shadow host and Pages Router's reserved announcer id.
 		// Never remove authored live regions by ARIA role or visual appearance.

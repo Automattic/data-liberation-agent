@@ -3,15 +3,40 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
+import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { collectImageAssets, imageContentType, resolvedImageOriginal } from './image-assets.js';
 
-it('resolves optimizer targets and chooses the largest srcset candidate independent of order', () => {
+it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
  expect(records).toHaveLength(1);
  expect(records[0].resolved_original).toBe('https://example.com/large.webp');
  expect(records[0].source_urls).toEqual(expect.arrayContaining(['https://example.com/small.webp', 'https://example.com/large.webp']));
- expect(resolvedImageOriginal('https://example.com/_next/image?url=%2Flogo.webp&w=640&q=75')).toBe('https://example.com/logo.webp');
+ expect(resolvedImageOriginal('https://example.com/_next/image?url=%2Flogo.webp&w=640&q=75', nextjsAdapter.resolveImageOriginal)).toBe('https://example.com/logo.webp');
+});
+
+it('keeps generic optimizer-shaped URLs opaque and bounds adapter resolution to HTTP(S) targets', () => {
+ const proxy = 'https://example.com/_next/image?url=%2Flogo.webp&w=640';
+ expect(resolvedImageOriginal(proxy)).toBe(proxy);
+ expect(resolvedImageOriginal(proxy, () => 'data:image/png;base64,AA')).toBe(proxy);
+ expect(resolvedImageOriginal(proxy, value => value === proxy ? '/logo.webp' : proxy)).toBe(proxy);
+ let steps = 0;
+ resolvedImageOriginal(proxy, () => `https://example.com/image-${++steps}`);
+ expect(steps).toBe(32);
+});
+
+it('prefers an enclosing lightbox original across documents without merging ordinary navigation', () => {
+ const records = collectImageAssets([
+  { url: 'https://example.com/', html: '<img srcset="/small.webp 100w, /large.webp 900w"><a href="/article"><img src="/other.webp"></a>' },
+  { url: 'https://example.com/gallery', html: '<a data-lightbox href="/original?id=1"><img src="/small.webp"></a><link rel="icon" href="/large.webp"><style>.hero{background-image:url(/small.webp)}</style>' },
+  { url: 'https://example.com/last', html: '<img srcset="/small.webp 100w, /large.webp 900w">' },
+ ]);
+ expect(records).toHaveLength(2);
+ const image = records.find(record => record.source_urls.includes('https://example.com/small.webp'))!;
+ expect(image.resolved_original).toBe('https://example.com/original?id=1');
+ expect(image.source_urls).not.toContain('https://example.com/article');
+ expect(new Set(image.references.map(ref => ref.kind))).toEqual(new Set(['content', 'head', 'CSS']));
+ expect(image.references).toContainEqual({ kind: 'content', document_url: 'https://example.com/gallery', location: 'anchor:0:href', source_url: 'https://example.com/original?id=1' });
 });
 
 it('records extensionless CSS backgrounds with document bases but not font sources or video sources', () => {
@@ -42,35 +67,49 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
   });
   await browser.close();
   const webp = Buffer.from(data.webp, 'base64'), jpeg = Buffer.from(data.jpeg, 'base64');
-  const proxy = (w: number) => `/_next/image?url=%2Flogo.webp&w=${w}&q=75`;
+  const proxy = (w: number) => `/_next/image?url=%2Fpreview.webp&w=${w}&q=75`;
   const server = createServer((request, response) => {
    const path = new URL(request.url!, 'http://example.com').pathname;
    // Deliberately lie about the format: metadata and filename must follow bytes.
    if (path === '/logo.webp') { response.writeHead(200, { 'content-type': 'image/jpeg' }); response.end(webp); }
-   else if (path === '/_next/image') { response.writeHead(200, { 'content-type': 'image/jpeg' }); response.end(jpeg); }
+   else if (path === '/_next/image' || path === '/preview.webp') { response.writeHead(200, { 'content-type': 'image/jpeg' }); response.end(jpeg); }
+   else if (path === '/hero.css') { response.writeHead(200, { 'content-type': 'text/css' }); response.end(`.hero{background-image:url('${proxy(203)}')}`); }
    else if (path === '/missing.webp') { response.writeHead(200, { 'content-type': 'image/webp' }); response.end('<html>placeholder</html>'); }
-   else { response.writeHead(200, { 'content-type': 'text/html' }); response.end(`<!doctype html><title>Next image fixture</title><h1>Transparent logo</h1><img alt="Logo" src="${proxy(67)}" srcset="${proxy(203)} 203w, ${proxy(67)} 67w"><div style="width:203px;height:90px;background-image:url('${proxy(67)}')"></div><img alt="Missing" src="/missing.webp">`); }
+   else { response.writeHead(200, { 'content-type': 'text/html' }); response.end(`<!doctype html><title>Next image fixture</title><link rel="stylesheet" href="/hero.css"><link rel="icon" href="${proxy(67)}"><link rel="apple-touch-icon" href="/logo.webp"><h1>Transparent logo</h1><nav><a href="/logo.webp"><img alt="Logo" src="${proxy(67)}" srcset="${proxy(203)} 203w, ${proxy(67)} 67w"></a></nav><img alt="Content logo" src="${proxy(67)}"><div class="hero" style="width:203px;height:90px;background-image:url('${proxy(67)}')"></div><img alt="Missing" src="/missing.webp">`); }
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'next-image-'));
   try {
-   const result = await captureWebsite({ url, outputDir: root, trustedOrigins: [url], learnFluid: false, routeLimit: 1 }, { findAdapter: () => ({ id: 'generic', discover: async () => ({ urls: [] }) }) });
+   const result = await captureWebsite({ url, outputDir: root, trustedOrigins: [url], learnFluid: false, routeLimit: 1 }, { findAdapter: () => ({ ...nextjsAdapter, discover: async () => ({ urls: [] }) }) });
    const records = JSON.parse(readFileSync(join(root, 'image-assets.json'), 'utf8')).images;
    expect(records).toHaveLength(2);
    const logo = records.find((r: any) => r.original);
+   expect(logo.resolved_original).toBe(`${url}logo.webp`);
    expect(logo.original).toMatchObject({ source_url: `${url}logo.webp`, content_type: 'image/webp', width: 203, height: 90, alpha: true });
    expect(logo.source_urls).toEqual(expect.arrayContaining([`${url}logo.webp`, new URL(proxy(67), url).href, new URL(proxy(203), url).href]));
    const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
    const images = receipt.assets.filter((asset: any) => asset.original);
    expect(images).toHaveLength(1);
+   expect(receipt.assets.filter((asset: any) => /\.(?:webp|jpe?g|png)(?:$|[?#])/i.test(asset.path))).toHaveLength(1);
    expect(images[0].source_url).toBe(`${url}logo.webp`);
+   expect(new Set(logo.references.map((ref: any) => ref.kind))).toEqual(new Set(['content', 'navigation', 'head', 'CSS']));
+   expect(images[0].references).toEqual(logo.references);
+   expect(logo.references).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'CSS', document_url: `${url}hero.css` })]));
+   const stylesheets = receipt.assets.filter((asset: any) => asset.path.endsWith('.css')).map((asset: any) => readFileSync(join(root, asset.path), 'utf8')).join('\n');
+   expect(stylesheets).toContain('/media/logo.webp');
+   expect(stylesheets).not.toContain('/_next/image');
    expect(readFileSync(join(root, images[0].path))).toEqual(webp);
    const html = readFileSync(join(root, 'website/index.html'), 'utf8');
    expect(html).not.toContain('/_next/image');
    expect(html).not.toContain(`${url}logo.webp`);
+   expect(html).not.toContain('preview.webp');
    expect(html).toContain('src="/media/logo.webp"');
+   expect(html).toContain('href="/media/logo.webp"');
+   expect(html.replaceAll('&quot;', '"')).toMatch(/background-image:\s*url\(['"]?\/media\/logo.webp/);
+   expect(html).toMatch(/rel="icon"[^>]*href="\/media\/logo.webp"/);
+   expect(html).toMatch(/rel="apple-touch-icon"[^>]*href="\/media\/logo.webp"/);
    const diagnostics = JSON.parse(readFileSync(join(root, 'diagnostics.json'), 'utf8'));
    expect(diagnostics.unresolvedMedia).toEqual(expect.arrayContaining([expect.objectContaining({ url: `${url}missing.webp` })]));
    const findings = JSON.parse(readFileSync(join(root, 'website/source-findings.json'), 'utf8')).findings;
