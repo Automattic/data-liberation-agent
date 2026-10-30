@@ -560,7 +560,8 @@ type LazyScrollWindow = Window & {
 /** Include the swept inner container when proving the observation's top pose. */
 export function lazyLoadScrollPose(): { x: number; y: number; innerY: number } {
   const state = (window as LazyScrollWindow).__dlaLazyScroller;
-  return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), innerY: Math.round(state?.element.scrollTop ?? 0) };
+  // innerY is the offset from the scroller's own starting pose, which the sweep restores.
+  return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), innerY: Math.round(state ? state.element.scrollTop - state.top : 0) };
 }
 
 /** Whether the document has physical overflow in either viewport dimension. */
