@@ -34,6 +34,22 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 		} finally { await browser.close(); }
 	}, 60_000 );
 
+	it( 'counts text below the fold inside a pinned device-document wrapper', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
+			const paragraphs = Array.from( { length: 40 }, ( _, index ) => `Paragraph ${ index + 1 } contains ordinary text for a long scrolling document.` );
+			await page.setContent( `<style>
+				html, body, .body { position:fixed; overflow:hidden; height:100%; width:100%; margin:0 }
+				.scroll { overflow:auto; height:100% }
+				p { margin:0; padding:20px; font:16px/24px sans-serif }
+			</style><div data-blocks-engine-capture-document-scope class="body"><div class="scroll">${ paragraphs.map( text => `<p>${ text }</p>` ).join( '' ) }</div></div>` );
+			expect( await page.locator( 'p' ).last().evaluate( element => element.getBoundingClientRect().top ) ).toBeGreaterThan( 900 );
+			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
+			expect( observation.textChars ).toBe( paragraphs.join( ' ' ).length );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it( 'counts partly painted text and focused links, including visible aria-hidden editorial labels', async () => {
 		const browser = await chromium.launch();
 		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
