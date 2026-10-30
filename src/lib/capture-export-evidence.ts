@@ -17,7 +17,7 @@ import { exportPublicationBoundary, EXPORT_PUBLICATION_BOUNDARIES, EXPORT_PUBLIC
 import { SITE_ANALYSIS_FILES } from './screenshot/aggregator.js';
 import { sourceGenerator } from './source-generator.js';
 import { extractTitle } from './html-extract/html-extract.js';
-import { siteNameFromRouteTitles } from './site-name.js';
+import { declaredSiteName, siteNameFromRouteTitles } from './site-name.js';
 
 export interface CaptureFluidEvidence {
 	applied: number;
@@ -355,10 +355,13 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const capturedInteractivity = input.capture.interactivity;
 	const retainedEntries = input.pages;
 	const routes = input.routes.retained;
-	const siteTitle = siteNameFromRouteTitles( options.title, routes.map( route => {
+	const routeHtml = routes.map( route => {
 		const path = join( stageDir, route.path );
-		return existsSync( path ) ? extractTitle( readFileSync( path, 'utf8' ) ) : '';
-	} ) );
+		return existsSync( path ) ? readFileSync( path, 'utf8' ) : '';
+	} );
+	// The entrypoint's own declaration of its name outranks a discovered title.
+	const entrypointHtml = routeHtml[ routes.findIndex( route => route.path === 'website/index.html' ) ] ?? '';
+	const siteTitle = declaredSiteName( entrypointHtml ) ?? siteNameFromRouteTitles( options.title, routeHtml.map( html => html ? extractTitle( html ) : '' ) );
 	const excludedRoutes = input.routes.excluded;
 	const duplicateRoutes = input.routes.duplicates;
 	const interactionPages = input.states.interactions;
