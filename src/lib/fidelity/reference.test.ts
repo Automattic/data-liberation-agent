@@ -10,6 +10,7 @@ import { applySourceCleanup, cleanupPolicy } from '../source-cleanup.js';
 import { checkFidelity, observePage } from './check.js';
 import { createReferenceCollector, readFrozenObservation, readReferenceArtifact, type FidelityReference } from './reference.js';
 import { matchRenderedImages } from './score.js';
+import { checkImageGeometry } from './rendered-contract-checks.js';
 import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
 
@@ -625,7 +626,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		}
 	}, 300_000 );
 
-	it( 'observes real normal/zoom occurrences and refuses correspondence after semantic roles are lost', async () => {
+	it( 'observes normal/zoom roles and scores document-order partners after roles are lost', async () => {
 		const browser = sharedBrowser;
 		const page = await browser.newPage();
 		try {
@@ -641,7 +642,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( pairs.every( pair => pair.source.role === pair.candidate.role && pair.source.width !== pair.candidate.width ) ).toBe( true );
 			await page.setContent( `<div><img alt="product" src="${ src }" width="200" height="200"></div><div><img alt="product" src="${ src }" width="400" height="400"></div>` );
 			const ambiguous = await observePage( page, 'about:blank', 1280, 0, null, undefined, undefined, true );
-			expect( matchRenderedImages( source.images, ambiguous.images ) ).toEqual( [] );
+			expect( matchRenderedImages( source.images, ambiguous.images ).map( pair => pair.candidate ) ).toEqual( ambiguous.images );
+			expect( checkImageGeometry( source, ambiguous ).failures?.[ 0 ] ).toContain( 'image geometry differs' );
 		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000 );
 	it( 'excludes overflow-clipped offstage copy while retaining repeated and below-fold text', async () => {
@@ -777,10 +779,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 	}, 30_000 );
 } );
 
-it( 'never silently pairs normal/zoom duplicate media by geometry or index', () => {
+it( 'uses unique normal/zoom roles before falling back to document order', () => {
 	const normal = { key: 'product', contentHash: 'same', role: 'img:product/main:', x: 0, y: 0, width: 200, height: 200 };
 	const zoom = { ...normal, role: 'img:product/dialog:zoom', width: 500, height: 500 };
 	const candidate = [ { ...zoom, width: 200 }, { ...normal, width: 500 } ];
 	expect( matchRenderedImages( [ normal, zoom ], candidate ).map( pair => pair.candidate.role ) ).toEqual( [ normal.role, zoom.role ] );
-	expect( matchRenderedImages( [ { ...normal, role: undefined }, { ...zoom, role: undefined } ], candidate ) ).toEqual( [] );
+	expect( matchRenderedImages( [ { ...normal, role: undefined }, { ...zoom, role: undefined } ], candidate ).map( pair => pair.candidate ) ).toEqual( candidate );
 } );
