@@ -572,7 +572,7 @@ async function runCaptureWebsite(
 			? { collectResponsiveImages: adapter.liberation.responsiveImages.bind( adapter.liberation ) }
 			: {} ),
 		publicUrlsOnly: true,
-		...( timeBudget ? { timeBudget } : {} ),
+		...( timeBudget ? { timeBudget: { ...timeBudget, assetBacklog: () => assetQueue.backlog() } } : {} ),
 		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 		onRouteCaptured: ( url, documents, stored ) => assetQueue.enqueueRoute( url, documents, stored ),
