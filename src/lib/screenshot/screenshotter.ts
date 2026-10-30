@@ -26,6 +26,7 @@ import {
 	serverRedirectTarget,
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { normalizeCaptureState, normalizeGeneratedIds } from './capture-state.js';
 import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
 import { captureCollections } from './collection-capture.js';
 import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline } from './component-states.js';
@@ -1072,6 +1073,16 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
+	// Sweeps and adapter preparation may leave a scrolled pose. Initial evidence
+	// must describe the same settled top state before geometry or components.
+	try {
+		await withEvaluateTimeout( normalizeCaptureState( page ), evaluateTimeoutMs );
+		await withEvaluateTimeout( normalizeGeneratedIds( page ), evaluateTimeoutMs );
+	} catch ( error ) {
+		fail( 'evaluate', `source baseline reset unproven: ${ String( error ) }` );
+		return;
+	}
+
 	// --- html (desktop only) --------------------------------------------------
 	if ( plan.captureGeometry ) {
 		let capture: GeometryCapture;
@@ -1105,17 +1116,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// source actually obeys, learned by resizing while its runtime still runs.
 	// Must happen after removals (so stripped chrome is never modelled) and
 	// before serialization (so the learned CSS is what gets written).
-	// Source preparation can scroll an offscreen control into view. Native view
-	// animations legitimately report finished there; observe the capture's
-	// at-top baseline, not the incidental position left by a probe click.
-	try { await withEvaluateTimeout( page.evaluate( async () => {
-		window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
-		await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
-	} ), evaluateTimeoutMs ); }
-	catch ( error ) {
-		fail( 'evaluate', `source baseline reset unproven: ${ String( error ) }` );
-		return;
-	}
 	args.phases?.enter( 'observe-source' );
 	await args.observeSource?.( page, url, viewport.id, sourceErrors, args.browserProfile, viewport );
 	if ( args.rendererCrashed() ) return;

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
+import { normalizeCaptureState, normalizeGeneratedIds } from './capture-state.js';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 
 /**
@@ -134,6 +135,8 @@ export function rebaseChromeState< T >( state: T, from: readonly string[], to: r
  * root also gets `CHROME_ROOT_ATTRIBUTE` (cleared by `clearChromeMarks`).
  */
 export async function readChromeLandmarks( page: Page, mark = false ): Promise< ChromeLandmark[] > {
+	await normalizeCaptureState( page );
+	await normalizeGeneratedIds( page );
 	const raw = await page.evaluate( ( { selector, attributes, rootAttribute, mark } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
 		const kept = ( element: Element ) => ! skipped.has( element.tagName );

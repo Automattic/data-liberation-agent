@@ -163,7 +163,13 @@ it.each( [ 'resize', 'snapshot', 'baseline' ] as const )( 'bounds a nonrespondin
 			prepareCapture: async page => {
 				await page.evaluate( boundary => {
 					if ( boundary === 'resize' ) addEventListener( 'resize', () => { for (;;) { /* real renderer main-thread stall */ } }, { once: true } );
-					else if ( boundary === 'snapshot' ) document.getAnimations = () => { for (;;) { /* real renderer main-thread stall */ } };
+					else if ( boundary === 'snapshot' ) {
+						// The capture baseline reads the animation clock first; stall the
+						// native snapshot that follows it.
+						const read = document.getAnimations.bind( document );
+						let calls = 0;
+						document.getAnimations = () => { if ( ++calls > 1 ) for (;;) { /* real renderer main-thread stall */ } return read(); };
+					}
 					else window.scrollTo = () => { for (;;) { /* baseline restoration cannot return */ } };
 				}, boundary );
 			},
