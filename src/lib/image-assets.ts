@@ -214,8 +214,15 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 					if ( declaration.prop.toLowerCase() === 'src' && declaration.parent?.type === 'atrule' && declaration.parent.name.toLowerCase() === 'font-face' ) {
 						const location = `declaration:${ declarationIndex++ }:src`;
 						const descriptors = new Map<string, string>();
-						declaration.parent.walkDecls( descriptor => { descriptors.set( descriptor.prop.toLowerCase(), descriptor.value ); } );
+						const sources: postcss.Declaration[] = [];
+						declaration.parent.walkDecls( descriptor => {
+							descriptors.set( descriptor.prop.toLowerCase(), descriptor.value );
+							if ( descriptor.prop.toLowerCase() === 'src' ) sources.push( descriptor );
+						} );
+						// Browsers load only the face's last src (the cascade), and no current one loads EOT.
+						if ( sources.at( -1 ) !== declaration ) return;
 						for ( const match of declaration.value.matchAll( /url\(\s*["']?([^\s"')]+)["']?\s*\)(?:\s*format\(\s*["']?([^"')]+)["']?\s*\))?/gi ) ) {
+							if ( match[ 2 ]?.toLowerCase() === 'embedded-opentype' ) continue;
 							const refs = reference( match[ 1 ], 'CSS', location );
 							for ( const ref of refs ) ref.font_face = { family: descriptors.get( 'font-family' ), weight: descriptors.get( 'font-weight' ), style: descriptors.get( 'font-style' ), unicode_range: descriptors.get( 'unicode-range' ), format: match[ 2 ] };
 							add( [ match[ 1 ] ], match[ 1 ], url, refs, 0, 'font' );
