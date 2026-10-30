@@ -28,11 +28,14 @@
     "dist/",
     "docs/",
     "gemini-extension.json",
+    "provenance.json",
     "scripts/",
     "skills/",
     "src/"
   ],
   "scripts": {
+    "prepack": "node scripts/pack-provenance.mjs",
+    "postpack": "node scripts/pack-provenance.mjs clean",
     "build": "tsc && node scripts/copy-runtime-assets.mjs && node scripts/build-mcp-bundle.mjs",
     "build:mcp-bundle": "node scripts/build-mcp-bundle.mjs",
     "copy-runtime-assets": "node scripts/copy-runtime-assets.mjs",
