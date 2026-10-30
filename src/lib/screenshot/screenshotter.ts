@@ -501,6 +501,31 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 					textBoundaries.push( boundary );
 				}
 			}
+			// Scripts can build flow content inside <p>, but the HTML parser closes
+			// the paragraph at these tags. Use parser-stable spans for serialization
+			// only, preserving attributes, child identities and the observed display.
+			const repairParagraphDescendants = () => {
+				const closingTags = new Set( 'address article aside blockquote details dialog div dl fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr main menu nav ol p pre section table ul'.split( ' ' ) );
+				const candidates = Array.from( document.querySelectorAll( 'p *' ) )
+					.filter( ( element ) => element.namespaceURI === 'http://www.w3.org/1999/xhtml' && closingTags.has( element.localName ) )
+					.map( ( element ) => ( { element, display: getComputedStyle( element ).display } ) );
+				const replacements: Array< { element: Element; span: HTMLSpanElement } > = [];
+				for ( const { element, display } of candidates ) {
+					const span = document.createElement( 'span' );
+					for ( const attribute of Array.from( element.attributes ) ) span.setAttribute( attribute.name, attribute.value );
+					span.append( ...Array.from( element.childNodes ) );
+					element.replaceWith( span );
+					if ( getComputedStyle( span ).display !== display ) span.style.setProperty( 'display', display, 'important' );
+					replacements.push( { element, span } );
+				}
+				return () => {
+					for ( const { element, span } of replacements.reverse() ) {
+						element.append( ...Array.from( span.childNodes ) );
+						span.replaceWith( element );
+					}
+				};
+			};
+			const restoreParagraphDescendants = repairParagraphDescendants();
 			try {
 				// Keep authored reset defaults in markup and observed properties in a
 				// typed inert contract. Neither fact may be substituted for the other.
@@ -515,6 +540,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				portMaps( document, snapshot, iframeEvidenceAttributes );
 				return `<!DOCTYPE html>${ snapshot.outerHTML }`;
 			} finally {
+				restoreParagraphDescendants();
 				for ( const boundary of textBoundaries ) boundary.remove();
 				for ( const { image, previous } of restoredImages.reverse() ) {
 					if ( previous === null ) image.removeAttribute( 'src' );
