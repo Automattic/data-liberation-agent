@@ -40,6 +40,13 @@ export interface CaptureTimeBudgetWindow {
 	 * per-route reserve.
 	 */
 	routeReserveMs?: number;
+	/**
+	 * Asset downloads that captured routes still owe (the capture's asset
+	 * queue). Under projected admission a route starts only if, once it and
+	 * the routes running now finish, their assets can still be fetched before
+	 * `abandonAt`: a captured page's images come before another page.
+	 */
+	assetBacklog?: () => { queuedMs: number; perRouteMs: number };
 	/** Epoch ms after which no route other than the entrypoint starts. */
 	admitUntil: number;
 	/** Epoch ms at which routes still running are abandoned. */
@@ -149,7 +156,11 @@ export class RouteTimeBudget {
 		let work = duration;
 		for ( const startedAt of this.startTimes.values() ) work += Math.max( 0, duration - ( now - startedAt ) );
 		const projected = Math.max( duration, work / Math.max( 1, admittedConcurrency ) );
-		if ( now + projected <= this.admitDeadline() ) return true;
+		// What is queued, and the assets of routes running now (they finish
+		// first), download while the candidate runs; its own assets follow it.
+		const assets = this.window.assetBacklog?.();
+		const assetTail = assets ? Math.max( 0, assets.queuedMs + this.running.size * assets.perRouteMs - projected ) + assets.perRouteMs : 0;
+		if ( now + projected <= this.admitDeadline() && now + projected + assetTail <= this.window.abandonAt ) return true;
 		// Running routes can still revise the estimate; only close permanently
 		// when the pool is idle, avoiding both premature truncation and a spin.
 		if ( ! this.running.size ) this.admissionClosed = true;

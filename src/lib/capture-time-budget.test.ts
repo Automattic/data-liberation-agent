@@ -40,10 +40,14 @@ describe( 'RouteTimeBudget', () => {
 		[ 'with a 5.5s reserve, clock-only admission', 5_500, false, 6 ],
 		[ 'with a 5s reserve, projected admission', 5_000, true, 6 ],
 		[ 'with a 5.5s reserve, projected admission', 5_500, true, 5 ],
-	] )( 'closes admission once the per-route reserve no longer fits: %s', ( _name, reserve, projectAdmission, admitted ) => {
+		// Each route leaves 20s of asset downloads: the last route admitted still gets its images before the deadline.
+		[ 'with an asset backlog, projected admission', undefined, true, 39, { queuedMs: 0, perRouteMs: 20_000 } ],
+		[ 'with queued assets that drain while the route runs', undefined, true, 44, { queuedMs: 1_000, perRouteMs: 0 } ],
+		[ 'with an asset backlog, clock-only admission', undefined, false, 44, { queuedMs: 0, perRouteMs: 20_000 } ],
+	] as const )( 'closes admission once the per-route reserve no longer fits: %s', ( _name, reserve, projectAdmission, admitted, assets? ) => {
 		let now = 0;
 		const entrypoint = 'https://example.test/';
-		const budget = new RouteTimeBudget( { timeBudgetMs: 60_000, ...( reserve !== undefined ? { routeReserveMs: reserve } : {} ), admitUntil: 45_000, abandonAt: 60_000, projectAdmission }, entrypoint, () => now );
+		const budget = new RouteTimeBudget( { timeBudgetMs: 60_000, ...( reserve !== undefined ? { routeReserveMs: reserve } : {} ), ...( assets ? { assetBacklog: () => assets } : {} ), admitUntil: 45_000, abandonAt: 60_000, projectAdmission }, entrypoint, () => now );
 		// One route takes 1s; every route finishes before the next candidate is checked.
 		const capture = ( url: string ): void => {
 			budget.start( url );

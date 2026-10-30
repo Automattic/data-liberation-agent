@@ -27,6 +27,10 @@ export class AssetAcquisitionQueue {
 	private fetched = 0;
 	private failed = 0;
 	private bytes = 0;
+	private routes = 0;
+	private queued = 0;
+	private attempts = 0;
+	private attemptMs = 0;
 
 	constructor(
 		private readonly outputDir: string,
@@ -52,7 +56,9 @@ export class AssetAcquisitionQueue {
 			this.seen.add( source );
 			if ( stored( source ) || this.stubs.get( source )?.status === 'success' ) continue;
 			this.waiting.push( source );
+			this.queued++;
 		}
+		this.routes++;
 		this.pump();
 	}
 
@@ -76,7 +82,10 @@ export class AssetAcquisitionQueue {
 		const { response } = await governor.run( async () => {
 			// Fetches queued behind the governor do not start after the deadline.
 			if ( this.deadline !== undefined && Date.now() >= this.deadline ) return { status: 0, headers: new Headers(), result: undefined };
+			const startedAt = Date.now();
 			const result = await downloadMedia( source, this.mediaDir, this.names, undefined, { preserveOriginal: true } );
+			this.attempts++;
+			this.attemptMs += Date.now() - startedAt;
 			const status = Number( /^HTTP (\d{3})$/.exec( result.error ?? '' )?.[ 1 ] ?? 200 );
 			return { status, headers: new Headers(), result };
 		} );
@@ -89,6 +98,18 @@ export class AssetAcquisitionQueue {
 		this.fetched++;
 		this.bytes += result.bytes;
 		this.stubs.markSuccess( source, relative( this.outputDir, result.localPath ) );
+	}
+
+	/**
+	 * Fetch time still owed, at the observed cost per fetch and this queue's
+	 * concurrency: `queuedMs` for what is waiting or in flight now, `perRouteMs`
+	 * for what one more captured route adds on average. Zero until a fetch has
+	 * finished, so admission is not held back on no evidence.
+	 */
+	backlog(): { queuedMs: number; perRouteMs: number } {
+		if ( ! this.attempts ) return { queuedMs: 0, perRouteMs: 0 };
+		const slotMs = this.attemptMs / this.attempts / this.concurrency;
+		return { queuedMs: ( this.waiting.length + this.pending.size ) * slotMs, perRouteMs: this.routes ? ( this.queued / this.routes ) * slotMs : 0 };
 	}
 
 	/** Wait for fetches already queued; persist the store `captureAssets()` reads. */
