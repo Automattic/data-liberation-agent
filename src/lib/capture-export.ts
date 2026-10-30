@@ -1717,7 +1717,8 @@ function buildExportCapture(
 		const exactReferences = references.filter( ( reference ) =>
 			referenceIndex.indexed.has( reference ) && mediaReferenceMatched( referenceIndex, reference )
 		);
-		const isReferenced = ( imageAsset?.kind === 'font' && imageAsset.references.length > 0 ) || retainedMediaFamilies.has( family ) || interactionMediaFamilies.has( family ) || exactReferences.length > 0;
+		// A stylesheet reference counts like a page reference: theme CSS paints the image.
+		const isReferenced = ( imageAsset?.kind === 'font' && imageAsset.references.length > 0 ) || imageAsset?.references.some( reference => reference.kind === 'CSS' ) || retainedMediaFamilies.has( family ) || interactionMediaFamilies.has( family ) || exactReferences.length > 0;
 		if ( imageAsset && seenImageAssets.has( imageAsset ) ) continue;
 		if ( imageAsset && isReferenced ) seenImageAssets.add( imageAsset );
 		if ( ( stub.status === 'error' || ( imageAsset && ! imageAsset.original ) ) && isReferenced ) {
