@@ -6,7 +6,7 @@ import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
-import { srcsetReferences } from '../srcset.js';
+import { srcsetCandidates } from '../srcset.js';
 import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
@@ -169,6 +169,8 @@ export interface CapturedResourceManifest {
 	version: 1;
 	resources: Record< string, CapturedResourceEntry >;
 	failures: CapturedResourceFailure[];
+	/** Renditions deliberately represented by another URL, not failed downloads. */
+	omissions?: Array< { url: string; representative: string; reason: 'redundant-srcset-rendition' } >;
 }
 
 export interface CapturedResourceReplay {
@@ -521,6 +523,13 @@ export class CapturedResourceStore {
 
 	async captureDomDependencies( html: string, documentUrl: string ): Promise< void > {
 		const pending = new Map< string, string >();
+		const renditions = new Map< string, string >();
+		const absolute = ( reference: string, base: string ): string | undefined => {
+			try {
+				const url = new URL( reference.replace( /&amp;/g, '&' ), base );
+				return /^https?:$/.test( url.protocol ) ? url.href : undefined;
+			} catch { return undefined; }
+		};
 		const add = ( reference: string, baseUrl: string, blockable = false, upgradable = false ) => {
 			if ( ! reference || reference.startsWith( 'data:' ) || reference.startsWith( '#' ) ) return;
 			try {
@@ -555,12 +564,31 @@ export class CapturedResourceStore {
 				'img[src],img[srcset],source[src],source[srcset],video[src],audio[src],video[poster]'
 			).each( ( _, element ) => {
 				const node = $( element );
+				// A srcset declares renditions of one image even when the URL
+				// filenames differ (and cannot be grouped by CDN URL syntax).
+				// Each picture source gets its own decision: media/type branches
+				// can be genuinely art-directed and must not collapse together.
+				const candidates = srcsetCandidates( node.attr( 'srcset' ) ?? '' );
+				const representative = candidates.reduce< typeof candidates[ number ] | undefined >(
+					( widest, candidate ) => ! widest || candidate.size > widest.size ? candidate : widest,
+					undefined
+				);
+				const target = representative && absolute( representative.url, baseUrl );
+				if ( target ) {
+					add( target, baseUrl, true );
+					const references = candidates.map( candidate => candidate.url );
+					// The img fallback is another rendition of this declared image.
+					if ( element.tagName === 'img' && node.attr( 'src' ) ) references.push( node.attr( 'src' )! );
+					for ( const reference of references ) {
+						const url = absolute( reference, baseUrl );
+						if ( url && url !== target ) renditions.set( url, target );
+					}
+				}
 				for ( const attribute of [ 'src', 'poster' ] ) {
 					const value = node.attr( attribute );
-					if ( value ) add( value, baseUrl, true, true );
+					if ( value && ! ( target && attribute === 'src' && element.tagName === 'img' ) )
+						add( value, baseUrl, true, true );
 				}
-				for ( const candidate of srcsetReferences( node.attr( 'srcset' ) ?? '' ) )
-					add( candidate, baseUrl, true );
 			} );
 			$( 'a[href],area[href]' ).each( ( _, element ) => {
 				const href = $( element ).attr( 'href' ) ?? '';
@@ -653,6 +681,19 @@ export class CapturedResourceStore {
 			};
 			fill();
 		} );
+		// Seed export's exact-reference replacement index with the same file
+		// for each retired rendition, as portable media family selection does.
+		// Explicit dependencies (metadata, CSS, another source) and browser
+		// responses take precedence over these fallback bindings.
+		for ( const [ url, representative ] of renditions ) {
+			if ( this.manifest.resources[ url ] || pending.has( url ) ) continue;
+			const resource = this.manifest.resources[ representative ];
+			if ( ! resource ) continue;
+			this.manifest.resources[ url ] = { ...resource };
+			this.manifest.omissions ??= [];
+			if ( ! this.manifest.omissions.some( omission => omission.url === url ) )
+				this.manifest.omissions.push( { url, representative, reason: 'redundant-srcset-rendition' } );
+		}
 		if ( stopped ) this.manifest.failures.push( { url: documentUrl, error: stopped } );
 	}
 
