@@ -340,7 +340,6 @@ function identitySubsetMerge(
 		( $d( node ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) )
 	);
 	let unsafeClassAlias = false;
-	let differingReferences = false;
 	const bodyClasses = ( html: string ) => {
 		const attributes = bodyAttributes( html );
 		return ( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
@@ -510,8 +509,13 @@ function identitySubsetMerge(
 		m: cheerio.Cheerio< Element >,
 		path: string
 	): void => {
-		// Stable ids cannot override each document's resolved URL identity.
-		if ( referenceOf( d.get( 0 )! ) !== referenceOf( m.get( 0 )! ) ) differingReferences = true;
+		// Stable ids cannot override each document's resolved URL identity: a
+		// component whose viewports link or embed different destinations (a
+		// rotating partner strip) ships once per viewport, like a re-parented one.
+		if ( referenceOf( d.get( 0 )! ) !== referenceOf( m.get( 0 )! ) ) {
+			divergedRoots.add( path.split( '/' )[ 0 ] as string );
+			return;
+		}
 		let projected = false;
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
@@ -624,7 +628,7 @@ function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
-	if ( unsafeClassAlias || differingReferences ) return undefined;
+	if ( unsafeClassAlias ) return undefined;
 	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds );
 	if ( divergedComponents === undefined ) return undefined;
 	$d( '[class]' ).each( ( _index, node ) => {
