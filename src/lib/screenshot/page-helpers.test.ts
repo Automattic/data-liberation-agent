@@ -4,6 +4,7 @@ import { chromium, type Browser } from 'playwright';
 import {
   waitForStable,
   triggerLazyLoad,
+  lazyLoadScrollPose,
   restoreTopScrollState,
   withEvaluateTimeout,
   waitForFonts,
@@ -320,6 +321,34 @@ describe('triggerLazyLoad', () => {
       await page.close();
     }
   });
+
+  it('loads lazy images in a primary inner scroller and restores its starting pose', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.route('https://assets.test/image.svg', route => route.fulfill({
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>',
+      }));
+      await page.setContent(`<!doctype html><style>
+        html,body { position:fixed; overflow:hidden; height:100%; width:100%; margin:0; }
+        main { width:100%; height:100%; overflow:auto; scroll-behavior:smooth; }
+      </style><main><div style="height:6000px"></div>
+        <img loading="lazy" width="10" height="10" src="https://assets.test/image.svg">
+      </main>`);
+      expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.complete)).toBe(false);
+      await triggerLazyLoad(page);
+      await waitForImages(page);
+      expect(await page.locator('img').evaluate((image: HTMLImageElement) => ({
+        complete: image.complete, naturalWidth: image.naturalWidth,
+      }))).toEqual({ complete: true, naturalWidth: 10 });
+      expect(await page.locator('main').evaluate(element => element.scrollTop)).toBe(0);
+      expect(await page.evaluate(lazyLoadScrollPose)).toEqual({ x: 0, y: 0, innerY: 0 });
+      await page.locator('main').evaluate(element => element.scrollTo({ top: 700, behavior: 'instant' }));
+      expect((await page.evaluate(lazyLoadScrollPose)).innerY).toBe(700);
+    } finally {
+      await page.close();
+    }
+  }, 30_000);
 
   it('preserves asynchronous body state and content revealed during lazy-load scrolling', async () => {
     const page = await browser.newPage();
