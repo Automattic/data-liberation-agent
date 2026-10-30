@@ -796,7 +796,7 @@ function mediaFamily( sourceUrl: string ): string {
 	const transformedPath = /^(.*?)\/v1\/(?:fill|fit|crop)\//i.exec( url.pathname )?.[ 1 ];
 	if ( transformedPath ) return `${ url.origin }${ transformedPath }`;
 	// WordPress rendition suffixes describe the same uploaded photograph.
-	const photoPath = url.pathname.replace( /-(?:\d+x\d+|scaled)(?=\.[^.\/]+$)/i, '' );
+	const photoPath = url.pathname.replace( /-(?:\d+x\d+|scaled(?:-\d+)?)(?=\.[^.\/]+$)/i, '' );
 	if ( photoPath !== url.pathname && ! url.search ) return `${ url.origin }${ photoPath }`;
 	const parameters = [ ...url.searchParams.keys() ];
 	return parameters.length > 0 && parameters.every( ( key ) => key === 'w' || key === 'h' )

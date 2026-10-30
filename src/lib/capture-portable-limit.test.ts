@@ -60,8 +60,8 @@ it('captures and exports the widest portable srcset representative', async () =>
 	});
 }, 30_000);
 
-it('exports over-limit social originals using a retained rendition, but never a stub', async () => {
-	await captureFixture('<meta property="og:image" content="/photo-scaled.svg"><meta name="twitter:image" content="/photo-scaled.svg"><meta property="og:image:url" content="/alone-scaled.svg"><meta name="twitter:image:src" content="/standalone-300x100.svg"><img src="/photo-2048x100.svg">', (dir, url) => {
+it.each(['-scaled', '-scaled-1'])('exports over-limit %s social originals using a retained rendition, but never a stub', async (suffix) => {
+	await captureFixture(`<meta property="og:image" content="/photo${suffix}.svg"><meta name="twitter:image" content="/photo${suffix}.svg"><meta property="og:image:url" content="/alone${suffix}.svg"><meta name="twitter:image:src" content="/standalone-300x100.svg"><img src="/photo-2048x100.svg">`, (dir, url) => {
 		const $ = cheerio.load(readFileSync(join(dir, 'website/index.html'), 'utf8'));
 		for (const selector of ['meta[property="og:image"]', 'meta[name="twitter:image"]']) {
 			const reference = $(selector).attr('content')!;
@@ -69,7 +69,7 @@ it('exports over-limit social originals using a retained rendition, but never a 
 			expect(reference).toMatch(/^\/media\//);
 			expect(readFileSync(join(dir, 'website', reference), 'utf8')).toContain('width="2048"');
 		}
-		expect($('meta[property="og:image:url"]').attr('content')).toBe(url + 'alone-scaled.svg');
+		expect($('meta[property="og:image:url"]').attr('content')).toBe(url + `alone${suffix}.svg`);
 		const standalone = $('meta[name="twitter:image:src"]').attr('content')!;
 		expect(standalone).toMatch(/^\/media\//);
 		expect(existsSync(join(dir, 'website', standalone))).toBe(true);
