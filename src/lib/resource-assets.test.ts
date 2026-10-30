@@ -43,7 +43,7 @@ it('records downloads and video sources at their owning elements, not as image c
 });
 
 describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public capture fixture (~15s)', () => {
- it('keeps each font format/subset, unifies verified PDF query aliases and rewrites video and poster', async () => {
+ it('captures real fonts behind a same-origin stylesheet proxy, PDF aliases, video and poster', async () => {
   const files = new Map<string, Buffer>();
   for (const subset of ['latin', 'greek']) for (const format of ['woff', 'woff2']) {
    const name = `roboto-${subset}-400-normal.${format}`;
@@ -53,25 +53,36 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
   files.set('/movie.webm', readFileSync('test/fixtures/resource-assets/movie.webm'));
   files.set('/poster.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
   files.set('/terms.pdf', readFileSync('test/fixtures/resource-assets/terms.pdf'));
+  const cdn = createServer((req, res) => {
+   const file = files.get(new URL(req.url!, 'http://example.com').pathname);
+   res.writeHead(file ? 200 : 404, {'content-type':'application/octet-stream', 'access-control-allow-origin':'*'});
+   res.end(file);
+  });
+  await new Promise<void>(resolve => cdn.listen(0, '127.0.0.1', resolve));
+  const cdnUrl = `http://127.0.0.1:${(cdn.address() as {port:number}).port}`;
+  const proxyPath = '/static/google-fonts.php?url=' + encodeURIComponent('https://fonts.googleapis.com/css2?family=Fixture:wght@400&display=swap');
   let css = '';
   for (const [subset, range] of [['latin', 'U+0000-00FF'], ['greek', 'U+0370-03FF']]) {
-   css += `@font-face{font-family:Fixture; font-weight:400;font-style:normal;unicode-range:${range};src:url('/roboto-${subset}-400-normal.woff2') format('woff2'),url('/roboto-${subset}-400-normal.woff') format('woff');}`;
+   // Relative paths must use the proxy response's /static/ directory, not
+   // the page directory or the upstream URL encoded in the query string.
+   const base = subset === 'latin' ? 'fonts' : cdnUrl;
+   css += `@font-face{font-family:Fixture; font-weight:400;font-style:normal;unicode-range:${range};src:url('${base}/roboto-${subset}-400-normal.woff2') format('woff2'),url('${base}/roboto-${subset}-400-normal.woff') format('woff');}`;
   }
-  css += "@font-face{font-family:Missing;src:url('/missing.woff2') format('woff2')}";
+  css += "@font-face{font-family:Missing;src:url('fonts/missing.woff2') format('woff2')}";
   const server = createServer((req, res) => {
-   const path = new URL(req.url!, 'http://example.com').pathname;
+   const path = new URL(req.url!, 'http://example.com').pathname.replace(/^\/static\/fonts\//, '/');
    // Lying headers must not become verified content types.
    if (files.has(path)) { res.writeHead(200, {'content-type':'application/octet-stream'}); res.end(files.get(path)); }
-   else if (path === '/fonts.css') { res.writeHead(200, {'content-type':'text/css'}); res.end(css); }
+   else if (req.url === proxyPath) { res.writeHead(200, {'content-type':'text/css'}); res.end(css); }
    else if (path === '/missing.woff2') { res.writeHead(200, {'content-type':'font/woff2'}); res.end('<html>not a font</html>'); }
-   else { res.writeHead(200, {'content-type':'text/html'}); res.end('<!doctype html><title>Resource fixture</title><link rel="stylesheet" href="/fonts.css"><h1 style="font-family:Fixture">Hello α</h1><nav><a href="/terms.pdf?download=1">Terms</a></nav><a href="/terms.pdf?download=2" download>Download terms</a><a download href="/download.zip">Archive</a><video controls poster="/poster.png"><source src="/movie.webm" type="video/webm"></video>'); }
+   else { res.writeHead(200, {'content-type':'text/html'}); res.end(`<!doctype html><title>Resource fixture</title><link rel="stylesheet" href="${proxyPath.replaceAll('&', '&amp;')}"><h1 style="font-family:Fixture">Hello α</h1><nav><a href="/terms.pdf?download=1">Terms</a></nav><a href="/terms.pdf?download=2" download>Download terms</a><a download href="/download.zip">Archive</a><video controls poster="/poster.png"><source src="/movie.webm" type="video/webm"></video>`); }
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as {port:number}).port}/`;
   mkdirSync('.tmp-test', {recursive:true});
   const root = mkdtempSync(join(process.cwd(), '.tmp-test/resource-assets-'));
   try {
-   const result = await captureWebsite({url, outputDir:root, trustedOrigins:[url], learnFluid:false, routeLimit:1}, {findAdapter:()=>({id:'fixture', detect:()=>true, discover:async()=>({urls:[]})})});
+   const result = await captureWebsite({url, outputDir:root, trustedOrigins:[url, cdnUrl], learnFluid:false, routeLimit:1}, {findAdapter:()=>({id:'fixture', detect:()=>true, discover:async()=>({urls:[]})})});
    const records = JSON.parse(readFileSync(join(root, 'image-assets.json'), 'utf8')).images;
    expect(records).toHaveLength(9); // four fonts, PDF, ZIP, video, poster, unresolved font
    const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
@@ -86,7 +97,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
     expect(asset.destination_owner).toBe(record.kind === 'font' ? 'theme' : 'media-library');
     const bytes = readFileSync(join(root, asset.path));
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(record.original.sha256);
-    const sourcePath = new URL(record.resolved_original).pathname;
+    const sourcePath = new URL(record.resolved_original).pathname.replace(/^\/static\/fonts\//, '/');
     expect(bytes).toEqual(files.get(sourcePath));
     if (sourcePath === '/movie.webm') expect(record.original.content_type).toBe('video/webm');
     if (sourcePath === '/download.zip') expect(record.original.content_type).toBe('application/zip');
@@ -101,6 +112,23 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
     }
     for (const source of record.source_urls) expect(html + exportedCss).not.toContain(source);
    }
+   const fonts = records.filter((r:any)=>r.kind === 'font' && r.original);
+   expect(fonts).toHaveLength(4);
+   for (const font of fonts) {
+    expect(font.resolved_original).toBe(font.resolved_original.includes('latin')
+     ? `${url}static/fonts/${new URL(font.resolved_original).pathname.split('/').at(-1)}`
+     : `${cdnUrl}${new URL(font.resolved_original).pathname}`);
+   }
+   // Inspect the emitted face src itself, not just the presence of an asset.
+   const fontSources = [...exportedCss.matchAll(/url\(["']?([^"')]+)["']?\)\s*format\(["'](woff2?)["']\)/g)];
+   expect(fontSources).toHaveLength(4);
+   for (const [, src, format] of fontSources) {
+    const path = join(root, 'website', new URL(src, 'http://portable.test/').pathname);
+    expect(resourceContentType(readFileSync(path), 'font')).toBe(`font/${format}`);
+   }
+   const missing = records.find((r:any)=>r.kind === 'font' && !r.original);
+   expect(missing).toMatchObject({original:null, error:expect.any(String), source_urls:[`${url}static/fonts/missing.woff2`]});
+   expect(missing.error.length).toBeGreaterThan(0);
    const pdf = records.find((r:any)=>r.original?.content_type === 'application/pdf');
    expect(pdf.source_urls).toHaveLength(2);
    expect(pdf.original.content_type).toBe('application/pdf');
@@ -117,9 +145,10 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
    expect(exportedCss.match(/format\(['"]woff2['"]\)/g)).toHaveLength(2);
    expect(exportedCss.match(/format\(['"]woff['"]\)/g)).toHaveLength(2);
    const findings = JSON.parse(readFileSync(join(root,'website/source-findings.json'),'utf8')).findings;
-   expect(findings).toEqual(expect.arrayContaining([expect.objectContaining({code:'asset_resource_unresolved', unit:'asset', loss_class:'omitted_unit', location:{url:`${url}missing.woff2`}})]));
+   expect(findings).toEqual(expect.arrayContaining([expect.objectContaining({code:'asset_resource_unresolved', unit:'asset', loss_class:'omitted_unit', location:{url:`${url}static/fonts/missing.woff2`}})]));
   } finally {
    server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));
+   cdn.closeAllConnections(); await new Promise<void>(resolve=>cdn.close(()=>resolve()));
    rmSync(root,{recursive:true,force:true});
   }
  }, 120_000);
