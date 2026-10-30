@@ -96,7 +96,7 @@ describe( 'capture evidence vocabulary', () => {
 			expect( CAPTURE_SCHEMAS ).toContain( schema );
 		}
 		// Blocks Engine CaptureEvidence::DISCLOSURE_RUNTIME_SHA256.
-		expect( CAPTURE_RUNTIME_SHA256.disclosure ).toBe( '67e77fd6348495edd9113e0ba1632abcd0907314aa46b5201fd1ff749544732c' );
+		expect( CAPTURE_RUNTIME_SHA256.disclosure ).toBe( '086fc8248547e7c1109e0f6a28e691cea966f7057b3e36eaa8ccad177d2cf737' );
 	} );
 
 	it( 'leaves no previous producer-specific name in source, scripts, skills or docs outside the migration note', () => {

@@ -1,11 +1,12 @@
 import { it, expect } from 'vitest';
 import { chromium } from 'playwright';
+import * as cheerio from 'cheerio';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { captureTriggeredDialogs } from './screenshot/interaction-capture.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 
-// One browser pass (~2 seconds): real WP render, source probing, portable replay.
+// One browser pass (~2 seconds): real WP render with submenu, source probing, portable replay.
 it( 'preserves core-navigation inline resting state and phone overlay behavior', async () => {
 	const root = new URL( '../../test/fixtures/core-navigation/', import.meta.url );
 	const server = createServer( async ( request, response ) => {
@@ -30,7 +31,7 @@ it( 'preserves core-navigation inline resting state and phone overlay behavior',
 		for ( const width of [ 1440, 768, 390 ] ) {
 			await page.setViewportSize( { width, height: 900 } );
 			expect( await page.locator( '.wp-block-navigation__responsive-container-open' ).isVisible() ).toBe( width === 390 );
-			if ( width !== 390 ) sourceGeometry.set( width, await page.locator( 'nav a' ).evaluateAll( links => links.map( link => {
+			if ( width !== 390 ) sourceGeometry.set( width, await page.locator( 'nav .wp-block-navigation__container > .wp-block-navigation-link > a' ).evaluateAll( links => links.map( link => {
 				const { x, y, width, height } = link.getBoundingClientRect();
 				return { x, y, width, height };
 			} ) ) );
@@ -42,10 +43,21 @@ it( 'preserves core-navigation inline resting state and phone overlay behavior',
 		} ) ] ) );
 		const withoutRuntime = html.replace( /<script\b[^>]*>[\s\S]*?<\/script>/gi, '' );
 		const portable = wireCapturedDialogs( withoutRuntime, report.states );
+		// Inspect serialized HTML, before replay JS can repair an opened snapshot.
+		// The submenu alone does not defeat source resting-inline observation.
+		const $ = cheerio.load( portable );
+		const panel = $( '.wp-block-navigation__responsive-container' );
+		expect( panel ).toHaveLength( 1 );
+		expect( panel.attr( 'data-blocks-engine-capture-resting-panel' ) ).toBeDefined();
+		expect( panel.attr( 'hidden' ) ).toBeUndefined();
+		expect( $( '.is-menu-open,.has-modal-open' ) ).toHaveLength( 0 );
+		expect( panel.attr( 'style' ) ?? '' ).not.toMatch( /display|visibility/ );
+		expect( panel.find( '[role="dialog"],[aria-modal="true"]' ) ).toHaveLength( 0 );
+		expect( $( '[data-blocks-engine-capture-dialog-panel-state]' ).attr( 'data-blocks-engine-capture-dialog-panel-state' ) ).toContain( 'is-menu-open' );
 		await page.route( '**/copy', route => route.fulfill( { contentType: 'text/html', body: portable } ) );
 		await page.goto( `${ url }copy` );
 		const open = page.locator( '.wp-block-navigation__responsive-container-open' );
-		const links = page.locator( 'nav a' );
+		const links = page.locator( 'nav .wp-block-navigation__container > .wp-block-navigation-link > a' );
 		expect( await links.count() ).toBe( 4 );
 		for ( const width of [ 1440, 768, 390, 1440, 390 ] ) {
 			await page.setViewportSize( { width, height: 900 } );
@@ -66,6 +78,7 @@ it( 'preserves core-navigation inline resting state and phone overlay behavior',
 				await open.click();
 				for ( const link of await links.all() ) expect( await link.isVisible() ).toBe( true );
 				await page.keyboard.press( 'Escape' );
+				expect( await page.locator( '.is-menu-open,.has-modal-open' ).count() ).toBe( 0 );
 				for ( const link of await links.all() ) expect( await link.isVisible() ).toBe( false );
 			}
 		}

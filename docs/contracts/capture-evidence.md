@@ -107,7 +107,7 @@ A consumer retires or tolerates a capture helper script only when the sha256 of 
 
 | Runtime | sha256 | Status |
 |---|---|---|
-| Disclosure interpreter (`script[data-blocks-engine-capture-disclosure-runtime]`) | `67e77fd6348495edd9113e0ba1632abcd0907314aa46b5201fd1ff749544732c` | Changed by #1004 (a panel the source shows inline while its trigger is concealed keeps that resting state). Blocks Engine recognizes the previous body (`b545f43a…`, from #779); it must publish this body before it recognizes it again. Until then Blocks Engine keeps the captured runtime. |
+| Disclosure interpreter (`script[data-blocks-engine-capture-disclosure-runtime]`) | `086fc8248547e7c1109e0f6a28e691cea966f7057b3e36eaa8ccad177d2cf737` | Changed by #1097: inline resting panels serialize closed content and restore it after replay, not only root attributes. Supersedes the #1004 body (`67e77fd6…`). Blocks Engine must publish this body before recognizing it. Until then Blocks Engine keeps the captured runtime. |
 | Gallery helper (`script[data-blocks-engine-capture-gallery-runtime]`) | `456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b` | This producer's current helper, which includes the src-swap sequence cycle from #711. Blocks Engine's `capture-gallery-runtime.js` (`0a6bf62a…`) is the renamed pre-#711 helper. Before #787, Blocks Engine's digest `1321b380…` was also the pre-#711 body, so the two never matched after #711. To recognize the current helper, Blocks Engine should publish this body and digest. |
 
 ## Migration

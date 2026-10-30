@@ -66,7 +66,9 @@ function apply(trigger){
   if(open&&opened&&target.__dlaDialogState!==captured){target.innerHTML=opened.html;target.__dlaDialogState=captured;}
   var existing=target.getAttribute('data-blocks-engine-capture-existing-panel');
   if(existing){
-    var states=JSON.parse(existing),state=inactive?states.resting:(opened||states.opened);
+    var states=JSON.parse(existing),resting=states.resting.html!==undefined;
+    var state=(inactive||(resting&&!open))?states.resting:(opened||states.opened);
+    if(resting&&!open&&target.__dlaDialogState!==null){target.innerHTML=states.resting.html;target.__dlaDialogState=null;}
     ['style','class'].forEach(function(name){if(state[name]===null)target.removeAttribute(name);else target.setAttribute(name,state[name]);});
     target.toggleAttribute('data-blocks-engine-capture-resting-panel',inactive);
     target.hidden=inactive?states.resting.hidden:!open;
@@ -309,12 +311,25 @@ export function wireCapturedDialogs(
 						style: existingPanel.attr( 'style' ) ?? null,
 						class: `${ existingPanel.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
 						hidden: existingPanel.attr( 'hidden' ) !== undefined,
+						...( state.dialog?.restingInline && !dropdown ? { html: existingPanel.html() ?? '' } : {} ),
 					},
 					opened: {
 						style: panel.attr( 'style' ) ?? null,
 						class: `${ panel.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
 					},
 				} ) ).attr( 'hidden', '' );
+				if ( reusePanel && state.dialog?.restingInline && !dropdown ) {
+					// Opened snapshots are replay evidence, not the initial authoring
+					// tree. Keep the source's closed content and root attributes even
+					// before (or without) the portable runtime running.
+					panel.html( existingPanel.html() ?? '' );
+					for ( const name of [ 'class', 'style', 'hidden' ] ) {
+						const value = existingPanel.attr( name );
+						if ( value === undefined ) panel.removeAttr( name );
+						else panel.attr( name, value );
+					}
+					panel.attr( 'data-blocks-engine-capture-resting-panel', '' );
+				}
 				if ( sourcePlaced ) panel.attr( 'data-blocks-engine-capture-observed-placement', 'true' ).attr( 'hidden', '' );
 			}
 			panel.attr( 'id', panelId ).attr( 'data-blocks-engine-capture-dialog-panel', panelId );
