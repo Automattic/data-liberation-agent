@@ -611,3 +611,33 @@ it( 'reconciles three request identities with rendered text and native cascade p
 	expect( mixedDom( '[data-blocks-engine-capture-device-document="tablet"]' ) ).toHaveLength( 1 );
 	expect( mixedDom( '[data-blocks-engine-capture-device-document="mobile"]' ) ).toHaveLength( 0 );
 } );
+
+it( 'reconciles a phone-only wrapper that has no desktop counterpart', async () => {
+	// A phone layout shows a hover overlay at rest and one more gallery item;
+	// neither wrapper exists on desktop, and neither holds a shared component.
+	const item = ( key: string ) => `<div id="item-a" class="item"><div class="content"><p>Shared item</p></div>${ key === 'mobile' ? '<div class="overlay"><button id="like-a">Like</button></div>' : '' }</div>`;
+	// The extra item's id repeats in the phone document, so it is not an identity either.
+	const extra = ( key: string ) => key === 'mobile' ? '<div id="item-b" class="item"><button id="like-b">Like extra</button></div><span id="item-b"></span>' : '';
+	const documents = Object.fromEntries( [ 'desktop', 'mobile' ].map( key => [ key, `<!doctype html><html><head><meta name="viewport" content="${ key === 'mobile' ? 'width=320' : 'width=device-width' }"><style>.overlay{color:rgb(0, 90, 0)}</style></head><body class="${ key }"><section id="gallery"><div id="row">${ item( key ) }${ extra( key ) }</div></section><p id="tail">Tail</p></body></html>` ] ) );
+	const pair: DeviceDocumentSelection = { ...selection, documents: [ 'desktop', 'mobile' ], rules: selection.rules.filter( rule => rule.document !== 'tablet' ) };
+	const assembly = assembleDeviceDocuments( documents, pair );
+	expect( assembly.evidence?.devices.mobile.outcome ).toBe( 'collapsed-identity-subset' );
+	expect( cheerio.load( assembly.html )( '#gallery' ) ).toHaveLength( 1 );
+	const browser = await chromium.launch( { headless: true } );
+	try {
+		for ( const key of pair.documents ) {
+			const context = await browser.newContext( { userAgent: key === 'mobile' ? 'iPhone' : 'Desktop' } );
+			try {
+				const page = await context.newPage();
+				const observe = () => page.evaluate( () => ( {
+					text: document.body.innerText,
+					overlay: [ ...document.querySelectorAll<HTMLElement>( '.overlay' ) ].filter( node => node.getClientRects().length ).map( node => getComputedStyle( node ).color ),
+				} ) );
+				await page.setContent( documents[ key ] );
+				const expected = await observe();
+				await page.setContent( installDeviceSelection( assembly.html, assembly ) );
+				expect( await observe(), key ).toEqual( expected );
+			} finally { await context.close(); }
+		}
+	} finally { await browser.close(); }
+} );

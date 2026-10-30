@@ -439,6 +439,7 @@ export function identitySubsetMerge(
 			.toArray()
 			.filter( ( child ) => ! $( child ).attr( 'id' ) );
 	const insertions: Insertion[] = [];
+	const insertedWrappers = new Set< Element >();
 	for ( const id of outermostMobileOnlyIds ) {
 		const mobileElement = mobileIds.get( id ) as Element;
 		const ancestorId = nearestIdentityId( $m, mobileElement );
@@ -450,6 +451,10 @@ export function identitySubsetMerge(
 		}
 		let parent = ancestorId ? $d( desktopIds.get( ancestorId ) as Element ) : $d( 'body' );
 		let mobileParent = ancestorId ? $m( mobileIds.get( ancestorId ) as Element ) : $m( 'body' );
+		// An id-less wrapper only the phone renders (a hover overlay a phone
+		// layout shows at rest) has no desktop step to resolve. When it holds
+		// no shared component, it is itself the mobile-only island.
+		let island: Element = mobileElement;
 		for ( const step of path ) {
 			const candidates = idlessChildren( $d, parent ).filter( ( child ) => child.tagName === step.tagName );
 			const mobileSiblings = idlessChildren( $m, mobileParent ).filter(
@@ -463,11 +468,26 @@ export function identitySubsetMerge(
 					: candidates.length === mobileSiblings.length
 					? candidates[ mobileSiblings.indexOf( step ) ]
 					: undefined;
-			if ( ! match ) return cannotMerge( 'Device-only component placement could not be resolved' );
+			if ( ! match ) {
+				const mobileOnlyWrapper =
+					byClass.length === 0 &&
+					( candidates.length === 0 || candidates.length < mobileSiblings.length ) &&
+					! $m( step )
+						.find( '[id]' )
+						.toArray()
+						.some( ( node ) => shared( $m( node ).attr( 'id' ) ?? '' ) );
+				if ( ! mobileOnlyWrapper ) return cannotMerge( 'Device-only component placement could not be resolved' );
+				island = step;
+				break;
+			}
 			parent = $d( match );
 			mobileParent = $m( step );
 		}
-		const element = $m( mobileElement );
+		if ( island !== mobileElement ) {
+			if ( insertedWrappers.has( island ) ) continue;
+			insertedWrappers.add( island );
+		}
+		const element = $m( island );
 		element.addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
 		insertions.push( { parent, index: element.index(), html: $m.html( element ) ?? '' } );
 	}
