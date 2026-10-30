@@ -97,6 +97,7 @@ Naming an unknown target lists the registered ones.
 | GoDaddy Websites & Marketing | Ready |
 | Hostinger Website Builder | Ready |
 | HubSpot | Ready |
+| Medium | Author/publication-scoped capture from the owner root |
 | Next.js | Generic discovery + framework route-announcer cleanup |
 | Shopify | Ready |
 | Soloist | Tenant-scoped authored links + Next page metadata discovery |
@@ -108,6 +109,10 @@ Naming an unknown target lists the registered ones.
 | Any other website | Best-effort generic fallback |
 
 Adapters contribute platform knowledge to discovery and capture — how a platform lists its routes, what its CDN URLs look like, how its runtime resolves anchors. Sites matching none of them fall back to a generic adapter that renders each page in a headless browser.
+
+Medium author and publication URLs (`https://medium.com/@handle/`, `https://medium.com/<publication>/`)
+are scoped to that first path segment. Discovery starts at the owner root and never reads
+medium.com's origin-wide sitemap; capture follows the owner's in-scope links.
 
 Soloist customer URLs (`https://soloist.ai/<handle>/`) are scoped to that handle,
 including when starting at a child route. Discovery reads one tenant homepage's
