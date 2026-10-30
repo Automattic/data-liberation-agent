@@ -556,10 +556,11 @@ describe( 'exportWebsiteCapture', () => {
 			'<html><body><nav><a href="https://example.com/#services" data-blocks-engine-capture-anchor-fragment="services">Services</a></nav><span id="services" data-blocks-engine-capture-anchor-target="services" data-blocks-engine-capture-anchor-source-id="services-section"></span><section id="services-section">Desktop services</section></body></html>'
 		);
 		// The phone header only has a menu button; its links live in the dialog
-		// the capture recorded, which carries source-origin hrefs.
+		// the capture recorded, which carries source-origin hrefs. Its banner text
+		// has no stable identity, so the phone document keeps its own copy.
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><header><button id="menu" aria-haspopup="dialog" aria-label="Menu">Menu</button></header><section id="services-section">Phone services</section></body></html>'
+			'<html><body><header><p>Phone-only banner</p><button id="menu" aria-haspopup="dialog" aria-label="Menu">Menu</button></header><section id="services-section">Phone services</section></body></html>'
 		);
 		const menuHtml = '<div role="dialog" aria-label="Site"><nav><a href="https://example.com/#services">Services</a><a href="https://example.com/#unknown">Unknown</a></nav></div>';
 		writeFileSync(
