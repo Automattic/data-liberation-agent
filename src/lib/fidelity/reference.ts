@@ -121,6 +121,16 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 		/** Routes outside this set were never navigated for reference evidence. */
 		sampledSourceUrls: sampleLimit === undefined ? undefined : [ ...sampledUrls ] as readonly string[],
 		requireUrls( urls: string[] ): void { sourceUrls = [ ...new Set( [ ...sourceUrls, ...urls ] ) ]; },
+		/**
+		 * `url` turned out to be a redirect alias of `target`: it has no document,
+		 * so its declared cells are withdrawn and its sample slot moves to the
+		 * route the receipt exports for it. An entrypoint that redirects still
+		 * freezes the homepage.
+		 */
+		alias( url: string, target: string ): void {
+			for ( const [ key, cell ] of cells ) if ( cell.sourceUrl === url ) cells.delete( key );
+			if ( sampleLimit !== undefined && sampledUrls.delete( url ) ) sampledUrls.add( target );
+		},
 		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile, expectedBoundary?: ExternalBoundary ): Promise<void> {
 			// A bounded sample leaves unsampled routes without reference evidence:
 			// no cells, no entries, and no reference page or context is opened.

@@ -79,4 +79,43 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 			expect( new Set( queries.map( ( route: {path: string} ) => route.path ) ).size ).toBe( 2 );
 		} finally { source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) ); if ( !process.env.KEEP_ROUTE_SCOPE_EVIDENCE ) rmSync( outputDir, { recursive: true, force: true } ); }
 	}, 120_000 );
+
+	it( 'freezes the bounded reference sample on the route a redirecting entrypoint exports', async () => {
+		const source = createServer( ( request, response ) => {
+			if ( request.url === '/tenant/' ) { response.writeHead( 301, { location: '/tenant' } ); response.end(); return; }
+			response.writeHead( request.url === '/tenant' ? 200 : 404, { 'content-type': 'text/html' } );
+			response.end( '<meta name="viewport" content="width=device-width,initial-scale=1">' + ( request.url === '/tenant' ? '<h1>Start page</h1><a href="/tenant">Home</a><p class="card">First item</p>' : 'Absent' ) );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
+		const entry = `${ origin }/tenant/`;
+		const target = `${ origin }/tenant`;
+		const routeScope = { origin, pathPrefixes: [ '/tenant' ] };
+		mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
+		const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'entry-redirect-' ) );
+		try {
+			const collector = createReferenceCollector( outputDir, entry, [ entry ], { routeScope, referenceSample: 1 } );
+			const capture = await captureScreenshots( { urls: [ entry ], primaryUrl: entry, outputDir, routeScope, linkedPages: { maxPages: 8 }, concurrency: 1, settleMs: 0, learnFluid: false,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 } ], referenceWidths: [ 390 ],
+				declareSourceProfile: collector.declare, observeSource: collector.observe, referenceSampleUrls: collector.sampledSourceUrls, onRouteAlias: collector.alias } );
+			expect( capture.failed ).toBe( 0 );
+			expect( capture.captured ).toBe( 1 );
+			const receiptPath = exportWebsiteCapture( { outputDir, sourceUrl: entry, platform: 'neutral-tenant', routeScope, summary: { routesFailed: capture.failed }, failures: [] } );
+			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+			expect( receipt.routes ).toHaveLength( 1 );
+			expect( receipt.routes[ 0 ] ).toMatchObject( { url: target, path: 'website/index.html' } );
+			collector.requireUrls( capture.linkedPageCoverage!.requiredUrls );
+			const reference = JSON.parse( readFileSync( collector.finalize( receiptPath ), 'utf8' ) );
+			// The alias has no document: its sample slot and cells belong to the exported route.
+			expect( reference.scope.cells.map( ( cell: { sourceUrl: string } ) => cell.sourceUrl ) ).toEqual( [ target ] );
+			expect( reference.entries.map( ( row: { sourceUrl: string } ) => row.sourceUrl ) ).toEqual( [ target ] );
+			const report = await checkFidelity( { directory: outputDir } );
+			expect( report.pending, JSON.stringify( report.pending ) ).toEqual( [] );
+			expect( report.scores?.map( score => score.route ) ).toEqual( [ '/' ] );
+			expect( report.pass ).toBe( true );
+		} finally {
+			source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) );
+			if ( !process.env.KEEP_ROUTE_SCOPE_EVIDENCE ) rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 120_000 );
 } );

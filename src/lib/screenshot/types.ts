@@ -146,6 +146,11 @@ export interface ScreenshotOpts {
 	 */
 	referenceSampleUrls?: readonly string[];
 	/**
+	 * A route resolved to a server redirect alias of `target`, the queued route
+	 * that captures its document. Evidence owed to the alias follows the target.
+	 */
+	onRouteAlias?: ( url: string, target: string ) => void;
+	/**
 	 * Capture time budget window (see `capture-time-budget.ts`). The entrypoint
 	 * starts first; no other route starts after `admitUntil`; routes still
 	 * running at `abandonAt` are abandoned. Uncaptured routes are reported as
