@@ -4,6 +4,7 @@ import {
 	canonicalLinkHref,
 	probeCanonicalRouteAliases,
 	queryOnlyAliasCandidates,
+	queryOnlyCanonicalTarget,
 } from './route-aliases.js';
 
 function document( html: string, finalUrl = 'https://fixture.test/x' ): SafeFetchResult {
@@ -115,5 +116,21 @@ describe( 'canonical route-alias probe', () => {
 		const result = await probeCanonicalRouteAliases( { sourceUrl: 'https://fixture.test/',
 			urls: [ 'https://fixture.test/', 'https://fixture.test/a', 'https://fixture.test/a?b=1' ] }, { fetch } );
 		expect( result ).toEqual( { aliases: [], probes: 1, kept: [ { url: 'https://fixture.test/a?b=1', reason: 'unreadable' } ] } );
+	} );
+} );
+
+describe( 'rendered query-only canonical target', () => {
+	it( 'names the canonical route of a query rendition and keeps every other route as its own page', () => {
+		const scope = { origin: 'https://fixture.test', pathPrefixes: [ '/@author' ] };
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/@author?source=list-0', 'https://fixture.test/@author', scope ) ).toBe( 'https://fixture.test/@author' );
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/@author/post-1?source=list-1', '/@author/post-1#top', scope ) ).toBe( 'https://fixture.test/@author/post-1' );
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/list?page=2&ref=a', '/list?page=2' ) ).toBe( 'https://fixture.test/list?page=2' );
+		// No query, no canonical, a self canonical, another path or origin, or out of scope.
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/@author', 'https://fixture.test/@author?x=1', scope ) ).toBeUndefined();
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/@author?x=1', undefined, scope ) ).toBeUndefined();
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/@author?x=1', '/@author?x=1#a', scope ) ).toBeUndefined();
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/@author/post-1?x=1', '/@author', scope ) ).toBeUndefined();
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/@author?x=1', 'https://other.test/@author', scope ) ).toBeUndefined();
+		expect( queryOnlyCanonicalTarget( 'https://fixture.test/elsewhere?x=1', '/elsewhere', scope ) ).toBeUndefined();
 	} );
 } );
