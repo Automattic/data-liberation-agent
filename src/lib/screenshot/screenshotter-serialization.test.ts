@@ -49,6 +49,52 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
+  it('keeps script-built paragraph letters parser-stable and restores the live elements', async () => {
+    const source = await browser.newPage();
+    const copy = await browser.newPage({ javaScriptEnabled: false });
+    try {
+      await source.setContent(`<!doctype html><style>
+        .lead { font: 700 64px/1 serif; }
+      </style><p class="lead"></p><script>
+        for (const letter of 'Hello') {
+          const element = document.createElement('div');
+          element.style.display = 'inline-block';
+          element.dataset.letter = letter;
+          element.textContent = letter;
+          document.querySelector('.lead').append(element);
+        }
+        const block = document.createElement('div');
+        block.id = 'block';
+        const nested = document.createElement('section');
+        nested.textContent = 'Text';
+        block.append(nested);
+        document.querySelector('.lead').append(block);
+      </script>`);
+      const originals = await source.locator('p.lead').evaluateHandle(element => Array.from(element.querySelectorAll('*')));
+      const before = await source.locator('p.lead').innerHTML();
+      const html = await capturePageHtml(source);
+      await copy.setContent(html);
+      expect(await copy.locator('[data-letter]').count()).toBe(5);
+      expect(await copy.locator('[data-letter]').evaluateAll(elements => elements.map(element => ({
+        inside: element.parentElement?.matches('p.lead'),
+        fontSize: getComputedStyle(element).fontSize,
+        display: getComputedStyle(element).display,
+        tag: element.localName,
+        letter: element.textContent,
+      })))).toEqual(Array.from('Hello', letter => ({ inside: true, fontSize: '64px', display: 'inline-block', tag: 'span', letter })));
+      expect(await copy.locator('p.lead > #block > span').textContent()).toBe('Text');
+      expect(await copy.locator('#block').evaluate(element => getComputedStyle(element).display)).toBe('block');
+      expect(await copy.locator('#block > span').evaluate(element => getComputedStyle(element).display)).toBe('block');
+      expect(await source.locator('p.lead').innerHTML()).toBe(before);
+      expect(await source.locator('p.lead').evaluate((element, nodes) =>
+        Array.from(element.querySelectorAll('*')).every((node, index) => node === nodes[index]), originals)).toBe(true);
+      await originals.dispose();
+    } finally {
+      await source.close();
+      await copy.close();
+    }
+  });
+
   it('preserves rendered image geometry when localization changes intrinsic dimensions', async () => {
     const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
