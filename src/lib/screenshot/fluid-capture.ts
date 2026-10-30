@@ -997,11 +997,24 @@ async function liftViewportHeights( page: Page, settleMs: number ): Promise< num
 		lifted = await page.evaluate( async ( { attribute, release, proven } ) => {
 			let count = 0;
 			const elements = [ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ];
+			const viewportSized = ( element: HTMLElement, property: string ) => {
+				const value = /^(-?\d+(?:\.\d+)?)px$/.exec( element.style.getPropertyValue( property ).trim() );
+				return value !== null && Math.abs( Number( value[ 1 ] ) - window.innerHeight ) <= 1;
+			};
 			for ( const element of proven ? elements : [] ) {
-				for ( const property of element.getAttribute( attribute )!.split( ' ' ).filter( Boolean ) ) {
+				const followed = element.getAttribute( attribute )!.split( ' ' ).filter( Boolean );
+				// A proven viewport-relative height carries its bounds with it: a px
+				// max-height or min-height equal to the same capture viewport height
+				// was set to that viewport height alongside it (a runtime may write a
+				// bound once at load and not refresh it, or learned authority may hold
+				// it through the probe). Left in px it would clamp the lifted height
+				// back to the capture viewport at any other viewport height.
+				const lift = followed.includes( 'height' )
+					? [ ...new Set( [ ...followed, 'max-height', 'min-height' ] ) ]
+					: followed;
+				for ( const property of lift ) {
 					// The runtime restored the capture height; it must still match.
-					const value = /^(-?\d+(?:\.\d+)?)px$/.exec( element.style.getPropertyValue( property ).trim() );
-					if ( value === null || Math.abs( Number( value[ 1 ] ) - window.innerHeight ) > 1 ) continue;
+					if ( ! viewportSized( element, property ) ) continue;
 					element.style.setProperty( property, '100vh', element.style.getPropertyPriority( property ) );
 					count++;
 				}

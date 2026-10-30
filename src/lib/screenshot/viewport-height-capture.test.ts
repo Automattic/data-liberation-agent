@@ -18,18 +18,22 @@ describe( 'viewport-sized inline geometry', () => {
 		const copy = await browser.newPage( { viewport: { width: 390, height: 900 } } );
 		try {
 			// A pin-style runtime: the section takes the live viewport height inside
-			// a spacer, and refreshes on resize. A width-derived sibling keeps the
-			// width sweep running, as on any real responsive page.
+			// a spacer, and refreshes its height on resize; its max-height is set to
+			// the same viewport height once at load and never refreshed. A
+			// width-derived sibling keeps the width sweep running, as on any real
+			// responsive page.
 			await page.setContent( `<style>body{margin:0}</style>
 				<div id="spacer"><section id="pinned">Pinned section</section></div>
 				<div id="fluid">Fluid</div><p id="after">After the section</p>
-				<script>const refresh=()=>{
-					const pinned=document.querySelector('#pinned');
-					pinned.style.height=innerHeight+'px';pinned.style.maxHeight=innerHeight+'px';
+				<script>const pinned=document.querySelector('#pinned');
+				pinned.style.maxHeight=innerHeight+'px';
+				const refresh=()=>{
+					pinned.style.height=innerHeight+'px';
 					document.querySelector('#fluid').style.width=innerWidth/2+'px';
 				};addEventListener('resize',refresh);refresh();</script>` );
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
-			// The width sweep ran and fitted the sibling; height and max-height followed the probe.
+			// The width sweep ran and fitted the sibling; height followed the probe,
+			// and the max-height the runtime set to the same viewport height lifts with it.
 			expect( result.sampledWidths.length ).toBeGreaterThan( 0 );
 			expect( result.byKind[ 'viewport-height' ] ).toBe( 2 );
 			expect( await page.locator( '[data-blocks-engine-capture-viewport-height],[data-blocks-engine-capture-fluid-release]' ).count() ).toBe( 0 );
