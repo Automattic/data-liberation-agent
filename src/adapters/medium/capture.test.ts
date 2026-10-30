@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { probeExclusionSkip } from '../../lib/screenshot/probe-exclusions.js';
 import { applyOwnerIdentity, removeFollowButtons } from './capture.js';
+import { matchClientErrorShell } from '../../lib/screenshot/document-integrity.js';
 import { mediumAdapter } from './index.js';
 
 // The shape of a Medium profile and story as rendered logged out (2026-10):
@@ -141,5 +142,15 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'Medium capture cleanup', () 
 		expect( ( await identity( 'https://medium.com/garden-notes', 'Garden Notes – Medium' ) ).website, 'publication' ).toEqual( site( 'Garden Notes', 'A gardening publication.', 'https://medium.com/garden-notes' ) );
 		expect( await identity( 'https://medium.com/@owner/about', 'About – Example Author – Medium' ), 'other pages only lose the suffix' ).toEqual( { title: 'About – Example Author', ogTitle: 'About – Example Author', website: [] } );
 		expect( ( await identity( 'https://medium.com/@owner/', 'Example Author – Medium', '<html></html>' ) ).website, 'no Apollo state' ).toEqual( [] );
+	} );
+
+	it( 'recognizes Medium\'s error view as an error shell, not page content', () => {
+		const ERROR_VIEW = `<section><div><div>500</div></div><div><h2>Apologies, but something went wrong on our end.</h2><p>Refresh the page, check <a href="https://status.medium.com">Medium's site status</a>, or <a href="https://medium.com/browse/top">find something interesting to read</a>.</p></div></section>`;
+		const STATUS_STORY = `<article><h2>Outages</h2><p>See <a href="https://status.medium.com">the status page</a> and <a href="https://medium.com/browse/top">top stories</a> below.</p><p>More text.</p></article>`;
+		const shell = ( body: string ) => matchClientErrorShell( `<!doctype html><html><head><title></title></head><body>${ body }</body></html>`, mediumAdapter.liberation?.clientErrorShellSelectors );
+		expect( shell( ERROR_VIEW ) ).toBeDefined();
+		expect( shell( HEADER + PROFILE ), 'profile' ).toBeUndefined();
+		expect( shell( HEADER + STORY ), 'story' ).toBeUndefined();
+		expect( shell( STATUS_STORY ), 'a story linking the same pages' ).toBeUndefined();
 	} );
 } );
