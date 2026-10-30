@@ -16,6 +16,9 @@ export default defineConfig({
     globalSetup: ['./vitest.global-setup.ts'],
     include: ['**/*.test.ts'],
     exclude: [...configDefaults.exclude, '**/worktrees/**', '**/.claude/**', 'test/canary/**'],
+    // Browser suites launch Chromium per file; bound parallelism so render and
+    // hook deadlines measure behavior rather than host CPU contention.
+    maxWorkers: 2,
     testTimeout: 15_000,
   },
 });

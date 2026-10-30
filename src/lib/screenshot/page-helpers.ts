@@ -553,6 +553,16 @@ export async function waitForNetworkQuiet(
 /** Page global counting sweeps and restores; only the latest may move the document. */
 const SCROLL_POSE_GENERATION = '__dlaScrollPoseGeneration';
 
+type LazyScrollWindow = Window & {
+  __dlaLazyScroller?: { element: HTMLElement; top: number };
+};
+
+/** Include the swept inner container when proving the observation's top pose. */
+export function lazyLoadScrollPose(): { x: number; y: number; innerY: number } {
+  const state = (window as LazyScrollWindow).__dlaLazyScroller;
+  return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), innerY: Math.round(state?.element.scrollTop ?? 0) };
+}
+
 /** Whether the document has physical overflow in either viewport dimension. */
 export async function documentCanScroll(page: Page): Promise<boolean> {
   try {
@@ -568,7 +578,9 @@ export async function documentCanScroll(page: Page): Promise<boolean> {
 }
 
 /**
- * Scroll from top to bottom in 500px increments with 200ms between steps,
+ * Sweep the document (or its primary viewport-sized inner scroller when the
+ * document cannot scroll), restoring the inner scroller's starting scrollTop.
+ * Scroll in 500px increments with 200ms between steps,
  * repeating the sweep until the page stops growing, wait for render-affecting
  * requests to become quiet, then RESTORE the top scroll state and let the
  * resulting transitions settle. Triggers lazy-loaded images so the subsequent
@@ -614,6 +626,29 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
   let interruption: string | null = null;
   try {
     const canScroll = await documentCanScroll(page);
+    const hasInnerScroller = await withEvaluateTimeout(page.evaluate((documentScrolls) => {
+      const owner = window as LazyScrollWindow;
+      delete owner.__dlaLazyScroller;
+      if (documentScrolls) return false;
+      let primary: HTMLElement | undefined;
+      let largestOverflow = 0;
+      for (const element of document.querySelectorAll<HTMLElement>('body *')) {
+        if (!['auto', 'scroll'].includes(getComputedStyle(element).overflowY)) continue;
+        const box = element.getBoundingClientRect();
+        const visibleWidth = Math.max(0, Math.min(box.right, innerWidth) - Math.max(box.left, 0));
+        const visibleHeight = Math.max(0, Math.min(box.bottom, innerHeight) - Math.max(box.top, 0));
+        if (element.clientWidth < innerWidth * 0.75 || element.clientHeight < innerHeight * 0.75 ||
+            visibleWidth < innerWidth * 0.75 || visibleHeight < innerHeight * 0.75) continue;
+        const overflow = element.scrollHeight - element.clientHeight;
+        if (overflow > largestOverflow) {
+          primary = element;
+          largestOverflow = overflow;
+        }
+      }
+      if (!primary) return false;
+      owner.__dlaLazyScroller = { element: primary, top: primary.scrollTop };
+      return true;
+    }, canScroll), EVALUATE_GRACE_MS);
     // One page.evaluate call per sweep, given the time it's still allowed to
     // run: `maxMs` here is the REMAINING settle budget, not a fixed per-sweep
     // allowance, so a page that never stops growing can't spend the full
@@ -629,21 +664,24 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
           // stop waiting for this evaluate while the page keeps running it.
           const owner = window as unknown as Record<string, number>;
           const generation = owner[poseKey] = (owner[poseKey] ?? 0) + 1;
-          let y = window.scrollY;
-          let total = document.documentElement.scrollHeight;
+          const target = (window as LazyScrollWindow).__dlaLazyScroller?.element ?? window;
+          const height = () => target === window ? window.innerHeight : (target as HTMLElement).clientHeight;
+          const scrollHeight = () => target === window ? document.documentElement.scrollHeight : (target as HTMLElement).scrollHeight;
+          let y = target === window ? window.scrollY : (target as HTMLElement).scrollTop;
+          let total = scrollHeight();
           // The viewport already covers the final innerHeight pixels. Walking
           // toward scrollHeight overscrolls a clamped page and sleeps despite
           // revealing nothing, again on every image-settling round.
-          let bottom = Math.max(0, total - window.innerHeight);
+          let bottom = Math.max(0, total - height());
           while (y < bottom && Date.now() - started < maxMs && owner[poseKey] === generation) {
             // A step taller than the layout viewport (a phone document scaled
             // into a wide window) jumps over content that never intersects, so
             // its viewport-gated loads and entrances never run.
-            y = Math.min(y + Math.max(1, Math.min(step, window.innerHeight)), bottom);
-            window.scrollTo({ top: y, left: 0, behavior: 'instant' });
+            y = Math.min(y + Math.max(1, Math.min(step, height())), bottom);
+            target.scrollTo({ top: y, left: 0, behavior: 'instant' });
             await new Promise((r) => setTimeout(r, pauseMs));
-            total = document.documentElement.scrollHeight;
-            bottom = Math.max(0, total - window.innerHeight);
+            total = scrollHeight();
+            bottom = Math.max(0, total - height());
           }
           return total;
         },
@@ -662,14 +700,14 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
       }
     };
     if ( requireNetworkIdle ) {
-      if ( canScroll ) await settleScroll();
+      if ( canScroll || hasInnerScroller ) await settleScroll();
       // Best-effort hydration window for the responsive geometry sweep: the
       // same render-affecting quiet [[waitForStable]] waits on, so perpetual
       // analytics chatter resolves at its first quiet gap instead of always
       // spending the raw-networkidle bound.
       await waitForNetworkQuiet( page, 'render-quiet' );
     } else {
-      if ( canScroll ) await waitForRenderIdle(page, settleScroll);
+      if ( canScroll || hasInnerScroller ) await waitForRenderIdle(page, settleScroll);
     }
     // Dynamic / JS-app content: expand statically-collapsed sections, then wait for known
     // content widgets (reviews / FAQ apps) to populate — so the snapshot captures real
@@ -716,7 +754,14 @@ export async function restoreTopScrollState(page: Page): Promise<void> {
     const scrolled = document.createEvent('Event');
     scrolled.initEvent('scroll', false, false);
     window.dispatchEvent(scrolled);
-    return overflow;
+    const inner = (window as LazyScrollWindow).__dlaLazyScroller;
+    if (inner) {
+      inner.element.scrollTo({ top: inner.top, behavior: 'instant' });
+      const event = document.createEvent('Event');
+      event.initEvent('scroll', false, false);
+      inner.element.dispatchEvent(event);
+    }
+    return overflow || !!inner;
   }, SCROLL_POSE_GENERATION), EVALUATE_GRACE_MS);
   // Throttled scroll handlers react within a quiet window after the event;
   // the transitions they start are then settled. A document that cannot

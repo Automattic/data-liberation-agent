@@ -22,6 +22,7 @@ import {
 	dismissOverlays,
 	settleDocument,
 	triggerLazyLoad,
+	lazyLoadScrollPose,
 	waitForStable,
 	type DismissedOverlay,
 	type OverlayTarget,
@@ -371,8 +372,8 @@ export async function observePage(
 		// viewport-relative, so a page still parked where an interrupted sweep
 		// left it would be scored as every image having moved.
 		if ( ! skipScrollProbe ) {
-			const pose = await page.evaluate( () => ( { x: Math.round( scrollX ), y: Math.round( scrollY ) } ) );
-			if ( pose.x || pose.y ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y })${ sweepInterruption ? ` after it was interrupted: ${ sweepInterruption }` : '' }` );
+			const pose = await page.evaluate( lazyLoadScrollPose );
+			if ( pose.x || pose.y || pose.innerY ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y }), inner scroller at ${ pose.innerY }${ sweepInterruption ? ` after it was interrupted: ${ sweepInterruption }` : '' }` );
 		}
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
