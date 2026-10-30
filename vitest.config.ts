@@ -11,8 +11,12 @@ import { defineConfig, configDefaults } from 'vitest/config';
 //     (test/canary/**) — canaries hit real third-party sites and are run by hand
 //     via `npx vitest run test/canary/...`.
 //   - globalSetup: the age-gated `.tmp-test` cleanup.
+//   - maxWorkers: many test files launch headless Chromium, so the default of
+//     one worker per core would run ~30 browsers at once on a large runner and
+//     exceed a 16 GB memory budget. Six workers keep the suite fast and bounded.
 export default defineConfig({
   test: {
+    maxWorkers: 6,
     globalSetup: ['./vitest.global-setup.ts'],
     include: ['**/*.test.ts'],
     exclude: [...configDefaults.exclude, '**/worktrees/**', '**/.claude/**', 'test/canary/**'],
