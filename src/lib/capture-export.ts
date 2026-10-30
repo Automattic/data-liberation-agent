@@ -795,6 +795,9 @@ function mediaFamily( sourceUrl: string ): string {
 	const url = new URL( sourceUrl );
 	const transformedPath = /^(.*?)\/v1\/(?:fill|fit|crop)\//i.exec( url.pathname )?.[ 1 ];
 	if ( transformedPath ) return `${ url.origin }${ transformedPath }`;
+	// WordPress rendition suffixes describe the same uploaded photograph.
+	const photoPath = url.pathname.replace( /-(?:\d+x\d+|scaled)(?=\.[^.\/]+$)/i, '' );
+	if ( photoPath !== url.pathname && ! url.search ) return `${ url.origin }${ photoPath }`;
 	const parameters = [ ...url.searchParams.keys() ];
 	return parameters.length > 0 && parameters.every( ( key ) => key === 'w' || key === 'h' )
 		? `${ url.origin }${ url.pathname }`
@@ -1964,7 +1967,7 @@ function buildExportCapture(
 		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, options.routeScope ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
-		const identityHtml = localizeMetadataImageReferences( originalHtml, url, portablePathsBySource, content => bindSrcsetShapedImageSrc(
+		const identityHtml = localizeMetadataImageReferences( originalHtml, url, new Map( [ ...mediaStage.metadataPathsBySource, ...portablePathsBySource ] ), content => bindSrcsetShapedImageSrc(
 			localizeDataAttributeMedia(
 				replaceResources(
 					rewriteMediaUrls(

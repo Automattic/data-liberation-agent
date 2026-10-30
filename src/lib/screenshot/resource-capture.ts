@@ -7,6 +7,7 @@ import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetCandidates } from '../srcset.js';
+import { portableSrcsetRepresentative } from '../portable-media-limits.js';
 import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
@@ -586,10 +587,7 @@ export class CapturedResourceStore {
 				// Each picture source gets its own decision: media/type branches
 				// can be genuinely art-directed and must not collapse together.
 				const candidates = srcsetCandidates( node.attr( 'srcset' ) ?? '' );
-				const representative = candidates.reduce< typeof candidates[ number ] | undefined >(
-					( widest, candidate ) => ! widest || candidate.size > widest.size ? candidate : widest,
-					undefined
-				);
+				const representative = portableSrcsetRepresentative( candidates );
 				const target = representative && absolute( representative.url, baseUrl );
 				if ( target ) {
 					add( target, baseUrl, true );

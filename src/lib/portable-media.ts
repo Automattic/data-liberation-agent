@@ -25,6 +25,8 @@ export interface PortableMediaMaterialization {
 	assetPathsByHash: Map< string, string >;
 	assetHashesByPath: Map< string, string >;
 	portablePathsBySource: Map< string, string >;
+	/** Captured image identities backed by a retained rendition of the same family. */
+	metadataPathsBySource: Map< string, string >;
 	assets: Array< { sourceUrl: string; source_url?: string; source_urls?: string[]; references?: import('./image-assets.js').ImageAssetReference[]; original?: import('./image-assets.js').ImageAssetRecord['original']; kind?: import('./image-assets.js').ImageAssetRecord['kind']; destination_owner?: import('./image-assets.js').ImageAssetRecord['destination_owner']; path: string } >;
 	unresolvedMedia: Array< { url: string; error: string } >;
 	portableMedia: {
@@ -73,6 +75,7 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 	const assetPathsByHash = new Map< string, string >();
 	const assetHashesByPath = new Map< string, string >();
 	const portablePathsBySource = new Map< string, string >();
+	const metadataPathsBySource = new Map< string, string >();
 	for ( const decision of plan.families ) {
 		const { family, candidates, eligible, admitted } = decision;
 		if ( decision.outcome === 'limit-excluded' ) {
@@ -139,7 +142,18 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			if ( ! mediaReplacements.has( reference ) )
 				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
 		}
-		if ( fallbackAssetPath ) portableUrlByFamily.set( family, portableAssetUrl( fallbackAssetPath ) );
+		if ( fallbackAssetPath ) {
+			portableUrlByFamily.set( family, portableAssetUrl( fallbackAssetPath ) );
+			for ( const candidate of candidates ) {
+				// Only limit-excluded captured files may use a family substitute.
+				// Eligible files retain exact-only budget/admission semantics.
+				if ( eligible.includes( candidate ) ) continue;
+				if ( candidate.imageAsset?.kind && candidate.imageAsset.kind !== 'image' ) continue;
+				for ( const source of [ candidate.sourceUrl, ...( candidate.imageAsset?.source_urls ?? [] ) ] ) {
+					metadataPathsBySource.set( source, `website/${ fallbackAssetPath.replace( /\\/g, '/' ) }` );
+				}
+			}
+		}
 	}
 	const portableMedia = {
 		selected_count: assets.length,
@@ -157,5 +171,5 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 		unresolvedMedia.push( { url: sourceUrl, error } );
 	}
-	return { mediaReplacements, portableUrlByFamily, assetPathsByHash, assetHashesByPath, portablePathsBySource, assets, unresolvedMedia, portableMedia };
+	return { mediaReplacements, portableUrlByFamily, assetPathsByHash, assetHashesByPath, portablePathsBySource, metadataPathsBySource, assets, unresolvedMedia, portableMedia };
 }
