@@ -2238,7 +2238,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// route without reference pages has been measured, it reserves the
 	// reference estimate.
 	type RouteKind = 'reference' | 'plain';
-	const routeKind = ( url: string ): RouteKind => ! opts.referenceSampleUrls || opts.referenceSampleUrls.includes( url ) ? 'reference' : 'plain';
+	// A sampled route that resolves to a redirect alias hands its sample slot to
+	// the route holding its document (see `onRouteAlias`).
+	const referenceRoutes = opts.referenceSampleUrls ? new Set( opts.referenceSampleUrls ) : undefined;
+	const routeKind = ( url: string ): RouteKind => ! referenceRoutes || referenceRoutes.has( url ) ? 'reference' : 'plain';
 	let observedWorkingSet = 0;
 	let idleFloor: number | undefined;
 	const routeWorkingSet: Record< RouteKind, number > = { reference: 0, plain: 0 };
@@ -2909,6 +2912,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( entry.redirectedTo && !urlFailures.length ) {
 			const target = entry.redirectedTo;
 			enqueue(target, frontier?.depths.get(url) ?? 0, 'alias');
+			// The alias holds no document of its own: whatever evidence was owed to
+			// it (a reference sample slot) belongs to the route that captures it.
+			const targetRoute = urls.find( queued => documentRequestUrl( queued ) === documentRequestUrl( target ) );
+			if ( targetRoute ) {
+				if ( referenceRoutes?.has( url ) ) referenceRoutes.add( targetRoute );
+				opts.onRouteAlias?.( url, targetRoute );
+			}
 			skipped++;
 			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
 			completed++;

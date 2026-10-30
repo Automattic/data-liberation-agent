@@ -564,6 +564,7 @@ async function runCaptureWebsite(
 		// Memory admission reserves for what a route opens: bounded samples
 		// leave most routes without fresh reference pages.
 		...( reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
+		onRouteAlias: reference.alias,
 		...( adapter.liberation?.canonicalizeHtml
 			? { canonicalizeHtml: adapter.liberation.canonicalizeHtml.bind( adapter.liberation ) }
 			: {} ),
