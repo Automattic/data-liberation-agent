@@ -30,6 +30,7 @@ import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
 import { captureCollections } from './collection-capture.js';
 import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline } from './component-states.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
+import { withDocumentTitle } from './document-title.js';
 import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
@@ -1096,6 +1097,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	await markGalleryRoots( page ).catch( () => undefined );
 	await markInitialDocument( page );
 	const initialDocument = await capturePageHtml( page );
+	// The serialized head is the initial one, so it is named by the title the
+	// browser reported for it, before exploration could retitle the page.
+	const initialTitle = await page.evaluate( () => document.title ).catch( () => undefined );
 
 	// Seam 1b: replace runtime-computed pixel geometry with the relationship the
 	// source actually obeys, learned by resizing while its runtime still runs.
@@ -1235,7 +1239,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 		const learned = await capturePageHtml( page );
-		const captured = projectInitialDocument( initialDocument, learned );
+		const projected = projectInitialDocument( initialDocument, learned );
+		const captured = typeof initialTitle === 'string' ? withDocumentTitle( projected, initialTitle ) : projected;
 		const html = canonicalize( frozen ? sanitizeFrozenHtml( captured ) : captured );
 		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
 		await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
