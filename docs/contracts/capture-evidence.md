@@ -79,6 +79,16 @@ initial tree; exploring another tab or slide never replaces it. Lazy tab panels
 are obtained by clicking their triggers and materialized hidden beside the initial
 panel. Native details retain their authored `open` state.
 
+`unsupported="collection"` marks collection controls that cannot be replayed;
+these are disabled, with an `interaction_unreplayable` loss finding. Collection
+component nodes add a stable, first-observed member inventory (destination URL,
+then normalized text and media), observed control/value membership sets including
+empty and reset probes, and explicit coverage limits (20 pages, 200 members,
+24 controls). Pagination unions feed linked-page discovery. Existing consumers
+may ignore the additive `collection` field. Search probes are bounded samples,
+not a claim to enumerate every possible query. Export displays the captured union
+rather than silently leaving a live-looking inert filter.
+
 `tabs`, `component-runtime`, `component-disclosure` and
 `component-disclosure-runtime` and `component-carousel-runtime` are portable replay attributes. `initial-node` is
 private correspondence used during geometry projection and removed before export.

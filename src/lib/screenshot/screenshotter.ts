@@ -27,6 +27,7 @@ import {
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
+import { captureCollections } from './collection-capture.js';
 import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline } from './component-states.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
@@ -1414,7 +1415,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Adapter-declared platform runtime is never driven by any probe below.
 		const excluded = await resolveProbeExclusions( page, args.probeExclusions ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
 		args.diagnostics?.push( ...excluded.diagnostics );
-		const components = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip ) );
+		const collections = await withReadOnlyProbes( page, () => captureCollections( page, excluded.skip ) ).catch( () => [] );
+		for ( const collection of collections ) {
+			( entry.blockLosses ??= [] ).push( { code: 'interaction_unreplayable', reason: collection.reason ?? 'Collection control replay unsupported', unit: 'block', profile: viewport.id } );
+			for ( const member of collection.collection?.members ?? [] ) await resourceStore.captureDomDependencies( member.html, navigationUrl );
+		}
+		const components = [ ...await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip ) ), ...collections ];
 		for ( const component of components ) for ( const state of component.states ) {
 			await resourceStore.captureDomDependencies( state.html, navigationUrl );
 		}
@@ -1440,7 +1446,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		if ( args.rendererCrashed() ) return;
 		try {
 			args.phases?.enter( 'selectable' );
-			const selectableStates = await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( excluded.skip, componentBaseline.skip ) } ) );
+			const collectionSkip = collections.flatMap( component => component.collection?.controls ?? [] ).join( ',' ) || undefined;
+			const selectableStates = await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( combineSkips( excluded.skip, componentBaseline.skip ), collectionSkip ) } ) );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
@@ -1452,7 +1459,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( args.rendererCrashed() ) return;
 			try {
 				await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-				interactions.states.push( ...await withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000, skip: excluded.skip } ) ) );
+				interactions.states.push( ...await withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000, skip: combineSkips( excluded.skip, collectionSkip ) } ) ) );
 			} catch {
 				/* A failed input probe must not misreport a successful selectable drive. */
 			}
@@ -2983,7 +2990,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				for ( const { path: htmlPath, document } of documents ) {
 					if ( ! existsSync( htmlPath ) ) continue;
 					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
-					for ( const link of sameOriginPageAnchors( html, url ) ) {
+					const collectionLinks = ( entry.interactions?.components ?? [] ).flatMap( component => component.collection?.members.flatMap( member => member.url ? [ member.url ] : [] ) ?? [] ).filter( link => new URL( link ).origin === new URL( url ).origin );
+					for ( const link of [ ...sameOriginPageAnchors( html, url ), ...collectionLinks ] ) {
 						if (!routeInScope(link, opts.routeScope)) continue;
 						if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
 							candidates.add(link);

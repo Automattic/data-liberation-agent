@@ -7,7 +7,8 @@ export interface CapturedComponent {
 	selector: string;
 	function?: 'slideshow';
 	slideshow?: Slideshow;
-	kind: 'tabs' | 'disclosure' | 'dialog' | 'listbox' | 'carousel' | 'menu' | 'filter' | 'choice-group' | 'unsupported';
+	collection?: import('./collection-capture.js').CollectionEvidence;
+	kind: 'collection' | 'tabs' | 'disclosure' | 'dialog' | 'listbox' | 'carousel' | 'menu' | 'filter' | 'choice-group' | 'unsupported';
 	initial: string;
 	states: Array<{ id: string; html: string; evidence?: CapturedDialogInteraction }>;
 	transitions: Array<{ from: string; to: string; trigger: { selector: string; action: 'click' | 'keyboard' | 'swipe' } }>;
