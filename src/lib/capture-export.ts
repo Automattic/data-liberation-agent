@@ -26,7 +26,7 @@ import { budgetOmittedRoutes } from './capture-usability.js';
 import { OMITTED_ROUTE_REASON } from './route-budget.js';
 import { ACTION_URL_REASON, stateChangingAction } from './url/action-url.js';
 import { portableFormAction } from './url/form-action.js';
-import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import { routeInScope, scopedRouteKey, validateRouteScope } from './url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import {
 	indexPortableMediaReferences,
@@ -372,7 +372,7 @@ function rewriteRouteLinksIn(
 			if ( ! isOption ) link.attr( 'href', resolved.href );
 			return;
 		}
-		const route = routes.get( documentRequestUrl( resolved.href ) );
+		const route = routes.get( scopedRouteKey( resolved.href, portable?.routeScope ) );
 		if ( route ) {
 			link.attr( attribute, route.includes('#') ? route : `${ route }${ resolved.hash }` );
 			return;
@@ -1191,6 +1191,7 @@ function uncapturedRouteAnchors(
 ): Array< { sourceUrl: string; url: string; reason: string } > {
 	return sameOriginPageAnchors( html, sourceUrl )
 		.filter( url => routeInScope( url, routeScope ) )
+		.map( url => scopedRouteKey( url, routeScope ) )
 		.filter( ( url ) => ! capturedRoutes.has( url ) )
 		// Resource-owned links already have localization or explicit acquisition
 		// diagnostics. Avoid duplicating those as missing HTML, without changing

@@ -12,7 +12,7 @@ describe('Medium owner scope', () => {
 			expect(detectFromDocument(url, new Headers(), '').platform).not.toBe('medium');
 		}
 		expect(resolvePlatform('medium')?.routeScope?.('https://medium.com/@writer/story-1a2b')).toEqual({
-			origin: 'https://medium.com', pathPrefixes: ['/@writer'],
+			origin: 'https://medium.com', pathPrefixes: ['/@writer'], ignoredQueryParams: ['source'],
 		});
 	});
 

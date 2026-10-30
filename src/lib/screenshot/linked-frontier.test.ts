@@ -475,4 +475,42 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
 		}
 	}, 120_000);
+
+	it('captures a canonical-less page once across tracking and platform referral variants, and links every variant to it', async () => {
+		const requests: string[] = [];
+		const docs: Partial<Record<string, string>> = {
+			'/': '<h1>Home</h1><a href="/following?utm_source=mail">A</a><a href="/following?fbclid=x">B</a><a href="/following?source=sidebar">C</a><a href="/following?source=byline&amp;utm_medium=web">D</a><a href="/list?page=2">Next</a>',
+			'/following': '<h1>Following</h1><a href="/?source=tab">Home</a>',
+			'/list': '<h1>Page two</h1>',
+		};
+		const source = createServer((request, response) => {
+			requests.push(request.url!);
+			const doc = docs[new URL(request.url!, 'http://x').pathname];
+			response.writeHead(doc ? 200 : 404, {'content-type': 'text/html'});
+			response.end(doc ?? '<h1>Absent</h1>');
+		});
+		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
+		const routeScope = {origin, pathPrefixes: ['/'], ignoredQueryParams: ['source']};
+		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
+		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'tracking-frontier-'));
+		try {
+			const url = `${origin}/`;
+			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, routeScope, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 1, settleMs: 0, learnFluid: false, viewports: [{id: 'desktop', width: 390, height: 844}]});
+			expect(capture.failed).toBe(0);
+			expect(capture.captured).toBe(3);
+			expect(requests.filter(path => path.startsWith('/following')).every(path => path === '/following')).toBe(true);
+			const receipt = JSON.parse(readFileSync(exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', routeScope, summary: {routesFailed: capture.failed}, failures: [], discoveryDiagnostics: capture.linkedPageCoverage!.diagnostics}), 'utf8'));
+			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual([`${origin}/`, `${origin}/following`, `${origin}/list?page=2`]);
+			// Every variant link points at the one captured document, not at the source.
+			const home = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
+			const followingLinks = [...home.matchAll(/href="([^"]*following[^"]*)"/g)].map(match => match[1]);
+			expect(followingLinks).toHaveLength(4);
+			expect(new Set(followingLinks).size).toBe(1);
+			expect(followingLinks[0]).not.toMatch(/[?]|127\.0\.0\.1/);
+		} finally {
+			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));
+			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
+		}
+	}, 120_000);
 });

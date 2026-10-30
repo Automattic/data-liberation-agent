@@ -1,6 +1,6 @@
 import { documentRequestUrl } from '../url/route-key.js';
 import type { SiteRouteScope } from '../../platform/types.js';
-import { routeInScope, validateRouteScope } from '../url/route-scope.js';
+import { routeInScope, scopedRouteKey, validateRouteScope } from '../url/route-scope.js';
 import { ROUTE_OMITTED_BY_BUDGET, routeBudgetReason } from '../route-budget.js';
 import type { CanonicalRouteAlias } from '../route-aliases.js';
 import { actionUrlExclusion } from '../url/action-url.js';
@@ -57,7 +57,7 @@ export class LinkedFrontier {
 
 	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked'): boolean {
 		if (!routeInScope(url, this.routeScope)) return false;
-		url = documentRequestUrl(url);
+		url = scopedRouteKey(url, this.routeScope);
 		// A link to a route whose server-HTML canonical is another inventory route
 		// counts as a link to that route: the capture holds its document, so the
 		// alias never spends budget and its canonical carries the evidence.
