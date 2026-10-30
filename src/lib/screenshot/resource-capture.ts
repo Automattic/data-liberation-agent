@@ -6,7 +6,8 @@ import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
-import { srcsetReferences } from '../srcset.js';
+import { srcsetCandidates } from '../srcset.js';
+import { portableSrcsetRepresentative } from '../portable-media-limits.js';
 import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
@@ -169,6 +170,8 @@ export interface CapturedResourceManifest {
 	version: 1;
 	resources: Record< string, CapturedResourceEntry >;
 	failures: CapturedResourceFailure[];
+	/** Renditions deliberately represented by another URL, not failed downloads. */
+	omissions?: Array< { url: string; representative: string; reason: 'redundant-srcset-rendition' } >;
 }
 
 export interface CapturedResourceReplay {
@@ -413,6 +416,11 @@ export class CapturedResourceStore {
 	private readonly manifest: CapturedResourceManifest;
 	private readonly captures = new Map< string, Promise< void > >();
 	private readonly browserLoadedResources = new Set< string >();
+	// Image responses arrive before serialization reveals their srcset family.
+	// Keep the response handle, not another stored/budgeted rendition's bytes.
+	private readonly deferredImages = new Map< string, Response >();
+	private readonly pageImages = new WeakMap< Page, Set< Response > >();
+	private readonly explicitDependencies = new Set< string >();
 	private readonly pageCaptures = new WeakMap< Page, Set< Promise< void > > >();
 	private readonly listeners = new WeakMap< Page, ( response: Response ) => void >();
 	private readonly replayMetadata = new Map< string, CapturedResourceReplayMetadata >();
@@ -475,7 +483,10 @@ export class CapturedResourceStore {
 	observe( page: Page ): void {
 		const pending = new Set< Promise< void > >();
 		this.pageCaptures.set( page, pending );
+		const images = new Set< Response >();
+		this.pageImages.set( page, images );
 		const listener = ( response: Response ) => {
+			if ( response.request().resourceType() === 'image' ) images.add( response );
 			const capture = this.capture( response );
 			pending.add( capture );
 			void capture.finally( () => pending.delete( capture ) );
@@ -493,10 +504,13 @@ export class CapturedResourceStore {
 		const listener = this.listeners.get( page );
 		if ( listener ) page.off?.( 'response', listener );
 		await Promise.all( this.pageCaptures.get( page ) ?? [] );
+		await this.captureDeferredImages( this.pageImages.get( page ) );
+		this.pageImages.delete( page );
 	}
 
 	async flush(): Promise< void > {
 		try {
+			await this.captureDeferredImages();
 			await Promise.all( this.captures.values() );
 			mkdirSync( dirname( this.manifestPath ), { recursive: true } );
 			writeFileSync( this.manifestPath, `${ JSON.stringify( this.manifest, null, 2 ) }\n` );
@@ -521,6 +535,13 @@ export class CapturedResourceStore {
 
 	async captureDomDependencies( html: string, documentUrl: string ): Promise< void > {
 		const pending = new Map< string, string >();
+		const renditions = new Map< string, string >();
+		const absolute = ( reference: string, base: string ): string | undefined => {
+			try {
+				const url = new URL( reference.replace( /&amp;/g, '&' ), base );
+				return /^https?:$/.test( url.protocol ) ? url.href : undefined;
+			} catch { return undefined; }
+		};
 		const add = ( reference: string, baseUrl: string, blockable = false, upgradable = false ) => {
 			if ( ! reference || reference.startsWith( 'data:' ) || reference.startsWith( '#' ) ) return;
 			try {
@@ -545,6 +566,12 @@ export class CapturedResourceStore {
 					return;
 				}
 				pending.set( url.href, url.href );
+				this.explicitDependencies.add( url.href );
+				// A later route/CSS dependency can require an earlier alias's own bytes.
+				if ( this.manifest.omissions?.some( omission => omission.url === url.href ) ) {
+					delete this.manifest.resources[ url.href ];
+					this.manifest.omissions = this.manifest.omissions.filter( omission => omission.url !== url.href );
+				}
 			} catch {
 				// Invalid browser values are removed by export's render-dependency pass.
 			}
@@ -555,16 +582,34 @@ export class CapturedResourceStore {
 				'img[src],img[srcset],source[src],source[srcset],video[src],audio[src],video[poster]'
 			).each( ( _, element ) => {
 				const node = $( element );
+				// A srcset declares renditions of one image even when the URL
+				// filenames differ (and cannot be grouped by CDN URL syntax).
+				// Each picture source gets its own decision: media/type branches
+				// can be genuinely art-directed and must not collapse together.
+				const candidates = srcsetCandidates( node.attr( 'srcset' ) ?? '' );
+				const representative = portableSrcsetRepresentative( candidates );
+				const target = representative && absolute( representative.url, baseUrl );
+				if ( target ) {
+					add( target, baseUrl, true );
+					const references = candidates.map( candidate => candidate.url );
+					// The img fallback is another rendition of this declared image.
+					if ( element.tagName === 'img' && node.attr( 'src' ) ) references.push( node.attr( 'src' )! );
+					for ( const reference of references ) {
+						const url = absolute( reference, baseUrl );
+						if ( url && url !== target ) renditions.set( url, target );
+					}
+				}
 				for ( const attribute of [ 'src', 'poster' ] ) {
 					const value = node.attr( attribute );
-					if ( value ) add( value, baseUrl, true, true );
+					if ( value && ! ( target && attribute === 'src' && element.tagName === 'img' ) )
+						add( value, baseUrl, true, true );
 				}
-				for ( const candidate of srcsetReferences( node.attr( 'srcset' ) ?? '' ) )
-					add( candidate, baseUrl, true );
 			} );
 			$( 'a[href],area[href]' ).each( ( _, element ) => {
 				const href = $( element ).attr( 'href' ) ?? '';
-				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ) add( href, baseUrl );
+				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ||
+					MEDIA_EXTENSION_RE.test( absolute( href, baseUrl )?.split( /[?#]/, 1 )[ 0 ] ?? '' ) ||
+					renditions.has( absolute( href, baseUrl ) ?? '' ) ) add( href, baseUrl );
 			} );
 			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl, true );
 			$( 'link[href]' ).each( ( _, element ) => {
@@ -572,6 +617,7 @@ export class CapturedResourceStore {
 				const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
 				const as = ( node.attr( 'as' ) ?? '' ).toLowerCase();
 				if (
+					renditions.has( absolute( node.attr( 'href' ) ?? '', baseUrl ) ?? '' ) ||
 					rel.includes( 'manifest' ) ||
 					rel.includes( 'stylesheet' ) ||
 					rel.some( ( value ) => /(?:^|-)icon$/.test( value ) ) ||
@@ -653,6 +699,19 @@ export class CapturedResourceStore {
 			};
 			fill();
 		} );
+		// Seed export's exact-reference replacement index with the same file
+		// for each retired rendition, as portable media family selection does.
+		// Explicit dependencies (metadata, CSS, another source) take precedence.
+		// Browser image responses alone are not independent declarations.
+		for ( const [ url, representative ] of renditions ) {
+			if ( this.manifest.resources[ url ] || this.explicitDependencies.has( url ) ) continue;
+			const resource = this.manifest.resources[ representative ];
+			if ( ! resource ) continue;
+			this.manifest.resources[ url ] = { ...resource };
+			this.manifest.omissions ??= [];
+			if ( ! this.manifest.omissions.some( omission => omission.url === url ) )
+				this.manifest.omissions.push( { url, representative, reason: 'redundant-srcset-rendition' } );
+		}
 		if ( stopped ) this.manifest.failures.push( { url: documentUrl, error: stopped } );
 	}
 
@@ -682,7 +741,18 @@ export class CapturedResourceStore {
 		}
 	}
 
-	private capture( response: Response ): Promise< void > {
+	private async captureDeferredImages( pageImages?: Set< Response > ): Promise< void > {
+		const responses = [ ...this.deferredImages.entries() ].filter(
+			( [ , response ] ) => ! pageImages || pageImages.has( response )
+		);
+		for ( const [ url ] of responses ) this.deferredImages.delete( url );
+		await Promise.all( responses.map( ( [ url, response ] ) => {
+			if ( this.manifest.omissions?.some( omission => omission.url === url ) ) return;
+			return this.capture( response, false );
+		} ) );
+	}
+
+	private capture( response: Response, deferImage = true ): Promise< void > {
 		const request = response.request();
 		const resourceType = request.resourceType();
 		if ( ! CAPTURED_RESOURCE_TYPES.has( resourceType ) ) return Promise.resolve();
@@ -729,6 +799,11 @@ export class CapturedResourceStore {
 		// wherever a redirect ultimately resolved it to.
 		const requestedUrl = originRequestUrl( request, resourceUrl );
 		const url = requestedUrl.href;
+		if ( resourceType === 'image' && deferImage ) {
+			this.browserLoadedResources.add( url );
+			this.deferredImages.set( url, response );
+			return Promise.resolve();
+		}
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
 
@@ -781,6 +856,11 @@ export class CapturedResourceStore {
 	}
 
 	private captureUrl( url: string ): Promise< void > {
+		const response = this.deferredImages.get( url );
+		if ( response ) {
+			this.deferredImages.delete( url );
+			return this.capture( response, false );
+		}
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
 		const capture = ( async () => {

@@ -4,6 +4,8 @@ import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { srcsetCandidates } from './srcset.js';
+import { metadataImageReferences } from './identity-resources.js';
+import { portableSrcsetRepresentative } from './portable-media-limits.js';
 import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
 import { getPlaywright } from './browser-kit/index.js';
@@ -176,7 +178,8 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 			if ( lightbox ) {
 				values.push( lightbox );
 			}
-			if ( values.length ) add( values, lightbox ?? candidates.at( -1 )?.url ?? values[ 0 ], url, references, lightbox ? Infinity : candidates.at( -1 )?.size ?? 0 );
+			const representative = portableSrcsetRepresentative( candidates );
+			if ( values.length ) add( values, lightbox ?? representative?.url ?? values[ 0 ], url, references, lightbox ? Infinity : representative?.size ?? 0 );
 		} );
 		$( 'a[href]' ).each( ( i, node ) => {
 			const href = $( node ).attr( 'href' )!;
@@ -199,6 +202,9 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 			const src = $( node ).attr( 'src' )!;
 			add( [ src ], src, url, reference( src, 'content', `video:${ i }:src` ), 0, 'video' );
 		} );
+		for ( const [ i, value ] of metadataImageReferences( html ).entries() ) {
+			add( [ value ], value, url, reference( value, 'head', `metadata:${ i }` ) );
+		}
 		$( 'link[href]' ).each( ( i, node ) => {
 			if ( ! /(?:^|\s)(?:icon|apple-touch-icon|apple-touch-icon-precomposed)(?:\s|$)/i.test( $( node ).attr( 'rel' ) ?? '' ) ) return;
 			const href = $( node ).attr( 'href' )!;

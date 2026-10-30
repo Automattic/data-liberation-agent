@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { IntegrityError } from './failure-class.js';
+import { MAX_PORTABLE_MEDIA_DIMENSION } from './portable-media-limits.js';
 
 /**
  * Portable media selection plan. One pass records which known reference strings
@@ -11,7 +12,6 @@ import { IntegrityError } from './failure-class.js';
 
 const MAX_PORTABLE_MEDIA_BYTES = 5 * 1024 * 1024;
 const MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES = 8 * 1024 * 1024;
-const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 
 export interface PortableMediaCandidate {
 	imageAsset?: import('./image-assets.js').ImageAssetRecord;
