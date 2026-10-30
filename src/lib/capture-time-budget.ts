@@ -179,13 +179,15 @@ export class RouteTimeBudget {
 		this.startTimes.set( url, this.now() );
 	}
 
-	finish( url: string ): void {
+	finish( url: string, probeOverrunMs = 0 ): void {
 		this.running.delete( url );
 		const startedAt = this.startTimes.get( url );
 		if ( startedAt !== undefined ) {
-			if ( url === this.entrypoint ) this.entrypointElapsed = this.now() - startedAt;
+			const elapsed = Math.max( 0, this.now() - startedAt - probeOverrunMs );
+			if ( url === this.entrypoint ) this.entrypointElapsed = elapsed;
 			else {
-				this.elapsedTotal += this.now() - startedAt;
+				// Optional probe overruns must not inflate subsequent route estimates.
+				this.elapsedTotal += elapsed;
 				this.finishedCount++;
 			}
 			this.startTimes.delete( url );

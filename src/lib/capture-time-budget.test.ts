@@ -83,6 +83,20 @@ describe( 'RouteTimeBudget', () => {
 		expect( budget.admits( 'https://example.test/next' ) ).toBe( true );
 	} );
 
+	it( 'does not project a timed-out optional probe onto later routes', () => {
+		let now = 0;
+		const entrypoint = 'https://example.test/';
+		const budget = new RouteTimeBudget( { timeBudgetMs: 100, admitUntil: 75, abandonAt: 100, projectAdmission: true }, entrypoint, () => now );
+		budget.start( entrypoint );
+		budget.finish( entrypoint );
+		budget.start( 'https://example.test/a' );
+		now = 50;
+		budget.finish( 'https://example.test/a', 45 );
+		expect( budget.admits( 'https://example.test/b' ) ).toBe( true );
+		now = 76;
+		expect( budget.admits( 'https://example.test/b' ) ).toBe( false );
+	} );
+
 	it( 'reports reserve-skipped routes as budget skips naming the reserve, under clock-only and projected admission', () => {
 		const entrypoint = 'https://example.test/';
 		const window = { timeBudgetMs: 60_000, routeReserveMs: 5_000, admitUntil: 45_000, abandonAt: 60_000 };

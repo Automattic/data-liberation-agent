@@ -82,6 +82,8 @@ const HELP = `
                          Unadmitted routes are route_omitted_by_budget; abandoned
                          routes are route_capture_skipped_budget. Set to your deadline
                          minus post-capture headroom. Browser capture only.
+    --route-deadline <duration>  Bound each route, e.g. 30s; optional probe phases
+                         receive smaller wall-clock budgets within this deadline.
     --route-reserve <duration>  Hold this much of the time budget per started
                          route for downstream work, e.g. 8s (your measured
                          per-route build cost). Admission closes so every
@@ -312,6 +314,9 @@ if (args.includes('--help')) {
   const { parseDurationMs } = await import('./lib/duration.js');
   const timeBudgetMs = timeBudgetArg === undefined ? undefined : parseDurationMs(timeBudgetArg ?? '');
   if (timeBudgetArg !== undefined && timeBudgetMs === undefined) throw new Error('--time-budget requires a positive duration such as 13m, 780s or 780000ms');
+  const routeDeadlineArg = args.includes('--route-deadline') ? getArg('--route-deadline') : undefined;
+  const routeDeadlineMs = routeDeadlineArg === undefined ? undefined : parseDurationMs(routeDeadlineArg ?? '');
+  if (routeDeadlineArg !== undefined && routeDeadlineMs === undefined) throw new Error('--route-deadline requires a positive duration such as 30s or 30000ms');
   const routeReserveArg = args.includes('--route-reserve') ? getArg('--route-reserve') : undefined;
   const routeReserveMs = routeReserveArg === undefined ? undefined : parseDurationMs(routeReserveArg ?? '');
   if (routeReserveArg !== undefined && routeReserveMs === undefined) throw new Error('--route-reserve requires a positive duration such as 8s, 5m or 8000ms');
@@ -348,6 +353,7 @@ if (args.includes('--help')) {
     referenceSample,
     timeBudgetMs,
     routeReserveMs,
+    routeDeadlineMs,
     maxFileBytes,
     maxTotalBytes,
     maxFiles,

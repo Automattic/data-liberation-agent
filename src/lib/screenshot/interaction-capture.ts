@@ -206,6 +206,8 @@ export interface InteractionStatesReport {
 	viewport: { width: number; height: number };
 	capturedAt: string;
 	states: CapturedDialogInteraction[];
+	/** A phase budget expired; completed evidence remains usable, not exhaustive. */
+	coverage?: 'partial';
 	components?: import('./component-states.js').CapturedComponent[];
 	routeNavigation?: CapturedRouteNavigation[];
 	/** Dialogs already visible after the page's normal runtime settling. */

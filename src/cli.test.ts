@@ -53,6 +53,13 @@ describe('cli', () => {
     expect(limit.stderr).toContain('--max-file-bytes requires a positive integer');
   }, 30_000);
 
+  it('documents and validates a per-route deadline before any request', async () => {
+    expect((await runCli(['--help'])).stdout).toContain('--route-deadline <duration>');
+    const result = await runCli(['https://example.invalid/', '--route-deadline', 'soon']);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('--route-deadline requires a positive duration');
+  }, 30_000);
+
   it('documents the total export budget and rejects invalid values before any request', async () => {
     const help = (await runCli(['--help'])).stdout;
     expect(help).toContain('--max-total-bytes <n>');
