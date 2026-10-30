@@ -217,17 +217,17 @@ describe( 'scoreViewport', () => {
 			img( 'item-large', 0, 700, 200, 120 ),
 		];
 		const copy = [ { ...img( 'item-small', 0, 100, 200, 120 ), renditions: [ 'item-large' ] } ];
-		expect( matchRenderedImages( source, copy ) ).toHaveLength( 0 );
+		expect( matchRenderedImages( source, copy ) ).toHaveLength( 1 );
 		expect( scoreViewport( at( 1728, { images: source } ), at( 1728, { images: copy } ) ).failures[ 0 ] ).toMatch(
-			/^images 3 of 3 missing/
+			/^images 2 of 3 missing/
 		);
 	} );
 
-	it( 'leaves same-named repeated images unpaired without structural evidence', () => {
+	it( 'counts surplus same-named occurrences as missing', () => {
 		const gallery = [ img( 'divider.jpg', 0, 800, 1600, 60 ), img( 'divider.jpg', 0, 1600, 1600, 60 ), img( 'divider.jpg', 0, 2400, 1600, 60 ) ];
 		const score = scoreViewport( at( 1600, { images: gallery } ), at( 1600, { images: gallery.slice( 0, 1 ) } ) );
 		expect( score.pass ).toBe( false );
-		expect( score.failures[ 0 ] ).toMatch( /^images 3 of 3 missing/ );
+		expect( score.failures[ 0 ] ).toMatch( /^images 2 of 3 missing/ );
 	} );
 
 	it( 'uses exact resource bytes to distinguish same-named images with colliding perceptual hashes', () => {
@@ -237,7 +237,7 @@ describe( 'scoreViewport', () => {
 		];
 		const candidate = source.map( image => ( { ...image } ) );
 		expect( matchRenderedImages( source, candidate ) ).toHaveLength( 2 );
-		expect( matchRenderedImages( [ source[ 0 ], source[ 0 ] ], [ candidate[ 0 ], candidate[ 0 ] ] ) ).toHaveLength( 0 );
+		expect( matchRenderedImages( [ { ...source[ 0 ] }, { ...source[ 0 ] } ], [ { ...candidate[ 0 ] }, { ...candidate[ 0 ] } ] ) ).toHaveLength( 2 );
 		const swapped = candidate.map( ( image, index ) => ( { ...image, y: candidate[ 1 - index ].y } ) );
 		expect( checkImageGeometry( at( 768, { images: source } ), at( 768, { images: swapped } ) ).failures?.[ 0 ] ).toContain( 'geometry differs' );
 	} );

@@ -4,6 +4,7 @@ import {
 	checkMotion,
 	checkTypography,
 } from './rendered-contract-checks.js';
+import { ambiguousRenderedImages, matchRenderedImages, scoreViewport } from './score.js';
 import type { LayoutObservation, RenderedImage, RenderedTextStyle } from './score.js';
 
 const observation = ( extra: Partial< LayoutObservation > = {} ): LayoutObservation => ( {
@@ -51,12 +52,33 @@ describe( 'checkImageGeometry', () => {
 		expect( result.failures?.[ 0 ] ).toContain( 'copy 1600x600 at (32,140)' );
 	} );
 
-	it( 'refuses nearest-geometry guesses for repeated media without roles', () => {
-		const source = [ image( 'tile', 0, 100 ), image( 'tile', 0, 900 ) ];
-		const candidate = [ image( 'tile', 2, 902 ), image( 'tile', 2, 102 ) ];
-		expect(
-			checkImageGeometry( observation( { images: source } ), observation( { images: candidate } ) )
-		).toEqual( { failures: [ 'image correspondence unproven: repeated media lacks unique structural role/state' ] } );
+	it.each( [ 'assetHash', 'contentHash', 'key' ] as const )( 'pairs repeated %s identities by document order, never geometry', identity => {
+		const source = [ 249, 256, 256 ].map( ( size, index ) => ( {
+			...image( identity === 'key' ? 'tile' : `source-${ index }`, 0, index * 400, size, size ),
+			[ identity ]: 'tile',
+		} ) );
+		const same = source.map( ( img, index ) => ( { ...img, key: identity === 'key' ? 'tile' : `copy-${ index }` } ) );
+		const cases = [
+			{ name: 'same-size', source: same.map( img => ( { ...img, width: 256, height: 256 } ) ), copy: same.map( img => ( { ...img, width: 256, height: 256 } ) ), failure: undefined },
+			{ name: 'mixed sizes', source, copy: same.map( img => ( { ...img, width: 256, height: 256 } ) ), failure: 'source 249x249 at (0,0), copy 256x256 at (0,0)' },
+			{ name: 'fewer copies', source, copy: same.slice( 0, 1 ), failure: 'images 2 of 3 missing' },
+			{ name: 'swapped positions', source, copy: same.map( ( img, index ) => ( { ...img, y: same[ 2 - index ].y } ) ), failure: 'image geometry differs' },
+		];
+		for ( const test of cases ) {
+			expect( ambiguousRenderedImages( test.source, test.copy ), test.name ).toEqual( [] );
+			const pairs = matchRenderedImages( test.source, test.copy );
+			expect( pairs.map( pair => pair.candidate ), test.name ).toEqual( test.copy );
+			const left = observation( { images: test.source } );
+			const right = observation( { images: test.copy } );
+			const geometry = checkImageGeometry( left, right );
+			const score = scoreViewport( left, right );
+			if ( test.failure ) {
+				expect( [ ...score.failures, ...geometry.failures ?? [] ].join( '; ' ), test.name ).toContain( test.failure );
+			} else {
+				expect( geometry, test.name ).toEqual( {} );
+				expect( score.pass, test.name ).toBe( true );
+			}
+		}
 	} );
 
 	it( 'allows small browser rounding drift', () => {

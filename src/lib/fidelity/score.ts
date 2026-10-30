@@ -238,9 +238,10 @@ function identityKeys( image: RenderedImage ): string[] {
  * Exact bytes precede perceptual content, and the URL key covers
  * whatever the hashes missed. A srcset candidate is the same asset under
  * another filename: the loaded file can change with viewport width while the
- * element still declares both renditions. Within a tier repeated identities
- * require unique structural roles; geometry is a measurement, not identity.
- * A copy image is consumed by at most one pair.
+ * element still declares both renditions. Within a tier, unique structural
+ * roles take precedence; remaining occurrences pair in document (array) order,
+ * regardless of size. Geometry measures the result, never chooses a partner.
+ * A copy image is consumed by at most one pair; surplus source images are missing.
  */
 export function matchRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): ImagePair[] {
 	const pairs: ImagePair[] = [];
@@ -254,17 +255,21 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 		const sourceOccurrences = source.filter( sameIdentity );
 		const copyOccurrences = copy.filter( sameIdentity );
 		if ( sourceOccurrences.length > 1 || copyOccurrences.length > 1 ) {
-			// Geometry cannot prove correspondence: pairing the nearest box hides a
-			// swapped normal/zoom occurrence or a materialization layout defect.
-			if ( ! image.role || sourceOccurrences.filter( other => other.role === image.role ).length !== 1 || copyOccurrences.filter( other => other.role === image.role ).length !== 1 ) return null;
-			const index = group.findIndex( candidate => candidate.role === image.role );
+			const uniqueRole = ( role: string | undefined ) => !! role &&
+				sourceOccurrences.filter( other => other.role === role ).length === 1 &&
+				copyOccurrences.filter( other => other.role === role ).length === 1;
+			// Reserve unique-role partners before the document-order fallback so
+			// an earlier unlabelled occurrence cannot consume a later role's match.
+			const index = uniqueRole( image.role )
+				? group.findIndex( candidate => candidate.role === image.role )
+				: group.findIndex( candidate => ! uniqueRole( candidate.role ) );
 			return index < 0 ? null : group.splice( index, 1 )[0]!;
 		}
 		return group.shift()!;
 	};
 
 	// Exact bytes precede perceptual identity, which can collide or vary with a
-	// decoded animation frame. Repeated resources still require unique roles.
+	// decoded animation frame. Repeated resources use roles, then document order.
 	for ( const identity of [ 'assetHash', 'contentHash' ] as const ) {
 		const byHash = new Map< string, RenderedImage[] >();
 		for ( const image of copy ) {
@@ -306,6 +311,8 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 				candidates.push( candidate );
 			}
 		}
+		// Rendition-key traversal order is not document order.
+		candidates.sort( ( left, right ) => copy.indexOf( left ) - copy.indexOf( right ) );
 		const candidate = correspondingIn( candidates, image );
 		if ( ! candidate ) continue;
 		paired.add( candidate );
@@ -320,9 +327,13 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 }
 
 export function ambiguousRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): RenderedImage[] {
-	const paired = new Set( matchRenderedImages( source, copy ).map( pair => pair.source ) );
-	return source.filter( image => ! paired.has( image ) && copy.some( candidate =>
-		( !! image.contentHash && image.contentHash === candidate.contentHash ) || identityKeys( image ).some( key => identityKeys( candidate ).includes( key ) ) ) );
+	const pairs = matchRenderedImages( source, copy );
+	const paired = new Set( pairs.map( pair => pair.source ) );
+	const consumed = new Set( pairs.map( pair => pair.candidate ) );
+	// Exhausted identities are missing occurrences, not ambiguous correspondence.
+	return source.filter( image => ! paired.has( image ) && copy.some( candidate => ! consumed.has( candidate ) && (
+		( !! image.assetHash && image.assetHash === candidate.assetHash ) ||
+		( !! image.contentHash && image.contentHash === candidate.contentHash ) || identityKeys( image ).some( key => identityKeys( candidate ).includes( key ) ) ) ) );
 }
 
 export function scoreViewport(
