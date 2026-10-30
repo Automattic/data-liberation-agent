@@ -4,7 +4,10 @@ import type { Page } from 'playwright';
 import { isStackingArtifact } from './document-integrity.js';
 
 const NODE = 'data-blocks-engine-capture-initial-node';
-const GEOMETRY = new Set(['width', 'height', 'font-size', 'padding-top', 'transform', 'inset', 'top', 'left', 'min-height', 'aspect-ratio']);
+// Every property capture rewrites in the live DOM must be listed: an unlisted
+// one keeps its initial value, e.g. a max-height lifted to 100vh alongside its
+// height would serialize back as the capture viewport's pixels and clamp it.
+const GEOMETRY = new Set(['width', 'height', 'font-size', 'padding-top', 'transform', 'inset', 'top', 'left', 'min-height', 'max-height', 'aspect-ratio']);
 
 function learnedStyle(initial: string, learned: string): string {
 	try {
