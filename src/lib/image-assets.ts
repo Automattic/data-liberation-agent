@@ -236,6 +236,34 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 	} ) );
 }
 
+const SVG_LENGTH = /^\s*(\d+(?:\.\d+)?|\.\d+)(?:px)?\s*$/i;
+
+/**
+ * An SVG's own declared size: width/height, else its viewBox. A viewBox-only
+ * SVG decodes at the browser's 300px default object size, which is not a
+ * property of the file and disagrees with consumers that read the document.
+ */
+export function svgDeclaredSize( bytes: Buffer ): { width: number; height: number } | undefined {
+	const root = /<svg\b([^>]*)>/i.exec( bytes.toString( 'utf8' ) )?.[ 1 ];
+	if ( root === undefined ) return undefined;
+	const attr = ( name: string ) => new RegExp( `(?:^|\\s)${ name }\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i' ).exec( root )?.slice( 1 ).find( value => value !== undefined );
+	const length = ( value?: string ) => {
+		const match = value === undefined ? null : SVG_LENGTH.exec( value );
+		return match ? Number( match[ 1 ] ) : undefined;
+	};
+	let width = length( attr( 'width' ) );
+	let height = length( attr( 'height' ) );
+	const viewBox = ( attr( 'viewBox' ) ?? '' ).trim().split( /[\s,]+/ ).map( Number );
+	if ( viewBox.length === 4 && viewBox.every( Number.isFinite ) && viewBox[ 2 ] > 0 && viewBox[ 3 ] > 0 ) {
+		const ratio = viewBox[ 2 ] / viewBox[ 3 ];
+		if ( width === undefined && height === undefined ) [ width, height ] = [ viewBox[ 2 ], viewBox[ 3 ] ];
+		else if ( width === undefined ) width = height! * ratio;
+		else if ( height === undefined ) height = width / ratio;
+	}
+	if ( ! width || ! height || ! Number.isFinite( width ) || ! Number.isFinite( height ) ) return undefined;
+	return { width: Math.max( 1, Math.round( width ) ), height: Math.max( 1, Math.round( height ) ) };
+}
+
 async function decodeImage( page: import('playwright').Page, bytes: Buffer, contentType: string ) {
 	return page.evaluate( async ( data ) => {
 		const image = new Image();
@@ -312,6 +340,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 						await page.route( '**/*', route => route.abort() );
 					}
 					const metadata = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : {};
+					if ( contentType === 'image/svg+xml' ) Object.assign( metadata, svgDeclaredSize( bytes ) );
 					// Even a lying response header's extension follows the verified bytes.
 					const extension = extensionFromContentType( contentType );
 					const currentExtension = extname( result.localPath );
