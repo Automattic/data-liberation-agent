@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.53] - 2026-10-30
+
+### Changed
+- regenerate plugin bundles
+- Refuse Medium's error view as route content
+- Name Medium copies after their owner instead of the platform
+- Treat tracking and platform referral parameters as non-identity in route keys
+
 ## [0.33.52] - 2026-10-30
 
 ### Changed
