@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
-import { captureCollections } from './collection-capture.js';
+import { probeExclusionSkip } from './probe-exclusions.js';
+import { captureCollections, collectionRegions } from './collection-capture.js';
 import { captureWebsite } from '../../index.js';
 import type { InteractionStatesReport } from './interaction-capture.js';
 import { wireCapturedComponents } from '../static-components.js';
@@ -58,3 +59,14 @@ if(innerWidth<600)document.querySelector('#filter-panel').hidden=true;let offset
 		}
 	} finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 }, 180_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('does not treat a probe-excluded control as a collection control', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		await page.setContent('<main><div id="column"><div><a href="/a">Tab A</a></div><div><a href="/one">Story one</a></div></div><button class="scroll">›</button></main>');
+		expect(await collectionRegions(page)).toHaveLength(1);
+		const skip = probeExclusionSkip([{ id: 'scroll', selector: 'button.scroll', reason: 'runtime scroller' }]);
+		expect(await collectionRegions(page, skip)).toEqual([]);
+	} finally { await browser.close(); }
+});

@@ -32,7 +32,8 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
 			if (found.some(region => root.closest(region.selector))) continue;
 			let owner: Element | null = root.parentElement;
 			for (let depth = 0; owner && owner !== document.body && depth < 3; depth++, owner = owner.parentElement) {
-				if (!owner.querySelector('button,input[type="search"],select')) continue;
+				// A control the adapter excluded from probing is never driven, so it cannot make a region a collection.
+				if (!Array.from(owner.querySelectorAll('button,input[type="search"],select')).some(control => !excluded || !control.matches(excluded))) continue;
 				found.push({ selector: selector(root), owner: selector(owner) }); break;
 			}
 		}
@@ -79,7 +80,7 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 				}
 				return members.map(member => member.key);
 			};
-			const controls = await probe.locator(region.owner).evaluate(root => {
+			const controls = await probe.locator(region.owner).evaluate((root, excluded) => {
 				const selector = (node: Element): string => {
 					if (node.id) return '#' + CSS.escape(node.id);
 					const parts: string[] = [];
@@ -89,8 +90,8 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 					}
 					return 'body > ' + parts.join(' > ');
 				};
-				return Array.from(root.querySelectorAll('button,input[type="search"],select')).map(node => ({ selector: selector(node), tag: node.tagName, label: node.getAttribute('aria-label') || node.textContent || '', options: node instanceof HTMLSelectElement ? Array.from(node.options).map(option => option.value) : [] }));
-			});
+				return Array.from(root.querySelectorAll('button,input[type="search"],select')).filter(node => !excluded || !node.matches(excluded)).map(node => ({ selector: selector(node), tag: node.tagName, label: node.getAttribute('aria-label') || node.textContent || '', options: node instanceof HTMLSelectElement ? Array.from(node.options).map(option => option.value) : [] }));
+			}, skip);
 			evidence.controls = controls.map(control => control.selector);
 			if (controls.length > limits.controls) evidence.coverage = 'partial';
 			const next = controls.find(control => /^(?:next(?: page)?|load more|show more|older|›|»|→)$/i.test(control.label.trim()));
