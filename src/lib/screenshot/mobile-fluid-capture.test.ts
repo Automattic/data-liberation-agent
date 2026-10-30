@@ -74,7 +74,15 @@ it( 'learns each responsive document through tablet widths without freezing phon
 		await copy.goto( `${ sourceUrl }copy/`, { waitUntil: 'domcontentloaded' } );
 		for ( const width of [ 390, 402, 600, 768, 1024, 1440, 768, 390 ] ) {
 			for ( const page of [ source, phone, copy ] ) await page.setViewportSize( { width, height: 900 } );
-			await phone.waitForTimeout( 50 );
+			// setViewportSize acknowledges the viewport change, not the source's
+			// resize handler. Under suite load a fixed sleep can still read the
+			// previous width (for example 402px after requesting 600px).
+			for ( const page of [ source, phone ] ) {
+				await page.waitForFunction( expectedWidth =>
+					document.querySelector( 'main' )!.getBoundingClientRect().width === expectedWidth,
+				width,
+				);
+			}
 			const expected = await geometry( width <= 1024 ? phone : source );
 			const actual = await geometry( copy );
 			expect( actual.section, `section at ${ width }` ).toBeCloseTo( expected.section, 0 );
