@@ -16,10 +16,6 @@ export default defineConfig({
     globalSetup: ['./vitest.global-setup.ts'],
     include: ['**/*.test.ts'],
     exclude: [...configDefaults.exclude, '**/worktrees/**', '**/.claude/**', 'test/canary/**'],
-    // Each browser suite can launch several Chromium processes (and parallel
-    // route captures). CPU-count concurrency oversubscribes browser resources,
-    // causing timing assertions and even browser.close() hooks to time out.
-    maxWorkers: 2,
     testTimeout: 15_000,
   },
 });
