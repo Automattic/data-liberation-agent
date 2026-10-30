@@ -1526,7 +1526,7 @@ function buildExportCapture(
 			}
 			const assembly = deviceAssembly ? {
 				html: deviceAssembly.html, hasMobileDocument: 'mobile' in sourceDocuments, portableNormalization: 'applied' as const,
-				evidence: { variants: Object.keys( deviceAssembly.viewports ).length, outcome: 'dual-structural' as const, reason: `Source-owned device selection: ${ deviceAssembly.selection.id }` },
+				evidence: { variants: Object.keys( deviceAssembly.viewports ).length, ...deviceAssembly.evidence! },
 			} : assembleResponsiveCapture( {
 				rawDesktopHtml,
 				rawMobileHtml,

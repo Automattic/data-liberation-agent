@@ -563,3 +563,51 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		} finally { await browser.close(); await site.close(); await new Promise<void>( resolve => source.close( () => resolve() ) ); }
 	} );
 } );
+
+
+it( 'reconciles three request identities with rendered text and native cascade parity', async () => {
+	const documents = Object.fromEntries( selection.documents.map( key => [ key, `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>
+	body:not(.phone) .gated{color:rgb(180, 0, 0)}body.phone .gated{color:rgb(0, 0, 180)}
+	.important{color:rgb(0, 120, 0)!important}.left,.right{display:block}#article{font-size:23px}[id="article"]{letter-spacing:2px}
+	</style></head><body class="${ key === 'mobile' ? 'phone' : key }">
+	<header id="header">${ key !== 'mobile' ? '<nav id="menu"><a id="home">Home</a><a id="about">About</a></nav>' : '' }</header>
+	<section id="shared"><h1 id="heading" class="gated">Shared heading</h1><p id="paragraph" style="font-size:${ key === 'mobile' ? 21 : key === 'tablet' ? 19 : 17 }px">Shared paragraph</p><p id="priority" class="important" style="color:${ key === 'mobile' ? 'red' : 'blue' }">Priority</p></section>
+	<main id="content"><div class="left">${ key === 'desktop' ? '<article id="article"><p>Article content</p></article>' : '' }</div><div class="center">${ key === 'tablet' ? '<article id="article"><p>Article content</p></article>' : '' }</div><div class="right">${ key === 'mobile' ? '<article id="article"><p>Article content</p></article>' : '' }</div></main>
+	<aside id="${ key }-only">${ key } only</aside></body></html>` ] ) );
+	const assembly = assembleDeviceDocuments( documents, selection );
+	const browser = await chromium.launch( { headless: true } );
+	try {
+		for ( const key of selection.documents ) {
+			const context = await browser.newContext( { userAgent: key === 'tablet' ? 'iPad' : key === 'mobile' ? 'iPhone' : 'Desktop' } );
+			try {
+				const page = await context.newPage();
+				const observe = () => page.evaluate( () => ( {
+					text: document.body.innerText,
+					article: ( ( style ) => [ style.fontSize, style.letterSpacing ] )( getComputedStyle( [ ...document.querySelectorAll<HTMLElement>( 'article' ) ].find( node => node.getClientRects().length )! ) ),
+					styles: [ 'heading', 'paragraph', 'priority' ].map( id => {
+						const style = getComputedStyle( document.getElementById( id )! );
+						return [ style.color, style.fontSize ];
+					} ),
+				} ) );
+				await page.setContent( documents[ key ] );
+				const expected = await observe();
+				await page.setContent( installDeviceSelection( assembly.html, assembly ) );
+				expect( await observe(), key ).toEqual( expected );
+				expect( await page.locator( '#shared' ).count() ).toBe( 1 );
+			} finally { await context.close(); }
+		}
+	} finally { await browser.close(); }
+	expect( assembly.evidence?.outcome ).toBe( 'collapsed-identity-subset' );
+	expect( assembly.evidence?.devices.mobile.divergedComponents ).toBeGreaterThan( 0 );
+	// Prior assembly emitted every source element plus one wrapper per device.
+	const before = Object.values( documents ).reduce( ( count, html ) => count + cheerio.load( html )( 'body *' ).length + 1, 0 );
+	const after = cheerio.load( assembly.html )( 'body *' ).length;
+	expect( { before, after } ).toEqual( { before: 45, after: 22 } );
+	// A third identity that cannot map is not discarded or counted as merged.
+	const mixed = assembleDeviceDocuments( { ...documents, tablet: fixture( 'tablet' ) }, selection );
+	expect( mixed.evidence?.devices.tablet ).toMatchObject( { outcome: 'dual-structural', reason: 'No shared stable element identities' } );
+	expect( mixed.evidence?.devices.mobile.outcome ).toBe( 'collapsed-identity-subset' );
+	const mixedDom = cheerio.load( mixed.html );
+	expect( mixedDom( '[data-blocks-engine-capture-device-document="tablet"]' ) ).toHaveLength( 1 );
+	expect( mixedDom( '[data-blocks-engine-capture-device-document="mobile"]' ) ).toHaveLength( 0 );
+} );

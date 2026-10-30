@@ -283,11 +283,14 @@ function cascadePropertiesOverlap( normal: string, important: string ): boolean 
  * it. Platform
  * neutral: adapters whose ids are unstable simply fall back.
  */
-function identitySubsetMerge(
+export function identitySubsetMerge(
 	desktopHtml: string,
 	mobileHtml: string,
-	switchWidth: number = DEFAULT_SWITCH_WIDTH
+	switchWidth: number = DEFAULT_SWITCH_WIDTH,
+	deviceKey?: string,
+	onUnreconciled?: ( reason: string ) => void
 ): ViewportTreeReconciliation | undefined {
+	const cannotMerge = ( reason: string ): undefined => { onUnreconciled?.( reason ); return undefined; };
 	const desktopBody = responsiveBodyContent( desktopHtml );
 	const learnedTransforms = learnedTransformSelectors( desktopHtml );
 	const mobileBody = responsiveBodyContent( mobileHtml );
@@ -345,7 +348,7 @@ function identitySubsetMerge(
 		return ( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 	};
 	const desktopBodyClasses = new Set( bodyClasses( desktopHtml ) );
-	for ( const token of bodyClasses( mobileHtml ) ) {
+	for ( const token of deviceKey ? [] : bodyClasses( mobileHtml ) ) {
 		if ( desktopBodyClasses.has( token ) ) continue;
 		if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
 		classAliases.set( token, `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` );
@@ -359,7 +362,7 @@ function identitySubsetMerge(
 	}
 	for ( const [ id ] of desktopIds ) if ( ! mobileIds.has( id ) ) desktopOnlyIds.push( id );
 	// Without a single shared id there is nothing to anchor one tree to.
-	if ( sharedIdCount === 0 ) return undefined;
+	if ( sharedIdCount === 0 ) return cannotMerge( 'No shared stable element identities' );
 	// A mobile-only subtree maps when its outermost mobile-only element hangs
 	// from a shared ancestor. Mobile-only elements nested inside it (a phone
 	// menu's overlay inside the menu) travel with that subtree and need no home
@@ -370,7 +373,7 @@ function identitySubsetMerge(
 		if ( ancestor && ! desktopIds.has( ancestor ) && mobileIds.has( ancestor ) ) continue;
 		// Without an identified ancestor the element hangs from <body>, which
 		// both documents share by construction.
-		if ( ancestor && ! desktopIds.has( ancestor ) ) return undefined;
+		if ( ancestor && ! desktopIds.has( ancestor ) ) return cannotMerge( 'Device-only component has no shared ancestor' );
 		outermostMobileOnlyIds.push( id );
 	}
 	// The same id must hang from the same shared ancestors in both captures, or
@@ -386,7 +389,7 @@ function identitySubsetMerge(
 			desktopChain.length !== mobileChain.length ||
 			desktopChain.some( ( value, index ) => value !== mobileChain[ index ] )
 		)
-			return undefined;
+			return cannotMerge( 'Shared component ancestry differs' );
 	}
 	// Text the mobile capture rendered must live inside a mapped parent, or the
 	// documents carry different content and collapsing would drop it. Script
@@ -407,7 +410,7 @@ function identitySubsetMerge(
 		}
 		return false;
 	};
-	if ( unmappedText( $m.root()[ 0 ] ) ) return undefined;
+	if ( unmappedText( $m.root()[ 0 ] ) ) return cannotMerge( 'Device text has no stable identified parent' );
 
 	// A desktop-only wrapper around shared components must keep rendering on
 	// mobile, or hiding it would hide them too; only leaf-side desktop-only
@@ -460,7 +463,7 @@ function identitySubsetMerge(
 					: candidates.length === mobileSiblings.length
 					? candidates[ mobileSiblings.indexOf( step ) ]
 					: undefined;
-			if ( ! match ) return undefined;
+			if ( ! match ) return cannotMerge( 'Device-only component placement could not be resolved' );
 			parent = $d( match );
 			mobileParent = $m( step );
 		}
@@ -493,6 +496,20 @@ function identitySubsetMerge(
 	// walk records the shared component it started from, and only that
 	// component ships once per viewport.
 	const divergedRoots = new Set< string >();
+	const deviceInlineRestores: Array<() => void> = [];
+	if ( deviceKey ) {
+		const placement = ( $: cheerio.CheerioAPI, node: Element ) => {
+			const steps: string[] = [];
+			for ( let parent = node.parent; parent && isElementNode( parent ) && parent.tagName !== 'body'; parent = parent.parent ) {
+				steps.unshift( $( parent ).attr( 'id' ) ?? `${ parent.tagName }.${ $( parent ).attr( 'class' ) ?? '' }` );
+			}
+			return steps.join( '/' );
+		};
+		for ( const [ id, node ] of desktopIds ) {
+			const other = mobileIds.get( id );
+			if ( other && placement( $d, node ) !== placement( $m, other ) ) divergedRoots.add( id );
+		}
+	}
 	const sharedIdsIn = ( $: cheerio.CheerioAPI, node: Element ): string =>
 		$( node )
 			.find( '[id]' )
@@ -512,6 +529,21 @@ function identitySubsetMerge(
 		// Stable ids cannot override each document's resolved URL identity: a
 		// component whose viewports link or embed different destinations (a
 		// rotating partner strip) ships once per viewport, like a re-parented one.
+		if ( deviceKey ) {
+			if ( d.get( 0 )!.tagName !== m.get( 0 )!.tagName ||
+				d.contents().filter( ( _i, node ) => node.type === 'text' ).text() !== m.contents().filter( ( _i, node ) => node.type === 'text' ).text() ||
+				( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== RESPONSIVE_DESKTOP_ONLY_CLASS && token !== RESPONSIVE_MOBILE_ONLY_CLASS ).join( ' ' ) !== ( m.attr( 'class' ) ?? '' ) || d.attr( 'sizes' ) !== m.attr( 'sizes' ) ) {
+				divergedRoots.add( path.split( '/' )[ 0 ] as string );
+				return;
+			}
+			// Keep native inline priority instead of promoting declarations to !important.
+			if ( d.attr( 'style' ) !== m.attr( 'style' ) ) {
+				d.attr( 'data-blocks-engine-capture-device-inline', JSON.stringify( { [ deviceKey ]: m.attr( 'style' ) ?? '' } ) );
+				const original = m.attr( 'style' );
+				deviceInlineRestores.push( () => { if ( original === undefined ) m.removeAttr( 'style' ); else m.attr( 'style', original ); } );
+				m.attr( 'style', d.attr( 'style' ) ?? '' );
+			}
+		}
 		if ( referenceOf( d.get( 0 )! ) !== referenceOf( m.get( 0 )! ) ) {
 			divergedRoots.add( path.split( '/' )[ 0 ] as string );
 			return;
@@ -601,6 +633,7 @@ function identitySubsetMerge(
 		let cursor = 0;
 		for ( const mobileChild of mobileChildren ) {
 			const mobileAnchor = anchorOf( $m, mobileChild );
+			if ( deviceKey && mobileAnchor && divergedRoots.has( mobileAnchor ) ) continue;
 			const mobileClass = $m( mobileChild ).attr( 'class' ) ?? '';
 			let match = mobileAnchor ? desktopAnchors.indexOf( mobileAnchor ) : -1;
 			if ( match >= 0 && ( desktopChildren[ match ] as Element ).tagName !== mobileChild.tagName ) match = -1;
@@ -608,7 +641,7 @@ function identitySubsetMerge(
 				const candidate = desktopChildren[ index ] as Element;
 				if ( desktopAnchors[ index ] && mobileAnchor !== desktopAnchors[ index ] ) continue;
 				if ( candidate.tagName !== mobileChild.tagName ) continue;
-				if ( ( $d( candidate ).attr( 'class' ) ?? '' ) !== mobileClass && desktopChildren.length !== mobileChildren.length )
+				if ( ( $d( candidate ).attr( 'class' ) ?? '' ) !== mobileClass && ( deviceKey || desktopChildren.length !== mobileChildren.length ) )
 					continue;
 				match = index;
 			}
@@ -616,6 +649,7 @@ function identitySubsetMerge(
 			cursor = match + 1;
 			const desktopChild = desktopChildren[ match ] as Element;
 			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) {
+				if ( deviceKey && ( divergedRoots.has( desktopAnchors[ match ] ?? '' ) || divergedRoots.has( mobileAnchor ?? '' ) ) ) continue;
 				divergedRoots.add( path.split( '/' )[ 0 ] as string );
 				continue;
 			}
@@ -628,9 +662,10 @@ function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
-	if ( unsafeClassAlias ) return undefined;
-	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds );
-	if ( divergedComponents === undefined ) return undefined;
+	if ( unsafeClassAlias ) return cannotMerge( 'Class projection would change the authored cascade' );
+	deviceInlineRestores.forEach( restore => restore() );
+	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds, deviceKey );
+	if ( divergedComponents === undefined ) return cannotMerge( 'Divergent component anchor identity or placement cannot be preserved' );
 	$d( '[class]' ).each( ( _index, node ) => {
 		const element = $d( node );
 		element.attr( 'class', ( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => classAliases.get( token ) ?? token ).join( ' ' ) );
@@ -908,7 +943,8 @@ function splitDivergedComponents(
 	$m: cheerio.CheerioAPI,
 	roots: Set< string >,
 	desktopIds: Map< string, Element >,
-	mobileIds: Map< string, Element >
+	mobileIds: Map< string, Element >,
+	deviceKey?: string
 ): number | undefined {
 	if ( roots.size === 0 ) return 0;
 	const outermost = [ ...roots ].filter( ( id ) => {
@@ -939,8 +975,8 @@ function splitDivergedComponents(
 		for ( const node of [ mobile, ...mobile.find( '[id]' ).toArray().map( ( child ) => $m( child ) ) ] ) {
 			const value = node.attr( 'id' );
 			if ( ! value ) continue;
-			renamed.set( value, `${ value }--data-blocks-engine-capture-mobile` );
-			node.attr( 'id', `${ value }--data-blocks-engine-capture-mobile` );
+			renamed.set( value, `${ value }--data-blocks-engine-capture-${ deviceKey ?? 'mobile' }` );
+			node.attr( 'id', `${ value }--data-blocks-engine-capture-${ deviceKey ?? 'mobile' }` );
 		}
 		for ( const node of [ mobile, ...mobile.find( '*' ).toArray().map( ( child ) => $m( child ) ) ] ) {
 			for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
@@ -954,7 +990,24 @@ function splitDivergedComponents(
 		desktop.find( `.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).remove();
 		desktop.addClass( RESPONSIVE_DESKTOP_ONLY_CLASS );
 		mobile.removeClass( RESPONSIVE_DESKTOP_ONLY_CLASS ).addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
-		desktop.after( $m.html( mobile ) ?? '' );
+		if ( deviceKey ) {
+			const path: Element[] = [];
+			let ancestor = mobileElement.parent;
+			while ( ancestor && isElementNode( ancestor ) && ancestor.tagName !== 'body' && ! $m( ancestor ).attr( 'id' ) ) {
+				path.unshift( ancestor ); ancestor = ancestor.parent;
+			}
+			let parent = ancestor && isElementNode( ancestor ) && ancestor.tagName !== 'body'
+				? $d( desktopIds.get( $m( ancestor ).attr( 'id' )! )! ) : $d( 'body' );
+			for ( const step of path ) {
+				const candidates = parent.children().filter( ( _i, node ) => node.tagName === step.tagName && ( $d( node ).attr( 'class' ) ?? '' ) === ( $m( step ).attr( 'class' ) ?? '' ) );
+				if ( candidates.length !== 1 ) return undefined;
+				parent = candidates.first();
+			}
+			const position = $m( mobileElement ).index();
+			const children = parent.children();
+			if ( position < children.length ) children.eq( position ).before( $m.html( mobile ) ?? '' );
+			else parent.append( $m.html( mobile ) ?? '' );
+		} else desktop.after( $m.html( mobile ) ?? '' );
 	}
 	return outermost.length;
 }

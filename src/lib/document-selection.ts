@@ -1,7 +1,9 @@
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
+import selectorParser from 'postcss-selector-parser';
 import { parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { reconcileDeviceDocuments, deviceIslandCss, type DeviceReconciliationEvidence } from './device-reconciliation.js';
 import { IntegrityError } from './failure-class.js';
 
 /** Platform-owned, ordered request-identity rules. No viewport/capability inference. */
@@ -45,6 +47,7 @@ export interface DeviceAssembly {
 	viewports: Record<string, Record<string, string>>;
 	roots: Record<string, { html: Record<string, string>; body: Record<string, string> }>;
 	missing: string[];
+	evidence?: DeviceReconciliationEvidence;
 }
 
 /** display:contents wrappers cannot carry the real body margin or viewport overflow.
@@ -79,11 +82,13 @@ function rootCss( css: string, bodyClasses: readonly string[] ): string {
 	return root.toString();
 }
 
-/** Preserve each document's cascade and body flags; identity never collapses by tree similarity. */
+/** Preserve each document's cascade and body flags, sharing only proven identities. */
 export function assembleDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, onUnparseable?: UnparseableStylesheetSink ): DeviceAssembly {
 	validateDeviceSelection( selection );
 	const base = documents[ selection.defaultDocument ];
 	if ( ! base ) throw new Error( 'Default device document was not captured' );
+	const reconciliation = reconcileDeviceDocuments( documents, selection );
+	const wrapperKey = ( key: string ) => reconciliation.reconciled.has( key ) ? selection.defaultDocument : key;
 	const $ = cheerio.load( base );
 	$( 'style,link[rel~="stylesheet"],meta[name="viewport"],script:not([type="application/ld+json"])' ).remove();
 	$( 'html' ).removeAttr( 'style' ).removeAttr( 'class' );
@@ -109,8 +114,8 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		for ( const [ name, value ] of Object.entries( body[ 0 ]?.attribs ?? {} ) ) wrapper.attr( name, value );
 		wrapper.attr( 'data-blocks-engine-capture-device-document', key ).attr( 'data-blocks-engine-capture-document-scope', '' );
 		wrapper.addClass( `data-blocks-engine-capture-${ key }-document` );
-		wrapper.html( body.html() ?? '' ).find( 'script,style' ).remove();
-		$( 'body' ).append( wrapper );
+		wrapper.html( key === selection.defaultDocument ? reconciliation.body : body.html() ?? '' ).find( 'script,style' ).remove();
+		if ( ! reconciliation.reconciled.has( key ) ) $( 'body' ).append( wrapper );
 		let previous: ( typeof sheets )[number] | undefined;
 		const rootClasses = ( body.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 		for ( const node of source( 'style,link[rel~="stylesheet"]' ).toArray() ) {
@@ -139,12 +144,37 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 			sheets.splice( after, 0, previous );
 		}
 	}
+	const emittedIds = new Set( $( '[id]' ).toArray().map( node => $( node ).attr( 'id' ) ) );
 	for ( const sheet of sheets ) {
 		if ( sheet.css !== undefined ) {
-			const scope = sheet.keys.map( key => `[data-blocks-engine-capture-device-document="${ key }"]` ).join( ',' );
+			const scope = [ ...new Set( sheet.keys.map( key => `[data-blocks-engine-capture-device-document="${ wrapperKey( key ) }"]` ) ) ].join( ',' );
 			// Re-project once per emitted entry rather than replacing sentinel text
 			// that could also occur in authored CSS. Root projection is scope-independent.
-			const css = projectStylesheet( () => scopeCss( sheet.css!, { scope, rootClasses: sheet.rootClasses } ) + sheet.rootProjection!, onUnparseable );
+			const css = projectStylesheet( () => {
+				const scoped = scopeCss( sheet.css!, { scope, rootClasses: sheet.rootClasses } ) + sheet.rootProjection!;
+				if ( ! sheet.keys.some( key => reconciliation.reconciled.has( key ) ) ) return scoped;
+				const projected = postcss.parse( scoped );
+				// Divergent islands have unique ids; source selectors must address
+				// those ids too, in both the `#id` and exact `[id="…"]` forms,
+				// without changing source selector specificity.
+				const islandIds = ( id: string ): string[] => sheet.keys.filter( key => reconciliation.reconciled.has( key ) )
+					.map( key => `${ id }--data-blocks-engine-capture-${ key }` ).filter( alias => emittedIds.has( alias ) );
+				projected.walkRules( rule => {
+					if ( ! parseSelectorList( rule.selector ) ) { rule.remove(); return; }
+					rule.selector = selectorParser( selectors => {
+						selectors.walkIds( node => {
+							const alternatives = islandIds( node.value );
+							if ( alternatives.length ) node.replaceWith( selectorParser().astSync( `:is(${ [ node.toString(), ...alternatives.map( id => `#${ id }` ) ].join( ',' ) })` ).first.first! );
+						} );
+						selectors.walkAttributes( node => {
+							if ( node.attribute !== 'id' || node.operator !== '=' || node.insensitive || ! node.value ) return;
+							const alternatives = islandIds( node.value );
+							if ( alternatives.length ) node.replaceWith( selectorParser().astSync( `:is(${ [ node.toString(), ...alternatives.map( id => `[id=${ JSON.stringify( id ) }]` ) ].join( ',' ) })` ).first.first! );
+						} );
+					} ).processSync( rule.selector );
+				} );
+				return projected.toString();
+			}, onUnparseable );
 			if ( css === undefined ) continue;
 			sheet.copy.text( css );
 		}
@@ -158,12 +188,12 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	// document stands in until the runtime names one.
 	const visibility = '[data-blocks-engine-capture-device-document]{display:none!important}[data-blocks-engine-capture-device-unavailable]{display:none}' +
 		`html:not([data-blocks-engine-capture-selected-document]) [data-blocks-engine-capture-device-document="${ selection.defaultDocument }"]{display:contents!important}` +
-		Object.keys( viewports ).map( key => `html[data-blocks-engine-capture-selected-document="${ key }"] [data-blocks-engine-capture-device-document="${ key }"]{display:contents!important}` ).join( '' ) +
+		Object.keys( viewports ).map( key => `html[data-blocks-engine-capture-selected-document="${ key }"] [data-blocks-engine-capture-device-document="${ wrapperKey( key ) }"]{display:contents!important}` ).join( '' ) +
 		'html[data-blocks-engine-capture-document-unavailable] [data-blocks-engine-capture-device-unavailable]{display:block!important}';
-	head.prepend( $( '<style data-blocks-engine-capture-device-visibility>' ).text( visibility ) );
+	head.prepend( $( '<style data-blocks-engine-capture-device-visibility>' ).text( visibility + deviceIslandCss( Object.keys( viewports ), selection.defaultDocument ) ) );
 	const missing = selection.documents.filter( key => ! documents[ key ] );
 	if ( missing.length ) $( 'body' ).append( '<p data-blocks-engine-capture-device-unavailable role="status">This source device document was not captured.</p>' );
-	return { html: $.html(), selection, viewports, roots, missing };
+	return { html: $.html(), selection, viewports, roots, missing, evidence: reconciliation.evidence };
 }
 
 /** Shared by the parser-time html/body overlays, without a host-specific contract.
@@ -204,6 +234,6 @@ export function installDeviceSelection( html: string, assembly: Omit<DeviceAssem
 	const declared = $( 'head [data-blocks-engine-capture-device-style]' ).last();
 	if ( declared.length ) declared.after( runtime ); else $( 'head' ).append( runtime );
 	const roots = JSON.stringify( assembly.roots ).replace( /</g, '\\u003c' );
-	$( 'body' ).prepend( `<script data-blocks-engine-capture-device-body>(function(){${ ROOT_OVERLAY_RUNTIME }var roots=${ roots },key=document.documentElement.getAttribute('data-blocks-engine-capture-selected-document');overlayRoot(document.body,roots,'body',key);})();</script>` );
+	$( 'body' ).prepend( `<script data-blocks-engine-capture-device-body>(function(){${ ROOT_OVERLAY_RUNTIME }var roots=${ roots },key=document.documentElement.getAttribute('data-blocks-engine-capture-selected-document');overlayRoot(document.body,roots,'body',key);document.addEventListener('DOMContentLoaded',function(){var wrapper=document.querySelector('[data-blocks-engine-capture-device-document="'+key+'"]')||document.querySelector('[data-blocks-engine-capture-device-document="'+${ JSON.stringify( assembly.selection.defaultDocument ) }+'"]');if(wrapper)overlayRoot(wrapper,roots,'body',key);document.querySelectorAll('[data-blocks-engine-capture-device-inline]').forEach(function(node){var styles=JSON.parse(node.getAttribute('data-blocks-engine-capture-device-inline'));if(Object.prototype.hasOwnProperty.call(styles,key))node.setAttribute('style',styles[key]);});});})();</script>` );
 	return $.html();
 }
