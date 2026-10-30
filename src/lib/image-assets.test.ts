@@ -9,6 +9,8 @@ import { captureAssets, collectAssets as collectImageAssets, imageContentType, r
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { SourceRequestGovernors } from './source-request-governor.js';
 import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
+import { downloadCaptureSectionMedia } from './capture.js';
+import { SectionSpecsStore } from './replicate/section-specs-store.js';
 
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
@@ -111,6 +113,27 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     expect(record.original).toMatchObject({ width: 40, height: 20 });
    });
    expect(hits).toBe(1);
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
+ it('keeps a verified original when later section media shares its filename', async () => {
+  const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/></svg>`;
+  const server = createServer((request, response) => { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(request.url!.startsWith('/large/') ? 40 : 20)); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'media-names-'));
+  try {
+   await runWithTrustedOrigins([url], async () => {
+    // Two CDN renditions of one image share a basename, as Wix transform URLs do.
+    const [record] = await captureAssets(root, [{ url, html: '<img src="/small/photo.svg">' }]);
+    SectionSpecsStore.load(root).set(url, [{ sectionIndex: 0, images: [{ url: `${url}large/photo.svg` }], cells: [] } as never], []);
+    expect(await downloadCaptureSectionMedia(root, [url])).toBe(1);
+    expect(readFileSync(record.local_path!, 'utf8')).toBe(svg(20));
+   });
   } finally {
    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
    rmSync(root, { recursive: true, force: true });

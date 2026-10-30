@@ -48,7 +48,8 @@ vi.mock( './capture-export.js', () => ( {
 	} ),
 } ) );
 
-vi.mock( './media-fetch/media.js', () => ( {
+vi.mock( './media-fetch/media.js', async ( importOriginal ) => ( {
+	...( await importOriginal< typeof import( './media-fetch/media.js' ) >() ),
 	downloadMedia: vi.fn( async ( url: string, outputDir: string ) => {
 		if ( url.endsWith( 'failed.jpg' ) ) {
 			return { localPath: null, error: 'download failed' };

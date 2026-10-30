@@ -5,7 +5,7 @@ import { findAdapter } from '../adapters/index.js';
 import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
 import { normalizeTrustedOrigins, runWithTrustedOrigins, safeFetch } from './media-fetch/safe-fetch.js';
-import { downloadMedia } from './media-fetch/media.js';
+import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { captureAssets } from './image-assets.js';
 import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
@@ -358,7 +358,7 @@ export async function downloadCaptureSectionMedia(
 	const recordedImageUrls = new Set( imageAssets.flatMap( record => record.source_urls ) );
 	const stubs = MediaStubStore.load( outputDir );
 	const mediaDir = join( outputDir, 'media' );
-	const seenNames = new Map< string, number >();
+	const seenNames = existingMediaNames( mediaDir );
 	const { downloaded } = await downloadSectionMedia( {
 		srcUrls: sectionUrls,
 		isAlreadyDone: ( url ) => recordedImageUrls.has( url ) || ! stubs.shouldAttempt( url ),
