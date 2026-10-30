@@ -183,3 +183,13 @@ export async function applyOwnerIdentity( page: Page, url: string, serverHtml: s
 		},
 	} );
 }
+/**
+ * Medium's error view ("500 / Apologies, but something went wrong on our
+ * end."), which its runtime serves in place of a story or profile it fails to
+ * load. Its class names are build hashes; the stable markers are the one
+ * sentence under the heading that links both Medium's status page and its
+ * story browser, outside any story `article`.
+ */
+export const clientErrorShellSelectors = [
+	'h2 + p:has(> a[href="https://status.medium.com"]):has(> a[href="https://medium.com/browse/top"]):not(article p)',
+];
