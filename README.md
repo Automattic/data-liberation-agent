@@ -18,6 +18,10 @@ Every retained route becomes a directory of HTML, CSS, media, and fonts, with re
 
 **HTML is the contract.** The liberated site is the deliverable — not an intermediate format on the way to somewhere else, and not tied to any destination.
 
+## Release provenance
+
+Release tarballs contain `package/provenance.json` (or `provenance.json` at the installed package root) with `name`, `version`, and `commit`. The `commit` is the full Git HEAD at pack time; packing requires a resolvable Git commit. This file is generated only during `npm pack` and removed afterward, leaving committed bundles unchanged.
+
 ## Four commands
 
 ```bash

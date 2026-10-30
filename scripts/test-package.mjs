@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, copyFileSync, cpSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSync, cpSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -47,11 +48,43 @@ async function withDeadline(promise, label, timeoutMs = MCP_TIMEOUT_MS) {
 
 try {
   mkdirSync(consumerDir);
+  const commit = run('git', ['rev-parse', 'HEAD']).stdout.trim();
+  const statusBefore = run('git', ['status', '--porcelain', '--untracked-files=all']).stdout;
+  const diffBefore = run('git', ['diff', '--binary', 'HEAD']).stdout;
+  assert.ok(!existsSync(join(repoRoot, 'provenance.json')));
   const packed = run(npm, ['pack', '--json', '--pack-destination', scratch]);
   const [{ filename }] = JSON.parse(packed.stdout);
+  assert.ok(!existsSync(join(repoRoot, 'provenance.json')), 'postpack must remove transient provenance');
+  assert.equal(run('git', ['status', '--porcelain', '--untracked-files=all']).stdout, statusBefore);
+  assert.equal(run('git', ['diff', '--binary', 'HEAD']).stdout, diffBefore);
   const releaseLayout = join(scratch, 'release-layout');
   mkdirSync(join(releaseLayout, 'node_modules'), { recursive: true });
   run('tar', ['-xzf', join(scratch, filename), '-C', releaseLayout, '--strip-components=1']);
+  const { name, version } = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  assert.deepEqual(JSON.parse(readFileSync(join(releaseLayout, 'provenance.json'), 'utf8')), {
+    name, version, commit,
+  });
+
+  // Exercise the real npm lifecycle outside a checkout and with an unborn HEAD.
+  const unversioned = join(scratch, 'unversioned');
+  mkdirSync(join(unversioned, 'scripts'), { recursive: true });
+  copyFileSync(join(repoRoot, 'scripts', 'pack-provenance.mjs'), join(unversioned, 'scripts', 'pack-provenance.mjs'));
+  const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  writeFileSync(join(unversioned, 'package.json'), JSON.stringify({
+    name, version, type: 'module',
+    scripts: { prepack: manifest.scripts.prepack, postpack: manifest.scripts.postpack },
+  }));
+  for (const unborn of [false, true]) {
+    if (unborn) run('git', ['init'], { cwd: unversioned });
+    const failed = spawnSync(npm, ['pack', '--json', '--pack-destination', scratch], {
+      cwd: unversioned, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS,
+    });
+    if (failed.error) throw failed.error;
+    assert.notEqual(failed.status, 0, 'packing without a source commit must fail');
+    assert.match(failed.stderr, /Cannot pack release: unable to determine the source commit/);
+    assert.ok(!existsSync(join(unversioned, 'provenance.json')));
+  }
+
   const repoRequire = createRequire(join(repoRoot, 'package.json'));
   const playwrightRoot = dirname(repoRequire.resolve('playwright/package.json'));
   const playwrightRequire = createRequire(join(playwrightRoot, 'package.json'));
