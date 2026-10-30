@@ -1645,6 +1645,14 @@ function buildExportCapture(
 		resourceManifest,
 		outputDir
 	);
+	// Component-only lazy media is evidence even when absent from the initial route.
+	for (const entry of retainedEntries) for (const reference of galleryFrameMediaUrls(entry.interactions?.states ?? [], entry.url, entry.interactions?.components)) {
+		const indexed = assetReferenceLocations.locations.get(reference);
+		if (indexed) continue;
+		assetReferenceLocations.locations.set(reference, { count: 1, references: [{ route: entry.url, path: routePathOf(entry.url), document: 'component', reference }] });
+		assetReferenceLocations.assetCount++;
+		assetReferenceLocations.totalReferenceCount++;
+	}
 	// The bounded asset index is the last consumer of the normalized source
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
@@ -1668,7 +1676,7 @@ function buildExportCapture(
 	const interactionMediaFamilies = new Set< string >();
 	const interactionMediaReferences = new Map< string, Set< string > >();
 	for ( const entry of retainedEntries ) {
-		for ( const reference of galleryFrameMediaUrls( entry.interactions?.states ?? [], entry.url ) ) {
+		for ( const reference of galleryFrameMediaUrls( entry.interactions?.states ?? [], entry.url, entry.interactions?.components ) ) {
 			const family = mediaFamily( reference );
 			interactionMediaFamilies.add( family );
 			const references = interactionMediaReferences.get( family ) ?? new Set< string >();
