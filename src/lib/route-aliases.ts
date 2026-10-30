@@ -95,6 +95,29 @@ export function queryOnlyAliasCandidates( urls: readonly string[] ): string[] {
 	return [ ...byPath.values() ].filter( group => group.length > 1 ).flatMap( group => group.filter( url => new URL( url ).search !== '' ) );
 }
 
+/**
+ * The route a query rendition declares itself an alias of: its `rel=canonical`
+ * differs from it by the query string alone (the same evidence #835 reads from
+ * server HTML, read here from the rendered document). Undefined for a
+ * query-less route, a self canonical, a different path or origin, or a
+ * canonical outside the route scope — each keeps the route as its own page.
+ */
+export function queryOnlyCanonicalTarget( url: string, canonical: string | undefined, routeScope?: SiteRouteScope ): string | undefined {
+	if ( ! canonical ) return undefined;
+	let route: URL;
+	let target: URL;
+	try {
+		route = new URL( url );
+		target = new URL( canonical, url );
+	} catch {
+		return undefined;
+	}
+	if ( ! route.search || target.origin !== route.origin || target.pathname !== route.pathname ) return undefined;
+	const key = documentRequestUrl( target.href );
+	if ( key === documentRequestUrl( route.href ) || ! routeInScope( key, routeScope ) ) return undefined;
+	return key;
+}
+
 /** First `<link rel="canonical">` of a server-HTML fragment, resolved against the response. */
 export function canonicalLinkHref( html: string, baseUrl: string ): string | undefined {
 	const $ = cheerio.load( html );

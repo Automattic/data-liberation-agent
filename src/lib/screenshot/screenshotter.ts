@@ -64,6 +64,7 @@ import { GlyphColorCache, recordGlyphColors } from './glyph-color.js';
 import { portRenderedGoogleMaps } from './rendered-google-maps.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
+import { ROUTE_ALIAS_CANONICAL, queryOnlyCanonicalTarget } from '../route-aliases.js';
 import { RouteTimeBudget, RouteDeadlines, deriveRouteDeadlineMs, routeTimeoutDiagnostic } from '../capture-time-budget.js';
 import { routeInScope, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
@@ -202,6 +203,8 @@ interface CapturePerViewportArgs {
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
 	resolveClientRedirect?: ( page: Page, url: string ) => Promise< string | undefined >;
+	/** Resolve a query rendition whose rendered rel=canonical is its query-less route to that route. */
+	canonicalQueryAlias?: boolean;
 	beforeFluid?: ScreenshotOpts['beforeFluid'];
 	beforeSerialize?: (
 		page: import('playwright').Page,
@@ -947,6 +950,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		if ( args.resolveClientRedirect ) {
 			const target = await args.resolveClientRedirect( page, url ).catch( () => undefined );
 			if ( target && serverRedirectTarget( url, target ) === target ) {
+				entry.redirectedTo = target;
+				return false;
+			}
+		}
+		// A query rendition (a tracking or source parameter on a link) whose
+		// rendered rel=canonical is the same path is that route's document, as
+		// export's duplicate detection would conclude after a full capture. Read
+		// from the rendered document because server HTML can be withheld from
+		// plain HTTP probes (#835). It continues as an alias, so the canonical
+		// route is captured once and no rendition spends a full browser pass.
+		if ( args.canonicalQueryAlias && new URL( url ).search ) {
+			const canonical = await page.evaluate( () => ( document.querySelector( 'link[rel~="canonical" i][href]' ) as HTMLLinkElement | null )?.href ).catch( () => undefined );
+			const target = queryOnlyCanonicalTarget( url, canonical, args.routeScope );
+			if ( target ) {
+				args.diagnostics?.push( { code: ROUTE_ALIAS_CANONICAL, reason: `rendered rel=canonical resolves to ${ target }; captured once under that route` } );
 				entry.redirectedTo = target;
 				return false;
 			}
@@ -2698,6 +2716,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								? { reflowPhoneViewport: { width: phoneProfile.width, height: phoneProfile.height } }
 								: {} ),
 							resolveClientRedirect: opts.resolveClientRedirect,
+							// The entrypoint is the capture's own identity, never an alias.
+							canonicalQueryAlias: ! primaryRef || documentRequestUrl( url ) !== documentRequestUrl( primaryRef ),
 							beforeFluid: opts.beforeFluid,
 							beforeSerialize: opts.beforeSerialize,
 							observeSource: opts.observeSource,

@@ -436,4 +436,43 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
 		}
 	}, 240_000);
+	it('resolves linked query renditions to their rendered rel=canonical route instead of capturing each one', async () => {
+		const requests: string[] = [];
+		// The canonical is written by script: plain HTTP probes never see it, only the rendered document.
+		const page = (path: string | undefined, body: string) => `<meta name="viewport" content="width=device-width,initial-scale=1">${path ? `<script>var l=document.createElement('link');l.rel='canonical';l.href=${JSON.stringify(path)};document.head.appendChild(l)</script>` : ''}${body}`;
+		const docs: Partial<Record<string, string>> = {
+			'/': page('/', '<h1>Home</h1><a href="/?ref=a">Home again</a><a href="/?ref=b">Home again</a><a href="/story?ref=a">Story</a><a href="/list?page=2">Next</a>'),
+			'/story': page('/story', '<h1>Story</h1><a href="/?ref=c">Home</a><a href="/story?ref=b">Story again</a>'),
+			// A query rendition without a canonical is its own document.
+			'/list': page(undefined, '<h1>Page two</h1>'),
+		};
+		const source = createServer((request, response) => {
+			requests.push(request.url!);
+			const doc = docs[new URL(request.url!, 'http://x').pathname];
+			response.writeHead(doc ? 200 : 404, {'content-type': 'text/html'});
+			response.end(doc ?? '<h1>Absent</h1>');
+		});
+		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
+		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
+		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'canonical-frontier-'));
+		try {
+			const url = `${origin}/`;
+			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 1, settleMs: 0, learnFluid: false, viewports: [{id: 'desktop', width: 390, height: 844}]});
+			expect(capture.failed).toBe(0);
+			// Three documents captured in full; five renditions resolved as aliases.
+			expect(capture.captured).toBe(3);
+			expect(capture.skipped).toBe(5);
+			expect(capture.linkedPageCoverage!.requiredUrls).toContain(`${origin}/story`);
+			const receipt = JSON.parse(readFileSync(exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures: [], discoveryDiagnostics: capture.linkedPageCoverage!.diagnostics}), 'utf8'));
+			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual([`${origin}/`, `${origin}/list?page=2`, `${origin}/story`]);
+			expect(receipt.routes.flatMap((route: {url: string}) => route.url.includes('ref=') ? [route.url] : [])).toEqual([]);
+			expect(Object.fromEntries(receipt.duplicateRoutes.map((row: {url: string; canonicalUrl: string}) => [row.url.slice(origin.length), row.canonicalUrl.slice(origin.length)]))).toEqual({
+				'/?ref=a': '/', '/?ref=b': '/', '/?ref=c': '/', '/story?ref=a': '/story', '/story?ref=b': '/story',
+			});
+		} finally {
+			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));
+			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
+		}
+	}, 120_000);
 });
