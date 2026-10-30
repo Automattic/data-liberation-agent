@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_CAPTURE_TIME_BUDGET_MS } from './route-budget.js';
 import { CAPTURE_BUDGET_DRAIN_MS, CAPTURE_BUDGET_MAX_GRACE_MS, captureTimeBudgetWindow, deriveRouteDeadlineMs, ROUTE_DEADLINE_MIN_MS, RouteDeadlines, RouteTimeBudget, routeTimeoutDiagnostic, validateRouteDeadlineMs, validateTimeBudgetMs } from './capture-time-budget.js';
 import { isUsableCapture, missingRoutes } from './capture-usability.js';
 
@@ -60,6 +61,26 @@ describe( 'RouteTimeBudget', () => {
 		}
 		expect( count ).toBe( admitted );
 		expect( budget.admits( entrypoint ) ).toBe( true );
+	} );
+
+	it( 'admits routes after a slow entrypoint: its one-time cost does not project onto later routes', () => {
+		let now = 0;
+		const entrypoint = 'https://example.test/';
+		const budget = new RouteTimeBudget( { ...captureTimeBudgetWindow( 0, DEFAULT_CAPTURE_TIME_BUDGET_MS ), projectAdmission: true }, entrypoint, () => now );
+		// The entrypoint runs alone and pays one-time work — shared chrome,
+		// dialog and interaction probing, observation — finishing 8.65 minutes
+		// into the 17 minute budget.
+		budget.start( entrypoint );
+		now = 519_000;
+		budget.finish( entrypoint );
+		// A typical route fits in what remains of the admission window (about
+		// 16 minutes), and so does the next once the projection rests on
+		// non-entrypoint evidence alone.
+		expect( budget.admits( 'https://example.test/about' ) ).toBe( true );
+		budget.start( 'https://example.test/about' );
+		now += 195_000;
+		budget.finish( 'https://example.test/about' );
+		expect( budget.admits( 'https://example.test/next' ) ).toBe( true );
 	} );
 
 	it( 'reports reserve-skipped routes as budget skips naming the reserve, under clock-only and projected admission', () => {
