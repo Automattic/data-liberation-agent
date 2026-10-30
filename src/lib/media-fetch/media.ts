@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, readFileSync, statSync, unlinkSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { createHash } from 'crypto';
 import { basename, extname, join, resolve } from 'path';
 import { pipeline } from 'stream/promises';
@@ -57,6 +57,15 @@ function boundFilename(name: string, hashSource: string = name): string {
     truncated += char;
   }
   return `${truncated}${suffix}${extension}`;
+}
+
+/**
+ * Seed a `safeFilename` name map with the files already in a media directory.
+ * Every writer into a shared directory starts here, so a later download never
+ * replaces bytes an earlier stage already wrote (and possibly verified).
+ */
+export function existingMediaNames(dir: string): Map<string, number> {
+  return new Map(existsSync(dir) ? readdirSync(dir).map((name) => [name, 1] as [string, number]) : []);
 }
 
 export function safeFilename(filename: string, seenNames: Map<string, number>): string {

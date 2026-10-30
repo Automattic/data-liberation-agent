@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { srcsetCandidates } from './srcset.js';
-import { deriveFilenameFromUrl, downloadMedia, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
+import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -265,9 +265,8 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	const manifestPath = join( root, 'resources', 'manifest.json' );
 	const resources: CapturedResourceManifest['resources'] = existsSync( manifestPath )
 		? JSON.parse( readFileSync( manifestPath, 'utf8' ) ).resources ?? {} : {};
-	const names = new Map<string, number>();
 	const mediaDir = join( root, 'media' );
-	if ( existsSync( mediaDir ) ) for ( const name of readdirSync( mediaDir ) ) names.set( name, 1 );
+	const names = existingMediaNames( mediaDir );
 	let browser: import('playwright').Browser | undefined;
 	try {
 		if ( images.length ) {

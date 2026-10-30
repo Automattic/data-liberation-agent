@@ -1,7 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { collectAssets } from './image-assets.js';
-import { downloadMedia } from './media-fetch/media.js';
+import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { MediaStubStore } from './resume-state/index.js';
 import type { SourceRequestGovernors } from './source-request-governor.js';
 
@@ -19,7 +19,7 @@ import type { SourceRequestGovernors } from './source-request-governor.js';
  */
 export class AssetAcquisitionQueue {
 	private readonly mediaDir: string;
-	private readonly names = new Map< string, number >();
+	private readonly names: Map< string, number >;
 	private readonly stubs: MediaStubStore;
 	private readonly seen = new Set< string >();
 	private readonly waiting: string[] = [];
@@ -36,7 +36,7 @@ export class AssetAcquisitionQueue {
 		private readonly concurrency = 2
 	) {
 		this.mediaDir = join( outputDir, 'media' );
-		if ( existsSync( this.mediaDir ) ) for ( const name of readdirSync( this.mediaDir ) ) this.names.set( name, 1 );
+		this.names = existingMediaNames( this.mediaDir );
 		this.stubs = MediaStubStore.load( outputDir );
 	}
 
