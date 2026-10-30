@@ -4894,7 +4894,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		writeFileSync( join( outputDir, 'resources', '.netlify', 'scripts', 'rum' ), 'rum();' );
 		writeFileSync(
 			join( outputDir, 'resources', 'assets', 'css', 'site.css' ),
-			'.hero{background:url("../images/hero.webp")}.missing{background:url("../images/missing.webp")}'
+			'.hero{background:url("../images/hero.webp")}.missing{background:url("../images/missing.webp")}.badge{background:url("../images/badge.png")}'
 		);
 		writeFileSync( join( outputDir, 'resources', 'assets', 'images', 'hero.webp' ), 'webp' );
 		writeFileSync(
@@ -4949,8 +4949,19 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
 			} )
 		);
+		// Image acquisition verified this stylesheet-only image as a media original.
+		writeFileSync( join( outputDir, 'media', 'badge.png' ), 'badge' );
+		writeFileSync( join( outputDir, 'image-assets.json' ), JSON.stringify( { version: 1, images: [ {
+			kind: 'image',
+			source_urls: [ 'https://example.com/assets/images/badge.png' ],
+			references: [ { kind: 'CSS', document_url: 'https://example.com/assets/css/site.css', location: 'declaration:1:background', source_url: 'https://example.com/assets/images/badge.png' } ],
+			resolved_original: 'https://example.com/assets/images/badge.png',
+			original: { source_url: 'https://example.com/assets/images/badge.png', content_type: 'image/png', width: 16, height: 136, sha256: '8805cdea2b197df5fd555dc359a7f5beed2e6d65de498ce3df3de94d78e1e262' },
+			local_path: join( outputDir, 'media', 'badge.png' ),
+		} ] } ) );
 		const media = MediaStubStore.load( outputDir );
 		media.markSuccess( 'https://example.com/hero.png', join( outputDir, 'media', 'hero.png' ) );
+		media.markSuccess( 'https://example.com/assets/images/badge.png', join( outputDir, 'media', 'badge.png' ) );
 		media.flush();
 
 		exportWebsiteCapture( {
@@ -4968,8 +4979,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect(
 			readFileSync( join( outputDir, 'website', 'assets', 'css', 'site.css' ), 'utf8' )
 		).toBe(
-			'.hero{background:url("/assets/images/hero.webp")}.missing{background:url("about:blank")}'
+			'.hero{background:url("/assets/images/hero.webp")}.missing{background:url("about:blank")}.badge{background:url("/media/badge.png")}'
 		);
+		expect( readFileSync( join( outputDir, 'website', 'media', 'badge.png' ), 'utf8' ) ).toBe( 'badge' );
 		expect(
 			readFileSync( join( outputDir, 'website', 'assets', 'images', 'hero.webp' ), 'utf8' )
 		).toBe( 'webp' );
