@@ -33,8 +33,9 @@ export interface CapturedGallery {
 export function galleryFrameMediaUrls(
 	states: readonly CapturedDialogInteraction[],
 	baseUrl: string,
+	components: readonly import('./component-states.js').CapturedComponent[] = [],
 ): string[] {
-	const urls = new Set< string >();
+	const urls = new Set< string >(components.flatMap(component => component.slideshow?.frames.flatMap(frame => frame.media.map(media => media.asset)) ?? []));
 	for ( const state of states ) {
 		for ( const gallery of [ state.gallery?.inline, state.gallery?.lightbox ] ) {
 			for ( const frame of gallery?.frames ?? [] ) {
@@ -498,8 +499,8 @@ export async function markGalleryRoots(page: Page): Promise<string[]> {
 	}, DIRECTION);
 }
 
-export async function captureGalleries(page: Page): Promise<CapturedDialogInteraction[]> {
-	const roots = await markGalleryRoots(page);
+export async function captureGalleries(page: Page, excludedRoots: string[] = []): Promise<CapturedDialogInteraction[]> {
+	const roots = (await markGalleryRoots(page)).filter(root => !excludedRoots.includes(root));
 	const states: CapturedDialogInteraction[] = [];
 	for (const root of roots) {
 		// Activation moves nested scrollports as well as the window. Keep actual

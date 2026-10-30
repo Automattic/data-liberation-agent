@@ -325,7 +325,7 @@ export async function downloadCaptureSectionMedia(
 	if ( existsSync( manifestPath ) ) {
 		const manifest = JSON.parse( readFileSync( manifestPath, 'utf8' ) ) as { entries?: Record< string, ManifestEntry > };
 		for ( const [ pageUrl, entry ] of Object.entries( manifest.entries ?? {} ) ) {
-			sectionUrls.push( ...galleryFrameMediaUrls( entry.interactions?.states ?? [], pageUrl ) );
+			sectionUrls.push( ...galleryFrameMediaUrls( entry.interactions?.states ?? [], pageUrl, entry.interactions?.components ) );
 		}
 	}
 

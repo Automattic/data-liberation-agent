@@ -171,7 +171,7 @@ export function buildSemanticEvidenceArtifacts( pages: SemanticEvidencePage[] ):
 interface AssetEvidenceReference {
 	route: string;
 	path: string;
-	document: 'desktop' | 'mobile' | 'css';
+	document: 'desktop' | 'mobile' | 'css' | 'component';
 	reference: string;
 }
 

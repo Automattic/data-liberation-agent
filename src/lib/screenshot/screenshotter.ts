@@ -1418,7 +1418,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		for ( const component of components ) for ( const state of component.states ) {
 			await resourceStore.captureDomDependencies( state.html, navigationUrl );
 		}
-		const galleryStates = await withReadOnlyProbes( page, () => captureGalleries( page ) ).catch( () => [] );
+		const galleryStates = await withReadOnlyProbes( page, () => captureGalleries( page, components.filter( component => component.slideshow ).map( component => component.selector ) ) ).catch( () => [] );
 		const skip = combineSkips( combineSkips( chrome?.skip, excluded.skip ), componentBaseline.skip );
 		let interactions: InteractionStatesReport;
 		try {
@@ -1561,7 +1561,14 @@ function mergeInteractionReports(
 	);
 	return {
 		...latest,
-		components: [ ...new Map( [ ...( previous.components ?? [] ), ...( latest.components ?? [] ) ].map( component => [ component.selector, component ] ) ).values() ],
+		components: [ ...new Map( [ ...( previous.components ?? [] ), ...( latest.components ?? [] ) ].map( component => {
+			const prior = previous.components?.find(node => node.selector === component.selector);
+			if (!component.slideshow || !prior?.slideshow || prior === component) return [component.selector, component] as const;
+			return [component.selector, { ...component, slideshow: { ...component.slideshow,
+				views: [...prior.slideshow.views, ...component.slideshow.views].filter((view, index, all) => all.findIndex(other => other.width === view.width) === index),
+				navigation: [...prior.slideshow.navigation, ...component.slideshow.navigation].filter((mode, index, all) => all.findIndex(other => other.mode === mode.mode) === index),
+			} }] as const;
+		} ) ).values() ],
 		states,
 		routeNavigation: [ ...new Map( [ ...( previous.routeNavigation ?? [] ), ...( latest.routeNavigation ?? [] ) ]
 			.map( route => [ route.selector, route ] ) ).values() ],

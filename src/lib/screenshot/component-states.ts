@@ -1,13 +1,16 @@
 import type { Page } from 'playwright';
+import { snapshotCarousels, exploreCarousel, type Slideshow } from './carousel-components.js';
 import type { CapturedDialogInteraction, InteractionStatesReport } from './interaction-capture.js';
 
 /** A route's stateful surfaces, not an inventory of individual trigger clicks. */
 export interface CapturedComponent {
 	selector: string;
+	function?: 'slideshow';
+	slideshow?: Slideshow;
 	kind: 'tabs' | 'disclosure' | 'dialog' | 'listbox' | 'carousel' | 'menu' | 'filter' | 'choice-group' | 'unsupported';
 	initial: string;
 	states: Array<{ id: string; html: string; evidence?: CapturedDialogInteraction }>;
-	transitions: Array<{ from: string; to: string; trigger: { selector: string; action: 'click' } }>;
+	transitions: Array<{ from: string; to: string; trigger: { selector: string; action: 'click' | 'keyboard' | 'swipe' } }>;
 	status: 'captured' | 'unsupported' | 'partial';
 	reason?: string;
 }
@@ -21,7 +24,8 @@ export interface ComponentBaseline {
 
 /** Read only. Called before any component exploration, on the settled route. */
 export async function snapshotComponents(page: Page): Promise<ComponentBaseline> {
-	return page.evaluate(() => {
+	const carousels = await snapshotCarousels(page);
+	const baseline = await page.evaluate((carousels) => {
 		const selector = (element: Element): string => {
 			if (element.id && document.querySelectorAll('#' + CSS.escape(element.id)).length === 1) return '#' + CSS.escape(element.id);
 			const parts: string[] = [];
@@ -31,11 +35,12 @@ export async function snapshotComponents(page: Page): Promise<ComponentBaseline>
 			}
 			return 'body > ' + parts.join(' > ');
 		};
-		const components: CapturedComponent[] = [];
+		const components: CapturedComponent[] = carousels;
 		const controls: ComponentBaseline['controls'] = [];
-		const roots: string[] = [];
+		const roots: string[] = carousels.map(node => node.selector);
 		for (const root of Array.from(document.querySelectorAll('[role="tablist"],details,[aria-roledescription="carousel"],[aria-expanded][aria-controls]:not([role="tab"]),[aria-haspopup]')).slice(0, 64)) {
 			const target = document.getElementById(root.getAttribute('aria-controls') ?? '');
+			if (carousels.some(node => document.querySelector(node.selector)?.contains(root))) continue;
 			const surface = target?.matches('[role="dialog"],[role="listbox"],[role="menu"],dialog') ? target : target?.querySelector('[role="dialog"],[role="listbox"],[role="menu"],dialog');
 			const role = surface?.getAttribute('role') ?? (surface?.tagName === 'DIALOG' ? 'dialog' : root.getAttribute('aria-haspopup'));
 			const kind: CapturedComponent['kind'] = root.matches('[role="tablist"]') ? 'tabs' : root.matches('details') ? 'disclosure' : root.matches('[aria-roledescription="carousel"]') ? 'carousel' : role === 'dialog' || role === 'listbox' || role === 'menu' ? role : !role && target && !root.closest('header,nav,footer,[role="navigation"],[role="banner"]') ? 'disclosure' : 'unsupported';
@@ -59,7 +64,8 @@ export async function snapshotComponents(page: Page): Promise<ComponentBaseline>
 			members.slice(0, 24).forEach((member, index) => controls.push({ component, selector: selector(member), state: kind === 'tabs' ? `tab-${index}` : kind === 'disclosure' ? (initial === 'open' ? 'closed' : 'open') : '' }));
 		}
 		return { components, controls, ...(roots.length ? { skip: roots.flatMap(root => [root, root + ' *']).join(',') } : {}) };
-	});
+	}, carousels);
+	return baseline;
 }
 
 /** Exploration owns only component states. It never returns replacement route HTML. */
@@ -69,11 +75,16 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 	for (const [index, component] of components.entries()) {
 		let current = component.initial;
 		const controls = baseline.controls.filter(control => control.component === index);
-		if (!controls.length) continue;
+		if (!controls.length && !component.slideshow) continue;
 		if (skip && await page.locator(component.selector).first().evaluate((root, excluded) => root.matches(excluded), skip).catch(() => true)) {
 			component.status = 'unsupported'; component.reason = 'interaction probe region excluded'; continue;
 		}
-		// Directional carousels are driven until the initial state repeats, not just once per button.
+		if (component.slideshow) {
+			try { await exploreCarousel(page, component); }
+			catch { component.status = 'partial'; component.reason = 'carousel exploration failed'; }
+			continue;
+		}
+		// Legacy caches without slideshow observations retain bounded exploration.
 		const restore = controls.find(control => control.state === component.initial);
 		const drives = component.kind === 'carousel' ? Array.from({ length: 24 }, () => controls.find(control => /next|forward/i.test(control.selector)) ?? controls.at(-1)).filter(Boolean) : component.kind === 'tabs' ? [...controls, ...(restore ? [restore] : [])] : [...controls, ...controls];
 		for (const control of drives) {
@@ -158,6 +169,7 @@ export function routeComponents(report: InteractionStatesReport): CapturedCompon
 			result.push(component);
 		}
 		if (component.status === 'unsupported') { component.reason = 'shape has no classified component role'; continue; }
+		if (evidence.gallery && component.slideshow) continue;
 		if (evidence.gallery) {
 			const gallery = evidence.gallery.inline;
 			component.states = gallery.frames.map((frame, index) => ({ id: `slide-${index}`, html: frame.html, ...(index === gallery.initial ? { evidence } : {}) }));
