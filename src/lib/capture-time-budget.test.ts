@@ -38,12 +38,8 @@ describe( 'RouteTimeBudget', () => {
 		[ 'with an explicit zero reserve', 0, false, 44 ],
 		[ 'with a 5s reserve, clock-only admission', 5_000, false, 6 ],
 		[ 'with a 5.5s reserve, clock-only admission', 5_500, false, 6 ],
-		// Under projected admission the projection rests on non-entrypoint
-		// routes alone, so until one finishes the 127s prior governs — and it
-		// does not fit this 45s window, whatever the reserve. Admission closes
-		// before anything but the entrypoint starts.
-		[ 'with a 5s reserve, projected admission', 5_000, true, 0 ],
-		[ 'with a 5.5s reserve, projected admission', 5_500, true, 0 ],
+		[ 'with a 5s reserve, projected admission', 5_000, true, 6 ],
+		[ 'with a 5.5s reserve, projected admission', 5_500, true, 5 ],
 	] )( 'closes admission once the per-route reserve no longer fits: %s', ( _name, reserve, projectAdmission, admitted ) => {
 		let now = 0;
 		const entrypoint = 'https://example.test/';

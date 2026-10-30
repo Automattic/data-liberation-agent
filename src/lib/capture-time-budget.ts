@@ -121,9 +121,11 @@ export class RouteTimeBudget {
 	private readonly started = new Set< string >();
 	private readonly running = new Set< string >();
 	private readonly startTimes = new Map< string, number >();
-	/** Total time and count of finished non-entrypoint routes: the entrypoint's one-time cost is not evidence of what an ordinary route costs. */
+	/** Finished non-entrypoint routes: the evidence for what an ordinary route costs. */
 	private elapsedTotal = 0;
 	private finishedCount = 0;
+	/** The entrypoint's own duration, which includes one-time work later routes reuse. */
+	private entrypointElapsed: number | undefined;
 	private admissionClosed = false;
 	private readonly committed = new Set< string >();
 	private readonly abandoned = new Set< string >();
@@ -138,10 +140,11 @@ export class RouteTimeBudget {
 		if ( this.abandoning || this.now() >= this.admitDeadline() ) return false;
 		if ( ! this.window.projectAdmission ) return true;
 		// 127 seconds was the worst observed per-route duration behind the
-		// former count cap. It stands in until a non-entrypoint route has
-		// finished, since the entrypoint's one-time cost (shared chrome,
-		// dialog and interaction probing) says nothing about the routes after it.
-		const duration = this.finishedCount ? this.elapsedTotal / this.finishedCount : 127_000;
+		// former count cap. Until a non-entrypoint route finishes, a faster
+		// entrypoint may lower it, but a slower one never raises it: the
+		// entrypoint pays one-time work (shared chrome, dialog and interaction
+		// probing) that the routes after it reuse.
+		const duration = this.finishedCount ? this.elapsedTotal / this.finishedCount : Math.min( 127_000, this.entrypointElapsed ?? 127_000 );
 		const now = this.now();
 		let work = duration;
 		for ( const startedAt of this.startTimes.values() ) work += Math.max( 0, duration - ( now - startedAt ) );
@@ -180,10 +183,8 @@ export class RouteTimeBudget {
 		this.running.delete( url );
 		const startedAt = this.startTimes.get( url );
 		if ( startedAt !== undefined ) {
-			// The entrypoint pays one-time work (shared chrome, dialog and
-			// interaction probing) that later routes reuse, so it is not
-			// evidence of how long an ordinary route takes.
-			if ( url !== this.entrypoint ) {
+			if ( url === this.entrypoint ) this.entrypointElapsed = this.now() - startedAt;
+			else {
 				this.elapsedTotal += this.now() - startedAt;
 				this.finishedCount++;
 			}
