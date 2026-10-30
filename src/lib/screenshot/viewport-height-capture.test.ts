@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 
 describe( 'viewport-sized inline geometry', () => {
 	let browser: Browser;
@@ -31,14 +32,19 @@ describe( 'viewport-sized inline geometry', () => {
 					pinned.style.height=innerHeight+'px';
 					document.querySelector('#fluid').style.width=innerWidth/2+'px';
 				};addEventListener('resize',refresh);refresh();</script>` );
+			// As in capture: the initial document is recorded before learning, and
+			// only learned geometry crosses back onto it at serialization. The
+			// copy renders without the source runtime (its listeners stay live here).
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			await markInitialDocument( page );
+			const initial = await page.content();
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
 			// The width sweep ran and fitted the sibling; height followed the probe,
 			// and the max-height the runtime set to the same viewport height lifts with it.
 			expect( result.sampledWidths.length ).toBeGreaterThan( 0 );
 			expect( result.byKind[ 'viewport-height' ] ).toBe( 2 );
 			expect( await page.locator( '[data-blocks-engine-capture-viewport-height],[data-blocks-engine-capture-fluid-release]' ).count() ).toBe( 0 );
-			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
-			const html = await page.content();
+			const html = projectInitialDocument( initial, await page.content() );
 			await copy.setContent( html );
 			const rendered = await copy.evaluate( () => ( {
 				innerHeight,
