@@ -47,6 +47,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		'document-scope': 'a', 'device-document': 'a', 'device-style': 'a', 'device-body': 'a', 'device-selection': 'a',
 		'device-visibility': 'a', 'device-unavailable': 'a', 'document-unavailable': 'a', 'selected-document': 'a',
 		'selected-viewport': 'a', 'source-media': 'a',
+		'device-only': 'a', 'device-hide': 'a', 'device-inline': 'a', 'reconcile-node': 'a',
 		'desktop-document': 'c', 'mobile-document': 'c', 'desktop-only': 'c', 'mobile-only': 'c',
 		/** Id suffix of the mobile copy (`<id>--data-blocks-engine-capture-mobile`). */
 		mobile: 'i',
