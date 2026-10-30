@@ -535,6 +535,8 @@ export async function observePage(
 				}
 				return { left: box.left + local.left * box.width / ( width || 1 ), right: box.left + local.right * box.width / ( width || 1 ), top: box.top + local.top * box.height / ( height || 1 ), bottom: box.top + local.bottom * box.height / ( height || 1 ) };
 			};
+			const isDocumentRootBox = ( element: Element ) => element === document.body || element === document.documentElement
+				|| element.hasAttribute( 'data-blocks-engine-capture-document-scope' );
 			const paintedTextRects = ( range: Range, parent: Element, collapsedWhitespace = false ) => {
 				const style = paintStyle( parent );
 				if ( Number.parseFloat( style.fontSize ) === 0 || [ 'hidden', 'collapse' ].includes( style.visibility ) ) return [];
@@ -550,7 +552,7 @@ export async function observePage(
 						if ( ancestorStyle.display === 'none' ) return false;
 						if ( ancestorStyle.display === 'contents' ) continue;
 						const box = ancestor.getBoundingClientRect();
-						if ( ancestor !== document.body && ancestor !== document.documentElement ) {
+						if ( ! isDocumentRootBox( ancestor ) ) {
 							if ( [ 'hidden', 'clip' ].includes( ancestorStyle.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
 							if ( [ 'hidden', 'clip' ].includes( ancestorStyle.overflowY ) ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
 						}
