@@ -1415,7 +1415,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Adapter-declared platform runtime is never driven by any probe below.
 		const excluded = await resolveProbeExclusions( page, args.probeExclusions ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
 		args.diagnostics?.push( ...excluded.diagnostics );
-		const collections = await withReadOnlyProbes( page, () => captureCollections( page, excluded.skip ) ).catch( () => [] );
+		const collections = await withReadOnlyProbes( page, () => captureCollections( page, excluded.skip, diagnostic => args.diagnostics?.push( diagnostic ) ) ).catch( () => [] );
 		for ( const collection of collections ) {
 			( entry.blockLosses ??= [] ).push( { code: 'interaction_unreplayable', reason: collection.reason ?? 'Collection control replay unsupported', unit: 'block', profile: viewport.id } );
 			for ( const member of collection.collection?.members ?? [] ) await resourceStore.captureDomDependencies( member.html, navigationUrl );

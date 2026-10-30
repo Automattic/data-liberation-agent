@@ -40,11 +40,20 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
 	}, skip);
 }
 
-/** Probe a disposable document: exploratory state can never overwrite the initial route tree. */
-export async function captureCollections(page: Page, skip?: string): Promise<CapturedComponent[]> {
+/**
+ * Probe a disposable document: exploratory state can never overwrite the initial route tree.
+ * Every control click is exploratory, so the probe page only ever sends read-only requests.
+ */
+export async function captureCollections(page: Page, skip?: string, record?: (diagnostic: { code: 'interaction_request_blocked'; reason: string }) => void): Promise<CapturedComponent[]> {
 	const regions = await collectionRegions(page, skip);
 	if (!regions.length) return [];
 	const probe = await page.context().newPage();
+	await probe.route('**/*', async route => {
+		const request = route.request();
+		if (['GET', 'HEAD', 'OPTIONS'].includes(request.method())) { await route.fallback(); return; }
+		record?.({ code: 'interaction_request_blocked', reason: `${request.method()} ${new URL(request.url()).pathname} blocked during collection probing` });
+		await route.fulfill({ status: 204, body: '' });
+	});
 	const result: CapturedComponent[] = [];
 	const limits = { pages: 20, members: 200, controls: 24 };
 	const deadline = Date.now() + 60_000;

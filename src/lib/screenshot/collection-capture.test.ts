@@ -12,16 +12,20 @@ import { wireCapturedComponents } from '../static-components.js';
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('captures deterministic paginated membership, search, reset, empty and static filters', async () => {
 	const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 	const root = mkdtempSync(join(parent, 'collections-'));
-	const source = `<!doctype html><html><head></head><body><main><section id="archive"><button id="filters" onclick="document.querySelector('#filter-panel').hidden=false">Filters</button><div id="filter-panel"><input id="search" type="search"><select id="category"><option value="">All</option><option>Even</option><option>Odd</option></select></div><div id="cards"></div><button id="previous">Previous</button><button id="next">Next</button></section><section id="portfolio"><button id="all">All</button><button id="decks">Decks</button><button id="bathrooms">Bathrooms</button><div id="projects"><article data-category="Decks"><a href="/deck">Deck</a></article><article data-category="Bathrooms"><a href="/bathroom">Bathroom</a></article></div></section></main><script>
+	const source = `<!doctype html><html><head></head><body><main><section id="archive"><button id="filters" onclick="document.querySelector('#filter-panel').hidden=false">Filters</button><div id="filter-panel"><input id="search" type="search"><select id="category"><option value="">All</option><option>Even</option><option>Odd</option></select></div><div id="cards"></div><button id="previous">Previous</button><button id="next">Next</button><button id="subscribe" onclick="fetch('/subscribe',{method:'POST'})">Subscribe</button></section><section id="portfolio"><button id="all">All</button><button id="decks">Decks</button><button id="bathrooms">Bathrooms</button><div id="projects"><article data-category="Decks"><a href="/deck">Deck</a></article><article data-category="Bathrooms"><a href="/bathroom">Bathroom</a></article></div></section></main><script>
 if(innerWidth<600)document.querySelector('#filter-panel').hidden=true;let offset=0;const search=document.querySelector('#search'),category=document.querySelector('#category');function render(){const items=Array.from({length:16},(_,i)=>({id:i,text:'Record '+i,category:i%2?'Odd':'Even'})).filter(item=>(!category.value||item.category===category.value)&&item.text.toLowerCase().includes(search.value.toLowerCase()));document.querySelector('#cards').innerHTML=items.slice(offset,offset+12).map(item=>'<article><a href="/record/'+item.id+'">'+item.text+'</a></article>').join('');document.querySelector('#next').disabled=offset+12>=items.length;document.querySelector('#previous').disabled=!offset;}search.oninput=category.onchange=()=>{offset=0;render()};document.querySelector('#next').onclick=()=>{offset+=12;render()};document.querySelector('#previous').onclick=()=>{offset-=12;render()};render();for(const button of document.querySelectorAll('#portfolio button'))button.onclick=()=>{for(const card of document.querySelector('#projects').children)card.hidden=button.id!=='all'&&card.dataset.category!==button.textContent};</script></body></html>`;
 	writeFileSync(join(root, 'source.html'), source);
-	const server = createServer((request, response) => { response.setHeader('Content-Type', 'text/html'); response.end(request.url === '/' ? readFileSync(join(root, 'source.html')) : '<!doctype html><html><body><main><h1>Record detail</h1></main></body></html>'); });
+	const unsafe: string[] = [];
+	const server = createServer((request, response) => { if (request.method !== 'GET') unsafe.push(`${request.method} ${request.url}`); response.setHeader('Content-Type', 'text/html'); response.end(request.url === '/' ? readFileSync(join(root, 'source.html')) : '<!doctype html><html><body><main><h1>Record detail</h1></main></body></html>'); });
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
 	const browser = await chromium.launch();
 	try {
 		const context = await browser.newContext(); const page = await context.newPage(); await page.goto(url);
-		const components = await captureCollections(page);
+		const blocked: string[] = [];
+		const components = await captureCollections(page, undefined, diagnostic => blocked.push(diagnostic.reason));
+		expect(unsafe).toEqual([]);
+		expect(blocked).toContain('POST /subscribe blocked during collection probing');
 		const archive = components.find(component => component.selector === '#cards')!.collection!;
 		expect(archive.members.map(member => member.url)).toEqual(Array.from({ length: 16 }, (_,i) => `${url}record/${i}`));
 		expect(new Set(archive.members.map(member => member.key)).size).toBe(16);
