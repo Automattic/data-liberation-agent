@@ -51,6 +51,9 @@ it('records extensionless font, CSS background and video sources with document b
  expect(records.find(record => record.kind === 'font')!.destination_owner).toBe('theme');
  expect(records.find(record => record.kind === 'video')!.destination_owner).toBe('media-library');
  expect(imageContentType(Buffer.from('<html>placeholder</html>'))).toBeUndefined();
+ // The bulletproof @font-face: browsers load the last src only, and never its EOT entry.
+ const face = collectImageAssets([{ url: 'https://example.com/', html: '<style>@font-face{font-family:Cabin;src:url(/cabin.eot);src:url(/cabin.eot?#iefix) format("embedded-opentype"),url(/cabin.woff) format("woff")}</style>' }]);
+ expect(face.map(record => record.resolved_original)).toEqual(['https://example.com/cabin.woff']);
 });
 
 it('joins overlapping srcsets without losing the largest original when another document has smaller candidates', () => {
