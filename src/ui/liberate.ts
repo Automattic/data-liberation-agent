@@ -46,6 +46,8 @@ export interface LiberateOptions {
 	timeBudgetMs?: number;
 	/** Milliseconds of the time budget reserved per started route for downstream work; see `CaptureOptions.routeReserveMs`. No effect without a time budget. Default: 0. */
 	routeReserveMs?: number;
+	/** Per-route browser deadline; see `CaptureOptions.routeDeadlineMs`. */
+	routeDeadlineMs?: number;
 	/** Per-file export cap in bytes; see `CaptureOptions.maxFileBytes`. Default: 50 MiB. */
 	maxFileBytes?: number;
 	/** Total export budget in bytes; see `CaptureOptions.maxTotalBytes`. Default: 250 MiB. */
@@ -95,6 +97,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		referenceSample: options.referenceSample,
 		timeBudgetMs: options.timeBudgetMs,
 		routeReserveMs: options.routeReserveMs,
+		routeDeadlineMs: options.routeDeadlineMs,
 		maxFileBytes: options.maxFileBytes,
 		maxTotalBytes: options.maxTotalBytes,
 		maxFiles: options.maxFiles,

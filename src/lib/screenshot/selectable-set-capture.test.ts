@@ -209,6 +209,26 @@ describe( 'captureSelectableSetStates', () => {
 		await browser?.close();
 	} );
 
+	it.skipIf( skipBrowser )( 'never classifies document roots as selectable triggers', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, '<!doctype html><html role="button" tabindex="0"><body role="button" tabindex="0"><p>Static content</p></body></html>' );
+			await page.evaluate( () => {
+				for ( const root of [ document.documentElement, document.body ] ) {
+					const measure = root.getBoundingClientRect.bind( root );
+					root.getBoundingClientRect = () => {
+						root.dataset.selectableMeasurements = String( Number( root.dataset.selectableMeasurements ?? 0 ) + 1 );
+						return measure();
+					};
+				}
+			} );
+			expect( await captureSelectableSetStates( page ) ).toEqual( [] );
+			// Exclusion happens during classification, before root visibility or
+			// drive work, rather than merely failing to form a group later.
+			expect( await page.locator( '[data-selectable-measurements]' ).count() ).toBe( 0 );
+		} finally { await page.close(); }
+	} );
+
 	it.skipIf( skipBrowser )( 'blocks probe POSTs without reaching the source and records evidence', async () => {
 		const page = await browser.newPage();
 		const posts: string[] = [];

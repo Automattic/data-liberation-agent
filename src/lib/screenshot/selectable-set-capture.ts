@@ -210,6 +210,7 @@ export async function captureSelectableSetStates(
 				const isPagerControl = ( element: Element ) =>
 					Boolean( element.closest( '[data-blocks-engine-capture-gallery-capture-width]' ) );
 				const looksSelectable = ( element: Element ): boolean => {
+					if ( element === document.documentElement || element === document.body ) return false;
 					if ( limits.skip !== undefined && element.matches( limits.skip ) ) return false;
 					if ( ! visible( element ) ) return false;
 					if ( element.getAttribute( 'aria-disabled' ) === 'true' || element.hasAttribute( 'disabled' ) ) {

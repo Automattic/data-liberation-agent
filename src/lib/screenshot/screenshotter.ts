@@ -43,6 +43,7 @@ import { captureScrollStates, type ScrollStatesReport } from './scroll-state-cap
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
+import { createPhaseBudget } from './phase-budget.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { combineSkips, resolveProbeExclusions } from './probe-exclusions.js';
@@ -182,6 +183,10 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 
 interface CapturePerViewportArgs {
 	page: Page;
+	routeDeadlineMs: number;
+	routeRemainingMs: () => number;
+	serverLinks: Set<string>;
+	probeOverrun: ( ms: number ) => void;
 	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
 	phases?: PhaseLedger;
 	/** Stop best-effort stages after a crash or page-error storm. */
@@ -911,6 +916,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 				// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
 				serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
+				if ( serverHtml ) for ( const link of sameOriginPageAnchors( resolveDocumentReferences( serverHtml, navigationUrl ), navigationUrl ) ) args.serverLinks.add( link );
 				navigated = true;
 				break;
 			} catch ( err ) {
@@ -1404,7 +1410,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// evidence no stage ever read. Its captured artifacts (HTML, screenshots,
 	// fluid geometry, hydrated disclosures) are unaffected: they are produced and
 	// consumed per profile before this point.
+	let probesExpired = false;
 	if ( args.rendererCrashed() ) return;
+	// Audit the authoritative resting document before a timed-out optional
+	// probe can close its page. Probe mutations are never serialized as baseline.
+	args.phases?.enter( 'cleanup-audit' );
+	const cleanup = await readSourceCleanup(page, sourcePolicy);
+	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
+	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
 	await releaseBaselineNavigation();
 	if ( isDesktop || isMobile ) {
 		const releaseNavigationLock = await lockMainFrameNavigation( page );
@@ -1414,54 +1427,68 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			await releaseNavigationLock();
 		}
 	}
-	if ( args.rendererCrashed() ) return;
-	args.phases?.enter( 'cleanup-audit' );
-	const cleanup = await readSourceCleanup(page, sourcePolicy);
-	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
-	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
+	if ( args.rendererCrashed() || probesExpired ) return;
 
 	async function probeInteractions(): Promise< void > {
+	const budget = createPhaseBudget( page, Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ), diagnostic => {
+		probesExpired = true;
+		args.diagnostics?.push( diagnostic );
+	}, args.probeOverrun );
+	const probe = <T>( phase: string, drive: () => Promise<T>, partial: T ) => {
+		args.phases?.enter( phase );
+		return budget.run( phase, drive, partial );
+	};
 	try {
 		// The scrolled screenshot must not become the resting state for controls
 		// whose evidence is replayed against the top-of-document portable baseline.
 		args.phases?.enter( 'dialogs' );
-		await restoreTopScrollState( page );
-		await withReadOnlyProbes( page, () => dismissOverlays( page ) );
+		await probe( 'dialogs', async () => {
+			await restoreTopScrollState( page );
+			await withReadOnlyProbes( page, () => dismissOverlays( page ) );
+		}, undefined );
 		// Shared chrome the entrypoint already probed is not clicked again: its
 		// rebased, verified states join this route's report instead.
 		let chrome: ChromeReuse | undefined;
 		if ( args.sharedChrome ) {
 			args.phases?.enter( 'shared-chrome' );
-			chrome = await reuseSharedChrome( page, args.sharedChrome ).catch( ( error: unknown ) => ( {
+			chrome = await probe( 'shared-chrome', () => reuseSharedChrome( page, args.sharedChrome! ), undefined ).catch( ( error: unknown ) => ( {
 				decision: { chromeReused: false, reason: `chrome reuse failed: ${ error instanceof Error ? error.message : String( error ) }` }, states: [],
 			} ) );
-			entry.sharedChrome = chrome.decision;
+			entry.sharedChrome = chrome?.decision;
 			args.phases?.enter( 'dialogs' );
 		}
 		// Adapter-declared platform runtime is never driven by any probe below.
-		const excluded = await resolveProbeExclusions( page, args.probeExclusions ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
+		const excluded = await probe( 'exclusions', () => resolveProbeExclusions( page, args.probeExclusions ), { skip: undefined, diagnostics: [] } ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
 		args.diagnostics?.push( ...excluded.diagnostics );
-		const collections = await withReadOnlyProbes( page, () => captureCollections( page, excluded.skip, diagnostic => args.diagnostics?.push( diagnostic ) ) ).catch( () => [] );
-		for ( const collection of collections ) {
-			( entry.blockLosses ??= [] ).push( { code: 'interaction_unreplayable', reason: collection.reason ?? 'Collection control replay unsupported', unit: 'block', profile: viewport.id } );
-			for ( const member of collection.collection?.members ?? [] ) await resourceStore.captureDomDependencies( member.html, navigationUrl );
-		}
-		const components = [ ...await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip ) ), ...collections ];
-		for ( const component of components ) for ( const state of component.states ) {
-			await resourceStore.captureDomDependencies( state.html, navigationUrl );
-		}
-		const galleryStates = await withReadOnlyProbes( page, () => captureGalleries( page, components.filter( component => component.slideshow ).map( component => component.selector ) ) ).catch( () => [] );
+		const collections = await probe( 'collections', async () => {
+			const captured = await withReadOnlyProbes( page, () => captureCollections( page, excluded.skip, diagnostic => args.diagnostics?.push( diagnostic ) ) );
+			for ( const collection of captured ) {
+				( entry.blockLosses ??= [] ).push( { code: 'interaction_unreplayable', reason: collection.reason ?? 'Collection control replay unsupported', unit: 'block', profile: viewport.id } );
+				for ( const member of collection.collection?.members ?? [] ) await resourceStore.captureDomDependencies( member.html, navigationUrl );
+			}
+			return captured;
+		}, [] ).catch( () => [] );
+		const components = [ ...await probe( 'components', async () => {
+			const captured = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip ) );
+			for ( const component of captured ) for ( const state of component.states ) {
+				await resourceStore.captureDomDependencies( state.html, navigationUrl );
+			}
+			return captured;
+		}, [] ), ...collections ];
+		const galleryStates = await probe( 'galleries', () => withReadOnlyProbes( page, () => captureGalleries( page, components.filter( component => component.slideshow ).map( component => component.selector ) ) ), [] ).catch( () => [] );
 		const skip = combineSkips( combineSkips( chrome?.skip, excluded.skip ), componentBaseline.skip );
 		let interactions: InteractionStatesReport;
 		try {
-			interactions = await withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip } ) : captureTriggeredDialogs( page, url ) );
+			interactions = await probe( 'dialogs', () => withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip } ) : captureTriggeredDialogs( page, url ) ), {
+				schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: url, viewport: { width: viewport.width, height: viewport.height }, capturedAt: new Date().toISOString(), states: [],
+			} );
 		} finally {
-			if ( chrome?.skip ) await clearChromeMarks( page );
+			if ( chrome?.skip && ! budget.expired() ) await probe( 'shared-chrome', () => clearChromeMarks( page ), undefined );
 		}
 		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
 		if ( isDesktop && args.reflowPhoneViewport && chrome?.unmatchedRoots?.length ) {
 			args.phases?.enter( 'shared-chrome' );
-			const phoneStates = await withReadOnlyProbes( page, () => probePhoneOnlyChrome( page, url, chrome!.unmatchedRoots!, args.reflowPhoneViewport! ) ).catch( () => [] );
+			const phoneStates = await probe( 'shared-chrome', () => withReadOnlyProbes( page, () => probePhoneOnlyChrome( page, url, chrome!.unmatchedRoots!, args.reflowPhoneViewport! ) ), [] ).catch( () => [] );
 			if ( phoneStates.length ) interactions.states.push( ...phoneStates );
 			args.phases?.enter( 'dialogs' );
 		}
@@ -1473,7 +1500,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			args.phases?.enter( 'selectable' );
 			const collectionSkip = collections.flatMap( component => component.collection?.controls ?? [] ).join( ',' ) || undefined;
-			const selectableStates = await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( combineSkips( excluded.skip, componentBaseline.skip ), collectionSkip ) } ) );
+			const selectableStates = await probe( 'selectable', () => withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( combineSkips( excluded.skip, componentBaseline.skip ), collectionSkip ) } ) ), [] );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
@@ -1484,8 +1511,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			}
 			if ( args.rendererCrashed() ) return;
 			try {
-				await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-				interactions.states.push( ...await withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000, skip: combineSkips( excluded.skip, collectionSkip ) } ) ) );
+				interactions.states.push( ...await probe( 'typed-search', async () => {
+					await withReadOnlyProbes( page, () => dismissOverlays( page ) );
+					return withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { skip: combineSkips( excluded.skip, collectionSkip ) } ) );
+				}, [] ) );
 			} catch {
 				/* A failed input probe must not misreport a successful selectable drive. */
 			}
@@ -1502,8 +1531,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				error: ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 ),
 			} );
 		}
+		if ( budget.expired() ) interactions.coverage = 'partial';
 		if (
-			( interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
+			( budget.expired() || interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
 			hasPromotableInteractionEvidence( entry.interactions, interactions )
 		) {
 			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
@@ -1516,11 +1546,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// the page scrolls past some offset) is a distinct trigger from clicks, so it
 	// gets its own probe. Also runs only after baseline artifacts, and is
 	// best-effort: a failed probe must not invalidate the rest of the capture.
-	if ( ! args.rendererCrashed() && ! entry.scrollStates?.toggles.length ) {
+	if ( ! budget.expired() && ! args.rendererCrashed() && ! entry.scrollStates?.toggles.length ) {
 		try {
 			args.phases?.enter( 'scroll-states' );
-			const scrollStates = await withReadOnlyProbes( page, () => captureScrollStates( page, url ) );
-			if ( scrollStates.toggles.length > 0 ) {
+			const scrollStates = await probe( 'scroll-states', () => withReadOnlyProbes( page, () => captureScrollStates( page, url ) ), undefined );
+			if ( scrollStates && scrollStates.toggles.length > 0 ) {
 				entry.scrollStates = scrollStates;
 			}
 		} catch {
@@ -1537,7 +1567,7 @@ function isProvenInlineGallery( state: CapturedDialogInteraction ): boolean {
 }
 
 function hasPromotableInteractionEvidence( previous: InteractionStatesReport | undefined, latest: InteractionStatesReport ): boolean {
-	return ! previous || ( latest.components?.length ?? 0 ) > 0 || latest.states.some( state => state.status === 'captured' || isProvenInlineGallery( state ) ) ||
+	return ! previous || latest.coverage === 'partial' || ( latest.components?.length ?? 0 ) > 0 || latest.states.some( state => state.status === 'captured' || isProvenInlineGallery( state ) ) ||
 		( latest.routeNavigation?.length ?? 0 ) > 0 || latest.initialDialogs?.some( state => state.status === 'captured' ) === true;
 }
 
@@ -1594,6 +1624,7 @@ function mergeInteractionReports(
 	);
 	return {
 		...latest,
+		...( previous.coverage === 'partial' || latest.coverage === 'partial' ? { coverage: 'partial' as const } : {} ),
 		components: [ ...new Map( [ ...( previous.components ?? [] ), ...( latest.components ?? [] ) ].map( component => {
 			const prior = previous.components?.find(node => node.selector === component.selector);
 			if (!component.slideshow || !prior?.slideshow || prior === component) return [component.selector, component] as const;
@@ -2280,6 +2311,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		contexts.delete( context );
 		if ( ! contexts.size ) routeContexts.delete( url );
 	};
+	const probeOverruns = new Map<string, number>();
+	const serverLinks = new Map<string, Set<string>>();
 	const deadlineRows: RouteDiagnostic[] = [];
 	const routeDeadlines = new RouteDeadlines( routeDeadlineMs, ( url, abandonment ) => {
 		const row = routeTimeoutDiagnostic( url, routeDeadlineMs, abandonment );
@@ -2662,6 +2695,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					try {
 						await capturePerViewport( {
 							page,
+							routeDeadlineMs,
+							routeRemainingMs: () => routeDeadlineMs ? Math.max( 1, routeDeadlineMs - ( Date.now() - routeStartedAt ) ) : 600_000,
+							probeOverrun: ms => probeOverruns.set( url, ( probeOverruns.get( url ) ?? 0 ) + ms ),
+							serverLinks: serverLinks.get( url ) ?? ( serverLinks.set( url, new Set() ), serverLinks.get( url )! ),
 							phases,
 							rendererCrashed: () => rendererCrashed || Boolean( errorGuard?.stopped() ),
 							browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
@@ -2973,7 +3010,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							routeBudget?.start( url );
 							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: { reference: Math.round( routeWorkingSet.reference ), plain: Math.round( routeWorkingSet.plain ) }, reservedBytes: routeEstimate( kind ), activeRoutes: running.size + 1, calibrated, kind, url } ) }\n` );
 							activeRoutes[ kind ]++;
-							const pending = processUrl( url ).finally( () => { activeRoutes[ kind ]--; routeBudget?.finish( url ); routeDeadlines.finish( url ); } ).then( () => {
+							const pending = processUrl( url ).finally( () => { activeRoutes[ kind ]--; routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
 								if ( memoryAdmission ) sampleMemory();
 							} );
 							// The slot frees even if abandonment unwinds slowly: the route's own
@@ -3009,6 +3046,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const candidates = new Set< string >();
 			const candidateDepths = new Map<string, number>();
 			for ( const url of urls ) {
+				for ( const link of serverLinks.get( url ) ?? [] ) {
+					if ( routeInScope( link, opts.routeScope ) && ! scheduled.has( documentRequestUrl( link ) ) ) {
+						candidates.add( link );
+						candidateDepths.set( link, 1 + ( frontier?.depths.get( url ) ?? 0 ) );
+					}
+				}
 				const entry = manifest.getEntry( url );
 				if ( ! entry?.html ) continue;
 				const documents: Array<{ path: string; document?: { url?: string; baseUrl?: string } }> = [ { path: join( opts.outputDir, entry.html ), document: entry.documents?.desktop } ];
