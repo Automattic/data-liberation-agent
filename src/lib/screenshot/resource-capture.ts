@@ -415,6 +415,11 @@ export class CapturedResourceStore {
 	private readonly manifest: CapturedResourceManifest;
 	private readonly captures = new Map< string, Promise< void > >();
 	private readonly browserLoadedResources = new Set< string >();
+	// Image responses arrive before serialization reveals their srcset family.
+	// Keep the response handle, not another stored/budgeted rendition's bytes.
+	private readonly deferredImages = new Map< string, Response >();
+	private readonly pageImages = new WeakMap< Page, Set< Response > >();
+	private readonly explicitDependencies = new Set< string >();
 	private readonly pageCaptures = new WeakMap< Page, Set< Promise< void > > >();
 	private readonly listeners = new WeakMap< Page, ( response: Response ) => void >();
 	private readonly replayMetadata = new Map< string, CapturedResourceReplayMetadata >();
@@ -477,7 +482,10 @@ export class CapturedResourceStore {
 	observe( page: Page ): void {
 		const pending = new Set< Promise< void > >();
 		this.pageCaptures.set( page, pending );
+		const images = new Set< Response >();
+		this.pageImages.set( page, images );
 		const listener = ( response: Response ) => {
+			if ( response.request().resourceType() === 'image' ) images.add( response );
 			const capture = this.capture( response );
 			pending.add( capture );
 			void capture.finally( () => pending.delete( capture ) );
@@ -495,10 +503,13 @@ export class CapturedResourceStore {
 		const listener = this.listeners.get( page );
 		if ( listener ) page.off?.( 'response', listener );
 		await Promise.all( this.pageCaptures.get( page ) ?? [] );
+		await this.captureDeferredImages( this.pageImages.get( page ) );
+		this.pageImages.delete( page );
 	}
 
 	async flush(): Promise< void > {
 		try {
+			await this.captureDeferredImages();
 			await Promise.all( this.captures.values() );
 			mkdirSync( dirname( this.manifestPath ), { recursive: true } );
 			writeFileSync( this.manifestPath, `${ JSON.stringify( this.manifest, null, 2 ) }\n` );
@@ -554,6 +565,12 @@ export class CapturedResourceStore {
 					return;
 				}
 				pending.set( url.href, url.href );
+				this.explicitDependencies.add( url.href );
+				// A later route/CSS dependency can require an earlier alias's own bytes.
+				if ( this.manifest.omissions?.some( omission => omission.url === url.href ) ) {
+					delete this.manifest.resources[ url.href ];
+					this.manifest.omissions = this.manifest.omissions.filter( omission => omission.url !== url.href );
+				}
 			} catch {
 				// Invalid browser values are removed by export's render-dependency pass.
 			}
@@ -592,7 +609,9 @@ export class CapturedResourceStore {
 			} );
 			$( 'a[href],area[href]' ).each( ( _, element ) => {
 				const href = $( element ).attr( 'href' ) ?? '';
-				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ) add( href, baseUrl );
+				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ||
+					MEDIA_EXTENSION_RE.test( absolute( href, baseUrl )?.split( /[?#]/, 1 )[ 0 ] ?? '' ) ||
+					renditions.has( absolute( href, baseUrl ) ?? '' ) ) add( href, baseUrl );
 			} );
 			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl, true );
 			$( 'link[href]' ).each( ( _, element ) => {
@@ -600,6 +619,7 @@ export class CapturedResourceStore {
 				const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
 				const as = ( node.attr( 'as' ) ?? '' ).toLowerCase();
 				if (
+					renditions.has( absolute( node.attr( 'href' ) ?? '', baseUrl ) ?? '' ) ||
 					rel.includes( 'manifest' ) ||
 					rel.includes( 'stylesheet' ) ||
 					rel.some( ( value ) => /(?:^|-)icon$/.test( value ) ) ||
@@ -683,10 +703,10 @@ export class CapturedResourceStore {
 		} );
 		// Seed export's exact-reference replacement index with the same file
 		// for each retired rendition, as portable media family selection does.
-		// Explicit dependencies (metadata, CSS, another source) and browser
-		// responses take precedence over these fallback bindings.
+		// Explicit dependencies (metadata, CSS, another source) take precedence.
+		// Browser image responses alone are not independent declarations.
 		for ( const [ url, representative ] of renditions ) {
-			if ( this.manifest.resources[ url ] || pending.has( url ) ) continue;
+			if ( this.manifest.resources[ url ] || this.explicitDependencies.has( url ) ) continue;
 			const resource = this.manifest.resources[ representative ];
 			if ( ! resource ) continue;
 			this.manifest.resources[ url ] = { ...resource };
@@ -723,7 +743,18 @@ export class CapturedResourceStore {
 		}
 	}
 
-	private capture( response: Response ): Promise< void > {
+	private async captureDeferredImages( pageImages?: Set< Response > ): Promise< void > {
+		const responses = [ ...this.deferredImages.entries() ].filter(
+			( [ , response ] ) => ! pageImages || pageImages.has( response )
+		);
+		for ( const [ url ] of responses ) this.deferredImages.delete( url );
+		await Promise.all( responses.map( ( [ url, response ] ) => {
+			if ( this.manifest.omissions?.some( omission => omission.url === url ) ) return;
+			return this.capture( response, false );
+		} ) );
+	}
+
+	private capture( response: Response, deferImage = true ): Promise< void > {
 		const request = response.request();
 		const resourceType = request.resourceType();
 		if ( ! CAPTURED_RESOURCE_TYPES.has( resourceType ) ) return Promise.resolve();
@@ -770,6 +801,11 @@ export class CapturedResourceStore {
 		// wherever a redirect ultimately resolved it to.
 		const requestedUrl = originRequestUrl( request, resourceUrl );
 		const url = requestedUrl.href;
+		if ( resourceType === 'image' && deferImage ) {
+			this.browserLoadedResources.add( url );
+			this.deferredImages.set( url, response );
+			return Promise.resolve();
+		}
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
 
@@ -822,6 +858,11 @@ export class CapturedResourceStore {
 	}
 
 	private captureUrl( url: string ): Promise< void > {
+		const response = this.deferredImages.get( url );
+		if ( response ) {
+			this.deferredImages.delete( url );
+			return this.capture( response, false );
+		}
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
 		const capture = ( async () => {

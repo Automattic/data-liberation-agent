@@ -35,6 +35,31 @@ afterEach( () => {
 } );
 
 describe( 'CapturedResourceStore', () => {
+	it( 'keeps independently referenced srcset candidates, including references on later routes', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-explicit-' ) );
+		dirs.push( outputDir );
+		const origin = 'https://example.com/';
+		const store = new CapturedResourceStore( outputDir, origin, async url => ( {
+			finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/svg+xml' } ),
+			body: Buffer.from( url ),
+		} ) );
+		const images = [ 'meta', 'css', 'plain', 'link', 'later' ];
+		const html = images.map( name => `<img src="/${ name }.svg" srcset="/${ name }.svg 400w, /${ name }-large.svg 1600w">` ).join( '' );
+		await store.captureDomDependencies( `${ html }
+			<meta property="og:image" content="/meta.svg">
+			<style>body{background:url(/css.svg)}</style>
+			<img src="/plain.svg"><a href="/link.svg">Download</a>`, origin );
+		await store.captureDomDependencies( '<img src="/later.svg">', `${ origin }next/` );
+		await store.flush();
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+		expect( manifest.failures ).toEqual( [] );
+		expect( manifest.omissions ?? [] ).toEqual( [] );
+		for ( const name of images ) {
+			const resource = manifest.resources[ `${ origin }${ name }.svg` ];
+			expect( resource.path ).not.toBe( manifest.resources[ `${ origin }${ name }-large.svg` ].path );
+			expect( readFileSync( join( outputDir, resource.path ), 'utf8' ) ).toBe( `${ origin }${ name }.svg` );
+		}
+	});
 	it( 'omits blocked mixed-content imports and their fonts from an HTTPS capture', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-content-' ) );
 		dirs.push( outputDir );
