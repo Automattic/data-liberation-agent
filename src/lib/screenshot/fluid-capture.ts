@@ -21,7 +21,7 @@ import {
 	type GeometrySample,
 } from './fluid-model.js';
 import type { Page } from 'playwright';
-import { captureFluidBaseline } from './fluid-baseline.js';
+import { captureFluidBaseline, FLUID_RELEASE_ATTRIBUTE } from './fluid-baseline.js';
 import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetSeries, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
 
 /** Fit paired translations only inside shared regimes, never across a wrap. */
@@ -288,6 +288,12 @@ export async function learnAndApplyFluidGeometry(
 	try {
 		const result = await learnFluidGeometry( page, options, baseline );
 		completed = true;
+		// Best effort: a failed probe leaves the learned (or frozen) lengths in place.
+		const lifted = await liftViewportHeights( page, options.settleMs ?? 1200 ).catch( () => 0 );
+		if ( lifted > 0 ) {
+			result.applied += lifted;
+			result.byKind[ 'viewport-height' ] = lifted;
+		}
 		return result;
 	} finally {
 		try {
@@ -918,6 +924,99 @@ async function learnFluidGeometry(
 		byKind,
 		sampledWidths: [ ...sampledWidths ].sort( ( a, b ) => a - b ),
 	};
+}
+
+/** Lengths a runtime sets to the viewport height (pinned sections, full-screen panels). */
+const VIEWPORT_HEIGHT_PROPERTIES = [ 'height', 'max-height', 'min-height' ] as const;
+/** Marks an element whose inline length matched the capture viewport height; removed after. */
+const VIEWPORT_HEIGHT_ATTRIBUTE = 'data-blocks-engine-capture-viewport-height';
+/** How far the probe moves the viewport height; any distinct height proves the relation. */
+const VIEWPORT_HEIGHT_PROBE_PX = 137;
+
+/**
+ * Express inline lengths the source sized to the live viewport height as `100vh`.
+ *
+ * The width sweep holds the viewport height constant, so a length that equals
+ * `innerHeight` at every width (a scroll-pinned section sized to the screen)
+ * learns as a constant and freezes at the capture profile's pixels. Every
+ * visitor at another height would then see the profile's height and every
+ * later section shifted. A length that equals `innerHeight` within 1px at the
+ * capture viewport is only a candidate: the viewport height is probed once and
+ * the length counts as viewport-relative only when the runtime rewrote it to
+ * the probe's `innerHeight` too. Pages without a candidate pay no resize.
+ *
+ * Returns the number of declarations rewritten.
+ */
+async function liftViewportHeights( page: Page, settleMs: number ): Promise< number > {
+	const original = page.viewportSize();
+	if ( ! original ) return 0;
+	const candidates = await page.evaluate( ( { attribute, properties } ) => {
+		let count = 0;
+		for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
+			const matched = properties.filter( property => {
+				const value = /^(-?\d+(?:\.\d+)?)px$/.exec( element.style.getPropertyValue( property ).trim() );
+				return value !== null && Math.abs( Number( value[ 1 ] ) - window.innerHeight ) <= 1;
+			} );
+			if ( ! matched.length ) continue;
+			element.setAttribute( attribute, matched.join( ' ' ) );
+			count++;
+		}
+		return count;
+	}, { attribute: VIEWPORT_HEIGHT_ATTRIBUTE, properties: [ ...VIEWPORT_HEIGHT_PROPERTIES ] } );
+	if ( candidates === 0 ) return 0;
+	const { settleDocument } = await import( './page-helpers.js' );
+	const settle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
+	const marked = { attribute: VIEWPORT_HEIGHT_ATTRIBUTE, release: FLUID_RELEASE_ATTRIBUTE };
+	let proven = false;
+	let lifted = 0;
+	try {
+		// Learned authority pins the declarations it fitted at the capture width;
+		// release them so the runtime may answer the probe, as it would in the source.
+		await page.evaluate( ( { attribute, release } ) => {
+			for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) {
+				const held = element.getAttribute( release );
+				element.setAttribute( release, `${ held ? `${ held } ` : '' }${ element.getAttribute( attribute )! }` );
+			}
+		}, marked );
+		await page.setViewportSize( { width: original.width, height: original.height + VIEWPORT_HEIGHT_PROBE_PX } );
+		await settleDocument( page, 'fluid-viewport-height', settle );
+		// Keep only the lengths the runtime rewrote to the probe's viewport height.
+		await page.evaluate( attribute => {
+			for ( const element of document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ) {
+				const followed = element.getAttribute( attribute )!.split( ' ' ).filter( property => {
+					const value = /^(-?\d+(?:\.\d+)?)px$/.exec( element.style.getPropertyValue( property ).trim() );
+					return value !== null && Math.abs( Number( value[ 1 ] ) - window.innerHeight ) <= 1;
+				} );
+				element.setAttribute( attribute, followed.join( ' ' ) );
+			}
+		}, VIEWPORT_HEIGHT_ATTRIBUTE );
+		proven = true;
+	} finally {
+		await page.setViewportSize( original );
+		await settleDocument( page, 'fluid-viewport-height', settle );
+		lifted = await page.evaluate( async ( { attribute, release, proven } ) => {
+			let count = 0;
+			const elements = [ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ];
+			for ( const element of proven ? elements : [] ) {
+				for ( const property of element.getAttribute( attribute )!.split( ' ' ).filter( Boolean ) ) {
+					// The runtime restored the capture height; it must still match.
+					const value = /^(-?\d+(?:\.\d+)?)px$/.exec( element.style.getPropertyValue( property ).trim() );
+					if ( value === null || Math.abs( Number( value[ 1 ] ) - window.innerHeight ) > 1 ) continue;
+					element.style.setProperty( property, '100vh', element.style.getPropertyPriority( property ) );
+					count++;
+				}
+			}
+			// Learned authority consumes a release marker on its next observation;
+			// drop any it never observed along with the candidate marks.
+			await new Promise( resolve => setTimeout( resolve, 0 ) );
+			for ( const element of elements ) {
+				element.removeAttribute( attribute );
+				element.removeAttribute( release );
+			}
+			return count;
+		}, { ...marked, proven } );
+	}
+	return lifted;
 }
 
 /**
