@@ -71,12 +71,16 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
   try {
    mkdirSync(join(root, 'resources'), { recursive: true });
    writeFileSync(join(root, 'resources/logo.svg'), svg);
+   // A viewBox-only SVG records its own size, not the browser's 300px default object size.
+   writeFileSync(join(root, 'resources/badge.svg'), '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 135 40"><rect width="135" height="40"/></svg>');
    writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({ version: 1, resources: {
     'https://example.com/logo.svg': { path: 'resources/logo.svg', contentType: 'image/svg+xml' },
+    'https://example.com/badge.svg': { path: 'resources/badge.svg', contentType: 'image/svg+xml' },
    }, failures: [] }));
-   const records = await captureAssets(root, [{ url: 'https://example.com/', html: '<img src="/logo.svg"><img src="/uncaptured.svg">' }], Date.now() - 1000);
+   const records = await captureAssets(root, [{ url: 'https://example.com/', html: '<img src="/logo.svg"><img src="/badge.svg"><img src="/uncaptured.svg">' }], Date.now() - 1000);
    const local = records.find(record => record.resolved_original.endsWith('/logo.svg'))!;
    expect(local.original).toMatchObject({ content_type: 'image/svg+xml', width: 20, height: 10 });
+   expect(records.find(record => record.resolved_original.endsWith('/badge.svg'))!.original).toMatchObject({ width: 135, height: 40 });
    expect(local.local_path).toBe(join(root, 'media/logo.svg'));
    expect(readFileSync(local.local_path!, 'utf8')).toBe(svg);
    expect(local.error).toBeUndefined();
