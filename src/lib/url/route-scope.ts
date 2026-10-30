@@ -1,4 +1,5 @@
 import type { SiteRouteScope } from '../../platform/types.js';
+import { documentRequestUrl, withoutQueryParams } from './route-key.js';
 
 /** Validate once at the owning boundary; malformed ownership must not widen capture. */
 export function validateRouteScope( scope: SiteRouteScope ): void {
@@ -8,7 +9,18 @@ export function validateRouteScope( scope: SiteRouteScope ): void {
 			if ( typeof path !== 'string' || !path.startsWith('/') || (path !== '/' && path.endsWith('/')) ) return true;
 			const parsed = new URL( path, origin );
 			return parsed.origin !== origin.origin || parsed.pathname !== path || !!parsed.search || !!parsed.hash;
-		} ) ) throw new Error( 'Invalid adapter route scope' );
+		} ) || ( scope.ignoredQueryParams !== undefined && ( !Array.isArray( scope.ignoredQueryParams ) ||
+			scope.ignoredQueryParams.some( name => typeof name !== 'string' || !name ) ) ) ) throw new Error( 'Invalid adapter route scope' );
+}
+
+/** Route identity inside an adapter scope: the document request minus the platform's non-semantic parameters. */
+export function scopedRouteKey( url: string, scope?: SiteRouteScope ): string {
+	const key = documentRequestUrl( url );
+	const ignored = scope?.ignoredQueryParams;
+	if ( !ignored?.length ) return key;
+	const parsed = new URL( key );
+	withoutQueryParams( parsed, name => ignored.includes( name ) );
+	return parsed.href;
 }
 
 /** Route admission only. Native resources remain independent of customer namespaces. */

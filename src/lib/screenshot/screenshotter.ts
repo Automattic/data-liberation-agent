@@ -69,7 +69,7 @@ import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
 import { ROUTE_ALIAS_CANONICAL, queryOnlyCanonicalTarget } from '../route-aliases.js';
 import { RouteTimeBudget, RouteDeadlines, deriveRouteDeadlineMs, routeTimeoutDiagnostic } from '../capture-time-budget.js';
-import { routeInScope, validateRouteScope } from '../url/route-scope.js';
+import { routeInScope, scopedRouteKey, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
@@ -2545,7 +2545,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const queuedRoutes = new Set( urls.map( documentRequestUrl ) );
 	const enqueue = (target: string, depth: number, ownership: 'linked' | 'alias' = 'linked'): void => {
 		if (!routeInScope(target, opts.routeScope)) return;
-		const key = documentRequestUrl(target);
+		const key = scopedRouteKey(target, opts.routeScope);
 		if (queuedRoutes.has(key)) return;
 		if (frontier && !frontier.admit(key, depth, Date.now(), ownership)) return;
 		queuedRoutes.add(key);
@@ -3081,7 +3081,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const candidates = new Set< string >();
 			const candidateDepths = new Map<string, number>();
 			for ( const url of urls ) {
-				for ( const link of serverLinks.get( url ) ?? [] ) {
+				for ( const serverLink of serverLinks.get( url ) ?? [] ) {
+					const link = routeInScope( serverLink, opts.routeScope ) ? scopedRouteKey( serverLink, opts.routeScope ) : serverLink;
 					if ( routeInScope( link, opts.routeScope ) && ! scheduled.has( documentRequestUrl( link ) ) ) {
 						candidates.add( link );
 						candidateDepths.set( link, 1 + ( frontier?.depths.get( url ) ?? 0 ) );
@@ -3095,8 +3096,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					if ( ! existsSync( htmlPath ) ) continue;
 					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
 					const collectionLinks = ( entry.interactions?.components ?? [] ).flatMap( component => component.collection?.members.flatMap( member => member.url ? [ member.url ] : [] ) ?? [] ).filter( link => new URL( link ).origin === new URL( url ).origin );
-					for ( const link of [ ...sameOriginPageAnchors( html, url ), ...collectionLinks ] ) {
-						if (!routeInScope(link, opts.routeScope)) continue;
+					for ( const anchor of [ ...sameOriginPageAnchors( html, url ), ...collectionLinks ] ) {
+						if (!routeInScope(anchor, opts.routeScope)) continue;
+						const link = scopedRouteKey( anchor, opts.routeScope );
 						if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
 							candidates.add(link);
 							candidateDepths.set(link, Math.min(candidateDepths.get(link) ?? Infinity, 1 + (frontier?.depths.get(url) ?? 0)));

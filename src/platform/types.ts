@@ -107,6 +107,8 @@ export interface Platform {
 export interface SiteRouteScope {
 	origin: string;
 	pathPrefixes: string[];
+	/** Platform query parameters that never select a different document (e.g. referral tags on every link). */
+	ignoredQueryParams?: string[];
 }
 
 /** Options accepted by {@link registerPlatform}. */
