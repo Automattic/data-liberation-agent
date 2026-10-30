@@ -25,3 +25,25 @@ export function siteNameFromRouteTitles( title: string | undefined, routeTitles:
 	if ( title === undefined || segments( title ).includes( name! ) ) return name;
 	return title;
 }
+
+/**
+ * The name a document's schema.org `WebSite` JSON-LD declares for the site,
+ * the site's own explicit statement of its name.
+ */
+export function declaredSiteName( html: string ): string | undefined {
+	for ( const [ , json ] of html.matchAll( /<script\b[^>]*type=["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi ) ) {
+		let data: unknown;
+		try {
+			data = JSON.parse( json! );
+		} catch {
+			continue;
+		}
+		const nodes = ( Array.isArray( data ) ? data : [ data ] ).flatMap( node =>
+			node && typeof node === 'object' && Array.isArray( ( node as { '@graph'?: unknown } )[ '@graph' ] ) ? ( node as { '@graph': unknown[] } )[ '@graph' ] : [ node ] );
+		for ( const node of nodes as Array< { '@type'?: unknown; name?: unknown } | null > ) {
+			const types = Array.isArray( node?.[ '@type' ] ) ? node[ '@type' ] : [ node?.[ '@type' ] ];
+			if ( types.includes( 'WebSite' ) && typeof node?.name === 'string' && node.name.trim() ) return node.name.trim();
+		}
+	}
+	return undefined;
+}

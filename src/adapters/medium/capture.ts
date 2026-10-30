@@ -126,3 +126,60 @@ export async function removeFollowButtons( page: Page ): Promise<number> {
 		return removed;
 	} );
 }
+
+/** Medium appends its own name to every document title ("About – Owner – Medium"). */
+const PLATFORM_TITLE_SUFFIX = /\s+[–—|-]\s+Medium$/;
+
+/**
+ * The owner's display name and bio from the Apollo state Medium serves with
+ * every page: the `User` an `/@handle` root names, or the `Collection` a
+ * publication root names.
+ */
+export function mediumOwnerIdentity( serverHtml: string, owner: string ): { name: string; slogan: string } | undefined {
+	const start = serverHtml.indexOf( 'window.__APOLLO_STATE__' );
+	if ( start < 0 ) return undefined;
+	const end = serverHtml.indexOf( '</script>', start );
+	let state: Record< string, Record< string, unknown > >;
+	try {
+		state = JSON.parse( serverHtml.slice( serverHtml.indexOf( '=', start ) + 1, end < 0 ? undefined : end ).trim().replace( /;$/, '' ) );
+	} catch {
+		return undefined;
+	}
+	const [ prefix, key, field, text ] = owner.startsWith( '@' )
+		? [ 'User:', 'username', owner.slice( 1 ), 'bio' ]
+		: [ 'Collection:', 'slug', owner, 'description' ];
+	const record = Object.entries( state ).find( ( [ id, value ] ) => id.startsWith( prefix ) && value?.[ key ] === field )?.[ 1 ];
+	const name = typeof record?.name === 'string' ? record.name.trim() : '';
+	if ( ! name ) return undefined;
+	return { name, slogan: typeof record?.[ text ] === 'string' ? ( record[ text ] as string ).trim() : '' };
+}
+
+/**
+ * Give the copy its owner's identity instead of Medium's: drop Medium's
+ * title suffix, and declare the owner's name and bio on the owner's root page
+ * as a schema.org `WebSite`, the site identity the export and importers read.
+ */
+export async function applyOwnerIdentity( page: Page, url: string, serverHtml: string | undefined ): Promise<void> {
+	const { pathname } = new URL( url );
+	const owner = pathname.split( '/' )[ 1 ] ?? '';
+	const isRoot = owner !== '' && pathname.replace( /\/$/, '' ) === `/${ owner }`;
+	const identity = isRoot && serverHtml ? mediumOwnerIdentity( serverHtml, owner ) : undefined;
+	await page.evaluate( ( { suffix, website } ) => {
+		const strip = ( value: string ) => value.replace( new RegExp( suffix ), '' );
+		document.title = strip( document.title );
+		for ( const meta of Array.from( document.querySelectorAll( 'meta[property="og:title"], meta[name="twitter:title"]' ) ) ) {
+			meta.setAttribute( 'content', strip( meta.getAttribute( 'content' ) ?? '' ) );
+		}
+		if ( ! website ) return;
+		const script = document.createElement( 'script' );
+		script.type = 'application/ld+json';
+		script.textContent = JSON.stringify( website );
+		document.head.append( script );
+	}, {
+		suffix: PLATFORM_TITLE_SUFFIX.source,
+		website: identity && {
+			'@context': 'https://schema.org', '@type': 'WebSite', name: identity.name, url,
+			...( identity.slogan ? { slogan: identity.slogan } : {} ),
+		},
+	} );
+}

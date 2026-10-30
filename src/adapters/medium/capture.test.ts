@@ -2,7 +2,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { probeExclusionSkip } from '../../lib/screenshot/probe-exclusions.js';
-import { removeFollowButtons } from './capture.js';
+import { applyOwnerIdentity, removeFollowButtons } from './capture.js';
 import { mediumAdapter } from './index.js';
 
 // The shape of a Medium profile and story as rendered logged out (2026-10):
@@ -113,5 +113,33 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'Medium capture cleanup', () 
 		} finally {
 			await page.close();
 		}
+	} );
+	it( "names the copy after its owner instead of Medium", async () => {
+		const apollo = ( owner: Record< string, string > ) => `<script>window.__APOLLO_STATE__ = ${ JSON.stringify( {
+			'User:a': { username: 'someone-else', name: 'Followed Writer', bio: 'Not the owner' },
+			'User:b': { username: 'owner', name: 'Example Author', bio: 'Writes about gardens.', ...owner },
+			'Collection:c': { slug: 'garden-notes', name: 'Garden Notes', description: 'A gardening publication.' },
+		} ) };</script>`;
+		const identity = async ( url: string, title: string, serverHtml = apollo( {} ) ) => {
+			const page = await browser.newPage();
+			try {
+				await page.setContent( `<!doctype html><html><head><title>${ title }</title><meta property="og:title" content="${ title }"></head><body></body></html>` );
+				await applyOwnerIdentity( page, url, serverHtml );
+				return await page.evaluate( () => ( {
+					title: document.title,
+					ogTitle: document.querySelector( 'meta[property="og:title"]' )?.getAttribute( 'content' ),
+					website: Array.from( document.querySelectorAll( 'script[type="application/ld+json"]' ), script => JSON.parse( script.textContent ?? '' ) ),
+				} ) );
+			} finally {
+				await page.close();
+			}
+		};
+		const site = ( name: string, slogan?: string, url = 'https://medium.com/@owner/' ) =>
+			[ { '@context': 'https://schema.org', '@type': 'WebSite', name, url, ...( slogan ? { slogan } : {} ) } ];
+		expect( await identity( 'https://medium.com/@owner/', 'Example Author – Medium' ) ).toEqual( { title: 'Example Author', ogTitle: 'Example Author', website: site( 'Example Author', 'Writes about gardens.' ) } );
+		expect( ( await identity( 'https://medium.com/@owner', 'Example Author – Medium', apollo( { bio: '' } ) ) ).website, 'no bio, no slogan' ).toEqual( site( 'Example Author', undefined, 'https://medium.com/@owner' ) );
+		expect( ( await identity( 'https://medium.com/garden-notes', 'Garden Notes – Medium' ) ).website, 'publication' ).toEqual( site( 'Garden Notes', 'A gardening publication.', 'https://medium.com/garden-notes' ) );
+		expect( await identity( 'https://medium.com/@owner/about', 'About – Example Author – Medium' ), 'other pages only lose the suffix' ).toEqual( { title: 'About – Example Author', ogTitle: 'About – Example Author', website: [] } );
+		expect( ( await identity( 'https://medium.com/@owner/', 'Example Author – Medium', '<html></html>' ) ).website, 'no Apollo state' ).toEqual( [] );
 	} );
 } );
