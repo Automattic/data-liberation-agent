@@ -140,7 +140,18 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[] ): Portable
 	);
 	const exact = bounded.filter( ( candidate ) => candidate.exactReferences.length > 0 );
 	const fallback = selectMediaCandidate( bounded, MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES );
-	const selected = exact.length > 0 ? exact : fallback ? [ fallback ] : [];
+	// Head-only raster images have no rendered geometry to constrain. If no
+	// portable rendition exists, keep the verified original within the byte cap.
+	// SVGs retain their existing dimension limit.
+	const headOriginal = ! fallback ? candidates.find( candidate =>
+		candidate.bytes <= MAX_PORTABLE_MEDIA_BYTES &&
+		candidate.exactReferences.length > 0 &&
+		candidate.imageAsset?.original?.content_type.startsWith( 'image/' ) &&
+		candidate.imageAsset.original.content_type !== 'image/svg+xml' &&
+		candidate.imageAsset.references.length > 0 &&
+		candidate.imageAsset.references.every( reference => reference.kind === 'head' )
+	) : undefined;
+	const selected = exact.length > 0 ? exact : fallback ? [ fallback ] : headOriginal ? [ headOriginal ] : [];
 	return [ ...selected ].sort(
 		( a, b ) =>
 			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
