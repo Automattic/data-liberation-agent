@@ -76,7 +76,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 	presentation: {
 		'glyph-color': 'a', 'glyph-pending': 'a', 'glyph-probe': 'a', 'glyph-probe-candidate': 'a', 'glyph-probe-style': 'a',
 		'native-control-state': 'a', 'native-control-runtime': 'a', 'native-effects': 'a', 'native-node': 'a', 'native-profile': 'a',
-		'native-losses': 'a', 'native-runtime-loss': 'a', 'native-view-timeline-runtime': 'a',
+		'native-losses': 'a', 'native-runtime-loss': 'a', 'native-view-timeline-runtime': 'a', 'runtime-emoji': 'a',
 		'viewport-entrance': 'a', 'viewport-entrances': 'a', 'viewport-entrance-loss': 'a', 'source-canvas': 'a',
 		replica: 'c', 'content-desktop': 'c', 'content-mobile': 'c', 'content-mobile-inner': 'c',
 	},

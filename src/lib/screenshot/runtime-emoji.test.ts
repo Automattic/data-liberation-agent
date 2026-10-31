@@ -197,6 +197,18 @@ describe( 'RUNTIME_EMOJI_PREDICATE_SOURCE / RUNTIME_EMOJI_RESTORE_SOURCE', () =>
 		expect( doc.querySelector( 'code' )!.textContent ).toBe( '👨‍👩‍👦‍👦🥵' );
 	} );
 
+	it.each( [
+		[ HOT_FACE_IMG, true ],
+		[ 'Native 🥵 text', false ],
+		[ `<img class="emoji" alt="🥵" src="/authored.png">`, false ],
+	] )( 'marks serialized HTML only when runtime emoji were restored: %s', ( html, marked ) => {
+		const predicate = new Function( 'return (' + RUNTIME_EMOJI_PREDICATE_SOURCE.factorySrc + ')' )()() as typeof isRuntimeEmojiReplacementImage;
+		const restore = new Function( 'return (' + RUNTIME_EMOJI_RESTORE_SOURCE.factorySrc + ')' )()( predicate ) as typeof restoreEmojiText;
+		const { dom, doc } = documentOf( `<p>${ html }</p>` );
+		restore( doc );
+		expect( /<html\b[^>]* data-blocks-engine-capture-runtime-emoji="wordpress"/.test( dom.serialize() ) ).toBe( marked );
+	} );
+
 	// The browser receives these factories as text. Build them the way the
 	// shipped runtime bundle does (minified) and run them with no module scope
 	// around them: any helper they reach by a module-level name is then
