@@ -138,6 +138,7 @@ function createEmojiTextRestore( isReplacementImage: ( attrs: EmojiImageAttribut
 		// the single run the source authored, not adjacent runs that
 		// serialization would have to keep apart.
 		for ( const parent of parents ) parent.normalize();
+		if ( restored > 0 ) root.documentElement.setAttribute( 'data-blocks-engine-capture-runtime-emoji', 'wordpress' );
 		return restored;
 	};
 }
