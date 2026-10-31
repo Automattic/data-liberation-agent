@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { collectAssets } from './image-assets.js';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { MediaStubStore } from './resume-state/index.js';
-import type { SourceRequestGovernors } from './source-request-governor.js';
+import { SOURCE_REQUEST_GOVERNOR_DEFAULTS, type SourceRequestGovernors } from './source-request-governor.js';
 
 /**
  * Capture-wide asset byte acquisition (#1049).
@@ -37,7 +37,9 @@ export class AssetAcquisitionQueue {
 		private readonly governors: SourceRequestGovernors,
 		private readonly deadline?: number,
 		private readonly resolve?: Parameters< typeof collectAssets >[ 1 ],
-		private readonly concurrency = 2
+		private readonly concurrency = 2,
+		/** Epoch ms after which no route starts: downloads then take the origin's full concurrency. */
+		private readonly admissionClosesAt?: number
 	) {
 		this.mediaDir = join( outputDir, 'media' );
 		this.names = existingMediaNames( this.mediaDir );
@@ -63,7 +65,11 @@ export class AssetAcquisitionQueue {
 	}
 
 	private pump(): void {
-		while ( this.pending.size < this.concurrency && this.waiting.length ) {
+		// Routes keep priority on the source only while new ones can start.
+		const limit = this.admissionClosesAt !== undefined && Date.now() >= this.admissionClosesAt
+			? Math.max( this.concurrency, SOURCE_REQUEST_GOVERNOR_DEFAULTS.concurrency )
+			: this.concurrency;
+		while ( this.pending.size < limit && this.waiting.length ) {
 			const task = this.fetch( this.waiting.shift()! ).finally( () => {
 				this.pending.delete( task );
 				this.pump();
