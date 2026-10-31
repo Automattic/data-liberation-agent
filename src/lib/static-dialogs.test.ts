@@ -26,6 +26,43 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	// ~1 second: reduced mebenedetto.com /jujuy-2022/ dual-document tree.
+	it( 'restores duplicate source panel IDs inside synthesized responsive menus', async () => {
+		const document = ( device: string ) => `<div class="${ device }"><header><nav>
+			<button aria-label="Open menu">Open menu</button>
+			<div id="modal-2" class="wp-block-navigation__responsive-container"><a href="#${ device }">${ device }</a></div>
+		</nav></header></div>`;
+		const html = `<html><head><style>.desktop{display:none}.wp-block-navigation__responsive-container{display:none}.is-menu-open{display:flex}</style></head><body>${ document( 'desktop' ) }${ document( 'mobile' ) }</body></html>`;
+		const state: CapturedDialogInteraction = {
+			...captured,
+			trigger: { ...captured.trigger, selector: 'body > div > header > nav > button', label: 'Open menu' },
+			dialog: { ...captured.dialog!, selector: '#modal-2', id: 'modal-2', tag: 'div', restingInline: true,
+				html: '<div id="modal-2" class="wp-block-navigation__responsive-container has-modal-open is-menu-open" style="display: flex !important; visibility: visible !important;"><a href="#opened">Opened menu</a></div>' },
+		};
+		const portable = wireCapturedDialogs( html, [ state ] );
+		const $ = cheerio.load( portable );
+		const panels = $( '.wp-block-navigation__responsive-container' );
+		expect( panels ).toHaveLength( 2 );
+		expect( $( '.is-menu-open,.has-modal-open' ) ).toHaveLength( 0 );
+		panels.each( ( _, panel ) => expect( $( panel ).attr( 'style' ) ?? '' ).not.toMatch( /display|visibility/ ) );
+		expect( $( '.desktop #modal-2' ).text() ).toBe( 'desktop' );
+		expect( $( '.mobile #modal-2' ).text() ).toBe( 'mobile' );
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.setContent( portable );
+			const trigger = page.locator( '.mobile button' ).first();
+			for ( let repeat = 0; repeat < 2; repeat++ ) {
+				expect( await page.locator( '.mobile #modal-2 a' ).isVisible() ).toBe( false );
+				await trigger.click();
+				expect( await page.locator( '.mobile #modal-2 a' ).isVisible() ).toBe( true );
+				expect( await page.locator( '.mobile #modal-2' ).textContent() ).toBe( 'Opened menu' );
+				await page.keyboard.press( 'Escape' );
+				expect( await page.locator( '.mobile #modal-2' ).textContent() ).toBe( 'mobile' );
+				expect( await page.locator( '.is-menu-open,.has-modal-open' ).count() ).toBe( 0 );
+			}
+		} finally { await browser.close(); }
+	} );
 	it.each( [
 		{ wrapper: '<div id="shell"><x-modal id="m1"> \n<!-- resting host -->PANEL\n </x-modal></div>', retained: [] },
 		{ wrapper: '<x-modal id="m1">PANEL<span>Other content</span></x-modal>', retained: [ 'm1' ] },
