@@ -10,7 +10,7 @@ import { exportWebsiteCapture } from './capture-export.js';
 
 async function captureFixture(body: string, check: (outputDir: string, url: string) => void) {
 	const server = createServer((request, response) => {
-		const width = request.url?.includes('-scaled') ? 2560 : request.url?.includes('300x') ? 300 : 2048;
+		const width = request.url?.includes('2048x') ? 2048 : request.url?.includes('-scaled') ? 2560 : request.url?.includes('300x') ? 300 : 2048;
 		response.setHeader('content-type', request.url === '/' ? 'text/html' : 'image/svg+xml');
 		response.end(request.url === '/' ? `<!doctype html><html><head><title>Photos</title></head><body>${body}</body></html>` : `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="100"><rect width="100%" height="100%" fill="red"/></svg>`);
 	});
@@ -60,8 +60,12 @@ it('captures and exports the widest portable srcset representative', async () =>
 	});
 }, 30_000);
 
-it.each(['-scaled', '-scaled-1'])('exports over-limit %s social originals using a retained rendition, but never a stub', async (suffix) => {
-	await captureFixture(`<meta property="og:image" content="/photo${suffix}.svg"><meta name="twitter:image" content="/photo${suffix}.svg"><meta property="og:image:url" content="/alone${suffix}.svg"><meta name="twitter:image:src" content="/standalone-300x100.svg"><img src="/photo-2048x100.svg">`, (dir, url) => {
+it.each([
+	['-scaled', '-2048x100'],
+	['-scaled-1', '-2048x100'],
+	['-scaled-1', '-scaled-1-2048x100'],
+])('exports over-limit %s social originals using retained %s, but never a stub', async (suffix, rendition) => {
+	await captureFixture(`<meta property="og:image" content="/photo${suffix}.svg"><meta name="twitter:image" content="/photo${suffix}.svg"><meta property="og:image:url" content="/alone${suffix}.svg"><meta name="twitter:image:src" content="/standalone-300x100.svg"><img src="/photo${rendition}.svg">`, (dir, url) => {
 		const $ = cheerio.load(readFileSync(join(dir, 'website/index.html'), 'utf8'));
 		for (const selector of ['meta[property="og:image"]', 'meta[name="twitter:image"]']) {
 			const reference = $(selector).attr('content')!;
