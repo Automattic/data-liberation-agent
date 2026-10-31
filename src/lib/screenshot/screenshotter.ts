@@ -261,6 +261,9 @@ function navSleep( ms: number ): Promise< void > {
 	return new Promise( ( resolve ) => setTimeout( resolve, ms ) );
 }
 
+/** Failure reason for a route whose source app crashed into its client error shell. */
+const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
+
 /**
  * Backoff before retrying a throttled / transiently-failed navigation. Honors a
  * numeric `Retry-After` (seconds) when the throttler supplies one; otherwise
@@ -1271,7 +1274,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				// The source's client runtime crashed under capture and replaced the
 				// document with its framework error shell. It is never page content:
 				// refuse it and let the route fail by name (route_capture_failed).
-				fail( 'content', `client error shell: the page's client runtime replaced the document with its framework error shell (matched ${ shellSelector }); HTML not persisted` );
+				fail( 'content', `${ CLIENT_ERROR_SHELL_FAILURE }: the page's client runtime replaced the document with its framework error shell (matched ${ shellSelector }); HTML not persisted` );
 			} else {
 				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
 				writeFileSync( plan.paths.html, html );
@@ -2676,8 +2679,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			let identity: ReturnType< typeof replayBrowserIdentity > | undefined;
 			let contextOptions: BrowserContextOptions | undefined;
 
-			// Retry a crashed renderer in a fresh context once. A disconnected browser
-			// also needs the shared relaunch before the retry.
+			// Retry a crashed renderer, or a source app that crashed into its client
+			// error shell, in a fresh context once. A disconnected browser also needs
+			// the shared relaunch before the retry.
 			for ( let crashRetry = false; ; crashRetry = true ) {
 				const attemptBrowser = browser;
 				const failuresBefore = profileFailures.length;
@@ -2840,8 +2844,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const failed = profileFailures.length > failuresBefore;
 				if ( ! failed || crashRetry || errorGuard?.stopped() ) break;
 				if ( attemptBrowser.isConnected() ) {
-					if ( ! rendererCrashed ) break;
-					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );
+					const shellCrashed = profileFailures.slice( failuresBefore ).some( failure => failure.error.startsWith( CLIENT_ERROR_SHELL_FAILURE ) );
+					if ( ! rendererCrashed && ! shellCrashed ) break;
+					sendLog( server, `[retry] ${ rendererCrashed ? 'renderer crashed' : CLIENT_ERROR_SHELL_FAILURE } for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				profileFailures.length = failuresBefore;
 				profileEntry.blockLosses = undefined;

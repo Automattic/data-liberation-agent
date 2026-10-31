@@ -16,6 +16,10 @@ import { captureScreenshots } from './screenshotter.js';
 //    commit throw and crash into the same shell. Overlay dismissal now hides
 //    in place, so the page survives capture.
 //
+//  - /crashes-once: the app crashes into the shell on its first load only,
+//    the transient failure a live platform serves now and then. Capture
+//    retries the route in a fresh context and keeps the real page.
+//
 // Without the fixes both routes save the shell document as their page HTML and
 // both tests below fail on it.
 
@@ -74,14 +78,21 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 
 	const crashUrl = () => `${ origin }/crashes-into-shell`;
 	const overlayUrl = () => `${ origin }/overlay-owned-crash`;
+	const onceUrl = () => `${ origin }/crashes-once`;
 
 	beforeAll( async () => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );
 		outputDir = mkdtempSync( join( parent, 'issue-917-' ) );
 		const pages: Record< string, string > = { '/': home, '/crashes-into-shell': crashesIntoShell, '/overlay-owned-crash': overlayOwnedCrash };
+		let onceServed = false;
 		server = createServer( ( request, response ) => {
 			response.setHeader( 'Content-Type', 'text/html' );
+			if ( request.url === '/crashes-once' ) {
+				response.end( onceServed ? home.replace( 'Ordinary home page', 'Recovered page' ) : crashesIntoShell );
+				onceServed = true;
+				return;
+			}
 			response.end( pages[ request.url ?? '' ] ?? '' );
 		} );
 		await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
@@ -90,7 +101,7 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 		// the device-mode entrypoint). The shell selectors are what a platform
 		// adapter declares; the neutral fixtures use a neutral one.
 		result = await captureScreenshots( {
-			urls: [ `${ origin }/`, crashUrl(), overlayUrl() ],
+			urls: [ `${ origin }/`, crashUrl(), overlayUrl(), onceUrl() ],
 			primaryUrl: `${ origin }/`,
 			outputDir,
 			concurrency: 1,
@@ -132,5 +143,10 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 		expect( entry?.html ).toBeDefined();
 		const html = readFileSync( join( outputDir, entry!.html! ), 'utf8' );
 		expect( html ).toContain( 'Ordinary home page' );
+	} );
+	it( 'retries a route whose app crashed into the shell once, and keeps the real page', () => {
+		const entry = manifest.entries[ onceUrl() ];
+		expect( entry?.html ).toBeDefined();
+		expect( readFileSync( join( outputDir, entry!.html! ), 'utf8' ) ).toContain( 'Recovered page' );
 	} );
 } );
