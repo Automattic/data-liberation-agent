@@ -455,15 +455,16 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html.match( /Open Menu<\/button>/g ) ).toHaveLength( 2 );
 	} );
 
-	it( 'replaces the captured portal without retaining its closed source copy', () => {
+	it( 'keeps the portal resting tree and stores opened content only as replay evidence', () => {
 		const html = wireCapturedDialogs(
 			'<html><head></head><body><button>Open Menu</button><div id="menu" data-visible="false"><nav><a href="/stale">Stale menu</a></nav></div><div id="other-dialog">Keep me</div></body></html>',
 			[ captured ]
 		);
-		expect( html ).not.toContain( 'Stale menu' );
-		expect( html ).not.toContain( 'id="menu"' );
+		const $ = cheerio.load( html );
+		expect( $( '[data-blocks-engine-capture-dialog-panel] #menu' ).text() ).toBe( 'Stale menu' );
+		expect( $( '[data-blocks-engine-capture-dialog-panel] a' ).attr( 'href' ) ).toBe( '/stale' );
+		expect( $( '[data-blocks-engine-capture-dialog-panel-state]' ).attr( 'data-blocks-engine-capture-dialog-panel-state' ) ).toContain( '/about' );
 		expect( html ).toContain( 'data-blocks-engine-capture-dialog-panel="data-blocks-engine-capture-dialog-0"' );
-		expect( html ).toContain( 'href="/about"' );
 		expect( html ).toContain( '<div id="other-dialog">Keep me</div>' );
 	} );
 
