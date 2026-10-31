@@ -322,12 +322,7 @@ export function wireCapturedDialogs(
 					// Opened snapshots are replay evidence, not the initial authoring
 					// tree. Keep the source's closed content and root attributes even
 					// before (or without) the portable runtime running.
-					panel.html( existingPanel.html() ?? '' );
-					for ( const name of [ 'class', 'style', 'hidden' ] ) {
-						const value = existingPanel.attr( name );
-						if ( value === undefined ) panel.removeAttr( name );
-						else panel.attr( name, value );
-					}
+					restoreRestingPanel( existingPanel, panel );
 					panel.attr( 'data-blocks-engine-capture-resting-panel', '' );
 				}
 				if ( sourcePlaced ) panel.attr( 'data-blocks-engine-capture-observed-placement', 'true' ).attr( 'hidden', '' );
@@ -335,9 +330,28 @@ export function wireCapturedDialogs(
 			panel.attr( 'id', panelId ).attr( 'data-blocks-engine-capture-dialog-panel', panelId );
 			if ( dropdown ) panel.addClass( 'data-blocks-engine-capture-dropdown' );
 			if ( state.dialog?.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
-			if ( !reusePanel && !sourcePlaced ) panel.html( state.gallery?.lightbox
-				? wireGalleryDialog( state.dialog!.html, state.gallery.lightbox, panelId )
-				: state.dialog!.html );
+			if ( !reusePanel && !sourcePlaced ) {
+				panel.html( state.gallery?.lightbox
+					? wireGalleryDialog( state.dialog!.html, state.gallery.lightbox, panelId )
+					: state.dialog!.html );
+				if ( !dropdown && !state.gallery && existingPanel.length === 1 ) {
+					// A failed inline-resting observation chooses a wrapper, not a
+					// different authoring state. Replay swaps its entire child root.
+					trigger.attr( 'data-blocks-engine-capture-dialog-panel-state', JSON.stringify( {
+						html: panel.html() ?? '',
+						style: panel.attr( 'style' ) ?? null,
+						class: panel.attr( 'class' ) ?? null,
+					} ) );
+					panel.empty().append( restoreRestingPanel( existingPanel ) );
+					const resting = {
+						html: panel.html() ?? '',
+						style: panel.attr( 'style' ) ?? null,
+						class: panel.attr( 'class' ) ?? null,
+						hidden: true,
+					};
+					panel.attr( 'data-blocks-engine-capture-existing-panel', JSON.stringify( { resting, opened: resting } ) );
+				}
+			}
 			if ( label ) trigger.attr( 'data-blocks-engine-capture-disclosure-label', label );
 			trigger.attr( 'data-blocks-engine-capture-dialog-trigger', panelId );
 			trigger.attr( 'aria-controls', panelId );
@@ -458,6 +472,17 @@ export function wireCapturedRouteNavigation( html: string, routes: CapturedRoute
 		} );
 	}
 	return changed ? $.html() : html;
+}
+
+/** Open snapshots are replay evidence; the authoring tree keeps the source root. */
+function restoreRestingPanel( resting: cheerio.Cheerio<AnyNode>, panel = resting.clone() ): cheerio.Cheerio<AnyNode> {
+	panel.html( resting.html() ?? '' );
+	for ( const name of [ 'class', 'style', 'hidden' ] ) {
+		const value = resting.attr( name );
+		if ( value === undefined ) panel.removeAttr( name );
+		else panel.attr( name, value );
+	}
+	return panel;
 }
 
 function nextDialogId( $: cheerio.CheerioAPI ): string {

@@ -6,8 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { captureTriggeredDialogs } from './screenshot/interaction-capture.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 
-// One browser pass (~2 seconds): real WP render with submenu, source probing, portable replay.
-it( 'preserves core-navigation inline resting state and phone overlay behavior', async () => {
+// ~2 seconds per case: real WP render, source probing, portable replay.
+it.each( [ false, true ] )( 'preserves core-navigation resting state and phone replay (synthesized=%s)', async ( synthesized ) => {
 	const root = new URL( '../../test/fixtures/core-navigation/', import.meta.url );
 	const server = createServer( async ( request, response ) => {
 		const name = request.url === '/' ? 'index.html' : request.url!.slice( 1 );
@@ -27,10 +27,15 @@ it( 'preserves core-navigation inline resting state and phone overlay behavior',
 		await page.waitForFunction( () => !!document.querySelector( '.wp-block-navigation__responsive-dialog' ) );
 		// Let the actual core Interactivity API hydrate before source probing.
 		await page.waitForTimeout( 200 );
+		if ( synthesized ) {
+			// No sampled width has a concealed trigger, so the inline-resting
+			// observation cannot prove reuse and wiring must synthesize a wrapper.
+			await page.addStyleTag( { content: '.wp-block-navigation__responsive-container-open{display:block!important}' } );
+		}
 		const sourceGeometry = new Map<number, { x: number; y: number; width: number; height: number }[]>();
 		for ( const width of [ 1440, 768, 390 ] ) {
 			await page.setViewportSize( { width, height: 900 } );
-			expect( await page.locator( '.wp-block-navigation__responsive-container-open' ).isVisible() ).toBe( width === 390 );
+			expect( await page.locator( '.wp-block-navigation__responsive-container-open' ).isVisible() ).toBe( synthesized || width === 390 );
 			if ( width !== 390 ) sourceGeometry.set( width, await page.locator( 'nav .wp-block-navigation__container > .wp-block-navigation-link > a' ).evaluateAll( links => links.map( link => {
 				const { x, y, width, height } = link.getBoundingClientRect();
 				return { x, y, width, height };
@@ -38,9 +43,9 @@ it( 'preserves core-navigation inline resting state and phone overlay behavior',
 		}
 		const html = await page.content();
 		const report = await captureTriggeredDialogs( page, url );
-		expect( report.states ).toEqual( expect.arrayContaining( [ expect.objectContaining( {
-			status: 'captured', dialog: expect.objectContaining( { restingInline: true } ),
-		} ) ] ) );
+		const menu = report.states.find( state => state.status === 'captured' && state.dialog?.id === 'modal-1' );
+		expect( menu ).toBeDefined();
+		expect( menu!.dialog!.restingInline ).toBe( synthesized ? undefined : true );
 		const withoutRuntime = html.replace( /<script\b[^>]*>[\s\S]*?<\/script>/gi, '' );
 		const portable = wireCapturedDialogs( withoutRuntime, report.states );
 		// Inspect serialized HTML, before replay JS can repair an opened snapshot.
@@ -48,7 +53,10 @@ it( 'preserves core-navigation inline resting state and phone overlay behavior',
 		const $ = cheerio.load( portable );
 		const panel = $( '.wp-block-navigation__responsive-container' );
 		expect( panel ).toHaveLength( 1 );
-		expect( panel.attr( 'data-blocks-engine-capture-resting-panel' ) ).toBeDefined();
+		if ( synthesized ) {
+			expect( panel.parent().attr( 'class' ) ).toBe( 'data-blocks-engine-capture-dialog' );
+			expect( panel.parent().attr( 'hidden' ) ).toBeDefined();
+		} else expect( panel.attr( 'data-blocks-engine-capture-resting-panel' ) ).toBeDefined();
 		expect( panel.attr( 'hidden' ) ).toBeUndefined();
 		expect( $( '.is-menu-open,.has-modal-open' ) ).toHaveLength( 0 );
 		expect( panel.attr( 'style' ) ?? '' ).not.toMatch( /display|visibility/ );
@@ -59,7 +67,7 @@ it( 'preserves core-navigation inline resting state and phone overlay behavior',
 		const open = page.locator( '.wp-block-navigation__responsive-container-open' );
 		const links = page.locator( 'nav .wp-block-navigation__container > .wp-block-navigation-link > a' );
 		expect( await links.count() ).toBe( 4 );
-		for ( const width of [ 1440, 768, 390, 1440, 390 ] ) {
+		for ( const width of synthesized ? [ 390, 390 ] : [ 1440, 768, 390, 1440, 390 ] ) {
 			await page.setViewportSize( { width, height: 900 } );
 			await expect.poll( () => open.isVisible() ).toBe( width === 390 );
 			for ( const link of await links.all() ) await expect.poll( () => link.isVisible() ).toBe( width !== 390 );
