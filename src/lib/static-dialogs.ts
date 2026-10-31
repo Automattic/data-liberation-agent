@@ -231,6 +231,18 @@ export function wireCapturedDialogs(
 		const sharedPanelId = reusedPanels.get( state.dialog!.selector );
 		const existingPanel = selectByCapturedSelector( $, state.dialog?.selector, state.dialog?.tag )
 			.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' );
+		// Responsive documents can retain the same source ID twice. Resolve
+		// each trigger's resting root before removal detaches those documents.
+		const restingPanels = new Map( capturedTriggers[ index ]!.toArray().map( element => {
+			let resting = existingPanel;
+			if ( resting.length > 1 ) {
+				for ( const ancestor of $( element ).parents().toArray() ) {
+					const local = existingPanel.filter( ( _, panel ) => $( panel ).parents().toArray().includes( ancestor ) );
+					if ( local.length === 1 ) { resting = local; break; }
+				}
+			}
+			return [ element, resting ];
+		} ) );
 		const reusePanel = ( state.dialog?.presentation === 'dropdown' || state.dialog?.restingInline === true ) && existingPanel.length === 1;
 		if ( !reusePanel && !sharedPanelId ) removeCapturedDialog( $, state.dialog?.selector );
 		// An earlier exported panel contains a captured snapshot, not another
@@ -334,7 +346,8 @@ export function wireCapturedDialogs(
 				panel.html( state.gallery?.lightbox
 					? wireGalleryDialog( state.dialog!.html, state.gallery.lightbox, panelId )
 					: state.dialog!.html );
-				if ( !dropdown && !state.gallery && existingPanel.length === 1 ) {
+				const restingPanel = restingPanels.get( element )!;
+				if ( !dropdown && !state.gallery && restingPanel.length === 1 ) {
 					// A failed inline-resting observation chooses a wrapper, not a
 					// different authoring state. Replay swaps its entire child root.
 					trigger.attr( 'data-blocks-engine-capture-dialog-panel-state', JSON.stringify( {
@@ -342,7 +355,7 @@ export function wireCapturedDialogs(
 						style: panel.attr( 'style' ) ?? null,
 						class: panel.attr( 'class' ) ?? null,
 					} ) );
-					panel.empty().append( restoreRestingPanel( existingPanel ) );
+					panel.empty().append( restoreRestingPanel( restingPanel ) );
 					const resting = {
 						html: panel.html() ?? '',
 						style: panel.attr( 'style' ) ?? null,
