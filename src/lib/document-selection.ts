@@ -101,6 +101,11 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	for ( const key of selection.documents ) {
 		if ( documents[ key ] === undefined ) continue;
 		const source = cheerio.load( documents[ key ] );
+		// This is a page-level runtime dependency, not a selected-device flag.
+		// Keep it when any captured document needs WordPress emoji support.
+		if ( source( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress' ) {
+			$( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji', 'wordpress' );
+		}
 		const viewport = source( 'meta[name="viewport"]' );
 		if ( viewport.length !== 1 || ! viewport.attr( 'content' ) ) throw new Error( `Device document ${ key } has no unique viewport metadata` );
 		viewports[ key ] = { name: 'viewport', content: viewport.attr( 'content' )!, ...( viewport.attr( 'id' ) ? { id: viewport.attr( 'id' )! } : {} ) };

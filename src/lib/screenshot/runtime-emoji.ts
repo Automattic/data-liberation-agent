@@ -138,7 +138,12 @@ function createEmojiTextRestore( isReplacementImage: ( attrs: EmojiImageAttribut
 		// the single run the source authored, not adjacent runs that
 		// serialization would have to keep apart.
 		for ( const parent of parents ) parent.normalize();
-		if ( restored > 0 ) root.documentElement.setAttribute( 'data-blocks-engine-capture-runtime-emoji', 'wordpress' );
+		// Native glyph support can leave no images to restore even though the
+		// source ships WordPress's emoji runtime. Record that dependency too.
+		const settings = ( root.defaultView as ( Window & { _wpemojiSettings?: unknown } ) | null )?._wpemojiSettings;
+		if ( restored > 0 || ( settings !== null && typeof settings === 'object' ) ) {
+			root.documentElement.setAttribute( 'data-blocks-engine-capture-runtime-emoji', 'wordpress' );
+		}
 		return restored;
 	};
 }
