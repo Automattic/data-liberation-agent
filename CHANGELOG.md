@@ -15,6 +15,12 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.60] - 2026-10-31
+
+### Changed
+- regenerate plugin bundles
+- Stabilize redirect deadline verification for G19 gate — Refs #1090, #1034
+
 ## [0.33.59] - 2026-10-31
 
 ### Changed
