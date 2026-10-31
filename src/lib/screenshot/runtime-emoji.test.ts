@@ -198,13 +198,15 @@ describe( 'RUNTIME_EMOJI_PREDICATE_SOURCE / RUNTIME_EMOJI_RESTORE_SOURCE', () =>
 	} );
 
 	it.each( [
-		[ HOT_FACE_IMG, true ],
-		[ 'Native 🥵 text', false ],
-		[ `<img class="emoji" alt="🥵" src="/authored.png">`, false ],
-	] )( 'marks serialized HTML only when runtime emoji were restored: %s', ( html, marked ) => {
+		[ HOT_FACE_IMG, true, false ],
+		[ 'Native 🥵 text', false, false ],
+		[ 'Native 🇦🇷 text', true, true ],
+		[ `<img class="emoji" alt="🥵" src="/authored.png">`, false, false ],
+	] )( 'marks serialized HTML when WordPress emoji runtime is present: %s', ( html, marked, settings ) => {
 		const predicate = new Function( 'return (' + RUNTIME_EMOJI_PREDICATE_SOURCE.factorySrc + ')' )()() as typeof isRuntimeEmojiReplacementImage;
 		const restore = new Function( 'return (' + RUNTIME_EMOJI_RESTORE_SOURCE.factorySrc + ')' )()( predicate ) as typeof restoreEmojiText;
 		const { dom, doc } = documentOf( `<p>${ html }</p>` );
+		if ( settings ) Object.assign( dom.window, { _wpemojiSettings: {} } );
 		restore( doc );
 		expect( /<html\b[^>]* data-blocks-engine-capture-runtime-emoji="wordpress"/.test( dom.serialize() ) ).toBe( marked );
 	} );
@@ -235,5 +237,9 @@ describe( 'RUNTIME_EMOJI_PREDICATE_SOURCE / RUNTIME_EMOJI_RESTORE_SOURCE', () =>
 		const { doc } = documentOf( `<h2>${ FAMILY_IMG }</h2>` );
 		expect( restore( doc ) ).toBe( 1 );
 		expect( doc.querySelector( 'h2' )!.textContent ).toBe( '👨‍👩‍👦‍👦' );
+		const native = documentOf( '<p>Native 🇦🇷 text</p>' );
+		Object.assign( native.dom.window, { _wpemojiSettings: {} } );
+		expect( restore( native.doc ) ).toBe( 0 );
+		expect( native.doc.documentElement.getAttribute( 'data-blocks-engine-capture-runtime-emoji' ) ).toBe( 'wordpress' );
 	} );
 } );

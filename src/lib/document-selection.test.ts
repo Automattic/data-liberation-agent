@@ -60,6 +60,12 @@ async function observation( page: Page ) {
 	} );
 }
 
+it.each( [ 'desktop', 'mobile' ] )( 'preserves the %s runtime emoji marker on exported html', ( markedDocument ) => {
+	const html = exported( directory(), true, ( document, key ) => key === markedDocument
+		? document.replace( '<html>', '<html data-blocks-engine-capture-runtime-emoji="wordpress">' ) : document );
+	expect( cheerio.load( html )( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) ).toBe( 'wordpress' );
+} );
+
 it( 'preserves default-document JSON-LD during device assembly while removing executable scripts', () => {
 	const product = { '@context': 'https://schema.org', '@type': 'Product', name: 'Fixture' };
 	const itemList = { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: [] };
