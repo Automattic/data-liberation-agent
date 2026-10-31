@@ -81,7 +81,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
       // exercised by native-view-timelines.test.ts with real Chromium.
       if (typeof fn === 'string' && s.includes('document.getAnimations')) return [];
       // capturePageHtml serializes in-renderer rather than via page.content().
-      if (s.includes('DOCTYPE')) return '<html><body>hello</body></html>';
+      if (s.includes('DOCTYPE')) return { html: '<html><body>hello</body></html>', findings: [] };
       if (s.includes('__dlaCleanup')) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
       // extractFull's section-spec closure — return an empty raw-section array so
       // the desktop pass writes sections/<slug>.json (no real DOM in the mock).
@@ -358,7 +358,7 @@ describe('captureScreenshots', () => {
 	it('reflects property-only media state before serializing HTML', async () => {
 		const page = {
 			evaluate: vi.fn().mockImplementation(async (fn: unknown) =>
-				String(fn).includes('DOCTYPE') ? '<html><video autoplay muted></video></html>' : false),
+				String(fn).includes('DOCTYPE') ? { html: '<html><video autoplay muted></video></html>', findings: [] } : false),
 			waitForTimeout: vi.fn(),
 		};
 
@@ -377,7 +377,7 @@ describe('captureScreenshots', () => {
 		const page = {
 			evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
 				const s = String(fn);
-				if (s.includes('DOCTYPE')) return '<html></html>';
+				if (s.includes('DOCTYPE')) return { html: '<html></html>', findings: [] };
 				// Keep the media-settling loop running to its bound.
 				return s.includes('source.setAttribute(property') ? true : undefined;
 			}),
@@ -395,7 +395,7 @@ describe('captureScreenshots', () => {
 				.fn()
 				.mockResolvedValueOnce(true)
 				.mockResolvedValueOnce(false)
-				.mockResolvedValue('<html><video src="https://cdn.example.test/video.mp4"></video></html>'),
+				.mockResolvedValue({ html: '<html><video src="https://cdn.example.test/video.mp4"></video></html>', findings: [] }),
 			waitForTimeout: vi.fn().mockResolvedValue(undefined),
 		};
 
@@ -706,7 +706,7 @@ describe('captureScreenshots', () => {
         const p = makeGoodPage();
         p.evaluate = vi.fn().mockImplementation(async (fn: unknown) => {
           const s = String(fn);
-          if (s.includes('DOCTYPE')) return '<html><body>hello</body></html>';
+          if (s.includes('DOCTYPE')) return { html: '<html><body>hello</body></html>', findings: [] };
           if (s.includes('__dlaCleanup')) return { url: 'https://example.com/short', viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
           if (s.includes('scrollHeight')) return 500;
           // site-analysis evaluate

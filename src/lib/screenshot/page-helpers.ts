@@ -1235,7 +1235,7 @@ function ensureScrollUnlocked(page: Page): Promise<void> {
 /** Remove every detection stamp so the captured HTML is clean. */
 function cleanupStamps(page: Page): Promise<void> {
   return page.evaluate(() => {
-    for (const a of ['data-lib-overlay', 'data-lib-overlay-close', 'data-lib-overlay-consent']) {
+    for (const a of ['data-lib-overlay', 'data-lib-overlay-close', 'data-lib-overlay-consent', 'data-lib-overlay-backdrop']) {
       for (const el of Array.from(document.querySelectorAll(`[${a}]`))) el.removeAttribute(a);
     }
   });
@@ -1334,6 +1334,16 @@ async function dismissOne(
 ): Promise<DismissedOverlay['method'] | null> {
   // Skip if already gone (e.g. removed by a sibling's close handler).
   if (!(await overlayPresent(page, t.idx))) return null;
+  // Associate explicit sibling backdrops before a handler hides them. Do not
+  // infer a backdrop from a full-screen box alone (it could be a real hero).
+  await page.evaluate((idx: number) => {
+    const node = document.querySelector(`[data-lib-overlay="${idx}"]`);
+    for (const sibling of Array.from(node?.parentElement?.children ?? [])) {
+      if (sibling !== node && /backdrop|overlay-mask/i.test(`${sibling.id} ${sibling.className}`) && !sibling.textContent?.trim() && !sibling.querySelector('img,video,a,button,input')) {
+        sibling.setAttribute('data-lib-overlay-backdrop', String(idx));
+      }
+    }
+  }, t.idx);
   // Consent banners: their accept/reject control IS the dismissal (and rarely a
   // close ×), so try it before the generic close affordance.
   if (t.kind === 'consent') {
@@ -1391,6 +1401,15 @@ export async function dismissOverlays(
       for (const t of targets) {
         const method = await withEvaluateTimeout(dismissOne(page, t), 10_000);
         if (method) {
+          // Retain node identity across re-detection rounds. Never remove live
+          // framework-owned nodes: the serializer consumes this evidence on a clone.
+          await page.evaluate(({ idx, kind, selector, method, consent }) => {
+            const node = document.querySelector(`[data-lib-overlay="${idx}"]`);
+            // A scored takeover can still be consent UI; genuine promo dialogs stay.
+            const evidence = JSON.stringify({ kind, selector, method, removable: kind !== 'takeover' || consent });
+            node?.setAttribute('data-lib-dismissed-overlay', evidence);
+            for (const backdrop of document.querySelectorAll(`[data-lib-overlay-backdrop="${idx}"]`)) backdrop.setAttribute('data-lib-dismissed-overlay', evidence);
+          }, { idx: t.idx, kind: t.kind, selector: t.selector, method, consent: !!detection.candidates.find(candidate => candidate.idx === t.idx && isConsentBanner(candidate)) });
           dismissed.push({ selector: t.selector, method, kind: t.kind, score: t.score, signals: t.signals });
           acted++;
         }

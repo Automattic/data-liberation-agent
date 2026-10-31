@@ -60,7 +60,7 @@ function makePage() {
 			const source = String( fn );
 			if ( source.includes( 'ViewTimeline' ) ) return [];
 			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
-			if ( source.includes( 'DOCTYPE' ) ) return '<html><body>Tianna Wolfson</body></html>';
+			if ( source.includes( 'DOCTYPE' ) ) return { html: '<html><body>Tianna Wolfson</body></html>', findings: [] };
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
 			if ( source.includes( 'scrollHeight' ) ) return 3000;
 			if ( source.includes( 'scrollTo' ) ) return undefined;

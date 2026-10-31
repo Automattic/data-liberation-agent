@@ -72,9 +72,9 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 			if ( source.includes( 'ViewTimeline' ) ) return [];
 			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: mobile ? 402 : 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
 			if ( source.includes( 'DOCTYPE' ) ) {
-				return mobile
+				return { html: mobile
 					? '<html><head><style>.hero{background:url("mobile-only.jpg")}</style></head><body>mobile</body></html>'
-					: '<html><body>desktop</body></html>';
+					: '<html><body>desktop</body></html>', findings: [] };
 			}
 			if ( source.includes( 'document.baseURI' ) ) return { url: 'https://example.com/', baseUrl: 'https://example.com/' };
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
