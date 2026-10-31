@@ -52,6 +52,7 @@ import { combineSkips, resolveProbeExclusions } from './probe-exclusions.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
+import { cleanPortableScaffolding } from './portable-scaffolding.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, routePhaseBreakdown, type PhaseLedger } from './phase-ledger.js';
 import { availableRuntimeMemory } from './runtime-memory.js';
@@ -276,7 +277,7 @@ function navBackoffMs( attempt: number, retryAfter?: string ): number {
 	return Math.min( 1000 * 2 ** ( attempt - 1 ), cap );
 }
 
-export async function capturePageHtml( page: Page ): Promise< string > {
+export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[] ): Promise< string > {
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',
@@ -399,7 +400,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
-		const html = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, iframeEvidenceAttributes } ) => {
+		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, iframeEvidenceAttributes, scaffoldingSource } ) => {
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -550,8 +551,10 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 					copies[ index ]!.setAttribute( controlAttribute, JSON.stringify( observeControl( control ) ) );
 				} );
 				const portMaps = new Function( 'return (' + portMapsSource + ')' )() as typeof portRenderedGoogleMaps;
+				const clean = new Function( 'return (' + scaffoldingSource + ')' )() as typeof cleanPortableScaffolding;
+				const findings = clean( document, snapshot );
 				portMaps( document, snapshot, iframeEvidenceAttributes );
-				return `<!DOCTYPE html>${ snapshot.outerHTML }`;
+				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings };
 			} finally {
 				restoreParagraphDescendants();
 				for ( const boundary of textBoundaries ) boundary.remove();
@@ -565,8 +568,9 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), iframeEvidenceAttributes } );
-		return wireNativeControlState( html );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString() } );
+		diagnostics?.push( ...result.findings );
+		return wireNativeControlState( result.html );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
@@ -1110,7 +1114,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	const componentBaseline: ComponentBaseline = snapshot && Array.isArray( snapshot.components ) ? snapshot : { components: [], controls: [] };
 	await markGalleryRoots( page ).catch( () => undefined );
 	await markInitialDocument( page );
-	const initialDocument = await capturePageHtml( page );
+	const initialDocument = await capturePageHtml( page, args.diagnostics );
 	// The serialized head is the initial one, so it is named by the title the
 	// browser reported for it, before exploration could retitle the page.
 	const initialTitle = await page.evaluate( () => document.title ).catch( () => undefined );
@@ -1241,7 +1245,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
-		const learned = await capturePageHtml( page );
+		const learned = await capturePageHtml( page, args.diagnostics );
 		const projected = projectInitialDocument( initialDocument, learned );
 		const captured = typeof initialTitle === 'string' ? withDocumentTitle( projected, initialTitle ) : projected;
 		const html = canonicalize( frozen ? sanitizeFrozenHtml( captured ) : captured );

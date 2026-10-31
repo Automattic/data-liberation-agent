@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { request } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { checkInternalRoute } from './internal-route.js';
 
 async function listen( server: Server ): Promise<string> {
@@ -19,6 +19,7 @@ describe( 'candidate-local HTTP inspection', () => {
 		const forbiddenOrigin = await listen( forbidden );
 		const seen: string[] = [];
 		let origin: string;
+		let chainTime = 0;
 		const server = createServer( ( req, response ) => {
 			const path = req.url!; seen.push( `${ req.headers.host }${ path }` );
 			const redirects: Record<string, [number, string]> = {
@@ -39,7 +40,11 @@ describe( 'candidate-local HTTP inspection', () => {
 			if ( path.startsWith( '/bound/' ) ) { response.writeHead( 301, { location: `/bound/${ Number( path.split( '/' ).pop() ) + 1 }` } ); response.end(); return; }
 			if ( path.startsWith( '/slow/' ) ) {
 				const n = Number( path.split( '/' ).pop() );
-				setTimeout( () => { response.writeHead( 301, { location: `/slow/${ n + 1 }` } ); response.end(); }, 150 ); return;
+				// Advance the chain deadline explicitly instead of assuming a loaded
+				// worker can complete exactly two timed responses within 400 ms.
+				chainTime = Math.min( 400, ( n + 1 ) * 150 );
+				if ( n < 2 ) { response.writeHead( 301, { location: `/slow/${ n + 1 }` } ); response.end(); }
+				return;
 			}
 			if ( path === '/disconnect' ) { req.socket.destroy(); return; }
 			if ( path === '/missing' ) { response.writeHead( 301 ); response.end(); return; }
@@ -64,9 +69,15 @@ describe( 'candidate-local HTTP inspection', () => {
 			expect( await checkInternalRoute( context, origin, `${ forbiddenOrigin }/initial` ) ).toMatchObject( { status: null, outcome: 'blocked-redirect' } );
 			expect( await checkInternalRoute( context, origin, '/bound/0', { maxRedirects: 2 } ) ).toEqual( { path: '/bound/0', status: 301, redirects: 2, outcome: 'redirect-limit' } );
 			expect( seen.filter( path => path.includes( '/bound/' ) ) ).toHaveLength( 3 );
-			const started = performance.now();
-			expect( await checkInternalRoute( context, origin, '/slow/0', { timeoutMs: 400 } ) ).toEqual( { path: '/slow/0', status: 301, redirects: 2, outcome: 'timeout' } );
-			expect( performance.now() - started ).toBeLessThan( 1_000 );
+			const realNow = performance.now.bind( performance );
+			const started = realNow();
+			const clock = vi.spyOn( performance, 'now' ).mockImplementation( () => chainTime );
+			const get = vi.spyOn( context, 'get' );
+			try {
+				expect( await checkInternalRoute( context, origin, '/slow/0', { timeoutMs: 400 } ) ).toEqual( { path: '/slow/0', status: 301, redirects: 2, outcome: 'timeout' } );
+				expect( get.mock.calls.map( ( [ , options ] ) => options?.timeout ) ).toEqual( [ 400, 250, 100 ] );
+			} finally { clock.mockRestore(); get.mockRestore(); }
+			expect( realNow() - started ).toBeLessThan( 1_000 );
 			expect( seen.filter( path => path.includes( '/slow/' ) ) ).toHaveLength( 3 );
 			expect( forbiddenRequests ).toBe( 0 );
 			expect( seen.some( path => path.includes( '/never' ) || path.startsWith( 'localhost:' ) ) ).toBe( false );
