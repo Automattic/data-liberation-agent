@@ -15,6 +15,22 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.54] - 2026-10-31
+
+### Changed
+- regenerate plugin bundles
+- Ignore node_modules whether it is a directory or a symlink
+- Retry a route whose source app crashed into its client error shell
+- Place a device-only wrapper that has no default counterpart
+- Cap vitest workers so browser tests stay within runner memory
+- Reconcile source-selected device documents into one tree
+
+### Fixed
+- admit a route only if captured routes' assets can still be fetched
+- serialize reused inline navigation panels in their resting state
+- fetch one representative rendition per srcset
+- skip @font-face sources no browser loads
+
 ## [0.33.53] - 2026-10-30
 
 ### Changed
