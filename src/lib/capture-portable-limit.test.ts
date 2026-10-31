@@ -8,11 +8,17 @@ import { srcsetReferences } from './srcset.js';
 import { captureAssets } from './image-assets.js';
 import { exportWebsiteCapture } from './capture-export.js';
 
-async function captureFixture(body: string, check: (outputDir: string, url: string) => void) {
+async function captureFixture(body: string, check: (outputDir: string, url: string) => void, head = '') {
 	const server = createServer((request, response) => {
+		if (request.url === '/dell-scaled.jpeg') {
+			response.setHeader('content-type', 'image/jpeg');
+			// A real 2560x1 JPEG, with no body image or rendition in the page.
+			response.end(Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABCgADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//9k=', 'base64'));
+			return;
+		}
 		const width = request.url?.includes('2048x') ? 2048 : request.url?.includes('-scaled') ? 2560 : request.url?.includes('300x') ? 300 : 2048;
 		response.setHeader('content-type', request.url === '/' ? 'text/html' : 'image/svg+xml');
-		response.end(request.url === '/' ? `<!doctype html><html><head><title>Photos</title></head><body>${body}</body></html>` : `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="100"><rect width="100%" height="100%" fill="red"/></svg>`);
+		response.end(request.url === '/' ? `<!doctype html><html><head><title>Photos</title>${head}</head><body>${body}</body></html>` : `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="100"><rect width="100%" height="100%" fill="red"/></svg>`);
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
@@ -30,7 +36,7 @@ async function captureFixture(body: string, check: (outputDir: string, url: stri
 		expect(result.failures).toEqual([]);
 		// HTTP acquisition is read-only review; exercise the portable asset/export
 		// stages explicitly against its captured files, as browser capture does.
-		const html = `<!doctype html><html><head><title>Photos</title></head><body>${body}</body></html>`;
+		const html = `<!doctype html><html><head><title>Photos</title>${head}</head><body>${body}</body></html>`;
 		await captureAssets(outputDir, [{ html, url }]);
 		mkdirSync(join(outputDir, 'html'), { recursive: true });
 		mkdirSync(join(outputDir, 'screenshots'), { recursive: true });
@@ -58,6 +64,19 @@ it('captures and exports the widest portable srcset representative', async () =>
 			expect(readFileSync(file, 'utf8')).toContain('width="2048"');
 		}
 	});
+}, 30_000);
+
+it('exports a head-only scaled JPEG original without a rendition', async () => {
+	await captureFixture('', (dir, url) => {
+		const manifest = JSON.parse(readFileSync(join(dir, 'resources/manifest.json'), 'utf8'));
+		expect(manifest.resources[url + 'dell-scaled.jpeg'].path).toMatch(/dell-scaled\.jpg$/);
+		const $ = cheerio.load(readFileSync(join(dir, 'website/index.html'), 'utf8'));
+		const reference = $('meta[property="og:image"]').attr('content')!;
+		expect(reference).toMatch(/^\/media\//);
+		expect($('meta[name="twitter:image"]').attr('content')).toBe(reference);
+		expect(existsSync(join(dir, 'website', reference))).toBe(true);
+		expect(readFileSync(join(dir, 'diagnostics.json'), 'utf8')).not.toContain('image_resource_unresolved');
+	}, '<meta property="og:image" content="/dell-scaled.jpeg"><meta name="twitter:image" content="/dell-scaled.jpeg">');
 }, 30_000);
 
 it.each([
