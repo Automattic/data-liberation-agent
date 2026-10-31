@@ -532,7 +532,7 @@ async function runCaptureWebsite(
 		prepareCapture: adapter.liberation?.prepare,
 		referenceSample,
 	} );
-	const assetQueue = new AssetAcquisitionQueue( outputDir, sourceGovernors, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ) );
+	const assetQueue = new AssetAcquisitionQueue( outputDir, sourceGovernors, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
 	const screenshotResult = await captureScreenshots( {
 		urls,
 		routeScope,

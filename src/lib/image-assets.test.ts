@@ -97,6 +97,35 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
   }
  });
 
+ it.each([
+  ['while routes can still start', 60_000, 2],
+  ['once route admission has closed', -1, 6],
+ ])('limits concurrent asset downloads %s', async (_name, closesIn, expected) => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2"/></svg>';
+  let inFlight = 0, most = 0;
+  const server = createServer((_request, response) => {
+   most = Math.max(most, ++inFlight);
+   setTimeout(() => { inFlight--; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); }, 100);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'asset-queue-'));
+  try {
+   mkdirSync(join(root, 'html'), { recursive: true });
+   writeFileSync(join(root, 'html/index.html'), Array.from({ length: 8 }, (_, i) => `<img src="/${i}.svg">`).join(''));
+   await runWithTrustedOrigins([url], async () => {
+    const queue = new AssetAcquisitionQueue(root, new SourceRequestGovernors(), Date.now() + 60_000, undefined, undefined, Date.now() + closesIn);
+    queue.enqueueRoute(url, ['html/index.html']);
+    await queue.drain();
+   });
+   expect(most).toBe(expected);
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
  it('fetches a captured route\'s lightbox original before the deadline so assets admit it afterwards', async () => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20"/></svg>';
   let hits = 0;
