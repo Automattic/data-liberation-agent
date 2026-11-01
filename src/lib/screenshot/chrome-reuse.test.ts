@@ -7,7 +7,7 @@ import * as cheerio from 'cheerio';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
-import { rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
+import { anchorChromeStates, readChromeLandmarks, reuseSharedChrome, rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
@@ -55,6 +55,45 @@ describe( 'shared chrome selectors', () => {
 	} );
 } );
 
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'UUID landmark identity safety', () => {
+	it( 'ignores only unreferenced UUID identities and still verifies each reused selector', async () => {
+		const browser = await chromium.launch();
+		try {
+			const view = await browser.newPage();
+			const first = 'CC6E93CF-BB58-4FD3-9C30-7A119F4B5D67';
+			const second = '8c5bdbb6-8cef-4e87-80e8-b26df2b79afa';
+			const fixture = ( id: string, reference = '', text = 'Subscribe' ) => `<footer ${ reference }><button id="${ id }">${ text }</button><button>Other</button></footer>`;
+			await view.setContent( fixture( first ) );
+			const landmarks = await readChromeLandmarks( view );
+			const anchored = await anchorChromeStates( view, landmarks, [ { status: 'no-dialog', trigger: { selector: `#${ first }`, tag: 'button', ariaHaspopup: '', dataBindings: {} } } ] );
+			await view.setContent( fixture( second ) );
+			expect( ( await readChromeLandmarks( view ) )[ 0 ]!.signature ).toBe( landmarks[ 0 ]!.signature );
+			// Signature equality never authorizes a selector that no longer resolves.
+			const reuse = await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence: { url: 'https://fixture/', landmarks, ...anchored } } );
+			expect( reuse.decision ).toMatchObject( { landmarks: { matched: 1 }, reusedStates: 0, rejectedStates: 1 } );
+			expect( reuse.skip ).toBeUndefined();
+			expect( await view.locator( 'button' ).first().getAttribute( 'id' ) ).toBe( second );
+			// Even a selector that resolves must still name the corresponding node.
+			await view.locator( 'button' ).nth( 1 ).evaluate( ( node, id ) => { node.id = id; }, first );
+			expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence: { url: 'https://fixture/', landmarks, ...anchored } } ) ).decision ).toMatchObject( { reusedStates: 0, rejectedStates: 1 } );
+			for ( const reference of [ 'aria-labelledby', 'aria-describedby', 'aria-controls', 'for', 'href' ] ) {
+				await view.setContent( fixture( first, `${ reference }="${ reference === 'href' ? '#' : '' }${ first }"` ) );
+				const referenced = await readChromeLandmarks( view );
+				expect( referenced[ 0 ]!.signature, reference ).not.toBe( landmarks[ 0 ]!.signature );
+				// Removing the target ID while leaving the reference must change identity.
+				await view.locator( 'button' ).first().evaluate( node => node.removeAttribute( 'id' ) );
+				expect( ( await readChromeLandmarks( view ) )[ 0 ]!.signature, reference ).not.toBe( referenced[ 0 ]!.signature );
+			}
+			await view.setContent( fixture( second, '', 'Different footer' ) );
+			expect( ( await readChromeLandmarks( view ) )[ 0 ]!.signature ).not.toBe( landmarks[ 0 ]!.signature );
+			await view.setContent( fixture( 'authored-id' ) );
+			expect( ( await readChromeLandmarks( view ) )[ 0 ]!.signature ).not.toBe( landmarks[ 0 ]!.signature );
+		} finally {
+			await browser.close();
+		}
+	} );
+} );
+
 /**
  * `/` and `/about` render the same header at different places in the page; `/landing`
  * renders a header with other text. Every page has its own tab set in main
@@ -70,7 +109,8 @@ function page( path: string ): string {
 <button type="button" class="info" aria-haspopup="dialog" data-control="header">Info</button></header>`;
 	const main = `<main><h1>${ path || 'home' }</h1><div class="tabs"><div role="tablist"><button role="tab" aria-controls="tab-region" aria-selected="true" data-control="tab">Overview</button><button role="tab" aria-controls="tab-region" aria-selected="false" data-control="tab">Details</button><button role="tab" aria-controls="tab-region" aria-selected="false" data-control="tab">Pricing</button></div>
 <div id="tab-region" role="tabpanel" class="tab-region">The overview of ${ path || 'home' } is short.</div></div></main>`;
-	const body = path === '' ? `<div class="wrap"><div class="promo">Sale this week</div>${ header }${ main }</div>` : `${ header }${ main }<footer>Footer</footer>`;
+	const footer = `<footer><div class="runtime-id"><span class="runtime-id">Footer</span></div><a href="/${ path === 'landing' ? 'terms' : 'privacy' }">Privacy</a><button type="button" data-control="footer">Subscribe to our Newsletter</button></footer>`;
+	const body = path === '' ? `<div class="wrap"><div class="promo">Sale this week</div>${ header }${ main }${ footer }</div>` : `${ header }${ main }${ footer }`;
 	// The Info control's panel lives in the site chrome (its trigger is in the
 	// header) but renders as a body-level portal, outside the landmark.
 	const infoDialog = `<div id="site-info-dialog" class="info-dialog" role="dialog" aria-label="Site info" hidden><p>Everything about this site.</p><button type="button" class="close" aria-label="Dismiss site info">×</button></div>`;
@@ -80,6 +120,7 @@ body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;he
 .contact-dialog{position:fixed;inset:0;background:#fff}[hidden]{display:none!important}main{min-height:1400px}
 </style></head><body>${ body }${ infoDialog }<script>
 const instance = Math.random().toString(36).slice(2);
+for (const node of document.querySelectorAll('.runtime-id')) node.id = crypto.randomUUID();
 document.addEventListener('click', event => { const control = event.target.closest('[data-control]'); if (control) fetch('/__click?path=' + encodeURIComponent(location.pathname) + '&control=' + control.dataset.control + '&instance=' + instance); }, true);
 const products = document.querySelector('.products'), menu = document.querySelector('.products-menu');
 products.addEventListener('click', () => { menu.hidden = !menu.hidden; products.setAttribute('aria-expanded', String(!menu.hidden)); });
@@ -144,7 +185,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 
 	it( 'probes the shared header once, on the entrypoint, and on no other route', () => {
 		expect( result.captured ).toBe( 3 );
-		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 1, states: 3, captured: 3, unanchored: 0 } );
+		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 2, states: 4, captured: 3, unanchored: 0 } );
 		// One page instance clicked the shared header: the one-time probe of the entrypoint.
 		const shared = clicks.filter( click => click.control === 'header' && click.path !== '/landing' );
 		expect( shared.length ).toBeGreaterThan( 0 );
@@ -155,8 +196,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 		expect( clicksOn( 'about', 'header' ) ).toEqual( [] );
 		expect( clicksOn( 'about', 'info' ) ).toEqual( [] );
 		for ( const path of [ '', 'about' ] ) {
-			// `/about` also has a footer, which the entrypoint does not.
-			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: path ? 2 : 1, entrypoint: 1, matched: 1 }, reusedStates: 3 } );
+			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: 2, entrypoint: 2, matched: 2 }, reusedStates: 4 } );
 			expect( entries[ url( path ) ]!.profiles!.desktop!.sharedChrome ).toEqual( entries[ url( path ) ]!.sharedChrome );
 		}
 	} );
@@ -167,6 +207,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 			[ 'captured', 'Products', url( '' ) ],
 			[ 'captured', 'Contact', url( '' ) ],
 			[ 'captured', 'Info', url( '' ) ],
+			[ 'no-dialog', 'Subscribe to our Newsletter', url( '' ) ],
 		] );
 		// Where the panel renders outside the landmark (the Info portal at body
 		// level), its state is still chrome evidence, addressed by the node's own id.
@@ -181,11 +222,20 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 		expect( states[ 1 ]!.dialog!.html ).toContain( 'Write to us any time.' );
 	} );
 
-	it( 'probes a route whose header differs in place', () => {
+	it( 'reuses the script-generated UUID footer without re-probing its trigger', () => {
+		const footerClicks = clicksOn( '', 'footer' );
+		expect( footerClicks.length ).toBeGreaterThan( 0 );
+		expect( new Set( footerClicks.map( click => click.instance ) ).size ).toBe( 1 );
+		expect( clicksOn( 'about', 'footer' ) ).toEqual( [] );
+		expect( entries[ url( 'about' ) ]!.interactions!.states.find( state => state.trigger.label === 'Subscribe to our Newsletter' ) ).toMatchObject( { status: 'no-dialog', reusedFrom: url( '' ) } );
+	} );
+
+	it( 'probes a route whose header and footer link differ in place', () => {
 		const landing = entries[ url( 'landing' ) ]!;
-		expect( landing.sharedChrome ).toMatchObject( { chromeReused: false, landmarks: { route: 2, entrypoint: 1, matched: 0 } } );
+		expect( landing.sharedChrome ).toMatchObject( { chromeReused: false, landmarks: { route: 2, entrypoint: 2, matched: 0 } } );
 		expect( landing.sharedChrome!.reason ).toContain( 'no chrome landmark matches' );
 		expect( clicksOn( 'landing', 'header' ).length ).toBeGreaterThan( 0 );
+		expect( clicksOn( 'landing', 'footer' ).length ).toBeGreaterThan( 0 );
 		expect( landing.interactions!.states.filter( state => state.reusedFrom ) ).toEqual( [] );
 		expect( landing.interactions!.states.find( state => state.trigger.label === 'Shop' ) ).toMatchObject( { status: 'captured' } );
 		expect( result.sharedChrome!.routes ).toMatchObject( { checked: 3, reused: 2, probedInPlace: [ { url: url( 'landing' ), profile: 'desktop' } ] } );
