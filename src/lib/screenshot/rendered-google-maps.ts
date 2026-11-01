@@ -1,3 +1,6 @@
+/** Runtime ownership shared with interaction discovery. */
+export const GOOGLE_MAP_RUNTIME_ROOT = '.gm-style';
+
 /**
  * Runs inside the page during serialization. Google Maps JS paints temporary
  * tiles and controls, whose event handlers cannot survive portable HTML. Its

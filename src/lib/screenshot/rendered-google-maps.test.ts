@@ -6,6 +6,46 @@ import { expect, it } from 'vitest';
 import { capturePageHtml } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { captureTriggeredDialogs } from './interaction-capture.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
+
+it('keeps map runtime dialogs out of page panels while retaining a real site dialog', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><style>
+      .gm-style { position:relative; width:640px; height:320px }
+    </style><main><div class="gm-style">
+      <a href="https://maps.google.com/maps?ll=12.345,23.456&z=9">View map</a>
+      <button id="map-help" aria-haspopup="dialog" aria-controls="map-dialog"
+        onclick="document.getElementById('map-dialog').show()">Keyboard shortcuts</button>
+      <dialog id="map-dialog" aria-label="Keyboard shortcuts">
+        <p>Use arrow keys to move the map</p>
+        <button onclick="this.closest('dialog').close()">Close</button>
+      </dialog>
+    </div>
+    <button id="newsletter" aria-haspopup="dialog" aria-controls="newsletter-dialog"
+      onclick="document.getElementById('newsletter-dialog').showModal()">Newsletter</button>
+    <dialog id="newsletter-dialog" aria-label="Newsletter">
+      <p>Newsletter information</p><button onclick="this.closest('dialog').close()">Close</button>
+    </dialog></main>`);
+    const captured = await capturePageHtml(page);
+    expect(load(captured)('.gm-style iframe')).toHaveLength(1);
+    // Cover resting runtime dialogs as well as those opened by their controls.
+    await page.locator('#map-help').click();
+    const initial = await captureTriggeredDialogs(page, 'about:blank');
+    expect((initial.initialDialogs ?? []).some(item => item.dialog.ariaLabel === 'Keyboard shortcuts')).toBe(false);
+    await page.evaluate(() => (document.getElementById('map-dialog') as HTMLDialogElement).close());
+    const report = await captureTriggeredDialogs(page, 'about:blank');
+    expect(report.states.some(item => item.trigger.id === 'map-help')).toBe(false);
+    expect(report.states.find(item => item.trigger.id === 'newsletter')?.status).toBe('captured');
+    const portable = load(wireCapturedDialogs(captured, report.states));
+    expect(portable('.data-blocks-engine-capture-dialog[aria-label="Keyboard shortcuts"]')).toHaveLength(0);
+    expect(portable('.data-blocks-engine-capture-dialog[aria-label="Newsletter"]')).toHaveLength(1);
+  } finally {
+    await browser.close();
+  }
+});
 
 it('ports a rendered Google map through portable export without freezing its tiles or changing the live map', async () => {
   const browser = await chromium.launch();
