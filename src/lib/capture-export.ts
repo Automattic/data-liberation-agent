@@ -1779,7 +1779,8 @@ function buildExportCapture(
 			if ( renditionBytes >= bytes || renditionBytes > maxFileBytes || dimension >= candidate.dimension ) return [];
 			return [ { ...candidate, sourceUrl: rendition.original.source_url, localPath: rendition.local_path,
 				bytes: renditionBytes, dimension,
-				imageAsset: { ...rendition, source_urls: imageAsset!.source_urls, references: imageAsset!.references },
+				references: rendition.source_urls.flatMap( url => mediaReferences( url, options.sourceUrl ) ),
+				imageAsset: rendition,
 			} ];
 		} );
 		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate, ...smaller ] );
