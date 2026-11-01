@@ -9,7 +9,10 @@ const skip = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium
 
 // A runtime waiting for a remote interaction acknowledgement can leave its
 // probe's browser-side settle timer pending forever. Keep baseline timers real;
-// stall only after the first user interaction. Both drivers must be bounded.
+// stall only the probe's 25ms settle polling after the first interaction.
+// Retain a real pending timer instead of dropping the callback entirely: the
+// latter returned an execution-context error rather than exercising the budget.
+// Both drivers must be bounded.
 const fixture = ( kind: string ) => `<!doctype html><title>Pending interaction</title>
 <main><a href="/linked">Linked document</a>
 <input type="search" placeholder="Find entries"><div id="categories"><button class="active">Everything</button><button>First</button><button>Second</button></div><div id="items"></div>
@@ -17,7 +20,7 @@ const fixture = ( kind: string ) => `<!doctype html><title>Pending interaction</
 const entries=[['Same heading','Evidence for apples',1],['Same heading','Evidence for oranges',2],['Other heading','Fresh berries',2]];let category=0;
 function render(){const query=document.querySelector('input').value.toLowerCase();document.querySelectorAll('#categories button').forEach((b,i)=>b.className=i===category?'active':'');document.querySelector('#items').innerHTML=entries.filter(e=>(!category||e[2]===category)&&(e[0]+' '+e[1]).toLowerCase().includes(query)).map(e=>'<article><h2>'+e[0]+'</h2><p>'+e[1]+'</p></article>').join('')||'<p>No entries match.</p>';}
 document.querySelector('input').addEventListener('input',()=>{render();if(document.querySelector('input').value)document.querySelector('input').disabled=true;});
-document.querySelectorAll('#categories button').forEach((b,i)=>b.onclick=()=>{category=i;render();${ kind === 'selectable' ? 'window.setTimeout = () => 0;' : '' }});render();
+document.querySelectorAll('#categories button').forEach((b,i)=>b.onclick=()=>{category=i;render();${ kind === 'selectable' ? 'const schedule = window.setTimeout.bind(window); window.setTimeout = (callback, delay, ...args) => schedule(callback, delay === 25 ? 60_000 : delay, ...args);' : '' }});render();
 </script>`;
 
 it.skipIf( skip )( 'retains baseline and follows server links when selectable and typed-search probes never settle', async () => {

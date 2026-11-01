@@ -1,5 +1,5 @@
-/** Runtime ownership shared with interaction discovery. */
-export const GOOGLE_MAP_RUNTIME_ROOT = '.gm-style';
+/** Maps owns the host's contents, including controls outside its style root. */
+export const GOOGLE_MAP_RUNTIME_ROOT = ':has(> div > .gm-style),.gm-style';
 
 /**
  * Runs inside the page during serialization. Google Maps JS paints temporary
@@ -75,6 +75,17 @@ export function portRenderedGoogleMaps(
     frame.setAttribute(evidenceAttributes.src, frame.src);
     frame.setAttribute(evidenceAttributes.width, frame.width);
     frame.setAttribute(evidenceAttributes.height, frame.height);
+    // The runtime also inserts controls beside .gm-style and dialogs beside
+    // its wrapper. Clear that host boundary, retaining the ancestor chain's
+    // layout styles so the embed keeps the observed responsive geometry.
+    const wrapper = map.parentElement;
+    const host = wrapper?.parentElement;
+    const copyWrapper = copy.parentElement;
+    const copyHost = copyWrapper?.parentElement;
+    if (wrapper?.tagName === 'DIV' && host && copyWrapper && copyHost) {
+      copyHost.replaceChildren(copyWrapper);
+      copyWrapper.replaceChildren(copy);
+    }
     copy.replaceChildren(frame);
     ported = true;
   }

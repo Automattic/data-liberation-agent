@@ -15,15 +15,21 @@ it('keeps map runtime dialogs out of page panels while retaining a real site dia
     const page = await browser.newPage();
     await page.setContent(`<!doctype html><style>
       .gm-style { position:relative; width:640px; height:320px }
-    </style><main><div class="gm-style">
-      <a href="https://maps.google.com/maps?ll=12.345,23.456&z=9">View map</a>
-      <button id="map-help" aria-haspopup="dialog" aria-controls="map-dialog"
-        onclick="document.getElementById('map-dialog').show()">Keyboard shortcuts</button>
-      <dialog id="map-dialog" aria-label="Keyboard shortcuts">
+    </style><main><div class="page-map"><div>
+      <div><button id="map-help" aria-haspopup="dialog" aria-controls="map-dialog"
+        onclick="document.getElementById('map-dialog').show()">Keyboard shortcuts</button></div>
+      <div aria-label="Map"><div><div class="LGLeeN-keyboard-shortcuts-view">
+        <table><tr><td>Use arrow keys to move the map</td></tr></table>
+      </div></div></div>
+      <div class="gm-style">
+        <a href="https://maps.google.com/maps?ll=12.345,23.456&z=9">View map</a>
+      </div>
+    </div><gmp-internal-dialog class="keyboard-shortcuts-dialog-view">
+      <dialog id="map-dialog" class="zlDrU-basic-dialog-element" aria-label="Keyboard shortcuts">
         <p>Use arrow keys to move the map</p>
         <button onclick="this.closest('dialog').close()">Close</button>
       </dialog>
-    </div>
+    </gmp-internal-dialog></div>
     <button id="newsletter" aria-haspopup="dialog" aria-controls="newsletter-dialog"
       onclick="document.getElementById('newsletter-dialog').showModal()">Newsletter</button>
     <dialog id="newsletter-dialog" aria-label="Newsletter">
@@ -39,6 +45,7 @@ it('keeps map runtime dialogs out of page panels while retaining a real site dia
     const report = await captureTriggeredDialogs(page, 'about:blank');
     expect(report.states.some(item => item.trigger.id === 'map-help')).toBe(false);
     expect(report.states.find(item => item.trigger.id === 'newsletter')?.status).toBe('captured');
+    expect(load(captured)('.page-map #map-help, .page-map table, .page-map gmp-internal-dialog')).toHaveLength(0);
     const portable = load(wireCapturedDialogs(captured, report.states));
     expect(portable('.data-blocks-engine-capture-dialog[aria-label="Keyboard shortcuts"]')).toHaveLength(0);
     expect(portable('.data-blocks-engine-capture-dialog[aria-label="Newsletter"]')).toHaveLength(1);
@@ -56,10 +63,14 @@ it('ports a rendered Google map through portable export without freezing its til
     await page.setContent(`<!doctype html><style>
       .map { position:relative; width:min(100%,640px); height:320px }
       .gm-style { position:absolute; inset:0; overflow:hidden }
-    </style><main><p>Example workshop</p><div class="map"><div class="gm-style">
+    </style><main><p>Example workshop</p><div class="map"><div>
+      <div><button aria-label="Keyboard shortcuts">Keyboard shortcuts</button></div>
+      <div aria-label="Map"><div><div class="LGLeeN-keyboard-shortcuts-view">
+        <table><tr><td>Arrow keys</td></tr></table>
+      </div></div></div><div class="gm-style">
       <div role="region" aria-label="Map"><div class="tiles">Runtime tile content</div></div>
       <a href="https://maps.google.com/maps?ll=-33.8651437,151.2099002&z=12&amp;t=m&amp;hl=en-AU&amp;mapclient=apiv3">Open this area in Google Maps</a>
-    </div></div></main>`);
+    </div></div><gmp-internal-dialog><dialog aria-label="Keyboard shortcuts"></dialog></gmp-internal-dialog></div></main>`);
     const before = await page.locator('main').innerHTML();
     const captured = await capturePageHtml(page);
     const $ = load(captured);
@@ -86,6 +97,8 @@ it('ports a rendered Google map through portable export without freezing its til
     expect(portable('iframe').attr('width')).toBe('640');
     expect(portable('iframe').attr('height')).toBe('320');
     expect(portable('.tiles')).toHaveLength(0);
+    expect(portable('.map button, .map table, .map gmp-internal-dialog, .map [aria-label="Map"]')).toHaveLength(0);
+    expect(portable('main > p').text()).toBe('Example workshop');
     const copy = await browser.newPage();
     await copy.route('https://maps.google.com/**', route => route.fulfill({contentType:'text/html',body:'<p>Map service</p>'}));
     await copy.setContent(portable.html());
