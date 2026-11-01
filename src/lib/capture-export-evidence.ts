@@ -107,6 +107,8 @@ export interface CaptureEvidenceInput {
 export const CAPTURE_RECEIPT_SCHEMA = 'blocks-engine-capture/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'blocks-engine-capture/source-profile/v1';
 export const ASSET_EVIDENCE_SCHEMA = 'blocks-engine-capture/asset-evidence/v1';
+/** Below Static Site Importer's 10 MiB max_file_bytes, including JSON encoding and newline. */
+export const MAX_ASSET_EVIDENCE_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_ASSET_EVIDENCE_ASSETS = 10_000;
 const MAX_ASSET_EVIDENCE_REFERENCES = 100;
 const MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE = 10_000;
@@ -187,6 +189,49 @@ interface AssetEvidenceRecord {
 	referenceCount: number;
 	referencesTruncated: boolean;
 	references: AssetEvidenceReference[];
+}
+
+type AssetEvidenceReport = ReturnType< typeof assetEvidence > & {
+	schema: string;
+	referenceLimit: number;
+	coverage: Record< string, string | number | boolean >;
+};
+
+/** Trim reference tails uniformly first, then retain an asset prefix in the existing sorted order.
+ * Counts still describe the source evidence, not just the emitted sample. No outcome fields change.
+ */
+export function serializeAssetEvidence( report: AssetEvidenceReport ): string {
+	const encode = ( referenceLimit: number, assetLimit: number, byteBudgetTruncated: boolean ) => {
+		const assets = report.assets.slice( 0, assetLimit ).map( asset => ( {
+			...asset,
+			referencesTruncated: asset.referencesTruncated || asset.references.length > referenceLimit,
+			references: asset.references.slice( 0, referenceLimit ),
+		} ) );
+		return `${ JSON.stringify( {
+			...report,
+			assetsTruncated: report.assetsTruncated || assetLimit < report.assets.length,
+			referencesTruncated: report.assets.some( asset => asset.referencesTruncated || asset.references.length > referenceLimit ),
+			byteBudget: MAX_ASSET_EVIDENCE_FILE_BYTES,
+			byteBudgetTruncated,
+			assets,
+		} ) }\n`;
+	};
+	const fits = ( content: string ) => Buffer.byteLength( content, 'utf8' ) <= MAX_ASSET_EVIDENCE_FILE_BYTES;
+	const full = encode( MAX_ASSET_EVIDENCE_REFERENCES, report.assets.length, false );
+	if ( fits( full ) ) return full;
+
+	// Binary search the largest uniform reference cap that fits. If even empty lists
+	// exceed the budget, drop later assets instead (including any oversized single asset).
+	const referencesFit = fits( encode( 0, report.assets.length, true ) );
+	let low = 0;
+	let high = referencesFit ? MAX_ASSET_EVIDENCE_REFERENCES : report.assets.length;
+	while ( low < high ) {
+		const middle = Math.ceil( ( low + high ) / 2 );
+		const candidate = referencesFit ? encode( middle, report.assets.length, true ) : encode( 0, middle, true );
+		if ( fits( candidate ) ) low = middle;
+		else high = middle - 1;
+	}
+	return referencesFit ? encode( low, report.assets.length, true ) : encode( 0, low, true );
 }
 
 export interface AssetEvidenceReferences {
@@ -558,7 +603,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	);
 	writeFileSync(
 		join( stageDir, 'asset-evidence.json' ),
-		`${ JSON.stringify(
+		serializeAssetEvidence(
 			{
 				schema: ASSET_EVIDENCE_SCHEMA,
 				assetCount: assetEvidenceReport.assetCount,
@@ -577,9 +622,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				},
 				assets: assetEvidenceReport.assets,
 			},
-			null,
-			2
-		) }\n`
+		)
 	);
 
 	// Merge capture-time route diagnostics (this route never produced HTML) with

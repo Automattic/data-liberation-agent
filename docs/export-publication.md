@@ -33,6 +33,12 @@ The receipt's `reports` array lists the capture-root-relative JSON sidecars an i
 
 Report identities stay public relative paths (`website/index.html`, `semantic-evidence/shard-0001.json`). They do not contain the staging directory or its generation id.
 
+## Asset evidence size contract
+
+`asset-evidence.json` uses compact JSON and an 8 MiB UTF-8 byte budget (including its trailing newline), below Static Site Importer's 10 MiB `max_file_bytes`. It retains the existing `assets[]` fields, including `id`, `sourceUrl`, outcomes and portable paths used by downstream projectors such as blocks-engine's `CapturedDialogProjector`.
+
+When necessary, export reduces all per-asset reference lists to the largest uniform prefix limit that fits. If even empty reference lists exceed the budget, it retains a prefix of the existing sorted assets instead. Each retained asset declares `referencesTruncated`; top-level `referencesTruncated`, `assetsTruncated`, `byteBudgetTruncated` and `byteBudget` declare the emitted sample's limits. Source `referenceCount`, `totalReferenceCount`, `assetCount` and `assetCountExact` retain their original meanings, not emitted-list lengths. Outcome/portable fields are never shortened to fit.
+
 ## Lock
 
 `.export-publication.lock` is created with `O_EXCL`. It records pid, process start time (`ps -o lstart`), generation id, and token. A live pid whose start time still matches rejects the second export. Rejection is not a queued or merged rematerialization: the second call throws `ExportPublicationRejected` and does not remove the in-flight stage. `materializeHttpDocuments` uses the same export, so a concurrent rematerialization is rejected the same way.
