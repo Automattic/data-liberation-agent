@@ -88,7 +88,7 @@ describe( 'capture evidence vocabulary', () => {
 			'collection-status', 'collection-runtime', 'collection-visibility', 'status-template', 'status-hide-zero', 'no-match', 'finite-probe',
 			'choice-index', 'native-control-state', 'native-control-runtime', 'glyph-color', 'anchor-unresolved',
 			// Static Site Importer reads these from the same namespace.
-			'device-style', 'selected-document', 'member-login', 'device-selection', 'device-body', 'selected-viewport', 'document-unavailable',
+			'device-style', 'selected-document', 'member-login', 'device-selection', 'device-body', 'document-unavailable',
 		];
 		const known = [ ...names, ...Object.keys( CAPTURE_EVIDENCE_FAMILIES ) ];
 		expect( published.filter( name => ! known.includes( name ) ) ).toEqual( [] );
