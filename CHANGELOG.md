@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.69] - 2026-11-01
+
+### Changed
+- regenerate plugin bundles
+- Attribute device checks and reuse desktop capture navigation
+- Stabilize shared-chrome signatures across runtime UUID IDs
+
 ## [0.33.68] - 2026-11-01
 
 ### Changed
