@@ -26,6 +26,7 @@ import {
 	serverRedirectTarget,
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { portStaticShadowContent } from './shadow-content.js';
 import { normalizeCaptureState, normalizeGeneratedIds } from './capture-state.js';
 import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
 import { captureCollections } from './collection-capture.js';
@@ -400,7 +401,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
-		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource } ) => {
+		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource } ) => {
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -552,8 +553,11 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				} );
 				const portMaps = new Function( 'return (' + portMapsSource + ')' )() as typeof portRenderedGoogleMaps;
 				const clean = new Function( 'return (' + scaffoldingSource + ')' )() as typeof cleanPortableScaffolding;
+				const portShadow = new Function( 'return (' + shadowSource + ')' )() as typeof portStaticShadowContent;
+				const flattenShadow = portShadow( document, snapshot );
 				const findings = clean( document, snapshot );
 				portMaps( document, snapshot, iframeEvidenceAttributes, new Function( 'return (' + mapHostSource + ')' )() as typeof isGoogleMapHost );
+				flattenShadow();
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings };
 			} finally {
 				restoreParagraphDescendants();
@@ -568,7 +572,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString() } );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString() } );
 		diagnostics?.push( ...result.findings );
 		return wireNativeControlState( result.html );
 	} finally {
