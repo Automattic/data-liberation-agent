@@ -251,7 +251,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 		const dir = directory(); const html = exported( dir );
 		const serialized = cheerio.load( html );
 		expect( serialized( 'meta[name="viewport"]' ) ).toHaveLength( 1 );
-		expect( serialized( 'meta[name="viewport"]' ).attr( 'data-blocks-engine-capture-selected-viewport' ) ).toBeDefined();
 		const visibility = serialized( 'style[data-blocks-engine-capture-device-visibility]' ).text();
 		for ( const key of selection.documents ) expect( visibility ).toContain( `html[data-blocks-engine-capture-selected-document="${ key }"] [data-blocks-engine-capture-device-document="${ key }"]{display:contents!important}` );
 		const selector = serialized( 'script[data-blocks-engine-capture-device-selection]' ).text();
@@ -313,6 +312,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 				await context.close();
 			}
 			writeFileSync( join( dir, 'browser-proof.json' ), JSON.stringify( rows, null, 2 ) );
+			// A host such as WordPress prints its own viewport meta in place of the exported one.
+			writeFileSync( join( dir, 'website', 'host.html' ), html.replace( /<meta name="viewport"[^>]*>/, '<meta name="viewport" content="width=device-width, initial-scale=1" />' ) );
+			const hosted = await browser.newContext( iphone );
+			const hostPage = await hosted.newPage();
+			await hostPage.goto( new URL( 'host.html', staticSite.url ).href, { waitUntil: 'load' } );
+			expect( await observation( hostPage ) ).toMatchObject( { selected: 'mobile', innerWidth: 320 } );
+			await hosted.close();
 		} finally { await browser.close(); await staticSite.close(); await new Promise<void>( resolve => source.close( () => resolve() ) ); }
 	}, 60_000 );
 
