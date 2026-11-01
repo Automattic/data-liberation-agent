@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.63] - 2026-11-01
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- Fix atom.bio discovery with shared tenant-handle scoping
+
 ## [0.33.62] - 2026-11-01
 
 ### Changed
