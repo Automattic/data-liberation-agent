@@ -349,8 +349,11 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	try {
 		if ( images.length ) {
 			let page: import('playwright').Page | undefined;
-			const jobs = images.map( record => ( { record, rendition: false } ) );
-			for ( const { record, rendition } of jobs ) {
+			// Rendition jobs carry their parent and the smaller fallbacks to try
+			// only if this one fails: one extra verified download per family.
+			const jobs: Array<{ record: ImageAssetRecord; rendition: boolean; parent?: ImageAssetRecord; rest?: ImageAssetRecord[] }> =
+				images.map( record => ( { record, rendition: false } ) );
+			for ( const { record, rendition, parent, rest } of jobs ) {
 				const source = record.resolved_original;
 				try {
 					if ( /\/_missing-media\/|\/(?:placeholder|missing-image)\.(?:svg|png|gif|webp)(?:[?#]|$)/i.test( source ) )
@@ -405,6 +408,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					record.local_path = localPath;
 					delete record.error;
 					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markSuccess( url, localPath );
+					else ( parent!.renditions ??= [] ).push( record );
 					if ( ! rendition && record.kind === 'image' ) {
 						const widths = Object.entries( record.rendition_widths ?? {} )
 							.filter( ( [ url, width ] ) => url !== source && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
@@ -413,17 +417,18 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 						// Try the nearest adequate rendition, then smaller fallbacks. Each
 						// request remains deadline-bound and bypasses aliased stub bytes.
 						const ordered = adequate < 0 ? widths.reverse() : [ widths[ adequate ], ...widths.slice( 0, adequate ).reverse() ];
-						record.renditions = ordered.map( ( [ url ] ) => ( {
+						const children: ImageAssetRecord[] = ordered.map( ( [ url ] ) => ( {
 							kind: 'image', destination_owner: record.destination_owner,
 							source_urls: [ url ], references: record.references,
 							resolved_original: url, original: null,
 						} ) );
-						for ( const child of record.renditions ) jobs.push( { record: child, rendition: true } );
+						if ( children.length ) jobs.push( { record: children[ 0 ], rendition: true, parent: record, rest: children.slice( 1 ) } );
 					}
 				} catch ( error ) {
 					if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
 					record.error = String( error );
 					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
+					else if ( rest?.length ) jobs.push( { record: rest[ 0 ], rendition: true, parent, rest: rest.slice( 1 ) } );
 				}
 			}
 		}

@@ -159,7 +159,8 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
  it('acquires and verifies a real srcset rendition rather than reusing original stub aliases', async () => {
   const hits: string[] = [];
   const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/>${width > 300 ? '<!--' + 'x'.repeat(1000) + '-->' : ''}</svg>`;
-  const server = createServer((request, response) => { hits.push(request.url!); response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(request.url!.includes('300') ? 300 : 1800)); });
+  let failAdequate = false;
+  const server = createServer((request, response) => { hits.push(request.url!); if (failAdequate && request.url!.includes('300')) { response.writeHead(500); response.end(); return; } response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(Number(/w=(\d+)/.exec(request.url!)?.[1] ?? 1800))); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
@@ -175,7 +176,9 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     const documents = [{ url, html: '<picture><source srcset="photo.svg?w=100 100w, photo.svg?w=300 300w, photo.svg?w=1800 1800w"><img style="width:250px" src="photo.svg"></picture>' }];
     const [record] = await captureAssets(root, documents, Date.now() + 30000, source => source.split('?')[0]);
     const small = record.renditions!.find(child => child.original);
-    expect(hits).toEqual(['/photo.svg?w=300', '/photo.svg?w=100']);
+    // Only the nearest adequate rendition is fetched when it succeeds.
+    expect(hits).toEqual(['/photo.svg?w=300']);
+    expect(record.renditions).toHaveLength(1);
     expect(record.rendered_width).toBe(250);
     expect(record.renditions![0].original?.width).toBe(300);
     expect(small?.original).toMatchObject({ source_url: `${url}photo.svg?w=300`, width: 300 });
@@ -183,8 +186,13 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     expect(small!.original!.sha256).not.toBe(record.original!.sha256);
     hits.length = 0;
     const [expired] = await captureAssets(root, documents, Date.now() - 1, source => source.split('?')[0]);
-    expect(expired.renditions!.every(child => !child.original && child.error?.includes('deadline'))).toBe(true);
+    expect(expired.renditions ?? []).toEqual([]);
     expect(hits).toEqual([]);
+    // A failed adequate rendition falls back to the next smaller one.
+    failAdequate = true;
+    const [fallback] = await captureAssets(root, documents, Date.now() + 30000, source => source.split('?')[0]);
+    expect(hits).toEqual(['/photo.svg?w=300', '/photo.svg?w=100']);
+    expect(fallback.renditions!.map(child => child.original?.width)).toEqual([100]);
    });
   } finally {
    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
