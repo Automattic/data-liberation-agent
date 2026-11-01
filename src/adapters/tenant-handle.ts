@@ -1,3 +1,4 @@
+import { SOURCE_USER_AGENT } from '../lib/browser-kit/source-identity.js';
 import { load, type CheerioAPI } from 'cheerio';
 import { classifyUrl, extractSameOriginLinks } from '../lib/extraction/sitemap.js';
 import { documentRequestUrl } from '../lib/url/route-key.js';
@@ -29,7 +30,7 @@ export async function discoverTenantHandle(
 	// Edge bot protection on shared hosts refuses runtime-default agents such as `node`.
 	const response = await fetch(new URL(`${root}/`, entry.origin), {
 		signal: AbortSignal.timeout(15000),
-		headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+		headers: { 'User-Agent': SOURCE_USER_AGENT },
 	});
 	if (!response.ok || !inTenant(new URL(response.url))) {
 		await response.body?.cancel();

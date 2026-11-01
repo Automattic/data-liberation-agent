@@ -5,7 +5,7 @@ import { safeFetch } from '../../lib/media-fetch/safe-fetch.js';
 export const BLOGGER_FEED_REQUESTED_RESULTS = 500;
 export const BLOGGER_FEED_PAGE_CAP = 40;
 
-const UA = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 
 export interface FeedDiagnostic {
 	code: string;
@@ -126,7 +126,7 @@ export async function enumerateBloggerPosts(
 		try {
 			const response = await safeFetch(pageUrl, {
 				fetchImpl, timeoutMs: 15_000, maxBytes: 8 * 1024 * 1024,
-				headers: { 'User-Agent': UA, Accept: 'application/atom+xml, application/xml, text/xml' },
+				headers: { 'User-Agent': SOURCE_USER_AGENT, Accept: 'application/atom+xml, application/xml, text/xml' },
 			});
 			if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
 			parsed = parseBloggerFeed(response.body.toString('utf8'), origin);

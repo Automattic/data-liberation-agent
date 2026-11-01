@@ -26,6 +26,7 @@
 // origin that redirects to another internal host is still blocked.
 //
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 
 /** The empty trust set every run starts with. Never mutated. */
 const NO_TRUSTED_ORIGINS: ReadonlySet<string> = new Set();
@@ -286,7 +287,7 @@ export async function safeFetch(rawUrl: string, opts: SafeFetchOpts = {}): Promi
     const originHeaders = opts.headersForOrigin
       ? await opts.headersForOrigin(new URL(currentUrl).origin)
       : undefined;
-    const headers = originHeaders ? { ...opts.headers, ...originHeaders } : opts.headers;
+    const headers = { 'User-Agent': SOURCE_USER_AGENT, ...opts.headers, ...originHeaders };
     let res: Response;
     try {
       res = await doFetch(currentUrl, {

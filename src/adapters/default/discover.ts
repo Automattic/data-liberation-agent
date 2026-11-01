@@ -5,7 +5,7 @@ import { createSourcePage, sourceContextOptions, getPlaywright } from '../../lib
 import type { InventoryUrl } from '../shared.js';
 import type { DefaultInventory } from './types.js';
 
-const UA = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 
 /**
  * Discovery for the platform-agnostic fallback adapter. Mirrors the webflow
@@ -20,7 +20,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
   try {
     const resp = await fetch(normalized, {
       signal: AbortSignal.timeout(15000),
-      headers: { 'User-Agent': UA },
+      headers: { 'User-Agent': SOURCE_USER_AGENT },
     });
     if (resp.ok) homepageHtml = await resp.text();
     else await resp.body?.cancel();

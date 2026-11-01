@@ -1,3 +1,4 @@
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, routeKey } from '../../lib/extraction/sitemap.js';
 import { extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
@@ -64,7 +65,7 @@ async function discoverArchiveUrls(siteUrl: string, prefix: string): Promise<str
     try {
       response = await fetch(archiveUrl, {
         signal: AbortSignal.timeout(15_000),
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+        headers: { 'User-Agent': SOURCE_USER_AGENT },
       });
     } catch {
       break;
@@ -130,7 +131,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   try {
     const homepageResp = await fetch(url, {
       signal: AbortSignal.timeout(15_000),
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+      headers: { 'User-Agent': SOURCE_USER_AGENT },
     });
     if (homepageResp.ok) {
       homepageHtml = await homepageResp.text();

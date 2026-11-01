@@ -1,3 +1,4 @@
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import * as cheerio from 'cheerio';
 import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
@@ -16,7 +17,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
   try {
     resp = await fetch(normalized, {
       signal: AbortSignal.timeout(15000),
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+      headers: { 'User-Agent': SOURCE_USER_AGENT },
     });
   } catch (err) {
     throw new Error(`HubSpot discover(): fetch failed for ${normalized}: ${(err as Error).message}`);

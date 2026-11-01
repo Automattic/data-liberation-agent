@@ -6,7 +6,7 @@ import { BLOGGER_FEED_REQUESTED_RESULTS, enumerateBloggerPosts } from './feed.js
 import type { BloggerInventory } from './types.js';
 import { safeFetch } from '../../lib/media-fetch/safe-fetch.js';
 
-const UA = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 
 function addRoutes(urls: InventoryUrl[], additions: readonly string[]): InventoryUrl[] {
 	const known = new Set(urls.map((entry) => {
@@ -68,7 +68,7 @@ async function fetchHomepage(url: string): Promise<string> {
 	try {
 		const response = await safeFetch(url, {
 			timeoutMs: 15_000, maxBytes: 8 * 1024 * 1024,
-			headers: { 'User-Agent': UA },
+			headers: { 'User-Agent': SOURCE_USER_AGENT },
 		});
 		if (response.status < 200 || response.status >= 300) return '';
 		return response.body.toString('utf8');
