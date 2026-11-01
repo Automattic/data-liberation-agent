@@ -14,12 +14,6 @@
 			"throw new Error('Brooklyn slide pause API is unavailable')": 1,
 			"throw new Error('Brooklyn slide runtime is unavailable')": 1
 		},
-		"src/adapters/soloist/discover.ts": {
-			"throw new Error(`Soloist homepage unavailable or redirected outside the tenant: ${response.status} ${response.url}`)": 1
-		},
-		"src/adapters/soloist/route-scope.ts": {
-			"throw new Error( 'Soloist discovery requires a customer handle URL' )": 1
-		},
 		"src/adapters/wix/collections.ts": {
 			"throw new Error('Source value bound exceeded')": 1,
 			"throw new Error('Source value depth exceeded')": 1
