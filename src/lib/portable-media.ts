@@ -1,5 +1,7 @@
-import { copyFileSync, mkdirSync } from 'node:fs';
-import { basename, dirname, extname, join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { basename, dirname, extname, join, relative } from 'node:path';
+import { copyExclusive } from './media-fetch/exclusive-file.js';
+import { safeFilename } from './media-fetch/media.js';
 import type { PortableMediaCandidate, PortableMediaPlan } from './portable-media-plan.js';
 import { portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 
@@ -128,7 +130,9 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				);
 				const destination = join( websiteDir, assetPath );
 				mkdirSync( dirname( destination ), { recursive: true } );
-				copyFileSync( candidate.localPath, destination );
+				const names = new Map<string, number>();
+				const allocated = copyExclusive( candidate.localPath, () => join( dirname( destination ), safeFilename( basename( destination ), names ) ) );
+				assetPath = relative( websiteDir, allocated );
 				assetPathsByHash.set( contentHash, assetPath );
 				assetHashesByPath.set( assetPath, contentHash );
 				const asset: PortableMediaMaterialization[ 'assets' ][ number ] = {

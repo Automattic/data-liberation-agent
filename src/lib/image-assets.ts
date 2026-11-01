@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { copyExclusive, moveExclusive } from './media-fetch/exclusive-file.js';
 import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
@@ -371,10 +372,9 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 						result = { localPath: cachedPath, filename: basename( cachedPath ), error: null };
 					} else if ( cachedPath ) {
 						mkdirSync( mediaDir, { recursive: true } );
-						const filename = safeFilename( deriveFilenameFromUrl( new URL( source ) ) || basename( cachedPath ), names );
-						const destination = join( mediaDir, filename );
-						copyFileSync( cachedPath, destination );
-						result = { localPath: destination, filename, error: null };
+						const rawFilename = deriveFilenameFromUrl( new URL( source ) ) || basename( cachedPath );
+						const destination = copyExclusive( cachedPath, () => join( mediaDir, safeFilename( rawFilename, names ) ) );
+						result = { localPath: destination, filename: basename( destination ), error: null };
 					} else {
 						result = await downloadMedia( source, mediaDir, names, undefined, { preserveOriginal: true, deadline } );
 					}
@@ -401,8 +401,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					let localPath = result.localPath;
 					if ( currentExtension.toLowerCase() !== extension ) {
 						const base = currentExtension ? result.filename!.slice( 0, -currentExtension.length ) : result.filename!;
-						localPath = join( mediaDir, safeFilename( `${ base }${ extension }`, names ) );
-						renameSync( result.localPath, localPath );
+						localPath = moveExclusive( result.localPath, () => join( mediaDir, safeFilename( `${ base }${ extension }`, names ) ) );
 					}
 					record.original = { source_url: source, content_type: contentType, ...metadata, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) };
 					record.local_path = localPath;

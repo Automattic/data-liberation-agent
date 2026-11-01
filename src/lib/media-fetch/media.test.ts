@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync, readFileSync } from 'fs';
 import { join, basename } from 'path';
-import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia, upgradeMediaUrl, isFontUrl } from './media.js';
+import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia, upgradeMediaUrl, isFontUrl, existingMediaNames } from './media.js';
 import { Readable } from 'stream';
+import { copyExclusive, moveExclusive } from './exclusive-file.js';
 
 // The fetch-time SVG raster wiring is tested with the rasterizer mocked —
 // the real-Chromium render path is covered in svg-raster.test.ts.
@@ -48,6 +49,45 @@ function stubResponse(contentType: string, body = 'fake-image-bytes'): Response 
     body: stream as unknown as ReadableStream,
   } as unknown as Response;
 }
+
+describe('independent media writers', () => {
+  it('copies and corrects extensions without replacing occupied files', () => {
+    const dir = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    try {
+      const original = join(dir, 'photo.webp');
+      const source = join(dir, 'source.jpg');
+      writeFileSync(original, 'verified');
+      writeFileSync(source, 'new bytes');
+      let n = 0;
+      const copy = copyExclusive(source, () => n++ === 0 ? original : join(dir, 'photo-2.jpg'));
+      n = 0;
+      const moved = moveExclusive(copy, () => n++ === 0 ? original : join(dir, 'photo-2.webp'));
+      expect(readFileSync(original, 'utf8')).toBe('verified');
+      expect(readFileSync(moved, 'utf8')).toBe('new bytes');
+      expect(existsSync(copy)).toBe(false);
+      expect(readFileSync(source, 'utf8')).toBe('new bytes');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it('retries disk collisions with stale snapshots, including simultaneous same-slug downloads', async () => {
+    const dir = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    try {
+      const early = existingMediaNames(dir);
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => stubResponse('image/webp', url)));
+      const first = await downloadMedia('https://cdn.example.com/a/Step+2+-+wetting-2.jpg', dir, early);
+      const later = existingMediaNames(dir);
+      const results = [first, ...await Promise.all([
+        downloadMedia('https://cdn.example.com/b/Step+2+wetting+2.jpg', dir, later),
+        downloadMedia('https://cdn.example.com/c/Step+2+wetting+2.jpg', dir, early),
+        downloadMedia('https://cdn.example.com/d/Step+2+wetting+2.jpg', dir, new Map()),
+      ])];
+      expect(new Set(results.map(result => result.localPath)).size).toBe(results.length);
+      for (const result of results) {
+        expect(result.error).toBeNull();
+        expect(readFileSync(result.localPath!, 'utf8')).toBe(result.url);
+      }
+    } finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
 
 describe('sanitizeMediaFilename', () => {
   it('slugifies spaces and %-encoding, preserves extension', () => {

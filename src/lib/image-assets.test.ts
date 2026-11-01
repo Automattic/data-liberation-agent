@@ -1,4 +1,6 @@
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -193,6 +195,51 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     const [fallback] = await captureAssets(root, documents, Date.now() + 30000, source => source.split('?')[0]);
     expect(hits).toEqual(['/photo.svg?w=300', '/photo.svg?w=100']);
     expect(fallback.renditions!.map(child => child.original?.width)).toEqual([100]);
+   });
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
+ it('preserves verified hashes across independent writers and a lying-header rendition rename (~1s)', async () => {
+  const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/></svg>`;
+  let duringRendition: (() => Promise<void>) | undefined;
+  const server = createServer(async (request, response) => {
+   // Keep the URL/header as JPEG so captureAssets must correct it from decoded bytes.
+   if (request.url!.includes('500w')) await duringRendition!();
+   response.writeHead(200, { 'content-type': request.url!.includes('500w') ? 'image/jpeg' : 'image/svg+xml' });
+   response.end(svg(request.url!.includes('500w') ? 500 : 1500));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'media-writers-'));
+  try {
+   await runWithTrustedOrigins([url], async () => {
+    const mediaDir = join(root, 'media');
+    mkdirSync(mediaDir);
+    const earlyNames = existingMediaNames(mediaDir);
+    const [original] = await captureAssets(root, [{ url, html: '<img src="/JS200/Step+2+-+wetting-2.jpg?format=300w">' }]);
+    expect(original.original).not.toBeNull();
+    // A captureAssets snapshot predates another writer's output. Publish two
+    // same-slug sources while it waits for its rendition; the correction must
+    // not rename onto the other writer's newly-created SVG.
+    const lateRecords: Array<{ local_path: string; original: { sha256: string } }> = [];
+    duringRendition = () => runWithTrustedOrigins([url], async () => {
+     for (const name of ['Step+2+wetting+2.svg', 'Step+2+wetting+2-2.svg']) {
+      const result = await downloadMedia(`${url}F7Q29/${name}`, mediaDir, earlyNames);
+      expect(result.error).toBeNull();
+      lateRecords.push({ local_path: result.localPath!, original: { sha256: createHash('sha256').update(readFileSync(result.localPath!)).digest('hex') } });
+     }
+    });
+    const [parent] = await captureAssets(root, [{ url, html: '<img width="400" src="/JS200/Step+2+-+wetting-2.jpg?format=300w" srcset="/JS200/Step+2+-+wetting-2.jpg?format=500w 500w, /JS200/Step+2+-+wetting-2.jpg?format=1500w 1500w">' }], undefined, source => source.replace(/format=\d+w/, 'format=300w'));
+    expect(parent.renditions).toHaveLength(1);
+    const records = [original, parent, ...parent.renditions!, ...lateRecords];
+    for (const record of records) {
+     expect(record.original).not.toBeNull();
+     expect(createHash('sha256').update(readFileSync(record.local_path!)).digest('hex')).toBe(record.original!.sha256);
+    }
    });
   } finally {
    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
