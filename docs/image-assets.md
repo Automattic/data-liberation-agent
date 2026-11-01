@@ -21,7 +21,10 @@ After browser capture, `image-assets.json` (version 1, historical filename and
 - `original`: null on failure, otherwise `source_url`, byte-sniffed `content_type`
   and SHA-256 of the stored bytes. Images additionally carry decoded
   `width`/`height` and `alpha` (at least one non-opaque decoded pixel);
-- `local_path` on success, or `error` on failure.
+- `local_path` on success, or `error` on failure;
+- optional `renditions`: independently acquired image records with their own
+  verified bytes, dimensions and digest. Optional `rendition_widths` and
+  `rendered_width` retain acquisition sizing hints.
 
 The public API exports `AssetRecord` and `AssetReference`. The older
 `ImageAssetRecord` and `ImageAssetReference` names remain type aliases. Older
@@ -51,6 +54,15 @@ format or subset. Declared WOFF/WOFF2/TrueType/OpenType formats must match the
 verified signature. The declared font-face descriptors survive in references.
 
 Original acquisition does not negotiate a different format or transcode.
+After originals, capture acquires smaller srcset/CDN-width alternatives through
+that same acquisition path, within the acquisition deadline. It starts at the
+nearest width above serialized rendered geometry (otherwise the smallest width),
+then tries smaller widths. Aliased media stubs never stand in for rendition bytes.
+Export reserves coverage before resolution and may select these alternatives
+instead of blanking an over-budget family. The receipt's `original` describes
+whichever verified bytes were actually published, including its rendition URL
+and digest, not the full-size file it replaced. Budget blanks are counted in
+`portableMedia.blanked_count`, not `retained_external_count`.
 Chromium decodes identified PNG, JPEG, GIF, WebP, AVIF and SVG bytes offline to
 verify dimensions and transparency (10 seconds, 40 million pixels maximum).
 Non-images use binary signatures rather than response headers or extensions:

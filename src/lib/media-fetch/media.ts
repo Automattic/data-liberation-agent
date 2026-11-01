@@ -30,6 +30,8 @@ export interface DownloadResult {
 export interface DownloadMediaOpts {
   /** Asset-original acquisition must not negotiate away alpha or upgrade a rendition. */
   preserveOriginal?: boolean;
+  /** Absolute acquisition deadline, including the response body. */
+  deadline?: number;
   /**
    * Rasterize a PNG sibling (and run the risky <use>/<defs> scan) for fetched
    * SVGs. Opt-in: only the media-LIBRARY download path (extraction loop in
@@ -292,12 +294,12 @@ export function isFontUrl(url: string): boolean {
  * recomputed for EACH hop's own origin so a redirect off the source can't
  * receive credentials meant only for it.
  */
-async function fetchMediaResponse(rawUrl: string, preserveOriginal = false): Promise<Response> {
+async function fetchMediaResponse(rawUrl: string, preserveOriginal = false, deadline?: number): Promise<Response> {
   let currentUrl = assertPublicHttpUrl(rawUrl).toString();
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const cookie = await sourceSessionCookieHeader(new URL(currentUrl).origin);
     const res = await fetch(currentUrl, {
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(Math.max(1, Math.min(30000, (deadline ?? Infinity) - Date.now()))),
       redirect: 'manual',
       headers: { 'User-Agent': SOURCE_USER_AGENT, accept: preserveOriginal ? '*/*' : BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
     });
@@ -346,7 +348,7 @@ export async function downloadMedia(
     // size (e.g. Wix fill transforms), but keep the filename/key derived from the
     // ORIGINAL url so the source→local rewrite map stays consistent. No-op for
     // URLs without a known upgrade rule.
-    const response = await fetchMediaResponse(opts?.preserveOriginal ? url : upgradeMediaUrl(url), opts?.preserveOriginal);
+    const response = await fetchMediaResponse(opts?.preserveOriginal ? url : upgradeMediaUrl(url), opts?.preserveOriginal, opts?.deadline);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }

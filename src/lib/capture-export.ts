@@ -1772,7 +1772,17 @@ function buildExportCapture(
 			renderedDimension: renderedMediaDimensions.get( family ),
 			dimension: imageAsset?.original ? Math.max( imageAsset.original.width ?? 0, imageAsset.original.height ?? 0 ) : mediaDimension( sourceUrl ),
 		};
-		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate ] );
+		const smaller: MediaCandidate[] = ( imageAsset?.renditions ?? [] ).flatMap( rendition => {
+			if ( ! rendition.original || ! rendition.local_path || ! existsSync( rendition.local_path ) ) return [];
+			const renditionBytes = statSync( rendition.local_path ).size;
+			const dimension = Math.max( rendition.original.width ?? 0, rendition.original.height ?? 0 );
+			if ( renditionBytes >= bytes || renditionBytes > maxFileBytes || dimension >= candidate.dimension ) return [];
+			return [ { ...candidate, sourceUrl: rendition.original.source_url, localPath: rendition.local_path,
+				bytes: renditionBytes, dimension,
+				imageAsset: { ...rendition, source_urls: imageAsset!.source_urls, references: imageAsset!.references },
+			} ];
+		} );
+		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate, ...smaller ] );
 	}
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
