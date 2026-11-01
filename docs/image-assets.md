@@ -59,10 +59,14 @@ that same acquisition path, within the acquisition deadline. It starts at the
 nearest width above serialized rendered geometry (otherwise the smallest width),
 then tries smaller widths. Aliased media stubs never stand in for rendition bytes.
 Export reserves coverage before resolution and may select these alternatives
-instead of blanking an over-budget family. The receipt's `original` describes
-whichever verified bytes were actually published, including its rendition URL
-and digest, not the full-size file it replaced. Budget blanks are counted in
-`portableMedia.blanked_count`, not `retained_external_count`.
+instead of blanking an over-budget family. A raster original above the portable
+dimension ceiling (2048px) still exports as real media when its family has no
+smaller rendition and its verified bytes fit the byte cap: a placeholder would
+erase a picture the source shows, and WordPress scales oversized originals on
+upload. SVGs and non-images keep the dimension limit. The receipt's `original`
+describes whichever verified bytes were actually published, including its
+rendition URL and digest, not the full-size file it replaced. Budget blanks are
+counted in `portableMedia.blanked_count`, not `retained_external_count`.
 Chromium decodes identified PNG, JPEG, GIF, WebP, AVIF and SVG bytes offline to
 verify dimensions and transparency (10 seconds, 40 million pixels maximum).
 Non-images use binary signatures rather than response headers or extensions:

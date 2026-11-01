@@ -135,10 +135,10 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligibl
 	);
 	const responsiveFamily =
 		dimensionBounded.filter( ( candidate ) => candidate.exactReferences.length > 0 ).length > 1;
+	const familyByteCap = ( candidate: PortableMediaCandidate ): number =>
+		candidate.galleryFrame || responsiveFamily ? MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES : MAX_PORTABLE_MEDIA_BYTES;
 	const bounded = dimensionBounded.filter(
-		( candidate ) =>
-			candidate.bytes <=
-			( candidate.galleryFrame || responsiveFamily ? MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES : MAX_PORTABLE_MEDIA_BYTES )
+		( candidate ) => candidate.bytes <= familyByteCap( candidate )
 	);
 	const exact = bounded.filter( ( candidate ) => candidate.exactReferences.length > 0 );
 	const fallback = selectMediaCandidate( bounded, MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES );
@@ -153,7 +153,21 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligibl
 		candidate.imageAsset.references.length > 0 &&
 		candidate.imageAsset.references.every( reference => reference.kind === 'head' )
 	) : undefined;
-	const selected = allEligible && bounded.length > 0 ? bounded : exact.length > 0 ? exact : fallback ? [ fallback ] : headOriginal ? [ headOriginal ] : [];
+	// A raster original above the dimension ceiling stays a real image when the
+	// family has no bounded rendition and its verified bytes fit the byte cap:
+	// a placeholder would erase a picture the source shows, and WordPress scales
+	// oversized originals on upload. SVGs and non-images keep the dimension limit.
+	const oversizedOriginal = ! bounded.length && ! headOriginal
+		? candidates.filter( candidate =>
+			candidate.bytes <= familyByteCap( candidate ) &&
+			candidate.imageAsset?.original?.content_type.startsWith( 'image/' ) &&
+			candidate.imageAsset.original.content_type !== 'image/svg+xml'
+		).sort(
+			( a, b ) => b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
+		)[ 0 ]
+		: undefined;
+	const unboundedOriginal = headOriginal ?? oversizedOriginal;
+	const selected = allEligible && bounded.length > 0 ? bounded : exact.length > 0 ? exact : fallback ? [ fallback ] : unboundedOriginal ? [ unboundedOriginal ] : [];
 	return [ ...selected ].sort(
 		( a, b ) =>
 			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )

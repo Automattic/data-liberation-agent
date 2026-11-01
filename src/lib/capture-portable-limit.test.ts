@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import { expect, it } from 'vitest';
 import { captureWebsite } from './capture.js';
@@ -8,8 +9,17 @@ import { srcsetReferences } from './srcset.js';
 import { captureAssets } from './image-assets.js';
 import { exportWebsiteCapture } from './capture-export.js';
 
+const TALL_JPG = () => readFileSync(fileURLToPath(new URL('../../test/fixtures/resource-assets/tall-1920x2880.jpg', import.meta.url)));
+
 async function captureFixture(body: string, check: (outputDir: string, url: string) => void, head = '') {
 	const server = createServer((request, response) => {
+		if (request.url === '/tall.jpg') {
+			response.setHeader('content-type', 'image/jpeg');
+			// A real 1920x2880 JPEG: above the portable dimension ceiling, well
+			// under the byte cap, with no srcset or smaller rendition.
+			response.end(TALL_JPG());
+			return;
+		}
 		if (request.url === '/dell-scaled.jpeg') {
 			response.setHeader('content-type', 'image/jpeg');
 			// A real 2560x1 JPEG, with no body image or rendition in the page.
@@ -63,6 +73,18 @@ it('captures and exports the widest portable srcset representative', async () =>
 			expect(existsSync(file)).toBe(true);
 			expect(readFileSync(file, 'utf8')).toContain('width="2048"');
 		}
+	});
+}, 30_000);
+
+it('exports a body JPEG above the dimension ceiling within the byte cap as real media', async () => {
+	await captureFixture('<img src="/tall.jpg" width="1920" height="2880" loading="lazy" alt="Tall photograph">', (dir) => {
+		const $ = cheerio.load(readFileSync(join(dir, 'website/index.html'), 'utf8'));
+		const reference = $('img').attr('src')!;
+		expect(reference).toMatch(/^\/media\/tall\.jpg$/);
+		expect(readFileSync(join(dir, 'website', reference)).equals(TALL_JPG())).toBe(true);
+		const diagnostics = readFileSync(join(dir, 'diagnostics.json'), 'utf8');
+		expect(diagnostics).not.toContain('exceeds portable size or dimension limits');
+		expect(diagnostics).not.toContain('image_resource_unresolved');
 	});
 }, 30_000);
 
