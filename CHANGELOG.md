@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.65] - 2026-11-01
+
+### Changed
+- regenerate plugin bundles
+- Preserve static open-shadow content in portable capture
+- Share the source HTTP identity across media downloads and discovery
+- Retry a referenced resource once after a transient fetch failure
+
 ## [0.33.64] - 2026-11-01
 
 ### Changed
