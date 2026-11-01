@@ -248,7 +248,7 @@ export function decideRouteMode( input: {
 export interface RouteDeviceDecision {
 	mode: DeviceMode;
 	reason: string;
-	/** Wall time of the cheap phone check (both identities, in parallel). */
+	/** Wall time of the phone check against capture's loaded desktop document. */
 	checkMs?: number;
 	structure?: StructureComparison;
 	/** The first reading differed, so both pages were read again after settling. */

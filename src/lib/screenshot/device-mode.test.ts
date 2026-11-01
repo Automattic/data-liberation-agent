@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -85,7 +85,7 @@ describe( 'device-mode evidence', () => {
  */
 function page( fixture: string, userAgent: string, path: string ): string {
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
-	const script = fixture === 'mixed' && path === 'promo' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
+	const script = fixture === 'mixed' && path === 'runtime' ? '<script>if(innerWidth<600){const node=document.createElement("div");node.id="yui_3_17_2_1_123_45";node.innerHTML="<span>Widget</span>";document.body.prepend(node)}</script>' : fixture === 'mixed' && path === 'promo' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
 	const reorder = reorderFixture( path );
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reflow ${ path }</title><style>
 body{margin:0;font:16px Arial}header{display:flex;justify-content:space-between;padding:0;height:60px}
@@ -131,6 +131,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 	const directories: string[] = [];
 	let server: Server;
 	let origin: string;
+	const documentLoads = new Map< string, number >();
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
 			if ( ( request.url ?? '' ).endsWith( '.svg' ) ) {
@@ -138,6 +139,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				response.end( '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="#36c"/></svg>' );
 				return;
 			}
+			documentLoads.set( request.url!, ( documentLoads.get( request.url! ) ?? 0 ) + 1 );
 			const [ , fixture = '', path = '' ] = ( request.url ?? '/' ).split( '/' );
 			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
 			const body = page( fixture, request.headers[ 'user-agent' ] ?? '', path );
@@ -245,10 +247,26 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 	}, 120_000 );
 
 	it( 'captures only the route whose script builds a different phone DOM in both profiles', async () => {
-		const run = await capture( 'mixed', { routes: [ 'promo' ] } );
+		let stderr = '';
+		const write = vi.spyOn( process.stderr, 'write' ).mockImplementation( chunk => { stderr += String( chunk ); return true; } );
+		let run: Awaited< ReturnType< typeof capture > >;
+		try {
+			run = await capture( 'mixed', { routes: [ 'promo', 'runtime' ] } );
+		} finally { write.mockRestore(); }
+		for ( const route of [ 'promo', 'runtime' ] ) {
+			const url = `${ origin }/mixed/${ route }`;
+			// Desktop capture + phone check; only a dual route loads phone again.
+			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 3 : 2 );
+			expect( run.entries[ url ]!.profiles!.desktop!.phases!.some( phase => phase.phase === 'device-check' ) ).toBe( true );
+			const line = stderr.split( '\n' ).find( line => line.startsWith( '[timing] route-phases ' ) && line.includes( url ) )!;
+			expect( JSON.parse( line.slice( '[timing] route-phases '.length ) )[ 'device-check' ] ).toBeGreaterThan( 0 );
+		}
+		const runtime = run.entries[ `${ origin }/mixed/runtime` ]!.deviceMode!;
+		expect( runtime ).toMatchObject( { mode: 'reflow-only', reason: expect.stringContaining( 'export treats as equivalent' ) } );
+		expect( runtime.rechecked ).toBeUndefined();
 		const home = `${ origin }/mixed/`;
 		const promo = `${ origin }/mixed/promo`;
-		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 2, reflowOnly: 1, dual: [ { url: promo } ] } } );
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 3, reflowOnly: 2, dual: [ { url: promo } ] } } );
 		expect( run.result.deviceMode!.routes!.dual[ 0 ]!.reason ).toContain( 'aside' );
 		expect( run.entries[ home ]!.deviceMode ).toMatchObject( { mode: 'reflow-only' } );
 		expect( run.entries[ promo ]!.deviceMode ).toMatchObject( { mode: 'dual', structure: { differingPaths: 1 } } );
