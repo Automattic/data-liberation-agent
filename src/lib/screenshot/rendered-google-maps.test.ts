@@ -6,6 +6,97 @@ import { expect, it } from 'vitest';
 import { capturePageHtml } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { captureTriggeredDialogs } from './interaction-capture.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
+import { isGoogleMapHost } from './rendered-google-maps.js';
+
+it('keeps map runtime dialogs out of page panels while retaining a real site dialog', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><style>
+      .gm-style { position:relative; width:640px; height:320px }
+    </style><main><div class="page-map"><div>
+      <div><button id="map-help" aria-haspopup="dialog" aria-controls="map-dialog"
+        onclick="document.getElementById('map-dialog').show()">Keyboard shortcuts</button></div>
+      <div aria-label="Map"><div><div class="LGLeeN-keyboard-shortcuts-view">
+        <table><tr><td>Use arrow keys to move the map</td></tr></table>
+      </div></div></div>
+      <div class="gm-style">
+        <a href="https://maps.google.com/maps?ll=12.345,23.456&z=9">View map</a>
+      </div>
+    </div><gmp-internal-dialog class="keyboard-shortcuts-dialog-view">
+      <dialog id="map-dialog" class="zlDrU-basic-dialog-element" aria-label="Keyboard shortcuts">
+        <p>Use arrow keys to move the map</p>
+        <button onclick="this.closest('dialog').close()">Close</button>
+      </dialog>
+    </gmp-internal-dialog></div>
+    <button id="newsletter" aria-haspopup="dialog" aria-controls="newsletter-dialog"
+      onclick="document.getElementById('newsletter-dialog').showModal()">Newsletter</button>
+    <dialog id="newsletter-dialog" aria-label="Newsletter">
+      <p>Newsletter information</p><button onclick="this.closest('dialog').close()">Close</button>
+    </dialog></main>`);
+    const captured = await capturePageHtml(page);
+    expect(load(captured)('.gm-style iframe')).toHaveLength(1);
+    // Cover resting runtime dialogs as well as those opened by their controls.
+    await page.locator('#map-help').click();
+    const initial = await captureTriggeredDialogs(page, 'about:blank');
+    expect((initial.initialDialogs ?? []).some(item => item.dialog.ariaLabel === 'Keyboard shortcuts')).toBe(false);
+    await page.evaluate(() => (document.getElementById('map-dialog') as HTMLDialogElement).close());
+    const report = await captureTriggeredDialogs(page, 'about:blank');
+    expect(report.states.some(item => item.trigger.id === 'map-help')).toBe(false);
+    expect(report.states.find(item => item.trigger.id === 'newsletter')?.status).toBe('captured');
+    expect(load(captured)('.page-map #map-help, .page-map table, .page-map gmp-internal-dialog')).toHaveLength(0);
+    const portable = load(wireCapturedDialogs(captured, report.states));
+    expect(portable('.data-blocks-engine-capture-dialog[aria-label="Keyboard shortcuts"]')).toHaveLength(0);
+    expect(portable('.data-blocks-engine-capture-dialog[aria-label="Newsletter"]')).toHaveLength(1);
+  } finally {
+    await browser.close();
+  }
+});
+
+it('preserves five GoDaddy maps, page content and site dialogs without claiming their root as a host', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><style>.gm-style {width:280px;height:160px}</style>
+      <p id="content">Keep the page</p>
+      ${Array.from({length:5}, (_, index) => `<div id="map-${index}"><div class="gm-style">
+        <a href="https://maps.google.com/maps?ll=${index},2&z=9">View map</a>
+      </div></div>`).join('')}
+      <button id="newsletter" aria-haspopup="dialog" aria-controls="newsletter-dialog"
+        onclick="document.getElementById('newsletter-dialog').showModal()">Newsletter</button>
+      <dialog id="newsletter-dialog" aria-label="Newsletter"><p>Site content</p></dialog>`);
+    const captured = load(await capturePageHtml(page));
+    expect(captured('iframe')).toHaveLength(5);
+    expect(captured('#content').text()).toBe('Keep the page');
+    for (let index = 0; index < 5; index++) {
+      expect(captured(`#map-${index} iframe`).attr('src')).toBe(`https://maps.google.com/maps?ll=${index}%2C2&z=9&output=embed`);
+    }
+    const report = await captureTriggeredDialogs(page, 'about:blank');
+    expect(report.states.find(item => item.trigger.id === 'newsletter')?.status).toBe('captured');
+
+    // The same predicate excludes roots, authored wrappers, and multi-map hosts.
+    const hostResults = await page.evaluate(source => {
+      const isHost = new Function('return (' + source + ')')() as (element: Element) => boolean;
+      return [
+        '<div><div style="position:relative"><div class="gm-style"></div></div></div>',
+        '<body><div><div class="gm-style"></div></div></body>',
+        '<main><div><div class="gm-style"></div></div></main>',
+        '<section role="main"><div><div class="gm-style"></div></div></section>',
+        '<div><div id="authored"><div class="gm-style"></div></div></div>',
+        '<div><div class="authored"><div class="gm-style"></div></div></div>',
+        '<div><div><div class="gm-style"></div><div class="gm-style"></div></div></div>',
+      ].map(html => {
+        const document = new DOMParser().parseFromString(html, 'text/html');
+        return isHost(document.querySelector('.gm-style')!.parentElement!.parentElement!);
+      });
+    }, isGoogleMapHost.toString());
+    expect(hostResults).toEqual([true, false, false, false, false, false, false]);
+  } finally {
+    await browser.close();
+  }
+});
 
 it('ports a rendered Google map through portable export without freezing its tiles or changing the live map', async () => {
   const browser = await chromium.launch();
@@ -16,10 +107,14 @@ it('ports a rendered Google map through portable export without freezing its til
     await page.setContent(`<!doctype html><style>
       .map { position:relative; width:min(100%,640px); height:320px }
       .gm-style { position:absolute; inset:0; overflow:hidden }
-    </style><main><p>Example workshop</p><div class="map"><div class="gm-style">
+    </style><main><p>Example workshop</p><div class="map"><div>
+      <div><button aria-label="Keyboard shortcuts">Keyboard shortcuts</button></div>
+      <div aria-label="Map"><div><div class="LGLeeN-keyboard-shortcuts-view">
+        <table><tr><td>Arrow keys</td></tr></table>
+      </div></div></div><div class="gm-style">
       <div role="region" aria-label="Map"><div class="tiles">Runtime tile content</div></div>
       <a href="https://maps.google.com/maps?ll=-33.8651437,151.2099002&z=12&amp;t=m&amp;hl=en-AU&amp;mapclient=apiv3">Open this area in Google Maps</a>
-    </div></div></main>`);
+    </div></div><gmp-internal-dialog><dialog aria-label="Keyboard shortcuts"></dialog></gmp-internal-dialog></div></main>`);
     const before = await page.locator('main').innerHTML();
     const captured = await capturePageHtml(page);
     const $ = load(captured);
@@ -46,6 +141,8 @@ it('ports a rendered Google map through portable export without freezing its til
     expect(portable('iframe').attr('width')).toBe('640');
     expect(portable('iframe').attr('height')).toBe('320');
     expect(portable('.tiles')).toHaveLength(0);
+    expect(portable('.map button, .map table, .map gmp-internal-dialog, .map [aria-label="Map"]')).toHaveLength(0);
+    expect(portable('main > p').text()).toBe('Example workshop');
     const copy = await browser.newPage();
     await copy.route('https://maps.google.com/**', route => route.fulfill({contentType:'text/html',body:'<p>Map service</p>'}));
     await copy.setContent(portable.html());

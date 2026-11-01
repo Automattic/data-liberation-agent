@@ -1,3 +1,18 @@
+/** Shared by runtime ownership discovery and clone cleanup (also runs in-page). */
+export function isGoogleMapHost(element: Element): boolean {
+  return element.matches(
+    ':not(html,body,main,header,footer,nav,aside,[role="main"],[role="banner"],[role="navigation"],[role="contentinfo"],[role="complementary"]):has(> div:not([id]):not([class]) > .gm-style)',
+  ) && element.querySelectorAll('.gm-style').length === 1;
+}
+
+/** Maps owns its style root and the contents of a verified host. */
+export function isGoogleMapRuntimeOwned(element: Element, isHost: (element: Element) => boolean): boolean {
+  for (let root: Element | null = element; root; root = root.parentElement) {
+    if (root.matches('.gm-style') || isHost(root)) return true;
+  }
+  return false;
+}
+
 /**
  * Runs inside the page during serialization. Google Maps JS paints temporary
  * tiles and controls, whose event handlers cannot survive portable HTML. Its
@@ -10,6 +25,7 @@ export function portRenderedGoogleMaps(
   source: Document,
   snapshot: HTMLElement,
   evidenceAttributes: { src: string; width: string; height: string },
+  isHost: (element: Element) => boolean,
 ): void {
   const maps = source.querySelectorAll('.gm-style');
   const copies = snapshot.querySelectorAll('.gm-style');
@@ -72,6 +88,17 @@ export function portRenderedGoogleMaps(
     frame.setAttribute(evidenceAttributes.src, frame.src);
     frame.setAttribute(evidenceAttributes.width, frame.width);
     frame.setAttribute(evidenceAttributes.height, frame.height);
+    // The runtime also inserts controls beside .gm-style and dialogs beside
+    // its wrapper. Clear that host boundary, retaining the ancestor chain's
+    // layout styles so the embed keeps the observed responsive geometry.
+    const wrapper = map.parentElement;
+    const host = wrapper?.parentElement;
+    const copyWrapper = copy.parentElement;
+    const copyHost = copyWrapper?.parentElement;
+    if (host && isHost(host) && copyWrapper && copyHost) {
+      copyHost.replaceChildren(copyWrapper);
+      copyWrapper.replaceChildren(copy);
+    }
     copy.replaceChildren(frame);
     ported = true;
   }

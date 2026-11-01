@@ -65,7 +65,7 @@ import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { GlyphColorCache, recordGlyphColors } from './glyph-color.js';
-import { portRenderedGoogleMaps } from './rendered-google-maps.js';
+import { isGoogleMapHost, portRenderedGoogleMaps } from './rendered-google-maps.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
 import { ROUTE_ALIAS_CANONICAL, queryOnlyCanonicalTarget } from '../route-aliases.js';
@@ -400,7 +400,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
-		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, iframeEvidenceAttributes, scaffoldingSource } ) => {
+		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource } ) => {
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -553,7 +553,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				const portMaps = new Function( 'return (' + portMapsSource + ')' )() as typeof portRenderedGoogleMaps;
 				const clean = new Function( 'return (' + scaffoldingSource + ')' )() as typeof cleanPortableScaffolding;
 				const findings = clean( document, snapshot );
-				portMaps( document, snapshot, iframeEvidenceAttributes );
+				portMaps( document, snapshot, iframeEvidenceAttributes, new Function( 'return (' + mapHostSource + ')' )() as typeof isGoogleMapHost );
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings };
 			} finally {
 				restoreParagraphDescendants();
@@ -568,7 +568,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString() } );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString() } );
 		diagnostics?.push( ...result.findings );
 		return wireNativeControlState( result.html );
 	} finally {
