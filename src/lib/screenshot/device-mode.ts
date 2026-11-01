@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { documentsDiffer } from '../responsive-assembly.js';
 
 /**
  * Whether a capture renders the phone profile as its own document.
@@ -225,6 +226,8 @@ export function decideSiteMode( input: {
 export function decideRouteMode( input: {
 	serverHtml?: DeviceModeDecision['serverHtml'];
 	structure?: StructureComparison;
+	/** Settled documents, read after the path recheck when paths still differ. */
+	renderedDocuments?: { desktop: string; phone: string };
 	bodyClasses?: { desktopOnly: string[]; phoneOnly: string[] };
 	error?: string;
 } ): Pick< DeviceModeDecision, 'mode' | 'reason' > {
@@ -234,6 +237,9 @@ export function decideRouteMode( input: {
 	if ( ! input.structure ) return { mode: 'dual', reason: 'the rendered structure could not be compared' };
 	const classes = input.bodyClasses ? [ ...input.bodyClasses.desktopOnly.map( token => `-${ token }` ), ...input.bodyClasses.phoneOnly.map( token => `+${ token }` ) ] : [];
 	if ( classes.length ) return { mode: 'dual', reason: `the phone identity renders different body classes (${ classes.join( ' ' ) })` };
+	if ( input.structure.differingPaths > 0 && input.renderedDocuments && ! documentsDiffer( input.renderedDocuments.desktop, input.renderedDocuments.phone ) ) {
+		return { mode: 'reflow-only', reason: 'the phone DOM differs only in runtime-injected nodes or other differences that export treats as equivalent' };
+	}
 	if ( input.structure.differingPaths > 0 ) return { mode: 'dual', reason: `the phone profile renders a different DOM (${ input.structure.differingPaths } differing element paths${ input.structure.firstDifference ? `; first: ${ input.structure.firstDifference }` : '' })` };
 	return { mode: 'reflow-only', reason: `same HTML and the same ${ input.structure.desktopElements }-element DOM at phone width` };
 }
