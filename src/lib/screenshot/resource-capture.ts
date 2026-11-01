@@ -83,6 +83,23 @@ export function resourceTimeoutMs( expectedBytes: number ): number {
 	return Math.min( CAPTURED_RESOURCE_TIMEOUT_CEILING_MS, Math.max( CAPTURED_RESOURCE_TIMEOUT_MS, scaled ) );
 }
 
+/**
+ * A CDN that renders an image on first request (a resized or re-encoded
+ * rendition) can outlast the read timeout or answer 5xx while it works; the
+ * same request moments later is served from its cache. One retry separates
+ * that transient miss from a resource that is really unavailable.
+ */
+async function fetchWithRetry( fetch: () => Promise< SafeFetchResult > ): Promise< SafeFetchResult > {
+	const transient = ( result: SafeFetchResult ) => result.status === 429 || result.status >= 500;
+	try {
+		const result = await fetch();
+		return transient( result ) ? await fetch() : result;
+	} catch ( error ) {
+		if ( ! ( error instanceof Error ) || ! ( error.name === 'TimeoutError' || /\btimed? ?out\b|timeout/i.test( error.message ) ) ) throw error;
+		return fetch();
+	}
+}
+
 const VIDEO_AUDIO_EXTENSION_RE =
 	/\.(?:mp4|m4v|mov|webm|ogv|mkv|avi|mpg|mpeg|mp3|m4a|aac|wav|flac|ogg)(?:[?#]|$)/i;
 
@@ -877,7 +894,7 @@ export class CapturedResourceStore {
 				looksLikeVideoOrAudioUrl( url ),
 				fetchedAsRenderCritical
 			);
-			const fetched = await this.fetchMedia( url, byteCeiling, resourceTimeoutMs( byteCeiling ) );
+			const fetched = await fetchWithRetry( () => this.fetchMedia( url, byteCeiling, resourceTimeoutMs( byteCeiling ) ) );
 			if ( fetched.status < 200 || fetched.status >= 300 )
 				throw new Error( `HTTP ${ fetched.status }` );
 			const contentType = canonicalContentType( fetched.headers.get( 'content-type' ) ?? '' );

@@ -60,6 +60,28 @@ describe( 'CapturedResourceStore', () => {
 			expect( readFileSync( join( outputDir, resource.path ), 'utf8' ) ).toBe( `${ origin }${ name }.svg` );
 		}
 	});
+	it( 'retries a referenced image once when its first fetch is transiently unavailable', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-transient-' ) );
+		dirs.push( outputDir );
+		const origin = 'https://example.com/';
+		const attempts = new Map< string, number >();
+		const store = new CapturedResourceStore( outputDir, origin, async url => {
+			const attempt = ( attempts.get( url ) ?? 0 ) + 1;
+			attempts.set( url, attempt );
+			if ( url.endsWith( 'missing.svg' ) ) return { finalUrl: url, status: 404, headers: new Headers(), body: Buffer.alloc( 0 ) };
+			if ( attempt === 1 && url.endsWith( 'slow.svg' ) ) throw new DOMException( 'The operation was aborted due to timeout', 'TimeoutError' );
+			if ( attempt === 1 && url.endsWith( 'busy.svg' ) ) return { finalUrl: url, status: 503, headers: new Headers(), body: Buffer.alloc( 0 ) };
+			return { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/svg+xml' } ), body: Buffer.from( url ) };
+		} );
+		await store.captureDomDependencies( '<meta property="og:image" content="/slow.svg"><img src="/busy.svg"><img src="/missing.svg">', origin );
+		await store.flush();
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+		expect( Object.keys( manifest.resources ).sort() ).toEqual( [ `${ origin }busy.svg`, `${ origin }slow.svg` ] );
+		// A permanent miss is reported once, without a retry.
+		expect( manifest.failures ).toEqual( [ { url: `${ origin }missing.svg`, error: 'HTTP 404' } ] );
+		expect( attempts.get( `${ origin }missing.svg` ) ).toBe( 1 );
+	} );
+
 	it( 'omits blocked mixed-content imports and their fonts from an HTTPS capture', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-content-' ) );
 		dirs.push( outputDir );
