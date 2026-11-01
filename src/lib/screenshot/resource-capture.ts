@@ -95,8 +95,9 @@ async function fetchWithRetry( fetch: () => Promise< SafeFetchResult > ): Promis
 		const result = await fetch();
 		return transient( result ) ? await fetch() : result;
 	} catch ( error ) {
-		if ( ! ( error instanceof Error ) || ! ( error.name === 'TimeoutError' || /\btimed? ?out\b|timeout/i.test( error.message ) ) ) throw error;
-		return fetch();
+		if ( error instanceof Error && ( error.name === 'TimeoutError' || /\btimed? ?out\b|timeout/i.test( error.message ) ) ) return fetch();
+		// failure-class: operational
+		throw error;
 	}
 }
 
