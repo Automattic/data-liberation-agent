@@ -36,6 +36,23 @@ describe( 'device-mode evidence', () => {
 		} );
 	} );
 
+	it( 'uses export equivalence for runtime-injected phone nodes, but keeps real phone content dual', () => {
+		const desktop = '<html><head><title>Example</title></head><body><div><h1>Welcome</h1><button>Menu</button></div></body></html>';
+		const phone = desktop.replace( '</head>', '<link id="yui_3_17_2_1_123_46" rel="stylesheet" href="/widget.css"></head>' ).replace( '<body>', '<body><div id="yui_3_17_2_1_123_45"><span>Phone widget</span></div>' );
+		const desktopPaths = [ 'html', 'html>head[1]', 'html>head[1]>title[1]', 'html>body[1]', 'html>body[1]>div[1]', 'html>body[1]>div[1]>h1[1]', 'html>body[1]>div[1]>button[1]' ];
+		const phonePaths = [ 'html', 'html>head[1]', 'html>head[1]>title[1]', 'html>head[1]>link[1]', 'html>body[1]', 'html>body[1]>div[1]', 'html>body[1]>div[1]>span[1]', 'html>body[1]>div[2]', 'html>body[1]>div[2]>h1[1]', 'html>body[1]>div[2]>button[1]' ];
+		const input = { serverHtml: 'identical' as const, structure: compareStructure( desktopPaths, phonePaths ), renderedDocuments: { desktop, phone } };
+		expect( input.structure.differingPaths ).toBeGreaterThan( 0 );
+		expect( decideRouteMode( input ) ).toEqual( {
+			mode: 'reflow-only',
+			reason: 'the phone DOM differs only in runtime-injected nodes or other differences that export treats as equivalent',
+		} );
+		// The same insertion without a runtime id is real content, not noise.
+		expect( decideRouteMode( { ...input, renderedDocuments: { desktop, phone: phone.replace( ' id="yui_3_17_2_1_123_45"', '' ) } } ).mode ).toBe( 'dual' );
+		expect( decideRouteMode( { ...input, serverHtml: 'different' } ).mode ).toBe( 'dual' );
+		expect( decideRouteMode( { ...input, bodyClasses: compareBodyClasses( [], [ 'phone' ] ) } ).mode ).toBe( 'dual' );
+	} );
+
 	it( 'gates the site on adapter documents and server HTML, and each route on its own structure', () => {
 		expect( decideSiteMode( { requested: 'auto', serverHtml: 'identical' } ).mode ).toBe( 'reflow-only' );
 		expect( decideSiteMode( { requested: 'auto', serverHtml: 'identical-after-normalization' } ).mode ).toBe( 'reflow-only' );
@@ -250,20 +267,22 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' ) ).not.toContain( 'Phone promo' );
 	}, 120_000 );
 
-	it( 'compares an empty container by presence, so reordering one keeps the route reflow-only', async () => {
+	it( 'keeps export-equivalent reorders reflow-only but captures real structure changes twice', async () => {
 		const run = await capture( 'reorder', { routes: [ 'empty-ul', 'move-content', 'move-img' ] } );
 		const base = `${ origin }/reorder`;
 		const expected: ReadonlyArray< readonly [ string, 'reflow-only' | 'dual' ] > = [
 			[ 'empty-ul', 'reflow-only' ],
 			[ 'move-content', 'dual' ],
-			[ 'move-img', 'dual' ],
+			[ 'move-img', 'reflow-only' ],
 		];
 		for ( const [ route, mode ] of expected ) {
 			expect( run.entries[ `${ base }/${ route }` ]!.deviceMode ).toMatchObject( { mode } );
 		}
-		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 4, reflowOnly: 2,
-			dual: [ { url: `${ base }/move-content` }, { url: `${ base }/move-img` } ] } } );
-		// Only the empty container's reorder avoids the second capture.
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 4, reflowOnly: 3,
+			dual: [ { url: `${ base }/move-content` } ] } } );
+		// Export also ignores image placement, so that reorder avoids a second capture.
+		expect( run.entries[ `${ base }/move-img` ]!.deviceMode!.reason ).toContain( 'export treats as equivalent' );
+		expect( Object.keys( run.entries[ `${ base }/move-img` ]!.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
 		expect( Object.keys( run.entries[ `${ base }/empty-ul` ]!.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
 		expect( Object.keys( run.entries[ `${ base }/move-content` ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
 	}, 120_000 );

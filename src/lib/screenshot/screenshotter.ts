@@ -2014,7 +2014,14 @@ async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< Rout
 			structure = compareStructure( desktop.paths, phone.paths );
 			bodyClasses = compareBodyClasses( desktop.bodyClasses, phone.bodyClasses );
 		}
-		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, bodyClasses: differs() ? bodyClasses : undefined } );
+		let renderedDocuments: { desktop: string; phone: string } | undefined;
+		if ( compared.serverHtml !== 'different' && structure.differingPaths > 0 && ! bodyClasses.desktopOnly.length && ! bodyClasses.phoneOnly.length ) {
+			// Positional paths cascade when a runtime inserts a widget. After the
+			// recheck, let export's equivalence rule decide whether it is content.
+			const [ desktop, phone ] = await Promise.all( [ compared.desktop.page.content(), compared.phone.page.content() ] );
+			renderedDocuments = { desktop, phone };
+		}
+		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, bodyClasses: differs() ? bodyClasses : undefined } );
 		return { ...decided, structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt };
 	} catch ( error ) {
 		// Both identities failed alike (an absent route, an off-site redirect):
