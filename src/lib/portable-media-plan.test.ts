@@ -281,6 +281,44 @@ describe( 'planPortableMediaFamilies', () => {
 		expect( adequate.families[ 0 ].admitted[ 0 ].candidate.dimension ).toBe( 1000 );
 	} );
 
+	it( 'ships a verified raster original above the dimension ceiling within the byte cap', () => {
+		const dir = tempDir( 'media-dimension-ceiling-' );
+		const homepage = join( dir, 'home.html' );
+		writeFileSync( homepage, '<main><img src="https://cdn.example/tall.jpg"></main>' );
+		const tall = candidate( dir, 'tall.jpg', 'https://cdn.example/tall.jpg', 360_000, 2880 );
+		tall.imageAsset = {
+			source_urls: [ tall.sourceUrl ], references: [], resolved_original: tall.sourceUrl,
+			original: {
+				source_url: tall.sourceUrl, content_type: 'image/jpeg', width: 1920, height: 2880,
+				sha256: createHash( 'sha256' ).update( Buffer.alloc( 360_000, 116 ) ).digest( 'hex' ),
+			},
+		};
+		// SVGs keep the existing dimension limit.
+		const poster = candidate( dir, 'poster.svg', 'https://cdn.example/poster.svg', 1000, 3000 );
+		poster.imageAsset = {
+			source_urls: [ poster.sourceUrl ], references: [], resolved_original: poster.sourceUrl,
+			original: {
+				source_url: poster.sourceUrl, content_type: 'image/svg+xml', width: 1000, height: 3000,
+				sha256: createHash( 'sha256' ).update( Buffer.alloc( 1000, 112 ) ).digest( 'hex' ),
+			},
+		};
+		const budget = 1024 * 1024;
+		const plan = planPortableMediaFamilies(
+			[ { family: tall.sourceUrl, candidates: [ tall ] }, { family: poster.sourceUrl, candidates: [ poster ] } ],
+			budget,
+			homepage,
+		);
+		expect( plan.families.map( decision => decision.outcome ) ).toEqual( [ 'selected', 'limit-excluded' ] );
+		expect( plan.families[ 0 ].admitted.map( entry => entry.candidate.sourceUrl ) ).toEqual( [ tall.sourceUrl ] );
+		const materialized = materializePortableMedia( {
+			websiteDir: join( dir, 'website' ), plan, maxBytes: budget,
+			retainedReferences: new Map( [ [ tall.sourceUrl, [ '/tall.jpg' ] ], [ poster.sourceUrl, [ '/poster.svg' ] ] ] ),
+			failedMedia: [],
+		} );
+		expect( materialized.mediaReplacements.get( '/tall.jpg' ) ).toBe( '/media/tall.jpg' );
+		expect( materialized.mediaReplacements.get( '/poster.svg' ) ).toBe( TRANSPARENT_IMAGE_DATA_URL );
+	} );
+
 	it( 'rejects changed verified bytes even during baseline admission', () => {
 		const dir = tempDir( 'media-integrity-' );
 		const homepage = join( dir, 'home.html' );
