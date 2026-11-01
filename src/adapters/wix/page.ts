@@ -1,3 +1,4 @@
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import type { PageData, PageMeta, CapturedApiCall } from './types.js';
 import { isExecutionContextDestroyed, ROUTE_PIN_INIT_SCRIPT } from './runtime.js';
 import { emptyMeta, extractImageUrls, deriveContent, extractFeaturedImageFromJsonLd } from './content.js';
@@ -21,7 +22,7 @@ async function fetchHtml(url: string): Promise<string> {
   try {
     const resp = await fetch(url, {
       signal: AbortSignal.timeout(20000),
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+      headers: { 'User-Agent': SOURCE_USER_AGENT },
     });
     if (!resp.ok) {
       await resp.body?.cancel();

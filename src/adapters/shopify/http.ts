@@ -1,3 +1,5 @@
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
+
 /**
  * Attempt to fetch a Shopify JSON endpoint. Returns null if the store blocks it.
  */
@@ -7,7 +9,7 @@ export async function fetchShopifyJson<T>(url: string, bounds?: { maxBytes: numb
       signal: AbortSignal.timeout(15000),
       redirect: bounds?.sameOrigin ? 'error' : 'follow',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)',
+        'User-Agent': SOURCE_USER_AGENT,
         Accept: 'application/json',
       },
     });

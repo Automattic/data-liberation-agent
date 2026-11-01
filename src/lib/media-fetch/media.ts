@@ -9,6 +9,7 @@ import {
   MAX_REDIRECTS,
 } from './safe-fetch.js';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
+import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 import { Transform } from 'stream';
 import { isRiskySvg, rasterizeSvg } from './svg-raster.js';
 
@@ -298,7 +299,7 @@ async function fetchMediaResponse(rawUrl: string, preserveOriginal = false): Pro
     const res = await fetch(currentUrl, {
       signal: AbortSignal.timeout(30000),
       redirect: 'manual',
-      headers: { accept: preserveOriginal ? '*/*' : BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
+      headers: { 'User-Agent': SOURCE_USER_AGENT, accept: preserveOriginal ? '*/*' : BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
     });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');

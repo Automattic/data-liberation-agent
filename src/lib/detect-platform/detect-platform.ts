@@ -1,3 +1,5 @@
+import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
+
 // src/lib/detect-platform/detect-platform.ts
 //
 // The automatic-detection ENGINE. Platforms own their signals (declared on the
@@ -109,6 +111,7 @@ async function matchPathProbes(
         const probeUrl = probeUrlObj.toString();
         const probeResp = await fetch(probeUrl, {
           method: 'HEAD',
+          headers: { 'User-Agent': SOURCE_USER_AGENT },
           signal: AbortSignal.timeout(10000),
           redirect: 'manual',
         });
@@ -137,6 +140,7 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
     const response = await fetch(normalized, {
       signal: AbortSignal.timeout(10000),
       redirect: 'follow',
+      headers: { 'User-Agent': SOURCE_USER_AGENT },
     });
 
     let documentResult = detectFromResponse(response.headers, '');

@@ -1,3 +1,4 @@
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 import type { SqsJsonResponse } from './types.js';
 
@@ -11,7 +12,7 @@ export async function fetchSqsJson(url: string): Promise<SqsJsonResponse | null>
     const resp = await fetch(jsonUrl, {
       signal: AbortSignal.timeout(15000),
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)',
+        'User-Agent': SOURCE_USER_AGENT,
       },
     });
     if (!resp.ok) return null;

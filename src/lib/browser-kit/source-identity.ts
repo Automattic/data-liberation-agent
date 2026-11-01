@@ -1,5 +1,8 @@
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
+/** Shared identity for Node-side HTTP requests to source sites (not browser device profiles). */
+export const SOURCE_USER_AGENT = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
+
 /** Configure Chromium itself, not just context headers (Chromium adds hints later).
  * Every page is configured before its first request, including popups. Routing is
  * also a barrier for pages created by the browser rather than context.newPage().

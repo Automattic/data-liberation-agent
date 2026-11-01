@@ -1,3 +1,4 @@
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
@@ -16,7 +17,7 @@ export async function discoverWeebly(url: string, _opts: Record<string, unknown>
     const resp = await fetch(normalized, {
       signal: AbortSignal.timeout(15000),
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)',
+        'User-Agent': SOURCE_USER_AGENT,
       },
     });
     if (resp.ok) {

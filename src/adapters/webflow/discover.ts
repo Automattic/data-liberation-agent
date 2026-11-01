@@ -1,3 +1,4 @@
+import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { fetchSitemapWithDiagnostics, classifyUrl, type SitemapDiagnostic } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
@@ -42,7 +43,7 @@ export async function discoverWebflow(url: string, _opts: Record<string, unknown
     const resp = await fetch(normalized, {
       signal: AbortSignal.timeout(15000),
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)',
+        'User-Agent': SOURCE_USER_AGENT,
       },
     });
     if (resp.ok) {

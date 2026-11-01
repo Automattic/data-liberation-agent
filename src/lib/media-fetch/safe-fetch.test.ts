@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 import type { AddressInfo } from 'node:net';
 import { describe, it, expect } from 'vitest';
 import {
@@ -257,10 +258,10 @@ describe('headersForOrigin', () => {
 
     expect(seenHeaders).toHaveLength(2);
     // First hop (the credentialed origin): both the static and origin headers.
-    expect(seenHeaders[0]).toEqual({ accept: 'image/*', cookie: 'session=abc' });
+    expect(seenHeaders[0]).toEqual({ 'User-Agent': SOURCE_USER_AGENT, accept: 'image/*', cookie: 'session=abc' });
     // Second hop (a DIFFERENT origin after the redirect): the static header
     // survives, but the cookie meant only for a.example.com does not.
-    expect(seenHeaders[1]).toEqual({ accept: 'image/*' });
+    expect(seenHeaders[1]).toEqual({ 'User-Agent': SOURCE_USER_AGENT, accept: 'image/*' });
   });
 
   it('never sends the origin-scoped header to a host that never earned it', async () => {

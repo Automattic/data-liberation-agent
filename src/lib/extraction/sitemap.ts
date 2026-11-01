@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { assertPublicHttpUrl, safeFetch } from '../media-fetch/safe-fetch.js';
 
@@ -282,7 +283,7 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
     }
 
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      const response = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': SOURCE_USER_AGENT } });
       if (!response.ok) {
         noteMiss({ code: 'sitemap_not_found', url, reason: `HTTP ${response.status}` }, misses);
         return false;
@@ -342,7 +343,7 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   const declaredSeen = new Set<string>();
   try {
     const robotsUrl = new URL('/robots.txt', baseOrigin).href;
-    const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(15000) });
+    const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': SOURCE_USER_AGENT } });
     if (response.ok) {
       for (const loc of parseRobotsSitemapDirectives(await response.text())) {
         let absolute: string;
