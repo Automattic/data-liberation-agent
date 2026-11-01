@@ -38,7 +38,7 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 			layout: { switchWidths: [ 751, 768 ], fluidReports: Object.values( fluidGeometry ) },
 			assets: {
 				references, stubs: MediaStubStore.load( captureRoot ), manifest: resourceManifest, portablePaths: new Map(), files: [],
-				media: { selected_count: 0, selected_bytes: 0, retained_external_count: 0, max_bytes: 1000, reserved_bytes: 0 },
+				media: { selected_count: 0, selected_bytes: 0, retained_external_count: 0, blanked_count: 0, max_bytes: 1000, reserved_bytes: 0 },
 			},
 			diagnostics: {
 				capture: [], dependencies: [], media: [], rejectedKeys: new Set( [ '/' ] ),
@@ -97,7 +97,7 @@ it( 'records the site name every captured route title repeats as the receipt tit
 			layout: { switchWidths: [], fluidReports: [] },
 			assets: {
 				references: collectAssetEvidenceReferences( [], () => 'index.html', resourceManifest, captureRoot ), stubs: MediaStubStore.load( captureRoot ), manifest: resourceManifest, portablePaths: new Map(), files: [],
-				media: { selected_count: 0, selected_bytes: 0, retained_external_count: 0, max_bytes: 1000, reserved_bytes: 0 },
+				media: { selected_count: 0, selected_bytes: 0, retained_external_count: 0, blanked_count: 0, max_bytes: 1000, reserved_bytes: 0 },
 			},
 			diagnostics: {
 				capture: [], dependencies: [], media: [], rejectedKeys: new Set(), anchors: [],

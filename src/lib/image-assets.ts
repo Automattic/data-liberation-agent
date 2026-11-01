@@ -5,7 +5,7 @@ import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { srcsetCandidates } from './srcset.js';
 import { metadataImageReferences } from './identity-resources.js';
-import { portableSrcsetRepresentative } from './portable-media-limits.js';
+import { MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
 import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
 import { getPlaywright } from './browser-kit/index.js';
@@ -31,6 +31,11 @@ export interface AssetRecord {
 		sha256: string;
 	} | null;
 	local_path?: string;
+	/** Independently acquired responsive bytes; never aliases of the original. */
+	renditions?: AssetRecord[];
+	/** Capture-observed responsive widths, ordered nearest adequate first. */
+	rendered_width?: number;
+	rendition_widths?: Record<string, number>;
 	error?: string;
 }
 
@@ -298,9 +303,41 @@ async function decodeImage( page: import('playwright').Page, bytes: Buffer, cont
 	}, `data:${ contentType };base64,${ bytes.toString( 'base64' ) }` );
 }
 
-/** One acquisition per record; stub aliases are a compatibility projection, not identity owners. */
+/** Verify originals first, then acquire responsive alternatives before the deadline.
+ * Stub aliases are a compatibility projection, never evidence of rendition bytes.
+ * Alternatives use the same download/signature/decode path and remain distinct records.
+ */
 export async function captureAssets( root: string, documents: ImageDocuments, deadline?: number, resolve?: ImageResolver ): Promise<ImageAssetRecord[]> {
-	const images = collectAssets( documents, resolve );
+	const widths = new Map<string, { width: number; rendered: number }>();
+	// Preserve responsive hints while streaming documents through identity collection.
+	function* inventory(): ImageDocuments {
+		for ( const { html, url } of documents ) {
+			const $ = cheerio.load( html );
+			$( 'img,picture source' ).each( ( _index, node ) => {
+				const image = $( node ).is( 'source' ) ? $( node ).closest( 'picture' ).find( 'img' ).first() : $( node );
+				const inline = /(?:^|;)\s*width\s*:\s*([\d.]+)px/i.exec( image.attr( 'style' ) ?? '' );
+				const rendered = Number( inline?.[ 1 ] ?? image.attr( 'width' ) );
+				const candidates = srcsetCandidates( $( node ).attr( 'srcset' ) ?? '' );
+				for ( const candidate of candidates ) {
+					if ( candidate.density || ! candidate.size ) continue;
+					let source: string;
+					try { source = new URL( candidate.url, url ).href; } catch { continue; }
+					widths.set( source, { width: candidate.size, rendered: Math.max( widths.get( source )?.rendered ?? 0, rendered > 0 ? rendered : 0 ) } );
+				}
+			} );
+			yield { html, url };
+		}
+	}
+	const images = collectAssets( inventory(), resolve );
+	for ( const record of images ) for ( const source of record.source_urls ) {
+		const parsed = new URL( source );
+		const cdnWidth = Number( parsed.searchParams.get( 'w' ) ?? parsed.searchParams.get( 'width' ) ) ||
+			Number( /^(\d+)w$/.exec( parsed.searchParams.get( 'format' ) ?? '' )?.[ 1 ] );
+		const hint = widths.get( source ) ?? ( cdnWidth > 0 ? { width: cdnWidth, rendered: 0 } : undefined );
+		if ( ! hint || record.kind !== 'image' ) continue;
+		( record.rendition_widths ??= {} )[ source ] = hint.width;
+		record.rendered_width = Math.max( record.rendered_width ?? 0, hint.rendered );
+	}
 	mkdirSync( root, { recursive: true } );
 	const stubs = MediaStubStore.load( root );
 	const manifestPath = join( root, 'resources', 'manifest.json' );
@@ -312,13 +349,14 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	try {
 		if ( images.length ) {
 			let page: import('playwright').Page | undefined;
-			for ( const record of images ) {
+			const jobs = images.map( record => ( { record, rendition: false } ) );
+			for ( const { record, rendition } of jobs ) {
 				const source = record.resolved_original;
 				try {
 					if ( /\/_missing-media\/|\/(?:placeholder|missing-image)\.(?:svg|png|gif|webp)(?:[?#]|$)/i.test( source ) )
 						throw new Error( 'source references a known image placeholder' ); // failure-class: operational
 					// Reuse the URL-owned file, never a filename guess or a different rendition.
-					const cachedPath = [ resources[ source ]?.path, stubs.get( source )?.localPath ]
+					const cachedPath = [ resources[ source ]?.path, ...( rendition ? [] : [ stubs.get( source )?.localPath ] ) ]
 						.filter( ( path ): path is string => Boolean( path ) )
 						.map( path => resolvePath( root, path ) )
 						.find( path => pathWithin( root, path ) && existsSync( path ) );
@@ -335,7 +373,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 						copyFileSync( cachedPath, destination );
 						result = { localPath: destination, filename, error: null };
 					} else {
-						result = await downloadMedia( source, mediaDir, names, undefined, { preserveOriginal: true } );
+						result = await downloadMedia( source, mediaDir, names, undefined, { preserveOriginal: true, deadline } );
 					}
 					if ( ! result.localPath ) throw new Error( result.error ?? 'resource download failed' ); // failure-class: operational
 					const bytes = readFileSync( result.localPath );
@@ -366,11 +404,26 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					record.original = { source_url: source, content_type: contentType, ...metadata, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) };
 					record.local_path = localPath;
 					delete record.error;
-					for ( const url of record.source_urls ) stubs.markSuccess( url, localPath );
+					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markSuccess( url, localPath );
+					if ( ! rendition && record.kind === 'image' ) {
+						const widths = Object.entries( record.rendition_widths ?? {} )
+							.filter( ( [ url, width ] ) => url !== source && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
+							.sort( ( a, b ) => a[ 1 ] - b[ 1 ] || a[ 0 ].localeCompare( b[ 0 ] ) );
+						const adequate = widths.findIndex( ( [ , width ] ) => width >= ( record.rendered_width ?? 0 ) );
+						// Try the nearest adequate rendition, then smaller fallbacks. Each
+						// request remains deadline-bound and bypasses aliased stub bytes.
+						const ordered = adequate < 0 ? widths.reverse() : [ widths[ adequate ], ...widths.slice( 0, adequate ).reverse() ];
+						record.renditions = ordered.map( ( [ url ] ) => ( {
+							kind: 'image', destination_owner: record.destination_owner,
+							source_urls: [ url ], references: record.references,
+							resolved_original: url, original: null,
+						} ) );
+						for ( const child of record.renditions ) jobs.push( { record: child, rendition: true } );
+					}
 				} catch ( error ) {
 					if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
 					record.error = String( error );
-					for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
+					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
 				}
 			}
 		}

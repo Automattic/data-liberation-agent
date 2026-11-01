@@ -10,6 +10,7 @@ import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { SourceRequestGovernors } from './source-request-governor.js';
 import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
 import { downloadCaptureSectionMedia } from './capture.js';
+import { MediaStubStore } from './resume-state/index.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
@@ -149,6 +150,42 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     expect(record.original).toMatchObject({ width: 40, height: 20 });
    });
    expect(hits).toBe(1);
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
+ it('acquires and verifies a real srcset rendition rather than reusing original stub aliases', async () => {
+  const hits: string[] = [];
+  const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/>${width > 300 ? '<!--' + 'x'.repeat(1000) + '-->' : ''}</svg>`;
+  const server = createServer((request, response) => { hits.push(request.url!); response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(request.url!.includes('300') ? 300 : 1800)); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'responsive-bytes-'));
+  try {
+   await runWithTrustedOrigins([url], async () => {
+    mkdirSync(join(root, 'media'), { recursive: true });
+    const originalPath = join(root, 'media/original.svg');
+    writeFileSync(originalPath, svg(1800));
+    const stubs = MediaStubStore.load(root);
+    for (const source of ['photo.svg', 'photo.svg?w=100', 'photo.svg?w=300', 'photo.svg?w=1800']) stubs.markSuccess(`${url}${source}`, originalPath);
+    stubs.flush();
+    const documents = [{ url, html: '<picture><source srcset="photo.svg?w=100 100w, photo.svg?w=300 300w, photo.svg?w=1800 1800w"><img style="width:250px" src="photo.svg"></picture>' }];
+    const [record] = await captureAssets(root, documents, Date.now() + 30000, source => source.split('?')[0]);
+    const small = record.renditions!.find(child => child.original);
+    expect(hits).toEqual(['/photo.svg?w=300', '/photo.svg?w=100']);
+    expect(record.rendered_width).toBe(250);
+    expect(record.renditions![0].original?.width).toBe(300);
+    expect(small?.original).toMatchObject({ source_url: `${url}photo.svg?w=300`, width: 300 });
+    expect(readFileSync(small!.local_path!, 'utf8')).toBe(svg(300));
+    expect(small!.original!.sha256).not.toBe(record.original!.sha256);
+    hits.length = 0;
+    const [expired] = await captureAssets(root, documents, Date.now() - 1, source => source.split('?')[0]);
+    expect(expired.renditions!.every(child => !child.original && child.error?.includes('deadline'))).toBe(true);
+    expect(hits).toEqual([]);
+   });
   } finally {
    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
    rmSync(root, { recursive: true, force: true });

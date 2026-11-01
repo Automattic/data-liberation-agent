@@ -7423,6 +7423,41 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'website', 'media', 'prefix.png' ) ) ).toBe( false );
 	} );
 
+	it( 'localizes independently verified responsive bytes before budget blanking, or counts a blank when unavailable', () => {
+		for ( const available of [ true, false ] ) {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-budget-' ) );
+			dirs.push( outputDir );
+			for ( const path of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+			const originalUrl = 'https://cdn.example/photo.png';
+			const smallUrl = `${ originalUrl }?width=300`;
+			writeFileSync( join( outputDir, 'html/homepage.html' ), `<main><img style="width:250px" src="${ originalUrl }" srcset="${ smallUrl } 300w, ${ originalUrl } 1800w"></main>` );
+			writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } ) );
+			const original = Buffer.alloc( 2000, 1 ), small = Buffer.alloc( 500, 2 );
+			const originalPath = join( outputDir, 'media/original.png' ), smallPath = join( outputDir, 'media/small.png' );
+			writeFileSync( originalPath, original );
+			writeFileSync( smallPath, small );
+			const stubs = MediaStubStore.load( outputDir );
+			// Reproduce the bug: every URL is aliased to the full-size file.
+			for ( const url of [ originalUrl, smallUrl ] ) stubs.markSuccess( url, originalPath );
+			stubs.flush();
+			const metadata = ( url: string, bytes: Buffer, width: number ) => ( { source_url: url, content_type: 'image/png', width, height: width, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) } );
+			writeFileSync( join( outputDir, 'image-assets.json' ), JSON.stringify( { version: 1, images: [ {
+				kind: 'image', source_urls: [ originalUrl, smallUrl ], references: [], resolved_original: originalUrl,
+				local_path: originalPath, original: metadata( originalUrl, original, 1800 ),
+				renditions: available ? [ { kind: 'image', source_urls: [ smallUrl ], references: [], resolved_original: smallUrl, local_path: smallPath, original: metadata( smallUrl, small, 300 ) } ] : [],
+			} ] } ) );
+			const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [], limits: { portableMediaTotalBytes: 600 } } ), 'utf8' ) );
+			expect( receipt.portableMedia ).toMatchObject( { selected_count: available ? 1 : 0, blanked_count: available ? 0 : 1, retained_external_count: 0 } );
+			const html = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
+			if ( available ) {
+				expect( html ).toContain( '/media/small.png' );
+				const asset = receipt.assets.find( ( asset: { original?: unknown } ) => asset.original );
+				expect( asset.original ).toEqual( metadata( smallUrl, small, 300 ) );
+				expect( createHash( 'sha256' ).update( readFileSync( join( outputDir, asset.path ) ) ).digest( 'hex' ) ).toBe( asset.original.sha256 );
+			} else expect( html ).toContain( 'data:image/gif;base64' );
+		}
+	} );
+
 	it( 'keeps the smaller eligible family when homepage priority ties, independent of stub order', () => {
 		for ( const order of [ 'large-first', 'small-first' ] as const ) {
 			const outputDir = mkdtempSync( join( tmpdir(), `liberation-media-budget-bytes-${ order }-` ) );
@@ -7467,7 +7502,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			expect( receipt.portableMedia ).toMatchObject( { selected_count: 1, selected_bytes: 1000 } );
 			expect( diagnostics.unresolvedMedia ).toContainEqual( {
 				url: largeUrl,
-				error: 'removed because the aggregate portable media limit was reached',
+				error: 'blanked because the aggregate portable media limit was reached',
 			} );
 		}
 	} );
@@ -7517,7 +7552,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			expect( receipt.portableMedia.selected_bytes ).toBe( 1500 );
 			expect( diagnostics.unresolvedMedia ).toContainEqual( {
 				url: otherUrl,
-				error: 'removed because the aggregate portable media limit was reached',
+				error: 'blanked because the aggregate portable media limit was reached',
 			} );
 		}
 	} );

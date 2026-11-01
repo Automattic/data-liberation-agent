@@ -21,6 +21,8 @@ export interface PortableMediaCandidate {
 	exactReferences: string[];
 	bytes: number;
 	dimension: number;
+	/** Largest observed rendered edge, when capture has geometry for this family. */
+	renderedDimension?: number;
 	/** Gallery frame assets may use the existing larger responsive-image byte bound. */
 	galleryFrame?: boolean;
 }
@@ -42,7 +44,7 @@ export type PortableMediaFamilyOutcome = 'limit-excluded' | 'budget-excluded' | 
 export interface PortableMediaFamilyDecision {
 	family: string;
 	candidates: PortableMediaCandidate[];
-	/** `selectMediaCandidates` result. Budget tie-breaks use the first entry. */
+	/** All bounded renditions, in preferred dimension order. Budget ties use the first entry. */
 	eligible: PortableMediaCandidate[];
 	/** Eligible candidates admitted by budget and content-hash dedupe, in eligible order. */
 	admitted: Array< { candidate: PortableMediaCandidate; contentHash: string } >;
@@ -127,7 +129,7 @@ function selectMediaCandidate(
 	)[ 0 ];
 }
 
-function selectMediaCandidates( candidates: PortableMediaCandidate[] ): PortableMediaCandidate[] {
+function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligible = false ): PortableMediaCandidate[] {
 	const dimensionBounded = candidates.filter(
 		( candidate ) => candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
 	);
@@ -151,7 +153,7 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[] ): Portable
 		candidate.imageAsset.references.length > 0 &&
 		candidate.imageAsset.references.every( reference => reference.kind === 'head' )
 	) : undefined;
-	const selected = exact.length > 0 ? exact : fallback ? [ fallback ] : headOriginal ? [ headOriginal ] : [];
+	const selected = allEligible && bounded.length > 0 ? bounded : exact.length > 0 ? exact : fallback ? [ fallback ] : headOriginal ? [ headOriginal ] : [];
 	return [ ...selected ].sort(
 		( a, b ) =>
 			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
@@ -189,7 +191,8 @@ export function planPortableMediaFamilies(
 	const homepagePriority = familyHomepagePriority( families, homepageHtmlPath );
 	const ranked = families.map( ( family, index ) => ( {
 		index,
-		eligible: selectMediaCandidates( family.candidates ),
+		eligible: selectMediaCandidates( family.candidates, true ),
+		preferred: selectMediaCandidates( family.candidates ),
 		homepagePriority: homepagePriority[ index ],
 	} ) );
 	const admissionOrder = [ ...ranked ].sort(
@@ -199,21 +202,65 @@ export function planPortableMediaFamilies(
 			( left.eligible[ 0 ]?.sourceUrl ?? '' ).localeCompare( right.eligible[ 0 ]?.sourceUrl ?? '' )
 	);
 	const admitted = new Map< PortableMediaCandidate, PortableMediaFamilyDecision[ 'admitted' ][ number ] >();
-	const hashes = new Set< string >();
+	const hashes = new Map< string, { count: number; bytes: number } >();
+	const verified = new Map< PortableMediaCandidate, string >();
 	let selectedBytes = 0;
-	for ( const family of admissionOrder ) {
-		for ( const candidate of family.eligible ) {
-			const contentHash = fileHash( candidate.localPath );
-			if ( candidate.imageAsset?.original && contentHash !== candidate.imageAsset.original.sha256 )
+	const hashOf = ( candidate: PortableMediaCandidate ): string => {
+		let hash = verified.get( candidate );
+		if ( hash === undefined ) {
+			hash = fileHash( candidate.localPath );
+			if ( candidate.imageAsset?.original && hash !== candidate.imageAsset.original.sha256 )
 				throw new IntegrityError( `Image original changed after verification: ${ candidate.sourceUrl }` );
-			const needsFile = ! hashes.has( contentHash );
-			if ( ! needsFile || selectedBytes + candidate.bytes <= budget ) {
-				admitted.set( candidate, { candidate, contentHash } );
-				if ( needsFile ) {
-					hashes.add( contentHash );
-					selectedBytes += candidate.bytes;
-				}
+			verified.set( candidate, hash );
+		}
+		return hash;
+	};
+	const admit = ( candidate: PortableMediaCandidate, replace?: PortableMediaCandidate ): boolean => {
+		if ( admitted.has( candidate ) ) return true;
+		const contentHash = hashOf( candidate );
+		const previous = replace && admitted.get( replace );
+		const previousFile = previous && hashes.get( previous.contentHash );
+		const releasedBytes = previousFile?.count === 1 ? previousFile.bytes : 0;
+		const extraBytes = hashes.has( contentHash ) && ! ( previous?.contentHash === contentHash && previousFile?.count === 1 ) ? 0 : candidate.bytes;
+		if ( selectedBytes - releasedBytes + extraBytes > budget ) return false;
+		if ( previous && replace ) {
+			admitted.delete( replace );
+			if ( --previousFile!.count === 0 ) {
+				hashes.delete( previous.contentHash );
+				selectedBytes -= previousFile!.bytes;
 			}
+		}
+		const existing = hashes.get( contentHash );
+		if ( existing ) existing.count++;
+		else {
+			hashes.set( contentHash, { count: 1, bytes: candidate.bytes } );
+			selectedBytes += candidate.bytes;
+		}
+		admitted.set( candidate, { candidate, contentHash } );
+		return true;
+	};
+	const baselines = new Map< number, PortableMediaCandidate >();
+	// Reserve one rendition per family before spending anything on resolution.
+	for ( const family of admissionOrder ) {
+		const smallest = [ ...family.eligible ].sort( ( a, b ) =>
+			a.dimension - b.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
+		);
+		const rendered = Math.max( 0, ...family.eligible.map( candidate => candidate.renderedDimension ?? 0 ) );
+		const baseline = smallest.find( candidate => candidate.dimension >= rendered ) ?? smallest[ smallest.length - 1 ];
+		if ( baseline ) {
+			const admittedBaseline = admit( baseline ) ? baseline : smallest.find( candidate => admit( candidate ) );
+			if ( admittedBaseline ) baselines.set( family.index, admittedBaseline );
+		}
+	}
+	// Upgrades replace the reservation and pay only the incremental,
+	// hash-deduplicated cost. Additional responsive renditions use spare bytes.
+	for ( const family of admissionOrder ) {
+		const baseline = baselines.get( family.index );
+		if ( ! baseline ) continue;
+		let upgraded = false;
+		for ( const candidate of family.preferred ) {
+			const replace = ! upgraded && candidate.dimension >= baseline.dimension ? baseline : undefined;
+			if ( admit( candidate, replace ) && replace ) upgraded = true;
 		}
 	}
 	return {

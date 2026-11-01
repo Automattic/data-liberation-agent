@@ -33,6 +33,7 @@ export interface PortableMediaMaterialization {
 		selected_count: number;
 		selected_bytes: number;
 		retained_external_count: number;
+		blanked_count: number;
 		max_bytes: number;
 		reserved_bytes: number;
 	};
@@ -70,6 +71,7 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 	const unresolvedMedia: PortableMediaMaterialization[ 'unresolvedMedia' ] = [];
 	const assets: PortableMediaMaterialization[ 'assets' ] = [];
 	let retainedExternalMediaCount = 0;
+	const blankedFamilies = new Set< string >();
 	const localizedMediaFamilies = new Set< string >();
 	const portableUrlByFamily = new Map< string, string >();
 	const assetPathsByHash = new Map< string, string >();
@@ -94,6 +96,11 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			continue;
 		}
 		if ( decision.outcome === 'budget-excluded' ) {
+			const isImage = candidates.every( candidate => ! candidate.imageAsset?.kind || candidate.imageAsset.kind === 'image' );
+			if ( isImage ) {
+				blankedFamilies.add( family );
+				for ( const reference of retainedReferences.get( family ) ?? [] ) mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
+			}
 			for ( const candidate of candidates ) {
 				if ( ! candidate.imageAsset?.kind || candidate.imageAsset.kind === 'image' ) for ( const reference of candidate.references ) {
 					mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
@@ -101,9 +108,9 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			}
 			unresolvedMedia.push( {
 				url: eligible[ 0 ].sourceUrl,
-				error: 'removed because the aggregate portable media limit was reached',
+				error: isImage ? 'blanked because the aggregate portable media limit was reached' : 'not localized because the aggregate portable media limit was reached',
 			} );
-			retainedExternalMediaCount++;
+			if ( ! isImage ) retainedExternalMediaCount++;
 			continue;
 		}
 		localizedMediaFamilies.add( family );
@@ -145,9 +152,8 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 		if ( fallbackAssetPath ) {
 			portableUrlByFamily.set( family, portableAssetUrl( fallbackAssetPath ) );
 			for ( const candidate of candidates ) {
-				// Only limit-excluded captured files may use a family substitute.
-				// Eligible files retain exact-only budget/admission semantics.
-				if ( eligible.includes( candidate ) ) continue;
+				// Unadmitted renditions use the family's coverage fallback.
+				if ( admitted.some( entry => entry.candidate === candidate ) ) continue;
 				if ( candidate.imageAsset?.kind && candidate.imageAsset.kind !== 'image' ) continue;
 				for ( const source of [ candidate.sourceUrl, ...( candidate.imageAsset?.source_urls ?? [] ) ] ) {
 					metadataPathsBySource.set( source, `website/${ fallbackAssetPath.replace( /\\/g, '/' ) }` );
@@ -159,17 +165,20 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 		selected_count: assets.length,
 		selected_bytes: plan.selectedBytes,
 		retained_external_count: retainedExternalMediaCount,
+		blanked_count: blankedFamilies.size,
 		max_bytes: input.maxBytes,
 		reserved_bytes: 0,
 	};
 	for ( const { family, sourceUrl, error, references, nonImage } of failedMedia ) {
 		if ( localizedMediaFamilies.has( family ) ) continue;
 		if ( nonImage ) { unresolvedMedia.push( { url: sourceUrl, error } ); continue; }
+		blankedFamilies.add( family );
 		for ( const reference of retainedReferences.get( family ) ?? [] )
 			mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 		for ( const reference of references )
 			mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 		unresolvedMedia.push( { url: sourceUrl, error } );
 	}
+	portableMedia.blanked_count = blankedFamilies.size;
 	return { mediaReplacements, portableUrlByFamily, assetPathsByHash, assetHashesByPath, portablePathsBySource, metadataPathsBySource, assets, unresolvedMedia, portableMedia };
 }

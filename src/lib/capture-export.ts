@@ -718,6 +718,7 @@ function bindSrcsetShapedImageSrc( html: string ): string {
 function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 	rendered: Map< string, Set< string > >;
 	retained: Map< string, string[] >;
+	dimensions: Map< string, number >;
 } {
 	const pages = new Set(
 		entries.flatMap( ( entry ) => {
@@ -728,6 +729,7 @@ function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 			}
 		} )
 	);
+	const dimensions = new Map< string, number >();
 	const rendered = new Map< string, Set< string > >();
 	const retained = new Map< string, string[] >();
 	for ( const entry of entries ) {
@@ -779,6 +781,16 @@ function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 		$( 'img,source,video,audio' ).each( ( _index, element ) => {
 			const node = $( element );
 			const src = node.attr( 'src' );
+			// Use authored/serialized pixel geometry when present; never infer
+			// rendered size from the CDN rendition's intrinsic dimensions.
+			const edge = ( name: string ): number => {
+				const inline = new RegExp( `(?:^|;)\\s*${ name }\\s*:\\s*([\\d.]+)px(?:\\s*!important)?\\s*(?:;|$)`, 'i' ).exec( node.attr( 'style' ) ?? '' );
+				const value = inline?.[ 1 ] ?? node.attr( name ) ?? '';
+				return /^\d+(?:\.\d+)?$/.test( value ) ? Number( value ) : 0;
+			};
+			const dimension = Math.max( edge( 'width' ), edge( 'height' ) );
+			const family = src && familyOf( src );
+			if ( family && dimension > 0 ) dimensions.set( family, Math.max( dimensions.get( family ) ?? 0, dimension ) );
 			const tag = String( node.prop( 'tagName' ) ?? '' ).toLowerCase();
 			if ( src ) {
 				for ( const reference of elementSrcReferences( tag, src ) ) add( reference );
@@ -788,7 +800,7 @@ function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 			for ( const candidate of srcsetReferences( srcset ) ) add( candidate );
 		} );
 	}
-	return { rendered, retained };
+	return { rendered, retained, dimensions };
 }
 
 function mediaFamily( sourceUrl: string ): string {
@@ -1661,7 +1673,7 @@ function buildExportCapture(
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
-	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
+	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies, dimensions: renderedMediaDimensions } =
 		retainedMediaReferenceInventory( retainedEntries );
 	const imageAssets = readAssets( outputDir );
 	const imageByUrl = new Map( imageAssets.flatMap( record => record.source_urls.map( url => [ url, record ] as const ) ) );
@@ -1757,9 +1769,20 @@ function buildExportCapture(
 			exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
 			...( interactionMediaReferences.has( family ) ? { galleryFrame: true } : {} ),
 			bytes,
+			renderedDimension: renderedMediaDimensions.get( family ),
 			dimension: imageAsset?.original ? Math.max( imageAsset.original.width ?? 0, imageAsset.original.height ?? 0 ) : mediaDimension( sourceUrl ),
 		};
-		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate ] );
+		const smaller: MediaCandidate[] = ( imageAsset?.renditions ?? [] ).flatMap( rendition => {
+			if ( ! rendition.original || ! rendition.local_path || ! existsSync( rendition.local_path ) ) return [];
+			const renditionBytes = statSync( rendition.local_path ).size;
+			const dimension = Math.max( rendition.original.width ?? 0, rendition.original.height ?? 0 );
+			if ( renditionBytes >= bytes || renditionBytes > maxFileBytes || dimension >= candidate.dimension ) return [];
+			return [ { ...candidate, sourceUrl: rendition.original.source_url, localPath: rendition.local_path,
+				bytes: renditionBytes, dimension,
+				imageAsset: { ...rendition, source_urls: imageAsset!.source_urls, references: imageAsset!.references },
+			} ];
+		} );
+		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate, ...smaller ] );
 	}
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
