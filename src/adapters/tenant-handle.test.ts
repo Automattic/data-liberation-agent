@@ -21,9 +21,11 @@ describe.each(['soloist.ai', 'www.atom.bio', 'atom.bio'])('shared-origin tenant 
 	it('discovers only the tenant, never fetching the platform sitemap', async () => {
 		const origin = `https://${host}`;
 		const requests: string[] = [];
-		vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+		vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => {
 			const url = String(input);
 			requests.push(url);
+			// Shared-host edges refuse runtime-default agents such as `node`.
+			if (!new Headers(init?.headers).get('user-agent')?.startsWith('Mozilla/')) return new Response('', { status: 403 });
 			if (url.includes('sitemap')) {
 				return response(`<urlset>${['/', '/pricing', '/signup', '/help', '/tenant-two'].map(
 					(path) => `<url><loc>${origin}${path}</loc></url>`,

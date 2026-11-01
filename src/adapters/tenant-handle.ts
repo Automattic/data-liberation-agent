@@ -26,7 +26,11 @@ export async function discoverTenantHandle(
 	const scope = tenantHandleRouteScope(entry.href);
 	const root = scope.pathPrefixes[0]!;
 	const inTenant = (candidate: URL): boolean => routeInScope(candidate.href, scope);
-	const response = await fetch(new URL(`${root}/`, entry.origin), { signal: AbortSignal.timeout(15000) });
+	// Edge bot protection on shared hosts refuses runtime-default agents such as `node`.
+	const response = await fetch(new URL(`${root}/`, entry.origin), {
+		signal: AbortSignal.timeout(15000),
+		headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+	});
 	if (!response.ok || !inTenant(new URL(response.url))) {
 		await response.body?.cancel();
 		// failure-class: operational
