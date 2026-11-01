@@ -78,6 +78,9 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 	const assetHashesByPath = new Map< string, string >();
 	const portablePathsBySource = new Map< string, string >();
 	const metadataPathsBySource = new Map< string, string >();
+	const assetsByPath = new Map< string, PortableMediaMaterialization[ 'assets' ][ number ] >();
+	const assetReferences: import('./image-assets.js').ImageAssetReference[] = [];
+	const seenReferences = new Set< string >();
 	for ( const decision of plan.families ) {
 		const { family, candidates, eligible, admitted } = decision;
 		if ( decision.outcome === 'limit-excluded' ) {
@@ -128,12 +131,14 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				copyFileSync( candidate.localPath, destination );
 				assetPathsByHash.set( contentHash, assetPath );
 				assetHashesByPath.set( assetPath, contentHash );
-				assets.push( {
+				const asset: PortableMediaMaterialization[ 'assets' ][ number ] = {
 					sourceUrl: candidate.sourceUrl,
 					source_url: candidate.sourceUrl,
-					...( candidate.imageAsset ? { kind: candidate.imageAsset.kind, destination_owner: candidate.imageAsset.destination_owner, source_urls: candidate.imageAsset.source_urls, references: candidate.imageAsset.references, original: candidate.imageAsset.original } : {} ),
+					...( candidate.imageAsset ? { kind: candidate.imageAsset.kind, destination_owner: candidate.imageAsset.destination_owner, source_urls: [], references: [], original: candidate.imageAsset.original } : {} ),
 					path: join( 'website', assetPath ).replace( /\\/g, '/' ),
-				} );
+				};
+				assets.push( asset );
+				assetsByPath.set( asset.path, asset );
 			}
 			portablePathsBySource.set(
 				candidate.sourceUrl,
@@ -150,6 +155,33 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
 		}
 		if ( fallbackAssetPath ) {
+			// Ownership follows the final rewrite, not the candidate's inherited
+			// family metadata. This also merges identities for hash-deduplicated files.
+			const familySources = new Set< string >();
+			for ( const candidate of candidates ) {
+				if ( ! candidate.imageAsset ) continue;
+				for ( const source of [ candidate.sourceUrl, ...candidate.imageAsset.source_urls ] ) familySources.add( source );
+				for ( const reference of candidate.imageAsset.references ) {
+					const key = JSON.stringify( reference );
+					if ( seenReferences.has( key ) ) continue;
+					seenReferences.add( key );
+					assetReferences.push( reference );
+				}
+			}
+			for ( const source of familySources ) {
+				const replacement = mediaReplacements.get( source ) ?? portableAssetUrl( fallbackAssetPath );
+				const owner = admitted.find( entry => portableAssetUrl( assetPathsByHash.get( entry.contentHash )! ) === replacement );
+				const path = assetPathsByHash.get( owner?.contentHash ?? admitted[ 0 ].contentHash )!;
+				portablePathsBySource.set( source, `website/${ path.replace( /\\/g, '/' ) }` );
+			}
+			// An extra responsive file may serve no family reference. It still
+			// identifies itself, but must not inherit the fallback's references.
+			for ( const { candidate, contentHash } of admitted ) {
+				if ( ! candidate.imageAsset ) continue;
+				const path = `website/${ assetPathsByHash.get( contentHash )!.replace( /\\/g, '/' ) }`;
+				if ( [ ...familySources ].some( source => portablePathsBySource.get( source ) === path ) ) continue;
+				portablePathsBySource.set( candidate.sourceUrl, path );
+			}
 			portableUrlByFamily.set( family, portableAssetUrl( fallbackAssetPath ) );
 			for ( const candidate of candidates ) {
 				// Unadmitted renditions use the family's coverage fallback.
@@ -160,6 +192,17 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				}
 			}
 		}
+	}
+	for ( const [ source, path ] of portablePathsBySource ) {
+		const asset = assetsByPath.get( path );
+		if ( ! asset?.source_urls ) continue;
+		asset.source_urls.push( source );
+	}
+	for ( const reference of assetReferences ) {
+		const asset = assetsByPath.get( portablePathsBySource.get( reference.source_url ) ?? '' );
+		const replacement = mediaReplacements.get( reference.source_url );
+		if ( asset?.source_urls?.includes( reference.source_url ) &&
+			( ! replacement || replacement === `/${ asset.path.replace( /^website\//, '' ) }` ) ) asset.references!.push( reference );
 	}
 	const portableMedia = {
 		selected_count: assets.length,

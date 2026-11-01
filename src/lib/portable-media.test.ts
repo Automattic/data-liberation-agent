@@ -74,3 +74,56 @@ it( 'hands collision/deduplication identities and failed-media replacements to r
 		expect( media.portablePathsBySource.has( 'https://example.test/fallback.png' ) ).toBe( false );
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );
+
+
+it( 'partitions original and rendition identities by their final rewrite, including rendition-only fallback', () => {
+	const tempRoot = join( process.cwd(), '.tmp-test' );
+	mkdirSync( tempRoot, { recursive: true } );
+	const root = mkdtempSync( join( tempRoot, 'media-ownership-' ) );
+	try {
+		const originalUrl = 'https://cdn.example/photo.jpg';
+		const smallUrl = `${ originalUrl }?format=300w`;
+		const references = [ originalUrl, smallUrl ].map( ( source_url, index ) => ( {
+			kind: 'content' as const, document_url: 'https://example.com/', location: `image:${ index }:src`, source_url,
+		} ) );
+		const candidate = ( sourceUrl: string, bytes: string, dimension: number, urls: string[] ): PortableMediaCandidate => {
+			const localPath = join( root, `${ dimension }.webp` );
+			writeFileSync( localPath, bytes );
+			return { sourceUrl, localPath, bytes: bytes.length, dimension, renderedDimension: 250,
+				references: urls, exactReferences: urls,
+				imageAsset: { kind: 'image', source_urls: urls, references: references.filter( reference => urls.includes( reference.source_url ) ),
+					resolved_original: sourceUrl, local_path: localPath,
+					original: { source_url: sourceUrl, content_type: 'image/webp', width: dimension, height: dimension,
+						sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) } },
+			};
+		};
+		const original = candidate( originalUrl, 'original bytes', 700, [ originalUrl, smallUrl ] );
+		const small = candidate( smallUrl, 'small', 300, [ smallUrl ] );
+		const htmlPath = join( root, 'index.html' );
+		writeFileSync( htmlPath, `<img src="${ originalUrl }"><img src="${ smallUrl }">` );
+		for ( const budget of [ small.bytes, 100 ] ) {
+			const plan = planPortableMediaFamilies( [ { family: originalUrl, candidates: [ original, small ] } ], budget, htmlPath );
+			const result = materializePortableMedia( { websiteDir: join( root, String( budget ) ), plan, maxBytes: budget,
+				retainedReferences: new Map( [ [ originalUrl, [ originalUrl, smallUrl ] ] ] ), failedMedia: [] } );
+			expect( result.assets ).toHaveLength( budget === 100 ? 2 : 1 );
+			const urls = result.assets.flatMap( asset => asset.source_urls ?? [] );
+			expect( new Set( urls ).size ).toBe( urls.length );
+			expect( new Set( urls ) ).toEqual( new Set( [ originalUrl, smallUrl ] ) );
+			for ( const asset of result.assets ) {
+				for ( const source of asset.source_urls! ) {
+					expect( result.mediaReplacements.get( source ) ).toBe( `/${ asset.path.replace( /^website\//, '' ) }` );
+					expect( result.portablePathsBySource.get( source ) ).toBe( asset.path );
+				}
+				expect( asset.references ).toEqual( references.filter( reference => asset.source_urls!.includes( reference.source_url ) ) );
+			}
+		}
+		// A retained responsive file with no rewritten family URL identifies
+		// itself, without borrowing any of the fallback's reference evidence.
+		const unserved = { ...small, references: [], exactReferences: [] };
+		const plan = planPortableMediaFamilies( [ { family: originalUrl, candidates: [ original, small ] } ], 100, htmlPath );
+		for ( const entry of plan.families[ 0 ].admitted ) if ( entry.candidate === small ) entry.candidate = unserved;
+		const result = materializePortableMedia( { websiteDir: join( root, 'unserved' ), plan, maxBytes: 100,
+			retainedReferences: new Map( [ [ originalUrl, [ originalUrl, smallUrl ] ] ] ), failedMedia: [] } );
+		expect( result.assets.find( asset => asset.sourceUrl === smallUrl ) ).toMatchObject( { source_urls: [ smallUrl ], references: [] } );
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );

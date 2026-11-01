@@ -7424,7 +7424,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'localizes independently verified responsive bytes before budget blanking, or counts a blank when unavailable', () => {
-		for ( const available of [ true, false ] ) {
+		for ( const budget of [ 600, 3000 ] ) for ( const available of [ true, false ] ) {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-budget-' ) );
 			dirs.push( outputDir );
 			for ( const path of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -7446,15 +7446,19 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				local_path: originalPath, original: metadata( originalUrl, original, 1800 ),
 				renditions: available ? [ { kind: 'image', source_urls: [ smallUrl ], references: [], resolved_original: smallUrl, local_path: smallPath, original: metadata( smallUrl, small, 300 ) } ] : [],
 			} ] } ) );
-			const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [], limits: { portableMediaTotalBytes: 600 } } ), 'utf8' ) );
-			expect( receipt.portableMedia ).toMatchObject( { selected_count: available ? 1 : 0, blanked_count: available ? 0 : 1, retained_external_count: 0 } );
+			const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [], limits: { portableMediaTotalBytes: budget } } ), 'utf8' ) );
+			const urls = receipt.assets.flatMap( ( asset: { source_urls?: string[] } ) => asset.source_urls ?? [] );
+			expect( new Set( urls ).size ).toBe( urls.length );
+			for ( const asset of receipt.assets ) for ( const reference of asset.references ?? [] ) expect( asset.source_urls ).toContain( reference.source_url );
+			expect( receipt.portableMedia ).toMatchObject( { selected_count: budget === 3000 ? available ? 2 : 1 : available ? 1 : 0, blanked_count: available || budget === 3000 ? 0 : 1, retained_external_count: 0 } );
 			const html = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
 			if ( available ) {
 				expect( html ).toContain( '/media/small.png' );
-				const asset = receipt.assets.find( ( asset: { original?: unknown } ) => asset.original );
+				const asset = receipt.assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === smallUrl );
+				expect( [ ...asset.source_urls ].sort() ).toEqual( ( budget === 3000 ? [ smallUrl ] : [ originalUrl, smallUrl ] ).sort() );
 				expect( asset.original ).toEqual( metadata( smallUrl, small, 300 ) );
 				expect( createHash( 'sha256' ).update( readFileSync( join( outputDir, asset.path ) ) ).digest( 'hex' ) ).toBe( asset.original.sha256 );
-			} else expect( html ).toContain( 'data:image/gif;base64' );
+			} else if ( budget === 600 ) expect( html ).toContain( 'data:image/gif;base64' );
 		}
 	} );
 
