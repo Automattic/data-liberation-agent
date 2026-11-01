@@ -59,7 +59,7 @@ it( 'hands collision/deduplication identities and failed-media replacements to r
 		expect( readFileSync( join( websiteDir, 'media/same.png' ), 'utf8' ) ).toBe( 'AAA' );
 		expect( readFileSync( join( websiteDir, 'media/same-4a8d8134f29b.png' ), 'utf8' ) ).toBe( 'BBBB' );
 		expect( media.portablePathsBySource.get( candidates[ 2 ].sourceUrl ) ).toBe( 'website/media/same.png' );
-		expect( media.portableMedia ).toEqual( { selected_count: 2, selected_bytes: 7, retained_external_count: 2, max_bytes: 7, reserved_bytes: 0 } );
+		expect( media.portableMedia ).toEqual( { selected_count: 2, selected_bytes: 7, retained_external_count: 1, blanked_count: 2, max_bytes: 7, reserved_bytes: 0 } );
 		expect( media.unresolvedMedia.map( value => value.url ) ).toEqual( [ candidates[ 3 ].sourceUrl, candidates[ 4 ].sourceUrl, 'https://example.test/fallback.png' ] );
 		expect( media.mediaReplacements.get( '/fallback.png' ) ).toBe( TRANSPARENT_IMAGE_DATA_URL );
 		const resources = materializePortableResources( {

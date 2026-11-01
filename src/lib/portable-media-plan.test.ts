@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { materializePortableMedia } from './portable-media.js';
+import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 import {
 	containsMediaReference,
 	indexPortableMediaReferences,
@@ -250,6 +252,42 @@ describe( 'planPortableMediaFamilies', () => {
 		expect( urlPlan.families.find( ( decision ) => decision.outcome === 'budget-excluded' )?.family ).toBe(
 			tiedLater.sourceUrl
 		);
+	} );
+
+	it( 'reserves coverage before upgrading preferred renditions, including unreferenced siblings', () => {
+		const dir = tempDir( 'media-coverage-' );
+		const homepage = join( dir, 'home.html' );
+		const families = [ 'a', 'b', 'c' ].map( name => {
+			const small = candidate( dir, `${ name }-small`, `https://cdn.example/${ name }?w=100`, 100, 100 );
+			small.exactReferences = [];
+			const large = candidate( dir, `${ name }-large`, `https://cdn.example/${ name }?w=1000`, 400, 1000 );
+			return { family: name, candidates: [ large, small ] };
+		} );
+		writeFileSync( homepage, families[ 2 ].candidates[ 0 ].sourceUrl );
+		for ( const inputs of [ families, [ ...families ].reverse() ] ) {
+			const plan = planPortableMediaFamilies( inputs, 600, homepage );
+			expect( plan.families.every( family => family.outcome === 'selected' ) ).toBe( true );
+			expect( plan.selectedBytes ).toBe( 600 );
+			expect( plan.families.find( family => family.family === 'c' )?.admitted.map( entry => entry.candidate.dimension ) ).toEqual( [ 1000 ] );
+			const tiny = planPortableMediaFamilies( inputs, 200, homepage );
+			const materialized = materializePortableMedia( { websiteDir: join( dir, 'website' ), plan: tiny, maxBytes: 200, retainedReferences: new Map( inputs.map( family => [ family.family, family.candidates.map( candidate => candidate.sourceUrl ) ] ) ), failedMedia: [] } );
+			expect( materialized.portableMedia ).toMatchObject( { blanked_count: 1, retained_external_count: 0 } );
+			expect( materialized.mediaReplacements.get( families[ 1 ].candidates[ 0 ].sourceUrl ) ).toBe( TRANSPARENT_IMAGE_DATA_URL );
+			expect( materialized.unresolvedMedia[ 0 ].error ).toMatch( /^blanked because/ );
+			expect( tiny.families.filter( family => family.outcome === 'selected' ).map( family => family.family ).sort() ).toEqual( [ 'a', 'c' ] );
+		}
+		families[ 0 ].candidates.forEach( candidate => candidate.renderedDimension = 300 );
+		const adequate = planPortableMediaFamilies( [ families[ 0 ] ], 400, homepage );
+		expect( adequate.families[ 0 ].admitted[ 0 ].candidate.dimension ).toBe( 1000 );
+	} );
+
+	it( 'rejects changed verified bytes even during baseline admission', () => {
+		const dir = tempDir( 'media-integrity-' );
+		const homepage = join( dir, 'home.html' );
+		writeFileSync( homepage, '' );
+		const value = candidate( dir, 'image', 'https://cdn.example/image', 10, 100 );
+		value.imageAsset = { source_urls: [ value.sourceUrl ], references: [], resolved_original: value.sourceUrl, original: { source_url: value.sourceUrl, content_type: 'image/png', sha256: 'changed' } };
+		expect( () => planPortableMediaFamilies( [ { family: 'image', candidates: [ value ] } ], 10, homepage ) ).toThrow( /changed after verification/ );
 	} );
 
 	it( 'reuses one content hash without charging the budget twice', () => {
