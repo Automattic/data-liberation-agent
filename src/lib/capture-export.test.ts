@@ -7467,7 +7467,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			expect( receipt.portableMedia ).toMatchObject( { selected_count: 1, selected_bytes: 1000 } );
 			expect( diagnostics.unresolvedMedia ).toContainEqual( {
 				url: largeUrl,
-				error: 'removed because the aggregate portable media limit was reached',
+				error: 'blanked because the aggregate portable media limit was reached',
 			} );
 		}
 	} );
@@ -7517,7 +7517,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			expect( receipt.portableMedia.selected_bytes ).toBe( 1500 );
 			expect( diagnostics.unresolvedMedia ).toContainEqual( {
 				url: otherUrl,
-				error: 'removed because the aggregate portable media limit was reached',
+				error: 'blanked because the aggregate portable media limit was reached',
 			} );
 		}
 	} );

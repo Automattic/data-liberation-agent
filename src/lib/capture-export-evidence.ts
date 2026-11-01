@@ -85,6 +85,7 @@ export interface CaptureEvidenceInput {
 			selected_count: number;
 			selected_bytes: number;
 			retained_external_count: number;
+			blanked_count: number;
 			max_bytes: number;
 			reserved_bytes: number;
 		};
