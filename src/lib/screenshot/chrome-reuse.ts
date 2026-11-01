@@ -155,7 +155,25 @@ export async function readChromeLandmarks( page: Page, mark = false ): Promise< 
 			.filter( element => ! element.parentElement?.closest( selector ) && ! element.closest( 'script,style,noscript,template' ) && kept( element ) );
 		return roots.map( root => {
 			const lines: string[] = [];
-			const describe = ( element: Element ) => attributes.map( name => element.getAttribute( name ) ).map( value => value ?? '' ).join( '|' );
+			// UUIDs used only as runtime node identities are load-volatile. Keep
+			// referenced IDs: those participate in the landmark's semantics. This
+			// affects only the signature, never the DOM or recorded selectors.
+			const referencedIds = new Set< string >();
+			for ( const element of [ root, ...Array.from( root.querySelectorAll( '*' ) ).filter( kept ) ] ) {
+				for ( const attribute of Array.from( element.attributes ) ) {
+					if ( attribute.name.startsWith( 'aria-' ) || attribute.name === 'for' ) {
+						for ( const token of attribute.value.split( /\s+/ ) ) referencedIds.add( token );
+					} else if ( attribute.name === 'href' && attribute.value.startsWith( '#' ) ) {
+						const fragment = attribute.value.slice( 1 );
+						referencedIds.add( fragment );
+						try { referencedIds.add( decodeURIComponent( fragment ) ); } catch { /* Keep malformed fragments verbatim. */ }
+					}
+				}
+			}
+			const describe = ( element: Element ) => attributes.map( name => {
+				const value = element.getAttribute( name ) ?? '';
+				return name === 'id' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test( value ) && ! referencedIds.has( value ) ? '' : value;
+			} ).join( '|' );
 			const text: string[] = [];
 			const walk = ( element: Element, prefix: string ) => {
 				let position = 0;
