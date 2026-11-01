@@ -39,6 +39,9 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports static open shadow rendering 
     const copy = await browser.newPage({ javaScriptEnabled: false });
     await source.goto(url);
     await copy.setContent(html);
+    const iconStyles = await copy.locator('icon-component').evaluate(node =>
+      [node, ...node.querySelectorAll('*')].flatMap(element => Array.from((element as HTMLElement | SVGElement).style)));
+    expect([...new Set(iconStyles)].sort()).toEqual(['align-items', 'color', 'display', 'height', 'justify-content', 'width']);
     expect(await copy.locator('a icon-component svg path').count()).toBe(1);
     expect(await copy.locator('script').count()).toBe(0);
     const rendering = () => {
