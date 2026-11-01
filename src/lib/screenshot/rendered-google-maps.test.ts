@@ -8,6 +8,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
+import { isGoogleMapHost } from './rendered-google-maps.js';
 
 it('keeps map runtime dialogs out of page panels while retaining a real site dialog', async () => {
   const browser = await chromium.launch();
@@ -49,6 +50,49 @@ it('keeps map runtime dialogs out of page panels while retaining a real site dia
     const portable = load(wireCapturedDialogs(captured, report.states));
     expect(portable('.data-blocks-engine-capture-dialog[aria-label="Keyboard shortcuts"]')).toHaveLength(0);
     expect(portable('.data-blocks-engine-capture-dialog[aria-label="Newsletter"]')).toHaveLength(1);
+  } finally {
+    await browser.close();
+  }
+});
+
+it('preserves five GoDaddy maps, page content and site dialogs without claiming their root as a host', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><style>.gm-style {width:280px;height:160px}</style>
+      <p id="content">Keep the page</p>
+      ${Array.from({length:5}, (_, index) => `<div id="map-${index}"><div class="gm-style">
+        <a href="https://maps.google.com/maps?ll=${index},2&z=9">View map</a>
+      </div></div>`).join('')}
+      <button id="newsletter" aria-haspopup="dialog" aria-controls="newsletter-dialog"
+        onclick="document.getElementById('newsletter-dialog').showModal()">Newsletter</button>
+      <dialog id="newsletter-dialog" aria-label="Newsletter"><p>Site content</p></dialog>`);
+    const captured = load(await capturePageHtml(page));
+    expect(captured('iframe')).toHaveLength(5);
+    expect(captured('#content').text()).toBe('Keep the page');
+    for (let index = 0; index < 5; index++) {
+      expect(captured(`#map-${index} iframe`).attr('src')).toBe(`https://maps.google.com/maps?ll=${index}%2C2&z=9&output=embed`);
+    }
+    const report = await captureTriggeredDialogs(page, 'about:blank');
+    expect(report.states.find(item => item.trigger.id === 'newsletter')?.status).toBe('captured');
+
+    // The same predicate excludes roots, authored wrappers, and multi-map hosts.
+    const hostResults = await page.evaluate(source => {
+      const isHost = new Function('return (' + source + ')')() as (element: Element) => boolean;
+      return [
+        '<div><div style="position:relative"><div class="gm-style"></div></div></div>',
+        '<body><div><div class="gm-style"></div></div></body>',
+        '<main><div><div class="gm-style"></div></div></main>',
+        '<section role="main"><div><div class="gm-style"></div></div></section>',
+        '<div><div id="authored"><div class="gm-style"></div></div></div>',
+        '<div><div class="authored"><div class="gm-style"></div></div></div>',
+        '<div><div><div class="gm-style"></div><div class="gm-style"></div></div></div>',
+      ].map(html => {
+        const document = new DOMParser().parseFromString(html, 'text/html');
+        return isHost(document.querySelector('.gm-style')!.parentElement!.parentElement!);
+      });
+    }, isGoogleMapHost.toString());
+    expect(hostResults).toEqual([true, false, false, false, false, false, false]);
   } finally {
     await browser.close();
   }

@@ -1,5 +1,17 @@
-/** Maps owns the host's contents, including controls outside its style root. */
-export const GOOGLE_MAP_RUNTIME_ROOT = ':has(> div > .gm-style),.gm-style';
+/** Shared by runtime ownership discovery and clone cleanup (also runs in-page). */
+export function isGoogleMapHost(element: Element): boolean {
+  return element.matches(
+    ':not(html,body,main,header,footer,nav,aside,[role="main"],[role="banner"],[role="navigation"],[role="contentinfo"],[role="complementary"]):has(> div:not([id]):not([class]) > .gm-style)',
+  ) && element.querySelectorAll('.gm-style').length === 1;
+}
+
+/** Maps owns its style root and the contents of a verified host. */
+export function isGoogleMapRuntimeOwned(element: Element, isHost: (element: Element) => boolean): boolean {
+  for (let root: Element | null = element; root; root = root.parentElement) {
+    if (root.matches('.gm-style') || isHost(root)) return true;
+  }
+  return false;
+}
 
 /**
  * Runs inside the page during serialization. Google Maps JS paints temporary
@@ -13,6 +25,7 @@ export function portRenderedGoogleMaps(
   source: Document,
   snapshot: HTMLElement,
   evidenceAttributes: { src: string; width: string; height: string },
+  isHost: (element: Element) => boolean,
 ): void {
   const maps = source.querySelectorAll('.gm-style');
   const copies = snapshot.querySelectorAll('.gm-style');
@@ -82,7 +95,7 @@ export function portRenderedGoogleMaps(
     const host = wrapper?.parentElement;
     const copyWrapper = copy.parentElement;
     const copyHost = copyWrapper?.parentElement;
-    if (wrapper?.tagName === 'DIV' && host && copyWrapper && copyHost) {
+    if (host && isHost(host) && copyWrapper && copyHost) {
       copyHost.replaceChildren(copyWrapper);
       copyWrapper.replaceChildren(copy);
     }

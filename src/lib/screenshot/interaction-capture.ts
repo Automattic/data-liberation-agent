@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import { randomUUID } from 'node:crypto';
-import { PORTABLE_WIDGET_RUNTIME_ROOTS } from './portable-widget-ownership.js';
+import { PORTABLE_WIDGET_OWNERSHIP_SOURCE } from './portable-widget-ownership.js';
 import type { CapturedGallery } from './gallery-capture.js';
 import { settleDocument } from './page-helpers.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
@@ -33,9 +33,10 @@ export interface CapturedRouteNavigation {
 /** Observe the result of clicking visible navigation buttons, never infer a route from a label. */
 export async function captureRouteNavigation( page: Page, sourceUrl: string, options: { skip?: string } = {} ): Promise< CapturedRouteNavigation[] > {
 	const candidates = await page.evaluate( ( { limit, skip, runtimeRoots }: { limit: number; skip?: string; runtimeRoots: string } ) => {
+		const runtimeOwned = new Function( 'return (' + runtimeRoots + ')' )() as (element: Element) => boolean;
 		return Array.from( document.querySelectorAll< HTMLButtonElement >( 'header button,[role="banner"] button,nav button,[role="navigation"] button' ) )
 			.filter( button => {
-				if ( button.closest( runtimeRoots ) || skip && button.matches( skip ) ) return false;
+				if ( runtimeOwned( button ) || skip && button.matches( skip ) ) return false;
 				const rect = button.getBoundingClientRect();
 				const style = getComputedStyle( button );
 				return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
@@ -57,7 +58,7 @@ export async function captureRouteNavigation( page: Page, sourceUrl: string, opt
 						.map( child => ( child.getAttribute( 'aria-label' ) || child.textContent || '' ).replace( /\s+/g, ' ' ).trim() ),
 				};
 			} );
-	}, { limit: MAX_ROUTE_CONTROLS, skip: options.skip, runtimeRoots: PORTABLE_WIDGET_RUNTIME_ROOTS } );
+	}, { limit: MAX_ROUTE_CONTROLS, skip: options.skip, runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE } );
 	const original = new URL( sourceUrl );
 	const routes: CapturedRouteNavigation[] = [];
 	for ( const candidate of candidates ) {
@@ -264,7 +265,8 @@ export async function captureTriggeredDialogs(
 	await rememberBaselinePanels( page );
 	const initialDialogs = await captureInitiallyVisibleDialogs( page );
 	const triggers = ( await page.evaluate( ( { limit, popupTypes, plainLimit, navLimit, skip, runtimeRoots }: { limit: number; popupTypes: string[]; plainLimit: number; navLimit: number; skip?: string; runtimeRoots: string } ) => {
-		const owned = ( element: Element ): boolean => !!element.closest( runtimeRoots ) || skip !== undefined && element.matches( skip );
+		const runtimeOwned = new Function( 'return (' + runtimeRoots + ')' )() as (element: Element) => boolean;
+		const owned = ( element: Element ): boolean => runtimeOwned( element ) || skip !== undefined && element.matches( skip );
 		const visible = ( element: Element ): boolean => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
@@ -427,7 +429,7 @@ export async function captureTriggeredDialogs(
 				dataBindings,
 			};
 		} );
-	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES, skip, runtimeRoots: PORTABLE_WIDGET_RUNTIME_ROOTS } ) ) as TriggerDescriptor[];
+	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES, skip, runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE } ) ) as TriggerDescriptor[];
 
 	const states: CapturedDialogInteraction[] = [];
 	// Keep navigation defaults suppressed for the complete popup probe transaction,
@@ -752,6 +754,7 @@ async function visibleDialogSelectors( page: Page ): Promise< string[] > {
 
 async function visibleSemanticDialogs( page: Page ): Promise< DialogDescriptor[] > {
 	return page.evaluate( ( { limit, runtimeRoots }: { limit: number; runtimeRoots: string } ) => {
+		const runtimeOwned = new Function( 'return (' + runtimeRoots + ')' )() as (element: Element) => boolean;
 		const visible = ( element: Element ): boolean => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
@@ -761,7 +764,7 @@ async function visibleSemanticDialogs( page: Page ): Promise< DialogDescriptor[]
 		const cssEscape = ( value: string ) => globalThis.CSS?.escape
 			? globalThis.CSS.escape( value ) : value.replace( /[^a-zA-Z0-9_-]/g, '\\$&' );
 		return Array.from( document.querySelectorAll( 'dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]' ) )
-			.filter( element => !element.closest( runtimeRoots ) )
+			.filter( element => !runtimeOwned( element ) )
 			.filter( visible )
 			.slice( 0, limit )
 			.map( ( dialog, index ) => {
@@ -787,7 +790,7 @@ async function visibleSemanticDialogs( page: Page ): Promise< DialogDescriptor[]
 					html: clone.outerHTML,
 				};
 			} );
-	}, { limit: MAX_INITIAL_DIALOGS, runtimeRoots: PORTABLE_WIDGET_RUNTIME_ROOTS } ) as Promise< DialogDescriptor[]>;
+	}, { limit: MAX_INITIAL_DIALOGS, runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE } ) as Promise< DialogDescriptor[]>;
 }
 
 async function findCloseControl(
@@ -914,8 +917,9 @@ async function firstNewVisibleDialog(
 	triggerSelector: string
 ): Promise< DialogDescriptor | undefined > {
 	return page.evaluate( ( { existing, surfaceSelector, semanticSelector, triggerSelector, runtimeRoots }: { existing: string[]; surfaceSelector: string; semanticSelector: string; triggerSelector: string; runtimeRoots: string } ) => {
+		const runtimeOwned = new Function( 'return (' + runtimeRoots + ')' )() as (element: Element) => boolean;
 		const visible = ( element: Element ): boolean => {
-			if ( element.closest( runtimeRoots ) ) return false;
+			if ( runtimeOwned( element ) ) return false;
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
 			// A descendant's own opacity can be 1 while its opening menu is transparent.
@@ -1069,7 +1073,7 @@ async function firstNewVisibleDialog(
 		};
 	}, {
 		existing: before,
-		runtimeRoots: PORTABLE_WIDGET_RUNTIME_ROOTS,
+		runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE,
 		triggerSelector,
 		surfaceSelector: POPUP_SURFACE_SELECTOR,
 		semanticSelector: SEMANTIC_POPUP_SELECTOR,
