@@ -2,11 +2,11 @@ import type { PlatformAdapter } from '../../types.js';
 import { nextjsAdapter } from '../nextjs/index.js';
 import { detection } from './detection.js';
 import { discoverSoloist } from './discover.js';
-import { soloistRouteScope } from './route-scope.js';
+import { tenantHandleRouteScope } from '../tenant-handle.js';
 
 export const soloistAdapter: PlatformAdapter = {
 	id: 'soloist',
-	routeScope: soloistRouteScope,
+	routeScope: tenantHandleRouteScope,
 	detection,
 	discover: discoverSoloist,
 	liberation: nextjsAdapter.liberation,

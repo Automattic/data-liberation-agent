@@ -101,6 +101,7 @@ Naming an unknown target lists the registered ones.
 | Next.js | Generic discovery + framework route-announcer cleanup |
 | Shopify | Ready |
 | Soloist | Tenant-scoped authored links + Next page metadata discovery |
+| atom.bio | Tenant-scoped profile discovery |
 | Squarespace | Ready |
 | Substack | Ready |
 | Webflow | Ready |
@@ -120,6 +121,10 @@ authored links and `__NEXT_DATA__.props.pageProps.data.websiteSettings.pages`.
 The tenant root is the homepage; section anchors are not extra routes. Platform
 footer links, other tenants, and the global sitemap are excluded. Routes absent
 from both homepage links and published page metadata remain undiscovered.
+
+atom.bio profiles (`https://www.atom.bio/<handle>/` or `https://atom.bio/<handle>/`)
+use the same tenant boundary and homepage-link discovery, without Next metadata.
+Platform pages and other tenants remain external destinations.
 
 Registered HTTP profiles can acquire route response evidence and shared dependencies through the [HTTP acquisition API](/docs/http-acquisition.md). Portable preparation and rendered acceptance remain separate from acquisition coverage.
 
