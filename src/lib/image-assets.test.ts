@@ -284,3 +284,9 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
   }
  }, 120_000);
 });
+
+it('skips a site builder default icon but keeps an owner-uploaded one', () => {
+ const custom = 'https://static.wixstatic.com/media/c168cb_c777%7Emv2.png/v1/fill/w_192%2Ch_192/c168cb_c777%7Emv2.png';
+ const records = collectImageAssets([{ url: 'https://ellenbauer37.wixsite.com/my-site-2', html: `<link rel="icon" sizes="192x192" href="https://www.wix.com/favicon.ico"><link rel="shortcut icon" href="https://www.wix.com/favicon.ico"><link rel="apple-touch-icon" href="https://static.parastorage.com/client/pfavico.ico"><link rel="icon" href="${custom}">` }]);
+ expect(records.map(record => record.resolved_original)).toEqual([custom]);
+});

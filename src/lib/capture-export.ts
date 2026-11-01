@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readAssets, type AssetRecord } from './image-assets.js';
+import { withoutPlatformDefaultIcons } from './platform-default-icons.js';
 import { assembleDeviceDocuments, installDeviceSelection, type DocumentSelection } from './document-selection.js';
 import type { AccessGateEvidence } from './access-gate.js';
 import {
@@ -1455,6 +1456,8 @@ function buildExportCapture(
 			const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
 			let rawDesktopHtml = embedded && options.input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, options.input.desktopVariant, desktopHash, embedded.receipt.regions), url, options.input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
 			rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
+			// A builder's own logo is not the site's icon; owner-uploaded icons stay.
+			rawDesktopHtml = withoutPlatformDefaultIcons(rawDesktopHtml, entry.documents?.desktop?.url ?? url);
 			const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 			// A client-routed SPA answers every route with HTTP 200 and renders its
 			// own not-found screen in JavaScript, so the HTTP-status check above
@@ -1487,14 +1490,14 @@ function buildExportCapture(
 					: undefined;
 			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
 			let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
-			if (rawMobileHtml !== undefined) rawMobileHtml = resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl);
+			if (rawMobileHtml !== undefined) rawMobileHtml = withoutPlatformDefaultIcons(resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl), entry.documents?.mobile?.url ?? url);
 			const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
 			for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
 				if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
 				const path = resolve( outputDir, profile.html );
 				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new IntegrityError( `Device document is missing or outside capture: ${ key }` );
 				const documentUrl = entry.documents?.[ key ];
-				sourceDocuments[ key ] = resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl );
+				sourceDocuments[ key ] = withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl ), documentUrl?.url ?? url );
 			}
 			const selection = options.resolveDocumentSelection?.( sourceDocuments );
 			if ( selection?.kind === 'width' ) {

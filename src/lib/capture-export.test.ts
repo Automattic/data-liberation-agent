@@ -6334,6 +6334,49 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( about ).not.toContain( 'example.com' );
 	} );
 
+	it( 'drops a site builder default icon from the exported head but keeps an owner-uploaded icon', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-icon-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'resources' ] )
+			mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const custom = 'https://static.wixstatic.com/media/c168cb_c777%7Emv2.png/v1/fill/w_192%2Ch_192/c168cb_c777%7Emv2.png';
+		writeFileSync( join( outputDir, 'html/homepage.html' ),
+			'<html><head><link rel="icon" sizes="192x192" href="https://www.wix.com/favicon.ico" type="image/x-icon"><link rel="shortcut icon" href="https://www.wix.com/favicon.ico" type="image/x-icon"><link rel="apple-touch-icon" href="https://www.wix.com/favicon.ico" type="image/x-icon"><!-- <link rel="mask-icon" href="https://www.wix.com/favicon.ico"> -->' +
+			`<link rel="icon" href="https://static.parastorage.com/client/pfavico.ico"><link rel="apple-touch-icon" href="${ custom }"></head><body><h1>Home</h1></body></html>` );
+		// The mobile document can lack an icon the desktop one has; neither may leak through assembly.
+		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html-mobile/homepage.html' ),
+			`<html><head><link rel="icon" href="https://www.wix.com/favicon.ico"><link rel="apple-touch-icon" href="${ custom }"></head><body><h1>Home</h1></body></html>` );
+		writeFileSync( join( outputDir, 'resources/wix-favicon.ico' ), 'wix' );
+		writeFileSync( join( outputDir, 'resources/owner.png' ), 'owner' );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
+			version: 1,
+			resources: {
+				'https://www.wix.com/favicon.ico': { path: 'resources/wix-favicon.ico', contentType: 'image/x-icon' },
+				[ custom ]: { path: 'resources/owner.png', contentType: 'image/png' },
+			},
+			failures: [],
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: { 'https://ellenbauer37.wixsite.com/my-site-2': { html: 'html/homepage.html' } },
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://ellenbauer37.wixsite.com/my-site-2',
+			platform: 'wix', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		const html = readFileSync( join( outputDir, receipt.entrypoint ), 'utf8' );
+		const document = cheerio.load( html );
+		expect( html ).not.toMatch( /wix\.com\/favicon\.ico|pfavico/ );
+		expect( document( 'link[rel="icon"], link[rel="shortcut icon"]' ) ).toHaveLength( 0 );
+		expect( existsSync( join( outputDir, 'website', 'external' ) ) ).toBe( false );
+		const owner = document( 'link[rel="apple-touch-icon"]' );
+		expect( owner ).toHaveLength( 1 );
+		expect( owner.attr( 'href' ) ).toMatch( /^\// );
+		expect( readFileSync( join( outputDir, 'website', owner.attr( 'href' )!.slice( 1 ) ), 'utf8' ) ).toBe( 'owner' );
+	} );
+
 	it( 'preserves captured and uncaptured document relations when their documents move', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-document-relations-' ) );
 		dirs.push( outputDir );
