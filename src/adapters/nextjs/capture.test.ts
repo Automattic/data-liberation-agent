@@ -50,7 +50,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Next.js capture/export (real Ch
 					observations.push({ device, announcers, live, interactive });
 				},
 			});
-			expect(observations).toEqual([
+			expect([...observations].sort((a, b) => a.device.localeCompare(b.device))).toEqual([
 				{ device: 'desktop', announcers: 0, live: 'Owner status', interactive: true },
 				{ device: 'mobile', announcers: 0, live: 'Owner status', interactive: true },
 			]);
