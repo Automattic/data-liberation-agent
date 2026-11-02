@@ -43,6 +43,13 @@ vi.mock('./fluid-capture.js', async (importOriginal) => ({
 	learnAndApplyFluidGeometry: learnAndApplyFluidGeometryMock,
 }));
 
+// Root-class readiness requires real frames and resize timers; its browser
+// fixture owns that contract, not these orchestration-only page mocks.
+vi.mock('./root-class-contracts.js', async (importOriginal) => ({
+	...( await importOriginal<typeof import('./root-class-contracts.js')>() ),
+	sampleRootClasses: vi.fn().mockResolvedValue([]),
+}));
+
 // Admission policy tests drive the runtime's available memory directly; the
 // host's real cgroup accounting is runtime-memory.test.ts's concern.
 vi.mock('./runtime-memory.js', () => ({

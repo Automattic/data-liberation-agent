@@ -1111,6 +1111,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		writeFileSync( plan.paths.geometry, `${ JSON.stringify( capture, null, 2 ) }\n` );
 	}
 
+	// Measure while the source runtime still owns layout. Later observation,
+	// fluid learning and serialization hooks may freeze timers or change DOM
+	// geometry; their root classes are not evidence of source width behavior.
+	let rootClassWidths: RootClassContract[] = [];
+	if ( isDesktop && plan.captureHtml ) {
+		try {
+			rootClassWidths = await sampleRootClasses( page );
+		} catch ( error ) {
+			// A bounded probe cannot safely hand a nonresponding renderer to
+			// subsequent DOM reads. Lose this profile rather than hang capture.
+			fail( 'evaluate', `root class source probe unproven: evaluate timeout or failure: ${ String( error ) }` );
+			return;
+		}
+	}
+
 	// Initial component states are immutable evidence, read before exploration.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
@@ -1198,15 +1213,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 	if ( args.rendererCrashed() ) return;
-
-	let rootClassWidths: RootClassContract[] = [];
-	if ( isDesktop && plan.captureHtml ) {
-		try {
-			rootClassWidths = await sampleRootClasses( page );
-		} catch ( error ) {
-			if ( ! await loseBlock( 'evaluate', { code: 'root_class_probe_unproven', reason: `Root class width probe failed: ${ String( error ) }`, severity: 'warning' } ) ) return;
-		}
-	}
 
 	// Remove attributed non-content islands before interaction evidence and HTML.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );

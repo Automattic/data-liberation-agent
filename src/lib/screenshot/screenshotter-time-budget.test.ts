@@ -152,7 +152,8 @@ it.skipIf( skipBrowser )( 'abandons a stalled route at its per-route deadline an
 	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'route-deadline-' ) );
 	try {
 		const startedAt = Date.now();
-		const routeDeadlineMs = 3_000;
+		// Healthy routes now also pay for the bounded root-class quiet windows.
+		const routeDeadlineMs = 6_000;
 		const result = await captureScreenshots( {
 			// The stalled route is admitted first; the entries after it complete.
 			urls: [ `${ origin }/slow`, `${ origin }/`, `${ origin }/about` ], primaryUrl: `${ origin }/`,
@@ -164,13 +165,13 @@ it.skipIf( skipBrowser )( 'abandons a stalled route at its per-route deadline an
 		expect( captureMs ).toBeLessThan( routeDeadlineMs + 10_000 );
 		expect( result.routeDiagnostics ).toEqual( [ {
 			code: 'route_capture_timeout', url: `${ origin }/slow`,
-			reason: expect.stringContaining( 'route capture deadline 3000ms' ),
+			reason: expect.stringContaining( `route capture deadline ${ routeDeadlineMs }ms` ),
 			unit: 'route', severity: 'error', metrics: { routeDeadlineMs },
 		} ] );
 
 		const { receipt, missing, complete, usable, findings } = exportCapture( outputDir, `${ origin }/`, result );
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ).sort() ).toEqual( [ `${ origin }/`, `${ origin }/about` ] );
-		expect( missing ).toEqual( [ { url: `${ origin }/slow`, code: 'route_capture_timeout', reason: expect.stringContaining( 'route capture deadline 3000ms' ) } ] );
+		expect( missing ).toEqual( [ { url: `${ origin }/slow`, code: 'route_capture_timeout', reason: expect.stringContaining( `route capture deadline ${ routeDeadlineMs }ms` ) } ] );
 		expect( complete ).toBe( false );
 		expect( usable ).toBe( true );
 		expect( findings.findings ).toContainEqual( expect.objectContaining( { code: 'route_capture_timeout', loss_class: 'omitted_unit', unit: 'route' } ) );

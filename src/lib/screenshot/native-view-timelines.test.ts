@@ -160,7 +160,8 @@ it.each( [ 'resize', 'snapshot', 'baseline' ] as const )( 'bounds a nonrespondin
 		const started = Date.now();
 		const result = await captureScreenshots( {
 			urls: [ url ], outputDir, concurrency: 1, settleMs: 0, evaluateTimeoutMs: 500, viewports: [ { id: 'desktop', width: 1000, height: 900 } ],
-			prepareCapture: async page => {
+			// Install at the native boundary, after the earlier root-class sweep.
+			observeSource: async page => {
 				await page.evaluate( boundary => {
 					if ( boundary === 'resize' ) addEventListener( 'resize', () => { for (;;) { /* real renderer main-thread stall */ } }, { once: true } );
 					else if ( boundary === 'snapshot' ) {

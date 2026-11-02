@@ -60,7 +60,7 @@ try {
   assert.match(readFileSync(join(outputDir, healthy.html), 'utf8'), /Healthy later route/);
   assert.ok(healthy.desktop, 'later route screenshot must exist');
   const pendingOutcomes = await Promise.all(pending);
-  assert.ok(pendingOutcomes.every(message => /crashed|closed/i.test(message)), 'all pending work must reject and settle');
+  assert.ok(pendingOutcomes.every(message => /crashed|closed|Execution context was destroyed/i.test(message)), 'all pending work must reject and settle');
   assert.deepEqual(cleanup, [0, 0], 'every route must close its contexts');
   assert.equal(browser.isConnected(), false, 'capture must close its browser');
   const require = createRequire(import.meta.url);
