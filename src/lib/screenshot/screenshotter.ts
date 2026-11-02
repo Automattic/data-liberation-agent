@@ -194,8 +194,6 @@ interface CapturePerViewportArgs {
 	probeOverrun: ( ms: number ) => void;
 	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
 	phases?: PhaseLedger;
-	/** Compare the phone identity before capture mutates the loaded desktop. */
-	checkDevice?: ( page: Page, html: string | undefined ) => Promise< void >;
 	/** Stop best-effort stages after a crash or page-error storm. */
 	rendererCrashed: () => boolean;
 	learnFluid?: boolean;
@@ -998,10 +996,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		};
 		releaseBaselineNavigation = await lockMainFrameNavigation(page, baselineDrift, true);
 		await applySourceCleanup(page, sourcePolicy);
-		if ( ! recovering && args.checkDevice ) {
-			args.phases?.enter( 'device-check' );
-			await args.checkDevice( page, serverHtml );
-		}
 
 		// --- settle, dismiss overlays, lazy load ----------------------------------
 		args.phases?.enter( 'settle' );
@@ -2004,7 +1998,8 @@ async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'c
  * Per-route check under a `reflow-only` site. Both identities use the same
  * bounded, resource-blocked policy. Capture's fully loaded desktop is not a
  * comparable baseline: resource load handlers can change its DOM.
- * Both comparison contexts close before capture resumes.
+ * Both comparison contexts close before the route's capture starts, so the
+ * pair never competes with capture's own loads.
  */
 async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
 	const startedAt = Date.now();
@@ -2621,12 +2616,18 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;
 		const desktopPlan = shouldAnalyzeUrl ? { ...plan.desktop, needsLoad: true } : plan.desktop;
 		const effectivePlan = { ...plan, desktop: desktopPlan };
-		// A fresh auto decision runs on capture's loaded desktop document.
-		let needsDeviceCheck = false;
+		// Decide before capture opens its context: the check's comparison pair
+		// must not compete with capture's own loads (#1155). Its wall time is
+		// attributed to the desktop profile as `device-check`.
 		let routeDevice: RouteDeviceDecision | undefined;
+		let deviceCheckMs: number | undefined;
 		if ( reflowViewports ) {
 			if ( ! force && existing?.deviceMode ) routeDevice = existing.deviceMode;
-			else if ( routeComparison ) needsDeviceCheck = true;
+			else if ( routeComparison ) {
+				const checkStartedAt = Date.now();
+				routeDevice = await checkRouteDeviceMode( { ...routeComparison, browser, url } );
+				deviceCheckMs = Date.now() - checkStartedAt;
+			}
 			else routeDevice = { mode: 'reflow-only', reason: 'reflow-only capture was requested' };
 			if ( routeDevice ) routeDecisions.push( { url, ...routeDevice } );
 			if ( routeDevice?.mode === 'dual' ) {
@@ -2654,7 +2655,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			outputDir: opts.outputDir, slug, id: profile.id, captureImages: opts.captureImages,
 			force: force || ! existing?.profiles?.[ profile.id ]?.html || JSON.stringify( existing.profiles?.[ profile.id ]?.recipe ) !== JSON.stringify( profile ),
 		} );
-		if ( ! needsDeviceCheck ) for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
+		for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
 
 		if ( routeProfiles.every( profile => ! profilePlan( profile ).needsLoad ) ) {
 			// Abandoned-at-deadline routes record nothing a later export could trip on.
@@ -2772,22 +2773,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							probeOverrun: ms => probeOverruns.set( url, ( probeOverruns.get( url ) ?? 0 ) + ms ),
 							serverLinks: serverLinks.get( url ) ?? ( serverLinks.set( url, new Set() ), serverLinks.get( url )! ),
 							phases,
-							...( needsDeviceCheck && viewport.id === 'desktop' ? { checkDevice: async () => {
-								routeDevice = await checkRouteDeviceMode( { ...routeComparison!, browser: attemptBrowser, url } );
-								needsDeviceCheck = false;
-								entry.deviceMode = routeDevice;
-								routeDecisions.push( { url, ...routeDevice } );
-								if ( routeDevice.mode === 'reflow-only' ) viewport.referenceWidths = reflowViewports!.find( profile => profile.id === 'desktop' )?.referenceWidths ?? [ 390, 768, 1440 ];
-								if ( routeDevice.mode === 'reflow-only' ) {
-									const mobile = routeProfiles.findIndex( profile => profile.id === 'mobile' );
-									if ( mobile !== -1 ) routeProfiles.splice( mobile, 1 );
-								}
-								for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
-								if ( routeDevice.mode === 'dual' ) process.stderr.write( `[device-mode] ${ url } dual (check ${ routeDevice.checkMs }ms): ${ routeDevice.reason }\n` );
-							} } : {} ),
 							rendererCrashed: () => rendererCrashed || Boolean( errorGuard?.stopped() ),
 							browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
-							viewport: { ...viewport, context: identity, get referenceWidths() { return viewport.referenceWidths; } },
+							viewport: { ...viewport, context: identity },
 							plan: vpPlan,
 							url,
 							slug,
@@ -2816,10 +2804,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
-							get reflowPhoneViewport() {
-								return routeDevice?.mode === 'reflow-only' && viewport.id === 'desktop' && phoneProfile
-									? { width: phoneProfile.width, height: phoneProfile.height } : undefined;
-							},
+							...( routeDevice?.mode === 'reflow-only' && viewport.id === 'desktop' && phoneProfile
+								? { reflowPhoneViewport: { width: phoneProfile.width, height: phoneProfile.height } }
+								: {} ),
 							resolveClientRedirect: opts.resolveClientRedirect,
 							// The entrypoint is the capture's own identity, never an alias.
 							canonicalQueryAlias: ! primaryRef || documentRequestUrl( url ) !== documentRequestUrl( primaryRef ),
@@ -2881,6 +2868,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					const profileRecord = profileEntry.profiles?.[ viewport.id ];
 					if ( profileRecord ) {
 						profileRecord.phases = phases.finish();
+						if ( viewport.id === 'desktop' && deviceCheckMs !== undefined && ! profileRecord.phases.some( phase => phase.phase === 'device-check' ) ) profileRecord.phases.unshift( { phase: 'device-check', ms: deviceCheckMs } );
 						profileRecord.readiness = phases.readiness();
 					}
 				}
@@ -2912,25 +2900,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const builtInProfiles = ( [ 'desktop', 'mobile' ] as const )
 			.map( id => routeProfiles.find( profile => profile.id === id ) )
 			.filter( ( profile ): profile is Viewport => Boolean( profile ) );
-		// Desktop decides whether a phone capture is needed before scheduling it.
-		if ( needsDeviceCheck ) {
-			const desktop = builtInProfiles.find( profile => profile.id === 'desktop' );
-			if ( desktop ) {
-				const result = await captureProfile( desktop );
-				if ( result ) {
-					urlFailures.push( ...result.failures );
-					if ( result.profileEntry.sharedChrome ) sharedChromeDecisions.push( { url, profile: desktop.id, ...result.profileEntry.sharedChrome } );
-					if ( mergeProfile( desktop, result.profileEntry, result.additional ) ) urlFailures.push( {
-						url, viewport: desktop.id, stage: 'goto', error: 'Source redirect aliases disagree across viewports', timestamp: new Date().toISOString(), attempt: 1,
-					} );
-				}
-				builtInProfiles.splice( builtInProfiles.indexOf( desktop ), 1 );
-			}
-			if ( routeDevice?.mode === 'reflow-only' ) {
-				const mobile = builtInProfiles.findIndex( profile => profile.id === 'mobile' );
-				if ( mobile !== -1 ) builtInProfiles.splice( mobile, 1 );
-			}
-		}
 		const builtInResults = memoryAdmission
 			? await ( async () => {
 					const results = [];

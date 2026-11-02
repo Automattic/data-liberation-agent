@@ -1,6 +1,6 @@
 # Matched-policy device checks (#1155)
 
-A resource-blocked phone DOM cannot be compared with capture's fully loaded desktop. Image load handlers and embed hydration can change structure. Per-route checks therefore load **both** identities in parallel using the existing bounded check policy, including blocking sub-frame documents. The capture desktop is left untouched. The `device-check` phase remains attributed to its desktop profile.
+A resource-blocked phone DOM cannot be compared with capture's fully loaded desktop. Image load handlers and embed hydration can change structure. Per-route checks therefore load **both** identities in parallel using the existing bounded check policy, including blocking sub-frame documents. The capture desktop is left untouched, and the check runs before capture opens its context: running the pair alongside capture's own load made a third concurrent load of the source and pushed bmoa navigations into 30 s timeouts (read as `dual`). The check's wall time is attributed to the desktop profile as `device-check`.
 
 The provider's bmoa evidence showed 39/40 routes becoming dual after #1151, versus predominantly reflow-only decisions before it. `/collection` took 9,738 ms and became dual; its previous decision was export-equivalent. The large path difference was not proof of a mobile document.
 
