@@ -14,6 +14,8 @@ export interface CapturedDropdownAncestorState {
 		/** `class` in closed/opened holds only the tokens opening removed/added. */
 		classTokensOnly?: true;
 	} >;
+	/** Class-token deltas, addressed within the authored trigger; empty selector is self. */
+	trigger?: Array< { selector: string; tag: string; closed: { class: string }; opened: { class: string }; classTokensOnly: true } >;
 	placement?: {
 		parentSelector: string;
 		parentDepth: number;
@@ -31,6 +33,7 @@ interface AncestorSnapshot {
 		depth: number;
 		closed: Record< string, string | null >;
 		opened?: Record< string, string | null >;
+		relativeSelector?: string;
 	} >;
 	reason?: string;
 }
@@ -46,6 +49,18 @@ export async function rememberDropdownAncestors( page: Page, triggerSelector: st
 		const allowed = new RegExp( pattern );
 		const snapshot: AncestorSnapshot = { rows: [] };
 		globals.__dlaDropdownAncestors = snapshot;
+		const nodes = [ trigger, ...trigger.querySelectorAll( '*' ) ];
+		if ( nodes.length > 128 ) { snapshot.reason = 'trigger-node-limit'; return; }
+		for ( const node of nodes ) {
+			const selector = globals.__dlaPanelSelectors?.get( node );
+			if ( !selector ) { snapshot.reason = 'source-identity-unavailable'; return; }
+			const path: string[] = [];
+			for ( let child = node; child !== trigger; child = child.parentElement! ) {
+				path.unshift( `:nth-child(${ Array.prototype.indexOf.call( child.parentElement!.children, child ) + 1 })` );
+			}
+			snapshot.rows.push( { node, selector, tag: node.tagName.toLowerCase(), depth: 0,
+				closed: { class: node.getAttribute( 'class' ) }, relativeSelector: path.length ? ':scope > ' + path.join( ' > ' ) : '' } );
+		}
 		let depth = 0;
 		for ( let node = trigger.parentElement; node; node = node.parentElement ) {
 			if ( ++depth > 8 ) { snapshot.reason = 'ancestor-limit'; break; }
@@ -79,7 +94,7 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 		// Class is a token set: a runtime that re-adds a class changes its order,
 		// not its state.
 		const sameValue = ( name: string, a: string | null, b: string | null ) => a === b ||
-			name === 'class' && a !== null && b !== null && tokens( a ).sort().join( ' ' ) === tokens( b ).sort().join( ' ' );
+			name === 'class' && tokens( a ).sort().join( ' ' ) === tokens( b ).sort().join( ' ' );
 		const result: CapturedDropdownAncestorState = { status: 'unverified', ancestors: [] };
 		if ( !snapshot || snapshot.reason ) {
 			return { ...result, reason: snapshot?.reason ?? 'ancestor-snapshot-unavailable' };
@@ -88,7 +103,7 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 			if ( !row.node.isConnected ) return { ...result, reason: 'ancestor-replaced' };
 			const opened: Record< string, string | null > = {};
 			for ( const attribute of Array.from( row.node.attributes ) ) {
-				if ( allowed.test( attribute.name ) ) opened[ attribute.name ] = attribute.value;
+				if ( row.relativeSelector !== undefined ? attribute.name === 'class' : allowed.test( attribute.name ) ) opened[ attribute.name ] = attribute.value;
 			}
 			if ( Object.keys( opened ).length > 32 ) return { ...result, reason: 'ancestor-attribute-count-limit' };
 			row.opened = opened;
@@ -106,20 +121,24 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 			let classTokensOnly = false;
 			const evidence = changed.map( name => {
 				const closed = row.closed[ name ] ?? null, open = opened[ name ] ?? null;
-				if ( name !== 'class' || ![ closed, open ].some( value => bytes( value ) > 2048 ) ) return [ name, closed, open ] as const;
+				if ( name !== 'class' || row.relativeSelector === undefined && ![ closed, open ].some( value => bytes( value ) > 2048 ) ) return [ name, closed, open ] as const;
 				classTokensOnly = true;
 				const before = tokens( closed ), after = tokens( open );
-				const kept = before.filter( token => after.includes( token ) ).slice( 0, 3 );
+				const kept = row.relativeSelector === undefined ? before.filter( token => after.includes( token ) ).slice( 0, 3 ) : [];
 				return [ name, [ ...kept, ...before.filter( token => !after.includes( token ) ) ].join( ' ' ), [ ...kept, ...after.filter( token => !before.includes( token ) ) ].join( ' ' ) ] as const;
 			} );
 			if ( evidence.some( ( [ , closed, open ] ) => bytes( closed ) > 2048 || bytes( open ) > 2048 ) ) return { ...result, reason: 'ancestor-attribute-limit' };
 			if ( changed.length > 0 ) {
-				result.ancestors.push( { selector: row.selector, tag: row.tag, depth: row.depth,
+				if ( row.relativeSelector !== undefined ) {
+					const [ , closed, open ] = evidence[ 0 ]!;
+					( result.trigger ??= [] ).push( { selector: row.relativeSelector, tag: row.tag,
+						closed: { class: closed ?? '' }, opened: { class: open ?? '' }, classTokensOnly: true } );
+				} else result.ancestors.push( { selector: row.selector, tag: row.tag, depth: row.depth,
 					closed: Object.fromEntries( evidence.map( ( [ name, closed ] ) => [ name, closed ] ) ),
 					opened: Object.fromEntries( evidence.map( ( [ name, , open ] ) => [ name, open ] ) ),
 					...( classTokensOnly ? { classTokensOnly: true as const } : {} ),
 				} );
-				if ( new TextEncoder().encode( JSON.stringify( result ) ).length > 32768 ) return { ...result, ancestors: [], reason: 'ancestor-state-byte-limit' };
+				if ( new TextEncoder().encode( JSON.stringify( result ) ).length > 32768 ) return { ...result, ancestors: [], trigger: [], reason: 'ancestor-state-byte-limit' };
 			}
 		}
 		const parent = snapshot.rows.find( row => row.node === panel.parentElement );
@@ -142,7 +161,7 @@ export async function verifyDropdownRestoration( page: Page, state: CapturedDrop
 			const tokens = ( value: string | null ) => ( value ?? '' ).split( /\s+/ ).filter( Boolean ).sort().join( ' ' );
 			const restored = ( node: Element, name: string, closed: string | null ) => {
 				const current = node.getAttribute( name );
-				return current === closed || name === 'class' && current !== null && closed !== null && tokens( current ) === tokens( closed );
+				return current === closed || name === 'class' && tokens( current ) === tokens( closed );
 			};
 			const panelVisible = Array.from( document.querySelectorAll( selector ) ).some( panel => {
 				const rect = panel.getBoundingClientRect(), style = getComputedStyle( panel );

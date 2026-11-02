@@ -50,6 +50,8 @@ function concealed(trigger){var style=getComputedStyle(trigger);if(style.display
 function ancestorBindings(trigger){try{return JSON.parse(trigger.getAttribute('data-blocks-engine-capture-dialog-ancestor-state')||'[]');}catch(error){return [];}}
 function classTokens(value){return (value||'').split(/\\s+/).filter(Boolean);}
 function ancestorAt(trigger,depth){var node=trigger;while(depth--&&node)node=node.parentElement;return node;}
+function triggerBindings(trigger){try{return JSON.parse(trigger.getAttribute('data-blocks-engine-capture-dialog-trigger-state')||'[]');}catch(error){return [];}}
+function applyTrigger(trigger,open){triggerBindings(trigger).forEach(function(binding){var node=binding.selector?trigger.querySelector(binding.selector):trigger;if(!node)return;var target=classTokens((open?binding.opened:binding.closed).class);classTokens((open?binding.closed:binding.opened).class).forEach(function(token){if(target.indexOf(token)<0)node.classList.remove(token);});target.forEach(function(token){node.classList.add(token);});});}
 function applyAncestors(trigger,open){ancestorBindings(trigger).forEach(function(binding){var node=ancestorAt(trigger,binding.depth);if(!node)return;
   Object.keys(binding.closed).forEach(function(name){var value=open?binding.opened[name]:binding.closed[name];
     if(!open){var owner=Array.prototype.find.call(triggers(),function(other){return other!==trigger&&!concealed(other)&&other.getAttribute('aria-expanded')==='true'&&ancestorBindings(other).some(function(row){return ancestorAt(other,row.depth)===node&&Object.prototype.hasOwnProperty.call(row.opened,name);});});if(owner){var row=ancestorBindings(owner).find(function(row){return ancestorAt(owner,row.depth)===node&&Object.prototype.hasOwnProperty.call(row.opened,name);});value=row.opened[name];}}
@@ -61,6 +63,7 @@ function apply(trigger){
   var target=panel(trigger);if(!target)return;
   var inactive=concealed(trigger),open=trigger.getAttribute('aria-expanded')==='true'&&!inactive;
   applyAncestors(trigger,open);
+  applyTrigger(trigger,open);
   if(!open&&Array.prototype.some.call(triggers(),function(other){return other!==trigger&&panel(other)===target&&!concealed(other)&&other.getAttribute('aria-expanded')==='true';}))return;
   var captured=trigger.getAttribute('data-blocks-engine-capture-dialog-panel-state');
   var opened=captured?JSON.parse(captured):null;
@@ -310,6 +313,8 @@ export function wireCapturedDialogs(
 					closed: { class: delta.removed.join( ' ' ) }, opened: { class: delta.added.join( ' ' ) }, classTokensOnly: true } );
 			}
 			if ( bindings.length ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( bindings ) );
+			const triggerState = resolveTriggerState( trigger, state.dialog?.ancestorState );
+			if ( triggerState?.length ) trigger.attr( 'data-blocks-engine-capture-dialog-trigger-state', JSON.stringify( triggerState ) );
 			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
 			// A source can reuse one responsive panel root for different trigger contents.
 			// Retain its single DOM identity while replaying each observed state,
@@ -555,7 +560,7 @@ function resolveObservedAncestors(
 	dropdown: boolean
 ): { state: CapturedDropdownAncestorState; parent?: Element; before?: Element } | undefined {
 	if ( state?.status !== 'verified' || dropdown && !state.placement || !Array.isArray( state.ancestors ) || state.ancestors.length > 8 || JSON.stringify( state ).length > 32768 ) return undefined;
-	if ( !dropdown && state.ancestors.length === 0 ) return undefined;
+	if ( !dropdown && state.ancestors.length === 0 && !state.trigger?.length ) return undefined;
 	const parents = trigger.parents().toArray();
 	for ( const row of state.ancestors ) {
 		if ( !row || !row.closed || !row.opened ) return undefined;
@@ -582,6 +587,18 @@ function resolveObservedAncestors(
 	const beforeNodes = state.placement.beforeSelector ? selectByCapturedSelector( $, state.placement.beforeSelector, undefined ).toArray().filter( ( node ): node is Element => node.type === 'tag' && node.parent === parent ) : [];
 	if ( state.placement.beforeSelector && beforeNodes.length !== 1 ) return undefined;
 	return { state, parent, ...( beforeNodes[ 0 ] ? { before: beforeNodes[ 0 ] } : {} ) };
+}
+
+function resolveTriggerState( trigger: cheerio.Cheerio< AnyNode >, state: CapturedDropdownAncestorState | undefined ): CapturedDropdownAncestorState[ 'trigger' ] {
+	if ( state?.status !== 'verified' || !Array.isArray( state.trigger ) || state.trigger.length > 128 || JSON.stringify( state ).length > 32768 ) return undefined;
+	for ( const row of state.trigger ) {
+		if ( !row || typeof row.selector !== 'string' || row.selector !== '' && !/^:scope > :nth-child\([1-9][0-9]*\)(?: > :nth-child\([1-9][0-9]*\))*$/.test( row.selector ) ) return undefined;
+		const node = row.selector ? trigger.find( row.selector.replace( /^:scope > /, '> ' ) ) : trigger;
+		if ( node.length !== 1 || node.prop( 'tagName' )?.toLowerCase() !== row.tag || row.classTokensOnly !== true ) return undefined;
+		if ( !row.closed || !row.opened || [ row.closed.class, row.opened.class ].some( value => typeof value !== 'string' || Buffer.byteLength( value ) > 2048 ) ) return undefined;
+		if ( !classTokens( row.closed.class ).every( token => classTokens( node.attr( 'class' ) ?? null ).includes( token ) ) ) return undefined;
+	}
+	return state.trigger;
 }
 
 function removeCapturedDialog( $: cheerio.CheerioAPI, selector: string | undefined ): void {

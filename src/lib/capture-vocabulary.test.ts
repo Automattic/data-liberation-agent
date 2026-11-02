@@ -79,7 +79,7 @@ describe( 'capture evidence vocabulary', () => {
 		// Automattic/blocks-engine php-transformer docs/contracts/capture-evidence.md (Contract\CaptureEvidence).
 		const published = [
 			'document-scope', 'device-document', 'mobile-document', 'desktop-document', 'responsive-counterpart-<n>', 'responsive-source', 'source-media',
-			'dialog-trigger', 'dialog-panel', 'dialog-close', 'dialog-panel-state', 'dialog-ancestor-state', 'dialog-ancestor-unverified', 'observed-placement',
+			'dialog-trigger', 'dialog-panel', 'dialog-close', 'dialog-panel-state', 'dialog-ancestor-state', 'dialog-trigger-state', 'dialog-ancestor-unverified', 'observed-placement',
 			'dropdown', 'dialog', 'disclosure', 'disclosure-runtime', 'disclosure-label', 'disclosure-open-<svg attribute>', 'disclosure-closed-<svg attribute>',
 			'local-disclosure', 'local-disclosure-runtime', 'exclusive-disclosures', 'inert-control', 'listbox-trigger', 'listbox-panel',
 			'gallery', 'gallery-sequence', 'gallery-slot', 'gallery-stage', 'gallery-initial', 'gallery-display', 'gallery-direction', 'gallery-index',
@@ -96,7 +96,7 @@ describe( 'capture evidence vocabulary', () => {
 			expect( CAPTURE_SCHEMAS ).toContain( schema );
 		}
 		// Blocks Engine CaptureEvidence::DISCLOSURE_RUNTIME_SHA256.
-		expect( CAPTURE_RUNTIME_SHA256.disclosure ).toBe( '086fc8248547e7c1109e0f6a28e691cea966f7057b3e36eaa8ccad177d2cf737' );
+		expect( CAPTURE_RUNTIME_SHA256.disclosure ).toBe( '5dd2db81c39f8f39c3756df8f8588fec6fe84e4a2ea2186fdf81b019f1aa2d6e' );
 	} );
 
 	it( 'leaves no previous producer-specific name in source, scripts, skills or docs outside the migration note', () => {
