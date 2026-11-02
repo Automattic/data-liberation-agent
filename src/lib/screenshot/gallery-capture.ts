@@ -61,6 +61,8 @@ const QUIET_BOUND = 1500;
 const BUDGET = 512 * 1024;
 const DIRECTION = '__dataLiberationGalleryDirection';
 type Direction = (element: Element) => 'next' | 'previous' | null;
+const ROOT_MARKS = '__dataLiberationGalleryRootMarks';
+type RootMarks = WeakMap<Element, { id: string | null; width: string | null }>;
 
 /**
  * Install the page-side directional control classifier once, so root discovery
@@ -476,8 +478,10 @@ export async function markGalleryRoots(page: Page): Promise<string[]> {
 		(globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown }).__name ??= (fn) => fn;
 	});
 	await page.evaluate(installDirection, DIRECTION);
-	return page.evaluate((key) => {
+	return page.evaluate(({ key, marksKey }) => {
 		const direction = (globalThis as unknown as Record<string, Direction>)[key]!;
+		const global = globalThis as unknown as Record<string, RootMarks>;
+		const marks = global[marksKey] ??= new WeakMap();
 		const controls = Array.from(document.querySelectorAll('body *'));
 		const visible = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
 		const previous = controls.filter(element => direction(element) === 'previous');
@@ -485,18 +489,27 @@ export async function markGalleryRoots(page: Page): Promise<string[]> {
 		const roots: string[] = [];
 		for (const before of previous) {
 			for (let scope = before.parentElement, depth = 0; scope && depth < 8; scope = scope.parentElement, depth++) {
+				// Like section extraction's wraps-only-this guard, do not merge
+				// independent heading-bearing content branches into one component.
+				if (scope.matches('body,html,main,[role="main"]') || Array.from(scope.children).filter(child => child.matches('h1,h2,h3,h4,h5,h6') || child.querySelector('h1,h2,h3,h4,h5,h6')).length > 1) break;
 				const after = next.find(control => scope!.contains(control));
 				if (!after || scope.querySelectorAll('img').length < 2) continue;
 				// Icon controls may appear only on hover, but the gallery itself must render.
 				if (!(visible(before) && visible(after)) && !Array.from(scope.querySelectorAll('img')).some(visible)) break;
-				if (!scope.id) scope.id = `data-blocks-engine-capture-gallery-${roots.length}`;
-				roots.push('#' + CSS.escape(scope.id));
+				if (!marks.has(scope)) marks.set(scope, { id: scope.getAttribute('id'), width: scope.getAttribute('data-blocks-engine-capture-gallery-capture-width') });
+				if (!scope.id) {
+					let index = roots.length;
+					while (document.getElementById(`data-blocks-engine-capture-gallery-${index}`)) index++;
+					scope.id = `data-blocks-engine-capture-gallery-${index}`;
+				}
+				const selector = '#' + CSS.escape(scope.id);
+				if (!roots.includes(selector)) roots.push(selector);
 				break;
 			}
 			if (roots.length >= 2) break;
 		}
 		return roots;
-	}, DIRECTION);
+	}, { key: DIRECTION, marksKey: ROOT_MARKS });
 }
 
 export async function captureGalleries(page: Page, excludedRoots: string[] = []): Promise<CapturedDialogInteraction[]> {
@@ -668,7 +681,24 @@ export async function captureGalleries(page: Page, excludedRoots: string[] = [])
 					if (state.status === 'captured') state.status = 'observed-incomplete';
 					state.error = `Source gallery viewport/scroll restoration failed: ${String(error).slice(0, 400)}`;
 				}
-			} finally { await scroll.dispose(); }
+			} finally {
+				try {
+					// Partial evidence is retained in the report, not as conversion identity.
+					if (state?.gallery?.inline.coverage !== 'complete' || state.gallery.inline.restoration !== 'verified') {
+						await scroll.evaluate((pose, key) => {
+							const element = pose.ancestors[0]!.node;
+							const marks = (globalThis as unknown as Record<string, RootMarks>)[key];
+							const original = marks?.get(element);
+							if (!original) return;
+							for (const [name, value] of [['id', original.id], ['data-blocks-engine-capture-gallery-capture-width', original.width]]) {
+								if (value === null) element.removeAttribute(name!);
+								else element.setAttribute(name!, value!);
+							}
+							marks.delete(element);
+						}, ROOT_MARKS);
+					}
+				} finally { await scroll.dispose(); }
+			}
 		}
 	}
 	return states;
