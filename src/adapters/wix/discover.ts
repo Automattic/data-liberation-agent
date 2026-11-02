@@ -177,7 +177,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     let documentTitle = '';
     try {
       homepageHtml = await withTimeout(p.content(), RENDERER_CALL_TIMEOUT_MS, 'wix discover metadata');
-      documentTitle = await withTimeout(p.title(), RENDERER_CALL_TIMEOUT_MS, 'wix discover title');
+      documentTitle = (await withTimeout(p.evaluate(() => document.title), RENDERER_CALL_TIMEOUT_MS, 'wix discover title')) as string;
     } catch {
       // metadata extraction failed
     }
