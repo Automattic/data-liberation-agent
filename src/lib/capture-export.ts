@@ -96,8 +96,9 @@ import {
 
 import { extractSharedChrome } from './shared-chrome.js';
 
-function withoutGeometryIdentities( html: string ): string {
-	return html.replace( /\sdata-blocks-engine-capture-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
+/** Strip correspondence used only during capture, before HTML is encoded as replay state. */
+function withoutCaptureBookkeeping( html: string ): string {
+	return html.replace( /\sdata-blocks-engine-capture-(?:geometry-id|initial-node)=(?:"[^"]*"|'[^']*')/g, '' );
 }
 
 interface CaptureManifestEntry {
@@ -1961,10 +1962,11 @@ function buildExportCapture(
 		if ( ! portableUrlByFamily.has( family ) ) portableUrlByFamily.set( family, portable );
 	}
 	// Interaction states are written to interaction-states.json and replayed into
-	// the portable pages, so their embedded HTML must name local media too.
+	// the portable pages, so clean their embedded HTML before replay wiring encodes
+	// it in JSON attributes/scripts. Keep runtime contract attributes intact.
 	const localizeInteractionMedia = ( text: string ): string =>
 		localizeFamilyMediaUrls(
-			replaceResources( replaceMedia( text ) ),
+			withoutCaptureBookkeeping( replaceResources( replaceMedia( text ) ) ),
 			portableUrlByFamily
 		);
 	for ( const entry of retainedEntries ) {
@@ -2010,7 +2012,7 @@ function buildExportCapture(
 			rewriteCapturedRouteLinks(
 				wireCapturedRouteNavigation(
 					wireCapturedDialogs(
-						wireCapturedComponents( withoutGeometryIdentities( identityHtml ), entry.interactions ? routeComponents( entry.interactions ) : [] ),
+						wireCapturedComponents( withoutCaptureBookkeeping( identityHtml ), entry.interactions ? routeComponents( entry.interactions ) : [] ),
 						entry.interactions ? componentReplayStates( routeComponents( entry.interactions ) ) : [],
 						entry.interactions?.initialDialogs ?? []
 					),
