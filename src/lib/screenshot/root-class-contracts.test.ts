@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
+import postcss from 'postcss';
+import { assembleResponsiveCapture } from '../responsive-assembly.js';
 import { scopeCss } from '../replicate/css-scope.js';
 import { projectRootClassContracts, rootClassContracts, sampleRootClasses } from './root-class-contracts.js';
 
@@ -9,6 +11,41 @@ describe( 'root class width contracts', () => {
 		const sample = ( width: number, body: string[] ) => ( { width, body, html: [] } );
 		expect( rootClassContracts( [ sample( 768, [ 'a', 'wide' ] ), sample( 1024, [ 'wide' ] ), sample( 1280, [ 'a', 'wide' ] ), sample( 1440, [ 'wide' ] ) ] ) ).toEqual( [] );
 		expect( rootClassContracts( [ sample( 768, [] ), sample( 1024, [ 'middle' ] ), sample( 1280, [] ), sample( 1440, [] ) ] )[ 0 ] ).toMatchObject( { class: 'middle', minWidth: 1024, maxWidth: 1279 } );
+	} );
+
+	it( 'keeps linked sheets shared and emits only contextual width-gated aliases after them', () => {
+		const contracts = rootClassContracts( [
+			{ width: 768, html: [], body: [ 'c' ] },
+			{ width: 1280, html: [], body: [] },
+			{ width: 1440, html: [], body: [] },
+		] );
+		const link = '<link rel="stylesheet" href="https://fixture.test/css/theme.css" media="screen">';
+		const desktop = `<html><head>${ link }</head><body><main class="x">Desktop</main></body></html>`;
+		const mobile = `<html><head>${ link }</head><body><nav>Phone menu</nav><main>Mobile</main></body></html>`;
+		const projected = projectRootClassContracts( desktop, contracts, () => ( {
+			css: '.unrelated{color:red}@media (max-width:1279px){.c .x{background:url(./texture.png)}}',
+			url: 'https://fixture.test/css/theme.css',
+		} ) );
+		const $ = cheerio.load( projected );
+		expect( $( 'link' ).toString() ).toBe( link );
+		expect( $( 'style' ) ).toHaveLength( 1 );
+		expect( $( 'link' ).next().is( 'style' ) ).toBe( true );
+		expect( $( 'style' ).attr( 'media' ) ).toBe( 'screen' );
+		const css = postcss.parse( $( 'style' ).text() );
+		expect( css.nodes ).toHaveLength( 1 );
+		expect( css.first ).toMatchObject( { type: 'atrule', name: 'media', params: '(max-width:1279px)' } );
+		expect( $( 'style' ).text() ).toBe( '@media (max-width:1279px){@media (min-width:768px) and (max-width:1279px){body:is(*,.c) .x{background:url("https://fixture.test/css/texture.png")}}}' );
+		expect( $( 'html' ).attr( 'data-blocks-engine-capture-root-class-contracts' ) ).toBe( JSON.stringify( contracts ) );
+		const assembled = assembleResponsiveCapture( {
+			rawDesktopHtml: projected, rawMobileHtml: mobile,
+			portableDesktopHtml: projected, portableMobileHtml: mobile,
+		} );
+		expect( assembled.hasMobileDocument ).toBe( true );
+		const result = cheerio.load( assembled.html );
+		expect( result( 'link[rel="stylesheet"]' ) ).toHaveLength( 1 );
+		expect( result( 'link' ).toString() ).toBe( link );
+		expect( assembled.html ).not.toContain( '@import' );
+		expect( assembled.html ).not.toContain( '.unrelated' );
 	} );
 
 	// One browser pass: about seven seconds including unstable-width coverage.
@@ -50,7 +87,7 @@ describe( 'root class width contracts', () => {
 			const $ = cheerio.load( exported );
 			expect( JSON.parse( $( 'html' ).attr( 'data-blocks-engine-capture-root-class-contracts' )! ) ).toEqual( contracts );
 			const css = $( 'style' ).text();
-			expect( $( 'link' ) ).toHaveLength( 0 );
+			expect( $( 'link' ) ).toHaveLength( 1 );
 			expect( css ).toContain( 'https://fixture.test/css/texture.png' );
 			expect( css ).not.toContain( ':is(*,.measured-wrap){padding' );
 			for ( const scoped of [ false, true ] ) {
