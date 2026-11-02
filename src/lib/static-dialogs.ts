@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN, type CapturedDropdownAncestorState } from './screenshot/dropdown-ancestor-state.js';
 import { wireCapturedCollections } from './static-collections.js';
+import { hasPhrasingContent } from './html-content-model.js';
 import { wireCapturedGalleries, wireGalleryDialog } from './static-galleries.js';
 import type {
 	CapturedDialogInteraction,
@@ -381,7 +382,15 @@ export function wireCapturedDialogs(
 				if ( observed.before ) $( observed.before ).before( panel );
 				else $( observed.parent ).append( panel );
 			}
-			else trigger.after( panel );
+			else {
+				// Keep generated flow content outside phrasing-only ancestors. Scan
+				// the whole chain: a transparent/custom wrapper can sit inside a p.
+				let insertionPoint = trigger;
+				for ( const ancestor of trigger.parents().toArray() ) {
+					if ( hasPhrasingContent( ancestor.tagName ) ) insertionPoint = $( ancestor );
+				}
+				insertionPoint.after( panel );
+			}
 			if ( ! dropdown && !state.gallery ) {
 				const close = $( '<button type="button" hidden>Close</button>' );
 				close.attr( 'data-blocks-engine-capture-dialog-close', panelId );
