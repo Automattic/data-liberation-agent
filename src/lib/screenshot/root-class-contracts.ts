@@ -7,6 +7,7 @@ import { parseSelectorList, projectStylesheet } from '../replicate/css-scope.js'
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { DEFAULT_SWEEP_WIDTHS } from './fluid-capture.js';
 import { withEvaluateTimeout } from './page-helpers.js';
+import { externalScriptSources, inlineRuntimeHash } from './device-mode.js';
 
 // Reuse the fluid ladder's tablet/desktop probes; never pay for its dense
 // transition refinement when observing class sets alone.
@@ -45,6 +46,57 @@ export function rootClassContracts( samples: RootClassSample[] ): RootClassContr
 		}
 	}
 	return contracts;
+}
+
+/** Root classes the source document declares. These are authored per-route
+ * identity (for example a page or collection id), not runtime width state.
+ */
+export function declaredRootClasses( html: string ): { html: string[]; body: string[] } {
+	const $ = cheerio.load( html );
+	const classes = ( selector: string ) => ( $( selector ).first().attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+	return { html: classes( 'html' ), body: classes( 'body' ) };
+}
+
+/** Capture-scoped proof cache. Exact script sets (not subset coverage), the
+ * same inline runtime shape and the same runtime-added root classes at the
+ * capture width are required; inherited results never seed proofs.
+ *
+ * Classes the source document declares are excluded from the key and from
+ * reused contracts' ownership: they are per-route authored identity that the
+ * shared runtime does not toggle. Classes the runtime added must still match.
+ */
+export class RootClassEvidence {
+	private readonly entries = new Map<string, { url: string; samples: RootClassSample[] }>();
+
+	async contracts( url: string, html: string, initial: RootClassSample, sample: () => Promise<RootClassSample[] | undefined> ): Promise<{ contracts: RootClassContract[]; inheritedFrom?: string }> {
+		const sets = ( observation: RootClassSample ) => ( {
+			width: observation.width,
+			html: [ ...new Set( observation.html ) ].sort(),
+			body: [ ...new Set( observation.body ) ].sort(),
+		} );
+		const declared = declaredRootClasses( html );
+		const runtimeAdded = ( observation: RootClassSample ) => {
+			const observed = sets( observation );
+			return {
+				width: observed.width,
+				html: observed.html.filter( name => ! declared.html.includes( name ) ),
+				body: observed.body.filter( name => ! declared.body.includes( name ) ),
+			};
+		};
+		const key = JSON.stringify( [ externalScriptSources( html, url ), inlineRuntimeHash( html, url ), runtimeAdded( initial ) ] );
+		const covered = this.entries.get( key );
+		if ( covered ) return { contracts: rootClassContracts( covered.samples ), inheritedFrom: covered.url };
+		const samples = await sample();
+		// The initial read must also agree with the stable capture-width sample,
+		// and a route whose declared root classes vary with width proves nothing
+		// about other routes. Declared classes never become contracts: they are
+		// present on every rung of a recorded ladder.
+		const declaredStable = samples?.every( observation => [ 'html', 'body' ].every( root => declared[ root as 'html' | 'body' ].every( name => observation[ root as 'html' | 'body' ].includes( name ) ) ) );
+		if ( declaredStable && samples?.some( observation => JSON.stringify( sets( observation ) ) === JSON.stringify( sets( initial ) ) ) ) {
+			this.entries.set( key, { url, samples } );
+		}
+		return { contracts: samples ? rootClassContracts( samples ) : [] };
+	}
 }
 
 /** Observe sets, not class attribute order. A debounce may leave the old set
@@ -86,10 +138,15 @@ async function stableRootClasses( page: Page ): Promise<RootClassSample | undefi
  * that sample would invent a range across an unproven gap.
  */
 export async function sampleRootClasses( page: Page, widths: readonly number[] = ROOT_CLASS_WIDTHS, onUnproven?: ( reason: string ) => void ): Promise<RootClassContract[]> {
+	return rootClassContracts( await sampleRootClassLadder( page, widths, onUnproven ) ?? [] );
+}
+
+/** Undefined distinguishes an unproven ladder from a proven empty verdict. */
+export async function sampleRootClassLadder( page: Page, widths: readonly number[] = ROOT_CLASS_WIDTHS, onUnproven?: ( reason: string ) => void ): Promise<RootClassSample[] | undefined> {
 	const original = page.viewportSize();
 	if ( ! original ) {
 		onUnproven?.( 'root class source probe unproven: no viewport' );
-		return [];
+		return undefined;
 	}
 	const samples: RootClassSample[] = [];
 	let proven = true;
@@ -110,12 +167,16 @@ export async function sampleRootClasses( page: Page, widths: readonly number[] =
 		}
 	} finally {
 		await withEvaluateTimeout( page.setViewportSize( original ), 1500 );
-		if ( ! await stableRootClasses( page ) ) {
+		const restored = await stableRootClasses( page );
+		if ( ! restored ) {
 			proven = false;
 			onUnproven?.( `root class source probe unproven restoring ${ original.width }px: no stable observation before deadline` );
+		} else if ( proven && JSON.stringify( restored ) !== JSON.stringify( samples[ 0 ] ) ) {
+			proven = false;
+			onUnproven?.( `root class source probe unproven restoring ${ original.width }px: root classes did not return to the capture-width set` );
 		}
 	}
-	return proven ? rootClassContracts( samples ) : [];
+	return proven ? samples : undefined;
 }
 
 /** Keep rules in cascade position and inside their authored at-rule context.
