@@ -12,6 +12,7 @@ import { isIntegrityError } from './failure-class.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { pathWithin } from './portable-assets.js';
+import { isPlatformDefaultIconLink } from './platform-default-icons.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 
 /** Capture-owned resource identity. Export copies these bytes, never a substitute. */
@@ -214,6 +215,8 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 		$( 'link[href]' ).each( ( i, node ) => {
 			if ( ! /(?:^|\s)(?:icon|apple-touch-icon|apple-touch-icon-precomposed)(?:\s|$)/i.test( $( node ).attr( 'rel' ) ?? '' ) ) return;
 			const href = $( node ).attr( 'href' )!;
+			// The builder's default icon is platform branding, not a site asset.
+			if ( isPlatformDefaultIconLink( $( node ).attr( 'rel' ), href, url ) ) return;
 			add( [ href ], href, url, reference( href, 'head', `link:${ i }` ) );
 		} );
 		const styles: string[] = [];
