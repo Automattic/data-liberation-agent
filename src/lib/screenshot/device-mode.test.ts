@@ -7,7 +7,7 @@ import { captureScreenshots, comparisonFailedAlike } from './screenshotter.js';
 import { SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, summarizeRouteDecisions } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -27,6 +27,33 @@ describe( 'device-mode evidence', () => {
 		expect( compareServerHtml( page( 'a1', '2026-10-09T10:00:00Z' ), page( 'a1', '2026-10-09T10:00:00Z', 'Hello phone' ) ) ).toBe( 'different' );
 		// An ordinary attribute or hidden input is content, not noise.
 		expect( normalizeServerHtml( '<input type="hidden" name="plan" value="pro">' ) ).toBe( '<input type="hidden" name="plan" value="pro">' );
+	} );
+
+	it.each( [
+		[ '<p>same</p>', '<p>same</p>', 'identical', 'reflow-only' ],
+		[ '<script nonce="a"></script>', '<script nonce="b"></script>', 'identical-after-normalization', 'reflow-only' ],
+		[ '<p>desktop</p>', '<p>phone</p>', 'different', 'dual' ],
+	] as const )( 'confirms a first HTML difference with one paired re-sample (%s / %s)', async ( desktop, phone, serverHtml, mode ) => {
+		let release!: ( html: string ) => void;
+		const fetchDesktop = vi.fn( () => new Promise< string >( resolve => { release = resolve; } ) );
+		const fetchPhone = vi.fn( async () => { release( desktop ); return phone; } );
+		const sample = await resampleSiteServerHtml( 'different', fetchDesktop, fetchPhone );
+		expect( sample ).toEqual( { serverHtml, serverHtmlFirstSample: 'different', serverHtmlResampled: true } );
+		expect( fetchDesktop ).toHaveBeenCalledTimes( 1 );
+		expect( fetchPhone ).toHaveBeenCalledTimes( 1 );
+		expect( decideSiteMode( { requested: 'auto', ...sample } ).mode ).toBe( mode );
+	} );
+
+	it.each( [ 'identical', 'identical-after-normalization', 'unavailable' ] as const )( 'does not re-sample %s HTML', async first => {
+		const fetch = vi.fn();
+		expect( await resampleSiteServerHtml( first, fetch, fetch ) ).toEqual( { serverHtml: first } );
+		expect( fetch ).not.toHaveBeenCalled();
+	} );
+
+	it( 'keeps the first difference when a re-sample fails', async () => {
+		const sample = await resampleSiteServerHtml( 'different', async () => { throw new Error( 'timeout' ); }, async () => '<p>phone</p>' );
+		expect( sample ).toEqual( { serverHtml: 'different', serverHtmlFirstSample: 'different', serverHtmlResampled: true } );
+		expect( decideSiteMode( { requested: 'auto', ...sample } ).mode ).toBe( 'dual' );
 	} );
 
 	it( 'counts differing element paths as a multiset and names the first divergence', () => {

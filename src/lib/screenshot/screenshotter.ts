@@ -94,7 +94,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
 import { anchorChromeStates, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
@@ -1957,7 +1957,16 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	}
 	await applyCaptureRemovals( page, { removeSelectors: args.removeSelectors, prepare: args.prepareCapture, ctx: { url: target, viewport } } );
 	if ( mode === 'probe' ) await installReadOnlyProbeGuard( page, diagnostic => args.probeDiagnostic?.( diagnostic ) );
-	const result = { page, html, target, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+	// Reuse the actual navigation identity (including client hints) for a cheap
+	// site-probe re-sample. Cookies come from the still-live source context.
+	const fetchServerHtml = async () => {
+		const headers = await navigation.response!.request().allHeaders();
+		delete headers.cookie;
+		const response = await context.request.get( target, { headers, maxRedirects: 0, maxRetries: 0, timeout: 30_000 } );
+		try { return response.ok() ? await response.text() : undefined; }
+		finally { await response.dispose(); }
+	};
+	const result = { page, html, target, fetchServerHtml, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
 	if ( timings ) timings.settle = Math.max( timings.settle, Date.now() - settledAt );
 	return result;
 }
@@ -2062,7 +2071,8 @@ async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< Rout
 /**
  * Decide once, on the entrypoint, whether this site can be captured with
  * desktop-only routes at all (see `device-mode.ts`): adapter device documents,
- * different server HTML or a failed probe keep the whole capture `dual`.
+ * persistently different server HTML or a failed probe keep the whole capture `dual`.
+ * A first HTML difference is confirmed with paired document-only requests.
  * Rendered structure is decided per route by `checkRouteDeviceMode`.
  *
  * In a `reflow-only` site the probe's fully loaded phone page also runs one
@@ -2086,10 +2096,11 @@ async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision
 		const compared = await compareIdentities( args, 'probe', contexts );
 		const { desktop, phone, bodyClasses } = compared;
 		url = compared.url;
-		serverHtml = compared.serverHtml;
+		const htmlSample = await resampleSiteServerHtml( compared.serverHtml, desktop.fetchServerHtml, phone.fetchServerHtml );
+		serverHtml = htmlSample.serverHtml;
 		structure = compared.structure;
 		const decided = decideSiteMode( { requested, serverHtml } );
-		const decision: DeviceModeDecision = { ...decided, requested, url, serverHtml, structure, ...( bodyClasses.desktopOnly.length || bodyClasses.phoneOnly.length ? { bodyClasses } : {} ), ignored };
+		const decision: DeviceModeDecision = { ...decided, requested, url, ...htmlSample, structure, ...( bodyClasses.desktopOnly.length || bodyClasses.phoneOnly.length ? { bodyClasses } : {} ), ignored };
 		let phoneInteractions: InteractionStatesReport | undefined;
 		if ( decided.mode === 'reflow-only' && structure.differingPaths > 0 ) {
 			// The entrypoint's own check then keeps it dual, and its phone pass probes these controls.

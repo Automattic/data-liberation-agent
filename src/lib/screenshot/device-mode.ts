@@ -35,6 +35,9 @@ export interface DeviceModeDecision {
 	/** The entrypoint the probe rendered. */
 	url?: string;
 	serverHtml?: 'identical' | 'identical-after-normalization' | 'different' | 'unavailable';
+	/** A differing first sample was confirmed with paired document-only requests. */
+	serverHtmlResampled?: boolean;
+	serverHtmlFirstSample?: DeviceModeDecision['serverHtml'];
 	structure?: StructureComparison;
 	/** Body class tokens only one identity rendered; source CSS can gate a whole layout on them. */
 	bodyClasses?: { desktopOnly: string[]; phoneOnly: string[] };
@@ -74,6 +77,25 @@ export function normalizeServerHtml( html: string ): string {
 export function compareServerHtml( desktop: string, phone: string ): NonNullable< DeviceModeDecision['serverHtml'] > {
 	if ( desktop === phone ) return 'identical';
 	return normalizeServerHtml( desktop ) === normalizeServerHtml( phone ) ? 'identical-after-normalization' : 'different';
+}
+
+/** Confirm a site-wide HTML difference once, without repeating the browser load. */
+export async function resampleSiteServerHtml(
+	first: NonNullable< DeviceModeDecision['serverHtml'] >,
+	fetchDesktop: () => Promise< string | undefined >,
+	fetchPhone: () => Promise< string | undefined >,
+): Promise< Pick< DeviceModeDecision, 'serverHtml' | 'serverHtmlResampled' | 'serverHtmlFirstSample' > > {
+	if ( first !== 'different' ) return { serverHtml: first };
+	// Start both requests together. A failed re-sample cannot disprove the first difference.
+	const [ desktop, phone ] = await Promise.all( [
+		fetchDesktop().catch( () => undefined ),
+		fetchPhone().catch( () => undefined ),
+	] );
+	return {
+		serverHtml: desktop === undefined || phone === undefined ? first : compareServerHtml( desktop, phone ),
+		serverHtmlResampled: true,
+		serverHtmlFirstSample: first,
+	};
 }
 
 /** Compare two element-path lists, both in document order. */
