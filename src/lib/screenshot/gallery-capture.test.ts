@@ -3,12 +3,55 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { chromium as playwrightChromium } from 'playwright';
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
-import { captureGalleries } from './gallery-capture.js';
+import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedGalleries } from '../static-galleries.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
+
+// Neutral reproduction: unrelated step images and arrow-only slider controls.
+const pageWrapperFixture = `<!doctype html><html><body><div class="page-content">
+<section><h2>How it works</h2><ol><li><img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2220%22 height=%2220%22/%3E">Choose</li><li><img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2220%22 height=%2220%22/%3E">Start</li></ol></section>
+<section><h2>Stories</h2><div class="slider"><span class="prev" style="display:inline-block;width:20px;height:20px"></span><span class="next" style="display:inline-block;width:20px;height:20px"></span></div></section>
+</div></body></html>`;
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('bounds gallery roots and restores authored identity after failed capture', async () => {
+	const page = await sharedBrowser.newPage();
+	await page.setContent(pageWrapperFixture);
+	expect(await markGalleryRoots(page)).toEqual([]);
+	expect(await page.locator('.page-content').getAttribute('id')).toBeNull();
+	// A local candidate whose images cannot decode fails capture.
+	// Include an empty authored id to prove exact restoration, not just deletion.
+	await page.setContent('<div id=""><img src="data:image/png,broken"><img src="data:image/png,broken"><span class="prev"></span><span class="next"></span></div>');
+	expect(await markGalleryRoots(page)).toHaveLength(1);
+	const states = await captureGalleries(page);
+	expect(states[0]?.error).toContain('No single decoded');
+	expect(await page.locator('body > div').getAttribute('id')).toBe('');
+	expect(await page.content()).not.toContain('data-blocks-engine-capture-gallery-');
+	await page.close();
+}, 15_000);
+
+// One real capture/export pass; expected wall time about 5 seconds.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('exports the neutral stepped-list and arrow-only slider without gallery identity', async () => {
+	const parent = join(process.cwd(), '.tmp-test');
+	mkdirSync(parent, { recursive: true });
+	const outputDir = mkdtempSync(join(parent, 'gallery-wrapper-'));
+	const server = createServer((_, response) => { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(pageWrapperFixture); });
+	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+	try {
+		await captureScreenshots({ urls: [url], outputDir, concurrency: 1, settleMs: 100, viewports: [{ id: 'desktop', width: 1440, height: 900 }] });
+		exportWebsiteCapture({ outputDir, sourceUrl: url, platform: 'default', summary: {}, failures: [] });
+		const html = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
+		expect(html).toContain('How it works');
+		expect(html).toContain('Stories');
+		expect(html).not.toContain('data-blocks-engine-capture-gallery-');
+	} finally {
+		await new Promise<void>(resolve => server.close(() => resolve()));
+		rmSync(outputDir, { recursive: true, force: true });
+	}
+}, 90_000);
 
 let sharedBrowser: import('playwright').Browser;
 const chromium = {
