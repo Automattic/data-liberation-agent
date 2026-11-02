@@ -112,22 +112,34 @@ export function projectRootClassContracts( html: string, contracts: RootClassCon
 	if ( ! contracts.length ) return html;
 	const $ = cheerio.load( html );
 	$( 'html' ).attr( 'data-blocks-engine-capture-root-class-contracts', JSON.stringify( contracts ) );
+	// Project authored inline styles in place before adding linked-sheet aliases.
+	$( 'style' ).each( ( _, element ) => {
+		const css = projectContractCss( $( element ).text(), contracts );
+		if ( css !== undefined ) $( element ).text( css );
+	} );
 	$( 'link[rel~="stylesheet"]:not([rel~="alternate"]):not([disabled])' ).each( ( _, element ) => {
 		const link = $( element );
 		const sheet = linkedSheet( link.attr( 'href' ) ?? '' );
 		if ( ! sheet || ! contracts.some( contract => sheet.css.includes( contract.class ) ) ) return;
-		// Inline in the link's original cascade slot, with resource-relative
-		// URLs resolved before the document acquires a different base.
+		// Keep the shared sheet identity; only aliases follow its cascade slot.
+		const css = projectContractCss( sheet.css, contracts, true );
+		if ( ! css ) return;
 		const source = cheerio.load( '<style></style>' );
-		source( 'style' ).text( sheet.css );
+		source( 'style' ).text( css );
 		const resolved = cheerio.load( resolveDocumentReferences( source.html(), sheet.url, sheet.url ) );
 		const style = $( '<style>' ).text( resolved( 'style' ).text() );
-		if ( link.attr( 'media' ) ) style.attr( 'media', link.attr( 'media' )! );
-		link.replaceWith( style );
+		const media = link.attr( 'media' );
+		if ( media !== undefined ) style.attr( 'media', media );
+		link.after( style );
 	} );
-	$( 'style' ).each( ( _, element ) => {
-		const css = projectStylesheet( () => {
-			const sheet = postcss.parse( $( element ).text() );
+	return $.html();
+}
+
+/** Linked sheets emit only aliases, with their original ancestor context. */
+function projectContractCss( css: string, contracts: RootClassContract[], aliasesOnly = false ): string | undefined {
+		return projectStylesheet( () => {
+			const sheet = postcss.parse( css );
+			const projected = postcss.root();
 			const rules: postcss.Rule[] = [];
 			sheet.walkRules( rule => { rules.push( rule ); } );
 			for ( const rule of rules ) {
@@ -159,12 +171,19 @@ export function projectRootClassContracts( html: string, contracts: RootClassCon
 					if ( ! selectors.length ) continue;
 					const media = postcss.atRule( { name: 'media', params: `(min-width:${ contract.minWidth }px) and (max-width:${ contract.maxWidth }px)` } );
 					media.append( rule.clone( { selector: selectors.join( ',' ) } ) );
-					rule.after( media );
+					if ( aliasesOnly ) {
+						let contextual: postcss.ChildNode = media;
+						for ( let parent = rule.parent; parent && parent.type !== 'root'; parent = parent.parent ) {
+							const wrapper = parent.clone( { nodes: [] } );
+							wrapper.append( contextual );
+							contextual = wrapper as postcss.ChildNode;
+						}
+						projected.append( contextual );
+					} else {
+						rule.after( media );
+					}
 				}
 			}
-			return sheet.toString();
+			return ( aliasesOnly ? projected : sheet ).toString();
 		} );
-		if ( css !== undefined ) $( element ).text( css );
-	} );
-	return $.html();
 }
