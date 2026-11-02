@@ -3,6 +3,9 @@ import type { SrcsetCandidate } from './srcset.js';
 /** Shared dimension ceiling for capture representatives and portable export. */
 export const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 
+/** Shared per-file byte ceiling for a portable media file outside a responsive family. */
+export const MAX_PORTABLE_MEDIA_BYTES = 5 * 1024 * 1024;
+
 /** Prefer a known portable width; density-only candidates have no pixel bound. */
 export function portableSrcsetRepresentative(candidates: readonly SrcsetCandidate[]): SrcsetCandidate | undefined {
 	// Width descriptors alone understate portrait originals. Rendition suffixes
