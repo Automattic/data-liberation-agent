@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { IntegrityError } from './failure-class.js';
-import { MAX_PORTABLE_MEDIA_DIMENSION } from './portable-media-limits.js';
+import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION } from './portable-media-limits.js';
 
 /**
  * Portable media selection plan. One pass records which known reference strings
@@ -10,7 +10,6 @@ import { MAX_PORTABLE_MEDIA_DIMENSION } from './portable-media-limits.js';
  * those decisions in original family order and does not reread staged HTML.
  */
 
-const MAX_PORTABLE_MEDIA_BYTES = 5 * 1024 * 1024;
 const MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES = 8 * 1024 * 1024;
 
 export interface PortableMediaCandidate {

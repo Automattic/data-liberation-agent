@@ -70,7 +70,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		'gallery-stage': 'a', 'gallery-source': 'a', 'gallery-frame': 'a', 'gallery-image': 'a', 'gallery-full-image': 'a', 'gallery-text': 'a',
 		'gallery-display': 'a', 'gallery-close': 'a', 'gallery-capture-width': 'a', 'gallery-runtime': 'a', 'gallery-visibility': 'a',
 		'captured-slide': 'a', 'captured-slideshow': 'a', 'captured-slide-count': 'a', 'expected-slide-count': 'a',
-		'capture-error': 'a', 'video-frame': 'a', 'squarespace-video': 'a',
+		'capture-error': 'a', 'video-frame': 'a', 'squarespace-video': 'a', 'wix-video': 'a',
 		'unsupported': 'a', 'tabs': 'a', 'component-runtime': 'a', 'initial-node': 'a', 'component-disclosure': 'a', 'component-disclosure-runtime': 'a', 'component-carousel-runtime': 'a',
 		slideshow: 'c', 'slideshow-track': 'c', 'slideshow-css': 'i', 'wix-captured-slideshow-css': 'i',
 	},
