@@ -3631,7 +3631,7 @@ describe( 'exportWebsiteCapture', () => {
 			':where(.data-blocks-engine-capture-mobile-document) .mobile{color:red}'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			':where(.data-blocks-engine-capture-mobile-document):not(.device-mobile-optimized) .desktop-only{display:flex}'
+			':where(.data-blocks-engine-capture-mobile-document):is(.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document):not(.device-mobile-optimized) .desktop-only{display:flex}'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'<style media="(min-width:768px)">.desktop{color:blue}</style>'

@@ -120,7 +120,10 @@ function scopeSelector(selector: string, scope: string, rootClasses: ReadonlySet
       // selector beginning with one of those classes must match the wrapper,
       // not a descendant that cannot exist (e.g. `.x .title` with `.x` on the
       // wrapper). Keep the class adjacent to the zero-specificity scope.
-      if (first?.type === 'class' && rootClasses.has(first.value)) {
+      const rootClassList = first?.type === 'pseudo' && first.value === ':is'
+        && first.nodes?.every((item) => item.nodes.length === 1
+          && item.first?.type === 'class' && rootClasses.has(item.first.value));
+      if ((first?.type === 'class' && rootClasses.has(first.value)) || rootClassList) {
         sel.prepend(selectorParser.string({ value: whereScope }));
         return;
       }
