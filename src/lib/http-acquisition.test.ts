@@ -160,7 +160,7 @@ describe( 'HTTP document acquisition', () => {
 		const custom: HttpAcquisitionProfile = { ...profile, variants: [ { id: 'desktop' } ], prepare: () => ( { html: '' } ) };
 		const empty = await acquireHttpDocuments( { url: source, urls: [ source ], outputDir: directory(), profile: custom }, dependencies( async () => new Response( '<article>Original</article>', { headers: { 'content-type': 'text/html' } } ) ) );
 		expect( empty.documents[ 0 ]!.status ).toBe( 'browser_required' );
-		for ( const [ contentType, body, maxDocumentBytes ] of [ [ 'application/pdf', 'PDF', 64 ], [ 'text/html', '<article>Too large</article>', 4 ], [ 'text/html;charset=no-such-encoding', '<article>Text</article>', 64 ] ] as const ) {
+		for ( const [ contentType, body, maxDocumentBytes ] of [ [ 'application/pdf', 'PDF', 64 ], [ 'text/html', '<article>Too large</article>', 4 ], [ 'text/html;charset=utf-8', new Uint8Array( [ 0x3c, 0x70, 0x3e, 0xff, 0xfe, 0x3c, 0x2f, 0x70, 0x3e ] ), 64 ] ] as const ) {
 			const result = await acquireHttpDocuments( { url: source, urls: [ source ], outputDir: directory(), profile: custom, maxDocumentBytes }, dependencies( async () => new Response( body, { headers: { 'content-type': contentType } } ) ) );
 			expect( result.documents[ 0 ]!.status ).toBe( 'failed' );
 			expect( result.documents[ 0 ]!.error ).toBeTruthy();

@@ -11,6 +11,7 @@ import { normalizeCssUrlEscapes } from './css-url-escapes.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 import { SourceRequestGovernor, type SourceRequestGovernors } from './source-request-governor.js';
+import { decodeHtml } from './decode-html.js';
 
 export interface AcquiredHttpDocument {
 	url: string;
@@ -111,8 +112,7 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 				document.status = 'browser_required';
 				document.error = 'Source redirected to a different route';
 			} else {
-				const charset = /charset\s*=\s*["']?([^;\s"']+)/i.exec( contentType )?.[ 1 ] ?? 'utf-8';
-				const html = new TextDecoder( charset, { fatal: true } ).decode( response.body );
+				const html = decodeHtml( response.body, contentType );
 				const prepared = await options.profile.prepare( html, { url, finalUrl: response.finalUrl, variant: variant.id } );
 				if ( prepared && prepared.html.trim() ) {
 					const $ = cheerio.load( prepared.html );

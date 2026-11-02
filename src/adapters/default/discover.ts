@@ -7,6 +7,7 @@ import type { InventoryUrl } from '../shared.js';
 import type { DefaultInventory } from './types.js';
 
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
+import { decodeHtml } from '../../lib/decode-html.js';
 
 /**
  * Discovery for the platform-agnostic fallback adapter. Mirrors the webflow
@@ -23,7 +24,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
       signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': SOURCE_USER_AGENT },
     });
-    if (resp.ok) homepageHtml = await resp.text();
+    if (resp.ok) homepageHtml = decodeHtml(new Uint8Array(await resp.arrayBuffer()), resp.headers.get('content-type') ?? '', { fatal: false });
     else await resp.body?.cancel();
   } catch {
     // Network error — continue with empty HTML.
