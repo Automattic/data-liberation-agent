@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.81] - 2026-11-02
+
+### Changed
+- regenerate plugin bundles
+- Preserve shared stylesheet links during root-class contract projection
+- Decode legacy HTML using BOM, transport and meta charset declarations
+
+### Fixed
+- Fix capture bookkeeping leaking into exported interaction HTML
+- capture the video player as a portable <video controls poster>
+
 ## [0.33.80] - 2026-11-02
 
 ### Changed
