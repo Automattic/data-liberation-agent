@@ -44,6 +44,30 @@ export function observeViewportEntrances(): void {
 		supported: boolean;
 	}>();
 	const transitions = new Map<Element, Map<string, string>>();
+	// Scroll-scrubbed inline styles (#1158): a style written in the frame after a
+	// scroll, which later returns to a value it held before, is a function of scroll
+	// position. Its settled pose is the last one written while its centre was in view.
+	const scrubbed = new Map<Element, { seen: Set<string>; reverted: boolean; settled?: string }>();
+	let scrolledAt = -Infinity;
+	addEventListener( 'scroll', () => { scrolledAt = performance.now(); }, true );
+	new MutationObserver( mutations => {
+		for ( const mutation of mutations ) {
+			const element = mutation.target;
+			if ( ! ( element instanceof HTMLElement ) ) continue;
+			let record = scrubbed.get( element );
+			if ( ! record ) {
+				if ( performance.now() - scrolledAt > 100 ) continue;
+				record = { seen: new Set( [ mutation.oldValue ?? '' ] ), reverted: false };
+				scrubbed.set( element, record );
+			}
+			const value = element.getAttribute( 'style' ) ?? '';
+			if ( value !== ( mutation.oldValue ?? '' ) && record.seen.has( value ) ) record.reverted = true;
+			record.seen.add( value );
+			const box = element.getBoundingClientRect();
+			const centre = ( box.top + box.bottom ) / 2;
+			if ( box.height && centre >= 0 && centre <= innerHeight ) record.settled = value;
+		}
+	} ).observe( document, { subtree: true, attributeFilter: [ 'style' ], attributeOldValue: true } );
 	let navigationalPose = true;
 	addEventListener( 'scroll', () => { if ( scrollX !== 0 || scrollY !== 0 ) navigationalPose = false; } );
 	// Ignore hydration's layout-viewport changes: only requested viewport changes
@@ -179,6 +203,12 @@ export function observeViewportEntrances(): void {
 		get losses() { return Array.from( targets ).filter( ([ element, target ]) => element.isConnected && ( target.loss || target.cssStarted && ! target.cssComplete ) )
 			.map( ([ element, target ]) => ( { id: element.id, reason: target.loss ?? 'CSS entrance has no observed terminal attribute switch' } ) ); },
 		stamp() {
+			// Only content below the fold at serialization: what is in view at the top
+			// pose (headers, hero) is already what a visitor sees first.
+			for ( const [ element, record ] of scrubbed ) {
+				if ( ! element.isConnected || ! record.reverted || record.settled === undefined || element.getBoundingClientRect().top < innerHeight ) continue;
+				if ( element.getAttribute( 'style' ) !== record.settled ) element.setAttribute( 'style', record.settled );
+			}
 			for ( const [ element, target ] of targets ) {
 				if ( ! element.isConnected ) continue;
 				captureState( element );

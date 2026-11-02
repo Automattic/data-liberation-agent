@@ -79,6 +79,44 @@ describe( 'source-observed viewport transition entrances', () => {
 		} finally { await server?.close(); await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
 
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'serializes scroll-scrubbed inline styles below the fold in their in-view pose (#1158)', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-scroll-scrubbed-' ) );
+		try {
+			const sourceUrl = 'https://fixture.test/';
+			const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
+			await context.addInitScript( observeViewportEntrances );
+			await context.route( 'https://fixture.test/**', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><head>
+<style>.spacer{height:120vh}.card{width:400px;height:300px;margin:40px auto;background:#ff5400}.word{font-size:48px}</style></head><body>
+<main><div class="spacer"><h1>Top</h1></div><div class="card" id="card"></div><p class="word" id="word">Revealed text</p><div class="spacer"></div></main>
+<script>
+const card = document.getElementById('card'), word = document.getElementById('word');
+function update() {
+  const r = card.getBoundingClientRect();
+  const p = Math.min(1, Math.max(0, (innerHeight - r.top) / (innerHeight * 0.6)));
+  card.style.clipPath = \`inset(\${(1 - p) * 45}%)\`;
+  card.style.transform = \`scale(\${0.6 + 0.4 * p})\`;
+  word.style.color = p < 1 ? 'rgb(250,180,150)' : 'rgb(0,0,0)';
+}
+addEventListener('scroll', update, { passive: true }); update();
+</script></body></html>` } ) );
+			const source = await context.newPage();
+			await source.goto( sourceUrl );
+			await triggerLazyLoad( source );
+			await stampViewportEntrances( source );
+			for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( directory, path ) );
+			writeFileSync( join( directory, 'html/home.html' ), await source.content() );
+			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+			exportWebsiteCapture( { outputDir: directory, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+			const html = readFileSync( join( directory, 'website/index.html' ), 'utf8' );
+			const card = html.match( /<div class="card"[^>]*>/ )?.[ 0 ] ?? '';
+			const word = html.match( /<p class="word"[^>]*>/ )?.[ 0 ] ?? '';
+			expect( card ).toContain( 'inset(0%)' );
+			expect( card ).toContain( 'scale(1)' );
+			expect( word ).toContain( 'color: rgb(0, 0, 0)' );
+		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 60_000 );
+
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'fidelity observes lost entrances even without named finite CSS animations', async () => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
