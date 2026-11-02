@@ -170,20 +170,20 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
       // nav extraction failed
     }
 
-    // 4. Read rendered metadata. Unlike page titles (which keep the half
-    // before the pipe), the document-title fallback keeps Wix's site-name
-    // half and removes its trailing " Main". Explicit OG metadata stays intact.
+    // 4. Wix's editor sets document.title to "Page Title | Site Name Main":
+    // the half after the last " | ", without the " Main" suffix Wix appends,
+    // is the site name ("Gilded Carat", not "Home | Gilded Carat Main").
     let homepageHtml = '';
+    let documentTitle = '';
     try {
       homepageHtml = await withTimeout(p.content(), RENDERER_CALL_TIMEOUT_MS, 'wix discover metadata');
+      documentTitle = await withTimeout(p.title(), RENDERER_CALL_TIMEOUT_MS, 'wix discover title');
     } catch {
       // metadata extraction failed
     }
-    const siteMetadata = extractSiteMetadata(homepageHtml, (title) => {
-      const pipeIdx = title.lastIndexOf(' | ');
-      const sitePart = pipeIdx > 0 ? title.slice(pipeIdx + 3).trim() : title;
-      return sitePart.replace(/ Main$/, '').trim();
-    });
+    const pipeIdx = documentTitle.lastIndexOf(' | ');
+    const siteName = (pipeIdx > 0 ? documentTitle.slice(pipeIdx + 3) : documentTitle).replace(/ Main$/, '');
+    const siteMetadata = extractSiteMetadata(homepageHtml, { title: siteName });
 
     // 5. Classify URLs
     const counts: Record<string, number> = {};

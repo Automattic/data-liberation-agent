@@ -14,7 +14,7 @@ export async function discoverMedium(url: string, _opts: Record<string, unknown>
 	return {
 		siteUrl: homepage,
 		discoveredAt: new Date().toISOString(),
-		siteMeta: { ...extractSiteMetadata('', () => root.slice(1)), language: 'en-US' },
+		siteMeta: { ...extractSiteMetadata('', { title: root.slice(1) }), language: 'en-US' },
 		navigation: [],
 		counts: { homepage: 1 },
 		urls: [{ url: homepage, type: 'homepage' }],

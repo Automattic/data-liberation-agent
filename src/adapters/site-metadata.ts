@@ -1,14 +1,15 @@
 import { extractMeta, extractTitle } from '../lib/html-extract/index.js';
 
-/** Site identity comes before the homepage's share title. Platform-specific
- * document-title normalization must not alter an explicitly declared OG name. */
+/** A platform's own record of the site (an API field, a known document-title
+ * format) names the site first; then its declared `og:site_name`, then the
+ * homepage share and document titles. */
 export function extractSiteMetadata(
   html: string,
-  documentTitle: (title: string) => string = (title) => title,
+  platform: { title?: string; tagline?: string } = {},
 ): { title: string; tagline: string } {
   return {
-    title: extractMeta(html, 'og:site_name') || extractMeta(html, 'og:title') ||
-      documentTitle(extractTitle(html)) || 'Imported Site',
-    tagline: extractMeta(html, 'og:description') || extractMeta(html, 'description') || '',
+    title: platform.title?.trim() || extractMeta(html, 'og:site_name') || extractMeta(html, 'og:title') ||
+      extractTitle(html) || 'Imported Site',
+    tagline: platform.tagline?.trim() || extractMeta(html, 'og:description') || extractMeta(html, 'description') || '',
   };
 }

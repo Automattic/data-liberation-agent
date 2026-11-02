@@ -133,12 +133,10 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     // Public navigation is best-effort; sitemap and optional admin discovery continue.
   }
 
-  // Public metadata takes precedence; the Squarespace API remains a fallback
-  // when the public homepage does not expose the site's identity.
-  const siteMetadata = extractSiteMetadata(homepageHtml, (title) => title ||
-    siteJson?.website?.siteTitle || siteJson?.websiteSettings?.siteTitle || '');
-  siteMetadata.tagline ||= siteJson?.website?.siteTagLine ||
-    siteJson?.websiteSettings?.siteTagLine || siteJson?.website?.siteDescription || '';
+  const siteMetadata = extractSiteMetadata(homepageHtml, {
+    title: siteJson?.website?.siteTitle || siteJson?.websiteSettings?.siteTitle,
+    tagline: siteJson?.website?.siteTagLine || siteJson?.websiteSettings?.siteTagLine || siteJson?.website?.siteDescription,
+  });
 
   // 4. Classify URLs — for Squarespace, we can probe each URL with ?format=json
   // to determine if it's a collection or item, but for the initial pass we use
