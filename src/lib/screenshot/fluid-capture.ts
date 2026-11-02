@@ -503,7 +503,10 @@ async function learnFluidGeometry(
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
 		let reused: Map< string, GeometrySample[] > | null = null;
-		if ( sheets || ! constantAcross( observations, PROBE_WIDTHS.length, await perpetual() ) ) {
+		const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
+		const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
+			series.every( sample => Number.isFinite( sample.value ) && sample.value === series[ 0 ]!.value ) );
+		if ( ! sheetsConstant || ! constantAcross( observations, PROBE_WIDTHS.length, await perpetual() ) ) {
 			reused = memo && reuseSweptSeries( observations, memoKey, memo );
 			if ( ! reused ) {
 				for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );

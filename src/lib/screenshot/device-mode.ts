@@ -1,4 +1,6 @@
 import type { Page } from 'playwright';
+import { load } from 'cheerio';
+import { createHash } from 'node:crypto';
 import { documentsDiffer } from '../responsive-assembly.js';
 
 /**
@@ -279,6 +281,12 @@ export function decideRouteMode( input: {
 export interface RouteDeviceDecision {
 	mode: DeviceMode;
 	reason: string;
+	serverHtml?: DeviceModeDecision['serverHtml'];
+	/** Request-only evidence; only a rendered pass can populate the covering ledger. */
+	inheritedFrom?: string;
+	attempts?: number;
+	externalScripts?: string[];
+	inlineRuntimeHash?: string;
 	/** Wall time of the matched-policy desktop/phone check. */
 	checkMs?: number;
 	/** Milliseconds; navigate and settle are the slower identity's elapsed time (loads run in parallel). */
@@ -303,4 +311,99 @@ export function summarizeRouteDecisions( decisions: ReadonlyArray< { url: string
 		dual: decisions.filter( decision => decision.mode === 'dual' ).map( ( { url, reason } ) => ( { url, reason } ) ),
 		checkMs: { total: times.reduce( ( a, b ) => a + b, 0 ), median: times.length ? times[ Math.floor( ( times.length - 1 ) / 2 ) ]! : 0, max: times.at( -1 ) ?? 0 },
 	};
+}
+
+/** Resolve real script elements (not strings in comments or inline JavaScript). */
+export function externalScriptSources( html: string, url: string ): string[] {
+	const $ = load( html );
+	const base = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? url, url );
+	return [ ...new Set( $( 'script[src]' ).toArray().map( node => new URL( $( node ).attr( 'src' )!, base ).href ) ) ].sort();
+}
+
+/** Script types the browser executes; anything else (JSON, ld+json, templates) is data. */
+function executesAsScript( type: string | undefined ): boolean {
+	const value = ( type ?? '' ).trim().toLowerCase();
+	return value === '' || value === 'module' || /^(?:text|application)\/(?:x-)?(?:java|ecma)script$/.test( value ) || value === 'text/jscript';
+}
+
+/**
+ * The shape of inline code. Comments and whitespace are dropped, numbers become
+ * a placeholder, and object/array literals built only from literal values
+ * (embedded page context, config) collapse innermost-first. String literals in
+ * code stay verbatim: a selector or branch string is behaviour. A misread token
+ * can only make two shapes differ, which falls back to the rendered check.
+ */
+export function inlineCodeShape( code: string ): string {
+	let out = '';
+	for ( let i = 0; i < code.length; ) {
+		const char = code[ i ]!;
+		const next = code[ i + 1 ];
+		if ( char === '/' && next === '/' ) { const end = code.indexOf( '\n', i ); i = end < 0 ? code.length : end; out += ' '; continue; }
+		if ( char === '/' && next === '*' ) { const end = code.indexOf( '*/', i + 2 ); i = end < 0 ? code.length : end + 2; out += ' '; continue; }
+		if ( char === '"' || char === "'" || char === '`' ) {
+			let j = i + 1;
+			while ( j < code.length && code[ j ] !== char ) j += code[ j ] === '\\' ? 2 : 1;
+			const body = code.slice( i + 1, j );
+			// Canonical double-quoted form; templates with substitutions are code.
+			out += char === '`' && body.includes( '${' ) ? `\`${ body }\`` : JSON.stringify( body );
+			i = j + 1;
+			continue;
+		}
+		if ( /[0-9]/.test( char ) && ! /[\w$]/.test( code[ i - 1 ] ?? '' ) ) {
+			const match = /^(?:0[xob][0-9a-f_]+|[0-9][0-9_]*(?:\.[0-9_]*)?(?:e[+-]?[0-9]+)?)n?/i.exec( code.slice( i ) )!;
+			out += '0';
+			i += match[ 0 ].length;
+			continue;
+		}
+		out += char;
+		i++;
+	}
+	out = out.replace( /\s+/g, ' ' );
+	const string = String.raw`"(?:[^"\\]|\\.)*"`;
+	const value = `(?:${ string }|-?0|true|false|null|D)`;
+	const key = `(?:${ string }|[\\w$]+)`;
+	const data = new RegExp( String.raw`\{ ?(?:${ key } ?: ?${ value } ?(?:, ?${ key } ?: ?${ value } ?)*,? ?)?\}|\[ ?(?:${ value } ?(?:, ?${ value } ?)*,? ?)?\]`, 'g' );
+	for ( let previous = ''; previous !== out; ) { previous = out; out = out.replace( data, 'D' ); }
+	return out.trim();
+}
+
+/**
+ * Inline code can be route-specific even with no external script changes.
+ * The route's own URL and path are identity, not behaviour, so they are
+ * replaced before the shape is taken.
+ */
+export function inlineRuntimeHash( html: string, url?: string ): string {
+	const $ = load( normalizeServerHtml( html ) );
+	const self = url ? new URL( url ) : undefined;
+	const identities = self ? [ self.href, `${ self.origin }${ self.pathname }`, self.pathname.length > 1 ? self.pathname.replace( /\/$/, '' ) : '' ].filter( Boolean ).sort( ( a, b ) => b.length - a.length ) : [];
+	// Whole references only: `/slow` inside `/slow/about` names another route.
+	const reference = identities.length ? new RegExp( `(?:${ identities.map( identity => identity.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' ) })(?![\\w%./-])`, 'g' ) : undefined;
+	const shape = ( code: string ) => inlineCodeShape( reference ? code.replace( reference, '\u0000ROUTE\u0000' ) : code );
+	const code = $( 'script:not([src])' ).toArray().filter( node => executesAsScript( $( node ).attr( 'type' ) ) ).map( node => shape( $( node ).html() ?? '' ) );
+	for ( const node of $( '*' ).toArray() ) {
+		for ( const [ name, value ] of Object.entries( $( node ).attr() ?? {} ) ) if ( /^on/i.test( name ) ) code.push( `${ name }=${ shape( value ) }` );
+	}
+	return createHash( 'sha256' ).update( JSON.stringify( code ) ).digest( 'hex' );
+}
+
+/** One capture's rendered proofs. A skipped check never creates another proof. */
+export class RouteDeviceEvidence {
+	private passed = new Map< string, { scripts: readonly string[]; inlineHash: string } >();
+	covering( scripts: readonly string[], inlineHash: string ): string | undefined {
+		for ( const [ url, known ] of this.passed ) if ( inlineHash === known.inlineHash && scripts.every( src => known.scripts.includes( src ) ) ) return url;
+		return undefined;
+	}
+	record( url: string, scripts: readonly string[], inlineHash: string ): void { this.passed.set( url, { scripts, inlineHash } ); }
+}
+
+/** Retry errors and degraded/differing rendered loads once, in fresh contexts. */
+export async function retryRouteDeviceCheck( check: () => Promise< RouteDeviceDecision > ): Promise< RouteDeviceDecision > {
+	let result: RouteDeviceDecision = { mode: 'dual', reason: 'check unavailable' };
+	for ( let attempt = 1; attempt <= 2; attempt++ ) {
+		try { result = await check(); }
+		catch ( error ) { result = { mode: 'dual', reason: `the phone check failed: ${ String( error ) }` }; }
+		result.attempts = attempt;
+		if ( result.mode === 'reflow-only' ) break;
+	}
+	return result;
 }

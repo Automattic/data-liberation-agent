@@ -230,7 +230,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				expect( entry.mobileHtml ).toBeUndefined();
 				// The desktop document also freezes the phone-width reference cell.
 				expect( entry.profiles!.desktop!.recipe.referenceWidths ).toEqual( [ 390, 768, 1440 ] );
-				expect( entry.deviceMode ).toMatchObject( { mode: 'reflow-only', structure: { differingPaths: 0 } } );
+				expect( entry.deviceMode ).toMatchObject( { mode: 'reflow-only' } );
+				if ( entry.deviceMode!.inheritedFrom ) expect( entry.deviceMode!.serverHtml ).toMatch( /^identical/ );
+				else expect( entry.deviceMode!.structure ).toMatchObject( { differingPaths: 0 } );
 				// The check blocks images, media and fonts and settles briefly.
 				expect( entry.deviceMode!.checkMs ).toBeLessThan( 8_000 );
 			}
@@ -304,8 +306,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( run.entries[ `${ origin }/mixed/runtime` ]!.deviceMode!.mode ).toBe( 'reflow-only' );
 		for ( const route of [ 'promo', 'runtime' ] ) {
 			const url = `${ origin }/mixed/${ route }`;
-			// Capture plus a matched-policy comparison pair; dual loads phone again.
-			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 4 : 3 );
+			// Request pair plus rendered pair; a dual decision retries both pairs.
+			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 10 : 5 );
 			expect( run.entries[ url ]!.profiles!.desktop!.phases!.some( phase => phase.phase === 'device-check' ) ).toBe( true );
 			const line = stderr.split( '\n' ).find( line => line.startsWith( '[timing] route-phases ' ) && line.includes( url ) )!;
 			expect( JSON.parse( line.slice( '[timing] route-phases '.length ) )[ 'device-check' ] ).toBeGreaterThan( 0 );
@@ -361,10 +363,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( Object.keys( run.entries[ `${ base }/move-content` ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
 	}, 120_000 );
 
-	it( 'keeps both captures of a route whose phone check timed out', async () => {
-		// The check navigates once at the base budget; capture then retries the
-		// slow route with a longer one. Same-message timeouts in both identities
-		// must not make the route desktop-only.
+	it( 'avoids a rendered timeout when request evidence already proves the slow route', async () => {
+		// Request-only evidence arrives outside the shrunk rendering budget.
+		// A covered route need not navigate either comparison page at all.
 		const limits = SOURCE_NAVIGATION_LIMITS as { timeoutMs: number };
 		const budget = limits.timeoutMs;
 		limits.timeoutMs = 3_000;
@@ -372,9 +373,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			const run = await capture( 'slow', { routes: [ 'late' ] } );
 			const late = `${ origin }/slow/late`;
 			expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only' } );
-			expect( run.entries[ late ]!.deviceMode ).toMatchObject( { mode: 'dual', reason: expect.stringContaining( 'the phone check failed' ) } );
-			expect( Object.keys( run.entries[ late ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
-			expect( readFileSync( join( run.outputDir, run.entries[ late ]!.mobileHtml! ), 'utf8' ) ).toContain( 'Welcome' );
+			expect( run.entries[ late ]!.deviceMode ).toMatchObject( { mode: 'reflow-only', inheritedFrom: `${ origin }/slow/` } );
+			expect( Object.keys( run.entries[ late ]!.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
+			expect( readFileSync( join( run.outputDir, run.entries[ late ]!.html! ), 'utf8' ) ).toContain( 'Welcome' );
 		} finally {
 			limits.timeoutMs = budget;
 		}

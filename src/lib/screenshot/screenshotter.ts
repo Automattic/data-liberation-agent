@@ -94,7 +94,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { inlineRuntimeHash, externalScriptSources, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
 import { anchorChromeStates, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
@@ -1880,6 +1880,8 @@ interface DeviceComparisonArgs {
 	prepareCapture?: ScreenshotOpts['prepareCapture'];
 	telemetryRequest?: ScreenshotOpts['telemetryRequest'];
 	probeDiagnostic?: ( diagnostic: ProfileDiagnostic ) => void;
+	deviceEvidence?: RouteDeviceEvidence;
+	identityHeaders?: Partial< Record< 'desktop' | 'mobile', Record< string, string > > >;
 }
 
 interface DeviceModeProbeArgs extends DeviceComparisonArgs {
@@ -1939,6 +1941,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	const status = navigation.response?.status() ?? 0;
 	// failure-class: operational
 	if ( status >= 400 || status === 0 ) throw new Error( `the ${ viewport } document answered HTTP ${ status }` );
+	if ( args.identityHeaders && navigation.response ) args.identityHeaders[ viewport ] = replayableRequestHeaders( await navigation.response.request().allHeaders() );
 	const html = await navigation.response?.text().catch( () => undefined );
 	const settledAt = Date.now();
 	if ( timings ) timings.navigate = Math.max( timings.navigate, settledAt - startedAt );
@@ -2010,7 +2013,41 @@ async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'c
  * Both comparison contexts close before the route's capture starts, so the
  * pair never competes with capture's own loads.
  */
-async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
+export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
+	const started = Date.now();
+	const result = await retryRouteDeviceCheck( async () => {
+		const contexts: BrowserContext[] = [];
+		try {
+			if ( args.publicUrlsOnly ) assertPublicHttpUrl( args.url );
+			const documents = await Promise.all( ( [ 'desktop', 'mobile' ] as const ).map( async identity => {
+				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone );
+				contexts.push( context );
+				const headers = args.identityHeaders?.[ identity ];
+				if ( ! headers ) return undefined;
+				const response = await context.request.get( args.url, { headers: replayableRequestHeaders( headers ), maxRedirects: 0, maxRetries: 0, timeout: 30_000 } );
+				try { return response.ok() ? await response.text() : undefined; }
+				finally { await response.dispose(); }
+			} ) );
+			const [ desktop, phone ] = documents;
+			if ( desktop !== undefined && phone !== undefined ) {
+				const serverHtml = compareServerHtml( desktop, phone );
+				const scripts = externalScriptSources( desktop, args.url );
+				const inheritedFrom = serverHtml !== 'different' ? args.deviceEvidence?.covering( scripts, inlineRuntimeHash( desktop, args.url ) ) : undefined;
+				if ( inheritedFrom ) return { mode: 'reflow-only', reason: 'same server HTML and external scripts covered by a rendered route check', serverHtml, inheritedFrom, externalScripts: scripts };
+			}
+		} finally {
+			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+		}
+		const rendered = await renderedRouteDeviceMode( args );
+		if ( rendered.mode === 'reflow-only' && rendered.externalScripts && rendered.serverHtml !== 'unavailable' ) args.deviceEvidence?.record( args.url, rendered.externalScripts, rendered.inlineRuntimeHash! );
+		return rendered;
+	} );
+	result.checkMs = Date.now() - started;
+	process.stderr.write( `[timing] device-check ${ JSON.stringify( { url: args.url, ...result.checkTimings, ...result, total: result.checkMs } ) }\n` );
+	return result;
+}
+
+async function renderedRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
 	const startedAt = Date.now();
 	const contexts: BrowserContext[] = [];
 	const checkTimings = { navigate: 0, settle: 0, equivalence: 0, recheck: 0 };
@@ -2056,7 +2093,7 @@ async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< Rout
 		}
 		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, bodyClasses: differs() ? bodyClasses : undefined } );
 		checkTimings.equivalence += Date.now() - finalEquivalenceStartedAt;
-		return { ...decided, structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt, checkTimings };
+		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt, checkTimings };
 	} catch ( error ) {
 		// Both identities failed alike (an absent route, an off-site redirect):
 		// there is no phone document to keep, and capture records the outcome once.
@@ -2064,7 +2101,6 @@ async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< Rout
 		return { ...decideRouteMode( { error: error instanceof Error ? error.message : String( error ) } ), checkMs: Date.now() - startedAt, checkTimings };
 	} finally {
 		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
-		process.stderr.write( `[timing] device-check ${ JSON.stringify( { url: args.url, ...checkTimings, total: Date.now() - startedAt } ) }\n` );
 	}
 }
 
@@ -2526,6 +2562,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
 		const requested = opts.deviceMode ?? 'dual';
 		const comparison = {
+			deviceEvidence: new RouteDeviceEvidence(),
+			identityHeaders: {},
 			desktop: profileContextOptions( desktopProfile, sessionContext ),
 			phone: profileContextOptions( phoneProfile, sessionContext ),
 			publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
