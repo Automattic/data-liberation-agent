@@ -67,6 +67,35 @@ The screenshot pipeline restores its canonical top-scroll state before
 interaction probes. A preceding scrolled screenshot therefore cannot hide the
 top-state transition that the portable baseline must replay.
 
+## Root class changes
+
+Dialog capture also records `dialog.rootClassState`, independently of the local
+ancestor depth limit. Each row is `{ root: "html" | "body", removed: string[],
+added: string[] }`: only the class tokens changed by opening are retained. Rows
+are emitted only after the source close action restores those tokens. This
+covers deeply nested controls and `html` changes, without capturing unrelated
+root attributes or replacing a consumer's full class list.
+
+Export projects these rows into the existing
+`data-blocks-engine-capture-dialog-ancestor-state` JSON on the authored trigger.
+Each projected row contains `depth` (parent hops from that trigger),
+`closed: { class: "removed tokens" }`, `opened: { class: "added tokens" }`, and
+`classTokensOnly: true`. Body ownership follows the nearest desktop/mobile
+document wrapper when root classes were moved there; otherwise it is the real
+root. HTML ownership similarly follows the root carrying its closed tokens.
+There is no source-selector or original-tag requirement on this projected owner.
+Local ancestor evidence retains non-class attributes and is not duplicated.
+
+Runtime contract (including downstream Blocks Engine / SSI): resolve each owner
+from the trigger using the exported depth; opening removes closed-only tokens
+and adds opened tokens, closing does the inverse. Preserve unrelated classes,
+including consumer-added ones. Apply the transition before displaying the panel;
+Escape, close buttons, toggle-close and responsive deactivation must revert it.
+An owner still used by another open control retains that control's opened state.
+DLA's standalone captured-dialog runtime already implements this contract; a
+consumer must retain/rebase these bindings when moving the trigger or its scope.
+No source-specific menu class names are part of the runtime contract.
+
 Consumers can map these generic source transitions onto their own state and
 layout primitives. Source-to-portable interaction proof and downstream
 projection remain distinct acceptance stages; this evidence does not claim

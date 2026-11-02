@@ -4,6 +4,7 @@ import { PORTABLE_WIDGET_OWNERSHIP_SOURCE } from './portable-widget-ownership.js
 import type { CapturedGallery } from './gallery-capture.js';
 import { settleDocument } from './page-helpers.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
+import { rootClasses, rootClassDelta, type CapturedRootClassState } from './root-class-state.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 
 export const INTERACTION_STATES_SCHEMA = 'blocks-engine-capture/interaction-states/v2';
@@ -133,6 +134,7 @@ export interface CapturedDialogInteraction {
 		css?: string;
 		/** Observed local ancestor transitions and panel placement, verified by source restoration. */
 		ancestorState?: CapturedDropdownAncestorState;
+		rootClassState?: CapturedRootClassState[];
 	};
 	/**
 	 * Present on `kind: 'selectable-set'` states. `size` is how many members
@@ -469,12 +471,14 @@ export async function captureTriggeredDialogs(
 				}
 			}
 			const pageBefore = await pageStateFingerprint( page );
+			let closedRoots = await rootClasses( page );
 			let before: string[] = [];
 			try {
 				await activateTrigger( page, trigger.probeSelector, async () => {
 					before = await visibleDialogSelectors( page );
 					await markVisibleBeforeActivation( page );
 					await rememberDropdownAncestors( page, trigger.probeSelector );
+					closedRoots = await rootClasses( page );
 				} );
 			} catch ( error ) {
 				const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
@@ -536,7 +540,10 @@ export async function captureTriggeredDialogs(
 			const dropdown = dialog.presentation === 'dropdown';
 			const observedAncestors = await observeDropdownAncestors( page, dialog.selector, dropdown );
 			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 ? observedAncestors : undefined;
+			const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
+			const restoredRoots = await rootClasses( page );
+			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			const restingInline = !dropdown && await observeInlineRestingPanel( page, trigger.probeSelector, dialog.selector );
 			const resolvedRole = dialog.role === 'navigation' ? 'menu' : dialog.role ?? ( [ 'dialog', 'listbox', 'menu' ].includes( trigger.ariaHaspopup ) ? trigger.ariaHaspopup : undefined );
@@ -559,6 +566,7 @@ export async function captureTriggeredDialogs(
 					htmlTruncated: bounded.truncated,
 					...( addedCss ? { css: addedCss } : {} ),
 					...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
+					...( rootsRestored && rootClassState.length ? { rootClassState } : {} ),
 				},
 			} );
 			if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
