@@ -7,7 +7,7 @@ import { captureScreenshots, comparisonFailedAlike } from './screenshotter.js';
 import { SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -48,6 +48,14 @@ describe( 'device-mode evidence', () => {
 		const fetch = vi.fn();
 		expect( await resampleSiteServerHtml( first, fetch, fetch ) ).toEqual( { serverHtml: first } );
 		expect( fetch ).not.toHaveBeenCalled();
+	} );
+
+	it( 'replays a navigation identity without HTTP/2 pseudo-headers, cookies or encodings', () => {
+		expect( replayableRequestHeaders( {
+			':authority': 'example.test', ':method': 'GET', ':path': '/', ':scheme': 'https',
+			accept: 'text/html', 'accept-encoding': 'gzip, br, zstd', cookie: 'a=1',
+			'sec-ch-ua-mobile': '?1', 'user-agent': 'Phone',
+		} ) ).toEqual( { accept: 'text/html', 'sec-ch-ua-mobile': '?1', 'user-agent': 'Phone' } );
 	} );
 
 	it( 'keeps the first difference when a re-sample fails', async () => {
@@ -159,6 +167,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 	let server: Server;
 	let origin: string;
 	const documentLoads = new Map< string, number >();
+	let transientPhoneServed = false;
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
 			if ( ( request.url ?? '' ).endsWith( '.svg' ) ) {
@@ -169,7 +178,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			documentLoads.set( request.url!, ( documentLoads.get( request.url! ) ?? 0 ) + 1 );
 			const [ , fixture = '', path = '' ] = ( request.url ?? '/' ).split( '/' );
 			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
-			const body = page( fixture, request.headers[ 'user-agent' ] ?? '', path );
+			let body = page( fixture, request.headers[ 'user-agent' ] ?? '', path );
+			// One cache variant: only the first phone document request differs.
+			if ( fixture === 'transient' && path === '' && ( request.headers[ 'user-agent' ] ?? '' ).includes( 'iPhone' ) && ! transientPhoneServed ) {
+				transientPhoneServed = true;
+				body = body.replace( '</head>', '<link rel="preload" href="/transient/x.css" as="style"></head>' );
+			}
 			// A route slower than the (shrunk) navigation budget on every request.
 			if ( fixture === 'slow' && path === 'late' ) { setTimeout( () => response.end( body ), 4_000 ); return; }
 			response.end( body );
@@ -192,6 +206,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as { entries: Record< string, ManifestEntry > };
 		return { outputDir, result, entries: manifest.entries };
 	};
+
+	it( 'confirms a transient entrypoint HTML difference before committing the site to dual', async () => {
+		const run = await capture( 'transient' );
+		expect( transientPhoneServed ).toBe( true );
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', serverHtml: 'identical', serverHtmlFirstSample: 'different', serverHtmlResampled: true } );
+	}, 120_000 );
 
 	describe( 'a site whose phone view is CSS reflow', () => {
 		let run: { outputDir: string; result: ScreenshotResult; entries: Record< string, ManifestEntry > };

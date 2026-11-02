@@ -79,6 +79,15 @@ export function compareServerHtml( desktop: string, phone: string ): NonNullable
 	return normalizeServerHtml( desktop ) === normalizeServerHtml( phone ) ? 'identical-after-normalization' : 'different';
 }
 
+/**
+ * Headers a browser navigation sent, made replayable by an API request:
+ * HTTP/2 pseudo-headers are not valid header names, the context's jar owns
+ * cookies, and the client negotiates its own decodable encodings.
+ */
+export function replayableRequestHeaders( headers: Record< string, string > ): Record< string, string > {
+	return Object.fromEntries( Object.entries( headers ).filter( ( [ name ] ) => ! name.startsWith( ':' ) && name !== 'cookie' && name !== 'accept-encoding' ) );
+}
+
 /** Confirm a site-wide HTML difference once, without repeating the browser load. */
 export async function resampleSiteServerHtml(
 	first: NonNullable< DeviceModeDecision['serverHtml'] >,

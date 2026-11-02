@@ -94,7 +94,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
 import { anchorChromeStates, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
@@ -1960,8 +1960,8 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	// Reuse the actual navigation identity (including client hints) for a cheap
 	// site-probe re-sample. Cookies come from the still-live source context.
 	const fetchServerHtml = async () => {
-		const headers = await navigation.response!.request().allHeaders();
-		delete headers.cookie;
+		if ( ! navigation.response ) return undefined;
+		const headers = replayableRequestHeaders( await navigation.response.request().allHeaders() );
 		const response = await context.request.get( target, { headers, maxRedirects: 0, maxRetries: 0, timeout: 30_000 } );
 		try { return response.ok() ? await response.text() : undefined; }
 		finally { await response.dispose(); }
