@@ -1117,7 +1117,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let rootClassWidths: RootClassContract[] = [];
 	if ( isDesktop && plan.captureHtml ) {
 		try {
-			rootClassWidths = await sampleRootClasses( page );
+			rootClassWidths = await sampleRootClasses( page, undefined, reason => args.diagnostics?.push( {
+				code: 'root_class_source_probe_unproven', reason: `${ url }: ${ reason }`,
+			} ) );
 		} catch ( error ) {
 			// A bounded probe cannot safely hand a nonresponding renderer to
 			// subsequent DOM reads. Lose this profile rather than hang capture.
