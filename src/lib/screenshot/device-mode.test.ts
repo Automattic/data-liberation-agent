@@ -97,7 +97,7 @@ body{margin:0;font:16px Arial}header{display:flex;justify-content:space-between;
 <button class="search" type="button" aria-haspopup="dialog" aria-controls="search">Search</button>
 <button id="menu-toggle" class="burger" type="button" aria-label="Menu" aria-haspopup="dialog">≡</button></header>
 <div id="search" role="dialog" aria-label="Site search" hidden><input aria-label="Query"></div>
-<main><h1>${ path === 'about' ? 'About us' : 'Welcome' }</h1>${ phoneHtml }${ reorder.markup }<div class="row"><div class="col">One</div><div class="col">Two</div></div>
+<main><h1>${ path === 'about' ? 'About us' : 'Welcome' }</h1>${ phoneHtml }${ reorder.markup }${ fixture === 'mixed' && path === 'runtime' ? '<img src="/flag.svg" width="120" height="80" onload="const node=document.createElement(\'section\');node.textContent=\'Image loaded\';this.after(node)">' : '' }<div class="row"><div class="col">One</div><div class="col">Two</div></div>
 <button class="more" type="button" aria-expanded="false" aria-controls="more-panel">More</button><div id="more-panel" hidden>Phone extras</div></main>
 <script>document.querySelector('.more').addEventListener('click',e=>{const d=document.getElementById('more-panel');d.hidden=!d.hidden;e.currentTarget.setAttribute('aria-expanded',String(!d.hidden))});
 document.querySelector('.search').addEventListener('click',()=>{const d=document.getElementById('search');d.hidden=!d.hidden});
@@ -253,10 +253,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		try {
 			run = await capture( 'mixed', { routes: [ 'promo', 'runtime' ] } );
 		} finally { write.mockRestore(); }
+		// Resource-dependent DOM must not manufacture a second device document.
+		expect( run.entries[ `${ origin }/mixed/runtime` ]!.deviceMode!.mode ).toBe( 'reflow-only' );
 		for ( const route of [ 'promo', 'runtime' ] ) {
 			const url = `${ origin }/mixed/${ route }`;
-			// Desktop capture + phone check; only a dual route loads phone again.
-			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 3 : 2 );
+			// Capture plus a matched-policy comparison pair; dual loads phone again.
+			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 4 : 3 );
 			expect( run.entries[ url ]!.profiles!.desktop!.phases!.some( phase => phase.phase === 'device-check' ) ).toBe( true );
 			const line = stderr.split( '\n' ).find( line => line.startsWith( '[timing] route-phases ' ) && line.includes( url ) )!;
 			expect( JSON.parse( line.slice( '[timing] route-phases '.length ) )[ 'device-check' ] ).toBeGreaterThan( 0 );
@@ -264,12 +266,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		const runtime = run.entries[ `${ origin }/mixed/runtime` ]!.deviceMode!;
 		expect( runtime ).toMatchObject( { mode: 'reflow-only', reason: expect.stringContaining( 'export treats as equivalent' ) } );
 		expect( runtime.rechecked ).toBeUndefined();
+		expect( runtime.checkTimings ).toEqual( { navigate: expect.any( Number ), settle: expect.any( Number ), equivalence: expect.any( Number ), recheck: 0 } );
+		const timing = stderr.split( '\n' ).find( line => line.startsWith( '[timing] device-check ' ) && line.includes( '/mixed/runtime' ) )!;
+		expect( JSON.parse( timing.slice( '[timing] device-check '.length ) ) ).toMatchObject( runtime.checkTimings! );
+		// The image loads in capture and inserts real content. The matched blocked
+		// comparison pair must still agree; full desktop versus blocked phone did not.
+		expect( readFileSync( join( run.outputDir, run.entries[ `${ origin }/mixed/runtime` ]!.html! ), 'utf8' ) ).toContain( 'Image loaded' );
 		const home = `${ origin }/mixed/`;
 		const promo = `${ origin }/mixed/promo`;
 		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 3, reflowOnly: 2, dual: [ { url: promo } ] } } );
 		expect( run.result.deviceMode!.routes!.dual[ 0 ]!.reason ).toContain( 'aside' );
 		expect( run.entries[ home ]!.deviceMode ).toMatchObject( { mode: 'reflow-only' } );
-		expect( run.entries[ promo ]!.deviceMode ).toMatchObject( { mode: 'dual', structure: { differingPaths: 1 } } );
+		expect( run.entries[ promo ]!.deviceMode ).toMatchObject( { mode: 'dual', structure: { differingPaths: 1 }, rechecked: true } );
+		expect( run.entries[ promo ]!.deviceMode!.checkTimings!.recheck ).toBeGreaterThanOrEqual( 1_500 );
 		expect( Object.keys( run.entries[ home ]!.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
 		expect( run.entries[ home ]!.mobileHtml ).toBeUndefined();
 		expect( Object.keys( run.entries[ promo ]!.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );

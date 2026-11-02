@@ -248,8 +248,10 @@ export function decideRouteMode( input: {
 export interface RouteDeviceDecision {
 	mode: DeviceMode;
 	reason: string;
-	/** Wall time of the phone check against capture's loaded desktop document. */
+	/** Wall time of the matched-policy desktop/phone check. */
 	checkMs?: number;
+	/** Milliseconds; navigate and settle are the slower identity's elapsed time (loads run in parallel). */
+	checkTimings?: { navigate: number; settle: number; equivalence: number; recheck: number };
 	structure?: StructureComparison;
 	/** The first reading differed, so both pages were read again after settling. */
 	rechecked?: boolean;
