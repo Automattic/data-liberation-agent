@@ -850,11 +850,9 @@ export interface OverlayTarget {
   hasCloseAffordance: boolean;
 }
 
-// DismissedOverlay and DismissOverlaysOpts are forward-declared here; they are
-// consumed by the dismissOverlays orchestrator added in a later task.
-
 /** A record of one overlay we dismissed (returned + logged for observability). */
 export interface DismissedOverlay {
+  consentBanner?: import('../consent-banner.js').ConsentBanner;
   selector: string;
   method: 'close-click' | 'escape' | 'hide';
   kind: 'takeover' | 'consent' | 'provider-promotion';
@@ -924,7 +922,7 @@ export function scoreOverlay(
 }
 
 const CONSENT_TEXT_RE = /\bcookies?\b|\bconsent\b|\bgdpr\b|\bccpa\b|\baccept all\b|privacy (policy|preferences)/i;
-const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc|cookieyes/i;
+const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc|cookieyes|\bcc-window\b|\bcc-banner\b/i;
 
 /**
  * A looser, separate classifier for cookie/consent banners. They frequently do
@@ -952,7 +950,7 @@ const PAGE_TEXT_SHARE = 0.9;
 /**
  * Decide which candidates are overlays and in what order to dismiss them.
  * Pure. Takeovers (score ≥ threshold) first, highest score first; then consent
- * banners that did not already qualify as takeovers. Benign chrome is dropped.
+ * banners (classified independently of takeover score). Benign chrome is dropped.
  */
 export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   const takeovers: OverlayTarget[] = [];
@@ -985,14 +983,14 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
     const hasOverlayEvidence =
       hasModalRole || c.vendorHint || (c.hasCloseAffordance && c.coverageRatio >= 0.15) ||
       (c.hasBackdrop && c.coverageRatio >= 0.15);
-    if (score >= OVERLAY_THRESHOLD && hasOverlayEvidence) {
-      takeovers.push({
-        idx: c.idx, kind: 'takeover', score, signals,
-        selector: c.selector, hasCloseAffordance: c.hasCloseAffordance,
-      });
-    } else if (isConsentBanner(c)) {
+    if (isConsentBanner(c)) {
       consents.push({
         idx: c.idx, kind: 'consent', score, signals: [...signals, 'consent'],
+        selector: c.selector, hasCloseAffordance: c.hasCloseAffordance,
+      });
+    } else if (score >= OVERLAY_THRESHOLD && hasOverlayEvidence) {
+      takeovers.push({
+        idx: c.idx, kind: 'takeover', score, signals,
         selector: c.selector, hasCloseAffordance: c.hasCloseAffordance,
       });
     } else if (isProviderPromotion(c)) {
@@ -1380,6 +1378,44 @@ async function dismissOne(
   return null;
 }
 
+/** Read intent while the banner and its rendered controls are still visible. */
+async function readConsentBanner(page: Page, target: OverlayTarget): Promise<import('../consent-banner.js').ConsentBanner | undefined> {
+  return page.evaluate(({ idx, selector }) => {
+    const root = document.querySelector<HTMLElement>(`[data-lib-overlay="${idx}"]`);
+    if (!root) return;
+    const visible = (node: HTMLElement) => !!node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
+    const label = (node: HTMLElement) => (node.innerText || node.getAttribute('aria-label') || (node as HTMLInputElement).value || '').trim();
+    const controls = Array.from(root.querySelectorAll<HTMLElement>('button, [role="button"], input[type="button"], input[type="submit"], a')).filter(visible);
+    const reject = controls.find(node => /reject|decline|deny|refuse|disagree|weigeren|ablehnen/i.test(label(node)));
+    const policy = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(visible).find(node =>
+      /privacy|policy|cookie|datenschutz/i.test(`${label(node)} ${node.href}`) && /^https?:/.test(node.href));
+    const accept = controls.find(node => node !== reject && node !== policy && /accept|agree|allow|\bok\b|akkoord|zustimm|verstanden/i.test(label(node)))
+      ?? controls.find(node => node !== reject && node !== policy && !/close|dismiss|settings|preferences|manage/i.test(label(node)));
+    if (!accept || !label(accept)) return;
+    // Read rendered prose, excluding control and policy labels, without mutating live DOM.
+    const clone = root.cloneNode(true) as HTMLElement;
+    const originals = Array.from(root.querySelectorAll<HTMLElement>('*'));
+    const copies = Array.from(clone.querySelectorAll<HTMLElement>('*'));
+    for (let i = originals.length - 1; i >= 0; i--) {
+      if (!visible(originals[i]) || originals[i].matches('button, [role="button"], input, a, script, style')) copies[i].remove();
+    }
+    const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    const bounds = root.getBoundingClientRect();
+    const style = getComputedStyle(root);
+    const button = getComputedStyle(accept);
+    return {
+      schema: 'static-site-importer/consent-banner/v1' as const,
+      text, accept_label: label(accept),
+      ...(reject ? { reject_label: label(reject) } : {}),
+      ...(policy ? { policy_link: { label: label(policy), href: policy.href } } : {}),
+      position: bounds.top <= innerHeight * .1 ? 'top' as const : bounds.bottom >= innerHeight * .9 ? 'bottom' as const : 'center' as const,
+      colors: { background: style.backgroundColor, text: style.color, button_background: button.backgroundColor, button_text: button.color },
+      source_selector: selector,
+    };
+  }, { idx: target.idx, selector: target.selector });
+}
+
 /**
  * Best-effort: detect and dismiss takeover modals + consent banners before
  * capture. NEVER throws — a dismissal failure must not fail a capture. Bounded
@@ -1399,18 +1435,19 @@ export async function dismissOverlays(
       if (targets.length === 0) break;
       let acted = 0;
       for (const t of targets) {
+        const consentBanner = t.kind === 'consent'
+          ? await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(() => undefined) : undefined;
         const method = await withEvaluateTimeout(dismissOne(page, t), 10_000);
         if (method) {
           // Retain node identity across re-detection rounds. Never remove live
           // framework-owned nodes: the serializer consumes this evidence on a clone.
-          await page.evaluate(({ idx, kind, selector, method, consent }) => {
+          await page.evaluate(({ idx, kind, selector, method }) => {
             const node = document.querySelector(`[data-lib-overlay="${idx}"]`);
-            // A scored takeover can still be consent UI; genuine promo dialogs stay.
-            const evidence = JSON.stringify({ kind, selector, method, removable: kind !== 'takeover' || consent });
+            const evidence = JSON.stringify({ kind, selector, method, removable: kind !== 'takeover' });
             node?.setAttribute('data-lib-dismissed-overlay', evidence);
             for (const backdrop of document.querySelectorAll(`[data-lib-overlay-backdrop="${idx}"]`)) backdrop.setAttribute('data-lib-dismissed-overlay', evidence);
-          }, { idx: t.idx, kind: t.kind, selector: t.selector, method, consent: !!detection.candidates.find(candidate => candidate.idx === t.idx && isConsentBanner(candidate)) });
-          dismissed.push({ selector: t.selector, method, kind: t.kind, score: t.score, signals: t.signals });
+          }, { idx: t.idx, kind: t.kind, selector: t.selector, method });
+          dismissed.push({ selector: t.selector, method, kind: t.kind, score: t.score, signals: t.signals, ...(consentBanner ? { consentBanner } : {}) });
           acted++;
         }
       }
