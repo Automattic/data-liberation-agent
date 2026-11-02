@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { discoverDefault } from './discover.js';
+import { SHIFT_JIS_TITLE } from '../../lib/shift-jis-fixture.js';
 
 let server: Server | undefined;
 
@@ -10,6 +11,16 @@ afterEach(async () => {
 });
 
 describe('discoverDefault', () => {
+  it('reads the site title of a legacy page that declares Shift_JIS only in <meta>', async () => {
+    const html = Buffer.concat([Buffer.from('<html><head><meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><title>'), SHIFT_JIS_TITLE, Buffer.from('</title></head><body></body></html>')]);
+    server = createServer((_request, response) => { response.setHeader('content-type', 'text/html'); response.end(html); });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('fixture server did not bind');
+    const inventory = await discoverDefault(`http://127.0.0.1:${address.port}/`, {});
+    expect(inventory.siteMeta.title).toBe('キューティー★コンプレックス');
+  });
+
   it('reports rejected sitemap leaves without adding them to the inventory', async () => {
     server = createServer((request, response) => {
       const origin = `http://${request.headers.host}`;
