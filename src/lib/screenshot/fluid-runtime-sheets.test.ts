@@ -89,6 +89,19 @@ describe( 'runtime-written stylesheet offsets', () => {
 		expect( adaptive.result.sampledWidths ).toEqual( [ 390, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
 	}, 60_000 );
 
+	it( 'stops after the probes when inline geometry and observed runtime sheets are constant', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<div id="wrap" style="width:720px;height:100px"><div id="item"></div></div>
+				<script>const sheet=document.createElement('style');document.head.appendChild(sheet);
+				const update=()=>{document.getElementById('wrap').style.width='720px';sheet.textContent='#item{position:absolute;left:20px;top:10px}/*'+innerWidth+'*/'};
+				addEventListener('resize',update);update();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+			expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+			expect( result.unmodelled ).toBe( 0 );
+		} finally { await page.close(); }
+	}, 20_000 );
+
 	it( 'leaves authored stylesheets and width-independent runtime rules untouched', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
