@@ -4,7 +4,8 @@ import { classifyUrl, extractSameOriginLinks } from '../lib/extraction/sitemap.j
 import { documentRequestUrl } from '../lib/url/route-key.js';
 import { routeInScope } from '../lib/url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
-import { extractMeta, extractNavLinks, extractTitle } from '../lib/html-extract/index.js';
+import { extractNavLinks } from '../lib/html-extract/index.js';
+import { extractSiteMetadata } from './site-metadata.js';
 import type { DefaultInventory } from './default/types.js';
 
 /** A shared-origin customer owns exactly its first path segment. */
@@ -59,8 +60,7 @@ export async function discoverTenantHandle(
 		siteUrl: homepage,
 		discoveredAt: new Date().toISOString(),
 		siteMeta: {
-			title: extractMeta(html, 'og:title') || extractTitle(html) || 'Imported Site',
-			tagline: extractMeta(html, 'og:description') || extractMeta(html, 'description') || '',
+			...extractSiteMetadata(html),
 			language: $('html').attr('lang') || 'en-US',
 		},
 		navigation: extractNavLinks(html, homepage).filter((link) => inTenant(new URL(link.href))),

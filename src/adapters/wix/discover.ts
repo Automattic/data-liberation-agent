@@ -5,6 +5,7 @@ import { withTimeout } from '../../lib/concurrency.js';
 import { discoverLinkedRoutes, resolveCanonicalSiteUrl } from './discovery-links.js';
 import { RENDERER_CALL_TIMEOUT_MS } from './page.js';
 import type { InventoryUrl } from '../shared.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
 import type { WixAdapterOpts, Inventory } from './types.js';
 
@@ -169,23 +170,20 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
       // nav extraction failed
     }
 
-    // 4. Extract site title.
-    //    Wix's editor sets document.title to "Page Title | Site Name Main".
-    //    Take the substring after the last " | " (the site-name half), then
-    //    drop the trailing " Main" suffix that Wix appends to every site
-    //    name. Without this the WordPress import lands with a site title
-    //    like "Home | Gilded Carat Main" instead of "Gilded Carat".
-    let siteTitle = '';
+    // 4. Read rendered metadata. Unlike page titles (which keep the half
+    // before the pipe), the document-title fallback keeps Wix's site-name
+    // half and removes its trailing " Main". Explicit OG metadata stays intact.
+    let homepageHtml = '';
     try {
-      siteTitle = (await withTimeout(p.evaluate(() => {
-        const t = document.title;
-        const pipeIdx = t.lastIndexOf(' | ');
-        const sitePart = pipeIdx > 0 ? t.slice(pipeIdx + 3).trim() : t;
-        return sitePart.replace(/ Main$/, '').trim();
-      }), RENDERER_CALL_TIMEOUT_MS, 'wix discover title')) as string;
+      homepageHtml = await withTimeout(p.content(), RENDERER_CALL_TIMEOUT_MS, 'wix discover metadata');
     } catch {
-      // title extraction failed
+      // metadata extraction failed
     }
+    const siteMetadata = extractSiteMetadata(homepageHtml, (title) => {
+      const pipeIdx = title.lastIndexOf(' | ');
+      const sitePart = pipeIdx > 0 ? title.slice(pipeIdx + 3).trim() : title;
+      return sitePart.replace(/ Main$/, '').trim();
+    });
 
     // 5. Classify URLs
     const counts: Record<string, number> = {};
@@ -200,8 +198,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
       siteUrl: url,
       discoveredAt: new Date().toISOString(),
       siteMeta: {
-        title: siteTitle || 'Imported Site',
-        tagline: '',
+        ...siteMetadata,
         language: 'en-US',
       },
       navigation,

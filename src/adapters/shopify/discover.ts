@@ -1,6 +1,7 @@
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { ShopifyAdapterOpts, ShopifyInventory, ShopifyPage, ShopifyBlog, ShopifyArticle } from './types.js';
 import { fetchShopifyPaginated } from './http.js';
@@ -90,10 +91,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
   }
 
   // Extract site metadata
-  const ogTitle = extractMeta(homepageHtml, 'og:title');
-  const ogDescription = extractMeta(homepageHtml, 'og:description');
-  const siteTitle = ogTitle || extractTitle(homepageHtml) || 'Imported Site';
-  const siteTagline = ogDescription || extractMeta(homepageHtml, 'description') || '';
+  const siteMetadata = extractSiteMetadata(homepageHtml);
   const langMatch = homepageHtml.match(/<html[^>]+lang=["']([^"']+)["']/i);
   const siteLanguage = langMatch?.[1] || 'en-US';
 
@@ -200,8 +198,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     discoveredAt: new Date().toISOString(),
     shopDomain,
     siteMeta: {
-      title: siteTitle,
-      tagline: siteTagline,
+      ...siteMetadata,
       language: siteLanguage,
     },
     navigation,

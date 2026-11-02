@@ -1,6 +1,7 @@
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, routeKey } from '../../lib/extraction/sitemap.js';
 import { extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
 import type { SquarespaceAdapterOpts, SquarespaceInventory } from './types.js';
@@ -109,15 +110,6 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   // 1. Fetch site metadata via ?format=json
   const siteJson = await fetchSqsJson(url);
 
-  const siteTitle =
-    siteJson?.website?.siteTitle ||
-    siteJson?.websiteSettings?.siteTitle ||
-    'Imported Site';
-  const siteTagline =
-    siteJson?.website?.siteTagLine ||
-    siteJson?.websiteSettings?.siteTagLine ||
-    siteJson?.website?.siteDescription ||
-    '';
   const siteLanguage = siteJson?.website?.language || 'en-US';
 
   // 2. Fetch sitemap
@@ -140,6 +132,13 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   } catch {
     // Public navigation is best-effort; sitemap and optional admin discovery continue.
   }
+
+  // Public metadata takes precedence; the Squarespace API remains a fallback
+  // when the public homepage does not expose the site's identity.
+  const siteMetadata = extractSiteMetadata(homepageHtml, (title) => title ||
+    siteJson?.website?.siteTitle || siteJson?.websiteSettings?.siteTitle || '');
+  siteMetadata.tagline ||= siteJson?.website?.siteTagLine ||
+    siteJson?.websiteSettings?.siteTagLine || siteJson?.website?.siteDescription || '';
 
   // 4. Classify URLs — for Squarespace, we can probe each URL with ?format=json
   // to determine if it's a collection or item, but for the initial pass we use
@@ -206,8 +205,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
     siteMeta: {
-      title: siteTitle,
-      tagline: siteTagline,
+      ...siteMetadata,
       language: siteLanguage,
     },
     navigation,
