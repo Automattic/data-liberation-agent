@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { allocateCaptureRoutes } from '../capture-export-routes.js';
 import { describe, it, expect, vi } from 'vitest';
+import { sameOriginPageAnchors } from '../screenshot/unscheduled-anchors.js';
 import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, isAttachmentSitemapUrl, isNonDocumentUrl, resolvePageLink } from './sitemap.js';
 
 describe('isNonDocumentUrl', () => {
@@ -864,6 +865,13 @@ describe('extractSameOriginLinks', () => {
 });
 
 describe('resolvePageLink', () => {
+  it('moves scheme and www variants of the entry site onto the entry origin for discovery and the capture frontier', () => {
+    const html = '<a href="relative.html">A</a> <a href="http://example.test/absolute.html">B</a> <a href="https://www.example.test/www.html?q=1#x">C</a> <a href="http://elsewhere.test/x.html">D</a>';
+    const expected = ['https://example.test/relative.html', 'https://example.test/absolute.html', 'https://example.test/www.html?q=1'];
+    expect(extractSameOriginLinks(html, 'https://example.test/')).toEqual(expected);
+    expect(sameOriginPageAnchors(html, 'https://example.test/')).toEqual(expected);
+  });
+
   it('preserves repeated slashes in same-origin paths and still drops scheme-relative hosts', () => {
     const base = 'https://example.test/';
     const origin = 'https://example.test';
