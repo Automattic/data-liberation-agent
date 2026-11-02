@@ -904,13 +904,32 @@ export function projectResponsiveBodyClassCss( source: string, moved: ReadonlyMa
 			let end = index + 1;
 			while ( start > 0 && siblings[ start - 1 ].type !== 'combinator' ) start--;
 			while ( end < siblings.length && siblings[ end ].type !== 'combinator' ) end++;
-			const wrapper = siblings.slice( start, end ).flatMap( node => node.type === 'class' && moved.has( node.value ) ? [ moved.get( node.value )! ] : [] )[ 0 ];
-			if ( ! wrapper ) return;
+			const compound = siblings.slice( start, end );
+			const wrapper = compound.flatMap( node => node.type === 'class' && moved.has( node.value ) ? [ moved.get( node.value )! ] : [] )[ 0 ];
+			const negatesMovedClass = compound.some( node => {
+				if ( node.type !== 'pseudo' || node.value !== ':not' ) return false;
+				let found = false;
+				node.walkClasses( token => { if ( moved.has( token.value ) ) found = true; } );
+				return found;
+			} );
+			if ( ! wrapper && ! negatesMovedClass ) return;
 			// Linked assets can also serve routes that did not move this class.
 			let owner = tag.parent;
 			while ( owner && owner.parent?.type !== 'root' ) owner = owner.parent;
-			if ( preserveBody && owner && selectorParser.isSelector( owner ) && ! originals.has( owner ) ) originals.set( owner, owner.clone() );
-			tag.replaceWith( selectorParser.className( { value: wrapper, spaces: tag.spaces } ) );
+			if ( preserveBody && owner && selectorParser.isSelector( owner ) && ! originals.has( owner ) ) {
+				const original = owner.clone();
+				// Negative body conditions still match the shared body on dual routes.
+				// Retain the authored selector only outside assembled documents.
+				if ( negatesMovedClass ) original.prepend( selectorParser.string( { value: `:where(html:not(:has(.${ DESKTOP_DOCUMENT_CLASS }))) ` } ) );
+				originals.set( owner, original );
+			}
+			// A negative condition must test both documents, not the wrapper that
+			// owns the excluded class. Keep the original compound's conditions.
+			const replacement = wrapper
+				? selectorParser.className( { value: wrapper } )
+				: selectorParser().astSync( `:is(.${ DESKTOP_DOCUMENT_CLASS },.${ MOBILE_DOCUMENT_CLASS })` ).first.first!;
+			replacement.spaces = tag.spaces;
+			tag.replaceWith( replacement );
 		} );
 		for ( const original of originals.values() ) selectors.append( original );
 		rule.selector = selectors.toString();
@@ -1820,7 +1839,7 @@ function responsiveMobileStyles(
 		.map(
 			( original ) => {
 				const style = aliasResponsiveClasses( original, classAliases );
-				const projected = scope ? projectStylesheet( () => scopeCss( style, { scope, rootClasses } ), onUnparseable ) : style;
+				const projected = scope ? projectStylesheet( () => scopeCss( style, { scope, rootClasses: [ ...rootClasses, DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] } ), onUnparseable ) : style;
 				return projected === undefined ? '' : `<style media="(max-width:${ switchWidth }px)">${ projected }</style>`;
 			}
 		)

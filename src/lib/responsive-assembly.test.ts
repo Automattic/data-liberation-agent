@@ -458,6 +458,41 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 		expect( profile.documentsPerRoute ).toBe( dual ? 2 : 1 );
 	}
 
+	it( 'keeps phone navigation visible when body negates a relocated device class', async () => {
+		const css = '.toggle{display:flex} body:not(.phone-nav) .toggle{display:none}' +
+			'body.page:not(.phone-nav,.unused) .listed{display:none}' +
+			'body.phone-nav:not(.desktop-nav) .mixed{color:rgb(0,128,0)} body.page{--shared:kept}';
+		const markup = '<nav><button class="toggle listed mixed">Menu</button></nav>';
+		const inlineHead = `<style>${ css }</style>`;
+		const linkedHead = '<link rel="stylesheet" href="https://example.com/layout.css">';
+		const exports = [
+			exportPair( page( markup, inlineHead, ' class="page"' ), page( markup, inlineHead, ' class="page phone-nav"' ) ),
+			exportPair( page( markup, linkedHead, ' class="page"' ), page( `<section>${ markup }</section>`, linkedHead, ' class="page phone-nav"' ), css ),
+		];
+		const browser = await chromium.launch();
+		try {
+			const copy = await browser.newPage();
+			for ( const exported of exports ) {
+				const $ = cheerio.load( exported.html );
+				const href = $( 'link[rel="stylesheet"]' ).attr( 'href' );
+				if ( href ) {
+					const emittedCss = readFileSync( join( dirs[ dirs.length - 1 ], 'website', href.replace( /^\//, '' ) ), 'utf8' );
+					$( 'link[rel="stylesheet"]' ).replaceWith( `<style>${ emittedCss }</style>` );
+					expect( emittedCss ).toContain( 'body.page{--shared:kept}' );
+				}
+				await copy.setContent( $.html() );
+				await copy.setViewportSize( { width: 390, height: 800 } );
+				const phone = copy.locator( `.${ MOBILE_DOCUMENT_CLASS } .toggle` );
+				expect( await phone.isVisible() ).toBe( true );
+				expect( await phone.evaluate( node => ( { display: getComputedStyle( node ).display, color: getComputedStyle( node ).color } ) ) ).toEqual( { display: 'flex', color: 'rgb(0, 128, 0)' } );
+				await copy.setViewportSize( { width: 1440, height: 900 } );
+				expect( await copy.locator( `.${ DESKTOP_DOCUMENT_CLASS } .toggle` ).evaluate( node => getComputedStyle( node ).display ) ).toBe( 'none' );
+			}
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it( 'projects captured linked CSS through the export stylesheet path', () => {
 		const link = '<link rel="stylesheet" href="https://example.com/layout.css">';
 		const exported = exportPair(
