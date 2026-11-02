@@ -48,7 +48,33 @@ describe( 'root class width contracts', () => {
 		expect( assembled.html ).not.toContain( '.unrelated' );
 	} );
 
-	// One browser pass: about seven seconds including unstable-width coverage.
+	// Local browser fixture: about five seconds, no network or platform knowledge.
+	it( 'proves width contracts through recurring main-thread long tasks', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( `<div>Local width contract fixture</div><script>
+				function measure(){document.body.classList.toggle('measured-wrap',innerWidth<1280)}
+				addEventListener('resize',measure);measure();
+				setInterval(()=>{const end=performance.now()+200;while(performance.now()<end){}},240);
+			</script>` );
+			const unproven: string[] = [];
+			expect( await sampleRootClasses( page, undefined, reason => unproven.push( reason ) ) ).toEqual( [ {
+				root: 'body', class: 'measured-wrap', minWidth: 768, maxWidth: 1279,
+				evidence: [
+					{ width: 768, html: [], body: [ 'measured-wrap' ] },
+					{ width: 1024, html: [], body: [ 'measured-wrap' ] },
+					{ width: 1280, html: [], body: [] },
+					{ width: 1440, html: [], body: [] },
+				],
+			} ] );
+			expect( unproven ).toEqual( [] );
+			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
+			expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( '' );
+		} finally { await browser.close(); }
+	}, 15_000 );
+
+	// One browser pass: about ten seconds including unstable-width coverage.
 	it( 'exports measurement-gated author CSS that survives responsive document scoping', async () => {
 		const browser = await chromium.launch();
 		try {
@@ -104,7 +130,9 @@ describe( 'root class width contracts', () => {
 				setInterval(()=>{if(innerWidth===1024)document.body.classList.toggle('noisy')},80);
 				addEventListener('resize',()=>document.body.classList.toggle('measured',innerWidth<1280));
 			</script>` );
-			expect( await sampleRootClasses( page ) ).toEqual( [] );
+			const unproven: string[] = [];
+			expect( await sampleRootClasses( page, undefined, reason => unproven.push( reason ) ) ).toEqual( [] );
+			expect( unproven ).toEqual( [ expect.stringContaining( 'unproven at 1024px' ) ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 		} finally { await browser.close(); }
 	}, 20_000 );

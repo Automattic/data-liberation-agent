@@ -52,19 +52,23 @@ export function rootClassContracts( samples: RootClassSample[] ): RootClassContr
  * Node owns the deadline and sleeps: source timers must not control the bound.
  */
 async function stableRootClasses( page: Page ): Promise<RootClassSample | undefined> {
-	const deadline = Date.now() + 1500;
+	// Allow resize work and recurring ~200ms long tasks to leave a 500ms
+	// quiet window. At most five observations (including restoration) and
+	// four bounded resizes keep the entire probe below 21 seconds.
+	const deadline = Date.now() + 3000;
 	let previous = '';
 	let quietSince = Date.now();
 	while ( Date.now() < deadline ) {
 		// A background/throttled page may not produce a frame. Do not let it
 		// hold capture indefinitely; no frame means no proven observation.
+		const controller = new AbortController();
 		const sample = await Promise.race( [
 			page.evaluate( () => new Promise<RootClassSample>( resolve => requestAnimationFrame( () => resolve( {
 				width: innerWidth, html: [ ...document.documentElement.classList ].sort(), body: [ ...document.body.classList ].sort(),
 			} ) ) ) ),
-			delay( Math.min( 100, Math.max( 0, deadline - Date.now() ) ) ).then( () => undefined ),
-		] );
-		if ( ! sample ) return undefined;
+			delay( Math.max( 0, deadline - Date.now() ), undefined, { signal: controller.signal } ).then( () => undefined ),
+		] ).finally( () => controller.abort() );
+		if ( ! sample || Date.now() >= deadline ) return undefined;
 		const signature = JSON.stringify( sample );
 		if ( signature !== previous ) {
 			previous = signature;
@@ -72,7 +76,7 @@ async function stableRootClasses( page: Page ): Promise<RootClassSample | undefi
 		} else if ( Date.now() - quietSince >= 500 ) {
 			return sample;
 		}
-		await delay( 50 );
+		await delay( Math.min( 50, Math.max( 0, deadline - Date.now() ) ) );
 	}
 	return undefined;
 }
@@ -81,25 +85,35 @@ async function stableRootClasses( page: Page ): Promise<RootClassSample | undefi
  * width (including restoration) invalidates the entire ladder: dropping just
  * that sample would invent a range across an unproven gap.
  */
-export async function sampleRootClasses( page: Page, widths: readonly number[] = ROOT_CLASS_WIDTHS ): Promise<RootClassContract[]> {
+export async function sampleRootClasses( page: Page, widths: readonly number[] = ROOT_CLASS_WIDTHS, onUnproven?: ( reason: string ) => void ): Promise<RootClassContract[]> {
 	const original = page.viewportSize();
-	if ( ! original ) return [];
+	if ( ! original ) {
+		onUnproven?.( 'root class source probe unproven: no viewport' );
+		return [];
+	}
 	const samples: RootClassSample[] = [];
 	let proven = true;
 	const sample = async () => {
 		const observation = await stableRootClasses( page );
 		if ( observation ) samples.push( observation );
-		else proven = false;
+		else {
+			proven = false;
+			onUnproven?.( `root class source probe unproven at ${ page.viewportSize()?.width }px: no stable observation before deadline` );
+		}
 	};
 	try {
 		await sample();
 		for ( const width of [ ...new Set( widths ) ].filter( width => width >= 768 && width < original.width ).sort( ( a, b ) => a - b ).slice( 0, 3 ) ) {
+			if ( ! proven ) break;
 			await withEvaluateTimeout( page.setViewportSize( { ...original, width } ), 1500 );
 			await sample();
 		}
 	} finally {
 		await withEvaluateTimeout( page.setViewportSize( original ), 1500 );
-		if ( ! await stableRootClasses( page ) ) proven = false;
+		if ( ! await stableRootClasses( page ) ) {
+			proven = false;
+			onUnproven?.( `root class source probe unproven restoring ${ original.width }px: no stable observation before deadline` );
+		}
 	}
 	return proven ? rootClassContracts( samples ) : [];
 }
