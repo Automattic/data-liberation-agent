@@ -4421,8 +4421,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-bounded-diagnostics-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		// 1,200 diagnostics exceed the 31 KiB sample budget without making
+		// this bounds check stress every other export pass with 24,000 nodes.
 		const styles = Array.from(
-			{ length: 12_000 },
+			{ length: 600 },
 			( _value, index ) => `<style nonce="runtime-${ index }">.x${ index }{color:red}</style>`
 		).join( '' );
 		for ( const slug of [ 'homepage', 'about' ] )
@@ -4438,7 +4440,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
 
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
-		expect( diagnostics.styleHoist.diagnosticCounts.unsafe_attributes ).toBe( 24_000 );
+		expect( diagnostics.styleHoist.diagnosticCounts.unsafe_attributes ).toBe( 1_200 );
 		expect( diagnostics.styleHoist.diagnosticsTruncated ).toBe( true );
 		expect( Buffer.byteLength( JSON.stringify( diagnostics.styleHoist ) ) ).toBeLessThanOrEqual( 32 * 1024 );
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'nonce="runtime-0"' );

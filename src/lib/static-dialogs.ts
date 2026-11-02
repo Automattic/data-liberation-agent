@@ -288,7 +288,28 @@ export function wireCapturedDialogs(
 			const dropdown = state.dialog?.presentation === 'dropdown';
 			const observed = resolveObservedAncestors( $, trigger, state.dialog?.ancestorState, dropdown );
 			if ( state.dialog?.ancestorState && !observed ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-unverified', state.dialog.ancestorState.reason ?? 'portable-owner-mismatch' );
-			if ( observed ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( observed.state.ancestors ) );
+			const bindings = ( observed?.state.ancestors ?? [] ).map( row => {
+				if ( !state.dialog?.rootClassState?.some( delta => delta.root === row.tag ) ) return row;
+				const { class: _closedClass, ...closed } = row.closed;
+				const { class: _openedClass, ...opened } = row.opened;
+				return { ...row, closed, opened };
+			} ).filter( row => Object.keys( row.closed ).length );
+			// Root classes may have moved onto a responsive document wrapper. Bind
+			// by the closed tokens within this trigger's ancestor chain, not source
+			// tag names or source depth. Replay already applies token deltas.
+			for ( const delta of state.dialog?.rootClassState ?? [] ) {
+				const parents = trigger.parents().toArray();
+				const scope = trigger.closest( '.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document' ).get( 0 );
+				const candidates = parents.filter( node => node === scope || node.tagName === delta.root );
+				const owner = candidates.find( node => {
+					const tokens = classTokens( $( node ).attr( 'class' ) ?? null );
+					return delta.removed.length > 0 && delta.removed.every( token => tokens.includes( token ) );
+				} ) ?? ( delta.root === 'body' ? scope : undefined ) ?? candidates.find( node => node.tagName === delta.root );
+				if ( !owner || owner.type !== 'tag' ) continue;
+				bindings.push( { selector: delta.root, tag: owner.tagName, depth: parents.indexOf( owner ) + 1,
+					closed: { class: delta.removed.join( ' ' ) }, opened: { class: delta.added.join( ' ' ) }, classTokensOnly: true } );
+			}
+			if ( bindings.length ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( bindings ) );
 			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
 			// A source can reuse one responsive panel root for different trigger contents.
 			// Retain its single DOM identity while replaying each observed state,
