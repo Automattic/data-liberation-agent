@@ -37,7 +37,7 @@ import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dia
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
-import { sampleRootClasses, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
+import { RootClassEvidence, rootClassContracts, sampleRootClassLadder, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
 import {
 	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
@@ -189,6 +189,7 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 
 interface CapturePerViewportArgs {
 	page: Page;
+	rootClassEvidence: RootClassEvidence;
 	routeDeadlineMs: number;
 	routeRemainingMs: () => number;
 	serverLinks: Set<string>;
@@ -1117,9 +1118,23 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let rootClassWidths: RootClassContract[] = [];
 	if ( isDesktop && plan.captureHtml ) {
 		try {
-			rootClassWidths = await sampleRootClasses( page, undefined, reason => args.diagnostics?.push( {
+			const startedAt = Date.now();
+			const onUnproven = ( reason: string ) => args.diagnostics?.push( {
 				code: 'root_class_source_probe_unproven', reason: `${ url }: ${ reason }`,
-			} ) );
+			} );
+			const initial = await withEvaluateTimeout( page.evaluate( () => ( {
+				width: innerWidth,
+				html: [ ...document.documentElement.classList ].sort(),
+				body: [ ...document.body.classList ].sort(),
+			} ) ), evaluateTimeoutMs );
+			// Only the server document separates authored root classes from
+			// runtime-added ones; without it, sample this route and prove nothing.
+			const ladder = () => sampleRootClassLadder( page, undefined, onUnproven );
+			const result = serverHtml
+				? await args.rootClassEvidence.contracts( url, serverHtml, initial, ladder )
+				: { contracts: rootClassContracts( await ladder() ?? [] ), inheritedFrom: undefined };
+			rootClassWidths = result.contracts;
+			process.stderr.write( `[timing] root-class ${ JSON.stringify( { url, durationMs: Date.now() - startedAt, inheritedFrom: result.inheritedFrom } ) }\n` );
 		} catch ( error ) {
 			// A bounded probe cannot safely hand a nonresponding renderer to
 			// subsequent DOM reads. Lose this profile rather than hang capture.
@@ -2581,6 +2596,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ];
 	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) && ( urls.length > 1 || frontier ) );
 	const sharedChromeResults = new Map< string, SharedChromeProbe >();
+	const rootClassEvidence = new RootClassEvidence();
 	if ( ! opts.viewports && desktopProfile && phoneProfile && entrypoint ) {
 		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
 		const requested = opts.deviceMode ?? 'dual';
@@ -2840,6 +2856,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					try {
 						await capturePerViewport( {
 							page,
+							rootClassEvidence,
 							routeDeadlineMs,
 							routeRemainingMs: () => routeDeadlineMs ? Math.max( 1, routeDeadlineMs - ( Date.now() - routeStartedAt ) ) : 600_000,
 							probeOverrun: ms => probeOverruns.set( url, ( probeOverruns.get( url ) ?? 0 ) + ms ),

@@ -1,12 +1,84 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { assembleResponsiveCapture } from '../responsive-assembly.js';
 import { scopeCss } from '../replicate/css-scope.js';
-import { projectRootClassContracts, rootClassContracts, sampleRootClasses } from './root-class-contracts.js';
+import { RootClassEvidence, projectRootClassContracts, rootClassContracts, sampleRootClasses } from './root-class-contracts.js';
 
 describe( 'root class width contracts', () => {
+	const runtime = '<script src="/runtime.js"></script><script>window.run = 1</script>';
+	const initial = { width: 1440, html: [ 'b', 'a' ], body: [ 'wide' ] };
+	const ladder = [ initial, { width: 768, html: [ 'a', 'b' ], body: [ 'narrow' ] } ];
+
+	it( 'inherits proven samples with the same runtime and initial class sets and re-derives contracts', async () => {
+		const evidence = new RootClassEvidence();
+		const sample = vi.fn().mockResolvedValue( ladder );
+		const first = await evidence.contracts( 'https://fixture.test/one', runtime, initial, sample );
+		const inherited = await evidence.contracts( 'https://fixture.test/two', runtime, { ...initial, html: [ 'a', 'b' ] }, sample );
+		expect( sample ).toHaveBeenCalledTimes( 1 );
+		expect( inherited ).toEqual( { contracts: first.contracts, inheritedFrom: 'https://fixture.test/one' } );
+		expect( inherited.contracts ).toEqual( rootClassContracts( ladder ) );
+	} );
+
+	it.each( [
+		{ html: runtime.replace( '/runtime.js', '/other.js' ), initial },
+		{ html: runtime.replace( 'window.run = 1', 'window.otherRuntime()' ), initial },
+		{ html: runtime, initial: { ...initial, html: [ 'other' ] } },
+		{ html: runtime, initial: { ...initial, body: [ 'other' ] } },
+		{ html: runtime, initial: { ...initial, width: 1280 } },
+	] )( 'samples afresh for a different runtime or initial root state: %j', async changed => {
+		const evidence = new RootClassEvidence();
+		const sample = vi.fn().mockResolvedValue( ladder );
+		await evidence.contracts( 'https://fixture.test/one', runtime, initial, sample );
+		expect( await evidence.contracts( 'https://fixture.test/two', changed.html, changed.initial, sample ) ).not.toHaveProperty( 'inheritedFrom' );
+		expect( sample ).toHaveBeenCalledTimes( 2 );
+	} );
+
+	it( 'never records an unproven ladder or a changed initial observation', async () => {
+		for ( const observations of [ undefined, [ { ...initial, body: [ 'changed' ] } ] ] ) {
+			const evidence = new RootClassEvidence();
+			const sample = vi.fn().mockResolvedValue( observations );
+			await evidence.contracts( 'https://fixture.test/one', runtime, initial, sample );
+			expect( await evidence.contracts( 'https://fixture.test/two', runtime, initial, sample ) ).not.toHaveProperty( 'inheritedFrom' );
+			expect( sample ).toHaveBeenCalledTimes( 2 );
+		}
+	} );
+
+	it( 'ignores server-declared per-route root classes but still keys on runtime-added ones', async () => {
+		const page = ( id: string ) => `<html><body class="collection-${ id } collection-type-page">${ runtime }</body></html>`;
+		const observed = ( id: string, extra: string[] = [] ) => ( { width: 1440, html: [], body: [ `collection-${ id }`, 'collection-type-page', 'js-ready', ...extra ].sort() } );
+		const evidence = new RootClassEvidence();
+		const sample = vi.fn().mockImplementation( async () => [ observed( 'one' ), { ...observed( 'one', [ 'tweak-narrow' ] ), width: 768 } ] );
+		const first = await evidence.contracts( 'https://fixture.test/one', page( 'one' ), observed( 'one' ), sample );
+		expect( first.contracts.map( contract => contract.class ) ).toEqual( [ 'tweak-narrow' ] );
+		const inherited = await evidence.contracts( 'https://fixture.test/two', page( 'two' ), observed( 'two' ), sample );
+		expect( inherited.inheritedFrom ).toBe( 'https://fixture.test/one' );
+		expect( inherited.contracts ).toEqual( first.contracts.map( contract => ( { ...contract, evidence: expect.any( Array ) } ) ) );
+		expect( sample ).toHaveBeenCalledTimes( 1 );
+		// A different runtime-added class is runtime state, not authored identity.
+		expect( await evidence.contracts( 'https://fixture.test/three', page( 'three' ), observed( 'three', [ 'other-runtime' ] ), sample ) ).not.toHaveProperty( 'inheritedFrom' );
+		expect( sample ).toHaveBeenCalledTimes( 2 );
+	} );
+
+	it( 'does not record a route whose declared root classes change with width', async () => {
+		const html = `<html><body class="declared">${ runtime }</body></html>`;
+		const start = { width: 1440, html: [], body: [ 'declared' ] };
+		const evidence = new RootClassEvidence();
+		const sample = vi.fn().mockResolvedValue( [ start, { width: 768, html: [], body: [] } ] );
+		await evidence.contracts( 'https://fixture.test/one', html, start, sample );
+		expect( await evidence.contracts( 'https://fixture.test/two', html, start, sample ) ).not.toHaveProperty( 'inheritedFrom' );
+		expect( sample ).toHaveBeenCalledTimes( 2 );
+	} );
+
+	it( 'reuses a proven ladder with no contracts', async () => {
+		const evidence = new RootClassEvidence();
+		const sample = vi.fn().mockResolvedValue( [ initial, { ...initial, width: 768 } ] );
+		await evidence.contracts( 'https://fixture.test/one', runtime, initial, sample );
+		expect( await evidence.contracts( 'https://fixture.test/two', runtime, initial, sample ) ).toEqual( { contracts: [], inheritedFrom: 'https://fixture.test/one' } );
+		expect( sample ).toHaveBeenCalledTimes( 1 );
+	} );
+
 	it( 'rejects disjoint observations and flags present at the wide capture', () => {
 		const sample = ( width: number, body: string[] ) => ( { width, body, html: [] } );
 		expect( rootClassContracts( [ sample( 768, [ 'a', 'wide' ] ), sample( 1024, [ 'wide' ] ), sample( 1280, [ 'a', 'wide' ] ), sample( 1440, [ 'wide' ] ) ] ) ).toEqual( [] );

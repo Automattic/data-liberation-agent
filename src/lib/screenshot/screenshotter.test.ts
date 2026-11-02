@@ -47,7 +47,7 @@ vi.mock('./fluid-capture.js', async (importOriginal) => ({
 // fixture owns that contract, not these orchestration-only page mocks.
 vi.mock('./root-class-contracts.js', async (importOriginal) => ({
 	...( await importOriginal<typeof import('./root-class-contracts.js')>() ),
-	sampleRootClasses: vi.fn().mockResolvedValue([]),
+	sampleRootClassLadder: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Admission policy tests drive the runtime's available memory directly; the
@@ -718,6 +718,7 @@ describe('captureScreenshots', () => {
           const s = String(fn);
           if (s.includes('DOCTYPE')) return { html: '<html><body>hello</body></html>', findings: [] };
           if (s.includes('__dlaCleanup')) return { url: 'https://example.com/short', viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
+          if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };
           if (s.includes('scrollHeight')) return 500;
           // site-analysis evaluate
           return { palette: [], typography: {}, metadata: { title: '', metaDescription: '', openGraph: {}, jsonLdTypes: [], htmlBytes: 0 }, breakpoints: { minWidth: [], maxWidth: [] } };
