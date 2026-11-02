@@ -5,7 +5,8 @@ import { expect, it, vi } from 'vitest';
 
 // Fluid learning is an optimization: when it throws, the route keeps its
 // frozen copy and the failure is a diagnostic, not a failed route (#763).
-vi.mock( './fluid-capture.js', () => ( {
+vi.mock( './fluid-capture.js', async importOriginal => ( {
+	...await importOriginal<typeof import('./fluid-capture.js')>(),
 	learnAndApplyFluidGeometry: async () => {
 		throw new TypeError( "Cannot read properties of undefined (reading 'nodeType')" );
 	},

@@ -53,6 +53,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		mobile: 'i',
 	},
 	responsive: {
+		'root-class-contracts': 'a',
 		'responsive-source': 'a', 'responsive-fragment': 'a', 'responsive-fragments': 'a', 'embedded-responsive': 'a', 'embedded-document': 'a',
 		'anchor-fragment': 'a', 'anchor-target': 'a', 'anchor-source-id': 'a', 'anchor-alias': 'a', 'anchor-unresolved': 'a',
 		'fluid-id': 'a', 'fluid-segment': 'a', 'fluid-rules': 'a', 'fluid-sheet-rules': 'a', 'fluid-ignore-padding': 'a', 'fluid-release': 'a', 'fluid-specificity': 'i', 'viewport-height': 'a',

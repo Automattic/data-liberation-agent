@@ -37,6 +37,7 @@ import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dia
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
+import { sampleRootClasses, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
 import {
 	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
@@ -1110,6 +1111,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		writeFileSync( plan.paths.geometry, `${ JSON.stringify( capture, null, 2 ) }\n` );
 	}
 
+	// Measure while the source runtime still owns layout. Later observation,
+	// fluid learning and serialization hooks may freeze timers or change DOM
+	// geometry; their root classes are not evidence of source width behavior.
+	let rootClassWidths: RootClassContract[] = [];
+	if ( isDesktop && plan.captureHtml ) {
+		try {
+			rootClassWidths = await sampleRootClasses( page );
+		} catch ( error ) {
+			// A bounded probe cannot safely hand a nonresponding renderer to
+			// subsequent DOM reads. Lose this profile rather than hang capture.
+			fail( 'evaluate', `root class source probe unproven: evaluate timeout or failure: ${ String( error ) }` );
+			return;
+		}
+	}
+
 	// Initial component states are immutable evidence, read before exploration.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
@@ -1250,7 +1266,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 		const learned = await capturePageHtml( page, args.diagnostics );
-		const projected = projectInitialDocument( initialDocument, learned );
+		const baseUrl = await page.evaluate( () => document.baseURI );
+		const projected = projectRootClassContracts( projectInitialDocument( initialDocument, learned ), rootClassWidths, href => {
+			const absolute = new URL( href, baseUrl ).href;
+			const resource = resourceStore.getReplayableResponse( absolute, 'stylesheet' );
+			return resource ? { css: readFileSync( resource.path, 'utf8' ), url: absolute } : undefined;
+		} );
 		const captured = typeof initialTitle === 'string' ? withDocumentTitle( projected, initialTitle ) : projected;
 		const html = canonicalize( frozen ? sanitizeFrozenHtml( captured ) : captured );
 		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );

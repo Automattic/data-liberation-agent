@@ -43,6 +43,13 @@ vi.mock('./fluid-capture.js', async (importOriginal) => ({
 	learnAndApplyFluidGeometry: learnAndApplyFluidGeometryMock,
 }));
 
+// Root-class readiness requires real frames and resize timers; its browser
+// fixture owns that contract, not these orchestration-only page mocks.
+vi.mock('./root-class-contracts.js', async (importOriginal) => ({
+	...( await importOriginal<typeof import('./root-class-contracts.js')>() ),
+	sampleRootClasses: vi.fn().mockResolvedValue([]),
+}));
+
 // Admission policy tests drive the runtime's available memory directly; the
 // host's real cgroup accounting is runtime-memory.test.ts's concern.
 vi.mock('./runtime-memory.js', () => ({
@@ -72,11 +79,14 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     }),
     url: vi.fn().mockImplementation(() => currentUrl),
     viewportSize: vi.fn().mockReturnValue({ width: 1440, height: 900 }),
+    setViewportSize: vi.fn().mockResolvedValue(undefined),
+    waitForTimeout: vi.fn().mockResolvedValue(undefined),
     content: vi.fn().mockResolvedValue('<html><body>hello</body></html>'),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('fakepng')),
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
       const s = String(fn);
+      if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };
       // This transport fixture has no native animations; browser behavior is
       // exercised by native-view-timelines.test.ts with real Chromium.
       if (typeof fn === 'string' && s.includes('document.getAnimations')) return [];
