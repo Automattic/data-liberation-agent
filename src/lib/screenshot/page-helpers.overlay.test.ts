@@ -83,6 +83,10 @@ describe('isConsentBanner', () => {
     expect(isConsentBanner(benign({ selector: 'div#onetrust-banner-sdk', text: 'manage preferences' }))).toBe(true);
   });
 
+  it('recognizes the generic cc-window / cc-banner shape without English consent text', () => {
+    expect(isConsentBanner(benign({ selector: 'div.cc-window.cc-banner', text: 'deze website gebruikt gegevens', zIndex: 100000 }))).toBe(true);
+  });
+
   it('does not flag a generic newsletter modal as a consent banner', () => {
     expect(isConsentBanner(benign({ text: 'join our list for 10 percent off', selector: 'div.popup' }))).toBe(false);
   });
@@ -159,7 +163,7 @@ describe('selectOverlayTargets', () => {
     ]);
   });
 
-  it('routes an above-threshold candidate that also reads as consent to takeovers (not consent)', () => {
+  it('classifies consent independently of the takeover score', () => {
     const detection: OverlayDetection = {
       scrollLock: { active: true },
       candidates: [
@@ -168,7 +172,7 @@ describe('selectOverlayTargets', () => {
     };
     const targets = selectOverlayTargets(detection);
     expect(targets).toHaveLength(1);
-    expect(targets[0].kind).toBe('takeover');
+    expect(targets[0].kind).toBe('consent');
   });
 
   it('drops thin sticky chrome that only reaches threshold via scroll-lock + a sibling backdrop', () => {

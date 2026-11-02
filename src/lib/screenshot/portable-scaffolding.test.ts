@@ -56,7 +56,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     const evidence = JSON.stringify(entry);
     for (const code of ['dismissed_overlay_removed', 'app_root_unwrapped', 'hidden_navigation_affordance_removed']) expect(evidence).toContain(code);
     for (const id of ['click-banner', 'hide-banner', '__next', 'root', 'app', 'hidden-top']) expect(evidence).toContain(id);
-    // Exercise scored consent (classified as takeover), explicit backdrop,
+    // Exercise scored consent, explicit backdrop,
     // genuine promo retention, selector dependencies and live-node identity.
     const probe = await browser.newPage();
     await probe.setContent(`<!doctype html><style>

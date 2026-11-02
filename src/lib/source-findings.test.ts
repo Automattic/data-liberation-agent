@@ -37,6 +37,7 @@ describe( 'source findings (static-site-importer/source-findings/v1)', () => {
 	it( 'owns the capture code -> loss class mapping Static Site Importer applied before #787', () => {
 		// static-site-importer includes/class-static-site-importer-diagnostic-loss-classes.php, REPORTED_LOSS_CODES, before #787.
 		expect( SOURCE_FINDING_LOSS_CLASSES ).toEqual( {
+			consent_banner_differs: { loss_class: 'degraded_unit', unit: 'block' },
 			route_capture_failed: { loss_class: 'omitted_unit', unit: 'route' },
 			route_export_failed: { loss_class: 'omitted_unit', unit: 'route' },
 			route_path_collision: { loss_class: 'omitted_unit', unit: 'route' },

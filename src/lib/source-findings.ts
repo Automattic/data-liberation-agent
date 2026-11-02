@@ -50,6 +50,7 @@ export const SOURCE_FINDING_LOSS_CLASSES = {
 	asset_exceeds_file_limit: { loss_class: 'omitted_unit', unit: 'asset' },
 	asset_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'asset' },
 	route_exceeds_total_budget: { loss_class: 'omitted_unit', unit: 'route' },
+	consent_banner_differs: { loss_class: 'degraded_unit', unit: 'block' },
 	route_capture_degraded: { loss_class: 'degraded_unit', unit: 'route' },
 	route_template_derived: { loss_class: 'degraded_unit', unit: 'route' },
 	template_slot_runtime_unobserved: { loss_class: 'degraded_unit', unit: 'block' },

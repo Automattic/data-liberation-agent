@@ -50,7 +50,7 @@ export interface CaptureEvidenceInput {
 		discoveryDiagnostics?: ReadonlyArray< RouteDiagnostic >;
 	};
 	capture: {
-		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' > > >;
+		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' | 'dismissed' > > >;
 		absentRoutes: ReadonlySet< string >;
 		interactivity: ReadonlyArray< SourceInteractivityPage >;
 		http?: { acquisition: unknown; diagnostics: ReadonlyArray< { code: string; url: string; reason: string } > };
@@ -639,6 +639,23 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		...( httpInput?.diagnostics ?? [] ),
 		...routeCaptureDiagnostics,
 	];
+
+	// Manifest order is capture order; keep the first site's intent, not builder DOM.
+	let consentBanner: import('./consent-banner.js').ConsentBanner | undefined;
+	for (const [url, entry] of Object.entries(capture.entries)) {
+		for (const overlay of entry.dismissed ?? []) {
+			const banner = overlay.consentBanner;
+			if (!banner) continue;
+			if (!consentBanner) {
+				consentBanner = banner;
+				writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(banner, null, 2)}\n`);
+			} else if (JSON.stringify({ ...banner, source_selector: undefined }) !== JSON.stringify({ ...consentBanner, source_selector: undefined })) {
+				if (!discoveryDiagnostics.some(row => row.code === 'consent_banner_differs' && row.url === url)) discoveryDiagnostics.push({
+					code: 'consent_banner_differs', url, reason: 'A different consent banner was observed; the first captured banner was retained.',
+				});
+			}
+		}
+	}
 
 	const receiptPath = join( stageDir, 'capture-receipt.json' );
 	// The entrypoint's self-declared generator: source evidence kept apart from the capturing platform.
