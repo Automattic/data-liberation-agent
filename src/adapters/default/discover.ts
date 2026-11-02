@@ -1,6 +1,7 @@
 import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, resolvePageLink } from '../../lib/extraction/sitemap.js';
 import { documentRequestUrl } from '../../lib/url/route-key.js';
-import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import { createSourcePage, sourceContextOptions, getPlaywright } from '../../lib/browser-kit/browser-kit.js';
 import type { InventoryUrl } from '../shared.js';
 import type { DefaultInventory } from './types.js';
@@ -28,10 +29,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
     // Network error — continue with empty HTML.
   }
 
-  const ogTitle = extractMeta(homepageHtml, 'og:title');
-  const ogDescription = extractMeta(homepageHtml, 'og:description');
-  const siteTitle = ogTitle || extractTitle(homepageHtml) || 'Imported Site';
-  const siteTagline = ogDescription || extractMeta(homepageHtml, 'description') || '';
+  const siteMetadata = extractSiteMetadata(homepageHtml);
 
   const langMatch = homepageHtml.match(/<html[^>]+lang=["']([^"']+)["']/i);
   const siteLanguage = langMatch?.[1] || 'en-US';
@@ -101,8 +99,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
     siteMeta: {
-      title: siteTitle,
-      tagline: siteTagline,
+      ...siteMetadata,
       language: siteLanguage,
     },
     navigation,

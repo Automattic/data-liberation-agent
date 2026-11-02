@@ -1,6 +1,7 @@
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { fetchSitemapWithDiagnostics, classifyUrl, type SitemapDiagnostic } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
 
@@ -56,10 +57,7 @@ export async function discoverWebflow(url: string, _opts: Record<string, unknown
   }
 
   // 2. Extract site metadata
-  const ogTitle = extractMeta(homepageHtml, 'og:title');
-  const ogDescription = extractMeta(homepageHtml, 'og:description');
-  const siteTitle = ogTitle || extractTitle(homepageHtml) || 'Imported Site';
-  const siteTagline = ogDescription || extractMeta(homepageHtml, 'description') || '';
+  const siteMetadata = extractSiteMetadata(homepageHtml);
 
   // Try to detect language from <html lang="...">
   const langMatch = homepageHtml.match(/<html[^>]+lang=["']([^"']+)["']/i);
@@ -93,8 +91,7 @@ export async function discoverWebflow(url: string, _opts: Record<string, unknown
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
     siteMeta: {
-      title: siteTitle,
-      tagline: siteTagline,
+      ...siteMetadata,
       language: siteLanguage,
     },
     navigation,

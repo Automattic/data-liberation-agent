@@ -1,6 +1,7 @@
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { parseSitemapXml, classifyUrl } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { GoDaddyWmInventory } from './types.js';
 
@@ -72,11 +73,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     // Network error — continue with empty HTML
   }
 
-  const ogTitle = extractMeta(homepageHtml, 'og:title');
-  const ogDescription = extractMeta(homepageHtml, 'og:description');
-  const ogSiteName = extractMeta(homepageHtml, 'og:site_name');
-  const siteTitle = ogSiteName || ogTitle || extractTitle(homepageHtml) || 'Imported Site';
-  const siteTagline = ogDescription || extractMeta(homepageHtml, 'description') || '';
+  const siteMetadata = extractSiteMetadata(homepageHtml);
 
   const langMatch = homepageHtml.match(/<html[^>]+lang=["']([^"']+)["']/i);
   const siteLanguage = langMatch?.[1] || 'en-US';
@@ -98,8 +95,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
     siteMeta: {
-      title: siteTitle,
-      tagline: siteTagline,
+      ...siteMetadata,
       language: siteLanguage,
     },
     navigation,

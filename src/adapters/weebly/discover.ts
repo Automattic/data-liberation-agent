@@ -1,6 +1,6 @@
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle } from '../../lib/html-extract/index.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import { extractWeeblyNavLinks } from './media.js';
 import type { WeeblyInventory } from './types.js';
@@ -30,10 +30,7 @@ export async function discoverWeebly(url: string, _opts: Record<string, unknown>
   }
 
   // 2. Extract site metadata
-  const ogTitle = extractMeta(homepageHtml, 'og:title');
-  const ogDescription = extractMeta(homepageHtml, 'og:description');
-  const siteTitle = ogTitle || extractTitle(homepageHtml) || 'Imported Site';
-  const siteTagline = ogDescription || extractMeta(homepageHtml, 'description') || '';
+  const siteMetadata = extractSiteMetadata(homepageHtml);
 
   // Detect language from <html lang="...">
   const langMatch = homepageHtml.match(/<html[^>]+lang=["']([^"']+)["']/i);
@@ -71,8 +68,7 @@ export async function discoverWeebly(url: string, _opts: Record<string, unknown>
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
     siteMeta: {
-      title: siteTitle,
-      tagline: siteTagline,
+      ...siteMetadata,
       language: siteLanguage,
     },
     navigation,

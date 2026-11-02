@@ -1,7 +1,8 @@
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import * as cheerio from 'cheerio';
 import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractNavLinks } from '../../lib/html-extract/index.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { HubSpotInventory } from './types.js';
 import { MAX_HTML_BYTES } from './constants.js';
@@ -39,10 +40,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
 
   const $ = cheerio.load(homepageHtml);
 
-  const ogTitle = extractMeta(homepageHtml, 'og:title');
-  const ogDescription = extractMeta(homepageHtml, 'og:description');
-  const siteTitle = ogTitle || extractTitle(homepageHtml) || 'Imported Site';
-  const siteTagline = ogDescription || extractMeta(homepageHtml, 'description') || '';
+  const siteMetadata = extractSiteMetadata(homepageHtml);
   const siteLanguage = $('html').attr('lang') || 'en-US';
 
   const sitemap = await fetchSitemapWithDiagnostics(url);
@@ -70,8 +68,7 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
     siteMeta: {
-      title: siteTitle,
-      tagline: siteTagline,
+      ...siteMetadata,
       language: siteLanguage,
     },
     navigation,

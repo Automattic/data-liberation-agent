@@ -1,5 +1,6 @@
 import { documentRequestUrl } from '../../lib/url/route-key.js';
 import { mediumRouteScope } from './route-scope.js';
+import { extractSiteMetadata } from '../site-metadata.js';
 import type { DefaultInventory } from '../default/types.js';
 
 /** Medium's origin sitemap lists every story on Medium, and its HTML answers
@@ -13,7 +14,7 @@ export async function discoverMedium(url: string, _opts: Record<string, unknown>
 	return {
 		siteUrl: homepage,
 		discoveredAt: new Date().toISOString(),
-		siteMeta: { title: root.slice(1), tagline: '', language: 'en-US' },
+		siteMeta: { ...extractSiteMetadata('', { title: root.slice(1) }), language: 'en-US' },
 		navigation: [],
 		counts: { homepage: 1 },
 		urls: [{ url: homepage, type: 'homepage' }],

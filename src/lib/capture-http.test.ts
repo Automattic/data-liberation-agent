@@ -32,6 +32,7 @@ vi.mock('./screenshot/screenshotter.js', () => ({ captureScreenshots: browserCap
 
 import { captureWebsite, IncompleteCaptureError, UnsupportedCapturePlatformError } from './capture.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
+import { discoverTenantHandle } from '../adapters/tenant-handle.js';
 
 const dirs: string[] = [];
 const url = 'https://example.com/';
@@ -77,6 +78,22 @@ afterEach(() => {
 });
 
 describe('orchestrated HTTP review capture', () => {
+	it('uses the declared site name rather than the homepage share title in the capture receipt', async () => {
+		const homepage = 'https://example.com/owner/';
+		const html = '<html><head><meta property="og:site_name" content="Owner Site"><meta property="og:title" content="Homepage Share Title"><title>Document Title</title></head><body><h1>Owner</h1></body></html>';
+		const platform = adapter();
+		platform.discover = (entry) => discoverTenantHandle(entry);
+		vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, url: homepage, text: async () => html })));
+		try {
+			const result = await captureWebsite(
+				{ url: homepage, outputDir: directory(), acquisition: 'http' },
+				{ findAdapter: () => platform },
+			);
+			expect(JSON.parse(readFileSync(result.captureReceiptPath, 'utf8')).title).toBe('Owner Site');
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
 	it('records source readiness before export-only projection and retains its learning provenance', async () => {
 		state.runtime = true;
 		const outputDir = directory(), platform = adapter(), order: string[] = [];
