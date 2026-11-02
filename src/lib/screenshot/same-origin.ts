@@ -45,6 +45,23 @@ export function sameHttpSite(left: string, right: string): boolean {
 }
 
 /**
+ * `url` moved onto `siteUrl`'s origin when both name the same HTTP site, else
+ * null. Legacy pages hard-code absolute `http://` links and sitemaps list
+ * either scheme or `www` variant, while capture keys every route by the entry
+ * origin; only the scheme and host change. The path keeps its setter
+ * semantics, so `//alt` stays a path instead of becoming a host.
+ */
+export function onSiteOrigin(url: string | URL, siteUrl: string): URL | null {
+  if (!sameHttpSite(String(url), siteUrl)) return null;
+  const target = new URL(url);
+  const moved = new URL(new URL(siteUrl).origin);
+  moved.pathname = target.pathname;
+  moved.search = target.search;
+  moved.hash = target.hash;
+  return moved;
+}
+
+/**
  * The URLs in `urls` whose origin differs from `primaryUrl` (or, when it is
  * null, from the first URL), with the canonical reference origin. A leading
  * `www.` is treated as origin-equivalent to the apex.

@@ -6116,6 +6116,25 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'website', 'old' ) ) ).toBe( false );
 	} );
 
+	it( 'rewrites a scheme variant link to the page captured on the capture origin', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-scheme-variant-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="http://example.com/about.html#team">About</a>' );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.com/': { html: 'html/home.html' },
+			'https://example.com/about.html': { html: 'html/about.html' },
+		} } ) );
+
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
+
+		expect( receipt.discoveryDiagnostics ?? [] ).toEqual( [] );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'a' ).attr( 'href' ) ).toBe( `/${ receipt.routes.find( ( route: { url: string } ) => route.url === 'https://example.com/about.html' ).path.replace( /^website\//, '' ) }#team` );
+	} );
+
 	it( 'accepts a proven unscheduled external redirect but keeps genuinely missing HTML blocking', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-unscheduled-anchor-' ) );
 		dirs.push( outputDir );

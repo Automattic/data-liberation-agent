@@ -41,7 +41,7 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
   return { kind, locs: urls };
 }
 
-import { canonicalizeHost } from '../screenshot/same-origin.js';
+import { onSiteOrigin } from '../screenshot/same-origin.js';
 import { normalizedUrl } from '../url/route-key.js';
 
 export function parseSitemapXml(xml: string): string[] {
@@ -211,10 +211,8 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
 export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<SitemapFetchResult> {
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
   let baseOrigin: string;
-  let siteHost: string;
   try {
     baseOrigin = new URL(normalizedBase).origin;
-    siteHost = canonicalizeHost(normalizedBase);
   } catch {
     return { urls: [], diagnostics: [] };
   }
@@ -249,17 +247,12 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
       diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'unsupported protocol' });
       return null;
     }
-    if (canonicalizeHost(entryUrl) !== siteHost) {
+    const accepted = onSiteOrigin(entryUrl, baseOrigin);
+    if (!accepted) {
       diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'origin differs from the entry URL' });
       return null;
     }
-    // Change only the scheme and host; keep the listed path and query. The
-    // setters cannot move the URL to another host, whereas re-parsing
-    // `pathname` as a relative reference reads a path such as `//alt` as
-    // scheme-relative and yields `https://alt/`.
-    const accepted = new URL(baseOrigin);
-    accepted.pathname = entryUrl.pathname;
-    accepted.search = entryUrl.search;
+    accepted.hash = '';
     return accepted;
   }
 
@@ -612,10 +605,9 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string, signal
 
 export function resolvePageLink(href: string, baseUrl: string, baseOrigin: string): string | null {
   try {
-    const resolved = new URL(href, baseUrl);
-    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
-    if (resolved.origin !== baseOrigin) return null;
-    if (isNonDocumentUrl(resolved.href)) return null;
+    // Same-site scheme and `www` variants are the same page on the entry origin.
+    const resolved = onSiteOrigin(new URL(href, baseUrl), baseOrigin);
+    if (!resolved || isNonDocumentUrl(resolved.href)) return null;
     resolved.hash = '';
     return resolved.href;
   } catch {

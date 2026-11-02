@@ -21,7 +21,7 @@ import { allocateCaptureRoutes, type RouteDiagnostic } from './capture-export-ro
 import { projectStylesheet } from './replicate/css-scope.js';
 import { IntegrityError, isIntegrityError } from './failure-class.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
-import { sameHttpSite } from './screenshot/same-origin.js';
+import { onSiteOrigin, sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
 import { budgetOmittedRoutes } from './capture-usability.js';
 import { OMITTED_ROUTE_REASON } from './route-budget.js';
@@ -367,6 +367,11 @@ function rewriteRouteLinksIn(
 		} catch {
 			return;
 		}
+		// Routes are keyed by the address they were captured at, usually the
+		// capture origin. An uncaptured scheme or `www` variant of this site
+		// names the same route on that origin.
+		const onCaptureOrigin = onSiteOrigin( resolved, documentUrl );
+		if ( onCaptureOrigin && ! routes.has( scopedRouteKey( resolved.href, portable?.routeScope ) ) ) resolved = onCaptureOrigin;
 		// A platform link can share the origin and even the portable pathname,
 		// yet belong to a different site. Preserve its authored destination.
 		if ( !routeInScope( resolved.href, portable?.routeScope ) ) {
