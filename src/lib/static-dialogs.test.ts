@@ -26,6 +26,30 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it.each( [ 'modal', 'dropdown' ] as const )( 'hoists a fallback %s panel out of a mid-sentence paragraph', presentation => {
+		const paragraph = '<p id="artists">Artists: <a href="#first">First</a>, <span><em><a id="open" href="#elise">Elise Barnett</a></em></span>, <a href="#last">Last</a>.</p>';
+		const html = wireCapturedDialogs( `<html><body><main>${ paragraph }</main></body></html>`, [ {
+			...captured,
+			trigger: { ...captured.trigger, selector: '#open', tag: 'a', label: 'Elise Barnett' },
+			dialog: { ...captured.dialog!, presentation },
+		} ] );
+		const $ = cheerio.load( html );
+		const assertStructure = ( document: cheerio.CheerioAPI ) => {
+			expect( document( 'main > p' ) ).toHaveLength( 1 );
+			expect( document( '#artists' ).text() ).toBe( 'Artists: First, Elise Barnett, Last.' );
+			expect( document( '#artists a' ).map( ( _, node ) => [ [ document( node ).attr( 'href' ), document( node ).text() ] ] ).get() )
+				.toEqual( [ [ '#first', 'First' ], [ '#elise', 'Elise Barnett' ], [ '#last', 'Last' ] ] );
+			expect( document( '#artists > span > em > #open' ) ).toHaveLength( 1 );
+			expect( document( '#artists' ).next().is( 'main > [data-blocks-engine-capture-dialog-panel]' ) ).toBe( true );
+			expect( document( '#artists [data-blocks-engine-capture-dialog-panel]' ) ).toHaveLength( 0 );
+		};
+		assertStructure( $ );
+		const reparsed = cheerio.load( $.html() );
+		assertStructure( reparsed );
+		// Detect repairs on the first parse too, not merely stability after repair.
+		expect( $.html() ).toBe( html );
+		expect( reparsed.html() ).toBe( html );
+	} );
 	// ~1 second: reduced mebenedetto.com /jujuy-2022/ dual-document tree.
 	it( 'restores duplicate source panel IDs inside synthesized responsive menus', async () => {
 		const document = ( device: string ) => `<div class="${ device }"><header><nav>
