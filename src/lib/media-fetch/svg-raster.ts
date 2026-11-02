@@ -1,5 +1,7 @@
-import { readFileSync, renameSync, unlinkSync } from 'fs';
-import { basename } from 'path';
+import { closeSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { openExclusive } from './exclusive-file.js';
+import { basename, dirname, join } from 'path';
+import { safeFilename } from './media.js';
 import { getPlaywright } from '../browser-kit/index.js';
 import { withTimeout } from '../concurrency.js';
 
@@ -25,7 +27,7 @@ export function isRiskySvg(bytes: Buffer | string): boolean {
 }
 
 export type RasterizeResult =
-  | { ok: true; width: number; height: number }
+  | { ok: true; width: number; height: number; path?: string }
   | { ok: false; error: string };
 
 const LAUNCH_TIMEOUT_MS = 30_000;
@@ -99,7 +101,7 @@ const SVG_LOAD_TIMEOUT_MS = 10000;
  * Chromium's image decode (an SVG declaring none falls back to 1024×1024 via
  * the zero-dimension guard). NEVER throws — failures return `{ok:false}` so a
  * raster problem can't fail the media fetch that triggered it. The PNG write
- * is atomic (unique tmp + rename).
+ * uses an exclusive create; collisions receive a numeric suffix.
  *
  * Launch and render are each bounded (Playwright's evaluate has no default
  * timeout). A timeout — or a failure that left the shared browser dead —
@@ -139,7 +141,7 @@ async function renderToPng(
   maxEdge: number,
 ): Promise<RasterizeResult> {
   let context: Awaited<ReturnType<CachedBrowser['newContext']>> | null = null;
-  const tmpPath = `${pngPath}.tmp-${process.pid}-${Date.now()}`;
+  let ownedPath: string | undefined;
   try {
     // data: URL (not file://) — a Playwright setContent page is about:blank,
     // which Chromium blocks from loading file:// subresources.
@@ -194,13 +196,16 @@ async function renderToPng(
       { waitUntil: 'load' },
     );
     // omitBackground keeps SVG transparency (logos) instead of flattening to white.
-    // Explicit type:'png' — the tmp path's suffix hides the .png extension, so
-    // Playwright can't infer the format from the path.
-    await page.locator('#raster').screenshot({ path: tmpPath, type: 'png', omitBackground: true });
-    renameSync(tmpPath, pngPath);
-    return { ok: true, width, height };
+    const bytes = await page.locator('#raster').screenshot({ type: 'png', omitBackground: true });
+    const names = new Map<string, number>();
+    const { path, value: fd } = openExclusive(
+      () => join(dirname(pngPath), safeFilename(basename(pngPath), names)),
+    );
+    ownedPath = path;
+    try { writeFileSync(fd, bytes); } finally { closeSync(fd); }
+    return { ok: true, width, height, path };
   } catch (err) {
-    try { unlinkSync(tmpPath); } catch { /* no partial tmp to clean */ }
+    if (ownedPath) try { unlinkSync(ownedPath); } catch { /* no partial file to clean */ }
     return { ok: false, error: (err as Error).message };
   } finally {
     // Bounded so a hung close can't hold a finished render past the deadline.

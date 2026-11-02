@@ -12,6 +12,7 @@ import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 import { Transform } from 'stream';
 import { isRiskySvg, rasterizeSvg } from './svg-raster.js';
+import { openExclusive } from './exclusive-file.js';
 
 export interface DownloadResult {
   url: string;
@@ -64,8 +65,7 @@ function boundFilename(name: string, hashSource: string = name): string {
 
 /**
  * Seed a `safeFilename` name map with the files already in a media directory.
- * Every writer into a shared directory starts here, so a later download never
- * replaces bytes an earlier stage already wrote (and possibly verified).
+ * This is a naming hint only; exclusive filesystem operations arbitrate collisions.
  */
 export function existingMediaNames(dir: string): Map<string, number> {
   return new Map(existsSync(dir) ? readdirSync(dir).map((name) => [name, 1] as [string, number]) : []);
@@ -403,8 +403,10 @@ export async function downloadMedia(
       rawFilename = `${rawFilename.slice(0, -urlExtension.length)}${negotiatedExtension}`;
     }
 
-    const filename = safeFilename(rawFilename, seenNames);
-    const destPath = resolveMediaPath(filename, outputDir);
+    const { path: destPath, value: fd } = openExclusive(
+      () => resolveMediaPath(safeFilename(rawFilename, seenNames), outputDir),
+    );
+    const filename = basename(destPath);
 
     // Stream to disk with a running byte counter so a body that lies about (or
     // omits) Content-Length still can't fill the disk — abort + delete the
@@ -426,7 +428,7 @@ export async function downloadMedia(
         cb(null, chunk);
       },
     });
-    const fileStream = createWriteStream(destPath);
+    const fileStream = createWriteStream(destPath, { fd });
     try {
       await pipeline(response.body as unknown as NodeJS.ReadableStream, sizeGuard, fileStream);
     } catch (streamErr) {
@@ -483,7 +485,7 @@ export async function downloadMedia(
         // frozen raster browser degrades to rasterError, not a hung loop.
         const raster = await rasterizeSvg(destPath, pngPath);
         svgExtras = raster.ok
-          ? { svgRisky, rasterPath: pngPath }
+          ? { svgRisky, rasterPath: raster.path ?? pngPath }
           : { svgRisky, rasterError: raster.error };
       } catch (rasterErr) {
         svgExtras = { rasterError: (rasterErr as Error).message };

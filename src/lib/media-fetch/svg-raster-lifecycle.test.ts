@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Browser-lifecycle behavior (timeouts, cache invalidation, bounded close)
@@ -28,9 +28,7 @@ function fakeBrowser() {
     setViewportSize: vi.fn(async () => {}),
     setContent: vi.fn(async () => {}),
     locator: vi.fn(() => ({
-      screenshot: vi.fn(async ({ path }: { path: string }) => {
-        writeFileSync(path, 'fake-png-bytes');
-      }),
+      screenshot: vi.fn(async () => Buffer.from('fake-png-bytes')),
     })),
   };
   const context = {
@@ -80,6 +78,19 @@ afterAll(() => {
 });
 
 describe('rasterizeSvg browser lifecycle', () => {
+  it('never overwrites an existing raster destination', async () => {
+    const { rasterizeSvg } = await loadModule();
+    stubLaunches(fakeBrowser());
+    const target = join(TMP_ROOT, 'occupied.png');
+    writeFileSync(target, 'verified-original');
+    const result = await rasterizeSvg(SVG_PATH, target);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.path).not.toBe(target);
+      expect(readFileSync(result.path!, 'utf8')).toBe('fake-png-bytes');
+    }
+    expect(readFileSync(target, 'utf8')).toBe('verified-original');
+  });
   it('a render timeout drops the cached browser so the next call relaunches', async () => {
     vi.useFakeTimers();
     const { rasterizeSvg } = await loadModule();
