@@ -37,6 +37,7 @@ import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dia
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
+import { sampleRootClasses, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
 import {
 	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
@@ -1198,6 +1199,15 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	if ( args.rendererCrashed() ) return;
 
+	let rootClassWidths: RootClassContract[] = [];
+	if ( isDesktop && plan.captureHtml ) {
+		try {
+			rootClassWidths = await sampleRootClasses( page );
+		} catch ( error ) {
+			if ( ! await loseBlock( 'evaluate', { code: 'root_class_probe_unproven', reason: `Root class width probe failed: ${ String( error ) }`, severity: 'warning' } ) ) return;
+		}
+	}
+
 	// Remove attributed non-content islands before interaction evidence and HTML.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 	// Restore runtime emoji replacement images to their authored text (#954),
@@ -1250,7 +1260,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 		const learned = await capturePageHtml( page, args.diagnostics );
-		const projected = projectInitialDocument( initialDocument, learned );
+		const baseUrl = await page.evaluate( () => document.baseURI );
+		const projected = projectRootClassContracts( projectInitialDocument( initialDocument, learned ), rootClassWidths, href => {
+			const absolute = new URL( href, baseUrl ).href;
+			const resource = resourceStore.getReplayableResponse( absolute, 'stylesheet' );
+			return resource ? { css: readFileSync( resource.path, 'utf8' ), url: absolute } : undefined;
+		} );
 		const captured = typeof initialTitle === 'string' ? withDocumentTitle( projected, initialTitle ) : projected;
 		const html = canonicalize( frozen ? sanitizeFrozenHtml( captured ) : captured );
 		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );

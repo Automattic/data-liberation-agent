@@ -72,11 +72,14 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     }),
     url: vi.fn().mockImplementation(() => currentUrl),
     viewportSize: vi.fn().mockReturnValue({ width: 1440, height: 900 }),
+    setViewportSize: vi.fn().mockResolvedValue(undefined),
+    waitForTimeout: vi.fn().mockResolvedValue(undefined),
     content: vi.fn().mockResolvedValue('<html><body>hello</body></html>'),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('fakepng')),
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
       const s = String(fn);
+      if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };
       // This transport fixture has no native animations; browser behavior is
       // exercised by native-view-timelines.test.ts with real Chromium.
       if (typeof fn === 'string' && s.includes('document.getAnimations')) return [];
