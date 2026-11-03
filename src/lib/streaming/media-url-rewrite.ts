@@ -51,7 +51,6 @@ export function rewriteMediaUrls(
 ): string {
   if (!input || mapping.size === 0) return input;
 
-  const aliasIndex = buildMediaAliasIndex(mapping);
   const replacements = new Map(mapping);
   // Inline CSS and other HTML attributes serialize query separators as &amp;.
   for (const [source, local] of mapping) {
@@ -60,8 +59,8 @@ export function rewriteMediaUrls(
     }
   }
 
-  // Resolve complete attribute/list candidates first, including existing media
-  // family aliases. Media attributes use exact URL-token replacement; the other
+  // Resolve complete attribute/list candidates by exact URL identity.
+  // Media attributes use exact URL-token replacement; the other
   // HTML/CSS/JSON surfaces retain the bounded raw replacement pass below.
   // Scan the *input* (pre-rewrite) for missing URLs so the local
   // replacement URL isn't itself reported as "missing" after the rewrite.
@@ -72,7 +71,7 @@ export function rewriteMediaUrls(
     seen.add(candidate);
 
     const decoded = candidate.replace(/&amp;/g, '&');
-    const local = resolveLocalUrl(decoded, mapping, aliasIndex);
+    const local = mapping.get(decoded);
     if (local) {
       replacements.set(candidate, decoded === candidate ? local : local.replace(/&/g, '&amp;'));
     } else if (opts.onMissing) {
@@ -80,13 +79,7 @@ export function rewriteMediaUrls(
     }
   }
 
-  // Apply LONGEST source URLs first. A mapped BASE url (e.g. `…/<id>~mv2.jpg`)
-  // is a substring-prefix of a carried transform url (`…/<id>~mv2.jpg/v1/fill/
-  // …/img.jpg`). The alias index resolves that transform url to the same local
-  // file and adds it to `replacements`, but if the shorter base entry runs
-  // first it rewrites only the prefix — leaving `<local>/v1/fill/…/img.jpg`
-  // (a 404). Longest-first guarantees the most-specific (full) url is replaced
-  // before any shorter substring of it.
+  // Prefer complete, most-specific source URLs over their shorter prefixes.
   const ordered = [...replacements.entries()]
     // A same-origin media URL can produce `/` as an alias. Replacing that
     // substring would corrupt every path, closing tag, and MIME type in the document.
@@ -177,77 +170,6 @@ function collectMediaCandidates(input: string): string[] {
   return candidates
     .map((c) => c.match(URL_LIKE)?.[0] ?? c)
     .filter((c) => /^https?:\/\//i.test(c));
-}
-
-interface MediaAliasRecord {
-  local: string;
-  score: number;
-}
-
-function buildMediaAliasIndex(mapping: Map<string, string>): Map<string, MediaAliasRecord> {
-  const out = new Map<string, MediaAliasRecord>();
-  for (const [source, local] of mapping.entries()) {
-    const score = mediaVariantScore(source);
-    for (const key of mediaAliasKeys(source)) {
-      const existing = out.get(key);
-      if (!existing || score > existing.score) {
-        out.set(key, { local, score });
-      }
-    }
-  }
-  return out;
-}
-
-function resolveLocalUrl(
-  source: string,
-  mapping: Map<string, string>,
-  aliasIndex: Map<string, MediaAliasRecord>,
-): string | undefined {
-  const exact = mapping.get(source);
-  if (exact) return exact;
-
-  for (const key of mediaAliasKeys(source)) {
-    const aliased = aliasIndex.get(key);
-    if (aliased) return aliased.local;
-  }
-
-  return undefined;
-}
-
-function mediaAliasKeys(source: string): string[] {
-  const keys: string[] = [];
-  const parsed = parseHttpUrl(source);
-  if (!parsed) return keys;
-
-  if (parsed.hostname === 'static.wixstatic.com') {
-    const asset = wixMediaAssetId(parsed);
-    if (asset) keys.push(`wix:${asset}`);
-  }
-
-  return keys;
-}
-
-function wixMediaAssetId(url: URL): string | undefined {
-  const parts = url.pathname.split('/').filter(Boolean);
-  const mediaIndex = parts.indexOf('media');
-  if (mediaIndex === -1 || mediaIndex + 1 >= parts.length) return undefined;
-  return decodeURIComponent(parts[mediaIndex + 1]);
-}
-
-function mediaVariantScore(source: string): number {
-  const match = source.match(/\bw_(\d+),h_(\d+)/i);
-  if (!match) return 0;
-  return Number(match[1]) * Number(match[2]);
-}
-
-function parseHttpUrl(source: string): URL | undefined {
-  try {
-    const parsed = new URL(source);
-    if (!/^https?:$/i.test(parsed.protocol)) return undefined;
-    return parsed;
-  } catch {
-    return undefined;
-  }
 }
 
 function escapeRegex(input: string): string {

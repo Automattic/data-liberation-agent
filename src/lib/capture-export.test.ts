@@ -2530,6 +2530,38 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).not.toContain( "R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='s%20Day.jpg" );
 	} );
 
+	it( 'keeps retrieved LQIP and hydrated image URLs distinct during export', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-image-identity-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const base = 'https://static.wixstatic.com/media/asset~mv2.jpg/v1/fill/';
+		const lqip = `${ base }w_147,h_97,al_c,blur_2,enc_auto/asset.jpg`;
+		const hydrated = `${ base }w_685,h_386,al_c,enc_auto/asset.jpg`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body><img id="lqip" src="${ lqip }"><img id="hydrated" src="${ hydrated }"></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+		mkdirSync( join( outputDir, 'resources' ), { recursive: true } );
+		const resources: Record<string, { path: string; contentType: string }> = {};
+		const media = MediaStubStore.load( outputDir );
+		for ( const [ url, filename, bytes ] of [ [ lqip, 'lqip.jpg', 'blurred' ], [ hydrated, 'hydrated.jpg', 'sharp' ] ] ) {
+			const path = join( outputDir, 'media', filename );
+			writeFileSync( path, bytes );
+			resources[ url ] = { path: `media/${ filename }`, contentType: 'image/jpeg' };
+			// The backdrop also has an independent media fetch; the hydrated
+			// image was retrieved by the browser resource capture.
+			if ( url === lqip ) media.markSuccess( url, path );
+		}
+		media.flush();
+		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '#lqip' ).attr( 'src' ) ).toBe( '/media/lqip.jpg' );
+		expect( $( '#hydrated' ).attr( 'src' ) ).toBe( '/media/hydrated.jpg' );
+		expect( readFileSync( join( outputDir, 'website/media/lqip.jpg' ), 'utf8' ) ).toBe( 'blurred' );
+		expect( readFileSync( join( outputDir, 'website/media/hydrated.jpg' ), 'utf8' ) ).toBe( 'sharp' );
+	} );
+
 	it( 'localizes a same-origin srcset whose candidate URLs contain commas', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-comma-srcset-export-' ) );
 		dirs.push( outputDir );
