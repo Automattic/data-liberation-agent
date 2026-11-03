@@ -21,6 +21,7 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
 import { SourceRequestGovernors } from './source-request-governor.js';
+import { completeSourceTlsChain } from './tls-aia.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
@@ -435,7 +436,10 @@ async function runCaptureWebsite(
 		onProgress?.( timedEvent );
 	};
 
-	const response = await safeFetch( options.url, { timeoutMs: 10_000 } );
+	const response = await safeFetch( options.url, { timeoutMs: 10_000 } ).catch( async error => {
+		if ( await completeSourceTlsChain( options.url, error ) ) return safeFetch( options.url, { timeoutMs: 10_000 } );
+		throw error; // failure-class: operational
+	} );
 	const sourceUrl = response.finalUrl;
 	const outputDir = options.outputDir;
 	const detection = await detect( sourceUrl );
