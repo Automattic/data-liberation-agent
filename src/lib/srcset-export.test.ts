@@ -13,6 +13,54 @@ import { observePage } from './fidelity/check.js';
 import { normalizeImageKey } from './fidelity/score.js';
 import { CapturedResourceStore } from './screenshot/resource-capture.js';
 
+describe( 'selected same-path srcset export', () => {
+	it( 'writes each retained Jimdo-style width to its own media file', () => {
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-query-srcset-' ) );
+		try {
+			for ( const folder of [ 'html', 'screenshots', 'media', 'resources' ] ) mkdirSync( join( directory, folder ) );
+			const source = 'https://jimdo.test/';
+			const widths = [ 347, 532, 816, 1920 ];
+			const urls = widths.map( width => `${ source }photo.png?width=${ width }` );
+			const bytes = widths.map( width => {
+				const png = new PNG( { width, height: 10 } );
+				png.data.fill( width % 251 );
+				return PNG.sync.write( png );
+			} );
+			const resources = Object.fromEntries( urls.map( ( url, index ) => {
+				const path = `resources/photo-${ widths[ index ] }.png`;
+				writeFileSync( join( directory, path ), bytes[ index ] );
+				return [ url, { path, contentType: 'image/png' } ];
+			} ) );
+			writeFileSync( join( directory, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
+			const original = urls.at( -1 )!;
+			const file = join( directory, 'media/photo.png' );
+			writeFileSync( file, bytes.at( -1 )! );
+			const media = MediaStubStore.load( directory );
+			for ( const url of urls ) media.markSuccess( url, file );
+			media.flush();
+			// Capture's identity inventory groups the URLs under the verified
+			// representative, while the resource manifest retains selected bytes.
+			writeFileSync( join( directory, 'image-assets.json' ), JSON.stringify( { images: [ {
+				kind: 'image', source_urls: urls, resolved_original: original, local_path: file,
+				references: urls.map( source_url => ( { kind: 'content', document_url: source, location: 'image:0:srcset', source_url } ) ),
+				rendition_widths: Object.fromEntries( urls.map( ( url, index ) => [ url, widths[ index ] ] ) ),
+				original: { source_url: original, content_type: 'image/png', width: 1920, height: 10, sha256: createHash( 'sha256' ).update( bytes.at( -1 )! ).digest( 'hex' ) },
+			} ] } ) );
+			writeFileSync( join( directory, 'html/home.html' ), `<img src="${ original }" srcset="${ urls.map( ( url, index ) => `${ url } ${ widths[ index ] }w` ).join( ', ' ) }">` );
+			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ source ]: { html: 'html/home.html' } } } ) );
+			exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
+			const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
+			const candidates = $( 'img' ).attr( 'srcset' )!.split( ',' ).map( candidate => candidate.trim().split( /\s+/ ) );
+			expect( candidates.map( ( [ , descriptor ] ) => descriptor ) ).toEqual( widths.map( width => `${ width }w` ) );
+			expect( new Set( candidates.map( ( [ path ] ) => path ) ).size ).toBe( widths.length );
+			for ( const [ index, [ path ] ] of candidates.entries() ) {
+				expect( path ).toMatch( /^\/media\// );
+				expect( readFileSync( join( directory, 'website', path ) ) ).toEqual( bytes[ index ] );
+			}
+		} finally { rmSync( directory, { recursive: true, force: true } ); }
+	} );
+} );
+
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'srcset browser/export contract', () => {
 	it( 'keeps selected lazy auto-sized width renditions byte-identical through capture and export', async () => {
 		// One browser pass; normally under five seconds.
