@@ -14,6 +14,56 @@ import { normalizeImageKey } from './fidelity/score.js';
 import { CapturedResourceStore } from './screenshot/resource-capture.js';
 
 describe( 'selected same-path srcset export', () => {
+	it.each( [
+		{ name: '1:1 crops', cropped: true },
+		{ name: 'rounded 2:3 resizes', cropped: false },
+	] )( 'exports selected $name linked to a 2:3 lightbox original', ( { cropped } ) => {
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-lightbox-srcset-' ) );
+		try {
+			for ( const folder of [ 'html', 'screenshots', 'media', 'resources' ] ) mkdirSync( join( directory, folder ) );
+			const source = 'https://gallery.test/';
+			const original = `${ source }photo-high.png`;
+			const widths = [ 147, 226, 532 ];
+			const urls = widths.map( width => `${ source }photo.png?crop=${ cropped ? '1:1' : '2:3' }&width=${ width }` );
+			const pngBytes = ( width: number, height: number ) => {
+				const png = new PNG( { width, height } );
+				png.data.fill( width % 251 );
+				return PNG.sync.write( png );
+			};
+			const bytes = widths.map( width => pngBytes( width, cropped ? width : Math.round( width * 1.5 ) ) );
+			const resources = Object.fromEntries( urls.map( ( url, index ) => {
+				const path = `resources/photo-${ widths[ index ] }.png`;
+				writeFileSync( join( directory, path ), bytes[ index ] );
+				return [ url, { path, contentType: 'image/png' } ];
+			} ) );
+			writeFileSync( join( directory, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
+			const originalBytes = pngBytes( 800, 1200 );
+			const file = join( directory, 'media/photo-high.png' );
+			writeFileSync( file, originalBytes );
+			const media = MediaStubStore.load( directory );
+			for ( const url of [ original, ...urls ] ) media.markSuccess( url, file );
+			media.flush();
+			writeFileSync( join( directory, 'image-assets.json' ), JSON.stringify( { images: [ {
+				kind: 'image', source_urls: [ original, ...urls ], resolved_original: original, local_path: file,
+				references: urls.map( source_url => ( { kind: 'content', document_url: source, location: 'image:0:srcset', source_url } ) ),
+				rendition_widths: Object.fromEntries( urls.map( ( url, index ) => [ url, widths[ index ] ] ) ),
+				original: { source_url: original, content_type: 'image/png', width: 800, height: 1200, sha256: createHash( 'sha256' ).update( originalBytes ).digest( 'hex' ) },
+			} ] } ) );
+			writeFileSync( join( directory, 'html/home.html' ), `<a href="${ original }"><img src="${ urls[ 2 ] }" srcset="${ urls.map( ( url, index ) => `${ url } ${ widths[ index ] }w` ).join( ', ' ) }"></a>` );
+			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ source ]: { html: 'html/home.html' } } } ) );
+			exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
+			const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
+			const candidates = $( 'img' ).attr( 'srcset' )!.split( ',' ).map( candidate => candidate.trim().split( /\s+/ ) );
+			expect( candidates.map( ( [ , descriptor ] ) => descriptor ) ).toEqual( widths.map( width => `${ width }w` ) );
+			const paths = candidates.map( ( [ path ] ) => path );
+			expect( new Set( paths ).size ).toBe( cropped ? widths.length : 1 );
+			for ( const [ index, path ] of paths.entries() ) {
+				expect( readFileSync( join( directory, 'website', path ) ) ).toEqual( cropped ? bytes[ index ] : originalBytes );
+				if ( cropped ) expect( path ).not.toBe( $( 'a' ).attr( 'href' ) );
+			}
+			expect( readFileSync( join( directory, 'website', $( 'a' ).attr( 'href' )! ) ) ).toEqual( originalBytes );
+		} finally { rmSync( directory, { recursive: true, force: true } ); }
+	} );
 	it( 'writes each retained Jimdo-style width to its own media file', () => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-query-srcset-' ) );
 		try {

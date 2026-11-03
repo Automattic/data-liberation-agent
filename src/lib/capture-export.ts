@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
 import { withoutPlatformDefaultIcons } from './platform-default-icons.js';
 import { assembleDeviceDocuments, installDeviceSelection, type DocumentSelection } from './document-selection.js';
@@ -1793,19 +1794,33 @@ function buildExportCapture(
 		// Inventory aliases describe one picture, not necessarily one file. Keep
 		// independently captured srcset bytes instead of rewriting every alias to
 		// the verified representative (notably same-path ?width=N CDN URLs).
-		// A distinct resolved original (for example a lightbox original or a
-		// de-proxied image) remains authoritative for every alias in its family.
+		// A distinct resolved original is authoritative only for resizes/re-encodes
+		// with the same aspect ratio. Cropped aliases retain their selected bytes.
 		const capturedRenditions: MediaCandidate[] = [];
-		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) &&
-			imageAsset.original && imageAsset.rendition_widths?.[ imageAsset.original.source_url ] !== undefined ) {
+		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) && imageAsset.original ) {
+			const originalIsRendition = imageAsset.rendition_widths?.[ imageAsset.original.source_url ] !== undefined;
 			for ( const url of imageAsset.source_urls ) {
 				if ( url === candidate.sourceUrl || exclusions.renditions.has( url ) || exclusions.assets.has( url ) ) continue;
 				const resource = resourceManifest.resources[ url ];
 				if ( ! resource || ! resource.contentType.startsWith( 'image/' ) ) continue;
 				const path = resolve( outputDir, resource.path );
 				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) continue;
-				const hash = createHash( 'sha256' ).update( readFileSync( path ) ).digest( 'hex' );
-				if ( hash === imageAsset.original?.sha256 ) continue;
+				const renditionContent = readFileSync( path );
+				const hash = createHash( 'sha256' ).update( renditionContent ).digest( 'hex' );
+				if ( hash === imageAsset.original.sha256 ) continue;
+				if ( ! originalIsRendition ) {
+					const { width: originalWidth, height: originalHeight } = imageAsset.original;
+					try {
+						const { width, height } = imageSize( renditionContent );
+						// Each measured edge can be rounded by half a pixel. Compare
+						// cross-products so small resizes need no arbitrary ratio epsilon.
+						if ( originalWidth && originalHeight && width && height &&
+							Math.abs( width * originalHeight - height * originalWidth ) <=
+							( width + height + originalWidth + originalHeight ) / 2 ) continue;
+					} catch {
+						// Unknown dimensions cannot prove that the original has the same crop.
+					}
+				}
 				const renditionReferences = mediaReferences( url, options.sourceUrl );
 				const exact = renditionReferences.filter( reference => referenceIndex.indexed.has( reference ) && mediaReferenceMatched( referenceIndex, reference ) );
 				if ( ! exact.length ) continue;
