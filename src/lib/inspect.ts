@@ -298,6 +298,7 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
         renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html'),
       options.rendered === false || renderedSamples.length !== selected.length ||
         samples.some((sample) => sample.outcome !== 'html'),
+      { routes: routes.length, truncated: discoveryTruncated },
     ),
     rendered: { enabled: options.rendered !== false, attempted: renderedAttempts, succeeded: renderedSamples.length, samples: renderedSamples },
     source: { requestedUrl: url, finalUrl, platform: { id: detection.platform, confidence: detection.confidence, evidence: detection.signals }, hosts: hosts.map(({ id, evidence }) => ({ id, evidence })) },
