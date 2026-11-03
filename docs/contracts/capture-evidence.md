@@ -32,7 +32,7 @@ Emitters spell the full names, because many of them sit inside runtime script an
 
 | Family | Names (after `data-blocks-engine-capture-`) |
 |---|---|
-| Dialogs | attributes `dialog-trigger`, `dialog-panel`, `dialog-close`, `dialog-panel-state`, `dialog-ancestor-state`, `dialog-ancestor-unverified`, `dialog-css`, `existing-panel`, `observed-placement`, `resting-panel`; classes `dialog`, `dropdown`, `initial-dialog`; ids `dialog-<n>` |
+| Dialogs | attributes `dialog-trigger`, `dialog-panel`, `dialog-close`, `dialog-panel-state`, `dialog-ancestor-state`, `dialog-trigger-state`, `dialog-ancestor-unverified`, `dialog-css`, `existing-panel`, `observed-placement`, `resting-panel`; classes `dialog`, `dropdown`, `initial-dialog`; ids `dialog-<n>` |
 | Disclosures | `disclosure`, `disclosure-base` (attribute and cascade layer), `disclosure-label`, `disclosure-runtime`, `disclosure-open-<svg attribute>`, `disclosure-closed-<svg attribute>`, `local-disclosure`, `local-disclosure-runtime`, `exclusive-disclosures`, `hydrated-disclosure`, `inert-control`; class `disclosure`; ids `disclosure-panel-<n>` |
 | Listbox, choice groups | `listbox-trigger`, `listbox-panel`, `listbox-runtime`, `choice-group`, `choice-index`, `choice-runtime` |
 | Documents | attributes `document-scope`, `device-document`, `device-style`, `device-body`, `device-selection`, `device-visibility`, `device-unavailable`, `document-unavailable`, `selected-document`, `source-media`; classes `desktop-document`, `mobile-document`, `<profile>-document`, `desktop-only`, `mobile-only`; id suffix `--data-blocks-engine-capture-mobile` |
@@ -113,7 +113,7 @@ A consumer retires or tolerates a capture helper script only when the sha256 of 
 
 | Runtime | sha256 | Status |
 |---|---|---|
-| Disclosure interpreter (`script[data-blocks-engine-capture-disclosure-runtime]`) | `086fc8248547e7c1109e0f6a28e691cea966f7057b3e36eaa8ccad177d2cf737` | Changed by #1097: inline resting panels serialize closed content and restore it after replay, not only root attributes. Supersedes the #1004 body (`67e77fd6…`). Blocks Engine must publish this body before recognizing it. Until then Blocks Engine keeps the captured runtime. |
+| Disclosure interpreter (`script[data-blocks-engine-capture-disclosure-runtime]`) | `5dd2db81c39f8f39c3756df8f8588fec6fe84e4a2ea2186fdf81b019f1aa2d6e` | Changed by #1194: replays class-token deltas on the trigger and its descendants. Supersedes the #1097 body (`086fc824…`). Blocks Engine must publish this body before recognizing it. Until then Blocks Engine keeps the captured runtime. |
 | Gallery helper (`script[data-blocks-engine-capture-gallery-runtime]`) | `456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b` | This producer's current helper, which includes the src-swap sequence cycle from #711. Blocks Engine's `capture-gallery-runtime.js` (`0a6bf62a…`) is the renamed pre-#711 helper. Before #787, Blocks Engine's digest `1321b380…` was also the pre-#711 body, so the two never matched after #711. To recognize the current helper, Blocks Engine should publish this body and digest. |
 
 ## Migration

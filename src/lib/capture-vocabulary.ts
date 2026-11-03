@@ -31,7 +31,7 @@ export const CAPTURE_SCHEMA_NAMESPACE = 'blocks-engine-capture/';
  */
 export const CAPTURE_EVIDENCE_NAMES = {
 	dialogs: {
-		'dialog-trigger': 'a', 'dialog-panel': 'a', 'dialog-close': 'a', 'dialog-panel-state': 'a', 'dialog-ancestor-state': 'a',
+		'dialog-trigger': 'a', 'dialog-panel': 'a', 'dialog-close': 'a', 'dialog-panel-state': 'a', 'dialog-ancestor-state': 'a', 'dialog-trigger-state': 'a',
 		'dialog-ancestor-unverified': 'a', 'dialog-css': 'a', 'existing-panel': 'a', 'observed-placement': 'a', 'resting-panel': 'a',
 		dialog: 'c', dropdown: 'c', 'initial-dialog': 'c',
 	},
@@ -130,6 +130,6 @@ export const CAPTURE_SCHEMAS = [
  * helper; see docs/contracts/capture-evidence.md for its status upstream.
  */
 export const CAPTURE_RUNTIME_SHA256 = {
-	disclosure: '086fc8248547e7c1109e0f6a28e691cea966f7057b3e36eaa8ccad177d2cf737',
+	disclosure: '5dd2db81c39f8f39c3756df8f8588fec6fe84e4a2ea2186fdf81b019f1aa2d6e',
 	gallery: '456af76323601e51d851d3a4d6fe4ff6e3989c9969562f425fd72103c5c57c6b',
 } as const;

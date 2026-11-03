@@ -114,6 +114,20 @@ it.skipIf( skipBrowser )( 'reports bounded and non-restored ancestor evidence wi
 	} finally { await browser.close(); }
 }, 30_000 );
 
+it.skipIf( skipBrowser )( 'does not replay trigger class changes that source close failed to restore', async () => {
+	const browser = await chromium.launch();
+	const page = await browser.newPage();
+	try {
+		await page.setContent( fixture().replace( '<button id="a">Menu A</button>', '<button id="a"><span class="icon">Menu A</span></button>' )
+			.replace( "const panel=document.createElement('div');", "document.querySelector('#a .icon').classList.add('icon--open');const panel=document.createElement('div');" ) );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'a' );
+		expect( state?.dialog?.ancestorState ).toMatchObject( { status: 'unverified', reason: 'ancestor-restoration-unverified', trigger: [ { opened: { class: 'icon--open' } } ] } );
+		const portable = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), [ state! ] );
+		expect( portable ).not.toContain( 'data-blocks-engine-capture-dialog-trigger-state=' );
+	} finally { await browser.close(); }
+}, 30_000 );
+
 // Squarespace-style overlay: the burger only toggles a body class, and the
 // full-screen menu is shown by `.menu-open .overlay`. It is a modal, so it
 // keeps its own mount, but the class must still be recorded and replayed.

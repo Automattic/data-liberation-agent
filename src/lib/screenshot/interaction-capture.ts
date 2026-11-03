@@ -539,7 +539,7 @@ export async function captureTriggeredDialogs(
 			// changed an ancestor; a dropdown always reports its evidence.
 			const dropdown = dialog.presentation === 'dropdown';
 			const observedAncestors = await observeDropdownAncestors( page, dialog.selector, dropdown );
-			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 ? observedAncestors : undefined;
+			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 || observedAncestors.trigger?.length ? observedAncestors : undefined;
 			const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 			const restoredRoots = await rootClasses( page );

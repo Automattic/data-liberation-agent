@@ -52,7 +52,7 @@ summarizes these as `ancestor_state_unverified_count`.
 A modal records the same evidence when opening it changed an ancestor. A
 Squarespace overlay menu, for example, is shown only by a class its runtime
 adds to `body`. Placement is optional for a modal because its consumer mounts
-it; a modal that changed no ancestor records no `ancestorState`. Portable
+it; a modal that changed neither ancestors nor trigger classes records no `ancestorState`. Portable
 wiring replays a modal's verified ancestor changes from its trigger and keeps
 the modal's own mount.
 
@@ -62,6 +62,22 @@ emitting replay. A later owner edit or missing source slot leaves an explicit
 observed root and layout rather than gaining a synthetic absolute-positioned
 wrapper. Closing one control preserves an ancestor still owned by another open
 control; closing the last owner restores the recorded closed state.
+
+`ancestorState.trigger` optionally records class-token deltas on the trigger
+and its descendants, alongside `ancestors`. Each row has `selector`, `tag`,
+`closed: { class: "removed tokens" }`, `opened: { class: "added tokens" }`,
+and `classTokensOnly: true`. An empty selector addresses the trigger itself;
+other selectors are `:scope > :nth-child(n)` paths relative to it. Unchanged
+tokens and non-class mutations are not replayed. Capture inspects at most 128
+trigger-subtree elements and requires the original nodes and their class token
+sets to restore on close, within the same evidence byte bounds. Export validates
+the relative paths and closed tokens before emitting
+`data-blocks-engine-capture-dialog-trigger-state` on the trigger. This local
+binding is independent of ancestor/placement binding: responsive assembly may
+move the document owner without changing the trigger subtree. The captured
+runtime applies these deltas on open and reverses them on close, preserving
+unrelated classes. Downstream consumers may implement this same contract or
+retain the captured runtime; no source-specific icon logic is needed.
 
 The screenshot pipeline restores its canonical top-scroll state before
 interaction probes. A preceding scrolled screenshot therefore cannot hide the
