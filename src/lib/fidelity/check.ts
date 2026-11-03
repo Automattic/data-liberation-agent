@@ -1627,7 +1627,14 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					let sourcePng = frozen.png;
 					const deviceSelected = receipt.routes?.some( row => row.url === sources.get( route ) && row.documentSelection?.kind === 'device' );
 					const sourceDocument = cheerio.load( readReferenceArtifact( directory, entry.document! ).toString() );
-					const runtimeEmoji = sourceDocument( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress';
+					// The captured website owns runtime authorization (the importer reads
+					// this same declaration). Legacy frozen references are raw source HTML
+					// and need not carry it; neither they nor the candidate may authorize it.
+					const capturedPath = routeFiles( receipt ).get( route );
+					if ( ! capturedPath ) throw new Error( 'Captured route document missing' );
+					// Read the route itself, not its includes: authorization lives on <html>.
+					const capturedDocument = cheerio.load( readFileSync( resolve( websiteDir, capturedPath ), 'utf8' ) );
+					const runtimeEmoji = capturedDocument( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress';
 					let sourceViewport = entry.viewportMeta ?? sourceDocument?.( 'meta[name="viewport"]' ).attr( 'content' );
 					const readViewport = () => page.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
