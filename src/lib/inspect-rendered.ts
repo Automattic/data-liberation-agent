@@ -11,8 +11,8 @@ import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
  * added under a new vocabulary version; removing or repurposing one is a
  * breaking change, because someone's acceptance policy is keyed on it.
  */
-export const SOURCE_CAPABILITY_VOCABULARY = 'blocks-engine-capture/source-capability-vocabulary/v1';
-export const SOURCE_CAPABILITIES = ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'] as const;
+export const SOURCE_CAPABILITY_VOCABULARY = 'blocks-engine-capture/source-capability-vocabulary/v2';
+export const SOURCE_CAPABILITIES = ['booking', 'commerce', 'dialogs', 'embeds', 'events', 'forms', 'media', 'membership', 'navigation'] as const;
 /**
  * HTML document ceiling for inspect. Page-builder homepages routinely exceed
  * 2 MB (a 2.9 MB Wix events page was rejected before any detector ran). 10 MB
@@ -263,6 +263,25 @@ export interface SourceComplexity {
   factors: Array<{ code: string; value: number; reason: string }>;
 }
 
+/** What bounded discovery measured about the route inventory, passed in by the caller rather than recomputed. */
+export interface SourceComplexityDiscovery {
+  /** Distinct routes the bounded discovery inventory ended with (`coverage.discovery.routes`). */
+  routes: number;
+  /** True when discovery reached its route limit: the site has at least that many pages. */
+  truncated: boolean;
+}
+
+// Complexity band thresholds. Provisional pending move-history data: no
+// calibrated move outcomes exist yet, so they explain a band, not predict one.
+/** More than this many rendered DOM elements on one sampled route makes the observed band complex. */
+export const COMPLEX_ELEMENTS = 2_000;
+/** More than this many rendered DOM elements on one sampled route makes the observed band at least moderate. */
+export const MODERATE_ELEMENTS = 500;
+/** More than this many images on one sampled route makes the observed band at least moderate. */
+export const MODERATE_IMAGES = 150;
+/** More than this many discovered routes, or discovery stopping at its limit, makes the observed band at least moderate. */
+export const MODERATE_PAGES = 50;
+
 /**
  * `band` and `confidence` answer different questions, so they take different
  * conditions.
@@ -276,10 +295,17 @@ export interface SourceComplexity {
  * functionality as things that remain explicitly unknown. Sampling fewer routes
  * than were discovered is the bound working as declared, not the sample failing,
  * so it does not lower confidence. Both quotes are from docs/inspection.md.
+ *
+ * `discovery` carries what the bounded route inventory measured (`coverage.discovery`)
+ * so page count can raise the band without this function recomputing discovery.
+ * Discovery that stopped at its limit means the site has at least that many
+ * pages, so it raises `observedBand` to `moderate`; `band` still withholds to
+ * `unknown` through `incomplete`, which the caller keeps true in that case.
  */
-export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean, sampleIncomplete: boolean): SourceComplexity {
+export function sourceComplexity(samples: RenderedInspection[], incomplete: boolean, sampleIncomplete: boolean, discovery: SourceComplexityDiscovery): SourceComplexity {
   const factors: SourceComplexity['factors'] = [];
   const maxElements = Math.max(0, ...samples.map((sample) => sample.elements));
+  const maxImages = Math.max(0, ...samples.map((sample) => sample.counts.images));
   const capabilityCounts = new Map<SourceCapability, number>();
   for (const sample of samples) for (const finding of sample.capabilities) {
     capabilityCounts.set(finding.capability, Math.max(capabilityCounts.get(finding.capability) ?? 0, finding.count));
@@ -288,9 +314,14 @@ export function sourceComplexity(samples: RenderedInspection[], incomplete: bool
     if (code !== 'navigation') factors.push({ code, value, reason: `Maximum observed ${code} matches on one sampled route` });
   }
   factors.push({ code: 'elements', value: maxElements, reason: 'Maximum rendered DOM element count on a sampled route' });
-  const app = ['booking', 'commerce', 'membership'].some((key) => capabilityCounts.has(key as SourceCapability));
-  const observedBand = !samples.length ? 'unknown' : app || maxElements > 2000 ? 'complex'
-    : factors.some((factor) => factor.code !== 'elements') || maxElements > 500 ? 'moderate' : 'simple';
+  factors.push({ code: 'images', value: maxImages, reason: 'Maximum rendered image count on a sampled route' });
+  factors.push({ code: 'pages', value: discovery.routes, reason: 'Discovered route count in the bounded inventory' });
+  // Booking, commerce, events and membership name backend-backed app surfaces:
+  // they need a destination that can materialize working backend functionality.
+  const app = ['booking', 'commerce', 'events', 'membership'].some((key) => capabilityCounts.has(key as SourceCapability));
+  const surface = [...capabilityCounts.keys()].some((code) => code !== 'navigation');
+  const observedBand = !samples.length ? 'unknown' : app || maxElements > COMPLEX_ELEMENTS ? 'complex'
+    : surface || maxImages > MODERATE_IMAGES || discovery.truncated || discovery.routes > MODERATE_PAGES || maxElements > MODERATE_ELEMENTS ? 'moderate' : 'simple';
   const unmeasured = samples.some((sample) => sample.limited || sample.unknowns.length > 0);
   const uncertain = incomplete || unmeasured;
   const sampleUncertain = sampleIncomplete || unmeasured;

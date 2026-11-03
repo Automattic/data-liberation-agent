@@ -53,8 +53,8 @@ it('reports where a capability was observed, and refuses to look decided when th
   const url = await source('<main><h1>Contact</h1><form id="enquiry" class="contact-form stacked"><input name="email"></form><iframe id="map" src="about:blank"></iframe></main>');
   const result = await inspectSource(url, { sampleLimit: 1 });
   expect(result.capabilityVocabulary).toEqual({
-    schema: 'blocks-engine-capture/source-capability-vocabulary/v1',
-    capabilities: ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'],
+    schema: 'blocks-engine-capture/source-capability-vocabulary/v2',
+    capabilities: ['booking', 'commerce', 'dialogs', 'embeds', 'events', 'forms', 'media', 'membership', 'navigation'],
   });
   const sample = result.rendered.samples[0];
   expect(sample.url).toBe(url);
@@ -182,22 +182,48 @@ it('withholds the band when sampling was bounded, without lowering confidence in
     limited: false, unknowns: [],
   } as unknown as RenderedInspection;
 
-  const bounded = sourceComplexity([sample], true, false);
+  const bounded = sourceComplexity([sample], true, false, { routes: 1, truncated: false });
   expect(bounded.band).toBe('unknown');
   expect(bounded.observedBand).toBe('moderate');
   expect(bounded.confidence).toBe('bounded-sample');
 
   // A sample that was declared and did not complete is still incomplete.
-  expect(sourceComplexity([sample], true, true).confidence).toBe('incomplete');
+  expect(sourceComplexity([sample], true, true, { routes: 1, truncated: false }).confidence).toBe('incomplete');
 
   // So is one whose own resources were limited, or that reported unknowns.
-  expect(sourceComplexity([{ ...sample, limited: true }], false, false).confidence).toBe('incomplete');
-  expect(sourceComplexity([{ ...sample, unknowns: ['blocked'] } as unknown as RenderedInspection], false, false).confidence).toBe('incomplete');
+  expect(sourceComplexity([{ ...sample, limited: true }], false, false, { routes: 1, truncated: false }).confidence).toBe('incomplete');
+  expect(sourceComplexity([{ ...sample, unknowns: ['blocked'] } as unknown as RenderedInspection], false, false, { routes: 1, truncated: false }).confidence).toBe('incomplete');
 
   // Unchanged when nothing was bounded at all.
-  const complete = sourceComplexity([sample], false, false);
+  const complete = sourceComplexity([sample], false, false, { routes: 1, truncated: false });
   expect(complete.band).toBe('moderate');
   expect(complete.confidence).toBe('bounded-sample');
+});
+
+it.each([
+  { description: 'events evidence alone is a backend-backed app surface, so a ticketing-only site is not read as a store',
+    capabilities: [{ capability: 'events', count: 3, evidence: 'Wix Events surface; ticketing backend', selector: '[data-hook="get-tickets-button"]', locators: [] }],
+    images: 2, discovery: { routes: 6, truncated: false }, band: 'complex' },
+  { description: '151 images on one sampled route is at least moderate',
+    capabilities: [], images: 151, discovery: { routes: 6, truncated: false }, band: 'moderate' },
+  { description: '51 discovered routes is at least moderate',
+    capabilities: [], images: 2, discovery: { routes: 51, truncated: false }, band: 'moderate' },
+  { description: 'discovery that stopped at its limit means at least that many pages, which is moderate',
+    capabilities: [], images: 2, discovery: { routes: 50, truncated: true }, band: 'moderate' },
+  { description: 'a small site under every threshold stays simple',
+    capabilities: [], images: 2, discovery: { routes: 3, truncated: false }, band: 'simple' },
+])( 'raises the observed band: $description', ( { capabilities, images, discovery, band } ) => {
+  const sample = {
+    url: 'https://example.test/', elements: 120, textCharacters: 400,
+    counts: { forms: 0, links: 3, images, videos: 0, frames: 0, dialogs: 0 },
+    capabilities, excluded: [], navigation: [], mediaLinks: 0,
+    requests: 3, bytes: 4096, limited: false, unknowns: [],
+  } as unknown as RenderedInspection;
+  const result = sourceComplexity([sample], false, false, discovery);
+  expect(result.observedBand).toBe(band);
+  // Nothing here was bounded or incomplete, so the declared band equals the measured one.
+  expect(result.band).toBe(band);
+  expect(result.factors.map((factor) => factor.code)).toEqual(expect.arrayContaining(['images', 'pages']));
 });
 
 it('attributes a host badge to the host instead of to the site it is serving', async () => {
