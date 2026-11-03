@@ -1697,6 +1697,7 @@ function buildExportCapture(
 	const imageByUrl = new Map( imageAssets.flatMap( record => record.source_urls.map( url => [ url, record ] as const ) ) );
 	const seenImageAssets = new Set<AssetRecord>();
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
+	const unselectedRenditions = new Map< string, unknown >();
 	const failedMedia: FailedPortableMedia[] = [];
 	const capturedPages = new Set(
 		[ options.sourceUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {
@@ -1820,6 +1821,14 @@ function buildExportCapture(
 				} );
 			}
 		}
+		if ( capturedRenditions.length ) {
+			// A mixed srcset must describe the files we actually retained, not
+			// claim that the original has every unselected candidate's width.
+			const selected = new Set( [ candidate.sourceUrl, ...capturedRenditions.map( rendition => rendition.sourceUrl ) ] );
+			for ( const url of Object.keys( imageAsset?.rendition_widths ?? {} ) ) {
+				if ( ! selected.has( url ) ) unselectedRenditions.set( url, true );
+			}
+		}
 		const smaller: MediaCandidate[] = ( imageAsset?.renditions ?? [] ).flatMap( rendition => {
 			if ( ! rendition.original || ! rendition.local_path || ! existsSync( rendition.local_path ) ) return [];
 			const renditionBytes = statSync( rendition.local_path ).size;
@@ -1865,7 +1874,7 @@ function buildExportCapture(
 		embeddedSources,
 		maxFileBytes,
 		excludedResources: exclusions.assets,
-		excludedRenditions: exclusions.renditions,
+		excludedRenditions: new Map( [ ...exclusions.renditions, ...unselectedRenditions ] ),
 		projectEmbeddedHtml: ( html ) => safeCapturedPageHtml( html ).html,
 	} );
 	for ( const { url, bytes } of resourceStage.oversizedResources ) routeCaptureDiagnostics.push( assetExceedsFileLimit( url, bytes, maxFileBytes ) );

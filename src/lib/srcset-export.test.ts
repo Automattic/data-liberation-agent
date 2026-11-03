@@ -14,22 +14,24 @@ import { normalizeImageKey } from './fidelity/score.js';
 import { CapturedResourceStore } from './screenshot/resource-capture.js';
 
 describe( 'selected same-path srcset export', () => {
-	it( 'writes each retained Jimdo-style width to its own media file', () => {
+	it.each( [ false, true ] )( 'writes truthful Jimdo-style widths with unselected candidates: %s', mixed => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-query-srcset-' ) );
 		try {
 			for ( const folder of [ 'html', 'screenshots', 'media', 'resources' ] ) mkdirSync( join( directory, folder ) );
 			const source = 'https://jimdo.test/';
-			const widths = [ 347, 532, 816, 1920 ];
+			const widths = mixed ? [ 96, 147, 226, 347, 532, 816, 1252, 1920 ] : [ 347, 532, 816, 1920 ];
+			const selectedWidths = mixed ? [ 532, 816, 1252, 1920 ] : widths;
 			const urls = widths.map( width => `${ source }photo.png?width=${ width }` );
 			const bytes = widths.map( width => {
 				const png = new PNG( { width, height: 10 } );
 				png.data.fill( width % 251 );
 				return PNG.sync.write( png );
 			} );
-			const resources = Object.fromEntries( urls.map( ( url, index ) => {
+			const resources = Object.fromEntries( urls.flatMap( ( url, index ) => {
+				if ( ! selectedWidths.includes( widths[ index ] ) ) return [];
 				const path = `resources/photo-${ widths[ index ] }.png`;
 				writeFileSync( join( directory, path ), bytes[ index ] );
-				return [ url, { path, contentType: 'image/png' } ];
+				return [ [ url, { path, contentType: 'image/png' } ] ];
 			} ) );
 			writeFileSync( join( directory, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
 			const original = urls.at( -1 )!;
@@ -51,11 +53,16 @@ describe( 'selected same-path srcset export', () => {
 			exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
 			const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
 			const candidates = $( 'img' ).attr( 'srcset' )!.split( ',' ).map( candidate => candidate.trim().split( /\s+/ ) );
-			expect( candidates.map( ( [ , descriptor ] ) => descriptor ) ).toEqual( widths.map( width => `${ width }w` ) );
-			expect( new Set( candidates.map( ( [ path ] ) => path ) ).size ).toBe( widths.length );
-			for ( const [ index, [ path ] ] of candidates.entries() ) {
+			expect( candidates.map( ( [ , descriptor ] ) => descriptor ) ).toEqual( selectedWidths.map( width => `${ width }w` ) );
+			expect( new Set( candidates.map( ( [ path ] ) => path ) ).size ).toBe( selectedWidths.length );
+			const originalPath = $( 'img' ).attr( 'src' );
+			expect( candidates.filter( ( [ path ] ) => path === originalPath ) ).toHaveLength( 1 );
+			for ( const [ path, descriptor ] of candidates ) {
 				expect( path ).toMatch( /^\/media\// );
-				expect( readFileSync( join( directory, 'website', path ) ) ).toEqual( bytes[ index ] );
+				const exported = readFileSync( join( directory, 'website', path ) );
+				const width = Number.parseInt( descriptor, 10 );
+				expect( Math.abs( PNG.sync.read( exported ).width - width ) ).toBeLessThanOrEqual( 1 );
+				expect( exported ).toEqual( bytes[ widths.indexOf( width ) ] );
 			}
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	} );
