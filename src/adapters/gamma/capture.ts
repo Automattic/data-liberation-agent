@@ -54,7 +54,14 @@ export async function prepareGammaPage( page: Page ): Promise< void > {
 			details.open = box.dataset.open === 'true';
 			const summary = document.createElement( 'summary' );
 			summary.append( ...[ ...title.childNodes ].map( ( node ) => node.cloneNode( true ) ) );
-			details.append( summary, ...[ ...content.children ].slice( 1 ).map( ( node ) => node.cloneNode( true ) ) );
+			const body = [ ...content.children ].slice( 1 ).map( ( node ) => node.cloneNode( true ) as Element );
+			// Gamma fades blocks in once they scroll into view, by adding
+			// `animate-has-animated`. Closed content never did, so it would stay
+			// at opacity 0; give it the state the source shows once opened.
+			for ( const node of body.flatMap( ( root ) => [ root, ...root.querySelectorAll( '*' ) ] ) ) {
+				if ( /(?:^|\s)animatable-on-load/.test( node.getAttribute( 'class' ) ?? '' ) ) node.classList.add( 'animate-has-animated' );
+			}
+			details.append( summary, ...body );
 			// Like the video swap below: detach Gamma's node view, so a later render
 			// updates the detached subtree rather than this document.
 			view.replaceWith( details );

@@ -97,8 +97,8 @@ describe( 'gamma platform', () => {
 			`<div class="node-toggleSummary"><div data-node-view-wrapper=""><button type="button" data-testid="toggle-button"><svg></svg></button><div data-node-view-content=""><div data-node-view-content-inner="toggleSummary">${ title }</div></div></div></div>` +
 			`${ body }</div></div></div></div></div>`;
 		const html = gammaPage( [] )
-			.replace( '<style>', '<style>.block-toggle [data-open="false"] [data-node-view-content-inner="toggle"] > :not(:first-child){display:none}' )
-			.replace( '<p>First</p>', toggle( false, 'Archive <strong>2025</strong>', `<p class="body">Outer body</p>${ toggle( false, 'More', '<p class="body">Inner body</p>' ) }` ) + toggle( true, 'Open one', '<p>Shown</p>' ) );
+			.replace( '<style>', '<style>.block-toggle [data-open="false"] [data-node-view-content-inner="toggle"] > :not(:first-child){display:none}.animatable-on-load-content-parent:not(.animate-has-animated){opacity:0}' )
+			.replace( '<p>First</p>', toggle( false, 'Archive <strong>2025</strong>', `<div class="node-smartLayout animatable-on-load-content-parent"><p class="body">Outer body</p></div>${ toggle( false, 'More', '<p class="body">Inner body</p>' ) }` ) + toggle( true, 'Open one', '<p>Shown</p>' ) );
 		const page = await prepared( html );
 		try {
 			expect( await page.locator( '[data-open]' ).count() ).toBe( 0 );
@@ -112,6 +112,8 @@ describe( 'gamma platform', () => {
 			expect( await outerBody.isVisible() ).toBe( false );
 			await page.locator( 'summary', { hasText: 'Archive' } ).click();
 			expect( await outerBody.isVisible() ).toBe( true );
+			// Gamma's entrance fade never ran on closed content; it opens fully visible.
+			expect( await outerBody.evaluate( ( node ) => getComputedStyle( node.parentElement! ).opacity ) ).toBe( '1' );
 			await page.locator( 'summary', { hasText: 'More' } ).click();
 			expect( await page.locator( 'p.body', { hasText: 'Inner body' } ).isVisible() ).toBe( true );
 		} finally { await page.close(); }
