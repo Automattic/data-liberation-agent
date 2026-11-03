@@ -1,6 +1,6 @@
 import type { ConsentBannerLayout } from './consent-banner.js';
 
-/** Keep observed width bounds; do not infer unmeasured CSS breakpoints. */
+/** Merge adjacent observations (including bisected edges), opening the outer ranges. */
 export function mergeConsentLayouts(samples: ConsentBannerLayout[]): ConsentBannerLayout[] {
   const ordered = [...samples].sort((a, b) => (a.min_width ?? 0) - (b.min_width ?? 0));
   const result: ConsentBannerLayout[] = [];
@@ -13,6 +13,10 @@ export function mergeConsentLayouts(samples: ConsentBannerLayout[]): ConsentBann
     } else {
       result.push({ ...sample });
     }
+  }
+  if (result.length) {
+    delete result[0].min_width;
+    delete result[result.length - 1].max_width;
   }
   return result;
 }

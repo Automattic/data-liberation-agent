@@ -2898,8 +2898,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
+							consentViewports: viewports,
 							...( routeDevice?.mode === 'reflow-only' && viewport.id === 'desktop' && phoneProfile
-								? { reflowPhoneViewport: { width: phoneProfile.width, height: phoneProfile.height }, consentViewports: [ phoneProfile ] }
+								? { reflowPhoneViewport: { width: phoneProfile.width, height: phoneProfile.height } }
 								: {} ),
 							resolveClientRedirect: opts.resolveClientRedirect,
 							// The entrypoint is the capture's own identity, never an alias.

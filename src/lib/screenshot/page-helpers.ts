@@ -1477,15 +1477,39 @@ export async function dismissOverlays(
           ? await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(() => undefined) : undefined;
         if (consentBanner?.presentation && opts.consentViewports?.length) {
           const original = page.viewportSize();
+          // Node owns both bounds: hostile source timers cannot extend the probe.
+          const deadline = Date.now() + 4000;
+          let resizes = 0;
+          const layouts = consentBanner.presentation.layout ?? [];
+          const same = (a: typeof layouts[number], b: typeof layouts[number]) =>
+            a.direction === b.direction && a.align_items === b.align_items && a.button_align === b.button_align;
+          const sampleAt = async (viewport: { width: number; height: number }) => {
+            if (resizes >= 32 || Date.now() >= deadline) return undefined;
+            resizes++;
+            await withEvaluateTimeout(page.setViewportSize(viewport), Math.max(1, deadline - Date.now()));
+            const sample = await withEvaluateTimeout(readConsentBanner(page, t), Math.max(1, deadline - Date.now()));
+            const layout = sample?.presentation?.layout?.[0];
+            if (layout) layouts.push(layout);
+            return layout;
+          };
           try {
             for (const viewport of opts.consentViewports) {
-              if (viewport.width === original?.width) continue;
-              await page.setViewportSize(viewport);
-              const sample = await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(() => undefined);
-              if (sample?.presentation?.layout) consentBanner.presentation.layout?.push(...sample.presentation.layout);
+              if (viewport.width !== original?.width) await sampleAt(viewport);
             }
+            while (resizes < 32 && Date.now() < deadline) {
+              const ordered = [...layouts].sort((a, b) => a.min_width! - b.min_width!);
+              const index = ordered.findIndex((high, i) => i > 0
+                && !same(ordered[i - 1], high) && high.min_width! - ordered[i - 1].max_width! > 1);
+              if (index < 0) break;
+              // Keep actual observations on both sides, never a guessed midpoint.
+              // Re-sort each time: an intermediate sample may reveal a third layout.
+              const width = Math.floor((ordered[index - 1].max_width! + ordered[index].min_width!) / 2);
+              if (!await sampleAt({ width, height: original?.height ?? opts.consentViewports[0].height })) break;
+            }
+          } catch {
+            // A bounded, best-effort probe keeps the observations already made.
           } finally {
-            if (original) await page.setViewportSize(original);
+            if (original) await withEvaluateTimeout(page.setViewportSize(original), 1000);
           }
         }
         if (consentBanner?.presentation?.layout) consentBanner.presentation.layout = mergeConsentLayouts(consentBanner.presentation.layout);
