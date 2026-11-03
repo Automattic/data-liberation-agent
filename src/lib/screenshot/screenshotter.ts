@@ -234,6 +234,7 @@ interface CapturePerViewportArgs {
 	 */
 	reflowPhoneViewport?: { width: number; height: number };
 	viewport: Viewport;
+	consentViewports?: ReadonlyArray<{ width: number; height: number }>;
 	plan: ArtifactPlan;
 	url: string;
 	slug: string;
@@ -1039,9 +1040,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
 		// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
 		args.phases?.enter( 'lazy-load' );
-		const dismissedEarly = await dismissOverlays( page );
+		const dismissedEarly = await dismissOverlays( page, { consentViewports: args.consentViewports } );
 		await triggerLazyLoad( page, args.learnFluid === true, { expandContent: false } );
-		const dismissedLate = await dismissOverlays( page );
+		const dismissedLate = await dismissOverlays( page, { consentViewports: args.consentViewports } );
 		const dismissedHere = [ ...dismissedEarly, ...dismissedLate ];
 		if ( dismissedHere.length > 0 ) {
 			// Accumulates within one run (desktop + mobile both append); on a resumed
@@ -2898,7 +2899,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
 							...( routeDevice?.mode === 'reflow-only' && viewport.id === 'desktop' && phoneProfile
-								? { reflowPhoneViewport: { width: phoneProfile.width, height: phoneProfile.height } }
+								? { reflowPhoneViewport: { width: phoneProfile.width, height: phoneProfile.height }, consentViewports: [ phoneProfile ] }
 								: {} ),
 							resolveClientRedirect: opts.resolveClientRedirect,
 							// The entrypoint is the capture's own identity, never an alias.

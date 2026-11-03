@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mergeConsentLayouts } from './consent-banner-layout.js';
 import { dirname, join, resolve } from 'node:path';
 import type { MediaStubStore } from './resume-state/index.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
@@ -642,13 +643,18 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 
 	// Manifest order is capture order; keep the first site's intent, not builder DOM.
 	let consentBanner: import('./consent-banner.js').ConsentBanner | undefined;
+	let consentUrl: string | undefined;
 	for (const [url, entry] of Object.entries(capture.entries)) {
 		for (const overlay of entry.dismissed ?? []) {
 			const banner = overlay.consentBanner;
 			if (!banner) continue;
 			if (!consentBanner) {
-				consentBanner = banner;
-				writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(banner, null, 2)}\n`);
+				consentBanner = structuredClone(banner);
+				consentUrl = url;
+			} else if (url === consentUrl && JSON.stringify({ ...banner, presentation: undefined, source_selector: undefined }) === JSON.stringify({ ...consentBanner, presentation: undefined, source_selector: undefined })) {
+				if (consentBanner.presentation && banner.presentation?.layout) {
+					consentBanner.presentation.layout = mergeConsentLayouts([...(consentBanner.presentation.layout ?? []), ...banner.presentation.layout]);
+				}
 			} else if (JSON.stringify({ ...banner, source_selector: undefined }) !== JSON.stringify({ ...consentBanner, source_selector: undefined })) {
 				if (!discoveryDiagnostics.some(row => row.code === 'consent_banner_differs' && row.url === url)) discoveryDiagnostics.push({
 					code: 'consent_banner_differs', url, reason: 'A different consent banner was observed; the first captured banner was retained.',
@@ -656,6 +662,8 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			}
 		}
 	}
+
+	if (consentBanner) writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(consentBanner, null, 2)}\n`);
 
 	const receiptPath = join( stageDir, 'capture-receipt.json' );
 	// The entrypoint's self-declared generator: source evidence kept apart from the capturing platform.

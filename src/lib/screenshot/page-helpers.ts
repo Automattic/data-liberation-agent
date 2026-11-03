@@ -1,4 +1,5 @@
 import type { Page, Request } from 'playwright';
+import { mergeConsentLayouts } from '../consent-banner-layout.js';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
 
@@ -863,6 +864,8 @@ export interface DismissedOverlay {
 export interface DismissOverlaysOpts {
   /** Max detect→dismiss rounds (stacked overlays). Default 3. */
   maxRounds?: number;
+  /** Additional capture viewports to sample before a consent click removes it. */
+  consentViewports?: ReadonlyArray<{ width: number; height: number }>;
   /**
    * Which kinds to dismiss. Default: all of them, which is what capture wants.
    * A caller that measures source attribution separately narrows this so the
@@ -1380,10 +1383,11 @@ async function dismissOne(
 
 /** Read intent while the banner and its rendered controls are still visible. */
 async function readConsentBanner(page: Page, target: OverlayTarget): Promise<import('../consent-banner.js').ConsentBanner | undefined> {
-  return page.evaluate(({ idx, selector }) => {
+  return page.evaluate(({ idx, selector, viewportWidth }) => {
     const root = document.querySelector<HTMLElement>(`[data-lib-overlay="${idx}"]`);
     if (!root) return;
     const visible = (node: HTMLElement) => !!node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
+    if (!visible(root)) return;
     const label = (node: HTMLElement) => (node.innerText || node.getAttribute('aria-label') || (node as HTMLInputElement).value || '').trim();
     const controls = Array.from(root.querySelectorAll<HTMLElement>('button, [role="button"], input[type="button"], input[type="submit"], a')).filter(visible);
     const reject = controls.find(node => /reject|decline|deny|refuse|disagree|weigeren|ablehnen/i.test(label(node)));
@@ -1415,8 +1419,19 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     );
     const buttonPresentation = cssValues({
       border_radius: button.borderRadius, padding: button.padding,
-      font_size: button.fontSize, font_family: button.fontFamily,
+      font_size: button.fontSize, font_family: button.fontFamily, line_height: button.lineHeight,
     });
+    // Use the common content container when controls are nested in a wrapper.
+    let content = accept.parentElement ?? root;
+    while (content !== root && prose && !content.contains(prose)) content = content.parentElement ?? root;
+    const contentStyle = getComputedStyle(content);
+    const contentBounds = content.getBoundingClientRect();
+    const controlBounds = accept.getBoundingClientRect();
+    const start = contentBounds.left + parseFloat(contentStyle.borderLeftWidth) + parseFloat(contentStyle.paddingLeft);
+    const end = contentBounds.right - parseFloat(contentStyle.borderRightWidth) - parseFloat(contentStyle.paddingRight);
+    const buttonAlign = Math.abs(controlBounds.left - start) <= 2 ? 'start' as const
+      : Math.abs(controlBounds.right - end) <= 2 ? 'end' as const : undefined;
+    const direction = contentStyle.flexDirection === 'column' ? 'column' as const : 'row' as const;
     return {
       schema: 'static-site-importer/consent-banner/v1' as const,
       text, accept_label: label(accept),
@@ -1426,13 +1441,17 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       presentation: {
         span: Math.abs(bounds.width - innerWidth) <= 1 ? 'full' as const : 'inset' as const,
         ...(position === 'center' ? {} : { edge_offset: `${position === 'bottom' ? innerHeight - bounds.bottom : bounds.top}px` }),
-        ...cssValues({ padding: style.padding, font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight }),
+        ...cssValues({ padding: style.padding, font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight, text_margin: typography.margin }),
+        layout: [{ min_width: viewportWidth, max_width: viewportWidth, direction,
+          ...cssValues({ align_items: contentStyle.alignItems }),
+          ...(buttonAlign ? { button_align: buttonAlign } : {}),
+        }],
         ...(Object.keys(buttonPresentation).length ? { button: buttonPresentation } : {}),
       },
       colors: { background: style.backgroundColor, text: style.color, button_background: button.backgroundColor, button_text: button.color },
       source_selector: selector,
     };
-  }, { idx: target.idx, selector: target.selector });
+  }, { idx: target.idx, selector: target.selector, viewportWidth: page.viewportSize()?.width });
 }
 
 /**
@@ -1456,6 +1475,20 @@ export async function dismissOverlays(
       for (const t of targets) {
         const consentBanner = t.kind === 'consent'
           ? await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(() => undefined) : undefined;
+        if (consentBanner?.presentation && opts.consentViewports?.length) {
+          const original = page.viewportSize();
+          try {
+            for (const viewport of opts.consentViewports) {
+              if (viewport.width === original?.width) continue;
+              await page.setViewportSize(viewport);
+              const sample = await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(() => undefined);
+              if (sample?.presentation?.layout) consentBanner.presentation.layout?.push(...sample.presentation.layout);
+            }
+          } finally {
+            if (original) await page.setViewportSize(original);
+          }
+        }
+        if (consentBanner?.presentation?.layout) consentBanner.presentation.layout = mergeConsentLayouts(consentBanner.presentation.layout);
         const method = await withEvaluateTimeout(dismissOne(page, t), 10_000);
         if (method) {
           // Retain node identity across re-detection rounds. Never remove live
