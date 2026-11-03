@@ -52,7 +52,8 @@ describe( 'gamma platform', () => {
 	} );
 
 	it( 'keeps the Next.js cleanup, since Gamma publishes with Next.js', () => {
-		expect( gammaAdapter.liberation?.removeSelectors ).toEqual( nextjsAdapter.liberation?.removeSelectors );
+		expect( gammaAdapter.liberation?.removeSelectors ).toEqual( expect.arrayContaining( nextjsAdapter.liberation!.removeSelectors! ) );
+		expect( gammaAdapter.liberation?.removeSelectors ).toContain( '[data-testid="media-placeholder"]' );
 		expect( gammaAdapter.liberation?.clientErrorShellSelectors ).toEqual( nextjsAdapter.liberation?.clientErrorShellSelectors );
 		expect( gammaAdapter.resolveImageOriginal?.( 'https://site.test/_next/image?url=%2Fphoto.jpg&w=640' ) ).toBe( 'https://site.test/photo.jpg' );
 	} );
