@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { detectFromResponse } from '../../lib/detect-platform/detect-platform.js';
 import { resolvePlatform } from '../../index.js';
+import { nextjsAdapter } from '../nextjs/index.js';
 import { gammaAdapter } from './index.js';
 
 const spinner = '<div data-node-view-wrapper=""><div class="video-box"><div class="chakra-spinner"><span>Loading...</span></div></div></div>';
@@ -48,6 +49,12 @@ describe( 'gamma platform', () => {
 		expect( detectFromResponse( new Headers(), source ).platform ).toBe( 'gamma' );
 		expect( detectFromResponse( new Headers(), '<script src="/_next/static/chunks/main.js"></script>' ).platform ).toBe( 'nextjs' );
 		expect( resolvePlatform( 'gamma' ) ).toBe( gammaAdapter );
+	} );
+
+	it( 'keeps the Next.js cleanup, since Gamma publishes with Next.js', () => {
+		expect( gammaAdapter.liberation?.removeSelectors ).toEqual( nextjsAdapter.liberation?.removeSelectors );
+		expect( gammaAdapter.liberation?.clientErrorShellSelectors ).toEqual( nextjsAdapter.liberation?.clientErrorShellSelectors );
+		expect( gammaAdapter.resolveImageOriginal?.( 'https://site.test/_next/image?url=%2Fphoto.jpg&w=640' ) ).toBe( 'https://site.test/photo.jpg' );
 	} );
 
 	it( 'gives each linked card the id its section links name, so they scroll without Gamma', async () => {
