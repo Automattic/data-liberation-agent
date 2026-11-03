@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Clobbered built-in</title>
+<style>.box{display:flex;gap:2vw;padding:3vw}.box>div{width:30%;height:10vw;background:#c33}</style>
+<script>
+function Number(dom){ this.dom = dom; }
+window.Math = {};
+window.JSON = {};
+window.Array = function Array() {};
+window.Object = function Object() {};
+window.parseFloat = function() { return -1; };
+</script>
+</head><body><div class="box"><div></div><div></div><div></div></div>
+<script>
+const reflow = () => { for (const node of document.querySelectorAll('.box > div')) node.style.width = innerWidth / 4 + 'px'; };
+addEventListener('resize', reflow); reflow();
+</script></body></html>

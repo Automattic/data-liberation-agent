@@ -107,6 +107,7 @@ export const CAPTURE_EVIDENCE_FAMILIES = {
 	'dialog-<n>': 'i',
 	'disclosure-panel-<n>': 'i',
 	'gallery-<n>': 'i',
+	'probe-<uuid>': 'a',
 } as const;
 
 /** Sidecar schemas, under `CAPTURE_SCHEMA_NAMESPACE`. */
