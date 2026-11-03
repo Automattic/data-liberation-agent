@@ -61,7 +61,7 @@ Matching leading root compounds in inline and available captured linked styleshe
 
 Every sidecar schema is `blocks-engine-capture/<name>/v<n>`. The full list is `CAPTURE_SCHEMAS`. Blocks Engine reads five of them:
 
-- `captured-interactions/v2` (`interaction-states.json`; replaces the flat v1 interaction inventory with component nodes)
+- `captured-interactions/v3` (`interaction-states.json`; component nodes with shared-component references)
 - `capture-receipt/v1` — its `reports` array names the capture-root JSON sidecars to forward to an importer (additive; schema stays `v1`)
 - `source-interactivity/v1`
 - `finite-bootstrap/v1`
@@ -70,6 +70,16 @@ Every sidecar schema is `blocks-engine-capture/<name>/v<n>`. The full list is `C
 `website/source-findings.json` uses Static Site Importer's own schema, `static-site-importer/source-findings/v1` ([loss-ledger.md](loss-ledger.md) section 5.1).
 
 ## Route component states (Refs #1034)
+
+The v3 report stores components identical across two or more pages once in
+`sharedComponents`, keyed by `sha256:` plus the SHA-256 of recursively key-sorted
+component JSON (array order preserved). Each page keeps its complete, ordered
+`components` list, using `{ "ref": "<id>" }` for shared entries and inline nodes
+for route-only components. Both report and page schemas are v3. Expanding refs
+recovers the v2 component arrays exactly; totals still count expanded per-route
+components. Readers accept inline v2 reports as well as v3, and report unresolved
+refs as structured diagnostics rather than failing the report. Portable HTML
+replay continues to use the full route evidence, not the shared table.
 
 Each route's `components` array groups a surface's `initial` state, bounded observed
 `states` (id and HTML), and `transitions` (from/to state ids and a click trigger

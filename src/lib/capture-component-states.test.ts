@@ -1,3 +1,4 @@
+import { resolveInteractionComponents, type ComponentPage } from './captured-interactions.js';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -38,7 +39,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('captures the initial route b
 			findAdapter: () => ({ id: 'component-fixture', detect: () => true, discover: async () => ({ urls: [{ url }] }) }),
 		});
 		expect(result.summary.routesFailed).toBe(0);
-		const evidence = JSON.parse(readFileSync(join(root, 'interaction-states.json'), 'utf8')) as { pages: InteractionStatesReport[] };
+		const evidence = resolveInteractionComponents(JSON.parse(readFileSync(join(root, 'interaction-states.json'), 'utf8')) as { pages: Array<Omit<InteractionStatesReport, 'components'> & ComponentPage> });
 		const components = evidence.pages.find(page => page.sourceUrl === url)!.components!;
 		expect(components.map(node => node.kind)).toEqual(['tabs', 'disclosure', 'carousel']);
 		for (const [kind, initial, states, trigger] of [

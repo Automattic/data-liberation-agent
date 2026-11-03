@@ -1,3 +1,4 @@
+import { resolveInteractionComponents, type ComponentPage } from './captured-interactions.js';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -47,7 +48,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 		});
 		expect(result.summary.routesFailed).toBe(0);
 		copyRoot = join(root, 'website');
-		const evidence = JSON.parse(readFileSync(join(root, 'interaction-states.json'), 'utf8')) as { pages: InteractionStatesReport[] };
+		const evidence = resolveInteractionComponents(JSON.parse(readFileSync(join(root, 'interaction-states.json'), 'utf8')) as { pages: Array<Omit<InteractionStatesReport, 'components'> & ComponentPage> });
 		const entry = evidence.pages.find(page => page.sourceUrl === url)!;
 		for (const id of ['country', 'region']) {
 			expect(entry.components?.find(node => node.selector === `#${id}` || node.states.some(state => state.evidence?.trigger.id === id))?.kind).toBe('listbox');

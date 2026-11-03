@@ -1,4 +1,4 @@
-# Slideshow capture (captured-interactions/v2)
+# Slideshow capture (captured-interactions/v3)
 
 A `pages[].components[]` node with `kind: "carousel"` and `function: "slideshow"`
 represents an inline slideshow. It is not a dialog and its state HTML must not

@@ -8,6 +8,7 @@ import { buildLayoutGeometryProof, type GeometryCapture } from './screenshot/lay
 import { SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
 import { routeComponents } from './screenshot/component-states.js';
+import { CAPTURED_INTERACTIONS_SCHEMA, shareInteractionComponents } from './captured-interactions.js';
 import type { ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import { DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, type ResponsiveVariantEvidence } from './responsive-assembly.js';
 import { pathWithin } from './portable-assets.js';
@@ -115,7 +116,7 @@ const MAX_ASSET_EVIDENCE_ASSETS = 10_000;
 const MAX_ASSET_EVIDENCE_REFERENCES = 100;
 const MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE = 10_000;
 
-export const CAPTURED_INTERACTIONS_SCHEMA = 'blocks-engine-capture/captured-interactions/v2';
+export { CAPTURED_INTERACTIONS_SCHEMA } from './captured-interactions.js';
 export const CAPTURED_SCROLL_STATES_SCHEMA = 'blocks-engine-capture/captured-scroll-states/v1';
 /** Indexed semantic evidence sidecar schema. */
 export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'blocks-engine-capture/captured-semantic-evidence/v2';
@@ -533,7 +534,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			`${ JSON.stringify(
 				{
 					schema: CAPTURED_INTERACTIONS_SCHEMA,
-					pages: componentPages,
+					...shareInteractionComponents( componentPages ),
 					totals: interactionSummary,
 				},
 				null,
