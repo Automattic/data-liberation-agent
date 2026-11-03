@@ -8,6 +8,7 @@ import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import type { Page } from 'playwright';
 import { mapPool } from '../concurrency.js';
+import { resolveInteractionComponents, type ComponentPage } from '../captured-interactions.js';
 import * as cheerio from 'cheerio';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
@@ -1097,10 +1098,11 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 
 	const sources = routeSourceMap( receipt );
 	const interactionPath = join( dirname( receiptPath ), 'interaction-states.json' );
-	const observedRoutes: CapturedRouteNavigation[] = existsSync( interactionPath )
-		? ( JSON.parse( readFileSync( interactionPath, 'utf8' ) ) as { pages?: Array< { routeNavigation?: CapturedRouteNavigation[] } > } )
-			.pages?.flatMap( page => page.routeNavigation ?? [] ) ?? []
-		: [];
+	const interactionReport = resolveInteractionComponents( existsSync( interactionPath )
+		? JSON.parse( readFileSync( interactionPath, 'utf8' ) ) as { pages?: Array<ComponentPage & { routeNavigation?: CapturedRouteNavigation[] }> }
+		: {} );
+	for ( const diagnostic of interactionReport.diagnostics ) log( `[compare] ${ JSON.stringify( diagnostic ) }` );
+	const observedRoutes = interactionReport.pages.flatMap( page => page.routeNavigation ?? [] );
 	if ( ! sources.has( '/' ) ) sources.set( '/', sourceUrl );
 
 	// One route whose cleanup could not be proven must not block comparing the

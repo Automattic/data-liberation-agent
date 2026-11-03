@@ -1,3 +1,4 @@
+import { resolveInteractionComponents, type ComponentPage } from '../captured-interactions.js';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -50,7 +51,7 @@ if(innerWidth<600)document.querySelector('#filter-panel').hidden=true;let offset
 			findAdapter: () => ({ id: 'collections', detect: () => true, discover: async () => ({ urls: [{ url }] }) }),
 		});
 		expect(captured.summary.routesFailed).toBe(0);
-		const reports = JSON.parse(readFileSync(join(output, 'interaction-states.json'), 'utf8')) as { pages: InteractionStatesReport[] };
+		const reports = resolveInteractionComponents(JSON.parse(readFileSync(join(output, 'interaction-states.json'), 'utf8')) as { pages: Array<Omit<InteractionStatesReport, 'components'> & ComponentPage> });
 		expect(reports.pages.find(report => report.sourceUrl === url)?.components?.find(node => node.selector === '#cards')?.collection?.members).toHaveLength(16);
 		const receipt = JSON.parse(readFileSync(join(output, 'capture-receipt.json'), 'utf8'));
 		for (let index = 0; index < 16; index++) {

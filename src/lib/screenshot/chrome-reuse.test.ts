@@ -6,6 +6,8 @@ import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
+import { CAPTURED_INTERACTIONS_SCHEMA, resolveInteractionComponents, type ComponentPage } from '../captured-interactions.js';
+import { routeComponents, type CapturedComponent } from './component-states.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { anchorChromeStates, readChromeLandmarks, reuseSharedChrome, rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
@@ -331,6 +333,30 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 	afterAll( async () => {
 		await new Promise< void >( resolve => server.close( () => resolve() ) );
 		rmSync( outputDir, { recursive: true, force: true } );
+	} );
+
+	it( 'stores shared components once while preserving every route component in order', () => {
+		const report = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ) as {
+			schema: string; pages: ComponentPage[]; sharedComponents: Record<string, CapturedComponent>;
+			totals: { component_count: number };
+		};
+		expect( report.schema ).toBe( CAPTURED_INTERACTIONS_SCHEMA );
+		const expanded = resolveInteractionComponents( report );
+		expect( expanded.diagnostics ).toEqual( [] );
+		const entries = ( JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as { entries: Record<string, ManifestEntry> } ).entries;
+		expect( expanded.pages ).toHaveLength( 2 );
+		for ( const page of expanded.pages ) {
+			expect( page.schema ).toBe( report.schema );
+			expect( page.components ).toEqual( routeComponents( entries[ page.sourceUrl! ]!.interactions! ) );
+		}
+		expect( report.totals.component_count ).toBe( expanded.pages.reduce( ( count, page ) => count + page.components.length, 0 ) );
+		const shared = Object.entries( report.sharedComponents );
+		expect( shared.length ).toBeGreaterThan( 0 );
+		for ( const [ id, component ] of shared ) {
+			expect( id ).toMatch( /^sha256:[a-f0-9]+$/ );
+			expect( report.pages.filter( page => page.components?.some( item => 'ref' in item && item.ref === id ) ) ).toHaveLength( 2 );
+			expect( report.pages.flatMap( page => page.components ?? [] ) ).not.toContainEqual( component );
+		}
 	} );
 
 	it( 'serializes the header of every route closed, annotated and identical', () => {
