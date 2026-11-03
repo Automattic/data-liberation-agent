@@ -41,6 +41,39 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); await copy.close(); }
 	}, 30_000 );
 
+	// Three real sweeps (~40s) exercise rAF-delayed fitting without timeout tracking.
+	it( 'waits for resize-driven fitted node replacement across repeated captures', async () => {
+		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
+		try {
+			for ( let run = 0; run < 3; run++ ) {
+				await page.goto( 'about:blank' );
+				await page.setContent( `<style>@media(min-width:768px){header{display:none}}</style>
+					<header><a id="title" style="font-size:30px">Phone title</a></header>
+					<script>
+					const title=document.querySelector('#title');
+					let generation=0;
+					const fit=(delay)=>{
+						const current=++generation, started=performance.now();
+						title.textContent='Phone title';
+						const frame=()=>{
+							if(current!==generation)return;
+							if(performance.now()-started<delay){requestAnimationFrame(frame);return;}
+							const span=document.createElement('span');span.className='textFitted';
+							span.style.fontSize=Math.min(30,Math.max(20,Math.floor((innerWidth-86)/11.69)))+'px';
+							span.textContent='Phone title';title.replaceChildren(span);
+						};requestAnimationFrame(frame);
+					};
+					addEventListener('resize',()=>fit(290));
+					addEventListener('load',()=>fit(120));
+					</script>` );
+				// Explicitly finish the delayed initial load, not just setContent's load event.
+				await page.locator( '.textFitted' ).waitFor( { state: 'attached' } );
+				await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+				expect( await page.locator( '.textFitted' ).getAttribute( 'style' ), `capture ${ run + 1 }` ).toContain( 'clamp(' );
+			}
+		} finally { await page.close(); }
+	}, 90_000 );
+
 	// One browser sweep (~8s) covers both disappearance and retained desktop sizing.
 	it( 'learns equal-height card minima only in the wide regime', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
