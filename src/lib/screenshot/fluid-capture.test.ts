@@ -16,7 +16,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	} );
 
 	// One sweep (~6s): refitting replaces, rather than edits, the fitted span.
-	it( 'waits for resize-driven fitted node replacement', async () => {
+	it( 'exports learned geometry after resize-driven and post-learning fitted node replacement', async () => {
 		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
 		try {
 			await page.setContent( `<header><a>Phone title</a></header>
@@ -38,6 +38,20 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				};
 				addEventListener('resize', fit);
 				addEventListener('load', () => requestAnimationFrame(fit));
+				// Replace once in the microtask delivering the learner's first write:
+				// this lands between rule application and authority activation.
+				const replaceFitted = () => {
+					const span = document.createElement('span');
+					span.className = 'textFitted'; span.textContent = 'Phone title';
+					span.style.fontSize = '30px';
+					document.querySelector('a').replaceChildren(span);
+				};
+				const observer = new MutationObserver(() => {
+					if (!document.querySelector('.textFitted')?.style.fontSize.includes('clamp(')) return;
+					observer.disconnect(); replaceFitted();
+				});
+				observer.observe(document.querySelector('a'), {subtree:true, attributes:true, attributeFilter:['style']});
+				window.replaceFitted = replaceFitted;
 				</script>` );
 			// Explicitly finish the delayed initial load before tagging the fitted span.
 			await page.locator( '.textFitted' ).waitFor( { state: 'attached' } );
@@ -45,9 +59,16 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const initial = await page.content();
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
 			expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
-			// The fixture only refits on an actual width change, not a queued resize
-			// at the restored width, so this reads the finalized live node.
-			expect( await page.locator( '.textFitted' ).getAttribute( 'style' ) ).toContain( 'clamp(' );
+			const exported = projectInitialDocument( initial, await page.content() );
+			expect( exported ).toContain( 'font-size: clamp(' );
+			// A second, later refit must retain both authority and correspondence.
+			await page.evaluate( () => new Promise<void>( resolve => setTimeout( () => {
+				// Source scrolling/sticky-header state can change an ancestor
+				// without changing the fitted title's own state.
+				document.body.classList.add( 'header-affix' );
+				( window as unknown as { replaceFitted: () => void } ).replaceFitted();
+				resolve();
+			}, 50 ) ) );
 			expect( projectInitialDocument( initial, await page.content() ) ).toContain( 'font-size: clamp(' );
 		} finally { await page.close(); }
 	}, 20_000 );
