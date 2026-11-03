@@ -735,7 +735,12 @@ async function learnFluidGeometry(
 		let sampledCss: string | null = null;
 		if ( model.kind === 'container' ) {
 			const viewportSamples = samples.map( ( sample ) => ( { viewport: sample.viewport, value: sample.value } ) );
-			const viewportOnly = learnWidestFluidModel( viewportSamples );
+			// A height fallback is applied eagerly to keep runtime-owned parents
+			// definite. It must fit every width, not just the widest regime:
+			// otherwise it replaces a correct container fit with desktop-only vw.
+			const viewportOnly = property === 'height'
+				? learnFluidModel( viewportSamples )
+				: learnWidestFluidModel( viewportSamples );
 			const varying = Math.max( ...viewportSamples.map( ( sample ) => sample.value ) ) -
 				Math.min( ...viewportSamples.map( ( sample ) => sample.value ) ) > CONTAINER_VERIFY_TOLERANCE_PX;
 			// A shrink-to-fit intermediate can make 100% collapse. The widest
