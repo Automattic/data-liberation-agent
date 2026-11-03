@@ -1,8 +1,15 @@
 <!doctype html><html><head><title>Consent fixture</title><style>
 body { margin:0; font-family:sans-serif } main { padding:32px; min-height:1000px }
 .cc-window { position:fixed; bottom:0; left:0; right:0; z-index:100000; background:rgb(34,34,34); color:rgb(255,255,255); padding:12px }
-.cc-window p { font:15px/18px Calibri, sans-serif }
-.cc-window button { background:rgb(153,153,153); color:rgb(255,255,255); border-radius:5px; padding:8px 40px; font:13.5px Calibri, sans-serif }
+.cc-window { display:flex; align-items:center; gap:8px }
+.cc-window p { min-width:0; flex:1 1 auto; margin:0 15px 0 0; font:15px/18px Calibri, sans-serif }
+@media(max-width:414px) {
+  .cc-window { flex-direction:column; align-items:stretch }
+  .cc-window p { margin:0 0 15px }
+  .cc-window button { align-self:flex-start }
+  .cc-window button:last-child { margin-left:auto; align-self:flex-end }
+}
+.cc-window button { background:rgb(153,153,153); color:rgb(255,255,255); border-radius:5px; padding:8px 40px; font:13.5px/16.2px Calibri, sans-serif }
 </style></head><body><main><h1>Community garden</h1><p>Welcome to our community garden. Find growing tips, seasonal planting advice, opening hours and events here. Our volunteers share practical knowledge about composting, caring for seedlings, watering and harvesting. Everyone is welcome to visit and learn about growing food together.</p></main>
-<div class="cc-window cc-banner"><p>This website uses cookies for analytics.</p><span hidden>Invisible text</span><a href="/privacy">Privacy policy</a><button onclick="this.parentNode.remove()">Accept</button><button>Reject</button></div>
+<div class="cc-window cc-banner"><p>This website uses cookies for analytics.</p><span hidden>Invisible text</span><a href="/privacy">Privacy policy</a><button>Reject</button><button onclick="this.parentNode.remove()">Accept</button></div>
 </body></html>

@@ -1,3 +1,11 @@
+export interface ConsentBannerLayout {
+  min_width?: number;
+  max_width?: number;
+  direction: 'row' | 'column';
+  align_items?: string;
+  button_align?: 'start' | 'end';
+}
+
 /** Portable consent intent; field names are shared with static-site-importer. */
 export interface ConsentBanner {
   schema: 'static-site-importer/consent-banner/v1';
@@ -14,7 +22,9 @@ export interface ConsentBanner {
     font_family?: string;
     font_size?: string;
     line_height?: string;
-    button?: { border_radius?: string; padding?: string; font_size?: string; font_family?: string };
+    text_margin?: string;
+    layout?: ConsentBannerLayout[];
+    button?: { border_radius?: string; padding?: string; font_size?: string; font_family?: string; line_height?: string };
   };
   source_selector?: string;
 }
