@@ -2619,6 +2619,30 @@ describe( 'exportWebsiteCapture', () => {
 		expect( states.map( ( state: { trigger: { tabKey?: string } } ) => state.trigger.tabKey ) ).toEqual( [ 'braces', 'oral-habits' ] );
 	} );
 
+	it( 'resolves route links inside a retained panel\'s replay snapshot as the live panel\'s own', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-panel-snapshot-links-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const panel = '<div id="panel" role="dialog"><a href="https://example.com/about">About</a></div>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body><button id="open" aria-haspopup="dialog">Menu</button>${ panel.replace( 'role="dialog"', 'role="dialog" hidden' ) }</body></html>` );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), '<html><body><h1>About</h1></body></html>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.com/': { html: 'html/homepage.html', interactions: {
+				schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: 'https://example.com/', viewport: { width: 1440, height: 900 }, capturedAt: '2026-11-03T00:00:00.000Z', initialDialogs: [],
+				states: [ { status: 'captured',
+					trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', label: 'Menu', dataBindings: {} },
+					dialog: { selector: '#panel', tag: 'div', id: 'panel', role: 'dialog', ariaModal: true, presentation: 'modal', html: panel, htmlBytes: panel.length, htmlTruncated: false } } ],
+			} },
+			'https://example.com/about': { html: 'html/about.html' },
+		} } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const live = $( '[data-blocks-engine-capture-dialog-panel] a' ).attr( 'href' );
+		expect( live ).toBe( '/about/index.html' );
+		const snapshot = JSON.parse( $( '[data-blocks-engine-capture-existing-panel]' ).attr( 'data-blocks-engine-capture-existing-panel' )! ) as Record< string, { html: string } >;
+		for ( const phase of [ 'resting', 'opened' ] ) expect( cheerio.load( snapshot[ phase ]!.html )( 'a' ).attr( 'href' ), phase ).toBe( live );
+	} );
+
 	it( 'localizes images named inside captured interaction states, including renditions that were never downloaded', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-interaction-media-export-' ) );
 		dirs.push( outputDir );
