@@ -50,6 +50,16 @@ describe( 'wireCapturedDialogs', () => {
 		expect( $.html() ).toBe( html );
 		expect( reparsed.html() ).toBe( html );
 	} );
+	it( 'wires only the labelled control when responsive documents repeat a trigger ID', () => {
+		const html = '<html><body><div class="desktop"><a id="1" href="/projects">Projects</a></div>'
+			+ '<div class="mobile"><a id="1" role="button" aria-label="Open menu"></a><div id="menu" hidden><a href="/about">About</a></div></div></body></html>';
+		const $ = cheerio.load( wireCapturedDialogs( html, [ {
+			...captured,
+			trigger: { ...captured.trigger, selector: '#\\31 ', id: '1', tag: 'a', label: 'Open menu' },
+		} ] ) );
+		expect( $( '[data-blocks-engine-capture-dialog-trigger]' ).toArray().map( node => $( node ).attr( 'aria-label' ) ) ).toEqual( [ 'Open menu' ] );
+		expect( $( '.desktop a' ).attr( 'href' ) ).toBe( '/projects' );
+	} );
 	// ~1 second: reduced mebenedetto.com /jujuy-2022/ dual-document tree.
 	it( 'restores duplicate source panel IDs inside synthesized responsive menus', async () => {
 		const document = ( device: string ) => `<div class="${ device }"><header><nav>

@@ -314,24 +314,33 @@ function rewriteCapturedRouteLinks(
 ): string {
 	const $ = cheerio.load( html );
 	rewriteRouteLinksIn( $, documentUrl, routes, portable );
-	// A dropdown root shared by several triggers carries each trigger's opened
-	// markup as serialized state, which the replay swaps in on open. Its links
-	// were written against the same document and must resolve as the panel's
-	// own do; otherwise the copy's menu opens onto source-relative links, and
-	// otherwise-identical shared chrome differs route by route.
-	$( '[data-blocks-engine-capture-dialog-panel-state]' ).each( ( _index, element ) => {
-		const trigger = $( element );
-		let state: { html?: unknown };
-		try {
-			state = JSON.parse( trigger.attr( 'data-blocks-engine-capture-dialog-panel-state' ) ?? '' ) as { html?: unknown };
-		} catch {
-			return;
-		}
-		if ( ! state || typeof state.html !== 'string' ) return;
-		const fragment = cheerio.load( state.html, null, false );
+	// Replay state serializes markup the runtime swaps in: a shared dropdown
+	// root's per-trigger opened panel, and a reused panel's resting and opened
+	// snapshots. Its links were written against the same document and must
+	// resolve as the live panel's own do; otherwise the swapped-in menu opens
+	// onto source links, and identical shared chrome differs route by route.
+	const rewriteFragment = ( html: unknown ): unknown => {
+		if ( typeof html !== 'string' ) return html;
+		const fragment = cheerio.load( html, null, false );
 		rewriteRouteLinksIn( fragment, documentUrl, routes, portable );
-		trigger.attr( 'data-blocks-engine-capture-dialog-panel-state', JSON.stringify( { ...state, html: fragment.html() } ) );
-	} );
+		return fragment.html();
+	};
+	const rewriteState = ( attribute: string, rewrite: ( state: Record< string, unknown > ) => Record< string, unknown > ) => {
+		$( `[${ attribute }]` ).each( ( _index, element ) => {
+			let state: unknown;
+			try {
+				state = JSON.parse( $( element ).attr( attribute ) ?? '' );
+			} catch {
+				return;
+			}
+			if ( state && typeof state === 'object' ) $( element ).attr( attribute, JSON.stringify( rewrite( state as Record< string, unknown > ) ) );
+		} );
+	};
+	rewriteState( 'data-blocks-engine-capture-dialog-panel-state', state => ( { ...state, html: rewriteFragment( state.html ) } ) );
+	rewriteState( 'data-blocks-engine-capture-existing-panel', snapshot => Object.fromEntries( Object.entries( snapshot ).map( ( [ key, phase ] ) => [
+		key,
+		phase && typeof phase === 'object' && 'html' in phase ? { ...phase, html: rewriteFragment( ( phase as { html: unknown } ).html ) } : phase,
+	] ) ) );
 	return $.html();
 }
 
