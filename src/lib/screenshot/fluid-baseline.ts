@@ -157,7 +157,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 					role.returned = { element, style: element.getAttribute( 'style' ), segment: element.getAttribute( segmentAttribute ), state: state( element ) };
 					role.authority = entries.filter( entry => entry.id === role.identity );
 				}
-				const observer = new MutationObserver( () => {
+				const enforce = () => {
 					project( false );
 					for ( const role of roles ) {
 						const element = role.current as HTMLElement | undefined;
@@ -169,14 +169,15 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 							role.authority = role.authority?.filter( entry => ! properties.includes( entry.property ) );
 							element.removeAttribute( release );
 						}
-						role.stateMatches = ( ! role.parent || role.parent.stateMatches === true ) && state( element ).every( ( value, index ) => value === returned.state[index] );
+						const ownStateMatches = state( element ).every( ( value, index ) => value === returned.state[index] );
+						role.stateMatches = ( ! role.parent || role.parent.stateMatches === true ) && ownStateMatches;
 						// Opening controls is source behavior, not a rewrite of captured
 						// geometry. Captured rules resume when that baseline state returns.
 						if ( ! role.stateMatches ) {
 							if ( returned.segment !== null ) element.removeAttribute( segmentAttribute );
-							continue;
 						}
-						if ( element !== returned.element && document.documentElement.clientWidth === captureWidth ) {
+						if ( ! ownStateMatches ) continue;
+						if ( role.stateMatches && element !== returned.element && document.documentElement.clientWidth === captureWidth ) {
 							// A late clone (including screenshot-driven resizes) inherits its
 							// own finalized width/insets, never the active source role's.
 							scratch.style.cssText = returned.style ?? '';
@@ -192,14 +193,23 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 							returned.element = element;
 						}
 						for ( const entry of role.authority ?? [] ) {
+							// Ancestor layout states (e.g. a body's sticky-header class)
+							// do not revoke a fitted leaf's typography. Its own state still
+							// gates authority; layout geometry retains ancestor gating.
+							if ( ! role.stateMatches && ( entry.property !== 'font-size' || entry.segmented ) ) continue;
 							const value = element.style.getPropertyValue( entry.property );
 							if ( entry.segmented ) {
 								if ( value !== '' ) element.style.removeProperty( entry.property );
 							} else if ( value !== entry.css ) element.style.setProperty( entry.property, entry.css );
 						}
 					}
-				} );
+				};
+				const observer = new MutationObserver( enforce );
 				observer.observe( document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'aria-hidden', 'aria-expanded'] } );
+				// Applying learned CSS and activating its authority are separate browser
+				// tasks. A refit between them may have replaced the styled node. Do not
+				// wait for another mutation (or serialize its old pixels in the meantime).
+				enforce();
 			},
 			cleanup: () => {
 				marking = false;
