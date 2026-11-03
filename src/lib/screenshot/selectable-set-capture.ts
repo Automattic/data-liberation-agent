@@ -773,13 +773,17 @@ export async function captureSelectableSetStates(
 					// state proves no single activation restores it. Repeating the pass
 					// cannot establish the activation-determined restoration replay needs.
 					let restorationExhausted = false;
-					// Activation can settle before the source updates selection. Keep the
-					// same bounded observation window as discovery, but return on a match.
+					// Only groups observed changing after activate() returns need polling.
+					// Immediate and inert groups keep the original single-read behavior.
+					let observedChoiceLatencyMs: number | undefined;
 					const waitForChoiceState = async ( matches: ( html: string ) => boolean ): Promise< string > => {
-						const observationDeadline = Date.now() + observationWindowMs;
+						const waitMs = observedChoiceLatencyMs
+							? Math.min( observationWindowMs, observedChoiceLatencyMs + limits.quietMs )
+							: 0;
+						const observationDeadline = Math.min( Date.now() + waitMs, deadline );
 						let html = snapshotChoiceGroup( group.root, group.members );
 						while ( ! matches( html ) && Date.now() < observationDeadline && Date.now() < deadline ) {
-							await wait( 100 );
+							await wait( Math.min( 100, observationDeadline - Date.now() ) );
 							html = snapshotChoiceGroup( group.root, group.members );
 						}
 						return html;
@@ -846,7 +850,9 @@ export async function captureSelectableSetStates(
 							};
 							break;
 						}
+						const beforeActivation = snapshotChoiceGroup( group.root, group.members );
 						const result = await activate( group.members[ index ] );
+						const activationReturnedAt = Date.now();
 						if ( ! result.ok ) {
 							discoveryError ??= { index, error: result.error };
 							if ( result.navigated ) {
@@ -861,13 +867,22 @@ export async function captureSelectableSetStates(
 						const observationDeadline = result.external || observedSelection( group.members[ index ]! ) === true && initialSelected[ index ] === true
 							? 0
 							: Date.now() + observationWindowMs;
+						let groupHtml = snapshotChoiceGroup( group.root, group.members );
+						let choiceLatencyMs = groupHtml !== beforeActivation ? 0 : undefined;
 						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
 							await wait( 100 );
+							groupHtml = snapshotChoiceGroup( group.root, group.members );
+							if ( choiceLatencyMs === undefined && groupHtml !== beforeActivation ) {
+								choiceLatencyMs = Date.now() - activationReturnedAt;
+							}
+						}
+						if ( choiceLatencyMs !== undefined ) {
+							observedChoiceLatencyMs = Math.max( observedChoiceLatencyMs ?? 0, choiceLatencyMs );
 						}
 						const observation = {
 							fps: candidates.map( fingerprint ),
 							texts: candidates.map( visibleTextOf ),
-							groupHtml: snapshotChoiceGroup( group.root, group.members ),
+							groupHtml,
 							selected: group.members.map( observedSelection ),
 						};
 						observations.push( observation );
