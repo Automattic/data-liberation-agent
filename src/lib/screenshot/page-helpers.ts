@@ -1417,6 +1417,7 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const cssValues = (values: Record<string, string>) => Object.fromEntries(
       Object.entries(values).filter(([, value]) => value.trim() && value !== 'normal'),
     );
+    // Computed insets ignore slide-in transforms; geometry is only a fallback for auto.
     // Snap measured geometry to whole CSS pixels; stringifying -0 yields "0px".
     const pixels = (value: number) => `${Math.round(value)}px`;
     const roundedPadding = (value: string) => value.replace(/\d*\.?\d+px/g, length => pixels(parseFloat(length)));
@@ -1448,7 +1449,9 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       presentation: {
         span: Math.abs(bounds.width - innerWidth) <= 1 ? 'full' as const : 'inset' as const,
         gap: rowGap === columnGap ? rowGap : `${rowGap} ${columnGap}`,
-        ...(position === 'center' ? {} : { edge_offset: pixels(position === 'bottom' ? innerHeight - bounds.bottom : bounds.top) }),
+        ...(position === 'center' ? {} : { edge_offset: pixels(position === 'bottom'
+          ? (style.bottom === 'auto' ? innerHeight - bounds.bottom : parseFloat(style.bottom))
+          : (style.top === 'auto' ? bounds.top : parseFloat(style.top))) }),
         ...cssValues({ padding: roundedPadding(style.padding), font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight, text_margin: typography.margin }),
         layout: [{ min_width: viewportWidth, max_width: viewportWidth, direction,
           ...cssValues({ align_items: contentStyle.alignItems, text_margin: typography.margin }),
