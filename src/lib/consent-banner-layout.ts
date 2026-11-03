@@ -7,7 +7,8 @@ export function mergeConsentLayouts(samples: ConsentBannerLayout[]): ConsentBann
   for (const sample of ordered) {
     const previous = result.at(-1);
     if (previous && previous.direction === sample.direction
-      && previous.align_items === sample.align_items && previous.button_align === sample.button_align) {
+      && previous.align_items === sample.align_items && previous.button_align === sample.button_align
+      && previous.text_margin === sample.text_margin) {
       previous.max_width = previous.max_width === undefined || sample.max_width === undefined
         ? undefined : Math.max(previous.max_width, sample.max_width);
     } else {

@@ -4,6 +4,7 @@ export interface ConsentBannerLayout {
   direction: 'row' | 'column';
   align_items?: string;
   button_align?: 'start' | 'end';
+  text_margin?: string;
 }
 
 /** Portable consent intent; field names are shared with static-site-importer. */
@@ -24,7 +25,7 @@ export interface ConsentBanner {
     line_height?: string;
     text_margin?: string;
     layout?: ConsentBannerLayout[];
-    button?: { border_radius?: string; padding?: string; font_size?: string; font_family?: string; line_height?: string };
+    button?: { border_radius?: string; border_width?: string; border_style?: string; border_color?: string; padding?: string; font_size?: string; font_family?: string; line_height?: string };
   };
   source_selector?: string;
 }
