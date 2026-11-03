@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
+import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { DEFAULT_SWEEP_WIDTHS, type FluidSeriesMemo, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
@@ -13,6 +14,43 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	afterAll( async () => {
 		await browser.close();
 	} );
+
+	// One sweep (~6s): refitting replaces, rather than edits, the fitted span.
+	it( 'waits for resize-driven fitted node replacement', async () => {
+		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
+		try {
+			await page.setContent( `<header><a>Phone title</a></header>
+				<script>
+				let fittedWidth = null, generation = 0;
+				const fit = () => {
+					if (fittedWidth === innerWidth) return;
+					fittedWidth = innerWidth;
+					document.querySelector('a').textContent = 'Phone title';
+					const current = ++generation, start = performance.now();
+					const frame = () => {
+						if (current !== generation) return;
+						if (performance.now() - start < 290) { requestAnimationFrame(frame); return; }
+						const span = document.createElement('span');
+						span.className = 'textFitted'; span.textContent = 'Phone title';
+						span.style.fontSize = Math.min(30, Math.max(20, Math.floor((innerWidth - 86) / 11.69))) + 'px';
+						document.querySelector('a').replaceChildren(span);
+					}; requestAnimationFrame(frame);
+				};
+				addEventListener('resize', fit);
+				addEventListener('load', () => requestAnimationFrame(fit));
+				</script>` );
+			// Explicitly finish the delayed initial load before tagging the fitted span.
+			await page.locator( '.textFitted' ).waitFor( { state: 'attached' } );
+			await markInitialDocument( page );
+			const initial = await page.content();
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
+			// The fixture only refits on an actual width change, not a queued resize
+			// at the restored width, so this reads the finalized live node.
+			expect( await page.locator( '.textFitted' ).getAttribute( 'style' ) ).toContain( 'clamp(' );
+			expect( projectInitialDocument( initial, await page.content() ) ).toContain( 'font-size: clamp(' );
+		} finally { await page.close(); }
+	}, 20_000 );
 
 	// Two real sweeps (~8s) cover initial learning and cross-route memo reuse.
 	it( 'preserves integer-fitted phone titles inside headers hidden at wide widths', async () => {
