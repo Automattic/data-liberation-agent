@@ -44,6 +44,7 @@ Emitters spell the full names, because many of them sit inside runtime script an
 
 Some names never reach `website/`:
 - capture strips `geometry-id`, `glyph-probe`, `glyph-probe-style`, `visual-iframe-*` and `embedded-document` before export;
+- `probe-<uuid>` attributes are temporary evaluation-boundary node identities, removed before the probe callback runs (and again on failure); they are not portable evidence;
 - frozen phone documents retain only bounded HTTPS iframes attested by `visual-iframe-*`, rebuilding their safe attributes before export; unattested frames and source iframe content are stripped;
 - `google-map-marker` is validated source-owned `{lat,lng}` marker evidence consumed and removed during serialization; the portable map uses an ordinary bounded HTTPS iframe and the `google-map-embed` class only keeps it filling its original owner;
 - `fidelity check` sets `check-route-tab` on its live comparison page;

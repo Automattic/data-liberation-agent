@@ -1,4 +1,5 @@
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
+import { installProbeIntrinsics } from './probe-intrinsics.js';
 
 /** Shared identity for Node-side HTTP requests to source sites (not browser device profiles). */
 export const SOURCE_USER_AGENT = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
@@ -112,6 +113,7 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
 export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}): Promise<BrowserContext> {
   const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
   try {
+    await installProbeIntrinsics(context);
     await installSourceIdentity(context, options);
     return context;
   } catch (error) {

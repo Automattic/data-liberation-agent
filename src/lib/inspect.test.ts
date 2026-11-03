@@ -31,7 +31,7 @@ afterEach(async () => {
 
 function runCli(url: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['tsx', CLI, 'inspect', url, '--http-only', '--discovery-limit', '3', '--sample-limit', '2'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--import', 'tsx', CLI, 'inspect', url, '--http-only', '--discovery-limit', '3', '--sample-limit', '2'], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });

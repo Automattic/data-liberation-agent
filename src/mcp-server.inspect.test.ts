@@ -29,7 +29,7 @@ afterEach(async () => {
 
 function inspectViaMcp(url: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['tsx', SERVER], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--import', 'tsx', SERVER], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '';
     const timer = setTimeout(() => {
       child.kill();

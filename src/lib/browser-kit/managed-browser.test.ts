@@ -315,7 +315,7 @@ describe('launchBrowser close()', () => {
     vi.useFakeTimers();
     try {
       const page = { close: vi.fn(() => new Promise<void>(() => {})) };
-      const ctx = { newPage: vi.fn(async () => page) };
+      const ctx = { newPage: vi.fn(async () => page), addInitScript: vi.fn(), on: vi.fn(), pages: () => [] };
       const browserClose = vi.fn(async () => {});
       mockPwLaunch.mockResolvedValueOnce({
         contexts: () => [],
@@ -365,7 +365,7 @@ describe('launchBrowser close()', () => {
   it('rejects within the bound and closes the browser when newPage() hangs', async () => {
     vi.useFakeTimers();
     try {
-      const ctx = { newPage: vi.fn(() => new Promise(() => {})) };
+      const ctx = { newPage: vi.fn(() => new Promise(() => {})), addInitScript: vi.fn(), on: vi.fn(), pages: () => [] };
       const browserClose = vi.fn(async () => {});
       mockPwLaunch.mockResolvedValueOnce({
         contexts: () => [],
@@ -443,7 +443,7 @@ describe('launchBrowser close()', () => {
 
   it('resolves with a page when context and page creation settle promptly', async () => {
     const page = { close: vi.fn(async () => {}) };
-    const ctx = { newPage: vi.fn(async () => page) };
+    const ctx = { newPage: vi.fn(async () => page), addInitScript: vi.fn(), on: vi.fn(), pages: () => [] };
     const browserClose = vi.fn(async () => {});
     mockPwLaunch.mockResolvedValueOnce({
       contexts: () => [],
