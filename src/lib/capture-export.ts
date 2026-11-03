@@ -1698,6 +1698,9 @@ function buildExportCapture(
 	const imageByUrl = new Map( imageAssets.flatMap( record => record.source_urls.map( url => [ url, record ] as const ) ) );
 	const seenImageAssets = new Set<AssetRecord>();
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
+	// Only mixed families need descriptor pruning; original-only families keep
+	// their existing collapse behavior. Values identify the selected source URLs.
+	const mixedSrcsetReferences = new Map< string, Set< string > >();
 	const failedMedia: FailedPortableMedia[] = [];
 	const capturedPages = new Set(
 		[ options.sourceUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {
@@ -1797,6 +1800,7 @@ function buildExportCapture(
 		// A distinct resolved original is authoritative only for resizes/re-encodes
 		// with the same aspect ratio. Cropped aliases retain their selected bytes.
 		const capturedRenditions: MediaCandidate[] = [];
+		const selectedReferences = new Set( mediaReferences( candidate.sourceUrl, options.sourceUrl ) );
 		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) && imageAsset.original ) {
 			const originalIsRendition = imageAsset.rendition_widths?.[ imageAsset.original.source_url ] !== undefined;
 			for ( const url of imageAsset.source_urls ) {
@@ -1807,7 +1811,10 @@ function buildExportCapture(
 				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) continue;
 				const renditionContent = readFileSync( path );
 				const hash = createHash( 'sha256' ).update( renditionContent ).digest( 'hex' );
-				if ( hash === imageAsset.original.sha256 ) continue;
+				if ( hash === imageAsset.original.sha256 ) {
+					for ( const reference of mediaReferences( url, options.sourceUrl ) ) selectedReferences.add( reference );
+					continue;
+				}
 				if ( ! originalIsRendition ) {
 					const { width: originalWidth, height: originalHeight } = imageAsset.original;
 					try {
@@ -1828,12 +1835,16 @@ function buildExportCapture(
 				if ( renditionBytes > maxFileBytes ) continue;
 				candidate.references = candidate.references.filter( reference => ! renditionReferences.includes( reference ) );
 				candidate.exactReferences = candidate.exactReferences.filter( reference => ! renditionReferences.includes( reference ) );
+				for ( const reference of renditionReferences ) selectedReferences.add( reference );
 				capturedRenditions.push( {
 					sourceUrl: url, localPath: path, references: renditionReferences, exactReferences: exact,
 					bytes: renditionBytes, dimension: imageAsset.rendition_widths?.[ url ] ?? mediaDimension( url ),
 					renderedDimension: candidate.renderedDimension,
 				} );
 			}
+		}
+		if ( capturedRenditions.length ) {
+			for ( const reference of references ) mixedSrcsetReferences.set( reference, selectedReferences );
 		}
 		const smaller: MediaCandidate[] = ( imageAsset?.renditions ?? [] ).flatMap( rendition => {
 			if ( ! rendition.original || ! rendition.local_path || ! existsSync( rendition.local_path ) ) return [];
@@ -2023,6 +2034,39 @@ function buildExportCapture(
 	// Interaction states are written to interaction-states.json and replayed into
 	// the portable pages, so clean their embedded HTML before replay wiring encodes
 	// it in JSON attributes/scripts. Keep runtime contract attributes intact.
+	const intrinsicWidths = new Map< string, number | undefined >();
+	const truthfulMixedSrcsets = ( html: string ): string => html.replace(
+		/(\s(?:data-)?srcset\s*=\s*)(["'])([\s\S]*?)\2/gi,
+		( attribute, prefix: string, quote: string, value: string ) => {
+			const candidates = srcsetCandidates( value.replace( /&amp;/g, '&' ) );
+			if ( ! candidates.some( candidate => mixedSrcsetReferences.has( candidate.url ) ) ||
+				candidates.some( candidate => candidate.density || candidate.size <= 1 ) ) return attribute;
+			const seen = new Set< string >();
+			const retained = candidates.flatMap( candidate => {
+				const selected = mixedSrcsetReferences.get( candidate.url );
+				if ( selected && ! selected.has( candidate.url ) ) return [];
+				const local = portableMediaReplacements.get( candidate.url );
+				const identity = local ?? candidate.url;
+				if ( seen.has( identity ) ) return [];
+				seen.add( identity );
+				let descriptor = `${ candidate.size }${ candidate.density ? 'x' : 'w' }`;
+				if ( selected && local?.startsWith( '/media/' ) && ! candidate.density ) {
+					if ( ! intrinsicWidths.has( local ) ) {
+						try {
+							intrinsicWidths.set( local, imageSize( readFileSync( join( websiteDir, local ) ) ).width );
+						} catch {
+							// Unsupported image formats retain their captured width evidence.
+							intrinsicWidths.set( local, undefined );
+						}
+					}
+					const width = intrinsicWidths.get( local );
+					if ( width && Math.abs( width - parseFloat( descriptor ) ) > 0.5 ) descriptor = `${ width }w`;
+				}
+				return [ `${ candidate.url }${ descriptor ? ` ${ descriptor }` : '' }` ];
+			} );
+			return `${ prefix }${ quote }${ retained.join( ', ' ).replace( /&/g, '&amp;' ) }${ quote }`;
+		}
+	);
 	const localizeInteractionMedia = ( text: string ): string =>
 		localizeFamilyMediaUrls(
 			withoutCaptureBookkeeping( replaceResources( replaceMedia( text ) ) ),
@@ -2060,7 +2104,7 @@ function buildExportCapture(
 			localizeDataAttributeMedia(
 				replaceResources(
 					rewriteMediaUrls(
-						content,
+						truthfulMixedSrcsets( content ),
 						portableMediaReplacements
 					)
 				),

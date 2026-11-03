@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { chromium, type Page } from 'playwright';
 import { PNG } from 'pngjs';
+import { imageSize } from 'image-size';
 import * as cheerio from 'cheerio';
 import { describe, expect, it, vi } from 'vitest';
 import { exportWebsiteCapture } from './capture-export.js';
@@ -64,22 +65,24 @@ describe( 'selected same-path srcset export', () => {
 			expect( readFileSync( join( directory, 'website', $( 'a' ).attr( 'href' )! ) ) ).toEqual( originalBytes );
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	} );
-	it( 'writes each retained Jimdo-style width to its own media file', () => {
+	it( 'exports only selected Jimdo-style files, once each at their intrinsic widths', () => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-query-srcset-' ) );
 		try {
 			for ( const folder of [ 'html', 'screenshots', 'media', 'resources' ] ) mkdirSync( join( directory, folder ) );
 			const source = 'https://jimdo.test/';
-			const widths = [ 347, 532, 816, 1920 ];
+			const widths = [ 96, 147, 347, 532, 816, 1252, 1920 ];
+			const intrinsicWidths = [ 1280, 147, 347, 532, 816, 1000, 1280 ];
+			const selected = [ 0, 2, 3, 4, 5, 6 ];
 			const urls = widths.map( width => `${ source }photo.png?width=${ width }` );
-			const bytes = widths.map( width => {
+			const bytes = intrinsicWidths.map( width => {
 				const png = new PNG( { width, height: 10 } );
 				png.data.fill( width % 251 );
 				return PNG.sync.write( png );
 			} );
-			const resources = Object.fromEntries( urls.map( ( url, index ) => {
+			const resources = Object.fromEntries( selected.map( index => {
 				const path = `resources/photo-${ widths[ index ] }.png`;
 				writeFileSync( join( directory, path ), bytes[ index ] );
-				return [ url, { path, contentType: 'image/png' } ];
+				return [ urls[ index ], { path, contentType: 'image/png' } ];
 			} ) );
 			writeFileSync( join( directory, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
 			const original = urls.at( -1 )!;
@@ -94,19 +97,22 @@ describe( 'selected same-path srcset export', () => {
 				kind: 'image', source_urls: urls, resolved_original: original, local_path: file,
 				references: urls.map( source_url => ( { kind: 'content', document_url: source, location: 'image:0:srcset', source_url } ) ),
 				rendition_widths: Object.fromEntries( urls.map( ( url, index ) => [ url, widths[ index ] ] ) ),
-				original: { source_url: original, content_type: 'image/png', width: 1920, height: 10, sha256: createHash( 'sha256' ).update( bytes.at( -1 )! ).digest( 'hex' ) },
+				original: { source_url: original, content_type: 'image/png', width: 1280, height: 10, sha256: createHash( 'sha256' ).update( bytes.at( -1 )! ).digest( 'hex' ) },
 			} ] } ) );
 			writeFileSync( join( directory, 'html/home.html' ), `<img src="${ original }" srcset="${ urls.map( ( url, index ) => `${ url } ${ widths[ index ] }w` ).join( ', ' ) }">` );
 			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ source ]: { html: 'html/home.html' } } } ) );
 			exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
 			const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
 			const candidates = $( 'img' ).attr( 'srcset' )!.split( ',' ).map( candidate => candidate.trim().split( /\s+/ ) );
-			expect( candidates.map( ( [ , descriptor ] ) => descriptor ) ).toEqual( widths.map( width => `${ width }w` ) );
-			expect( new Set( candidates.map( ( [ path ] ) => path ) ).size ).toBe( widths.length );
-			for ( const [ index, [ path ] ] of candidates.entries() ) {
+			expect( candidates.map( ( [ , descriptor ] ) => descriptor ) ).toEqual( [ 1280, 347, 532, 816, 1000 ].map( width => `${ width }w` ) );
+			expect( new Set( candidates.map( ( [ path ] ) => path ) ).size ).toBe( candidates.length );
+			for ( const [ path, descriptor ] of candidates ) {
 				expect( path ).toMatch( /^\/media\// );
-				expect( readFileSync( join( directory, 'website', path ) ) ).toEqual( bytes[ index ] );
+				const content = readFileSync( join( directory, 'website', path ) );
+				expect( content ).toEqual( bytes[ intrinsicWidths.indexOf( parseFloat( descriptor ) ) ] );
+				expect( Math.abs( imageSize( content ).width! - parseFloat( descriptor ) ) ).toBeLessThanOrEqual( 0.5 );
 			}
+			expect( candidates.filter( ( [ path ] ) => path === $( 'img' ).attr( 'src' ) ) ).toHaveLength( 1 );
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	} );
 } );
