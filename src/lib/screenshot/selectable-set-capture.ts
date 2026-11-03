@@ -121,6 +121,7 @@ export async function captureSelectableSetStates(
 					globalWithName.__name = ( fn ) => fn;
 				}
 				const wait = ( ms: number ) => new Promise( ( resolve ) => setTimeout( resolve, ms ) );
+				const observationWindowMs = Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
 				const cssEscape = ( value: string ) =>
 					globalThis.CSS?.escape
 						? globalThis.CSS.escape( value )
@@ -772,6 +773,17 @@ export async function captureSelectableSetStates(
 					// state proves no single activation restores it. Repeating the pass
 					// cannot establish the activation-determined restoration replay needs.
 					let restorationExhausted = false;
+					// Activation can settle before the source updates selection. Keep the
+					// same bounded observation window as discovery, but return on a match.
+					const waitForChoiceState = async ( matches: ( html: string ) => boolean ): Promise< string > => {
+						const observationDeadline = Date.now() + observationWindowMs;
+						let html = snapshotChoiceGroup( group.root, group.members );
+						while ( ! matches( html ) && Date.now() < observationDeadline && Date.now() < deadline ) {
+							await wait( 100 );
+							html = snapshotChoiceGroup( group.root, group.members );
+						}
+						return html;
+					};
 					const restoreChoiceGroup = async (): Promise< boolean > => {
 						const sameChoiceState = ( actual: string, expected: string ) => {
 							// Roving-focus runtimes move tabindex with focus, which an
@@ -788,7 +800,9 @@ export async function captureSelectableSetStates(
 							for ( let pass = 0; pass < 2; pass++ ) {
 								for ( let index = 0; index < restoreLimit; index++ ) {
 									if ( observedSelection( group.members[ index ]! ) === initialSelected[ index ] ) continue;
+									const before = snapshotChoiceGroup( group.root, group.members );
 									const result = await activate( group.members[ index ]! );
+									if ( result.ok ) await waitForChoiceState( ( html ) => html !== before );
 									if ( ! result.ok && result.navigated ) navigated = true;
 								}
 								if ( sameChoiceState( snapshotChoiceGroup( group.root, group.members ), initialGroupHtml ) ) return true;
@@ -796,7 +810,7 @@ export async function captureSelectableSetStates(
 						}
 						if ( restorationIndex !== undefined && restorationIndex < restoreLimit ) {
 							const result = await activate( group.members[ restorationIndex ]! );
-							if ( result.ok && sameChoiceState( snapshotChoiceGroup( group.root, group.members ), initialGroupHtml ) ) return true;
+							if ( result.ok && sameChoiceState( await waitForChoiceState( ( html ) => sameChoiceState( html, initialGroupHtml ) ), initialGroupHtml ) ) return true;
 							if ( ! result.ok && result.navigated ) navigated = true;
 							restorationIndex = undefined;
 						}
@@ -809,7 +823,7 @@ export async function captureSelectableSetStates(
 								if ( result.navigated ) navigated = true;
 								continue;
 							}
-							if ( sameChoiceState( snapshotChoiceGroup( group.root, group.members ), initialGroupHtml ) ) {
+							if ( sameChoiceState( await waitForChoiceState( ( html ) => sameChoiceState( html, initialGroupHtml ) ), initialGroupHtml ) ) {
 								restorationIndex = index;
 								return true;
 							}
@@ -846,7 +860,7 @@ export async function captureSelectableSetStates(
 						// so neither burns the observation window.
 						const observationDeadline = result.external || observedSelection( group.members[ index ]! ) === true && initialSelected[ index ] === true
 							? 0
-							: Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+							: Date.now() + observationWindowMs;
 						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
 							await wait( 100 );
 						}
@@ -939,13 +953,14 @@ export async function captureSelectableSetStates(
 								replayReason ??= restorationError ?? 'source actions did not restore the initial choice state';
 								break;
 							}
+							const before = snapshotChoiceGroup( group.root, group.members );
 							const result = await activate( group.members[ index ] );
 							if ( ! result.ok ) {
 								pushOutcome( 'click-failed', index, { error: result.error } );
 								if ( result.navigated ) navigated = true;
 								continue;
 							}
-							const after = snapshotChoiceGroup( group.root, group.members );
+							const after = await waitForChoiceState( ( html ) => html !== before );
 							const selected = group.members.map( observedSelection );
 							const transition = { selectedIndex: index, selected, html: after };
 							transitions.set( index, after );
@@ -974,7 +989,7 @@ export async function captureSelectableSetStates(
 									replayReason ??= `${ name} activation failed: ${ result.error }`;
 									return;
 								}
-								if ( snapshotChoiceGroup( group.root, group.members ) !== transitions.get( index ) ) {
+								if ( await waitForChoiceState( ( html ) => html === transitions.get( index ) ) !== transitions.get( index ) ) {
 									replay = 'unsupported';
 									replayReason ??= `${ name} activation was history-dependent`;
 									return;
@@ -1044,7 +1059,7 @@ export async function captureSelectableSetStates(
 							controlledPanel( member ) ?? document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
 						let afterRegion = resolveRegion();
 						let after = fingerprint( afterRegion );
-						const changeDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						const changeDeadline = Date.now() + observationWindowMs;
 						while ( after === before && ! wasSelected && Date.now() < changeDeadline && Date.now() < deadline ) {
 							await wait( 100 );
 							afterRegion = resolveRegion();
