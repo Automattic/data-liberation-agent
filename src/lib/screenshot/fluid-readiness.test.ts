@@ -423,8 +423,8 @@ describe( 'responsive readiness contract', () => {
 			await page.setContent( writer( 'innerWidth / 2' ) );
 			const widths: number[] = [];
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, onProgress: width => widths.push( width ) } );
-			expect( widths ).toEqual( [ 390, 768, 1920, 600, 1024, 1440, 320, 360 ] );
-			expect( result.sampledWidths ).toEqual( [ 320, 360, ...COARSE_SWEEP_WIDTHS ] );
+			expect( widths ).toEqual( [ 390, 768, 1920, 600, 1024, 1440, 320, 360, 414 ] );
+			expect( result.sampledWidths ).toEqual( [ 320, 360, 390, 414, ...COARSE_SWEEP_WIDTHS.slice( 1 ) ] );
 			expect( result.applied ).toBeGreaterThan( 0 );
 			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
 		} finally { await page.close(); }
@@ -449,7 +449,7 @@ describe( 'responsive readiness contract', () => {
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0 } );
 			// 801 bisects 768–1024, 783 bisects 768–801, 775 bisects 768–783;
 			// 775–783 holds no ladder width, so the switch is located exactly.
-			expect( result.sampledWidths ).toEqual( [ 320, 360, 390, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
+			expect( result.sampledWidths ).toEqual( [ 320, 360, 390, 414, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
 			expect( result.breakpoints ).toContain( 783 );
 		} finally { await page.close(); }
 	}, 60_000 );

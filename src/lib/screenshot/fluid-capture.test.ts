@@ -14,6 +14,33 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
+	// Two real sweeps (~8s) cover initial learning and cross-route memo reuse.
+	it( 'preserves integer-fitted phone titles inside headers hidden at wide widths', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		const memo: FluidSeriesMemo = new Map();
+		try {
+			for ( const route of [ 'entrypoint', 'interior' ] ) {
+				await page.goto( 'about:blank' );
+				await page.setContent( `<style>@media(min-width:768px){header{display:none}}</style>
+					<header><span class="textFitted">Phone title</span></header><main>${ route }</main>
+					<script>const fit=()=>document.querySelector('.textFitted').style.fontSize=
+						Math.min(30,Math.max(20,Math.floor((innerWidth-86)/11.69)))+'px';
+					addEventListener('resize',fit);fit();</script>` );
+				await learnAndApplyFluidGeometry( page, { settleMs: 10, memo } );
+				await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+				expect( await page.locator( '.textFitted' ).getAttribute( 'style' ) ).toContain( 'round(down,' );
+				await copy.setContent( await page.content() );
+				const sizes: string[] = [];
+				for ( const width of [ 320, 360, 390, 414, 500 ] ) {
+					await copy.setViewportSize( { width, height: 900 } );
+					sizes.push( await copy.locator( '.textFitted' ).evaluate( node => getComputedStyle( node ).fontSize ) );
+				}
+				expect( sizes, route ).toEqual( [ '20px', '23px', '26px', '28px', '30px' ] );
+			}
+		} finally { await page.close(); await copy.close(); }
+	}, 30_000 );
+
 	// One browser sweep (~8s) covers both disappearance and retained desktop sizing.
 	it( 'learns equal-height card minima only in the wide regime', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
@@ -154,7 +181,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			// later round bisects the intervals some series leaves unexplained:
 			// the tablet-band switches and the font-size clamp past 1440. 767 and
 			// 1280 sit inside straight runs of every series and are skipped.
-			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 320, 360, 801, 1536, 783, 1840, 775, 791, 769, 799, 800 ];
+			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 320, 360, 414, 801, 1536, 783, 1840, 775, 791, 769, 799, 800 ];
 			expect( widths ).toEqual( LADDER_ORDER );
 			expect( result.sampledWidths ).toEqual( [ ...LADDER_ORDER ].sort( ( a, b ) => a - b ) );
 			expect( measurements ).toHaveLength( LADDER_ORDER.length );
@@ -1230,8 +1257,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			expect( refinementWidths( [ sampled( width => Math.min( 1000, width * 0.6 ) ) ], coarse ) ).toEqual( [ 1536 ] );
 			// Separate changes refine in the same round; an interval beside one being
 			// refined waits, since that sample may give it a straight window.
-			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ) ], coarse ) ).toEqual( [ 767, 1280 ] );
-			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ), sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 767, 801, 1280 ] );
+			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ) ], coarse ) ).toEqual( [ 414, 801, 1536 ] );
+			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ), sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 414, 801, 1536 ] );
 		} );
 		it( 'refines a series that appears, vanishes or stops being pixels inside an interval', () => {
 			expect( refinementWidths( [ series( { 390: 1, 600: 1, 768: 1, 1024: 1, 1440: 1 } ) ], coarse ) ).toEqual( [ 1536 ] );
@@ -1259,9 +1286,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				'switch inside the tablet band': sweep( width => width >= 783 ? 600 : 300 ),
 				'no relationship': sweep( width => Math.round( 400000 / width ) ),
 			} ).toEqual( {
-				proportional: 6, affine: 6, 'mobile switch': 7, 'tablet-only regime': 13, 'desktop switch': 7,
-				'capped in the tablet gap': 7, 'capped on the desktop': 7, 'floored and capped': 7,
-				'switch inside the tablet band': 9, 'no relationship': 10,
+				proportional: 6, affine: 6, 'mobile switch': 8, 'tablet-only regime': 14, 'desktop switch': 7,
+				'capped in the tablet gap': 7, 'capped on the desktop': 7, 'floored and capped': 8,
+				'switch inside the tablet band': 9, 'no relationship': 12,
 			} );
 		} );
 		it( 'explains a varying value\'s container too, never a perpetual mover', () => {
