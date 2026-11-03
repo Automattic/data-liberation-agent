@@ -19,6 +19,7 @@ import { bloggerAdapter } from '../adapters/blogger/index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
 import { framerAdapter } from '../adapters/framer/index.js';
+import { gammaAdapter } from '../adapters/gamma/index.js';
 import { ghostAdapter } from '../adapters/ghost/index.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
@@ -48,6 +49,7 @@ const builtins: Platform[] = [
 	bloggerAdapter,
 	emdashAdapter,
 	framerAdapter,
+	gammaAdapter,
 	ghostAdapter,
 	godaddyWmAdapter,
 	hostingerAdapter,
