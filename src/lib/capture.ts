@@ -11,12 +11,13 @@ import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
+import { normalizeDiscoveredRoutes } from './extraction/sitemap.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { actionUrlExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
-import { DEFAULT_CAPTURE_TIME_BUDGET_MS, dedupeRouteInventory, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
+import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
@@ -465,7 +466,7 @@ async function runCaptureWebsite(
 	// Action URLs leave the inventory before the budget sees it, so they never
 	// spend, and never appear as omitted, failed or missing routes.
 	const excludedActions = new Map< string, { code: string; url: string; reason: string } >();
-	const inventoryUrls = dedupeRouteInventory( [
+	const inventoryUrls = await normalizeDiscoveredRoutes( [
 		sourceUrl,
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )

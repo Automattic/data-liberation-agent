@@ -43,6 +43,35 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
 
 import { onSiteOrigin } from '../screenshot/same-origin.js';
 import { normalizedUrl } from '../url/route-key.js';
+import { canonicalLinkHref } from '../route-aliases.js';
+
+/** Merge slash variants in discovery order, preferring a same-route canonical when observed. */
+export async function normalizeDiscoveredRoutes(urls: readonly string[]): Promise<string[]> {
+  const groups = new Map<string, string[]>();
+  for (const url of urls) {
+    const key = normalizedUrl(url);
+    const group = groups.get(key) ?? [];
+    if (!group.includes(url)) group.push(url);
+    groups.set(key, group);
+  }
+  const result: string[] = [];
+  for (const [key, group] of groups) {
+    let preferred = group[0];
+    // Only ambiguous spellings need an extra request. Failure keeps the first
+    // discovered address, not a guessed slash policy or an unrelated canonical.
+    if (group.length > 1) {
+      try {
+        const response = await safeFetch(preferred, { timeoutMs: 15_000, maxBytes: 2 * 1024 * 1024 });
+        if (response.status >= 200 && response.status < 300 && /^text\/html(?:;|$)/i.test(response.headers.get('content-type') ?? '')) {
+          const canonical = canonicalLinkHref(response.body.toString('utf8'), response.finalUrl);
+          if (canonical && normalizedUrl(canonical) === key) preferred = canonical;
+        }
+      } catch { /* Advisory normalization: retain the first spelling. */ }
+    }
+    result.push(preferred);
+  }
+  return result;
+}
 
 export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
@@ -494,7 +523,15 @@ async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: stri
       if (contentType && !/^(?:text\/html|application\/xhtml\+xml)(?:;|$)/i.test(contentType)) throw new Error(`non-HTML response (${contentType})`);
       // resolvePageLink below already excludes attachment viewer links, so the
       // fallback cannot re-add what the sitemap left out.
-      const links = extractSameOriginLinks(response.body.toString('utf8'), response.finalUrl, baseOrigin);
+      const html = response.body.toString('utf8');
+      const canonical = canonicalLinkHref(html, response.finalUrl);
+      // Canonical preference is limited to the same slash-equivalent route:
+      // another origin, path or query must not replace an inventory entry.
+      if (canonical && normalizedUrl(canonical) === normalizedUrl(url)) {
+        const index = urls.findIndex(entry => normalizedUrl(entry) === normalizedUrl(url));
+        if (index !== -1) urls[index] = canonical;
+      }
+      const links = extractSameOriginLinks(html, response.finalUrl, baseOrigin);
       const finalRequest = new URL(response.finalUrl);
       finalRequest.hash = '';
       parsedRequests.add(finalRequest.href);

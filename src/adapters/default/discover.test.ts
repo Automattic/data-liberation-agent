@@ -78,6 +78,26 @@ describe('discoverDefault', () => {
     ]);
   });
 
+  it('collapses sitemap and link slash variants and prefers the page canonical', async () => {
+    server = createServer((request, response) => {
+      const origin = `http://${request.headers.host}`;
+      if (request.url === '/sitemap.xml') {
+        response.setHeader('content-type', 'application/xml');
+        response.end(`<urlset>${['/', '/about/', '/first/', '/one', '/two'].map(path => `<url><loc>${origin}${path}</loc></url>`).join('')}</urlset>`);
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end(request.url === '/' ? '<a href="/about">About</a><a href="/first">First</a>' :
+        request.url?.startsWith('/about') ? '<link rel="canonical" href="/about">About' : 'Page');
+    });
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const origin = `http://localtest.me:${(server.address() as {port: number}).port}`;
+    const inventory = await discoverDefault(`${origin}/`, {});
+    expect(inventory.urls.map(({url}) => url)).toEqual([
+      `${origin}/`, `${origin}/about`, `${origin}/first/`, `${origin}/one`, `${origin}/two`,
+    ]);
+  });
+
   it('merges homepage chrome links outside <footer> even when the sitemap is not thin', async () => {
     server = createServer((request, response) => {
       const origin = `http://${request.headers.host}`;
@@ -106,7 +126,6 @@ describe('discoverDefault', () => {
       `${origin}/three`,
       `${origin}/four`,
       `${origin}/five`,
-      `${origin}/two`,
       `${origin}/aviso-legal`,
       `${origin}/three?ref=footer`,
     ]);

@@ -10,17 +10,17 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { checkFidelity } from '../fidelity/check.js';
 import { documentRequestUrl } from '../url/route-key.js';
 
-it('names concrete page, depth and time omissions without merging query or slash identities', () => {
+it('merges slash identities while preserving query, depth and time boundaries', () => {
 	const frontier = new LinkedFrontier({maxPages: 2, maxDepth: 1, timeoutMs: 100}, 0);
 	expect(frontier.admit('https://source.test/catalog/?tag=Research#one', 0, 0)).toBe(true);
 	expect(frontier.admit('https://source.test/catalog/?tag=Research#two', 0, 0)).toBe(false);
-	expect(frontier.admit('https://source.test/catalog?tag=Research', 1, 0)).toBe(true);
-	expect(frontier.admit('https://source.test/catalog/?tag=research', 1, 0)).toBe(false);
+	expect(frontier.admit('https://source.test/catalog?tag=Research', 1, 0)).toBe(false);
+	expect(frontier.admit('https://source.test/catalog/?tag=research', 1, 0)).toBe(true);
 	expect(frontier.admit('https://source.test/deep', 2, 0)).toBe(false);
 	expect(frontier.admit('https://source.test/late', 1, 100)).toBe(false);
-	expect(frontier.required.size).toBe(5);
+	expect(frontier.required.size).toBe(4);
 	expect(frontier.diagnostics.map(row => row.reason)).toEqual([
-		'maxPages=2 exhausted; 2 addresses scheduled', 'depth=2 exceeds maxDepth=1', 'timeoutMs=100 exhausted',
+		'depth=2 exceeds maxDepth=1', 'timeoutMs=100 exhausted',
 	]);
 });
 
@@ -279,7 +279,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
 		}
 	}, 180_000);
-	it('retains different slash documents through allocation, exact links and frozen verification', async () => {
+	it('captures slash variants once and rewrites both links to the retained page', async () => {
 		const docs: Record<string, string> = {
 			'/': '<h1>Home</h1><a href="/article">Article address</a><a href="/article/">Directory address</a>',
 			'/article': '<h1>Article without slash</h1><a href="/article/">Other document</a>',
@@ -298,19 +298,17 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const url = `${origin}/`;
 			const collector = createReferenceCollector(directory, url, [url]);
 			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 2, settleMs: 0, learnFluid: false, observeSource: collector.observe});
-			expect(capture.captured).toBe(3);
+			expect(capture.captured).toBe(2);
 			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures: []});
 			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
 			const without = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article`);
 			const withSlash = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article/`);
-			expect(without.path).not.toBe(withSlash.path);
+			expect(withSlash).toBeUndefined();
 			expect(readFileSync(join(directory, without.path), 'utf8')).toContain('<h1>Article without slash</h1>');
-			expect(readFileSync(join(directory, withSlash.path), 'utf8')).toContain('<h1>Article with slash</h1>');
 			const home = readFileSync(join(directory, 'website/index.html'), 'utf8');
 			expect(home).toContain(`href="/${without.path.slice('website/'.length)}">Article address`);
-			expect(home).toContain(`href="/${withSlash.path.slice('website/'.length)}">Directory address`);
-			expect(readFileSync(join(directory, without.path), 'utf8')).toContain(`href="/${withSlash.path.slice('website/'.length)}"`);
-			expect(readFileSync(join(directory, withSlash.path), 'utf8')).toContain(`href="/${without.path.slice('website/'.length)}"`);
+			expect(home).toContain(`href="/${without.path.slice('website/'.length)}">Directory address`);
+			expect(readFileSync(join(directory, without.path), 'utf8')).toContain(`href="/${without.path.slice('website/'.length)}"`);
 			expect(receipt.duplicateRoutes).toEqual([]);
 			collector.finalize(receiptPath);
 			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); closed = true;
@@ -398,16 +396,16 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const capture = await captureFn({urls, primaryUrl: urls[0], outputDir: directory, linkedPages: {maxPages: 12, maxDepth: 3, timeoutMs: 180_000}, concurrency: 2, settleMs: 0, learnFluid: false, observeSource: collector.observe});
 			expect(capture.failed).toBe(0);
 			expect(capture.captured).toBe(7);
-			expect(capture.skipped).toBe(2);
-			expect(capture.linkedPageCoverage?.requiredUrls).toHaveLength(9);
+			expect(capture.skipped).toBe(1);
+			expect(capture.linkedPageCoverage?.requiredUrls).toHaveLength(8);
 			expect(capture.linkedPageCoverage?.diagnostics).toEqual([]);
-			expect(requests).toEqual(expect.arrayContaining(['/second/', '/third/', '/footer/', '/phone/', '/catalog/?tag=Research', '/catalog/?tag=research', '/catalog?tag=Research']));
+			expect(requests).toEqual(expect.arrayContaining(['/second/', '/third/', '/footer/', '/phone/', '/catalog/?tag=Research', '/catalog/?tag=research']));
 			expect(externalRequests).toBe(0);
 			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: urls[0]!, platform: 'default', summary: {routesFailed: capture.failed}, failures: [], discoveryDiagnostics: capture.linkedPageCoverage?.diagnostics});
 			expect(JSON.parse(readFileSync(receiptPath, 'utf8')).summary.complete).toBe(true);
 			collector.requireUrls(capture.linkedPageCoverage!.requiredUrls);
 			const frozen = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));
-			expect(frozen.scope.sourceUrls).toHaveLength(9);
+			expect(frozen.scope.sourceUrls).toHaveLength(8);
 			for (const url of capture.linkedPageCoverage!.requiredUrls.filter(url => !url.endsWith('/alias/'))) {
 				const cells = frozen.entries.filter((entry: {sourceUrl: string}) => entry.sourceUrl === url);
 				expect(cells).toHaveLength(3);
