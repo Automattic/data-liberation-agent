@@ -59,6 +59,28 @@ const headerOffset = at( [
 ] );
 
 describe( 'learnFluidModel', () => {
+	it( 'reproduces integer text-fit steps with a bounded affine rule (#1210)', () => {
+		const samples = at( [ [ 320, 20 ], [ 360, 23 ], [ 390, 26 ], [ 414, 28 ], [ 600, 30 ] ] );
+		const model = learnFluidModel( samples );
+		expect( model.kind ).toBe( 'affine' );
+		if ( model.kind === 'breakpoint' ) throw new Error( 'expected CSS model' );
+		expect( model.css ).toMatch( /^clamp\(20px, round\(down, calc\(.+\), 1px\), 30px\)$/ );
+		// Evaluate the emitted coefficients, not the model metadata: formatting
+		// must not move an observation across a whole-pixel rounding boundary.
+		const terms = model.css.match( /calc\(([\d.]+)vw ([+-]) ([\d.]+)px\)/ )!;
+		const evaluate = ( width: number ) => Math.min( 30, Math.max( 20,
+			Math.floor( Number( terms[ 1 ] ) * width / 100 + ( terms[ 2 ] === '-' ? -1 : 1 ) * Number( terms[ 3 ] ) ) ) );
+		for ( const sample of [ ...samples, { viewport: 500, value: 30 } ] ) {
+			expect( evaluate( sample.viewport ) ).toBe( sample.value );
+		}
+	} );
+
+	it( 'prefers an exact floored affine fit over an approximate ratio', () => {
+		const model = learnFluidModel( at( [ [ 320, 42 ], [ 360, 46 ], [ 390, 49 ], [ 414, 51 ] ] ) );
+		expect( model ).toMatchObject( { kind: 'affine' } );
+		if ( model.kind !== 'breakpoint' ) expect( model.css ).toContain( 'round(down, calc(' );
+	} );
+
 	it( 'does not project negative-offset width lines onto an unbounded viewport', () => {
 		expect( learnFluidModel( at( [ [ 1280, 353 ], [ 1440, 407 ], [ 1920, 567 ] ] ) ).kind ).toBe( 'breakpoint' );
 	} );
@@ -222,7 +244,7 @@ describe( 'learnWidestFluidModel', () => {
 				[ 1920, 1049 ],
 			] )
 		);
-		expect( model ).toMatchObject( { kind: 'proportional', css: '54.64vw' } );
+		expect( model ).toMatchObject( { kind: 'proportional', css: 'round(down, 54.64vw, 1px)' } );
 	} );
 
 	// The regression this guards: an element that merely fills its parent was
