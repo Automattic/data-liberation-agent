@@ -363,6 +363,9 @@ async function learnFluidGeometry(
 				}
 				element.setAttribute( attribute, `${ prefix }${ index++ }` );
 			}
+			// Bind in the tagging task: a resize handler can replace these nodes
+			// before the next browser evaluation gets a turn.
+			state.bind();
 			return index;
 		},
 		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
@@ -374,7 +377,6 @@ async function learnFluidGeometry(
 		}, ID_ATTRIBUTE );
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] };
 	}
-	await baseline.evaluate( state => state.bind() );
 	await bindRuntimeSheets( page );
 	// The element path up to its nearest identified ancestor, with sibling
 	// position; a signature two tagged elements share cannot key a reuse.
@@ -1096,7 +1098,9 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		// One serialized geometry record per tagged element, keyed by its id, so
 		// rest can be judged per element (see `perpetual` below).
-		const snapshot = () => new Map( state.elements().map( element => {
+		const snapshot = () => {
+			state.reconcile();
+			return new Map( state.elements().map( element => {
 				const geometry = state.readGeometry( element );
 				const style = geometry.style;
 				const pixel = state.pixel;
@@ -1113,6 +1117,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 					pixel( style.width ) === null ? null : geometry.parent?.clientWidth,
 					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ] ) ] as const;
 			} ) );
+		};
 		// An element whose geometry changes on every observation for
 		// PERPETUAL_TICKS in a row is running a perpetual animation (a script
 		// writing transforms each frame), not settling. It can never be quiet, so
@@ -1236,9 +1241,10 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// Native-lazy images clipped out of view by an overflow ancestor are
 			// equally unreachable by this vertical sweep.
 			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
-			// Delayed resize work is observed as its pending timeout, so rest no
-			// longer needs a fixed window that outlasts every debounce.
-			if ( quiet >= 1 && imagesReady && work.pending() === 0 ) break;
+			// Pending timeouts cover debounces. A missing tagged role can also
+			// be between an unwrap and an rAF-driven refit: allow one more tick
+			// for its replacement, without charging intact documents that wait.
+			if ( quiet >= ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) break;
 		}
 		// Later widths reuse this wait's visited extent and content (see `reuse`),
 		// so what the last sweep actually observed is what they compare against.

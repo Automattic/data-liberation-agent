@@ -45,10 +45,12 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			element: Element;
 			style: string | null;
 			identity: string | null;
+			initialIdentity: string | null;
 			tag: string;
 			id: string | null;
 			role: string | null;
 			classes: string[];
+			text: string | null;
 			children: Role[];
 			parent?: Role;
 			current?: Element;
@@ -61,14 +63,15 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 		const snapshot = ( element: Element, parent?: Role ): Role => {
 			const role: Role = {
 				element, style: element.getAttribute( 'style' ), identity: null,
+				initialIdentity: element.getAttribute( 'data-blocks-engine-capture-initial-node' ),
 				tag: element.tagName, id: element.getAttribute( 'id' ),
-				role: element.getAttribute( 'role' ), classes: [ ...element.classList ], children: [], parent,
+				role: element.getAttribute( 'role' ), classes: [ ...element.classList ], text: element.textContent, children: [], parent,
 			};
 			roles.push( role );
 			role.children = [ ...element.children ].map( child => snapshot( child, role ) );
 			return role;
 		};
-		const root = snapshot( document.documentElement );
+		let root = snapshot( document.documentElement );
 		const scratch = document.createElement( 'span' );
 		const geometry = [ 'width', 'height', 'min-height', 'font-size', 'padding-top', 'inset', 'top', 'left' ];
 		const walk = ( role: Role, element: Element | undefined, restore: boolean, matched: Set<Element>, unlearnedOnly = false ) => {
@@ -78,7 +81,12 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			// a spacer cloned from an active header must not borrow that header's id.
 			if ( element !== role.element && ( element.tagName !== role.tag ||
 				element.getAttribute( 'id' ) !== role.id || element.getAttribute( 'role' ) !== role.role ||
-				role.classes.some( token => ! element.classList.contains( token ) ) ) ) return;
+				role.classes.some( token => ! element.classList.contains( token ) ) ||
+				( role.identity !== null && /(?:^|;)\s*font-size\s*:/.test( role.style ?? '' ) &&
+					role.children.length === 0 && element.textContent !== role.text ) ) ) return;
+			// Export projects learned geometry back onto the initial tree. A
+			// proven replacement must retain that correspondence as well.
+			if ( role.initialIdentity !== null ) element.setAttribute( 'data-blocks-engine-capture-initial-node', role.initialIdentity );
 			matched.add( element );
 			role.current = element;
 			if ( ! marking || role.identity === null ) element.removeAttribute( attribute );
@@ -127,7 +135,16 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 		];
 		return {
 			pixel, elements, element, readGeometry, translation,
-			bind: () => { for ( const role of roles ) role.identity = role.element.getAttribute( attribute ); },
+			bind: () => {
+				// Tagging happens in a later browser task than baseline creation. A
+				// runtime may have replaced a fitted child between those tasks; bind
+				// the live tagged tree, never a detached pre-tagging object.
+				roles.length = 0;
+				root = snapshot( document.documentElement );
+				for ( const role of roles ) role.identity = role.element.getAttribute( attribute );
+			},
+			/** A tagged role is between removal and its runtime-created replacement. */
+			missing: () => roles.some( role => role.identity !== null && ! role.current ),
 			/** The source has replaced an element it rendered before the sweep. */
 			replaced: () => roles.some( role => ! role.element.isConnected ),
 			reconcile: () => project( false ),
