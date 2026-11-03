@@ -23,6 +23,7 @@ vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 vi.mock( './resource-capture.js', () => ( {
 	CapturedResourceStore: class {
 		captureDomDependencies = mocks.captureDomDependencies;
+		captureSelectedSrcsets = vi.fn().mockResolvedValue( undefined );
 		getReplayableResponse = mocks.getReplayableResponse;
 		observe = vi.fn();
 		settle = vi.fn().mockResolvedValue( undefined );

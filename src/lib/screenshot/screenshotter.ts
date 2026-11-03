@@ -1235,6 +1235,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 	if ( args.rendererCrashed() ) return;
+	if ( plan.captureHtml || plan.captureMobileHtml ) {
+		await resourceStore.captureSelectedSrcsets( page ).catch( () => undefined );
+	}
 
 	// Remove attributed non-content islands before interaction evidence and HTML.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );

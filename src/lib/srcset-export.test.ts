@@ -11,8 +11,73 @@ import { MediaStubStore } from './resume-state/index.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
 import { observePage } from './fidelity/check.js';
 import { normalizeImageKey } from './fidelity/score.js';
+import { CapturedResourceStore } from './screenshot/resource-capture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'srcset browser/export contract', () => {
+	it( 'keeps selected lazy auto-sized width renditions byte-identical through capture and export', async () => {
+		// One browser pass; normally under five seconds.
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-selected-srcset-' ) );
+		const browser = await chromium.launch();
+		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
+		try {
+			const source = 'https://selected.test/';
+			const images = new Map<string, Buffer>();
+			for ( const width of [ 100, 200, 400, 800, 1600 ] ) {
+				const png = new PNG( { width, height: 100 } );
+				png.data.fill( width % 251 );
+				images.set( `/photo-${ width }.png`, PNG.sync.write( png ) );
+			}
+			const html = `<meta name="viewport" content="width=device-width"><style>body{margin:0}img{width:50vw;height:auto}</style><img sizes="auto, 50vw" loading="lazy" src="/photo-1600.png" srcset="${ [ ...images.keys() ].map( path => `${ path } ${ path.match( /\d+/ )![ 0 ] }w` ).join( ', ' ) }">`;
+			const context = await browser.newContext( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 } );
+			const store = new CapturedResourceStore( directory, source, async url => ( {
+				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: images.get( new URL( url ).pathname )!,
+			} ) );
+			// A real source server is shared by the independent selection contexts.
+			const { createServer } = await import( 'node:http' );
+			const origin = createServer( ( request, response ) => {
+				response.setHeader( 'content-type', request.url === '/' ? 'text/html' : 'image/png' );
+				response.end( request.url === '/' ? html : images.get( request.url! ) );
+			} );
+			await new Promise<void>( resolve => origin.listen( 0, '127.0.0.1', resolve ) );
+			const url = `http://127.0.0.1:${ ( origin.address() as { port: number } ).port }/`;
+			try {
+				const page = await context.newPage();
+				store.observe( page );
+				await page.goto( url );
+				await page.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).decode() );
+				await store.captureSelectedSrcsets( page );
+				await store.captureDomDependencies( html, url );
+				await store.settle( page );
+				await store.flush();
+				for ( const folder of [ 'html', 'screenshots' ] ) mkdirSync( join( directory, folder ) );
+				writeFileSync( join( directory, 'html/home.html' ), html );
+				writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ url ]: { html: 'html/home.html' } } } ) );
+				exportWebsiteCapture( { outputDir: directory, sourceUrl: url, platform: 'generic', summary: {}, failures: [] } );
+				const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
+				expect( $( 'img' ).attr( 'sizes' ) ).toBe( 'auto, 50vw' );
+				expect( $( 'img' ).attr( 'loading' ) ).toBe( 'lazy' );
+				const manifest = JSON.parse( readFileSync( join( directory, 'resources/manifest.json' ), 'utf8' ) );
+				expect( new Set( Object.values( manifest.resources ).map( ( entry: any ) => entry.path ) ).size ).toBe( 4 );
+				expect( manifest.omissions.map( ( entry: { url: string } ) => new URL( entry.url ).pathname ) ).toEqual( [ '/photo-100.png' ] );
+				server = await startStaticServer( join( directory, 'website' ) );
+				for ( const width of [ 390, 1440 ] ) {
+					const selected: Buffer[] = [];
+					for ( const address of [ url, server.url ] ) {
+						const fresh = await browser.newContext( { viewport: { width, height: 900 }, deviceScaleFactor: 1 } );
+						try {
+							const sample = await fresh.newPage();
+							await sample.goto( address );
+							await sample.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).decode() );
+							const current = await sample.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).currentSrc );
+							selected.push( Buffer.from( await ( await fetch( current ) ).arrayBuffer() ) );
+						} finally { await fresh.close(); }
+					}
+					expect( selected[ 1 ] ).toEqual( selected[ 0 ] );
+					expect( selected[ 0 ] ).toEqual( images.get( `/photo-${ width === 390 ? 200 : 800 }.png` ) );
+				}
+			} finally { origin.closeAllConnections(); await new Promise<void>( resolve => origin.close( () => resolve() ) ); }
+		} finally { await server?.close(); await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
 	it( 'localizes padded single URL attributes without replacing registered source pixels with placeholders', async () => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-padded-url-contract-' ) );
 		const browser = await chromium.launch();

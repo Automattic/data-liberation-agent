@@ -39,9 +39,9 @@ it('maps real browser responses at multiple viewports before exporting', async (
 		await store.flush();
 		const manifest = JSON.parse(readFileSync(join(outputDir, 'resources/manifest.json'), 'utf8'));
 		expect(manifest.failures).toEqual([]);
-		expect(manifest.omissions).toHaveLength(4);
-		expect(new Set(Object.values(manifest.resources).map((entry: any) => entry.path)).size).toBe(2);
-		expect(readdirSync(join(outputDir, 'resources')).filter(path => path.endsWith('.svg'))).toHaveLength(2);
+		expect(manifest.omissions).toHaveLength(2);
+		expect(new Set(Object.values(manifest.resources).map((entry: any) => entry.path)).size).toBe(4);
+		expect(readdirSync(join(outputDir, 'resources')).filter(path => path.endsWith('.svg'))).toHaveLength(4);
 		for (const omission of manifest.omissions) {
 			expect(omission.reason).toBe('redundant-srcset-rendition');
 			expect(manifest.resources[omission.url]).toEqual(manifest.resources[omission.representative]);

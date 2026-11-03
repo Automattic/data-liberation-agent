@@ -518,6 +518,55 @@ export class CapturedResourceStore {
 		return Boolean( this.manifest.resources[ url ] );
 	}
 
+	/** Probe responsive slots at fidelity widths without Chromium's larger-image cache reuse. */
+	async captureSelectedSrcsets( page: Page ): Promise< void > {
+		if ( ! await page.locator( 'img[srcset],picture img' ).count() ) return;
+		const original = page.viewportSize();
+		const browser = page.context().browser();
+		if ( ! original || ! browser ) return;
+		try {
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: original.height } );
+				const fixture = await page.evaluate( async () => {
+					await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
+					const images = Array.from( document.querySelectorAll<HTMLImageElement>( 'img[srcset],picture img' ) );
+					return { base: document.baseURI, html: images.map( image => {
+						const copy = image.cloneNode( false ) as HTMLImageElement;
+						for ( const attribute of Array.from( copy.attributes ) ) {
+							if ( attribute.name.startsWith( 'on' ) ) copy.removeAttribute( attribute.name );
+						}
+						copy.removeAttribute( 'style' );
+						copy.style.cssText = `display:block;width:${ image.getBoundingClientRect().width }px;height:auto`;
+						const picture = document.createElement( 'picture' );
+						if ( image.parentElement?.tagName === 'PICTURE' ) {
+							for ( const source of image.parentElement.querySelectorAll( 'source' ) ) picture.append( source.cloneNode( true ) );
+						}
+						picture.append( copy );
+						return picture.outerHTML;
+					} ).join( '' ) };
+				} );
+				if ( ! fixture.html ) break;
+				const context = await browser.newContext( {
+					viewport: { width, height: original.height }, deviceScaleFactor: 1,
+					storageState: await page.context().storageState(),
+				} );
+				try {
+					const probe = await context.newPage();
+					this.observe( probe );
+					await probe.setContent( `<base href="${ fixture.base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ fixture.html }` );
+					for ( const image of await probe.locator( 'img' ).all() ) {
+						await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
+						await image.evaluate( image => Promise.race( [
+							( image as HTMLImageElement ).decode().catch( () => undefined ),
+							new Promise<void>( resolve => setTimeout( resolve, 2000 ) ),
+						] ) );
+					}
+					await this.settle( probe );
+				} finally { await context.close(); }
+			}
+		} finally { await page.setViewportSize( original ); }
+	}
+
 	async settle( page: Page ): Promise< void > {
 		const listener = this.listeners.get( page );
 		if ( listener ) page.off?.( 'response', listener );
@@ -614,7 +663,10 @@ export class CapturedResourceStore {
 					if ( element.tagName === 'img' && node.attr( 'src' ) ) references.push( node.attr( 'src' )! );
 					for ( const reference of references ) {
 						const url = absolute( reference, baseUrl );
-						if ( url && url !== target ) renditions.set( url, target );
+						if ( url && url !== target ) {
+							if ( this.browserLoadedResources.has( url ) ) add( url, baseUrl, true );
+							else renditions.set( url, target );
+						}
 					}
 				}
 				for ( const attribute of [ 'src', 'poster' ] ) {
@@ -819,6 +871,11 @@ export class CapturedResourceStore {
 		const url = requestedUrl.href;
 		if ( resourceType === 'image' && deferImage ) {
 			this.browserLoadedResources.add( url );
+			// A later viewport can select a URL an earlier route retired.
+			if ( this.manifest.omissions?.some( omission => omission.url === url ) ) {
+				delete this.manifest.resources[ url ];
+				this.manifest.omissions = this.manifest.omissions.filter( omission => omission.url !== url );
+			}
 			this.deferredImages.set( url, response );
 			return Promise.resolve();
 		}
