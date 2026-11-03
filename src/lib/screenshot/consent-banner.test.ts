@@ -64,6 +64,10 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects m
       </style>`));
       const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 390, height: 844 }] });
       const presentation = dismissed.find(item => item.consentBanner)?.consentBanner?.presentation;
+      // Chromium measures the fixture's bottom:-0.02px beyond the viewport.
+      expect(presentation?.edge_offset).toBe('0px');
+      expect(presentation?.padding).toBe('12px');
+      expect(presentation?.button?.padding).toBe('8px 40px');
       expect(presentation?.gap).toBe(expectedGap);
       expect(presentation?.button).toBeDefined();
       for (const field of ['border_width', 'border_style', 'border_color']) {
