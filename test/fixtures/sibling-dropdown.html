@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+body{margin:0}body:not(.phone) .bar{background:#ddd}.shell{position:relative}.bar{position:relative;top:10px;z-index:20;height:50px;background:#eee}button{padding:12px}.drawer{display:none;position:absolute;top:0;left:0;z-index:10;width:100%;height:240px;background:white;padding-top:70px;box-sizing:border-box}.drawer.open{display:block}.drawer a{display:block}
+</style></head><body><div class="shell"><div class="bar"><button aria-expanded="false" aria-haspopup="menu">Menu</button></div><nav class="drawer" aria-label="Site"><a href="#content">First</a><a href="#content">Second</a><a href="#content">Third</a></nav><main id="content"><h1>Sibling dropdown</h1><p>Portable navigation fixture.</p></main></div><script>
+const toggle=document.querySelector('button'),drawer=document.querySelector('.drawer');function set(open){toggle.setAttribute('aria-expanded',String(open));drawer.classList.toggle('open',open);}toggle.onclick=()=>set(toggle.getAttribute('aria-expanded')!=='true');addEventListener('keydown',e=>{if(e.key==='Escape')set(false)});
+</script></body></html>

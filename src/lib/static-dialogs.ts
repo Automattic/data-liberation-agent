@@ -197,7 +197,7 @@ export function wireCapturedDialogs(
 	const $ = cheerio.load( html );
 	let wired = 0;
 	let listboxes = 0;
-	const reusedPanels = new Map< string, string >();
+	const reusedPanels = new Map< AnyNode, string >();
 	const choiceConfigs: Array< { transitions: Record< string, string > } > = [];
 	const choiceGroups = new Map< string, NonNullable< CapturedDialogInteraction[ 'choiceGroup' ] >[] >();
 	for ( const state of choiceStates ) {
@@ -231,13 +231,13 @@ export function wireCapturedDialogs(
 	// panel and its close button can shift positional selectors used by later
 	// states in the same chrome landmark.
 	const capturedTriggers = captured.map( state => findTriggers( $, state.trigger ) );
-	for ( const [ index, state ] of captured.entries() ) {
-		const sharedPanelId = reusedPanels.get( state.dialog!.selector );
-		const existingPanel = selectByCapturedSelector( $, state.dialog?.selector, state.dialog?.tag )
-			.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' );
+	const capturedPanels = captured.map( state => selectByCapturedSelector( $, state.dialog?.selector, state.dialog?.tag )
+		.not( '[data-blocks-engine-capture-dialog-panel], [data-blocks-engine-capture-dialog-panel] *' ) );
+	const capturedRestingPanels = captured.map( ( _, index ) => {
+		const existingPanel = capturedPanels[ index ]!;
 		// Responsive documents can retain the same source ID twice. Resolve
 		// each trigger's resting root before removal detaches those documents.
-		const restingPanels = new Map( capturedTriggers[ index ]!.toArray().map( element => {
+		return new Map( capturedTriggers[ index ]!.toArray().map( element => {
 			let resting = existingPanel;
 			if ( resting.length > 1 ) {
 				for ( const ancestor of $( element ).parents().toArray() ) {
@@ -247,8 +247,12 @@ export function wireCapturedDialogs(
 			}
 			return [ element, resting ];
 		} ) );
-		const reusePanel = ( state.dialog?.presentation === 'dropdown' || state.dialog?.restingInline === true ) && existingPanel.length === 1;
-		if ( !reusePanel && !sharedPanelId ) removeCapturedDialog( $, state.dialog?.selector );
+	} );
+	for ( const [ index, state ] of captured.entries() ) {
+		const existingPanel = capturedPanels[ index ]!;
+		const restingPanels = capturedRestingPanels[ index ]!;
+		const canReuse = state.dialog?.presentation === 'dropdown' || state.dialog?.restingInline === true;
+		if ( !canReuse || ![ ...restingPanels.values() ].some( panel => panel.length === 1 ) ) removeCapturedDialog( $, state.dialog?.selector );
 		// An earlier exported panel contains a captured snapshot, not another
 		// instance of the observed source control whose ID it happens to copy.
 		const triggers = capturedTriggers[ index ]!
@@ -309,13 +313,19 @@ export function wireCapturedDialogs(
 					return delta.removed.length > 0 && delta.removed.every( token => tokens.includes( token ) );
 				} ) ?? ( delta.root === 'body' ? scope : undefined ) ?? candidates.find( node => node.tagName === delta.root );
 				if ( !owner || owner.type !== 'tag' ) continue;
+				// Responsive assembly also retains shared body classes on the outer
+				// body. Mutable state belongs to the document wrapper alone: an
+				// outer closed token would keep its adopted panel closed in CSS.
+				if ( owner === scope && delta.root === 'body' ) $( 'body' ).removeClass( [ ...delta.removed, ...delta.added ].join( ' ' ) );
 				bindings.push( { selector: delta.root, tag: owner.tagName, depth: parents.indexOf( owner ) + 1,
 					closed: { class: delta.removed.join( ' ' ) }, opened: { class: delta.added.join( ' ' ) }, classTokensOnly: true } );
 			}
 			if ( bindings.length ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( bindings ) );
 			const triggerState = resolveTriggerState( trigger, state.dialog?.ancestorState );
 			if ( triggerState?.length ) trigger.attr( 'data-blocks-engine-capture-dialog-trigger-state', JSON.stringify( triggerState ) );
-			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
+			const restingPanel = restingPanels.get( element )!;
+			const reusePanel = canReuse && restingPanel.length === 1;
+			const reusedPanelId = restingPanel.length === 1 ? reusedPanels.get( restingPanel.get( 0 )! ) : undefined;
 			// A source can reuse one responsive panel root for different trigger contents.
 			// Retain its single DOM identity while replaying each observed state,
 			// rather than binding every trigger to the first captured contents.
@@ -333,7 +343,7 @@ export function wireCapturedDialogs(
 				if ( !trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', dropdown ? 'menu' : 'dialog' );
 				return;
 			}
-			const panelId = reusePanel && state.dialog?.id ? state.dialog.id : nextDialogId( $ );
+			const panelId = reusePanel && state.dialog?.id && existingPanel.length === 1 ? state.dialog.id : nextDialogId( $ );
 			const sourcePlaced = Boolean( observed?.parent );
 			// Modality follows the observed source presentation: a dropdown leaves
 			// the page interactive, so it does not claim aria-modal.
@@ -347,10 +357,10 @@ export function wireCapturedDialogs(
 				// phone toggle. In that state, authored CSS and inline styles own it.
 				if ( reusePanel ) panel.attr( 'data-blocks-engine-capture-existing-panel', JSON.stringify( {
 					resting: {
-						style: existingPanel.attr( 'style' ) ?? null,
-						class: `${ existingPanel.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
-						hidden: existingPanel.attr( 'hidden' ) !== undefined,
-						...( state.dialog?.restingInline && !dropdown ? { html: existingPanel.html() ?? '' } : {} ),
+						style: restingPanel.attr( 'style' ) ?? null,
+						class: `${ restingPanel.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
+						hidden: restingPanel.attr( 'hidden' ) !== undefined,
+						...( state.dialog?.restingInline && !dropdown ? { html: restingPanel.html() ?? '' } : {} ),
 					},
 					opened: {
 						style: panel.attr( 'style' ) ?? null,
@@ -361,7 +371,7 @@ export function wireCapturedDialogs(
 					// Opened snapshots are replay evidence, not the initial authoring
 					// tree. Keep the source's closed content and root attributes even
 					// before (or without) the portable runtime running.
-					restoreRestingPanel( existingPanel, panel );
+					restoreRestingPanel( restingPanel, panel );
 					panel.attr( 'data-blocks-engine-capture-resting-panel', '' );
 				}
 				if ( sourcePlaced ) panel.attr( 'data-blocks-engine-capture-observed-placement', 'true' ).attr( 'hidden', '' );
@@ -373,7 +383,6 @@ export function wireCapturedDialogs(
 				panel.html( state.gallery?.lightbox
 					? wireGalleryDialog( state.dialog!.html, state.gallery.lightbox, panelId )
 					: state.dialog!.html );
-				const restingPanel = restingPanels.get( element )!;
 				if ( !dropdown && !state.gallery && restingPanel.length === 1 ) {
 					// A failed inline-resting observation chooses a wrapper, not a
 					// different authoring state. Replay swaps its entire child root.
@@ -401,8 +410,8 @@ export function wireCapturedDialogs(
 			// transformed slide would make fixed positioning and hit ownership local.
 			if (state.gallery) gallerySurface($, trigger).append(panel);
 			else if ( reusePanel ) {
-				existingPanel.replaceWith( panel );
-				reusedPanels.set( state.dialog!.selector, panelId );
+				restingPanel.replaceWith( panel );
+				reusedPanels.set( restingPanel.get( 0 )!, panelId );
 			}
 			else if ( observed?.parent ) {
 				if ( observed.before ) $( observed.before ).before( panel );
@@ -680,7 +689,17 @@ function selectByCapturedSelector(
 ) {
 	if ( ! selector ) return $( [] );
 	try {
-		const matches = $( selector );
+		// Source body-relative paths must start at each responsive document,
+		// not at the assembled outer body whose children are now wrappers.
+		const scoped = selector.replace( /^body(?=\s*>)/, ':is(.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document)' );
+		const documents = $( '.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document' );
+		let matches = scoped !== selector && documents.length ? $( scoped ) : $( selector );
+		// Cleanup can remove preceding source siblings. Relax positional indexes
+		// only when the unchanged ancestry identifies one node per document.
+		if ( !matches.length && scoped !== selector && documents.length ) {
+			const candidates = $( scoped.replace( /:nth-(?:of-type|child)\(\d+\)/g, '' ) );
+			if ( documents.toArray().every( document => candidates.filter( ( _, node ) => $( node ).parents().toArray().includes( document ) ).length <= 1 ) ) matches = candidates;
+		}
 		if ( ! tag ) return matches;
 		return matches.filter( ( _, element ) => ( element as Element ).tagName === tag );
 	} catch {
