@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { BrowserContext, Page } from 'playwright';
+import { installProbeIntrinsics } from '../browser-kit/probe-intrinsics.js';
 import { PNG } from 'pngjs';
 import { observePage, routeSourceMap } from './check.js';
 import { spreadSample } from '../route-budget.js';
@@ -169,6 +170,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 								storageState: await sourceContext.storageState(), ignoreHTTPSErrors: true,
 							} );
 							ownedResource = referenceContext;
+							await installProbeIntrinsics( referenceContext );
 							await referenceContext.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 							referencePage = await referenceContext.newPage();
 							observePageTraffic( referencePage, options.telemetryRequest );

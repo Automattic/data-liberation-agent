@@ -23,10 +23,9 @@ export function documentRequestUrl( url: string ): string {
 	return parsed.href;
 }
 
-/** Document identity: fragments share content, but query renditions may not. */
+/** Discovery identity: slash variants share a route; origin and document queries do not. */
 export function normalizedUrl( url: string ): string {
-	const parsed = new URL( url );
-	parsed.hash = '';
+	const parsed = new URL( documentRequestUrl( url ) );
 	parsed.pathname = parsed.pathname.replace( /\/$/, '' ) || '/';
 	return parsed.href;
 }

@@ -291,6 +291,7 @@ interface PortableLinkContext {
 	routeScope?: SiteRouteScope;
 	/** Selectable-set tab keys per captured document, keyed by `documentRequestUrl`. */
 	tabKeysByRoute?: Map< string, Set< string > >;
+	boundaryRoutes?: Set<string>;
 }
 
 /**
@@ -351,7 +352,7 @@ function rewriteRouteLinksIn(
 	routes: Map< string, string >,
 	portable?: PortableLinkContext
 ): void {
-	const comparisonRoutes = new Set([...routes.keys()].map(normalizedUrl));
+	const comparisonRoutes = new Map([...routes].map(([url, path]) => [normalizedUrl(url), path]));
 	// Document relations share navigation's route/source resolution. Resource
 	// relations keep their asset localization, including alternate stylesheets.
 	$( 'a[href],area[href],link[href],option[value]' ).each( ( _index, element ) => {
@@ -395,10 +396,15 @@ function rewriteRouteLinksIn(
 			return;
 		}
 		if ( isOption ) return;
-		// A comparison-key match is not evidence that a different network
-		// address names this captured document (for example /catalog vs /catalog/).
-		if (comparisonRoutes.has(normalizedUrl(resolved.href))) {
-			link.attr('href', resolved.href);
+		// Discovery folds slash variants. Exact captured addresses above still
+		// take precedence for older inventories containing both spellings.
+		if (portable?.boundaryRoutes?.has(documentRequestUrl(resolved.href))) {
+			link.attr(attribute, resolved.href);
+			return;
+		}
+		const slashRoute = comparisonRoutes.get(normalizedUrl(resolved.href));
+		if (slashRoute) {
+			link.attr(attribute, slashRoute.includes('#') ? slashRoute : `${slashRoute}${resolved.hash}`);
 			return;
 		}
 		// A query that names one of the target page's own tabs selects a tab on
@@ -1219,12 +1225,14 @@ function uncapturedRouteAnchors(
 	absentRoutes: Set< string >,
 	omittedRoutes: Set< string >,
 	resourceInputs: Set< string >,
-	routeScope?: SiteRouteScope
+	routeScope?: SiteRouteScope,
+	boundaryRoutes: Set<string> = new Set()
 ): Array< { sourceUrl: string; url: string; reason: string } > {
+	const capturedIdentities = new Set([...capturedRoutes].filter(url => !boundaryRoutes.has(url)).map(normalizedUrl));
 	return sameOriginPageAnchors( html, sourceUrl )
 		.filter( url => routeInScope( url, routeScope ) )
 		.map( url => scopedRouteKey( url, routeScope ) )
-		.filter( ( url ) => ! capturedRoutes.has( url ) )
+		.filter( ( url ) => ! capturedRoutes.has(url) && ! capturedIdentities.has( normalizedUrl( url ) ) )
 		// Resource-owned links already have localization or explicit acquisition
 		// diagnostics. Avoid duplicating those as missing HTML, without changing
 		// the independent required frontier or its frozen outcome obligations.
@@ -1942,8 +1950,8 @@ function buildExportCapture(
 		const routePath = routePathOf( url );
 		portableRouteLinks.set( canonicalKey, `/${ routePath }` );
 	}
-	// Source links, aliases and observed navigation all use actual request
-	// addresses. A comparison key cannot select between different slash pages.
+	// Exact request addresses take precedence; link rewriting also resolves
+	// uncaptured slash spellings through the shared discovery identity.
 	const sourceRouteLinks = portableRouteLinks;
 
 	const portableServedPaths = new Set< string >();
@@ -1973,9 +1981,13 @@ function buildExportCapture(
 		targetCount?: number;
 		url?: string;
 	} > = [];
+	const boundaryRoutes = new Set<string>();
 	const capturedRouteKeys = new Set( sourceRouteLinks.keys() );
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
-		if ( entry.externalRedirect ) capturedRouteKeys.add( documentRequestUrl( url ) );
+		if ( entry.externalRedirect ) {
+			capturedRouteKeys.add( documentRequestUrl( url ) );
+			boundaryRoutes.add( documentRequestUrl( url ) );
+		}
 	}
 	const absentRoutes = new Set( routeCaptureDiagnostics
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
@@ -2097,7 +2109,7 @@ function buildExportCapture(
 		}
 		mkdirSync( dirname( destination ), { recursive: true } );
 		const originalHtml = readFileSync( htmlPath, 'utf8' );
-		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, options.routeScope ) );
+		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, options.routeScope, boundaryRoutes ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = localizeMetadataImageReferences( originalHtml, url, new Map( [ ...mediaStage.metadataPathsBySource, ...portablePathsBySource ] ), content => bindSrcsetShapedImageSrc(
@@ -2123,7 +2135,7 @@ function buildExportCapture(
 				),
 				url,
 				sourceRouteLinks,
-				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths, routeScope: options.routeScope, tabKeysByRoute }
+				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths, routeScope: options.routeScope, tabKeysByRoute, boundaryRoutes }
 			),
 			`/${ routePath }`, responsiveIdentities,
 			reason => routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url, reason, unit: 'stylesheet', severity: 'warning', path: `website/${ routePath }` } )

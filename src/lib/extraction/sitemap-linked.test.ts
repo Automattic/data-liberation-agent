@@ -26,6 +26,25 @@ async function fixture(handler: (request: IncomingMessage, response: ServerRespo
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('bounded linked-page fallback', () => {
+  it('merges sitemap slash variants with page links, preferring only a same-route canonical', async () => {
+    const f = await fixture((req, res) => {
+      if (req.url === '/sitemap.xml') {
+        res.setHeader('content-type', 'application/xml');
+        res.end(`<urlset><url><loc>${origin}/about/</loc></url><url><loc>${origin}/first/</loc></url></urlset>`);
+        return;
+      }
+      res.setHeader('content-type', 'text/html');
+      res.end(req.url === '/' ? '<a href="/about">About</a><a href="/first">First</a>' :
+        req.url === '/about/' ? '<link rel="canonical" href="/about">About' :
+        '<link rel="canonical" href="https://external.test/first">First');
+    });
+    try {
+      const result = await fetchSitemapWithDiagnostics(`${origin}/`);
+      expect(result.urls).toEqual([`${origin}/about`, `${origin}/first/`]);
+      expect(f.requests.filter(path => path.startsWith('/about'))).toEqual(['/about/']);
+    } finally { await f.close(); }
+  });
+
   it('closes deeper raw HTML links, cycles and aliases without folding genuine routes', async () => {
     const documents: Record<string, string[]> = {
       '/': ['/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/blog/#top', 'https://external.test/page', '/logo.png', '/cart', 'mailto:a@b.test'],

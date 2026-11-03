@@ -28,7 +28,7 @@ A host injects instrumentation into pages it serves — badges, HUDs, beacons �
 
 ## Capability vocabulary
 
-`capabilityVocabulary` publishes the schema id and the capability names this version recognizes: `booking`, `commerce`, `dialogs`, `embeds`, `forms`, `media`, `membership`, `navigation`. They are exported as `SOURCE_CAPABILITIES` and `SOURCE_CAPABILITY_VOCABULARY` alongside the `SourceCapability` type. Treat them as a contract: members may be added under a new vocabulary version, and removing or repurposing one is a breaking change, because a consumer's acceptance policy can be keyed on a name. Source adapters extend the vocabulary's use through `CapabilityRule` selectors; they do not invent new names.
+`capabilityVocabulary` publishes the schema id and the capability names this version recognizes: `booking`, `commerce`, `dialogs`, `embeds`, `events`, `forms`, `media`, `membership`, `navigation`. They are exported as `SOURCE_CAPABILITIES` and `SOURCE_CAPABILITY_VOCABULARY` alongside the `SourceCapability` type. Treat them as a contract: members may be added under a new vocabulary version, and removing or repurposing one is a breaking change, because a consumer's acceptance policy can be keyed on a name. Source adapters extend the vocabulary's use through `CapabilityRule` selectors; they do not invent new names.
 
 Each finding carries the route it was observed on, the selector that matched, and up to five bounded locators for the matched elements, so a consumer can act on an occurrence rather than only on a site-wide band.
 
@@ -48,12 +48,12 @@ Neither side should learn about the other. A producer that encodes one destinati
 
 `complexity` is a transparent heuristic about the sampled source, not a destination compatibility prediction:
 
-- **complex:** booking, commerce or membership evidence, or more than 2,000 DOM elements on a sampled route.
-- **moderate:** other non-navigation capability evidence, or more than 500 elements.
+- **complex:** booking, commerce, events or membership evidence, or more than 2,000 DOM elements on a sampled route.
+- **moderate:** other non-navigation capability evidence, more than 500 elements, more than 150 images on a sampled route, more than 50 discovered routes, or discovery that stopped at its route limit (50 by default).
 - **simple:** none of those observed factors.
 - **unknown:** missing rendered samples, truncated discovery/sampling, or limited/blocked resources. `observedBand` retains the measured lower-bound classification and `factors` explains it.
 
-`confidence: bounded-sample` means the declared sample completed. Responsive behavior, unsampled routes, delayed states and backend functionality remain explicitly unknown. Consumers apply their own acceptance policy. These thresholds are initial explainable heuristics, not calibrated success probabilities.
+`confidence: bounded-sample` means the declared sample completed. Responsive behavior, unsampled routes, delayed states and backend functionality remain explicitly unknown. Consumers apply their own acceptance policy. These thresholds are initial explainable heuristics, not calibrated success probabilities, and the image and page counts are provisional pending move-history data.
 
 Sampling fewer routes than discovery found is the bound working as declared, so it withholds the band without lowering confidence: a result can report `band: unknown` alongside `confidence: bounded-sample`. The two answer different questions — whether a site-wide classification is offered, and whether the sample that was declared completed. A consumer that needs to know how much of the source was covered reads `coverage.discovery` and `coverage.sampling`. Read both: `sampling.complete` is false whenever sampling was truncated or a sample failed, but discovery truncation is reported only by `coverage.discovery.truncated`, so a tightened `discoveryLimit` can cap the inventory while sampling still reports complete. A declared sample that did not complete, a sample whose resources were limited, and a sample reporting its own unknowns all still report `incomplete`.
 

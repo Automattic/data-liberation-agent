@@ -10,10 +10,10 @@ function matchCount(html: string, selector: string): number {
 }
 
 describe('wix events capability rule', () => {
-  it('declares a commerce rule, alongside Stores and Bookings, for the Wix Events ticketing surface', () => {
+  it('declares an events rule, alongside Stores and Bookings, for the Wix Events ticketing surface', () => {
     const events = inspection.find((rule) => rule.evidence.includes('Wix Events'));
     expect(events).toBeDefined();
-    expect(events?.capability).toBe('commerce');
+    expect(events?.capability).toBe('events');
     expect(inspection.find((rule) => rule.evidence.includes('Wix Stores'))).toBeDefined();
     expect(inspection.find((rule) => rule.capability === 'booking')).toBeDefined();
   });
@@ -62,9 +62,11 @@ it('reports an app capability for a Wix Events ticketing page, so a ticketing so
   );
   const result = await inspectSource(url, { sampleLimit: 1 });
   const found = result.rendered.samples[0].capabilities.find(
-    (finding) => finding.capability === 'commerce' && finding.evidence.includes('Wix Events'),
+    (finding) => finding.capability === 'events' && finding.evidence.includes('Wix Events'),
   );
   expect(found).toBeDefined();
+  // A ticketing-only site is an events source, not a store.
+  expect(result.rendered.samples[0].capabilities.map((finding) => finding.capability)).not.toContain('commerce');
   expect(result.complexity.band).toBe('complex');
 }, 30_000);
 
@@ -73,7 +75,7 @@ it('reports no app capability for a Wix site with no events, stores or bookings'
   const result = await inspectSource(url, { sampleLimit: 1 });
   const appCapabilities = result.rendered.samples[0].capabilities
     .map((finding) => finding.capability)
-    .filter((capability) => ['booking', 'commerce', 'membership'].includes(capability));
+    .filter((capability) => ['booking', 'commerce', 'events', 'membership'].includes(capability));
   expect(appCapabilities).toEqual([]);
   expect(result.complexity.band).not.toBe('complex');
 }, 30_000);

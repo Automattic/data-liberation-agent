@@ -1,4 +1,4 @@
-import { documentRequestUrl } from './url/route-key.js';
+import { normalizedUrl } from './url/route-key.js';
 
 /**
  * Default browser capture window: 17 minutes of a ~60-minute hosted deadline.
@@ -66,11 +66,11 @@ export function validateRouteSelection( selection: unknown ): asserts selection 
 	throw new RangeError( `routeSelection must be one of ${ ROUTE_SELECTIONS.join( ', ' ) }` );
 }
 
-/** Deduplicate an inventory by document request identity, keeping first occurrences in order. */
+/** Deduplicate slash-equivalent discovery routes, keeping first occurrences in order. */
 export function dedupeRouteInventory( urls: readonly string[] ): string[] {
 	const seen = new Set< string >();
 	return urls.filter( url => {
-		const key = documentRequestUrl( url );
+		const key = normalizedUrl( url );
 		if ( seen.has( key ) ) return false;
 		seen.add( key );
 		return true;
@@ -79,7 +79,7 @@ export function dedupeRouteInventory( urls: readonly string[] ): string[] {
 
 /**
  * Apply a route budget to an initial inventory whose first URL is the
- * entrypoint. Routes are deduplicated by document request identity, then the
+ * entrypoint. Routes are deduplicated by discovery identity, then the
  * entrypoint plus an even spread of the remainder is kept, so the same
  * inventory always yields the same selection. `limit` counts the entrypoint.
  *
@@ -95,9 +95,9 @@ export function selectRouteBudget( urls: string[], limit: number | undefined, pr
 		// Progressive even spreads keep every prefix representative, without
 		// throwing away routes before their observed cost is known.
 		const ordered = new Set< string >( inventory.slice( 0, 1 ) );
-		const keys = new Map( inventory.map( url => [ documentRequestUrl( url ), url ] ) );
+		const keys = new Map( inventory.map( url => [ normalizedUrl( url ), url ] ) );
 		for ( const url of preferred ) {
-			const route = keys.get( documentRequestUrl( url ) );
+			const route = keys.get( normalizedUrl( url ) );
 			if ( route ) ordered.add( route );
 		}
 		for ( let count = 2; count < inventory.length; count *= 2 ) {
@@ -113,12 +113,12 @@ export function selectRouteBudget( urls: string[], limit: number | undefined, pr
 function coverageSample( inventory: string[], limit: number, preferred: readonly string[] ): string[] {
 	if ( limit <= 0 ) return [];
 	const [ entrypoint, ...rest ] = inventory as [ string, ...string[] ];
-	const byKey = new Map( rest.map( url => [ documentRequestUrl( url ), url ] ) );
+	const byKey = new Map( rest.map( url => [ normalizedUrl( url ), url ] ) );
 	const picks = [ entrypoint ];
 	const kept = new Set( picks );
 	for ( const url of preferred ) {
 		if ( picks.length >= limit ) break;
-		const route = byKey.get( documentRequestUrl( url ) );
+		const route = byKey.get( normalizedUrl( url ) );
 		if ( route && ! kept.has( route ) ) {
 			picks.push( route );
 			kept.add( route );

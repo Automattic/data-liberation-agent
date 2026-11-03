@@ -107,6 +107,7 @@ export const CAPTURE_EVIDENCE_FAMILIES = {
 	'dialog-<n>': 'i',
 	'disclosure-panel-<n>': 'i',
 	'gallery-<n>': 'i',
+	'probe-<uuid>': 'a',
 } as const;
 
 /** Sidecar schemas, under `CAPTURE_SCHEMA_NAMESPACE`. */
@@ -117,7 +118,7 @@ export const CAPTURE_SCHEMAS = [
 	'finite-bootstrap/v1', 'http-acquisition/v1', 'interaction-states/v1', 'interaction-states/v2', 'layout-geometry-capture/v1',
 	'layout-geometry-proof/v1', 'learned-motion/v1', 'native-view-timelines/v1', 'portable-motion/v1', 'runtime-observations/v1',
 	'runtime-regions/v1', 'scroll-states/v1', 'shopify-http-proof/v4', 'source-behavior/v1', 'source-behavior-report/v1',
-	'source-capability-vocabulary/v1', 'source-cleanup/v8', 'source-interactivity/v1', 'source-outcome/v1', 'source-profile/v1',
+	'source-capability-vocabulary/v2', 'source-cleanup/v8', 'source-interactivity/v1', 'source-outcome/v1', 'source-profile/v1',
 ] as const;
 
 /**

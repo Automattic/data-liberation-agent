@@ -93,6 +93,7 @@ Naming an unknown target lists the registered ones.
 |---|---|
 | Blogger | Browser capture + feed accounting; opt-in orchestrated HTTP review capture |
 | EmDash CMS | Ready |
+| Gamma | Generic discovery + card section anchors and video embeds |
 | Ghost | Ready |
 | GoDaddy Websites & Marketing | Ready |
 | Hostinger Website Builder | Ready |

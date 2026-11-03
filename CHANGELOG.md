@@ -15,6 +15,40 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.102] - 2026-11-03
+
+### Changed
+- regenerate plugin bundles
+- add an events capability, and let page count and images raise the complexity band
+
+## [0.33.101] - 2026-11-03
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- Fix WordPress runtime emoji normalization in fidelity comparison
+
+## [0.33.100] - 2026-11-03
+
+### Changed
+- regenerate plugin bundles
+- Add a Gamma adapter: working section links and video embeds
+
+## [0.33.99] - 2026-11-03
+
+### Changed
+- regenerate plugin bundles
+- Fit runtime-sized image height fallbacks across every captured width
+- Deduplicate trailing-slash routes across sitemap and link discovery
+- Protect capture probes from source-overridden JavaScript built-ins
+
+## [0.33.98] - 2026-11-03
+
+### Changed
+- regenerate plugin bundles
+- Recover incomplete source TLS chains through bounded AIA discovery
+
 ## [0.33.97] - 2026-11-03
 
 ### Changed
