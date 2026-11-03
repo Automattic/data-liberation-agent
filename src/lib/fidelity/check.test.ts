@@ -18,6 +18,7 @@ import {
 	routeSourceMap,
 } from './check.js';
 import type { LayoutObservation } from './score.js';
+import { createReferenceCollector } from './reference.js';
 // This suite exercises the retained live drift diagnostic; frozen stages have real-browser coverage in reference.test.ts.
 const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
 
@@ -610,6 +611,80 @@ describe.skipIf( skipBrowserTests )( 'comparison screenshot transaction', () => 
 				expect( [ ...png.data.subarray( offset, offset + 3 ) ] ).toEqual( [ 0x12, 0x34, 0x56 ] );
 			}
 		} finally {
+			server.closeAllConnections();
+			await new Promise<void>( resolve => server.close( () => resolve() ) );
+		}
+	}, 90_000 );
+} );
+
+describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', () => {
+	it.each( [
+		{ declared: true, extraRequest: false },
+		{ declared: false, extraRequest: false },
+		{ declared: true, extraRequest: true },
+	] )( 'source declaration: $declared, unrelated request: $extraRequest', async ( { declared, extraRequest } ) => {
+		const html = ( body: string, declaration = '' ) => `<!doctype html><html ${ declaration }><head><meta charset="utf-8"><title>Emoji</title></head><body><main>${ body }</main></body></html>`;
+		const sourceHtml = html( 'Hello 😉', declared ? 'data-blocks-engine-capture-runtime-emoji="wordpress"' : '' );
+		// Simulate core's runtime replacing the authored text, rather than
+		// starting with an image-only document. No WordPress/network script needed.
+		const candidateHtml = html( `Hello 😉<script>
+			const main = document.querySelector('main');
+			main.firstChild.replaceWith(document.createTextNode('Hello '));
+			const img = document.createElement('img');
+			img.className = 'emoji';
+			img.draggable = false;
+			img.setAttribute('role', 'img');
+			img.alt = '😉';
+			img.src = 'https://s.w.org/images/core/emoji/17.0.2/svg/1f609.svg';
+			main.insertBefore(img, main.querySelector('script'));
+			// A non-image request to the very same URL must not inherit the
+			// emoji exemption merely because its host/path match an emoji image.
+			${ extraRequest ? "fetch(img.src).catch(() => {});" : '' }
+		</script>`, 'data-blocks-engine-capture-runtime-emoji="wordpress"' );
+		const server = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( sourceHtml );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		const candidate = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( candidateHtml ); } );
+		await new Promise<void>( resolve => candidate.listen( 0, '127.0.0.1', resolve ) );
+		const candidateUrl = `http://127.0.0.1:${ ( candidate.address() as { port: number } ).port }`;
+		const dir = liberatedRun();
+		writeFileSync( join( dir, 'capture-receipt.json' ), JSON.stringify( {
+			source: { url: `${ origin }/` }, websiteRoot: 'website', routes: [ { url: `${ origin }/`, path: 'website/index.html' } ],
+		} ) );
+		// The candidate declares support too: only the source may authorize it.
+		writeFileSync( join( dir, 'website', 'index.html' ), sourceHtml );
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			const collector = createReferenceCollector( dir, `${ origin }/`, [ `${ origin }/` ] );
+			const widths = [ 390, 768, 1440 ];
+			await collector.observe( page, `${ origin }/`, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: widths } );
+			collector.finalize( join( dir, 'capture-receipt.json' ) );
+			const report = await checkLiveFidelity( { directory: dir, candidateUrl, widths, settleMs: 0 } );
+			expect( report.pending ).toEqual( [] );
+			expect( report.scores ).toHaveLength( widths.length );
+			for ( const score of report.scores ) {
+				if ( declared ) {
+					expect( score.liberated.textChars ).toBe( score.source.textChars );
+					expect( score.failures.filter( failure => /text /.test( failure ) ) ).toEqual( [] );
+				} else {
+					expect( score.liberated.textChars ).toBeLessThan( score.source.textChars );
+				}
+				if ( ! declared || extraRequest ) {
+					expect( score.liberated.externalHosts ).toEqual( [ 's.w.org' ] );
+					expect( score.failures ).toContain( 'copy requested 1 external host(s): s.w.org' );
+				} else {
+					expect( score.liberated.externalHosts ).toEqual( [] );
+					expect( score.failures.filter( failure => /copy requested/.test( failure ) ) ).toEqual( [] );
+				}
+			}
+		} finally {
+			await browser.close();
+			candidate.closeAllConnections();
+			await new Promise<void>( resolve => candidate.close( () => resolve() ) );
 			server.closeAllConnections();
 			await new Promise<void>( resolve => server.close( () => resolve() ) );
 		}
