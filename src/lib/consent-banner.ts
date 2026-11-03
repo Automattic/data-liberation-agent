@@ -20,6 +20,7 @@ export interface ConsentBanner {
     span: 'full' | 'inset';
     edge_offset?: string;
     padding?: string;
+    gap?: string;
     font_family?: string;
     font_size?: string;
     line_height?: string;

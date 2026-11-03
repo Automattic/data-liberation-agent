@@ -1427,6 +1427,8 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     let content = accept.parentElement ?? root;
     while (content !== root && prose && !content.contains(prose)) content = content.parentElement ?? root;
     const contentStyle = getComputedStyle(content);
+    const rowGap = contentStyle.rowGap === 'normal' ? '0px' : contentStyle.rowGap;
+    const columnGap = contentStyle.columnGap === 'normal' ? '0px' : contentStyle.columnGap;
     const contentBounds = content.getBoundingClientRect();
     const controlBounds = accept.getBoundingClientRect();
     const start = contentBounds.left + parseFloat(contentStyle.borderLeftWidth) + parseFloat(contentStyle.paddingLeft);
@@ -1442,6 +1444,7 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       position,
       presentation: {
         span: Math.abs(bounds.width - innerWidth) <= 1 ? 'full' as const : 'inset' as const,
+        gap: rowGap === columnGap ? rowGap : `${rowGap} ${columnGap}`,
         ...(position === 'center' ? {} : { edge_offset: `${position === 'bottom' ? innerHeight - bounds.bottom : bounds.top}px` }),
         ...cssValues({ padding: style.padding, font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight, text_margin: typography.margin }),
         layout: [{ min_width: viewportWidth, max_width: viewportWidth, direction,

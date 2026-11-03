@@ -46,20 +46,25 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
   ]);
 });
 
-// One Chromium session (~1 second) covers border omission and margin-only bisection.
+// One Chromium session (~1 second) covers border omission, gaps and margin-only bisection.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async () => {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 768, height: 900 } });
     const fixture = readFileSync(new URL('./fixtures/consent-banner.html', import.meta.url), 'utf8');
-    for (const border of ['none', '0px solid red']) {
+    for (const [border, gap, expectedGap] of [
+      ['none', 'normal', '0px'],
+      ['0px solid red', '8px', '8px'],
+      ['none', 'normal 8px', '0px 8px'],
+    ]) {
       await page.setContent(fixture.replace('</style>', `
-        .cc-window { flex-direction:row; align-items:center }
+        .cc-window { flex-direction:row; align-items:center; gap:${gap} }
         .cc-window button { border:${border}; align-self:auto !important }
       </style>`));
       const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 390, height: 844 }] });
       const presentation = dismissed.find(item => item.consentBanner)?.consentBanner?.presentation;
+      expect(presentation?.gap).toBe(expectedGap);
       expect(presentation?.button).toBeDefined();
       for (const field of ['border_width', 'border_style', 'border_color']) {
         expect(presentation?.button).not.toHaveProperty(field);
@@ -101,7 +106,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
       policy_link: { label: 'Privacy policy', href: `${url}privacy` }, position: 'bottom',
       colors: { background: 'rgb(34, 34, 34)', text: 'rgb(255, 255, 255)', button_background: 'rgb(153, 153, 153)', button_text: 'rgb(255, 255, 255)' },
       presentation: {
-        span: 'full', edge_offset: '0px', padding: '12px',
+        span: 'full', edge_offset: '0px', padding: '12px', gap: '8px',
         font_family: 'Calibri, sans-serif', font_size: '15px', line_height: '18px', text_margin: '0px 15px 0px 0px',
         layout: [
           { max_width: 414, direction: 'column', align_items: 'stretch', button_align: 'end', text_margin: '0px 0px 15px' },
