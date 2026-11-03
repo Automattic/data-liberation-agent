@@ -1419,6 +1419,8 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     );
     const buttonPresentation = cssValues({
       border_radius: button.borderRadius, padding: button.padding,
+      ...(button.borderStyle !== 'none' && button.borderWidth.split(/\s+/).some(width => parseFloat(width) > 0)
+        ? { border_width: button.borderWidth, border_style: button.borderStyle, border_color: button.borderColor } : {}),
       font_size: button.fontSize, font_family: button.fontFamily, line_height: button.lineHeight,
     });
     // Use the common content container when controls are nested in a wrapper.
@@ -1443,7 +1445,7 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
         ...(position === 'center' ? {} : { edge_offset: `${position === 'bottom' ? innerHeight - bounds.bottom : bounds.top}px` }),
         ...cssValues({ padding: style.padding, font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight, text_margin: typography.margin }),
         layout: [{ min_width: viewportWidth, max_width: viewportWidth, direction,
-          ...cssValues({ align_items: contentStyle.alignItems }),
+          ...cssValues({ align_items: contentStyle.alignItems, text_margin: typography.margin }),
           ...(buttonAlign ? { button_align: buttonAlign } : {}),
         }],
         ...(Object.keys(buttonPresentation).length ? { button: buttonPresentation } : {}),
@@ -1482,7 +1484,8 @@ export async function dismissOverlays(
           let resizes = 0;
           const layouts = consentBanner.presentation.layout ?? [];
           const same = (a: typeof layouts[number], b: typeof layouts[number]) =>
-            a.direction === b.direction && a.align_items === b.align_items && a.button_align === b.button_align;
+            a.direction === b.direction && a.align_items === b.align_items && a.button_align === b.button_align
+            && a.text_margin === b.text_margin;
           const sampleAt = async (viewport: { width: number; height: number }) => {
             if (resizes >= 32 || Date.now() >= deadline) return undefined;
             resizes++;

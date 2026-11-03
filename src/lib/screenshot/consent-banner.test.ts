@@ -5,6 +5,7 @@ import { expect, it } from 'vitest';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { mergeConsentLayouts } from '../consent-banner-layout.js';
+import { dismissOverlays } from './page-helpers.js';
 
 it('opens outer bounds and merges only adjacent identical observations in viewport order', () => {
   expect(mergeConsentLayouts([
@@ -31,6 +32,46 @@ it('opens outer bounds and merges only adjacent identical observations in viewpo
     { min_width: 415, direction: 'row' },
     { min_width: 1440, max_width: 1440, direction: 'row' },
   ])).toEqual([{ max_width: 414, direction: 'column' }, { min_width: 415, direction: 'row' }]);
+});
+
+it('keeps otherwise identical layouts distinct when message margins differ', () => {
+  expect(mergeConsentLayouts([
+    { min_width: 390, max_width: 390, direction: 'row', text_margin: '0px 0px 15px' },
+    { min_width: 414, max_width: 414, direction: 'row', text_margin: '0px 0px 15px' },
+    { min_width: 415, max_width: 415, direction: 'row', text_margin: '0px 15px 0px 0px' },
+    { min_width: 1440, max_width: 1440, direction: 'row', text_margin: '0px 15px 0px 0px' },
+  ])).toEqual([
+    { max_width: 414, direction: 'row', text_margin: '0px 0px 15px' },
+    { min_width: 415, direction: 'row', text_margin: '0px 15px 0px 0px' },
+  ]);
+});
+
+// One Chromium session (~1 second) covers border omission and margin-only bisection.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 768, height: 900 } });
+    const fixture = readFileSync(new URL('./fixtures/consent-banner.html', import.meta.url), 'utf8');
+    for (const border of ['none', '0px solid red']) {
+      await page.setContent(fixture.replace('</style>', `
+        .cc-window { flex-direction:row; align-items:center }
+        .cc-window button { border:${border}; align-self:auto !important }
+      </style>`));
+      const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 390, height: 844 }] });
+      const presentation = dismissed.find(item => item.consentBanner)?.consentBanner?.presentation;
+      expect(presentation?.button).toBeDefined();
+      for (const field of ['border_width', 'border_style', 'border_color']) {
+        expect(presentation?.button).not.toHaveProperty(field);
+      }
+      expect(presentation?.layout).toEqual([
+        { max_width: 414, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 0px 15px' },
+        { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px' },
+      ]);
+    }
+  } finally {
+    await browser.close();
+  }
 });
 
 // One real capture/export pass (~15 seconds), no mocked browser or export seams.
@@ -63,10 +104,10 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
         span: 'full', edge_offset: '0px', padding: '12px',
         font_family: 'Calibri, sans-serif', font_size: '15px', line_height: '18px', text_margin: '0px 15px 0px 0px',
         layout: [
-          { max_width: 414, direction: 'column', align_items: 'stretch', button_align: 'end' },
-          { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end' },
+          { max_width: 414, direction: 'column', align_items: 'stretch', button_align: 'end', text_margin: '0px 0px 15px' },
+          { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px' },
         ],
-        button: { border_radius: '5px', padding: '8px 40px', font_size: '13.5px', font_family: 'Calibri, sans-serif', line_height: '16.2px' },
+        button: { border_radius: '5px', border_width: '2px', border_style: 'solid', border_color: 'rgb(255, 255, 255)', padding: '8px 40px', font_size: '13.5px', font_family: 'Calibri, sans-serif', line_height: '16.2px' },
       },
       source_selector: 'div.cc-window.cc-banner',
     });
