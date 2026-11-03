@@ -19,6 +19,7 @@ import {
 } from './check.js';
 import type { LayoutObservation } from './score.js';
 import { createReferenceCollector } from './reference.js';
+import { restoreRuntimeEmoji } from '../screenshot/runtime-emoji.js';
 // This suite exercises the retained live drift diagnostic; frozen stages have real-browser coverage in reference.test.ts.
 const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
 
@@ -624,7 +625,7 @@ describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', (
 		{ declared: true, extraRequest: true },
 	] )( 'source declaration: $declared, unrelated request: $extraRequest', async ( { declared, extraRequest } ) => {
 		const html = ( body: string, declaration = '' ) => `<!doctype html><html ${ declaration }><head><meta charset="utf-8"><title>Emoji</title></head><body><main>${ body }</main></body></html>`;
-		const sourceHtml = html( 'Hello 😉', declared ? 'data-blocks-engine-capture-runtime-emoji="wordpress"' : '' );
+		const sourceHtml = html( `Hello 😉${ declared ? '<script>window._wpemojiSettings = {};</script>' : '' }` );
 		// Simulate core's runtime replacing the authored text, rather than
 		// starting with an image-only document. No WordPress/network script needed.
 		const candidateHtml = html( `Hello 😉<script>
@@ -654,15 +655,25 @@ describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', (
 		writeFileSync( join( dir, 'capture-receipt.json' ), JSON.stringify( {
 			source: { url: `${ origin }/` }, websiteRoot: 'website', routes: [ { url: `${ origin }/`, path: 'website/index.html' } ],
 		} ) );
-		// The candidate declares support too: only the source may authorize it.
-		writeFileSync( join( dir, 'website', 'index.html' ), sourceHtml );
+		// The candidate declares support too: only the captured website may authorize it.
+		// Build that document through capture's runtime normalization, not authored markup.
 		const browser = await chromium.launch();
 		try {
 			const page = await browser.newPage();
+			await page.goto( `${ origin }/` );
+			expect( await page.getAttribute( 'html', 'data-blocks-engine-capture-runtime-emoji' ) ).toBeNull();
+			await restoreRuntimeEmoji( page );
+			expect( await page.getAttribute( 'html', 'data-blocks-engine-capture-runtime-emoji' ) ).toBe( declared ? 'wordpress' : null );
+			writeFileSync( join( dir, 'website', 'index.html' ), await page.content() );
 			const collector = createReferenceCollector( dir, `${ origin }/`, [ `${ origin }/` ] );
 			const widths = [ 390, 768, 1440 ];
 			await collector.observe( page, `${ origin }/`, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: widths } );
 			collector.finalize( join( dir, 'capture-receipt.json' ) );
+			// Existing captures have raw reference HTML without the capture-owned declaration.
+			const reference = JSON.parse( readFileSync( join( dir, 'fidelity-reference.json' ), 'utf8' ) );
+			for ( const entry of reference.entries ) {
+				expect( readFileSync( join( dir, entry.document.path ), 'utf8' ) ).not.toContain( 'data-blocks-engine-capture-runtime-emoji' );
+			}
 			const report = await checkLiveFidelity( { directory: dir, candidateUrl, widths, settleMs: 0 } );
 			expect( report.pending ).toEqual( [] );
 			expect( report.scores ).toHaveLength( widths.length );
