@@ -1793,8 +1793,11 @@ function buildExportCapture(
 		// Inventory aliases describe one picture, not necessarily one file. Keep
 		// independently captured srcset bytes instead of rewriting every alias to
 		// the verified representative (notably same-path ?width=N CDN URLs).
+		// A distinct resolved original (for example a lightbox original or a
+		// de-proxied image) remains authoritative for every alias in its family.
 		const capturedRenditions: MediaCandidate[] = [];
-		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) ) {
+		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) &&
+			imageAsset.original && imageAsset.rendition_widths?.[ imageAsset.original.source_url ] !== undefined ) {
 			for ( const url of imageAsset.source_urls ) {
 				if ( url === candidate.sourceUrl || exclusions.renditions.has( url ) || exclusions.assets.has( url ) ) continue;
 				const resource = resourceManifest.resources[ url ];
