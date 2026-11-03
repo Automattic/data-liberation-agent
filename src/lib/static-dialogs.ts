@@ -662,13 +662,20 @@ function findTriggers(
 	$: cheerio.CheerioAPI,
 	trigger: CapturedDialogInteraction[ 'trigger' ]
 ) {
+	const label = ( trigger.label ?? '' ).replace( /\s+/g, ' ' ).trim().toLowerCase();
+	// Responsive documents and runtime ID counters can repeat an ID or path
+	// on unrelated controls. Several matches keep only the observed label.
+	const labelled = ( matches: cheerio.Cheerio< AnyNode > ) => {
+		if ( matches.length < 2 || ! label ) return matches;
+		const named = matches.filter( ( _, element ) => normalizedText( $( element ).attr( 'aria-label' ) || $( element ).text() ).toLowerCase() === label );
+		return named.length ? named : matches;
+	};
 	if ( trigger.id ) {
 		const byId = $( `#${ cssEscape( trigger.id ) }` );
-		if ( byId.length ) return byId;
+		if ( byId.length ) return labelled( byId );
 	}
 	const bySelector = selectByCapturedSelector( $, trigger.selector, trigger.tag );
-	if ( bySelector.length ) return bySelector;
-	const label = ( trigger.label ?? '' ).replace( /\s+/g, ' ' ).trim().toLowerCase();
+	if ( bySelector.length ) return labelled( bySelector );
 	if ( ! label ) return $( [] );
 	return $( 'button,summary,a,[role="button"]' ).filter( ( _, element ) => {
 		if ( trigger.tag && element.tagName !== trigger.tag ) return false;
