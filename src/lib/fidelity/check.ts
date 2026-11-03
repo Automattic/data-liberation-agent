@@ -10,6 +10,7 @@ import type { Page } from 'playwright';
 import { mapPool } from '../concurrency.js';
 import { resolveInteractionComponents, type ComponentPage } from '../captured-interactions.js';
 import * as cheerio from 'cheerio';
+import { restoreRuntimeEmoji, RUNTIME_EMOJI_PREDICATE_SOURCE } from '../screenshot/runtime-emoji.js';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { load } from 'cheerio';
@@ -328,16 +329,16 @@ export async function observePage(
 	/** Observe the already-cleaned capture session without navigation or interaction probes. */
 	captureSession = false,
 	/** Skip scroll probes for frozen baseline observations; drift observations keep them enabled. */
-	skipScrollProbe = false
+	skipScrollProbe = false,
+	measurement: { runtimeEmoji?: boolean; navigate?: boolean } = {}
 ): Promise< LayoutObservation > {
-	const external = new Set< string >();
-	const onRequest = ( request: { url: () => string } ): void => {
-		const host = externalRequestHost( request.url(), localOrigin );
-		if ( host ) external.add( host );
+	const requests: Array<{ url: string; image: boolean }> = [];
+	const onRequest = ( request: { url: () => string; resourceType: () => string } ): void => {
+		requests.push( { url: request.url(), image: request.resourceType() === 'image' } );
 	};
 	page.on( 'request', onRequest );
 	try {
-		if ( ! captureSession ) {
+		if ( measurement.navigate ?? ! captureSession ) {
 			await page.addInitScript( observeViewportEntrances );
 			const response = await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
@@ -366,6 +367,23 @@ export async function observePage(
 		// Drift observations keep the controlled sweep for lazy content/motion.
 		const sweepInterruption = skipScrollProbe ? null : await triggerLazyLoad( page, false, { expandContent: !captureSession } );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
+		// Capture serializes core emoji replacements as text. Measure the same
+		// canonical DOM here or a faithful WordPress runtime loses textChars and
+		// gains an external host solely by restoring the source's emoji images.
+		// Only the source declaration authorizes canonicalization. A candidate
+		// cannot exempt its own network traffic by declaring runtime support.
+		const emojiUrls = new Set<string>();
+		if ( measurement.runtimeEmoji ) {
+			const urls = await page.evaluate( ( { factorySrc } ) => {
+				const matches = new Function( 'return (' + factorySrc + ')' )()();
+				return Array.from( document.querySelectorAll<HTMLImageElement>( 'img.emoji' ) ).filter( img => matches( {
+					className: img.className, draggable: img.getAttribute( 'draggable' ), role: img.getAttribute( 'role' ),
+					alt: img.getAttribute( 'alt' ), src: img.getAttribute( 'src' ),
+				} ) ).map( img => img.src );
+			}, RUNTIME_EMOJI_PREDICATE_SOURCE );
+			for ( const url of urls ) emojiUrls.add( url );
+			await restoreRuntimeEmoji( page );
+		}
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
 		await onBaseline?.();
@@ -933,7 +951,8 @@ export async function observePage(
 			entranceLosses: measured.entranceLosses,
 			docWidth: measured.docWidth,
 			overflow: measured.overflow,
-			externalHosts: [ ...external ].sort(),
+			externalHosts: [ ...new Set( requests.filter( request => ! ( request.image && emojiUrls.has( request.url ) ) )
+				.map( request => externalRequestHost( request.url, localOrigin ) ).filter( ( host ): host is string => host !== null ) ) ].sort(),
 			hashTargets: measured.hashTargets as HashTarget[],
 			internalRoutes,
 			dialogs,
@@ -1185,6 +1204,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			let liberatedPng: Buffer | undefined;
 			const source = await observePage( page, sourceHref, viewport, Math.max( settleMs, sourceSettleMs ), null, receipt.cleanup?.policy,
 				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
+			const runtimeEmoji = await page.evaluate( () => document.documentElement.getAttribute( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress' );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
 				cleanupSink.push(report);
@@ -1201,7 +1221,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				// policy what it would still remove. Removing it first would hide
 				// exactly what is being measured.
 				const liberated = await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin, undefined,
-					options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined );
+					options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined, false, false, { runtimeEmoji } );
 				const candidateRetained = receipt.cleanup
 					? ( await applySourceCleanup( page, receipt.cleanup.policy ) ).removed
 					: 0;
@@ -1214,7 +1234,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				settleMs,
 				new URL( localHref ).origin,
 				receipt.cleanup?.policy,
-				options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined
+				options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined,
+				false, false, { runtimeEmoji }
 			);
 			if (receipt.cleanup) {
 				const candidateCleanup = await readSourceCleanup(page);
@@ -1605,13 +1626,12 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					let source = frozen.observation;
 					let sourcePng = frozen.png;
 					const deviceSelected = receipt.routes?.some( row => row.url === sources.get( route ) && row.documentSelection?.kind === 'device' );
-					const sourceDocument = deviceSelected && entry.viewportMeta === undefined ? cheerio.load( readReferenceArtifact( directory, entry.document! ).toString() ) : undefined;
+					const sourceDocument = cheerio.load( readReferenceArtifact( directory, entry.document! ).toString() );
+					const runtimeEmoji = sourceDocument( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress';
 					let sourceViewport = entry.viewportMeta ?? sourceDocument?.( 'meta[name="viewport"]' ).attr( 'content' );
 					const readViewport = () => page.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
-						const response = await page.goto( url, { waitUntil: 'domcontentloaded' } );
-						if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }` );
-						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, false );
+						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, false, { runtimeEmoji, navigate: true } );
 					};
 					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await captureViewportScreenshot( page ); sourceViewport = await readViewport(); }
 					const liberated = await measure( candidate );
