@@ -1404,12 +1404,31 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const bounds = root.getBoundingClientRect();
     const style = getComputedStyle(root);
     const button = getComputedStyle(accept);
+    const position = bounds.top <= innerHeight * .1 ? 'top' as const : bounds.bottom >= innerHeight * .9 ? 'bottom' as const : 'center' as const;
+    // Prefer an element's own prose over wrappers or text inside controls.
+    const prose = originals.find(node => visible(node)
+      && !node.closest('button, [role="button"], input, a, script, style')
+      && Array.from(node.childNodes).some(child => child.nodeType === Node.TEXT_NODE && child.textContent?.trim()));
+    const typography = getComputedStyle(prose ?? root);
+    const cssValues = (values: Record<string, string>) => Object.fromEntries(
+      Object.entries(values).filter(([, value]) => value.trim() && value !== 'normal'),
+    );
+    const buttonPresentation = cssValues({
+      border_radius: button.borderRadius, padding: button.padding,
+      font_size: button.fontSize, font_family: button.fontFamily,
+    });
     return {
       schema: 'static-site-importer/consent-banner/v1' as const,
       text, accept_label: label(accept),
       ...(reject ? { reject_label: label(reject) } : {}),
       ...(policy ? { policy_link: { label: label(policy), href: policy.href } } : {}),
-      position: bounds.top <= innerHeight * .1 ? 'top' as const : bounds.bottom >= innerHeight * .9 ? 'bottom' as const : 'center' as const,
+      position,
+      presentation: {
+        span: Math.abs(bounds.width - innerWidth) <= 1 ? 'full' as const : 'inset' as const,
+        ...(position === 'center' ? {} : { edge_offset: `${position === 'bottom' ? innerHeight - bounds.bottom : bounds.top}px` }),
+        ...cssValues({ padding: style.padding, font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight }),
+        ...(Object.keys(buttonPresentation).length ? { button: buttonPresentation } : {}),
+      },
       colors: { background: style.backgroundColor, text: style.color, button_background: button.backgroundColor, button_text: button.color },
       source_selector: selector,
     };

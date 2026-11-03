@@ -29,6 +29,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
       text: 'This website uses cookies for analytics.', accept_label: 'Accept', reject_label: 'Reject',
       policy_link: { label: 'Privacy policy', href: `${url}privacy` }, position: 'bottom',
       colors: { background: 'rgb(34, 34, 34)', text: 'rgb(255, 255, 255)', button_background: 'rgb(153, 153, 153)', button_text: 'rgb(255, 255, 255)' },
+      presentation: {
+        span: 'full', edge_offset: '0px', padding: '12px',
+        font_family: 'Calibri, sans-serif', font_size: '15px', line_height: '18px',
+        button: { border_radius: '5px', padding: '8px 40px', font_size: '13.5px', font_family: 'Calibri, sans-serif' },
+      },
       source_selector: 'div.cc-window.cc-banner',
     });
     for (const route of ['index.html', 'other/index.html']) {

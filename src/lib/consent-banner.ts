@@ -7,5 +7,14 @@ export interface ConsentBanner {
   policy_link?: { label: string; href: string };
   position?: 'top' | 'bottom' | 'center';
   colors?: { background: string; text: string; button_background: string; button_text: string };
+  presentation?: {
+    span: 'full' | 'inset';
+    edge_offset?: string;
+    padding?: string;
+    font_family?: string;
+    font_size?: string;
+    line_height?: string;
+    button?: { border_radius?: string; padding?: string; font_size?: string; font_family?: string };
+  };
   source_selector?: string;
 }
