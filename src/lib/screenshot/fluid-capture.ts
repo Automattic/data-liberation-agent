@@ -120,7 +120,7 @@ export interface FluidLearningResult {
  *
  * This is the resolution the default sweep can reach, not what it samples:
  * see COARSE_SWEEP_WIDTHS and refinementWidths. */
-export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
+export const DEFAULT_SWEEP_WIDTHS = [ 320, 360, 390, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
 
 /**
  * Widths every varying default sweep samples; the ladder refines between them.
@@ -510,6 +510,16 @@ async function learnFluidGeometry(
 			reused = memo && reuseSweptSeries( observations, memoKey, memo );
 			if ( ! reused ) {
 				for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
+				// Runtime-fitted phone text can have an offset as well as a slope.
+				// Observe below 390 rather than extrapolating from a capped 600px value.
+				const phoneSeries = [ ...refinementSeries( observations, await perpetual() ), ...await runtimeSheetSeries( page, sampledWidths ) ];
+				if ( phoneSeries.some( series => {
+					const phone = series.find( sample => sample.viewport === 390 );
+					const large = series.find( sample => sample.viewport === 600 );
+					return phone && large && phone.value !== large.value;
+				} ) ) {
+					for ( const width of [ 320, 360 ] ) await sample( width );
+				}
 				// Refine only intervals some series leaves unexplained.
 				for ( ;; ) {
 					const series = refinementSeries( observations, await perpetual() );

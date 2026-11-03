@@ -86,7 +86,7 @@ describe( 'runtime-written stylesheet offsets', () => {
 		expect( full.rules.join( '\n' ) ).toContain( '(min-width:783px)' );
 		expect( adaptive.rules ).toEqual( full.rules );
 		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
-		expect( adaptive.result.sampledWidths ).toEqual( [ 390, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
+		expect( adaptive.result.sampledWidths ).toEqual( [ 320, 360, 390, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
 	}, 60_000 );
 
 	it( 'stops after the probes when inline geometry and observed runtime sheets are constant', async () => {

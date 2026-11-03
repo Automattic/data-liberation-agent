@@ -63,6 +63,73 @@ function fits( samples: readonly GeometrySample[], predict: ( viewport: number )
  * invent responsiveness the source never had.
  */
 export function learnFluidModel( samples: readonly GeometrySample[] ): FluidModel {
+	const model = learnContinuousModel( samples );
+	const ordered = samples.filter( sample => Number.isFinite( sample.value ) && Number.isFinite( sample.viewport ) )
+		.sort( ( a, b ) => a.viewport - b.viewport );
+	if ( ordered.length < MIN_SAMPLES || ! ordered.every( sample => Number.isInteger( sample.value ) ) ||
+		new Set( ordered.map( sample => sample.value ) ).size < MIN_SAMPLES ) return model;
+
+	// Exact continuous geometry is not evidence of quantization. Integer steps
+	// become observable when the continuous prediction misses whole pixels.
+	if ( model.kind !== 'breakpoint' && model.kind !== 'constant' &&
+		ordered.every( sample => sample.value === predictContinuous( model, sample ) ) ) return model;
+
+	const quantized = quantizedAffine( ordered );
+	if ( quantized ) return quantized;
+	if ( model.kind === 'breakpoint' || model.kind === 'constant' ) return model;
+	return { ...model, css: `round(down, ${ model.css }, 1px)` };
+}
+
+function predictContinuous( model: Exclude< FluidModel, { kind: 'breakpoint' } >, sample: GeometrySample ): number {
+	switch ( model.kind ) {
+		case 'constant': return model.value;
+		case 'container': return model.ratio * ( sample.container ?? NaN );
+		case 'proportional': return model.ratio * sample.viewport;
+		case 'floored': return Math.max( model.floor, model.ratio * sample.viewport );
+		case 'capped': return Math.min( model.cap, model.ratio * sample.viewport );
+		case 'affine': return model.slope * sample.viewport + model.intercept;
+	}
+}
+
+/** Find a line inside the one-pixel observation bands, not through their edges. */
+function quantizedAffine( samples: readonly GeometrySample[] ): FluidModel | null {
+	const min = Math.min( ...samples.map( sample => sample.value ) );
+	const max = Math.max( ...samples.map( sample => sample.value ) );
+	for ( const bounded of [ false, true ] ) {
+		const interior = samples.filter( sample => ! bounded || ( sample.value !== min && sample.value !== max ) );
+		if ( interior.length < MIN_SAMPLES ) continue;
+		// Each pair constrains the slope of a line intersecting both bands.
+		let low = 0;
+		let high = Infinity;
+		for ( const a of interior ) for ( const b of interior ) {
+			if ( b.viewport <= a.viewport ) continue;
+			low = Math.max( low, ( b.value - a.value - 1 ) / ( b.viewport - a.viewport ) );
+			high = Math.min( high, ( b.value - a.value + 1 ) / ( b.viewport - a.viewport ) );
+		}
+		if ( ! Number.isFinite( high ) || high <= low ) continue;
+		const slope = round( ( low + high ) / 2, 6 );
+		let lower = -Infinity;
+		let upper = Infinity;
+		for ( const sample of samples ) {
+			if ( ! bounded || sample.value !== min ) lower = Math.max( lower, sample.value - slope * sample.viewport );
+			if ( ! bounded || sample.value !== max ) upper = Math.min( upper, sample.value + 1 - slope * sample.viewport );
+		}
+		if ( upper <= lower ) continue;
+		const intercept = round( ( lower + upper ) / 2, 6 );
+		if ( ! bounded && intercept < 0 ) continue;
+		const form = `calc(${ round( slope * 100, 4 ) }vw ${ intercept < 0 ? '-' : '+' } ${ Math.abs( intercept ) }px)`;
+		const stepped = `round(down, ${ form }, 1px)`;
+		const predict = ( viewport: number ) => {
+			const value = Math.floor( slope * viewport + intercept );
+			return bounded ? Math.min( max, Math.max( min, value ) ) : value;
+		};
+		if ( ! samples.every( sample => predict( sample.viewport ) === sample.value ) ) continue;
+		return { kind: 'affine', slope, intercept, css: bounded ? `clamp(${ min }px, ${ stepped }, ${ max }px)` : stepped };
+	}
+	return null;
+}
+
+function learnContinuousModel( samples: readonly GeometrySample[] ): FluidModel {
 	const usable = samples.filter( ( sample ) => Number.isFinite( sample.value ) && Number.isFinite( sample.viewport ) );
 	if ( usable.length < MIN_SAMPLES ) {
 		return { kind: 'breakpoint', samples: [ ...usable ] };
@@ -423,7 +490,7 @@ export function learnSegmentedFluidModel(
 		const narrow = viewportModelForRun( usable.slice( 0, split ), options.holdNarrowForBoundedAffine );
 		const wide = usable.slice( split );
 		const line = leastSquaresLine( wide );
-		if ( ( narrow === null && ! options.holdNarrowForBoundedAffine ) || viewportModelForRun( wide ) !== null || line === null ||
+		if ( ( narrow === null && ! options.holdNarrowForBoundedAffine ) || learnContinuousModel( wide ).kind !== 'breakpoint' || line === null ||
 			line.slope <= 0 || line.intercept >= -TOLERANCE_PX ||
 			line.slope * wide[ 0 ]!.viewport + line.intercept <= 0 ||
 			! fits( wide, ( viewport ) => line.slope * viewport + line.intercept ) ) continue;

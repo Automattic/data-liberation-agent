@@ -154,7 +154,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			// later round bisects the intervals some series leaves unexplained:
 			// the tablet-band switches and the font-size clamp past 1440. 767 and
 			// 1280 sit inside straight runs of every series and are skipped.
-			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 801, 1536, 783, 1840, 775, 791, 769, 799, 800 ];
+			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 320, 360, 801, 1536, 783, 1840, 775, 791, 769, 799, 800 ];
 			expect( widths ).toEqual( LADDER_ORDER );
 			expect( result.sampledWidths ).toEqual( [ ...LADDER_ORDER ].sort( ( a, b ) => a - b ) );
 			expect( measurements ).toHaveLength( LADDER_ORDER.length );
