@@ -297,6 +297,12 @@ export function materializePortableResources( options: PortableResourceOptions )
 			? stripExcludedRenditionReferences( originalHtml, entry.url, options.excludedRenditions )
 			: originalHtml;
 		for ( const dependency of dependencyReferences( html, entry.url, false, embeddedSources ) ) {
+			// A retrieved URL owns its bytes, even when media selection supplied
+			// a fallback for another rendition of the same picture.
+			if ( dependency.kind === 'media' && ! portablePathsBySource.has( dependency.url ) && resourceManifest.resources[ dependency.url ] && copyResource( dependency, entry.url ) ) {
+				mediaReplacements.set( dependency.reference, resourceReplacements.get( dependency.url )! );
+				continue;
+			}
 			const mediaReplacement = mediaReplacements.get( dependency.reference ) ?? mediaReplacements.get( dependency.url );
 			if (
 				mediaReplacement &&

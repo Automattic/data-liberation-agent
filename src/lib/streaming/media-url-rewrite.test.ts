@@ -87,7 +87,7 @@ describe('rewriteMediaUrls', () => {
     expect(onMissing).toHaveBeenCalledWith('https://cdn/unknown.jpg');
   });
 
-  it('rewrites Wix image variants that share the same media asset id', () => {
+  it('does not alias different transform URLs by media asset id', () => {
     const mapped =
       'https://static.wixstatic.com/media/e20b04_78c87aec087f40859a405e925d30d2f5~mv2.jpg/v1/fill/w_1280,h_663,fp_0.63_0.02,q_85,enc_avif,quality_auto/e20b04_78c87aec087f40859a405e925d30d2f5~mv2.jpg';
     const composed =
@@ -96,8 +96,8 @@ describe('rewriteMediaUrls', () => {
     const onMissing = vi.fn();
     const out = rewriteMediaUrls(html, new Map([[mapped, 'http://localhost:8881/wp-content/uploads/2026/04/hero.jpg']]), { onMissing });
 
-    expect(out).toBe('<img src="http://localhost:8881/wp-content/uploads/2026/04/hero.jpg">');
-    expect(onMissing).not.toHaveBeenCalled();
+    expect(out).toBe(html);
+    expect(onMissing).toHaveBeenCalledWith(composed);
   });
 
   it('does not warn for URLs that were successfully rewritten', () => {
@@ -134,6 +134,8 @@ describe('rewriteMediaUrls', () => {
     const fillUrl2x = `${base}/v1/fill/w_943,h_707,q_90,enc_avif,quality_auto/${hash}~mv2.png`;
     const html = `<picture><source srcset="${fillUrl1x} 1x, ${fillUrl2x} 2x" type="image/png"><img src="${fillUrl2x}"></picture>`;
 
+    map.set(fillUrl1x, localUrl);
+    map.set(fillUrl2x, localUrl);
     const out = rewriteMediaUrls(html, map);
 
     // Every occurrence of the source domain must be replaced
@@ -146,11 +148,9 @@ describe('rewriteMediaUrls', () => {
     expect(out).toContain(`src="${localUrl}"`);
   });
 
-  it('rewrites a transform <img src> when only the BASE url is mapped (no transform-tail mangle)', () => {
-    // installMediaForUrl stores the BASE wixstatic URL as the map key (that's the
-    // stub source). Carried blog/post <img> use the transform CDN path. The base
-    // key is a substring-prefix of the transform URL, so applying it first would
-    // leave `<local>.jpg/v1/fill/.../img.jpg` (a 404). Longest-source-first fixes it.
+  it('leaves a transform URL unchanged when only the base URL is mapped', () => {
+    // A base URL cannot identify the bytes retrieved for a transform URL.
+    // Nor may replacing its prefix leave a local URL with a transform tail.
     const hash = '670df9_94b496dd08804719b2be70c43165684f';
     const base = `https://static.wixstatic.com/media/${hash}~mv2.jpg`;
     const local = `http://localhost:8884/wp-content/uploads/2026/05/${hash}-mv2.jpg`;
@@ -160,9 +160,8 @@ describe('rewriteMediaUrls', () => {
 
     const out = rewriteMediaUrls(html, map);
 
-    expect(out).toBe(`<img src="${local}">`);
-    expect(out).not.toContain('static.wixstatic.com');
-    expect(out).not.toContain(`${local}/v1`); // no leftover transform tail
+    expect(out).toBe(html);
+    expect(out).not.toContain(`${local}/v1`);
   });
 
   it('rewrites a Wix srcset whose display filename contains parentheses (no `).png` mangle)', () => {
@@ -174,6 +173,8 @@ describe('rewriteMediaUrls', () => {
     const map = new Map([[base, local]]);
     const v1 = `${base}/v1/crop/x_0,y_167,w_500,h_160/fill/w_153,h_49,q_85,enc_avif,quality_auto/Cornelius%20Holmes%20(1).png`;
     const v2 = `${base}/v1/crop/x_0,y_167,w_500,h_160/fill/w_306,h_98,q_85,enc_avif,quality_auto/Cornelius%20Holmes%20(1).png`;
+    map.set(v1, local);
+    map.set(v2, local);
     const html = `<img srcset="${v1} 1x, ${v2} 2x" src="${v1}">`;
 
     const out = rewriteMediaUrls(html, map);
@@ -221,7 +222,7 @@ describe('rewriteMediaUrls', () => {
     const variant = `${base}/v1/fill/w_640,h_480,q_85,enc_avif,quality_auto/Happy%20Women's%20Day.jpg`;
     const html = `<img src="${variant}" srcset="${variant} 1x,\n${variant} 2x">`;
 
-    const out = rewriteMediaUrls(html, new Map([[base, local]]));
+    const out = rewriteMediaUrls(html, new Map([[variant, local]]));
 
     expect(out).toBe(`<img src="${local}" srcset="${local} 1x,\n${local} 2x">`);
     expect(out).not.toContain("Women's%20Day.jpg");
