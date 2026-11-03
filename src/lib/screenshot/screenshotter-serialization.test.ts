@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { capturePageHtml } from './screenshotter.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { load } from 'cheerio';
 
 describe('capturePageHtml stylesheet serialization', () => {
   let browser: Browser;
@@ -46,6 +47,19 @@ describe('capturePageHtml stylesheet serialization', () => {
     } finally {
       await source.close();
       await copy.close();
+    }
+  });
+
+  it('records a quirks-mode source on the captured root', async () => {
+    const page = await browser.newPage();
+    try {
+      for (const [doctype, expected] of [['<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">', 'BackCompat'], ['', 'BackCompat'], ['<!DOCTYPE html>', null]] as const) {
+        await page.setContent(`${doctype}<html><body><p><font size="-2">Line</font></p></body></html>`);
+        const root = load(await capturePageHtml(page))('html');
+        expect(root.attr('data-blocks-engine-capture-compat-mode') ?? null, doctype || 'no DOCTYPE').toBe(expected);
+      }
+    } finally {
+      await page.close();
     }
   });
 

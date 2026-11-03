@@ -560,6 +560,10 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				const findings = clean( document, snapshot );
 				portMaps( document, snapshot, iframeEvidenceAttributes, new Function( 'return (' + mapHostSource + ')' )() as typeof isGoogleMapHost );
 				flattenShadow();
+				// The copy is always serialized as a standards-mode document. A quirks-mode
+				// source laid out lines and tables under different rules, so record the
+				// mode the source rendered in for the transform to honor.
+				if ( document.compatMode === 'BackCompat' ) snapshot.setAttribute( 'data-blocks-engine-capture-compat-mode', 'BackCompat' );
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings };
 			} finally {
 				restoreParagraphDescendants();
