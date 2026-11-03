@@ -69,20 +69,20 @@ describe( 'wireCapturedDialogs', () => {
 		expect( panels ).toHaveLength( 2 );
 		expect( $( '.is-menu-open,.has-modal-open' ) ).toHaveLength( 0 );
 		panels.each( ( _, panel ) => expect( $( panel ).attr( 'style' ) ?? '' ).not.toMatch( /display|visibility/ ) );
-		expect( $( '.desktop #modal-2' ).text() ).toBe( 'desktop' );
-		expect( $( '.mobile #modal-2' ).text() ).toBe( 'mobile' );
+		expect( $( '.desktop [data-blocks-engine-capture-existing-panel]' ).text() ).toBe( 'desktop' );
+		expect( $( '.mobile [data-blocks-engine-capture-existing-panel]' ).text() ).toBe( 'mobile' );
 		const browser = await chromium.launch( { headless: true } );
 		try {
 			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
 			await page.setContent( portable );
 			const trigger = page.locator( '.mobile button' ).first();
 			for ( let repeat = 0; repeat < 2; repeat++ ) {
-				expect( await page.locator( '.mobile #modal-2 a' ).isVisible() ).toBe( false );
+				expect( await page.locator( '.mobile [data-blocks-engine-capture-existing-panel] a' ).isVisible() ).toBe( false );
 				await trigger.click();
-				expect( await page.locator( '.mobile #modal-2 a' ).isVisible() ).toBe( true );
-				expect( await page.locator( '.mobile #modal-2' ).textContent() ).toBe( 'Opened menu' );
+				expect( await page.locator( '.mobile [data-blocks-engine-capture-existing-panel] a' ).isVisible() ).toBe( true );
+				expect( await page.locator( '.mobile [data-blocks-engine-capture-existing-panel]' ).textContent() ).toBe( 'Opened menu' );
 				await page.keyboard.press( 'Escape' );
-				expect( await page.locator( '.mobile #modal-2' ).textContent() ).toBe( 'mobile' );
+				expect( await page.locator( '.mobile [data-blocks-engine-capture-existing-panel]' ).textContent() ).toBe( 'mobile' );
 				expect( await page.locator( '.is-menu-open,.has-modal-open' ).count() ).toBe( 0 );
 			}
 		} finally { await browser.close(); }
