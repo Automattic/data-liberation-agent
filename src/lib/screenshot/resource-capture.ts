@@ -524,13 +524,20 @@ export class CapturedResourceStore {
 		const original = page.viewportSize();
 		const browser = page.context().browser();
 		if ( ! original || ! browser ) return;
+		const scroll = await page.evaluate( () => ( { x: scrollX, y: scrollY } ) );
 		try {
 			for ( const width of [ 390, 768, 1440 ] ) {
 				await page.setViewportSize( { width, height: original.height } );
 				const fixture = await page.evaluate( async () => {
 					await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
 					const images = Array.from( document.querySelectorAll<HTMLImageElement>( 'img[srcset],picture img' ) );
-					return { base: document.baseURI, html: images.map( image => {
+					const html: string[] = [];
+					for ( const image of images ) {
+						// Lazy galleries may only lay out their small slots when visible.
+						// Measure in the source layout, not an offscreen placeholder or
+						// the detached probe's default intrinsic image dimensions.
+						image.scrollIntoView( { block: 'center', behavior: 'instant' } );
+						await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
 						const copy = image.cloneNode( false ) as HTMLImageElement;
 						for ( const attribute of Array.from( copy.attributes ) ) {
 							if ( attribute.name.startsWith( 'on' ) ) copy.removeAttribute( attribute.name );
@@ -542,8 +549,9 @@ export class CapturedResourceStore {
 							for ( const source of image.parentElement.querySelectorAll( 'source' ) ) picture.append( source.cloneNode( true ) );
 						}
 						picture.append( copy );
-						return picture.outerHTML;
-					} ).join( '' ) };
+						html.push( picture.outerHTML );
+					}
+					return { base: document.baseURI, html: html.join( '' ) };
 				} );
 				if ( ! fixture.html ) break;
 				const context = await browser.newContext( {
@@ -564,7 +572,10 @@ export class CapturedResourceStore {
 					await this.settle( probe );
 				} finally { await context.close(); }
 			}
-		} finally { await page.setViewportSize( original ); }
+		} finally {
+			await page.setViewportSize( original );
+			await page.evaluate( position => window.scrollTo( { left: position.x, top: position.y, behavior: 'instant' } ), scroll );
+		}
 	}
 
 	async settle( page: Page ): Promise< void > {
