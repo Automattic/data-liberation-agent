@@ -8,7 +8,7 @@ import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { anchorChromeStates, readChromeLandmarks, reuseSharedChrome, rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
-import type { CapturedDialogInteraction } from './interaction-capture.js';
+import type { CapturedDialogInteraction, InteractionStatesReport } from './interaction-capture.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -250,6 +250,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 
 	it( 'exports the reused menu and dialog working on the route that did not probe them', async () => {
 		exportWebsiteCapture( { outputDir, sourceUrl: url( '' ), platform: 'neutral', summary: {}, failures: [] } );
+		const report = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ) as { pages: InteractionStatesReport[] };
+		const about = report.pages.find( page => page.sourceUrl === url( 'about' ) )!;
+		expect( about.components!.some( node => node.kind === 'tabs' ) ).toBe( true );
+		expect( about.components!.flatMap( node => node.states ).some( state => state.evidence?.reusedFrom ) ).toBe( false );
+		const landing = report.pages.find( page => page.sourceUrl === url( 'landing' ) )!;
+		expect( landing.components!.some( node => node.kind === 'menu' ) ).toBe( true );
 		const site = await startStaticServer( join( outputDir, 'website' ) );
 		const browser = await chromium.launch();
 		try {
@@ -285,7 +291,7 @@ function mountedMenuPage( path: string ): string {
 body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;height:60px}
 .mobile-nav a{display:block}main{min-height:1400px}@media (min-width:768px){.toggle,.mobile-nav{display:none}}
 </style></head><body><header class="site-header"><a href="/">Brand</a><nav aria-label="Main"><a href="/">Home</a><a href="/privacy">Privacy</a></nav>
-<div class="actions"><button type="button" class="toggle" aria-expanded="false" aria-controls="mobile-nav"><span>Open menu</span></button></div></header>
+<div class="actions"><button id="menu-toggle" type="button" class="toggle" aria-expanded="false" aria-controls="mobile-nav"><span>Open menu</span></button></div></header>
 <main><h1>${ path || 'home' }</h1><p>Body copy for ${ path || 'home' }.</p></main><footer>Footer</footer><script>
 const header = document.querySelector('header'), toggle = document.querySelector('.toggle');
 toggle.addEventListener('click', () => {
@@ -307,7 +313,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
 			const path = new URL( request.url ?? '/', 'http://fixture' ).pathname.slice( 1 );
-			if ( ! [ '', 'privacy' ].includes( path ) ) {
+			if ( ! [ '', 'privacy', 'about' ].includes( path ) ) {
 				response.statusCode = 404;
 				response.end( 'not found' );
 				return;
@@ -319,7 +325,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
 		mkdirSync( parent, { recursive: true } );
 		outputDir = mkdtempSync( join( parent, 'shared-chrome-mounted-' ) );
-		const urls = [ url( '' ), url( 'privacy' ) ];
+		const urls = [ url( '' ), url( 'privacy' ), url( 'about' ) ];
 		await captureScreenshots( {
 			// The default profiles: the toggle only shows at phone width, which the
 			// reflow-only device probe reaches, as on a responsive source.
@@ -333,8 +339,22 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 		rmSync( outputDir, { recursive: true, force: true } );
 	} );
 
+	// Reuses the browser pass above; report assertions add no browser work.
+	it( 'records the shared toggle once on its source route, omitting chrome-only routes', () => {
+		const report = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) );
+		const components = report.pages.flatMap( ( page: InteractionStatesReport ) => page.components ?? [] );
+		console.info( 'shared-toggle fixture:', components.length, 'components,', Buffer.byteLength( JSON.stringify( report ) ), 'compact JSON bytes' );
+		expect( report.pages.map( ( page: InteractionStatesReport ) => page.sourceUrl ) ).toEqual( [ url( '' ) ] );
+		expect( components ).toHaveLength( 1 );
+		expect( components[ 0 ].states.some( ( state: { html: string } ) => state.html.includes( 'mobile-nav' ) ) ).toBe( true );
+		expect( report.totals.component_count ).toBe( components.length );
+		for ( const status of [ 'captured', 'unsupported', 'partial' ] ) {
+			expect( report.totals[ `component_${ status }_count` ] ).toBe( components.filter( ( node: { status: string } ) => node.status === status ).length );
+		}
+	} );
+
 	it( 'serializes the header of every route closed, annotated and identical', () => {
-		const headers = [ 'index.html', 'privacy/index.html' ].map( file => {
+		const headers = [ 'index.html', 'privacy/index.html', 'about/index.html' ].map( file => {
 			// Equal chrome may be exported once, as a part every route includes.
 			const html = readFileSync( join( outputDir, 'website', file ), 'utf8' )
 				.replace( /<!--#include virtual="([^"]+)" -->/g, ( _, part: string ) => readFileSync( join( outputDir, 'website', part ), 'utf8' ) );

@@ -411,7 +411,21 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const siteTitle = declaredSiteName( entrypointHtml ) ?? siteNameFromRouteTitles( options.title, routeHtml.map( html => html ? extractTitle( html ) : '' ) );
 	const excludedRoutes = input.routes.excluded;
 	const duplicateRoutes = input.routes.duplicates;
-	const interactionPages = input.states.interactions;
+	// Reuse evidence is still needed to wire each portable document, but the
+	// importer projects shared chrome from its owning route into a template part.
+	// Keep the entrypoint copy (also tagged reusedFrom by the one-time probe).
+	const interactionPages = input.states.interactions.map( page => {
+		const reused = page.states.filter( state => state.reusedFrom && state.reusedFrom !== page.sourceUrl );
+		// The popup probe omits first-child ordinals that the component snapshot
+		// includes. Both selectors address the same trigger in these paths.
+		const identity = ( selector: string ) => selector.replace( /:nth-of-type\(1\)/g, '' );
+		const selectors = new Set( reused.flatMap( state => [ state.trigger.selector, ...( state.trigger.id ? [ '#' + state.trigger.id ] : [] ) ] ).map( identity ) );
+		return {
+			...page,
+			states: page.states.filter( state => ! reused.includes( state ) ),
+			components: page.components?.filter( component => ! selectors.has( identity( component.selector ) ) ),
+		};
+	} );
 	const scrollStatesPages = input.states.scroll;
 	const { fluidReports, switchWidths } = input.layout;
 	const assetReferenceLocations = input.assets.references;
@@ -482,7 +496,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			`${ JSON.stringify( geometry.proof, null, 2 ) }\n`
 		);
 
-	const componentPages = interactionPages.map( ( { states, initialDialogs, ...page } ) => ( { ...page, components: routeComponents( { ...page, states, initialDialogs } ) } ) );
+	const componentPages = interactionPages.map( ( { states, initialDialogs, ...page } ) => ( { ...page, components: routeComponents( { ...page, states, initialDialogs } ) } ) ).filter( page => page.components.length > 0 );
 	const components = componentPages.flatMap( page => page.components );
 	const interactionStates = interactionPages.flatMap( ( page ) => page.states );
 	const initialDialogs = interactionPages.flatMap( ( page ) => page.initialDialogs ?? [] );
