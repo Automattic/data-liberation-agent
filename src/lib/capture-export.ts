@@ -1790,6 +1790,36 @@ function buildExportCapture(
 			renderedDimension: renderedMediaDimensions.get( family ),
 			dimension: imageAsset?.original ? Math.max( imageAsset.original.width ?? 0, imageAsset.original.height ?? 0 ) : mediaDimension( sourceUrl ),
 		};
+		// Inventory aliases describe one picture, not necessarily one file. Keep
+		// independently captured srcset bytes instead of rewriting every alias to
+		// the verified representative (notably same-path ?width=N CDN URLs).
+		// A distinct resolved original (for example a lightbox original or a
+		// de-proxied image) remains authoritative for every alias in its family.
+		const capturedRenditions: MediaCandidate[] = [];
+		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) &&
+			imageAsset.original && imageAsset.rendition_widths?.[ imageAsset.original.source_url ] !== undefined ) {
+			for ( const url of imageAsset.source_urls ) {
+				if ( url === candidate.sourceUrl || exclusions.renditions.has( url ) || exclusions.assets.has( url ) ) continue;
+				const resource = resourceManifest.resources[ url ];
+				if ( ! resource || ! resource.contentType.startsWith( 'image/' ) ) continue;
+				const path = resolve( outputDir, resource.path );
+				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) continue;
+				const hash = createHash( 'sha256' ).update( readFileSync( path ) ).digest( 'hex' );
+				if ( hash === imageAsset.original?.sha256 ) continue;
+				const renditionReferences = mediaReferences( url, options.sourceUrl );
+				const exact = renditionReferences.filter( reference => referenceIndex.indexed.has( reference ) && mediaReferenceMatched( referenceIndex, reference ) );
+				if ( ! exact.length ) continue;
+				const renditionBytes = statSync( path ).size;
+				if ( renditionBytes > maxFileBytes ) continue;
+				candidate.references = candidate.references.filter( reference => ! renditionReferences.includes( reference ) );
+				candidate.exactReferences = candidate.exactReferences.filter( reference => ! renditionReferences.includes( reference ) );
+				capturedRenditions.push( {
+					sourceUrl: url, localPath: path, references: renditionReferences, exactReferences: exact,
+					bytes: renditionBytes, dimension: imageAsset.rendition_widths?.[ url ] ?? mediaDimension( url ),
+					renderedDimension: candidate.renderedDimension,
+				} );
+			}
+		}
 		const smaller: MediaCandidate[] = ( imageAsset?.renditions ?? [] ).flatMap( rendition => {
 			if ( ! rendition.original || ! rendition.local_path || ! existsSync( rendition.local_path ) ) return [];
 			const renditionBytes = statSync( rendition.local_path ).size;
@@ -1801,7 +1831,7 @@ function buildExportCapture(
 				imageAsset: rendition,
 			} ];
 		} );
-		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate, ...smaller ] );
+		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate, ...capturedRenditions, ...smaller ] );
 	}
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
