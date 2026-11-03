@@ -1,5 +1,4 @@
-import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, resolvePageLink } from '../../lib/extraction/sitemap.js';
-import { documentRequestUrl } from '../../lib/url/route-key.js';
+import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, resolvePageLink, normalizeDiscoveredRoutes } from '../../lib/extraction/sitemap.js';
 import { extractNavLinks } from '../../lib/html-extract/index.js';
 import { extractSiteMetadata } from '../site-metadata.js';
 import { createSourcePage, sourceContextOptions, getPlaywright } from '../../lib/browser-kit/browser-kit.js';
@@ -66,13 +65,12 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
   const counts: Record<string, number> = {};
   const inventoryUrls: InventoryUrl[] = [];
   const discoveredUrls = new Set(sitemapUrls);
-  const knownRoutes = new Set(sitemapUrls.map(documentRequestUrl));
   const origin = new URL(normalized).origin;
   // A sitemap is not a complete route list: builders routinely omit legal and
   // CTA pages that are linked only from site chrome, which may be a plain
   // `div` rather than a <footer>. Merge the homepage's own same-origin links
-  // whatever the sitemap's size. Retain exact slash and query addresses until
-  // source navigation proves an alias; normalization is not that evidence.
+  // whatever the sitemap's size. Slash variants share discovery identity;
+  // preserve the first spelling and keep document query renditions distinct.
   for (const href of [
     ...navigation.map((link) => link.href),
     ...renderedUrls,
@@ -80,12 +78,9 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
   ]) {
     const pageUrl = resolvePageLink(href, normalized, origin);
     if (!pageUrl) continue;
-    const key = documentRequestUrl(pageUrl);
-    if (knownRoutes.has(key)) continue;
-    knownRoutes.add(key);
     discoveredUrls.add(pageUrl);
   }
-  for (const u of discoveredUrls) {
+  for (const u of await normalizeDiscoveredRoutes([...discoveredUrls])) {
     const type = classifyUrl(u);
     inventoryUrls.push({ url: u, type });
     counts[type] = (counts[type] || 0) + 1;

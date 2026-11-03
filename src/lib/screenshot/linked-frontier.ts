@@ -1,4 +1,4 @@
-import { documentRequestUrl } from '../url/route-key.js';
+import { documentRequestUrl, normalizedUrl } from '../url/route-key.js';
 import type { SiteRouteScope } from '../../platform/types.js';
 import { routeInScope, scopedRouteKey, validateRouteScope } from '../url/route-scope.js';
 import { ROUTE_OMITTED_BY_BUDGET, routeBudgetReason } from '../route-budget.js';
@@ -27,7 +27,7 @@ export interface LinkedPageCoverage {
 	aliasedTo?: CanonicalRouteAlias[];
 }
 
-/** Exact network addresses are deduped; aliases require observed source evidence. */
+/** Discovery dedupes slash variants while retaining the first request address. */
 export class LinkedFrontier {
 	readonly required = new Set<string>();
 	readonly depths = new Map<string, number>();
@@ -36,6 +36,7 @@ export class LinkedFrontier {
 	readonly diagnostics: FrontierDiagnostic[] = [];
 	readonly limits: Required<LinkedPageLimits>;
 	private readonly deadline: number;
+	private readonly routeIdentities = new Set<string>();
 	private readonly capturePageLimit?: number;
 
 	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope,
@@ -76,7 +77,7 @@ export class LinkedFrontier {
 			this.omit(url, 'non_document_url', 'URL identifies a non-document resource');
 			return false;
 		}
-		if (this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
+		if ((ownership !== 'alias' && this.routeIdentities.has(normalizedUrl(url))) || this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
 		this.required.add(url);
 		// The caller's route budget bounds every new route: adapter inventory and
 		// linked discovery alike. A proven redirect continues a route already
@@ -102,6 +103,7 @@ export class LinkedFrontier {
 			const row = this.diagnostics[i]!;
 			if (row.url === url && (row.code === 'linked_page_budget_exhausted' || row.code === ROUTE_OMITTED_BY_BUDGET)) this.diagnostics.splice(i, 1);
 		}
+		this.routeIdentities.add(normalizedUrl(url));
 		this.depths.set(url, depth);
 		return true;
 	}

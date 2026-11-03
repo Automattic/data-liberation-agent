@@ -31,7 +31,7 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 			const capture = await captureScreenshots( { urls: [ url, `${url}/`, `${origin}/`, `${origin}/other/` ], primaryUrl: url, outputDir, ...{ routeScope }, linkedPages: { maxPages: 8 }, concurrency: 1, settleMs: 0, learnFluid: false, observeSource: collector.observe } );
 			expect( capture.failed ).toBe( 0 );
 			expect( capture.captured ).toBe( 1 );
-			expect( capture.linkedPageCoverage?.requiredUrls ).toEqual( [ url, `${url}/`, `${url}/leave` ] );
+			expect( capture.linkedPageCoverage?.requiredUrls ).toEqual( [ url, `${url}/leave` ] );
 			expect( capture.linkedPageCoverage?.diagnostics ).toEqual( [] );
 			expect( requests ).toContain( '/shared/theme.css' );
 			for ( const external of [ '/', '/?utm_content=badge', '/other/', '/other/private?ref=tenant' ] ) expect( requests ).not.toContain( external );
@@ -42,7 +42,7 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 			expect( receipt.summary.complete ).toBe( true );
 			expect( receipt.discoveryDiagnostics ).toContainEqual( { code: 'route_external_redirect', url: `${url}/leave`,
 				reason: 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)' } );
-			expect( receipt.duplicateRoutes ).toContainEqual( { url: `${url}/`, canonicalUrl: url, path: 'website/index.html' } );
+			expect( receipt.duplicateRoutes ).toEqual( [] );
 			const portable = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
 			for ( const external of [ '/', '/?utm_content=badge', '/other/' ] ) expect( portable ).toContain( `href="${origin}${external}"` );
 			expect( portable ).not.toContain( 'Unrelated platform content' );
