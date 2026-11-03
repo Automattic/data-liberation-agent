@@ -1159,6 +1159,47 @@ describe( 'captureSelectableSetStates', () => {
 	);
 
 	it.skipIf( skipBrowser )(
+		'waits for delayed thumbnail selection before verifying choice replay and restoration',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><html><body>
+					<section>
+						<div id="thumbnails">
+							<button type="button" class="selected">Front</button>
+							<button type="button" class="">Back</button>
+							<button type="button" class="">Side</button>
+						</div>
+						<figure><img alt="Front" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><figcaption>Front</figcaption></figure>
+					</section>
+					<script>
+						document.querySelectorAll('#thumbnails button').forEach((button) => button.addEventListener('click', () => {
+							setTimeout(() => {
+								document.querySelectorAll('#thumbnails button').forEach((item) => { item.className = item === button ? 'selected' : ''; });
+								document.querySelector('figure img').alt = button.textContent;
+								document.querySelector('figure img').src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7#' + button.textContent;
+								document.querySelector('figcaption').textContent = button.textContent;
+							}, 800);
+						}));
+					</script>
+				</body></html>` );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 25_000 } );
+				expect( states ).toHaveLength( 3 );
+				for ( const state of states ) {
+					expect( state ).toMatchObject( {
+						kind: 'choice-group',
+						choiceGroup: { replay: 'activation-determined', restoration: 'verified', coverage: 'complete' },
+					} );
+				}
+				expect( await page.locator( '#thumbnails .selected' ).innerText() ).toBe( 'Front' );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
 		'stops re-driving a choice group once a full pass proved no activation restores it',
 		async () => {
 			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
