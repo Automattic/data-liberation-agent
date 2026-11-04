@@ -4,7 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
 import { getSourceResponse, sourceGovernorFor } from '../browser-kit/source-traffic.js';
-import { isSourceTransportThrottle } from '../source-request-governor.js';
+import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
@@ -16,7 +16,7 @@ import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { applyCaptureRemovals } from './apply-removals.js';
-import { accessGateRemoval, applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
+import { accessGateRemoval, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
 import { accessGateNote, installAccessGatePlaceholder, openAccessGateShell, routeKeptContent, type AccessGateEvidence } from '../access-gate.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
@@ -321,9 +321,13 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				frame.removeAttribute( attribute );
 			}
 
+			// A frame with no src of its own or with srcdoc is not a page to link to;
+			// an empty src would resolve to this document's own URL.
+			const rawSource = frame.hasAttribute( 'srcdoc' ) ? undefined : frame.getAttribute( 'src' )?.trim();
+			if ( ! rawSource ) continue;
 			let source: URL;
 			try {
-				source = new URL( frame.getAttribute( 'src' ) ?? '', document.baseURI );
+				source = new URL( rawSource, document.baseURI );
 			} catch {
 				continue;
 			}
@@ -881,7 +885,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let navigationUrl = url;
 	let releaseBaselineNavigation: () => Promise< void > = async () => {};
 	let externalNavigation: string | undefined;
-	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
+	let sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	// Both the initial visit and disclosure recovery own the same navigation,
 	// cleanup and readiness path. Recovery must not inherit the probed DOM.
 	const loadBaseline = async ( recovering = false ): Promise< boolean > => {
@@ -902,10 +906,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		let timedOut: { budgetMs: number; error: string } | undefined;
 		let navigated = false;
 		let attempt = 0;
-		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut;
+		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut && ! sourceGovernorFor(page.context?.(), url)?.blockedClient;
 		let redirectedTo: string | undefined;
 		while ( ++attempt <= MAX_NAV_ATTEMPTS ) {
 			try {
+				const governor = sourceGovernorFor(page.context?.(), url);
+				if (governor?.isConfirmingRefusal || governor?.blockedClient) await governor.admitSourceRequest();
 				args.phases?.enter( 'navigate' );
 				const started = Date.now();
 				const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope, timeoutMs: budgetMs});
@@ -943,6 +949,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 				// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
 				serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
+				sourcePolicy = cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), response, serverHtml ?? '');
 				if ( serverHtml ) for ( const link of sameOriginPageAnchors( resolveDocumentReferences( serverHtml, navigationUrl ), navigationUrl ) ) args.serverLinks.add( link );
 				navigated = true;
 				break;
@@ -959,7 +966,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					return false;
 				}
 				if ( mayRetry() && !(err instanceof SourceNavigationError) ) {
-					if (!sourceGovernorFor(page.context(), url) || !isSourceTransportThrottle(err)) await navSleep( navBackoffMs( attempt ) );
+					const governor = sourceGovernorFor(page.context?.(), url);
+					if (!governor || !isSourceTransportThrottle(err) || governor.hasSustainedRefusal) await navSleep( navBackoffMs( attempt ) );
 					continue;
 				}
 				loadFail( 'goto', err, attempt );
@@ -2008,7 +2016,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	const html = await navigation.response?.text().catch( () => undefined );
 	const settledAt = Date.now();
 	if ( timings ) timings.navigate = Math.max( timings.navigate, settledAt - startedAt );
-	await applySourceCleanup( page, args.cleanupPolicy ?? cleanupPolicy() );
+	await applySourceCleanup( page, cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), navigation.response, html ?? '') );
 	if ( mode === 'check' ) {
 		// Bounded after the document is parsed: up to CHECK_LOAD_WAIT_MS for
 		// `load`, up to 0.5 s of network quiet, the short scroll, then up to 1 s
@@ -2337,6 +2345,7 @@ function runtimeMemoryLimit(): number {
 }
 
 export async function captureScreenshots( opts: ScreenshotOpts ): Promise< ScreenshotResult > {
+	opts = { ...opts, governors: opts.governors ?? new SourceRequestGovernors() };
 	const startTime = Date.now();
 
 	// --- validate + filter ----------------------------------------------------
@@ -3367,6 +3376,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Routes the time budget left uncaptured are missing routes: counted as failed.
 	const budgetDiagnostics = routeBudget?.diagnostics( urls ) ?? [];
 	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
+	for (const origin of new Set(urls.map(url => new URL(url).origin))) {
+		const blocked = opts.governors?.forOrigin(origin).blockedClient;
+		if (blocked) routeDiagnostics.push({ code: blocked.code, url: origin, reason: blocked.message, ...blocked.evidence });
+	}
 	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows );
 	return {
 		captured,
