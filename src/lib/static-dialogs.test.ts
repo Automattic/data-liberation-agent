@@ -26,6 +26,23 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it( 'consumes retained source selectors before removing them from adopted panels', () => {
+		const html = '<html><body><button>Open Menu</button><nav data-blocks-engine-capture-source-selector="body > nav:nth-of-type(2)"><a href="/about">About</a></nav></body></html>';
+		const portable = wireCapturedDialogs( html, [ {
+			...captured,
+			dialog: { ...captured.dialog!, selector: 'body > nav:nth-of-type(2)', tag: 'nav', presentation: 'dropdown', html: '<nav><a href="/about">About</a></nav>' },
+		} ] );
+		const $ = cheerio.load( portable );
+		expect( $( 'nav' ) ).toHaveLength( 1 );
+		expect( $( 'nav' ).attr( 'data-blocks-engine-capture-dialog-panel' ) ).toBeTruthy();
+		expect( $( 'button' ).attr( 'aria-controls' ) ).toBe( $( 'nav' ).attr( 'id' ) );
+		expect( portable ).not.toContain( 'data-blocks-engine-capture-source-selector' );
+	} );
+	it( 'removes unused source selectors when no dialogs were captured', () => {
+		const portable = wireCapturedDialogs( '<html><body><nav data-blocks-engine-capture-source-selector="body > nav">Menu</nav></body></html>', [] );
+		expect( portable ).not.toContain( 'data-blocks-engine-capture-source-selector' );
+		expect( cheerio.load( portable )( 'nav' ).text() ).toBe( 'Menu' );
+	} );
 	it.each( [ 'modal', 'dropdown' ] as const )( 'hoists a fallback %s panel out of a mid-sentence paragraph', presentation => {
 		const paragraph = '<p id="artists">Artists: <a href="#first">First</a>, <span><em><a id="open" href="#elise">Elise Barnett</a></em></span>, <a href="#last">Last</a>.</p>';
 		const html = wireCapturedDialogs( `<html><body><main>${ paragraph }</main></body></html>`, [ {

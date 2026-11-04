@@ -194,7 +194,7 @@ export function wireCapturedDialogs(
 	);
 	const choiceStates = states.filter( isReplayableChoiceGroup );
 	const localDisclosures = html.includes('data-blocks-engine-capture-local-disclosure');
-	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 && !localDisclosures ) return html;
+	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 && !localDisclosures && !html.includes( 'data-blocks-engine-capture-source-selector' ) ) return html;
 	const $ = cheerio.load( html );
 	let wired = 0;
 	let listboxes = 0;
@@ -492,6 +492,8 @@ export function wireCapturedDialogs(
 		}
 		$('head').append(`<script data-blocks-engine-capture-local-disclosure-runtime="true">${LOCAL_DISCLOSURE_RUNTIME}</script>`);
 	}
+	// Correspondence addresses are only needed while resolving captured wiring.
+	$( '[data-blocks-engine-capture-source-selector]' ).removeAttr( 'data-blocks-engine-capture-source-selector' );
 	return $.html();
 }
 
