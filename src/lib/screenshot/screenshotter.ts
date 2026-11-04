@@ -1330,8 +1330,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// the receipt honest instead of shipping a mismatched pair silently.
 			const capturedUrl = page.url();
 			if ( externalNavigation ) {
-				// A blocked external request leaves the loader DOM intact, not a public route.
-				fail( 'content', externalNavigation );
+				// A blocked external request leaves the loader DOM intact, not a public
+				// route; the failure was recorded when the lock blocked it.
 			} else if ( isRouteDrift( capturedUrl, navigationUrl ) ) {
 				fail( 'content', `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted` );
 			} else if ( isStackingArtifact( html ) ) {
