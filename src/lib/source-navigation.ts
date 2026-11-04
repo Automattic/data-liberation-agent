@@ -1,3 +1,4 @@
+import { fetchSourceRoute } from './browser-kit/source-traffic.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -73,7 +74,7 @@ function safeTarget(url: string, publicUrlsOnly: boolean): URL {
 }
 
 async function readSourceResponse(route: Route, url: string, timeout: number): Promise<{response: DocumentResponse; rendered: RenderedResponse}> {
-	const acquired = await route.fetch({url, maxRedirects: 0, maxRetries: 0, timeout});
+	const acquired = await fetchSourceRoute(route, {url, maxRedirects: 0, maxRetries: 0, timeout}, 1);
 	try {
 		const headers = acquired.headers();
 		const status = acquired.status();

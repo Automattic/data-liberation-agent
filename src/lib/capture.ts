@@ -549,6 +549,7 @@ async function runCaptureWebsite(
 	} );
 	const assetQueue = new AssetAcquisitionQueue( outputDir, sourceGovernors, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
 	const screenshotResult = await captureScreenshots( {
+		governors: sourceGovernors,
 		urls,
 		routeScope,
 		outputDir,

@@ -172,7 +172,8 @@ function harvestSourceSession(
   browser: SessionCapableBrowser,
   entryUrl: string,
   origin: string,
-  publicUrlsOnly: boolean
+  publicUrlsOnly: boolean,
+  governors?: import('../source-request-governor.js').SourceRequestGovernors
 ): Promise<SourceStorageState | null> {
   let pending = sourceSessions.get(origin);
   if (!pending) {
@@ -180,7 +181,7 @@ function harvestSourceSession(
       let context: Awaited<ReturnType<SessionCapableBrowser['newContext']>> | undefined;
       try {
         if (publicUrlsOnly) assertPublicHttpUrl(entryUrl);
-        context = await createSourceContext(browser as unknown as import('playwright').Browser, await desktopContextOptions(browser));
+        context = await createSourceContext(browser as unknown as import('playwright').Browser, await desktopContextOptions(browser), { governors, sourceUrl: entryUrl });
         const page = await context.newPage();
         if (publicUrlsOnly) {
           if (!page.route) throw new Error('Public source harvest requires request routing');
@@ -225,12 +226,12 @@ function harvestSourceSession(
 export async function sourceContextOptions(
   browser: object,
   entryUrl: string,
-  options: { publicUrlsOnly?: boolean } = {}
+  options: { publicUrlsOnly?: boolean; governors?: import('../source-request-governor.js').SourceRequestGovernors } = {}
 ): Promise<SourceBrowserIdentity & { storageState?: SourceStorageState }> {
   const origin = originOf(entryUrl);
   const [identity, session] = await Promise.all([
     desktopContextOptions(browser),
-    origin ? harvestSourceSession(browser as SessionCapableBrowser, entryUrl, origin, options.publicUrlsOnly === true) : null,
+    origin ? harvestSourceSession(browser as SessionCapableBrowser, entryUrl, origin, options.publicUrlsOnly === true, options.governors) : null,
   ]);
   return session ? { ...identity, storageState: session } : identity;
 }
