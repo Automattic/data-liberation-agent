@@ -8,7 +8,8 @@ import type { SqsJsonResponse } from './types.js';
 export function completeProductJsonLd(scripts: string[], payload: SqsJsonResponse, pageUrl: string): string[] {
   try {
     const item = payload.item;
-    if (item?.structuredContent?._type !== 'product' || !Array.isArray(item.variants)) return scripts;
+    // Store items carry their purchasable variants; other collection items do not.
+    if (!Array.isArray(item?.variants) || !item.variants.length) return scripts;
     const variants = item.variants;
     const page = new URL(pageUrl);
     page.search = '';
