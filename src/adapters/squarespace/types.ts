@@ -36,6 +36,20 @@ export interface SqsJsonResponse {
     enabled?: boolean;
   };
   item?: {
+    id?: string;
+    recordType?: number;
+    variantOptionOrdering?: string[];
+    items?: Array<{ assetUrl?: string }>;
+    variants?: Array<{
+      sku?: string;
+      optionValues?: Array<{ optionName: string; value: string }>;
+      priceMoney?: { currency: string; value: string };
+      salePriceMoney?: { currency: string; value: string };
+      onSale?: boolean;
+      unlimited?: boolean;
+      qtyInStock?: number;
+      mainImage?: { assetUrl?: string };
+    }>;
     title?: string;
     urlId?: string;
     body?: string;

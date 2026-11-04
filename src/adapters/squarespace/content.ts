@@ -5,10 +5,29 @@ import type { SqsJsonResponse } from './types.js';
 /**
  * Fetch a Squarespace URL with `?format=json` appended. Pure fetch, no Playwright.
  */
+const jsonRequests = new Map<string, { expires: number; request: Promise<SqsJsonResponse | null> }>();
+
 export async function fetchSqsJson(url: string): Promise<SqsJsonResponse | null> {
+  let endpoint: URL;
+  try { endpoint = new URL(url); } catch { return null; }
+  endpoint.hash = '';
+  endpoint.searchParams.set('format', 'json');
+  const key = endpoint.href;
+  const cached = jsonRequests.get(key);
+  if (cached && cached.expires > Date.now()) return cached.request;
+  // Bounded reuse for discovery and repeated route/profile serializations. Do
+  // not retain a site's payloads indefinitely in a long-lived MCP process.
+  for (const [key, entry] of jsonRequests) {
+    if (entry.expires <= Date.now()) jsonRequests.delete(key);
+  }
+  if (jsonRequests.size >= 128) jsonRequests.delete(jsonRequests.keys().next().value!);
+  const request = requestSqsJson(key);
+  jsonRequests.set(key, { expires: Date.now() + 5 * 60_000, request });
+  return request;
+}
+
+async function requestSqsJson(jsonUrl: string): Promise<SqsJsonResponse | null> {
   try {
-    const separator = url.includes('?') ? '&' : '?';
-    const jsonUrl = `${url}${separator}format=json`;
     const resp = await fetch(jsonUrl, {
       signal: AbortSignal.timeout(15000),
       headers: {
