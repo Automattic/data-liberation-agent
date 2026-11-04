@@ -1,6 +1,6 @@
 # Source refusal during capture
 
-After earlier HTTP responses, three consecutive connection resets/refusals spanning at least two document route paths pause new requests to that origin. Asset URLs cannot manufacture distinct-route evidence. Any intervening HTTP response clears the streak.
+After earlier HTTP responses, three consecutive connection resets/refusals spanning at least two document route paths pause new requests to that origin. Only requests admitted after the governor's latest throttle pause, while its in-flight limit is one, can contribute to that streak. Late failures from an earlier parallel burst trigger ordinary backoff, not confirmation. Asset URLs cannot manufacture distinct-route evidence. Any intervening HTTP response clears the streak.
 
 Confirmation uses HEAD requests without redirects, at escalating offsets of approximately 2, 8, 20 and 60 seconds. Probe timeouts are reserved inside the governor's 60-second maximum retry window. Any HTTP response resumes capture immediately; timeouts and unrelated errors do not prove a client block. Already-in-flight responses also invalidate confirmation. Isolated resets retain navigation backoff and retry; healthy browser fan-out remains uncapped.
 

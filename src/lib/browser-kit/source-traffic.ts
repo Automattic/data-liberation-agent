@@ -21,7 +21,7 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     if (!entry) return;
     nativeRequests.delete(request);
     if (!entry.throttled) entry.governor.observeBrowserOutcome(failed ? undefined : entry.status, undefined,
-      failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl);
+      failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl, entry.refusalAdmission);
     if (entry.acquired) entry.governor.release();
   };
   context.on('requestfinished', request => finish(request, false));
@@ -36,6 +36,7 @@ export function sourceGovernorFor(context: BrowserContext, url: string) {
 const nativeRequests = new WeakMap<Request, {
   governor: ReturnType<SourceRequestGovernors['forOrigin']>;
   acquired: boolean;
+  refusalAdmission?: number;
   routeUrl?: string;
   status?: number;
   throttled?: boolean;
@@ -55,7 +56,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
     try { await governor.acquire(abort.signal, true); }
     finally { context.off('close', close); }
   }
-  nativeRequests.set(request, { governor, acquired, routeUrl: owningDocumentUrl(request) });
+  nativeRequests.set(request, { governor, acquired, routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
   catch (error) {
     if (nativeRequests.delete(request) && acquired) governor.release();

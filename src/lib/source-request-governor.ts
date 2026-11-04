@@ -152,9 +152,17 @@ export class SourceRequestGovernor {
 		this.firstRefusal = undefined;
 	}
 
-	private observeRefusal(error: unknown, routeUrl?: string): void {
+	/** Snapshot only admissions made at one in flight, after the latest pause. */
+	refusalAdmission(): number | undefined {
+		return this.browserThrottled && this.limit === 1 && Date.now() >= this.pausedUntil ? this.throttles : undefined;
+	}
+
+	private observeRefusal(error: unknown, routeUrl?: string, admission?: number): void {
 		if (!this.hadResponse || this.confirmation || !isSourceTransportThrottle(error, true)) return;
 		this.firstRefusal ??= { requestsBeforeFirstRefusal: this.requests - 1, firstRefusalAt: new Date().toISOString() };
+		// Failures from the original fan-out (or an older backoff) are pressure,
+		// not proof that this client is still refused after slowing down.
+		if (admission === undefined || admission !== this.throttles) return;
 		this.refusalCount++;
 		if (routeUrl) this.refusalRoutes.add(new URL(routeUrl).pathname);
 		if (this.refusalCount < SOURCE_REFUSAL_DEFAULTS.consecutive || this.refusalRoutes.size < 2) return;
@@ -242,6 +250,7 @@ export class SourceRequestGovernor {
 		let throttles = 0;
 		for ( let attempt = 1; ; attempt++ ) {
 			await this.acquire( options.signal, options.browser );
+			const refusalAdmission = this.refusalAdmission();
 			let response: T;
 			try {
 				this.requests++;
@@ -249,7 +258,7 @@ export class SourceRequestGovernor {
 				response = await task( attempt );
 			} catch (error) {
 				if (!isSourceTransportThrottle(error)) throw error; // failure-class: operational
-				this.observeRefusal(error, options.routeUrl);
+				this.observeRefusal(error, options.routeUrl, refusalAdmission);
 				throttles++;
 				this.recordThrottle(this.fallbackRetryAfterMs);
 				if (this.confirmation) {
@@ -285,11 +294,11 @@ export class SourceRequestGovernor {
 	}
 
 	/** Outcomes observed by the browser's native network stack. */
-	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string): void {
+	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string, admission?: number): void {
 		this.requests++;
 		this.firstRequestAt ??= Date.now();
 		if (status !== undefined) this.reachable();
-		else this.observeRefusal(error, routeUrl);
+		else this.observeRefusal(error, routeUrl, admission);
 		if ((status !== undefined && THROTTLE_STATUSES.has(status)) || isSourceTransportThrottle(error)) {
 			this.recordThrottle(parseRetryAfter(retryAfter, { fallbackMs: this.fallbackRetryAfterMs, maxMs: this.maxRetryAfterMs }));
 		} else if (status !== undefined) this.recordSuccess();
