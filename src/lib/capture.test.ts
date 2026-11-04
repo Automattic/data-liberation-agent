@@ -385,6 +385,26 @@ describe( 'captureWebsite completeness', () => {
 		expect( isUsableCapture( result ) ).toBe( true );
 	} );
 
+	it( 'publishes refusal evidence then surfaces the specific failure to callers', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		const { SourceBlockedClientError } = await import( './source-request-governor.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		const blocked = new SourceBlockedClientError( { origin: 'https://example.com', requestsBeforeFirstRefusal: 10, firstRefusalAt: '2026-11-04T00:00:00.000Z' } );
+		captureScreenshotsMock.mockImplementationOnce( async options => {
+			( options as import('./screenshot/types.js').ScreenshotOpts ).governors!.forOrigin( sourceUrl ).blockedClient = blocked;
+			return { urls: [ sourceUrl ], captured: 1, skipped: 0, failed: 0, durationMs: 1, routeDiagnostics: [ { code: blocked.code, url: sourceUrl, reason: blocked.message, ...blocked.evidence } ] };
+		} );
+		mkdirSync( join( root, 'html' ), { recursive: true } );
+		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( root, 'html', 'home.html' ), '<main><h1>Fixture</h1></main>' );
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( { id: 'generic', discover: async () => ( { urls: [] } ) } ),
+		} ) ).rejects.toBe( blocked );
+		const receipt = JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'source_blocked_client', requestsBeforeFirstRefusal: 10, firstRefusalAt: blocked.evidence.firstRefusalAt } ) );
+	} );
+
 	it( 'counts a route saved with a failed stage as captured and a route export dropped as failed', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
