@@ -5,6 +5,8 @@ import type { CapturedDialogInteraction, InteractionStatesReport } from './inter
 /** A route's stateful surfaces, not an inventory of individual trigger clicks. */
 export interface CapturedComponent {
 	selector: string;
+	/** Layout in which the trigger rendered and its states were explored. */
+	viewport?: { id?: string; width: number; height: number };
 	function?: 'slideshow';
 	slideshow?: Slideshow;
 	collection?: import('./collection-capture.js').CollectionEvidence;
@@ -70,15 +72,37 @@ export async function snapshotComponents(page: Page): Promise<ComponentBaseline>
 }
 
 /** Exploration owns only component states. It never returns replacement route HTML. */
-export async function exploreComponents(page: Page, baseline: ComponentBaseline, skip?: string): Promise<CapturedComponent[]> {
+export async function exploreComponents(page: Page, baseline: ComponentBaseline, skip?: string, viewports: Array<{ id?: string; width: number; height: number }> = []): Promise<CapturedComponent[]> {
 	const components = structuredClone(baseline.components);
 	const deadline = Date.now() + 30_000;
+	const originalViewport = page.viewportSize();
+	const candidates = viewports.length ? viewports : originalViewport ? [originalViewport] : [];
+	try {
 	for (const [index, component] of components.entries()) {
 		let current = component.initial;
 		const controls = baseline.controls.filter(control => control.component === index);
 		if (!controls.length && !component.slideshow) continue;
 		if (skip && await page.locator(component.selector).first().evaluate((root, excluded) => root.matches(excluded), skip).catch(() => true)) {
 			component.status = 'unsupported'; component.reason = 'interaction probe region excluded'; continue;
+		}
+		// Visibility, unlike click actionability, is a layout fact. Do not spend a
+		// click timeout on a control hidden by this profile's media queries.
+		let rendered = false;
+		for (const viewport of candidates) {
+			if (Date.now() > deadline) break;
+			const size = page.viewportSize();
+			if (size?.width !== viewport.width || size?.height !== viewport.height) await page.setViewportSize({ width: viewport.width, height: viewport.height });
+			rendered = await page.locator(controls[0]?.selector ?? component.selector).first().evaluate(element => {
+				const box = element.getBoundingClientRect();
+				const style = getComputedStyle(element);
+				return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.display !== 'none';
+			}).catch(() => false);
+			if (rendered) { component.viewport = { ...viewport }; break; }
+		}
+		if (!rendered) {
+			component.status = 'partial';
+			component.reason = Date.now() > deadline ? 'component exploration limit' : 'trigger not rendered at captured viewports';
+			continue;
 		}
 		if (component.slideshow) {
 			try { await exploreCarousel(page, component); }
@@ -125,6 +149,12 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 		}
 	}
 	return components;
+	} finally {
+		if (originalViewport) {
+			const size = page.viewportSize();
+			if (size?.width !== originalViewport.width || size?.height !== originalViewport.height) await page.setViewportSize(originalViewport);
+		}
+	}
 }
 
 /** Project the role-classified popup probe into the same component contract. */
