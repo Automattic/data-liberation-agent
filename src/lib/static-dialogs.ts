@@ -327,6 +327,16 @@ export function wireCapturedDialogs(
 			if ( bindings.length ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( bindings ) );
 			const triggerState = resolveTriggerState( trigger, state.dialog?.ancestorState );
 			if ( triggerState?.length ) trigger.attr( 'data-blocks-engine-capture-dialog-trigger-state', JSON.stringify( triggerState ) );
+			// Correspondence can retain the other viewport's opened tokens. The
+			// authoring tree, not just the runtime's first apply(), must be closed.
+			for ( const binding of bindings ) {
+				const owner = trigger.parents().eq( binding.depth - 1 );
+				applyClosedState( owner, binding.closed, binding.opened );
+			}
+			for ( const binding of triggerState ?? [] ) {
+				const owner = binding.selector ? trigger.find( binding.selector.replace( /^:scope > /, '> ' ) ) : trigger;
+				applyClosedState( owner, binding.closed, binding.opened );
+			}
 			const restingPanel = restingPanels.get( element )!;
 			const reusePanel = canReuse && restingPanel.length === 1;
 			const reusedPanelId = restingPanel.length === 1 ? reusedPanels.get( restingPanel.get( 0 )! ) : undefined;
@@ -559,6 +569,28 @@ function gallerySurface($: cheerio.CheerioAPI, trigger: cheerio.Cheerio<AnyNode>
 	return document.length ? document : $('body');
 }
 
+/** Replay only the observed delta, preserving unrelated portable classes. */
+function applyClosedState(
+	node: cheerio.Cheerio< AnyNode >,
+	closed: Record< string, string | null >,
+	opened: Record< string, string | null >
+): void {
+	for ( const [ name, value ] of Object.entries( closed ) ) {
+		if ( name === 'class' ) {
+			const target = classTokens( value );
+			node.removeClass( classTokens( opened[ name ] ?? null ).filter( token => !target.includes( token ) ).join( ' ' ) );
+			node.addClass( target.join( ' ' ) );
+			if ( value === null && !node.attr( name ) ) node.removeAttr( name );
+		} else if ( value === null ) node.removeAttr( name );
+		else node.attr( name, value );
+	}
+}
+
+function hasKnownClassState( current: string | null, closed: string | null, opened: string | null ): boolean {
+	const tokens = classTokens( current );
+	return [ closed, opened ].some( value => classTokens( value ).every( token => tokens.includes( token ) ) );
+}
+
 function classTokens( value: string | null ): string[] {
 	return ( value ?? '' ).split( /\s+/ ).filter( Boolean );
 }
@@ -589,10 +621,10 @@ function resolveObservedAncestors(
 			const closed = row.closed[ name ], opened = row.opened[ name ];
 			if ( [ closed, opened ].some( value => value !== null && ( typeof value !== 'string' || Buffer.byteLength( value ) > 2048 ) ) ) return undefined;
 			if ( closed === opened ) continue;
-			// Class is replayed as tokens: the portable owner must still carry the
-			// closed tokens (all of them, when the full list was recorded).
+			// Correspondence may retain either viewport's state. Require a known
+			// token set before binding, then restore the closed delta at export.
 			const current = $( node ).attr( name ) ?? null;
-			if ( name === 'class' ? !classTokens( closed ).every( token => classTokens( current ).includes( token ) ) : current !== closed ) return undefined;
+			if ( name === 'class' ? !hasKnownClassState( current, closed, opened ) : current !== closed ) return undefined;
 		}
 	}
 	if ( !dropdown || !state.placement ) return { state };
@@ -611,7 +643,7 @@ function resolveTriggerState( trigger: cheerio.Cheerio< AnyNode >, state: Captur
 		const node = row.selector ? trigger.find( row.selector.replace( /^:scope > /, '> ' ) ) : trigger;
 		if ( node.length !== 1 || node.prop( 'tagName' )?.toLowerCase() !== row.tag || row.classTokensOnly !== true ) return undefined;
 		if ( !row.closed || !row.opened || [ row.closed.class, row.opened.class ].some( value => typeof value !== 'string' || Buffer.byteLength( value ) > 2048 ) ) return undefined;
-		if ( !classTokens( row.closed.class ).every( token => classTokens( node.attr( 'class' ) ?? null ).includes( token ) ) ) return undefined;
+		if ( !hasKnownClassState( node.attr( 'class' ) ?? null, row.closed.class, row.opened.class ) ) return undefined;
 	}
 	return state.trigger;
 }

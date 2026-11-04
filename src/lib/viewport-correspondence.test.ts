@@ -89,6 +89,47 @@ describe( 'viewport URL correspondence', () => {
 		} finally { await browser.close(); }
 	} );
 
+	it( 'exports closed trigger and ancestor bindings after correspondence retains desktop opened classes', async () => {
+		const page = ( open: boolean ) => `<html><head><style>.icon{display:inline-block;width:20px;height:20px;background:green}.icon.expanded{background:red}</style></head><body><header id="chrome" class="chrome ${ open ? 'expanded' : 'collapsed' }"><button id="toggle" class="control ${ open ? 'active' : 'idle' }" aria-label="Menu"><span class="icon ${ open ? 'expanded' : '' }"></span></button></header><main><h1>Home</h1></main>${ open ? '' : '<nav id="panel">Menu links</nav>' }</body></html>`;
+		const desktop = page( true ), mobile = page( false );
+		const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		expect( assembly.evidence ).toMatchObject( { variants: 1, outcome: 'collapsed-identity-subset' } );
+		expect( cheerio.load( assembly.html )( '#toggle span' ).hasClass( 'expanded' ) ).toBe( true );
+		const html = wireCapturedDialogs( assembly.html, [ {
+			status: 'captured',
+			trigger: { selector: '#toggle', tag: 'button', ariaHaspopup: '', label: 'Menu', dataBindings: {} },
+			dialog: { selector: '#panel', tag: 'nav', ariaModal: false,
+				html: '<nav id="panel">Menu links</nav>', htmlBytes: 37, htmlTruncated: false,
+				ancestorState: { status: 'verified', ancestors: [ {
+					selector: '#chrome', tag: 'header', depth: 1,
+					closed: { class: 'collapsed' }, opened: { class: 'expanded' }, classTokensOnly: true,
+				} ], trigger: [
+					{ selector: '', tag: 'button', closed: { class: 'idle' }, opened: { class: 'active' }, classTokensOnly: true },
+					{ selector: ':scope > :nth-child(1)', tag: 'span', closed: { class: '' }, opened: { class: 'expanded' }, classTokensOnly: true },
+				] },
+			},
+		} ] );
+		// Parse bytes without executing the load-time normalizer.
+		const $ = cheerio.load( html );
+		expect( $( '#chrome' ).attr( 'class' )?.split( /\s+/ ) ).toEqual( expect.arrayContaining( [ 'chrome', 'collapsed' ] ) );
+		expect( $( '#chrome' ).hasClass( 'expanded' ) ).toBe( false );
+		expect( $( '#toggle' ).hasClass( 'idle' ) ).toBe( true );
+		expect( $( '#toggle' ).hasClass( 'active' ) ).toBe( false );
+		expect( $( '#toggle span' ).hasClass( 'icon' ) ).toBe( true );
+		expect( $( '#toggle span' ).hasClass( 'expanded' ) ).toBe( false );
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.setContent( html );
+			await page.locator( '#toggle' ).click();
+			expect( await page.locator( '#toggle span' ).getAttribute( 'class' ) ).toContain( 'expanded' );
+			expect( await page.locator( '#chrome' ).getAttribute( 'class' ) ).toContain( 'expanded' );
+			await page.locator( '#toggle' ).evaluate( node => ( node as HTMLButtonElement ).click() );
+			expect( await page.locator( '#toggle span' ).getAttribute( 'class' ) ).not.toContain( 'expanded' );
+			expect( await page.locator( '#chrome' ).getAttribute( 'class' ) ).toContain( 'collapsed' );
+		} finally { await browser.close(); }
+	} );
+
 	it( 'refuses a mobile-only insertion that introduces a unique source id conflict', () => {
 		const desktop = '<body><h1>Home</h1><div id="unique">Desktop</div></body>';
 		const mobile = '<body><h1>Home</h1><nav id="unique">Phone</nav></body>';
