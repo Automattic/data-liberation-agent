@@ -3,12 +3,35 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSyn
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupPolicy, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
+import { cleanupPolicy, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
+import { registerHost, unregisterHost } from '../platform/host.js';
 import { capture as wixCapture } from '../adapters/wix/capture.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { checkFidelity as checkLiveFidelity } from './fidelity/check.js';
 const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
+
+it('treats unavailable response headers as no host evidence while retaining source detection', () => {
+  const id = 'cleanup-response-test';
+  registerHost({ id, detection: {
+    httpSignals: [{ header: 'x-cleanup-host', signal: 'response header' }],
+    sourceSignals: [{ pattern: /cleanup-host-marker/, signal: 'source marker' }],
+  }, residue: [{ selector: '#host-badge', evidence: 'host badge' }] });
+  try {
+    const base = cleanupPolicy();
+    for (const response of [undefined, null, {}, { headers: () => undefined },
+      { headers: () => null }, { headers: () => [['invalid']] },
+      { headers: () => { throw new Error('headers unavailable'); } }]) {
+      expect(cleanupPolicyForResponse(base, response, '').rules).toEqual(base.rules);
+      expect(cleanupPolicyForResponse(base, response, 'cleanup-host-marker').rules)
+        .toContainEqual(expect.objectContaining({ host: id, selector: '#host-badge' }));
+    }
+    expect(cleanupPolicyForResponse(base, { headers: () => ({ 'x-cleanup-host': 'yes' }) }, '').rules)
+      .toContainEqual(expect.objectContaining({ host: id, selector: '#host-badge' }));
+  } finally {
+    unregisterHost(id);
+  }
+});
 
 let server: Server | undefined;
 let directory: string | undefined;
@@ -96,6 +119,37 @@ it('captures clean artifacts and compares intentional removals while rejecting d
   await expect(checkFidelity({ directory, widths: [1440], settleMs: 200 })).rejects.toThrow('retains advertising');
   expect(JSON.parse(readFileSync(join(directory, 'compare', 'cleanup-evidence.json'), 'utf8')).completed).toBe(false);
 }, 90_000);
+
+it('captures detected host residue as attribution cleanup but keeps the same frame without detection', async () => {
+  registerHost({ id: 'fixture-host', detection: { httpSignals: [{ header: 'x-fixture-host', signal: 'fixture header' }] },
+    residue: [{ selector: 'iframe#hud-badge', evidence: 'fixture host badge frame' }] });
+  try {
+    server = createServer((req, res) => {
+      res.setHeader('content-type', 'text/html');
+      if (req.url === '/') res.setHeader('x-fixture-host', 'yes');
+      res.end(`<!doctype html><html><head><title>Owner</title></head><body><main>Owner content</main><script>
+        const frame = document.createElement('iframe'); frame.id = 'hud-badge'; frame.srcdoc = 'Powered by fixture host';
+        frame.style.cssText = 'position:fixed;bottom:0;right:0;width:150px;height:30px'; document.body.append(frame);
+      </script></body></html>`);
+    });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+    mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
+    directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'cleanup-host-'));
+    const result = await captureScreenshots({ urls: [url, `${url}authored`], primaryUrl: url, outputDir: directory,
+      captureImages: true, learnFluid: false, settleMs: 100 });
+    expect(result.failed).toBe(0);
+    exportWebsiteCapture({ outputDir: directory, sourceUrl: url, platform: 'default', summary: {}, failures: [] });
+    const manifest = JSON.parse(readFileSync(join(directory, 'screenshots', 'manifest.json'), 'utf8'));
+    for (const [route, file, detected] of [['', 'index.html', true], ['authored', 'authored/index.html', false]] as const) {
+      if (detected) expect(readFileSync(join(directory, 'website', file), 'utf8')).not.toContain('<iframe');
+      expect(readFileSync(join(directory, manifest.entries[`${url}${route}`].html), 'utf8').includes('<iframe')).toBe(!detected);
+      const records = manifest.entries[`${url}${route}`].cleanup.reports.flatMap((report: { records: unknown[] }) => report.records);
+      expect(records).toEqual(detected ? expect.arrayContaining([expect.objectContaining({ category: 'source-attribution',
+        selector: '#hud-badge', host: 'fixture-host', evidence: 'fixture host badge frame', action: 'remove' })]) : []);
+    }
+  } finally { unregisterHost('fixture-host'); }
+}, 60_000);
 
 // A builder runtime that re-initializes its document shortly after load (a
 // same-URL reload the route-drift guard never sees) takes window.__dlaCleanup
