@@ -58,6 +58,50 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
+	it( 'records a cross-origin subframe runtime error as a diagnostic but blocks on a top-level one', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-subframe-error-' ) );
+		const frame = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( '<!DOCTYPE html><html><body style="margin:0;background:#333"><script>navigator.keyboard && navigator.keyboard.getLayoutMap();</script></body></html>' );
+		} );
+		await new Promise<void>( resolve => frame.listen( 0, '127.0.0.1', resolve ) );
+		// `localhost` is a different site from `127.0.0.1`, so the frame is cross-origin.
+		const frameUrl = `http://localhost:${ ( frame.address() as { port: number } ).port }/frame.html`;
+		const source = createServer( ( request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( request.url === '/control'
+				? '<!DOCTYPE html><html><body><p>Top-level control</p><script>navigator.keyboard && navigator.keyboard.getLayoutMap(); Promise.reject(new Error(\'top-level own rejection\'));</script></body></html>'
+				: `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Embed</title>
+					<style>body{margin:0;font:16px/1.5 sans-serif}main{padding:24px}iframe{display:block;width:480px;height:270px;border:0;background:#ccc}</style></head>
+					<body><main><h1>Video</h1><p>An embedded third-party player.</p><iframe src="${ frameUrl }" title="Player"></iframe></main></body></html>` );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		const context = await sharedBrowser.newContext();
+		const page = await context.newPage();
+		try {
+			const collect = async ( target: string ) => {
+				const collector = createReferenceCollector( directory, target, [ target ] );
+				await collector.observe( page, target, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
+				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+				return ( JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference ).entries[ 0 ]!;
+			};
+			const embed = await collect( url );
+			expect( embed.readiness.reasons ).toEqual( [] );
+			expect( embed.readiness.ready ).toBe( true );
+			expect( embed.readiness.diagnostics ).toEqual( [ expect.stringMatching( new RegExp( `^subframe runtime error \\(${ new URL( frameUrl ).origin }\\): getLayoutMap\\(\\) must be called from a top-level browsing context` ) ) ] );
+			expect( () => readFrozenObservation( directory, embed ) ).not.toThrow();
+			const control = await collect( `${ url }control` );
+			expect( control.readiness.ready ).toBe( false );
+			expect( control.readiness.reasons ).toEqual( [ 'source runtime error: top-level own rejection' ] );
+			expect( () => readFrozenObservation( directory, control ) ).toThrow( 'Source evidence unready: source runtime error: top-level own rejection' );
+		} finally {
+			await context.close();
+			for ( const server of [ source, frame ] ) { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); }
+			rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 60_000 );
 	it.each( [ 'profile', 'sibling', 'borrowed', 'persistent' ] as const )( 'releases only owned %s resources on success and navigation failure', async mode => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, `reference-lifetime-${ mode }-` ) );
