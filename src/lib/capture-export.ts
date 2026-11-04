@@ -44,6 +44,7 @@ import {
 	MOBILE_DOCUMENT_CLASS,
 	projectResponsiveIdentityCss,
 	projectResponsiveBodyClassCss,
+	projectCollapsedBodyClassCss,
 	responsiveMovedBodyClasses,
 	routePhoneDocumentFragments,
 	type ResponsiveVariantEvidence,
@@ -1404,6 +1405,7 @@ function buildExportCapture(
 	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
 	const redirectAliases: Array< { url: string; target: string } > = [];
 	const responsiveBodyClassProjections = new Map<string, ReadonlyMap<string, string>>();
+	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
 		// One route's non-integrity failure drops that route, not the capture. Integrity
 		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
@@ -1582,6 +1584,12 @@ function buildExportCapture(
 				const classes = ( scope: string ) => ( $( `.${ scope }` ).first().attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== scope );
 				const moved = responsiveMovedBodyClasses( classes( DESKTOP_DOCUMENT_CLASS ), classes( MOBILE_DOCUMENT_CLASS ) );
 				if ( moved.size ) responsiveBodyClassProjections.set( JSON.stringify( [ ...moved ] ), moved );
+			}
+			if ( !assembly.hasMobileDocument && assembly.evidence?.outcome === 'collapsed-identity-subset' && rawMobileHtml ) {
+				const classes = ( html: string ) => ( cheerio.load( html )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+				const moved = responsiveMovedBodyClasses( classes( rawDesktopHtml ), classes( rawMobileHtml ) );
+				const aliases = new Map( [ ...moved ].filter( ( [ , scope ] ) => scope === MOBILE_DOCUMENT_CLASS ).map( ( [ token ] ) => [ token, `data-blocks-engine-capture-responsive-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` ] ) );
+				if ( moved.size ) collapsedBodyClassProjections.set( JSON.stringify( [ ...moved ] ), { moved, aliases, width: detectedFloor ?? DEFAULT_SWITCH_WIDTH } );
 			}
 			const capturedHtml = assembly.portableNormalization === 'pending'
 				? portableDocument( assembly.html )
@@ -2150,7 +2158,7 @@ function buildExportCapture(
 	selfContainWebsite( websiteDir );
 	// Author identity selectors can live in linked/imported stylesheets, not
 	// only inline <style>. Project the localized copies with the same primitive.
-	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases || responsiveBodyClassProjections.size ) {
+	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases || responsiveBodyClassProjections.size || collapsedBodyClassProjections.size ) {
 		const projectStylesheets = ( directory: string ): void => {
 			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
 				const path = join( directory, entry.name );
@@ -2161,6 +2169,7 @@ function buildExportCapture(
 						() => {
 							let css = projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases );
 							for ( const moved of responsiveBodyClassProjections.values() ) css = projectResponsiveBodyClassCss( css, moved, true );
+							for ( const { moved, aliases, width } of collapsedBodyClassProjections.values() ) css = projectCollapsedBodyClassCss( css, moved, aliases, width );
 							return css;
 						},
 						reason => routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url: options.sourceUrl, reason, unit: 'stylesheet', severity: 'warning', path: relative( stageDir, path ).replace( /\\/g, '/' ) } )
