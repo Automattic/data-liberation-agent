@@ -71,7 +71,7 @@ async function governedResponse(context: BrowserContext, url: string, task: () =
   const result = await governor.run(async attempt => {
     const response = await task();
     const status = response.status();
-    const headers = new Headers(response.headers());
+    const headers = new Headers(response.headersArray().map(({ name, value }): [string, string] => [name, value]));
     if ((status === 429 || status === 503) && attempt < maxAttempts) await response.dispose();
     return { status, headers, response };
   }, { browser: true, maxAttempts });
