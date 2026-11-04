@@ -775,9 +775,9 @@ export const capture: LiberationHooks = {
 			// closed the menu, as the collapsed-menu runtime usually does on
 			// layouts where the drawer is not scroll-locking, this is a no-op).
 			if ( trigger.menu ) await closeOpenedMenu( page );
-			// Share the existing no-move budget across the two possible starts;
-			// dead handlers must not pay an extra full wait for the retry.
-			const resolveLanding = ( initialScroll: number ) => page.evaluate( async ( { fragment, maxWait, noMoveMs, initialScroll } ) => {
+			// Keep the full first-probe budget for runtimes that start scrolling late.
+			// Only a fixed/sticky trigger can retry from a displaced start.
+			const resolveLanding = ( initialScroll: number, noMoveMs = WIX_ANCHOR_NO_MOVE_MILLISECONDS ) => page.evaluate( async ( { fragment, maxWait, noMoveMs, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ].filter( ( link ) => {
@@ -859,8 +859,14 @@ export const capture: LiberationHooks = {
 					delete link.dataset.blocksEngineCaptureAnchorUnresolved;
 				}
 				return true;
-			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs: WIX_ANCHOR_NO_MOVE_MILLISECONDS / 2, initialScroll } );
-			if ( await resolveLanding( initialScroll ) === 'no-movement' ) {
+			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs, initialScroll } );
+			if ( await resolveLanding( initialScroll ) === 'no-movement' && await link.evaluate( ( element ) => {
+				for ( let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement ) {
+					const position = getComputedStyle( ancestor ).position;
+					if ( position === 'fixed' || position === 'sticky' ) return true;
+				}
+				return false;
+			} ) ) {
 				// A fixed trigger can already be at its runtime's landing (notably
 				// the first section at y=0). Displace once to distinguish that from
 				// a dead handler, without scrolling an in-flow trigger back into view.
@@ -882,7 +888,7 @@ export const capture: LiberationHooks = {
 							const displacedScroll = await page.evaluate( () => scrollY );
 							await link.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
 							if ( trigger.menu ) await closeOpenedMenu( page );
-							await resolveLanding( displacedScroll );
+							await resolveLanding( displacedScroll, WIX_ANCHOR_NO_MOVE_MILLISECONDS / 2 );
 						}
 					} catch {
 						// Keep the original unresolved reason when the retry cannot click.

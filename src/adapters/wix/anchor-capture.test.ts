@@ -10,19 +10,26 @@ const landing = ( node: Element ): number => {
 };
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime anchor capture', () => {
-	it.each( [ 0, 600, -1 ] )( 'observes scroll from a trusted click with delay %i', async ( delay ) => {
+	it.each( [
+		{ delay: 0, position: 'fixed' },
+		{ delay: 600, position: 'fixed' },
+		{ delay: -1, position: 'fixed' },
+		{ delay: 1000, position: 'static' },
+	] )( 'observes scroll from a trusted click with delay $delay and $position trigger', async ( { delay, position } ) => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
 			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
-				body: `<style>body{margin:0}nav{position:fixed;top:0;z-index:5}section{height:1000px}</style>
+				body: `<style>body{margin:0}nav{position:${ position };top:0;z-index:5;height:20px}section{height:1000px}</style>
 					<nav><a href="#runtime-section">Section</a></nav>
 					<section>First</section><section id="section-source">Destination</section><section>Last</section>
 					<script>document.querySelector('a').addEventListener('click', event => {
 						event.preventDefault();
-						if (!event.isTrusted || ${ delay } < 0) return;
-						const move = () => window.scrollTo({top:1000,behavior:'instant'});
+						if (!event.isTrusted) return;
+						document.querySelector('a').dataset.clicks = String(Number(document.querySelector('a').dataset.clicks || 0) + 1);
+						if (${ delay } < 0) return;
+						const move = () => window.scrollTo({top:document.getElementById('section-source').offsetTop,behavior:'instant'});
 						if (${ delay } === 0) move(); else setTimeout(move, ${ delay });
 					});</script>`,
 			} ) );
@@ -32,8 +39,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				expect( await page.locator( '#runtime-section' ).count() ).toBe( 0 );
 				expect( await page.locator( 'a' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
 			} else {
+				expect( await page.locator( 'a' ).getAttribute( 'data-clicks' ) ).toBe( '1' );
 				expect( await page.locator( '#runtime-section' ).count() ).toBe( 1 );
-				expect( await page.locator( '#runtime-section' ).evaluate( landing ) ).toBe( 1000 );
+				expect( await page.locator( '#runtime-section' ).evaluate( landing ) ).toBe( position === 'static' ? 1020 : 1000 );
 				// The target lives inside the section the runtime scrolled to.
 				expect( await page.locator( '#section-source > #runtime-section' ).count() ).toBe( 1 );
 				expect( await page.locator( 'a' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
@@ -150,9 +158,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			const elapsed = Date.now() - started;
 			expect( await page.locator( 'a[href$="#dead-one"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
 			expect( await page.locator( 'a[href$="#dead-two"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
-			// Two never-moving fragments end within their no-move beats, not at
-			// 2 × the full bound (sweep + 2 frags; pre-fix returns > 7s here).
-			expect( elapsed ).toBeLessThan( 5_500 );
+			// Fixed chrome pays the full first no-move beat and a half-beat retry
+			// per fragment, still less than two full 3s scroll bounds plus the sweep.
+			expect( elapsed ).toBeLessThan( 6_500 );
 		} finally {
 			await browser.close();
 		}
