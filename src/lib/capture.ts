@@ -11,6 +11,8 @@ import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
+import { extractNavigationLandmarkLinks } from './html-extract/index.js';
+import { decodeHtml } from './decode-html.js';
 import { normalizeDiscoveredRoutes } from './extraction/sitemap.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { actionUrlExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
@@ -442,6 +444,9 @@ async function runCaptureWebsite(
 		throw error; // failure-class: operational
 	} );
 	const sourceUrl = response.finalUrl;
+	const entryHtml = response.body && response.headers
+		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )
+		: '';
 	const outputDir = options.outputDir;
 	const detection = await detect( sourceUrl );
 	const adapter = dependencies.findAdapter( detection.platform );
@@ -506,7 +511,12 @@ async function runCaptureWebsite(
 				.map( group => ( group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ] ?? '' ) )
 				.filter( url => url !== '' )
 		: [];
-	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ], timeBudget?.projectAdmission );
+	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
+	const entryNavigationRoutes = prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) );
+	// Navigation chrome is site-wide contract: rank its inventory destinations
+	// first, preserving discovery order within that tier, before template coverage
+	// and the general inventory spread.
+	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ], timeBudget?.projectAdmission );
 	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
