@@ -320,9 +320,13 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				frame.removeAttribute( attribute );
 			}
 
+			// A frame with no src of its own or with srcdoc is not a page to link to;
+			// an empty src would resolve to this document's own URL.
+			const rawSource = frame.hasAttribute( 'srcdoc' ) ? undefined : frame.getAttribute( 'src' )?.trim();
+			if ( ! rawSource ) continue;
 			let source: URL;
 			try {
-				source = new URL( frame.getAttribute( 'src' ) ?? '', document.baseURI );
+				source = new URL( rawSource, document.baseURI );
 			} catch {
 				continue;
 			}
