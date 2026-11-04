@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.122] - 2026-11-04
+
+### Changed
+- regenerate plugin bundles
+- Keep bounded locator probe waits bounded under probe intrinsics
+- Complete Squarespace product JSON-LD as ProductGroup during capture
+- Recover reset and throttled subresources before capture
+- Refuse routes whose page navigates to another site instead of saving its pre-redirect document
+
 ## [0.33.121] - 2026-11-04
 
 ### Changed
