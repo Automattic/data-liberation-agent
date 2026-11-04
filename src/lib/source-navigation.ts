@@ -47,6 +47,11 @@ export function isNavigationTimeout(error: unknown): boolean {
 export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
 export class SourceNavigationError extends Error {}
+
+/** Explain an observed cross-site navigation without guessing why access is withheld. */
+export function externalNavigationMessage(destination: string): string {
+	return `This page sends visitors to another site (${new URL(destination).host}), so there is no public page to copy. If this is an editor, preview, or sign-in-protected link, publish the site and import its public address.`;
+}
 export type RedirectMechanism = 'http' | 'refresh-header' | 'meta-refresh';
 interface DocumentResponse { url: string; status: number; headers: Record<string, string>; body: string }
 interface RenderedResponse { url: string; status: number; headers: Record<string, string>; body: Buffer }
@@ -268,7 +273,10 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 				await replaySourceReload(route, address, Math.max(1, deadline - Date.now()));
 				return;
 			}
-			if (address !== expected || delivered) throw new SourceNavigationError('Unexplained source main-frame navigation');
+			if (address !== expected || delivered) {
+				// failure-class: representability:route
+				throw new SourceNavigationError(sameHttpSite(address, requestedUrl) ? 'Unexplained source main-frame navigation' : externalNavigationMessage(address));
+			}
 			if (!acquired) {
 				const acquireResponse = async (current: string, timeout: number) => {
 					const acquired = await readSourceResponse(route, current, timeout); rendered = acquired.rendered; return acquired.response;

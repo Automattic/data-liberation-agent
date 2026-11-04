@@ -108,7 +108,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(manifest.entries[`${origin}/script`].html).toBeUndefined();
 			expect(readFileSync(join(directory,'screenshots/failures.json'),'utf8')).toMatch(/disagree/);
 			const failures = JSON.parse(readFileSync(join(directory,'screenshots/failures.json'),'utf8'));
-			expect(failures.some((failure:{url:string; error:string}) => failure.url === `${origin}/late-script` && /route drift/.test(failure.error))).toBe(true);
+			expect(failures.some((failure:{url:string; error:string}) => failure.url === `${origin}/late-script` && failure.error.includes('This page sends visitors to another site (foreign.fixture.invalid)'))).toBe(true);
 		} finally { source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); rmSync(directory,{recursive:true,force:true}); }
 	}, 120_000);
 
