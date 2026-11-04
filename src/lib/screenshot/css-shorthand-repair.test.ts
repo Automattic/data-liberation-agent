@@ -76,6 +76,34 @@ describe( 'repairShorthandVarCollapse', () => {
 		expect( result ).toContain( '.mobile { display: block; }' );
 	} );
 
+	it( 'recovers an animation shorthand whose selector the CSSOM re-spaced on serialization', () => {
+		// Authored without spaces inside :is(); Chromium serializes `:is(#x, [id^="x__"])`.
+		// The animation-composition / animation-timeline overrides collapse the
+		// `animation: var(--x)` shorthand to empty longhands.
+		const original =
+			'.a :is(#x,[id^="x__"]){animation:var(--anim);animation-composition:add;animation-timeline:auto}\n' +
+			'.a>.b,.c{color:red}';
+		const live =
+			'.a :is(#x, [id^="x__"]) { animation-duration: ; animation-timing-function: ; animation-delay: ; ' +
+			'animation-iteration-count: ; animation-direction: ; animation-fill-mode: ; animation-play-state: ; ' +
+			'animation-name: ; animation-composition: add; animation-timeline: auto; }\n' +
+			'.a > .b, .c { color: red; }';
+
+		const result = repairShorthandVarCollapse( live, original );
+		expect( result ).toContain(
+			'.a :is(#x, [id^="x__"]) { animation:var(--anim);animation-composition:add;animation-timeline:auto }'
+		);
+		expect( result ).not.toContain( 'animation-name: ;' );
+		expect( result ).toContain( '.a > .b, .c { color: red; }' );
+	} );
+
+	it( 'keeps descendant combinators significant when matching re-spaced selectors', () => {
+		// `:is(a) .b` (descendant) and `:is(a).b` (compound) are different rules.
+		const live = ':is(a) .b { font-weight: ; font-family: ; color: red; }';
+		const original = ':is(a).b { font: var(--x); color: red; }';
+		expect( repairShorthandVarCollapse( live, original ) ).toContain( 'font-weight: ;' );
+	} );
+
 	it( 'does not repair when the candidate original rule is itself empty (nothing to recover)', () => {
 		const live = '.foo { font-weight: ; color: red; }';
 		const original = '.foo { font-weight: ; color: red; }';

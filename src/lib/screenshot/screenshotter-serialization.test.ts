@@ -173,6 +173,28 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
+  it('keeps a var() animation shorthand whose re-spaced selector collapsed to empty longhands', async () => {
+    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    try {
+      // Chromium serializes this selector as `.a :is(#x, [id^="x__"])` and the shorthand,
+      // followed by its own animation-composition / animation-timeline longhands, as empty longhands.
+      await source.setContent(`<!doctype html><style>@keyframes enter{from{opacity:0}to{opacity:1}}
+.a{--anim:enter 1s linear 0s 1 paused both}
+.a :is(#x,[id^="x__"]){animation:var(--anim);animation-composition:replace;animation-timeline:auto}</style>
+<div class="a"><p id="x">Hero</p></div>`);
+      expect(await source.evaluate(() => Array.from(document.styleSheets[0].cssRules).map(rule => rule.cssText).join('\n'))).toContain('animation-name: ;');
+      const html = await capturePageHtml(source);
+      expect(html).toContain('animation:var(--anim)');
+      expect(html).not.toContain('animation-name: ;');
+      await copy.setContent(html);
+      expect(await copy.locator('#x').evaluate(element => getComputedStyle(element).animationName)).toBe('enter');
+    } finally {
+      await source.close();
+      await copy.close();
+    }
+  });
+
   it('preserves linked stylesheet source text and responsive layout', async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
     await page.setContent(`
