@@ -52,7 +52,8 @@ describe( 'gamma platform', () => {
 	} );
 
 	it( 'keeps the Next.js cleanup, since Gamma publishes with Next.js', () => {
-		expect( gammaAdapter.liberation?.removeSelectors ).toEqual( nextjsAdapter.liberation?.removeSelectors );
+		expect( gammaAdapter.liberation?.removeSelectors ).toEqual( expect.arrayContaining( nextjsAdapter.liberation!.removeSelectors! ) );
+		expect( gammaAdapter.liberation?.removeSelectors ).toContain( '[data-testid="media-placeholder"]' );
 		expect( gammaAdapter.liberation?.clientErrorShellSelectors ).toEqual( nextjsAdapter.liberation?.clientErrorShellSelectors );
 		expect( gammaAdapter.resolveImageOriginal?.( 'https://site.test/_next/image?url=%2Fphoto.jpg&w=640' ) ).toBe( 'https://site.test/photo.jpg' );
 	} );
@@ -88,6 +89,34 @@ describe( 'gamma platform', () => {
 			expect( await page.locator( '.node-video .chakra-spinner' ).count() ).toBe( 0 );
 			const box = await frame.boundingBox();
 			expect( box!.width / box!.height ).toBeCloseTo( 16 / 9, 1 );
+		} finally { await page.close(); }
+	} );
+
+	it( 'turns toggles, nested ones included, into native details that open without Gamma', async () => {
+		const toggle = ( open: boolean, title: string, body: string ) =>
+			`<div class="react-renderer node-toggle block block-toggle"><div data-node-view-wrapper=""><div class="toggle box-style" data-open="${ open }"><div data-node-view-content=""><div data-node-view-content-inner="toggle">` +
+			`<div class="node-toggleSummary"><div data-node-view-wrapper=""><button type="button" data-testid="toggle-button"><svg></svg></button><div data-node-view-content=""><div data-node-view-content-inner="toggleSummary">${ title }</div></div></div></div>` +
+			`${ body }</div></div></div></div></div>`;
+		const html = gammaPage( [] )
+			.replace( '<style>', '<style>.block-toggle [data-open="false"] [data-node-view-content-inner="toggle"] > :not(:first-child){display:none}.animatable-on-load-content-parent:not(.animate-has-animated){opacity:0}' )
+			.replace( '<p>First</p>', toggle( false, 'Archive <strong>2025</strong>', `<div class="node-smartLayout animatable-on-load-content-parent"><p class="body">Outer body</p></div>${ toggle( false, 'More', '<p class="body">Inner body</p>' ) }` ) + toggle( true, 'Open one', '<p>Shown</p>' ) );
+		const page = await prepared( html );
+		try {
+			expect( await page.locator( '[data-open]' ).count() ).toBe( 0 );
+			expect( await page.locator( 'details' ).count() ).toBe( 3 );
+			expect( await page.locator( 'details summary' ).allTextContents() ).toEqual( [ 'Archive 2025', 'More', 'Open one' ] );
+			expect( await page.locator( 'details button' ).count() ).toBe( 0 );
+			expect( await page.locator( 'details details summary' ).textContent() ).toBe( 'More' );
+			expect( await page.locator( 'details.box-style' ).count() ).toBe( 3 );
+			expect( await page.locator( 'details' ).last().getAttribute( 'open' ) ).toBe( '' );
+			const outerBody = page.locator( 'p.body', { hasText: 'Outer body' } );
+			expect( await outerBody.isVisible() ).toBe( false );
+			await page.locator( 'summary', { hasText: 'Archive' } ).click();
+			expect( await outerBody.isVisible() ).toBe( true );
+			// Gamma's entrance fade never ran on closed content; it opens fully visible.
+			expect( await outerBody.evaluate( ( node ) => getComputedStyle( node.parentElement! ).opacity ) ).toBe( '1' );
+			await page.locator( 'summary', { hasText: 'More' } ).click();
+			expect( await page.locator( 'p.body', { hasText: 'Inner body' } ).isVisible() ).toBe( true );
 		} finally { await page.close(); }
 	} );
 

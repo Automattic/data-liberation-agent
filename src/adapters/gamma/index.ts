@@ -13,6 +13,12 @@ export const gammaAdapter: PlatformAdapter = {
 	resolveImageOriginal: nextjsAdapter.resolveImageOriginal,
 	liberation: {
 		...nextjsAdapter.liberation,
+		removeSelectors: [
+			...( nextjsAdapter.liberation?.removeSelectors ?? [] ),
+			// Gamma's empty-image slot: a grey box with an "images" icon, which the
+			// published page keeps under the card. Its parent paints the same grey.
+			'[data-testid="media-placeholder"]',
+		],
 		prepare: prepareGammaPage,
 	},
 };

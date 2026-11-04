@@ -18,6 +18,14 @@
 //   (`attrs.embed.url`, e.g. `https://www.youtube.com/embed/<id>`). Each video
 //   node is replaced by a plain iframe of that URL. The pairing is by order and
 //   is only made when the rendered and published video counts agree.
+//
+// - Toggles. A toggle node (`.node-toggle`) is a `.toggle[data-open]` box whose
+//   first child is the summary; Gamma's stylesheet hides every later child while
+//   `data-open="false"`, and its button only flips that attribute. No ARIA ties
+//   the button to the content, so capture sees no disclosure and the copy keeps
+//   the content hidden for good. Each toggle becomes a native `<details>` with
+//   the summary text and copies of the content, which works without a runtime.
+//   Inner toggles go first, so a parent copies its already-converted children.
 
 import type { Page } from 'playwright';
 
@@ -33,6 +41,30 @@ export async function prepareGammaPage( page: Page ): Promise< void > {
 		for ( const card of document.querySelectorAll< HTMLElement >( '[data-card-id][data-card-scroll-element="true"]' ) ) {
 			const id = `card-${ card.dataset.cardId }`;
 			if ( linked.has( id ) && ! card.id && ! document.getElementById( id ) ) card.id = id;
+		}
+
+		for ( const toggle of [ ...document.querySelectorAll< HTMLElement >( '.node-toggle' ) ].reverse() ) {
+			const view = toggle.querySelector( ':scope > [data-node-view-wrapper]' );
+			const box = view?.querySelector< HTMLElement >( '.toggle[data-open]' );
+			const content = box?.querySelector( '[data-node-view-content-inner="toggle"]' );
+			const title = content?.firstElementChild?.querySelector( '[data-node-view-content-inner="toggleSummary"]' );
+			if ( ! view || ! box || ! content || ! title ) continue;
+			const details = document.createElement( 'details' );
+			details.className = box.className;
+			details.open = box.dataset.open === 'true';
+			const summary = document.createElement( 'summary' );
+			summary.append( ...[ ...title.childNodes ].map( ( node ) => node.cloneNode( true ) ) );
+			const body = [ ...content.children ].slice( 1 ).map( ( node ) => node.cloneNode( true ) as Element );
+			// Gamma fades blocks in once they scroll into view, by adding
+			// `animate-has-animated`. Closed content never did, so it would stay
+			// at opacity 0; give it the state the source shows once opened.
+			for ( const node of body.flatMap( ( root ) => [ root, ...root.querySelectorAll( '*' ) ] ) ) {
+				if ( /(?:^|\s)animatable-on-load/.test( node.getAttribute( 'class' ) ?? '' ) ) node.classList.add( 'animate-has-animated' );
+			}
+			details.append( summary, ...body );
+			// Like the video swap below: detach Gamma's node view, so a later render
+			// updates the detached subtree rather than this document.
+			view.replaceWith( details );
 		}
 
 		const nodes = [ ...document.querySelectorAll< HTMLElement >( '.node-video' ) ];
