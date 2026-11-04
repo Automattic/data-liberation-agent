@@ -12,7 +12,7 @@ import { wixDocumentSelection, wixAdditionalProfiles } from './document-selectio
 import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
-import { portWixRuntimeEmbeds } from './embeds.js';
+import { portWixRuntimeEmbeds, WIX_PINNED_CHAT_SELECTOR } from './embeds.js';
 import { portWixVideoPlayers, portWixBackgroundVideos } from './video.js';
 import { normalizeWixImageGeometry } from './image-geometry.js';
 import { normalizeWixGalleryStrips } from './gallery-strip-geometry.js';
@@ -601,6 +601,8 @@ export const capture: LiberationHooks = {
     { id: 'wix-members-gate', category: 'provider-service',
       selector: '[data-testid="siteMembersDialogBlockingLayer"]', accessGate: { provider: 'Wix' } },
     { id: 'wix-members-dialog', category: 'provider-service', selector: '[data-testid="siteMembersDialogLayout"]' },
+    { id: 'wix-ai-assistant', category: 'provider-service', selector: '#pinnedBottomLeft > [id$="-pinned-layer"]:has([data-hook="AiAssistantWidgetContainer"])' },
+    { id: 'wix-chat-launcher', category: 'provider-service', selector: '#pinnedBottomRight > [id$="-pinned-layer"]:has(iframe[title*="chat" i])' },
     // Wix mirrors its response headers into <meta http-equiv="X-Wix-…">: the
     // owner's metaSiteId, the app instance id and the published revision. They
     // are Wix account identifiers, not page metadata, and a copy would publish
