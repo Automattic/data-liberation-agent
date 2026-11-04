@@ -234,7 +234,7 @@ interface CapturePerViewportArgs {
 	 */
 	reflowPhoneViewport?: { width: number; height: number };
 	viewport: Viewport;
-	consentViewports?: ReadonlyArray<{ width: number; height: number }>;
+	consentViewports?: ReadonlyArray<{ id?: string; width: number; height: number }>;
 	plan: ArtifactPlan;
 	url: string;
 	slug: string;
@@ -1549,7 +1549,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			return captured;
 		}, [] ).catch( () => [] );
 		const components = [ ...await probe( 'components', async () => {
-			const captured = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip ) );
+			const captured = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip, [
+				{ id: viewport.id, width: viewport.width, height: viewport.height },
+				...( args.consentViewports ?? [] ).filter( candidate => candidate.id !== viewport.id ).map( candidate => ( { id: candidate.id, width: candidate.width, height: candidate.height } ) ),
+			] ) );
 			for ( const component of captured ) for ( const state of component.states ) {
 				await resourceStore.captureDomDependencies( state.html, navigationUrl );
 			}
