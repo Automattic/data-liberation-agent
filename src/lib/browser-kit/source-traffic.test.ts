@@ -58,7 +58,8 @@ it.skipIf(skipBrowser)('captures all routes through a resetting origin and leave
           res.writeHead(200, { 'content-type': 'text/css' });
           res.end('h1 { color: rgb(0, 70, 0) }');
         } else {
-          res.writeHead(200, { 'content-type': 'text/html' });
+          // Repeated Set-Cookie headers are joined by newlines in Playwright's headers().
+          res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': ['a=1; Path=/', 'b=2; Path=/'] });
           res.end(`<!doctype html><title>Local fixture</title>${Array.from({ length: 12 }, (_, i) => `<link rel="stylesheet" href="/asset-${i}.css">`).join('')}<h1>Local fixture</h1><p>Portable content</p>${healthy ? '<img src="/image-1.bmp" width="40" height="40"><img src="/image-2.bmp" width="40" height="40"><video preload="auto" src="/video.webm" width="160" height="90"></video>' : ''}`);
         }
       }, 40);
