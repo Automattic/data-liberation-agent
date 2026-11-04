@@ -573,7 +573,7 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html ).toContain(
 			'<button class="menu" aria-label="Open Menu" data-menu="primary" type="submit" name="menu" data-blocks-engine-capture-disclosure-label="Open Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0" aria-controls="data-blocks-engine-capture-dialog-0" aria-expanded="false" aria-haspopup="dialog">Menu</button>'
 		);
-		expect( html ).toContain( '<button type="button" hidden="" data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0" aria-label="Close Open Menu">Close</button>' );
+		expect( html ).toContain( '<button type="button" class="data-blocks-engine-capture-generated-close" hidden="" data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0" aria-label="Close Open Menu">Close</button>' );
 		expect( html ).not.toContain( '<summary' );
 	} );
 
