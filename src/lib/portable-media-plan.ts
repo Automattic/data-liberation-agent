@@ -24,6 +24,8 @@ export interface PortableMediaCandidate {
 	renderedDimension?: number;
 	/** Gallery frame assets may use the existing larger responsive-image byte bound. */
 	galleryFrame?: boolean;
+	/** Same-crop captured resize retained only for aggregate-budget fallback. */
+	budgetFallback?: boolean;
 }
 
 export interface PortableMediaReferenceIndex {
@@ -205,7 +207,7 @@ export function planPortableMediaFamilies(
 	const ranked = families.map( ( family, index ) => ( {
 		index,
 		eligible: selectMediaCandidates( family.candidates, true ),
-		preferred: selectMediaCandidates( family.candidates ),
+		preferred: selectMediaCandidates( family.candidates.filter( candidate => ! candidate.budgetFallback ) ),
 		homepagePriority: homepagePriority[ index ],
 	} ) );
 	const admissionOrder = [ ...ranked ].sort(
