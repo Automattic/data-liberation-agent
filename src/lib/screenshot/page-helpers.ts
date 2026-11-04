@@ -1491,9 +1491,10 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       presentation: {
         span: Math.abs(bounds.width - innerWidth) <= 1 ? 'full' as const : 'inset' as const,
         gap: rowGap === columnGap ? rowGap : `${rowGap} ${columnGap}`,
+        // Only a fixed surface's computed inset is a viewport offset; measure others.
         ...(position === 'center' ? {} : { edge_offset: pixels(position === 'bottom'
-          ? (style.bottom === 'auto' ? innerHeight - bounds.bottom : parseFloat(style.bottom))
-          : (style.top === 'auto' ? bounds.top : parseFloat(style.top))) }),
+          ? (style.position !== 'fixed' || style.bottom === 'auto' ? innerHeight - bounds.bottom : parseFloat(style.bottom))
+          : (style.position !== 'fixed' || style.top === 'auto' ? bounds.top : parseFloat(style.top))) }),
         ...cssValues({ padding: roundedPadding(style.padding), font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight, text_margin: typography.margin }),
         layout: [{ min_width: viewportWidth, max_width: viewportWidth, direction,
           ...cssValues({ align_items: contentStyle.alignItems, text_margin: typography.margin }),
