@@ -1,4 +1,6 @@
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
+import { fetchSourceRoute, governSourceContext, hasSourceGovernor } from './source-traffic.js';
+import type { SourceRequestGovernors } from '../source-request-governor.js';
 import { installProbeIntrinsics } from './probe-intrinsics.js';
 
 /** Shared identity for Node-side HTTP requests to source sites (not browser device profiles). */
@@ -61,6 +63,10 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
   await context.route('**/*', async route => {
     try { await applyIdentity(route); }
     catch {
+      if (hasSourceGovernor(route, context)) {
+        await route.abort('connectionreset').catch(() => {});
+        return;
+      }
       // Closing the page or context mid-request already handled this route;
       // for any other failure the request proceeds rather than stalling.
       await route.fallback().catch(() => {});
@@ -95,10 +101,10 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
       headers['sec-ch-ua-mobile'] = mobile ? '?1' : '?0';
       headers['sec-ch-ua-platform'] = JSON.stringify(platform);
     }
-    if (!page || !ownedPages.has(page)) {
+    if (hasSourceGovernor(route, context) || !page || !ownedPages.has(page)) {
       // Popup main requests have no target yet. Fetch with the context's cookies
       // and explicit identity instead of allowing Chromium to add native hints.
-      const response = await route.fetch({ headers, maxRedirects: 0 });
+      const response = await fetchSourceRoute(route, { headers, maxRedirects: 0 }, 4, context);
       try { await route.fulfill({ response }); }
       finally { await response.dispose(); }
     } else await route.continue({ headers });
@@ -110,9 +116,10 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
 }
 
 /** Source contexts must use this factory, not just spread identity options. */
-export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}): Promise<BrowserContext> {
+export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}, traffic?: { governors?: SourceRequestGovernors; sourceUrl: string }): Promise<BrowserContext> {
   const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
   try {
+    if (traffic?.governors) governSourceContext(context, traffic.governors, traffic.sourceUrl);
     await installProbeIntrinsics(context);
     await installSourceIdentity(context, options);
     return context;

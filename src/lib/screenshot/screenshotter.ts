@@ -3,6 +3,8 @@ import { totalmem } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
+import { getSourceResponse, sourceGovernorFor } from '../browser-kit/source-traffic.js';
+import { isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
@@ -922,7 +924,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				const status = response ? response.status() : 0;
 				if ( status >= 400 ) {
 					if ( RETRYABLE_STATUS.has( status ) && mayRetry() ) {
-						await navSleep( navBackoffMs( attempt, response?.headers()[ 'retry-after' ] ) );
+						if (!sourceGovernorFor(page.context(), url)) await navSleep( navBackoffMs( attempt, response?.headers()[ 'retry-after' ] ) );
 						continue;
 					}
 					loadFail( 'goto', rejectedNavigationReason( status, response?.headers?.() ), attempt );
@@ -955,7 +957,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					return false;
 				}
 				if ( mayRetry() && !(err instanceof SourceNavigationError) ) {
-					await navSleep( navBackoffMs( attempt ) );
+					if (!sourceGovernorFor(page.context(), url) || !isSourceTransportThrottle(err)) await navSleep( navBackoffMs( attempt ) );
 					continue;
 				}
 				loadFail( 'goto', err, attempt );
@@ -1919,6 +1921,7 @@ async function probePhoneOnlyChrome(
 }
 
 interface DeviceComparisonArgs {
+	governors?: ScreenshotOpts['governors'];
 	browser: Browser;
 	url: string;
 	desktop: BrowserContextOptions;
@@ -1959,7 +1962,7 @@ const CHECK_RECHECK_MS = 1_500;
  */
 async function loadForComparison( args: DeviceComparisonArgs, options: BrowserContextOptions, viewport: 'desktop' | 'mobile', mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
 	const startedAt = Date.now();
-	const context = await createSourceContext( args.browser, options );
+	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url } );
 	contexts.push( context );
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
@@ -2015,7 +2018,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	const fetchServerHtml = async () => {
 		if ( ! navigation.response ) return undefined;
 		const headers = replayableRequestHeaders( await navigation.response.request().allHeaders() );
-		const response = await context.request.get( target, { headers, maxRedirects: 0, maxRetries: 0, timeout: 30_000 } );
+		const response = await getSourceResponse(context, target, { headers, maxRedirects: 0, maxRetries: 0, timeout: 30_000 });
 		try { return response.ok() ? await response.text() : undefined; }
 		finally { await response.dispose(); }
 	};
@@ -2070,11 +2073,11 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 		try {
 			if ( args.publicUrlsOnly ) assertPublicHttpUrl( args.url );
 			const documents = await Promise.all( ( [ 'desktop', 'mobile' ] as const ).map( async identity => {
-				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone );
+				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone, { governors: args.governors, sourceUrl: args.url } );
 				contexts.push( context );
 				const headers = args.identityHeaders?.[ identity ];
 				if ( ! headers ) return undefined;
-				const response = await context.request.get( args.url, { headers: replayableRequestHeaders( headers ), maxRedirects: 0, maxRetries: 0, timeout: 30_000 } );
+				const response = await getSourceResponse(context, args.url, { headers: replayableRequestHeaders( headers ), maxRedirects: 0, maxRetries: 0, timeout: 30_000 });
 				try { return response.ok() ? await response.text() : undefined; }
 				finally { await response.dispose(); }
 			} ) );
@@ -2613,14 +2616,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const sharedChromeResults = new Map< string, SharedChromeProbe >();
 	const rootClassEvidence = new RootClassEvidence();
 	if ( ! opts.viewports && desktopProfile && phoneProfile && entrypoint ) {
-		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } );
+		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } );
 		const requested = opts.deviceMode ?? 'dual';
 		const comparison = {
 			deviceEvidence: new RouteDeviceEvidence(),
 			identityHeaders: {},
 			desktop: profileContextOptions( desktopProfile, sessionContext ),
 			phone: profileContextOptions( phoneProfile, sessionContext ),
-			publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
+			governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
 			telemetryRequest: opts.telemetryRequest,
 		};
@@ -2656,12 +2659,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const sharedChromeDecisions: Array< { url: string; profile: string } & SharedChromeRouteDecision > = [];
 	if ( sharedChromeEnabled ) {
 		const profiles = ( reflowViewports ?? viewports ).filter( viewport => ( viewport.id === 'desktop' || viewport.id === 'mobile' ) && ! sharedChromeResults.has( viewport.id ) );
-		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) : undefined;
+		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) : undefined;
 		await Promise.all( profiles.map( async viewport => {
 			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
 				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
-				publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
+				governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
 				telemetryRequest: opts.telemetryRequest,
 				...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
@@ -2844,9 +2847,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					// some sources gate every route/asset behind a session only the
 					// tokenized ENTRY url establishes. Keyed by origin, so this navigates
 					// once per run — every worker and viewport for every route reuses it.
-					contextOptions = profileContextOptions( viewport, await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
+					contextOptions = profileContextOptions( viewport, await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) );
 					identity = replayBrowserIdentity( contextOptions );
-					context = await createSourceContext( attemptBrowser, contextOptions );
+					context = await createSourceContext( attemptBrowser, contextOptions, { governors: opts.governors, sourceUrl: entryUrl } );
 					trackRouteContext( url, context );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
@@ -3265,7 +3268,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			} else if ( candidates.size ) {
 				let context: BrowserContext | undefined;
 				try {
-					context = await createSourceContext( browser, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly } ) );
+					context = await createSourceContext( browser, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ), { governors: opts.governors, sourceUrl: entryUrl } );
 					// Inspecting an action URL performs the action; export names it instead.
 					for ( const url of [ ...candidates ].filter( url => ! stateChangingAction( url ) ).slice(0, 32) ) {
 						try {
@@ -3273,7 +3276,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							const prior = manifest.getEntry( url );
 							if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
 							const inspected = await inspectSourceDocument(url, async (current, timeout) => {
-								const response = await context!.request.get(current, {maxRedirects: 0, maxRetries: 0, timeout: Math.min(SOURCE_LINK_PROBE_REQUEST_MS, timeout)});
+								const response = await getSourceResponse(context!, current, {maxRedirects: 0, maxRetries: 0, timeout: Math.min(SOURCE_LINK_PROBE_REQUEST_MS, timeout)});
 								try { return {url: current, status: response.status(), headers: response.headers(), body: await response.text()}; }
 								finally { await response.dispose(); }
 							}, opts.publicUrlsOnly, SOURCE_NAVIGATION_LIMITS.timeoutMs, opts.routeScope);

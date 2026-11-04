@@ -31,6 +31,7 @@ export function defaultViewports(mobile: { width: number; height: number }): Vie
 export const SCREENSHOT_DEVICE_SCALE_FACTOR = 0.7;
 
 export interface ScreenshotOpts {
+	governors?: import('../source-request-governor.js').SourceRequestGovernors;
 	urls: string[];
 	outputDir: string;
 	primaryUrl?: string; // reference for same-origin enforcement

@@ -5,7 +5,9 @@
  * governor: template grouping and HTTP acquisition share it, so source
  * throttling slows the whole capture instead of stopping one pass.
  *
- * - At most `concurrency` requests are in flight at once.
+ * - At most `concurrency` HTTP requests are in flight at once. Browser
+ *   fan-out is uncapped while healthy; it shares admission limits only after
+ *   an origin throttle, until success-driven recovery reaches full speed.
  * - A throttle response (429 or 503) pauses new requests for the source's
  *   `Retry-After` (delta-seconds or an HTTP date, capped at
  *   `maxRetryAfterMs`), drops the in-flight limit to 1 and retries the
@@ -57,7 +59,17 @@ export interface SourceRequestGovernorOptions {
 	recoveryStep?: number;
 }
 
+/** Transport refusals are source pressure signals, including nested Node fetch causes. */
+export function isSourceTransportThrottle(error: unknown): boolean {
+	if (!error || typeof error !== 'object') return false;
+	const value = error as { message?: string; code?: string; cause?: unknown };
+	return /ECONNRESET|ECONNREFUSED|ERR_CONNECTION_(?:RESET|REFUSED)|CONTENT_LENGTH_MISMATCH|content length mismatch|body length mismatch|socket hang up|connection (?:reset|refused)/i.test(`${value.code ?? ''} ${value.message ?? ''}`)
+		|| (value.cause !== error && isSourceTransportThrottle(value.cause));
+}
+
 export interface GovernedRequestOptions {
+	/** Browser fan-out is unlimited while healthy; shares the reduced limit during recovery. */
+	browser?: boolean;
 	/** Rejects waits and stops retrying once aborted. */
 	signal?: AbortSignal;
 	/** Requests at most, the first included. Default `SOURCE_REQUEST_GOVERNOR_DEFAULTS.maxAttempts`. */
@@ -97,6 +109,7 @@ export class SourceRequestGovernor {
 	private limit: number;
 	private active = 0;
 	private successes = 0;
+	private browserThrottled = false;
 	private pausedUntil = 0;
 	private requests = 0;
 	private throttles = 0;
@@ -131,18 +144,25 @@ export class SourceRequestGovernor {
 	 * Run `task` under the governor. A throttle response is retried after its
 	 * `Retry-After` until it succeeds, `maxAttempts` runs out (the last throttle
 	 * response is returned) or `signal` aborts; an abort rejects with the signal's reason. A task that throws
-	 * releases its slot and rethrows.
+	 * releases its slot and rethrows, except transport refusals, which throttle
+	 * and retry with the fallback delay under the same attempt bound.
 	 */
 	async run< T extends { status: number; headers: Headers } >( task: ( attempt: number ) => Promise< T >, options: GovernedRequestOptions = {} ): Promise< GovernedResponse< T > > {
 		const maxAttempts = Math.max( 1, options.maxAttempts ?? SOURCE_REQUEST_GOVERNOR_DEFAULTS.maxAttempts );
 		let throttles = 0;
 		for ( let attempt = 1; ; attempt++ ) {
-			await this.acquire( options.signal );
+			await this.acquire( options.signal, options.browser );
 			let response: T;
 			try {
 				this.requests++;
 				this.firstRequestAt ??= Date.now();
 				response = await task( attempt );
+			} catch (error) {
+				if (!isSourceTransportThrottle(error)) throw error; // failure-class: operational
+				throttles++;
+				this.recordThrottle(this.fallbackRetryAfterMs);
+				if (attempt >= maxAttempts) throw error; // failure-class: operational
+				continue;
 			} finally {
 				this.release();
 			}
@@ -161,23 +181,25 @@ export class SourceRequestGovernor {
 	private recordThrottle( delayMs: number ) {
 		this.throttles++;
 		this.limit = 1;
+		this.browserThrottled = true;
 		this.successes = 0;
 		this.pausedUntil = Math.max( this.pausedUntil, Date.now() + delayMs );
 	}
 
 	private recordSuccess() {
-		if ( this.limit >= this.maxConcurrency ) return;
+		if ( !this.browserThrottled && this.limit >= this.maxConcurrency ) return;
 		if ( ++this.successes < this.recoveryStep ) return;
 		this.successes = 0;
-		this.limit++;
+		this.limit = Math.min(this.maxConcurrency, this.limit + 1);
+		if (this.limit === this.maxConcurrency) this.browserThrottled = false;
 		this.wake();
 	}
 
 	/** Wait for a free slot, then for any pause to pass. */
-	private async acquire( signal?: AbortSignal ): Promise< void > {
+	private async acquire( signal?: AbortSignal, browser = false ): Promise< void > {
 		for ( ;; ) {
 			if ( signal?.aborted ) throw abortReason( signal ); // failure-class: operational
-			if ( this.active < this.limit ) {
+			if ( (browser && !this.browserThrottled) || this.active < this.limit ) {
 				const wait = this.pausedUntil - Date.now();
 				if ( wait <= 0 ) {
 					this.active++;
@@ -208,7 +230,7 @@ export class SourceRequestGovernor {
 	}
 
 	private wake() {
-		let free = this.limit - this.active;
+		let free = !this.browserThrottled ? this.waiters.length : this.limit - this.active;
 		while ( free-- > 0 && this.waiters.length ) this.waiters.shift()!();
 	}
 

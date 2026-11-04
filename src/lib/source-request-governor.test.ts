@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { parseRetryAfter, SOURCE_REQUEST_GOVERNOR_DEFAULTS, SourceRequestGovernor, SourceRequestGovernors } from './source-request-governor.js';
+import { isSourceTransportThrottle, parseRetryAfter, SOURCE_REQUEST_GOVERNOR_DEFAULTS, SourceRequestGovernor, SourceRequestGovernors } from './source-request-governor.js';
 
 const ok = () => ( { status: 200, headers: new Headers() } );
 const throttle = ( retryAfter?: string, status = 429 ) => ( { status, headers: new Headers( retryAfter === undefined ? {} : { 'retry-after': retryAfter } ) } );
@@ -35,6 +35,38 @@ describe( 'parseRetryAfter', () => {
 } );
 
 describe( 'SourceRequestGovernor', () => {
+	it('backs off on transport resets across browser and HTTP callers, then recovers uncapped browser fan-out', async () => {
+		vi.useFakeTimers();
+		const governor = new SourceRequestGovernor('https://source.example', { concurrency: 2, recoveryStep: 1 });
+		for (const message of ['ECONNRESET', 'ECONNREFUSED', 'net::ERR_CONNECTION_RESET', 'net::ERR_CONNECTION_REFUSED', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH', 'body length mismatch', 'route.fetch: socket hang up']) {
+			expect(isSourceTransportThrottle(new Error(message))).toBe(true);
+		}
+		expect(isSourceTransportThrottle(new Error('fetch failed', { cause: Object.assign(new Error(), { code: 'ECONNRESET' }) }))).toBe(true);
+		expect(isSourceTransportThrottle(new Error('Timeout 30000ms exceeded'))).toBe(false);
+		const reset = new Error('route.fetch: read ECONNRESET');
+		const task = vi.fn().mockRejectedValueOnce(reset).mockResolvedValue(ok());
+		const pending = governor.run(task, { browser: true });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(governor.concurrency).toBe(1);
+		expect(governor.throttleEvents).toBe(1);
+		const http = vi.fn(async () => ok());
+		const other = governor.run(http);
+		await vi.advanceTimersByTimeAsync(999);
+		expect(task).toHaveBeenCalledTimes(1);
+		expect(http).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		await Promise.all([pending, other]);
+		expect(governor.concurrency).toBe(2);
+		let active = 0;
+		let peak = 0;
+		await Promise.all(Array.from({ length: 20 }, () => governor.run(async () => {
+			peak = Math.max(peak, ++active);
+			await Promise.resolve();
+			active--;
+			return ok();
+		}, { browser: true })));
+		expect(peak).toBe(20);
+	});
 	it( 'bounds requests in flight, drops to one after a throttle and recovers on successes', async () => {
 		const governor = new SourceRequestGovernor( 'https://source.example', { concurrency: 4, recoveryStep: 2 } );
 		let active = 0;
