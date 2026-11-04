@@ -13,7 +13,7 @@ import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
-import { portWixVideoPlayers } from './video.js';
+import { portWixVideoPlayers, portWixBackgroundVideos } from './video.js';
 import { normalizeWixImageGeometry } from './image-geometry.js';
 import { normalizeWixGalleryStrips } from './gallery-strip-geometry.js';
 
@@ -958,6 +958,10 @@ export const capture: LiberationHooks = {
 		// The video player is a runtime widget too: it becomes a standard
 		// `<video controls poster>` with a portable rendition (see video.ts).
 		await portWixVideoPlayers( page ).catch( () => 0 );
+		// A background video keeps its element and semantics; only its
+		// `<video>`'s rendition is re-pointed at one a portable website can
+		// carry (see video.ts).
+		await portWixBackgroundVideos( page ).catch( () => 0 );
 		// Revealing a slideshow scrolls, so the chrome is settled after it.
 		await settleScrollReactiveChrome( page );
 		// Horizontal gallery strips re-lay out too late for the sweep to learn

@@ -14,12 +14,22 @@
 // At serialization the player becomes one standard element:
 // `<video controls poster>` with the rendition that fits the rendered box
 // and the portable byte limit, and the rendition's intrinsic size.
+//
+// A background video is a different contract: `<wix-video class="… bgVideo …">`
+// keeps its `<video muted loop autoplay playsinline>` and publishes the same
+// renditions as a flat quality list (`qualities[]`, CDN-relative URLs) with no
+// per-entry dimensions. The runtime pointed the element at whichever rendition
+// it chose — often a 1080p file larger than a portable media file may be. At
+// serialization that `src` alone is re-pointed at a portable rendition; the
+// background semantics, classes, styles and poster are left as authored.
 
 import type { Page } from 'playwright';
 import { MAX_PORTABLE_MEDIA_BYTES } from '../../lib/portable-media-limits.js';
 
 const VIDEO_MARKER = 'data-blocks-engine-capture-wix-video';
 const HEAD_TIMEOUT_MS = 10_000;
+/** A background video's `qualities[].url` is relative to Wix's video CDN. */
+const WIX_VIDEO_CDN = 'https://video.wixstatic.com/';
 
 export interface WixVideoRendition {
 	url: string;
@@ -51,7 +61,8 @@ function httpsUrl( value: unknown, base?: string ): string | undefined {
 
 /**
  * Read the progressive MP4 renditions and poster from a `data-video-info`
- * record. Adaptive (HLS) sources are skipped: they need a player runtime.
+ * record — the player's `sources[].types[]`, or a background video's flat
+ * `qualities[]`. Adaptive (HLS) sources are skipped: they need a player runtime.
  */
 export function wixVideoRecord( info: string, base?: string ): WixVideoRecord | null {
 	let record: Record< string, unknown >;
@@ -74,6 +85,28 @@ export function wixVideoRecord( info: string, base?: string ): WixVideoRecord | 
 			const { format, url } = type as { format?: unknown; url?: unknown };
 			const resolved = format === 'mp4' ? httpsUrl( url, base ) : undefined;
 			if ( resolved ) renditions.push( { url: resolved, width: w, height: h } );
+		}
+	}
+	if ( renditions.length === 0 ) {
+		// A background video's record: one quality entry per progressive MP4,
+		// with a CDN-relative `url` and no dimensions — each is derived from its
+		// `720p` label and the record's intrinsic size.
+		const w = finitePositive( record.videoWidth );
+		const h = finitePositive( record.videoHeight );
+		if ( w && h ) {
+			for ( const quality of Array.isArray( record.qualities ) ? record.qualities : [] ) {
+				if ( ! quality || typeof quality !== 'object' ) continue;
+				const { quality: label, url } = quality as { quality?: unknown; url?: unknown };
+				const height = typeof label === 'string' ? /^\s*(\d{2,4})p\s*$/i.exec( label )?.[ 1 ] : undefined;
+				const resolved = height ? httpsUrl( url, WIX_VIDEO_CDN ) : undefined;
+				if ( resolved && height ) {
+					renditions.push( {
+						url: resolved,
+						width: Math.round( ( Number( height ) * w ) / h ),
+						height: Number( height ),
+					} );
+				}
+			}
 		}
 	}
 	if ( renditions.length === 0 ) return null;
@@ -216,4 +249,59 @@ export async function portWixVideoPlayers( page: Page ): Promise< number > {
 		}
 		return replaced;
 	}, { marker: VIDEO_MARKER, replacements } );
+}
+
+interface CollectedBackgroundVideo {
+	info: string;
+	width: number;
+}
+
+/**
+ * Re-point each background `<wix-video>`'s `<video>` at the rendition a
+ * portable website can carry. The element itself stays — classes, styles,
+ * poster and the muted/loop/autoplay/playsinline semantics are exactly as
+ * authored — so this is not the player conversion above.
+ * Returns how many background videos were updated.
+ */
+export async function portWixBackgroundVideos( page: Page ): Promise< number > {
+	const collected = await page.evaluate( ( marker ) => {
+		const backgrounds: CollectedBackgroundVideo[] = [];
+		for ( const container of document.querySelectorAll( 'wix-video[data-video-info]' ) ) {
+			if ( ! container.querySelector( 'video' ) ) continue;
+			container.setAttribute( marker, String( backgrounds.length ) );
+			backgrounds.push( {
+				info: container.getAttribute( 'data-video-info' ) ?? '',
+				width: container.getBoundingClientRect().width,
+			} );
+		}
+		return backgrounds;
+	}, VIDEO_MARKER ) as CollectedBackgroundVideo[];
+	if ( collected.length === 0 ) return 0;
+
+	const records = collected.map( ( background ) => wixVideoRecord( background.info ) );
+	const bytes = new Map< string, number | undefined >();
+	for ( const record of records ) {
+		for ( const { url } of record?.renditions ?? [] ) {
+			if ( ! bytes.has( url ) ) bytes.set( url, await renditionBytes( page, url ) );
+		}
+	}
+	const updates = collected.map( ( background, index ) => {
+		const record = records[ index ];
+		const rendition = record && selectWixVideoRendition( record.renditions, background.width, bytes );
+		return rendition?.url ?? null;
+	} );
+
+	return page.evaluate( ( { marker, updates } ) => {
+		let updated = 0;
+		for ( const element of document.querySelectorAll( `[${ marker }]` ) ) {
+			const src = updates[ Number( element.getAttribute( marker ) ) ];
+			element.removeAttribute( marker );
+			if ( ! src ) continue;
+			// Every `<video>` the runtime left inside (the capture may add a
+			// second one for the mobile document) carries the same rendition.
+			for ( const video of element.querySelectorAll( 'video' ) ) video.setAttribute( 'src', src );
+			updated++;
+		}
+		return updated;
+	}, { marker: VIDEO_MARKER, updates } );
 }
