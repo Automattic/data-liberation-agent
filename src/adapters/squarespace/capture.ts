@@ -1,4 +1,5 @@
 import type { LiberationHooks } from '../page-actions.js';
+import { preserveSquarespaceProductJsonLd } from './product-jsonld.js';
 
 const VIDEO_MARKER = 'data-blocks-engine-capture-squarespace-video';
 
@@ -71,7 +72,8 @@ export const capture: LiberationHooks = {
 	 * still of the current frame. Give it the platform's own poster instead,
 	 * when the video does not already declare one.
 	 */
-	beforeSerialize: async ( page ) => {
+	beforeSerialize: async ( page, context ) => {
+		await preserveSquarespaceProductJsonLd( page, context );
 		const configs = await page.evaluate( ( marker ) => {
 			const configs: string[] = [];
 			for ( const video of document.querySelectorAll( 'video' ) ) {

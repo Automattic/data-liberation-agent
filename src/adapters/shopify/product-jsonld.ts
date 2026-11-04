@@ -3,21 +3,10 @@ import type { LiberationContext } from '../page-actions.js';
 import { fetchShopifyJson } from './http.js';
 import type { ShopifyProductJson, ShopifyProductVariant } from './types.js';
 
-type Node = Record<string, any>;
-// Match capture-export's inert JSON-LD retention contract without coupling the
-// adapter to the exporter (which owns no Shopify knowledge).
-const MAX_SCRIPT = 64 * 1024;
-const MAX_TOTAL = 256 * 1024;
-const MAX_SCRIPTS = 16;
+import { object, list, describesPage, withinJsonLdLimits, type JsonLdNode as Node } from '../product-jsonld.js';
 const PRODUCT_ROUTE = /^\/(?:(?<locale>[a-z]{2,3}(?:-[a-z0-9]{2,8})*)\/)?products\/[^/]+\/?$/i;
 const requests = new WeakMap<object, Map<string, Promise<ShopifyProductJson | null>>>();
 
-function object(value: unknown): value is Node {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-function list(value: unknown): any[] {
-  return value === undefined ? [] : Array.isArray(value) ? value : [value];
-}
 function append(existing: unknown, additions: unknown[]): unknown[] {
   const result = list(existing).slice();
   for (const value of additions) {
@@ -40,15 +29,6 @@ function variantId(node: Node, pageUrl: string): string | undefined {
     } catch { /* Unrecognised theme identifiers remain untouched. */ }
   }
   return undefined;
-}
-/** Only this page's product is completed; related-product nodes keep their own data. */
-function describesPage(node: Node, pageUrl: string): boolean {
-  const own = new URL(pageUrl).pathname.replace(/\/$/, '');
-  const sources = [node.url, node['@id'], ...list(node.offers).map(offer => offer?.url)].filter((value): value is string => typeof value === 'string' && !value.startsWith('#'));
-  if (!sources.length) return true;
-  return sources.some(source => {
-    try { return new URL(source, pageUrl).pathname.replace(/\/$/, '') === own; } catch { return false; }
-  });
 }
 function completeVariant(node: Node, variant: ShopifyProductVariant, product: ShopifyProductJson, pageUrl: string): void {
   const properties = product.options.flatMap(option => {
@@ -172,8 +152,7 @@ export function completeProductJsonLd(scripts: string[], product: ShopifyProduct
       visit(group);
       result.push(JSON.stringify(group).replace(/</g, '\\u003c'));
     }
-    if (result.length > MAX_SCRIPTS || result.some(source => Buffer.byteLength(source) > MAX_SCRIPT) ||
-        result.reduce((sum, source) => sum + Buffer.byteLength(source), 0) > MAX_TOTAL) {
+    if (!withinJsonLdLimits(result)) {
       return { scripts, diagnostic: 'shopify_product_jsonld_limit: enrichment exceeds JSON-LD export limits; original retained' };
     }
     return { scripts: result };

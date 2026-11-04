@@ -1,0 +1,13 @@
+{
+  "item": {
+    "id": "abc", "recordType": 11, "title": "Field Tee",
+    "variantOptionOrdering": ["Color", "Size"],
+    "items": [{"assetUrl":"https://cdn.example/a.jpg"},{"assetUrl":"https://cdn.example/b.jpg"},{"assetUrl":"https://cdn.example/a.jpg"}],
+    "structuredContent": {"_type":"StoreItem","productType":1},
+    "variants": [
+      {"sku":"FT-BLK-S","attributes":{"Size":"S","Color":"Black"},"optionValues":[{"optionName":"Size","value":"S"},{"optionName":"Color","value":"Black"}],"priceMoney":{"currency":"USD","value":"27.99"},"salePriceMoney":{"currency":"USD","value":"0.00"},"onSale":false,"unlimited":true,"qtyInStock":0,"mainImage":{"assetUrl":"https://cdn.example/a.jpg"}},
+      {"sku":"FT-BLK-M","optionValues":[{"optionName":"Size","value":"M"},{"optionName":"Color","value":"Black"}],"priceMoney":{"currency":"USD","value":"27.99"},"salePriceMoney":{"currency":"USD","value":"19.99"},"onSale":true,"unlimited":false,"qtyInStock":0}
+    ]
+  },
+  "collection": {"title":"Shop"}
+}
