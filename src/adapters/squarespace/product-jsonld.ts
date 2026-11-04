@@ -31,6 +31,8 @@ export function completeProductJsonLd(scripts: string[], payload: SqsJsonRespons
             const money = variant.onSale ? variant.salePriceMoney : variant.priceMoney;
             return {
               '@type': 'Product', sku: variant.sku, image: variant.mainImage?.assetUrl,
+              // Variant names make each child a complete Product for schema consumers.
+              name: [value.name ?? item.title, variant.optionValues?.map(option => option.value).join(' / ')].filter(Boolean).join(' - '),
               additionalProperty: variant.optionValues?.map(option => ({
                 '@type': 'PropertyValue', name: option.optionName, value: option.value,
               })),

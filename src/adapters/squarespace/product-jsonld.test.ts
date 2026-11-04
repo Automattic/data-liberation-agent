@@ -41,6 +41,7 @@ describe('Squarespace product JSON-LD', () => {
     expect(group.hasVariant).toHaveLength(fixture.item.variants.length);
     group.hasVariant.forEach((variant: any, index: number) => {
       expect(variant.sku).toBe(fixture.item.variants[index].sku);
+      expect(variant.name).toBe(`${thin.name} - ${fixture.item.variants[index].optionValues!.map(option => option.value).join(' / ')}`);
       expect(variant.additionalProperty).toEqual(fixture.item.variants[index].optionValues!.map(option => ({ '@type': 'PropertyValue', name: option.optionName, value: option.value })));
       expect(variant.offers).toMatchObject({ '@type': 'Offer', price: index ? '19.99' : '27.99', priceCurrency: 'USD', availability: `https://schema.org/${index ? 'OutOfStock' : 'InStock'}` });
     });
