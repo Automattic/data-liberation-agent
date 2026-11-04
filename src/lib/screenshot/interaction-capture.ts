@@ -135,6 +135,11 @@ export interface CapturedDialogInteraction {
 		/** Observed local ancestor transitions and panel placement, verified by source restoration. */
 		ancestorState?: CapturedDropdownAncestorState;
 		rootClassState?: CapturedRootClassState[];
+		/**
+		 * The panel's own control that closed it when clicked: its tag, label and
+		 * element-child path from the serialized panel root.
+		 */
+		closeControl?: { tag: string; label: string; path: number[] };
 	};
 	/**
 	 * Present on `kind: 'selectable-set'` states. `size` is how many members
@@ -619,6 +624,7 @@ export async function captureTriggeredDialogs(
 			const observedAncestors = await observeDropdownAncestors( page, dialog.selector, dropdown );
 			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 || observedAncestors.trigger?.length ? observedAncestors : undefined;
 			const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
+			const closeControl = await clickAuthoredCloseControl( page, dialog.selector );
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 			const restoredRoots = await rootClasses( page );
 			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
@@ -643,6 +649,7 @@ export async function captureTriggeredDialogs(
 					htmlBytes: bounded.bytes,
 					htmlTruncated: bounded.truncated,
 					...( addedCss ? { css: addedCss } : {} ),
+					...( closeControl ? { closeControl } : {} ),
 					...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
 					...( rootsRestored && rootClassState.length ? { rootClassState } : {} ),
 				},
@@ -877,6 +884,50 @@ async function visibleSemanticDialogs( page: Page ): Promise< DialogDescriptor[]
 				};
 			} );
 	}, { limit: MAX_INITIAL_DIALOGS, runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE } ) as Promise< DialogDescriptor[]>;
+}
+
+/**
+ * Click the opened panel's own close control, a dismissal-named element or a
+ * pointer-cursor control labelled as closing it, and report it when the click
+ * closed the panel. Its path counts the element children the snapshot keeps.
+ */
+async function clickAuthoredCloseControl( page: Page, dialogSelector: string ): Promise< NonNullable< NonNullable< CapturedDialogInteraction[ 'dialog' ] >[ 'closeControl' ] > | undefined > {
+	const found = await page.evaluate( dialogSelector => {
+		const dialog = document.querySelector( dialogSelector );
+		if ( ! dialog ) return undefined;
+		const named = '[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-close],[data-testid*="close" i]';
+		const label = ( element: Element ) => ( element.getAttribute( 'aria-label' ) || element.getAttribute( 'title' ) || element.textContent || '' ).replace( /\s+/g, ' ' ).trim();
+		const shown = ( element: Element ) => {
+			const rect = element.getBoundingClientRect();
+			const style = getComputedStyle( element );
+			return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+		};
+		const pointer = ( element: Element ) => getComputedStyle( element ).cursor === 'pointer';
+		const control = Array.from( dialog.querySelectorAll( '*' ) ).find( element => shown( element ) && (
+			element.matches( named ) ||
+			pointer( element ) && ! ( element.parentElement && pointer( element.parentElement ) ) && /^(close|[×✕✖x])$/i.test( label( element ) )
+		) );
+		if ( ! control ) return undefined;
+		const kept = ( element: Element ) => ! [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME' ].includes( element.tagName );
+		const path: number[] = [];
+		for ( let node: Element = control; node !== dialog; node = node.parentElement! ) path.unshift( Array.from( node.parentElement!.children ).filter( kept ).indexOf( node ) );
+		control.setAttribute( 'data-lib-authored-close', '' );
+		return { tag: control.tagName.toLowerCase(), label: label( control ).slice( 0, 80 ), path };
+	}, dialogSelector ).catch( () => undefined );
+	if ( ! found ) return undefined;
+	const control = page.locator( '[data-lib-authored-close]' ).first();
+	try {
+		await control.click( { timeout: 1_000 } );
+		for ( let attempt = 0; attempt < 10; attempt++ ) {
+			if ( ! await panelIntersectsViewport( page, dialogSelector ) ) return found;
+			await page.waitForTimeout( 100 );
+		}
+		return undefined;
+	} catch {
+		return undefined;
+	} finally {
+		await page.evaluate( () => document.querySelector( '[data-lib-authored-close]' )?.removeAttribute( 'data-lib-authored-close' ) ).catch( () => undefined );
+	}
 }
 
 async function findCloseControl(

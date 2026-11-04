@@ -41,7 +41,7 @@ const DISCLOSURE_CSS =
 	'[data-blocks-engine-capture-dialog-panel]:not(.data-blocks-engine-capture-dropdown):not([data-blocks-engine-capture-resting-panel]):not([hidden]){display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
 	'[data-blocks-engine-capture-dialog-panel].data-blocks-engine-capture-dropdown:not([data-blocks-engine-capture-existing-panel]):not([data-blocks-engine-capture-observed-placement]):not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
 	'[data-blocks-engine-capture-dialog-panel]:not([data-blocks-engine-capture-resting-panel]):not([data-blocks-engine-capture-observed-placement]):not([hidden])>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
-	'[data-blocks-engine-capture-dialog-close]:not([hidden]){position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}';
+	'.data-blocks-engine-capture-generated-close:not([hidden]){position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}';
 
 const DISCLOSURE_RUNTIME = `(function(){
 function triggers(){return document.querySelectorAll('[data-blocks-engine-capture-dialog-trigger]');}
@@ -440,8 +440,24 @@ export function wireCapturedDialogs(
 				}
 				insertionPoint.after( panel );
 			}
-			if ( ! dropdown && !state.gallery ) {
-				const close = $( '<button type="button" hidden>Close</button>' );
+			// The panel's own observed close control closes it here too. Opening
+			// replays the panel state, so that markup carries the binding as well.
+			const authoredClose = state.dialog?.closeControl && ! dropdown && ! state.gallery
+				? markAuthoredClose( $, reusePanel || sourcePlaced ? panel : panel.children().first(), state.dialog.closeControl, panelId )
+				: false;
+			if ( authoredClose ) {
+				const replay = trigger.attr( 'data-blocks-engine-capture-dialog-panel-state' );
+				if ( replay ) {
+					const replayState = JSON.parse( replay ) as { html: string };
+					const fragment = cheerio.load( `<div>${ replayState.html }</div>`, null, false );
+					const container = fragment.root().children().first();
+					// A reused root replays its children; a generated panel replays the root itself.
+					markAuthoredClose( fragment, reusePanel ? container : container.children().first(), state.dialog!.closeControl!, panelId );
+					trigger.attr( 'data-blocks-engine-capture-dialog-panel-state', JSON.stringify( { ...replayState, html: container.html() ?? '' } ) );
+				}
+			}
+			if ( ! dropdown && !state.gallery && ! authoredClose ) {
+				const close = $( '<button type="button" class="data-blocks-engine-capture-generated-close" hidden>Close</button>' );
 				close.attr( 'data-blocks-engine-capture-dialog-close', panelId );
 				close.attr( 'aria-label', label ? `Close ${ label }` : 'Close' );
 				panel.after( close );
@@ -668,6 +684,26 @@ function removeCapturedDialog( $: cheerio.CheerioAPI, selector: string | undefin
 	} catch {
 		// Invalid source selectors cannot safely identify a node to remove.
 	}
+}
+
+/** Bind the panel's observed close control, found by its element path, tag and label. */
+function markAuthoredClose(
+	$: cheerio.CheerioAPI,
+	root: cheerio.Cheerio< AnyNode >,
+	control: NonNullable< NonNullable< CapturedDialogInteraction[ 'dialog' ] >[ 'closeControl' ] >,
+	panelId: string
+): boolean {
+	let node = root;
+	for ( const index of control.path ) {
+		node = node.children().filter( ( _, child ) => ! [ 'script', 'style', 'noscript', 'iframe' ].includes( ( child as Element ).tagName ) ).eq( index );
+		if ( ! node.length ) return false;
+	}
+	const element = node.get( 0 ) as Element | undefined;
+	const label = ( node.attr( 'aria-label' ) || node.attr( 'title' ) || node.text() ).replace( /\s+/g, ' ' ).trim().slice( 0, 80 );
+	if ( ! element || element.tagName !== control.tag || label !== control.label ) return false;
+	node.attr( 'data-blocks-engine-capture-dialog-close', panelId );
+	if ( ! node.is( 'a,button' ) ) node.attr( 'role', 'button' ).attr( 'tabindex', '0' );
+	return true;
 }
 
 function findCloseControl(

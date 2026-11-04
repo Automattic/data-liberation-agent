@@ -33,7 +33,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 	dialogs: {
 		'dialog-trigger': 'a', 'dialog-panel': 'a', 'dialog-close': 'a', 'dialog-panel-state': 'a', 'dialog-ancestor-state': 'a', 'dialog-trigger-state': 'a',
 		'dialog-ancestor-unverified': 'a', 'dialog-css': 'a', 'existing-panel': 'a', 'observed-placement': 'a', 'resting-panel': 'a',
-		dialog: 'c', dropdown: 'c', 'initial-dialog': 'c',
+		dialog: 'c', dropdown: 'c', 'initial-dialog': 'c', 'generated-close': 'c',
 	},
 	disclosures: {
 		disclosure: 'a', 'disclosure-base': 'a', 'disclosure-label': 'a', 'disclosure-runtime': 'a',

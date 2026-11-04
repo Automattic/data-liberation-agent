@@ -309,7 +309,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		}, 60_000 );
 	} );
 
-	it( 'carries a builder navbar\'s phone-only menu control to every route and opens its drawer there', async () => {
+	it( 'carries a builder navbar\'s phone-only menu control to every route and opens and closes its drawer there', async () => {
 		const run = await capture( 'builder', { routes: [ 'about', 'contact' ] } );
 		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', phoneProbe: { status: 'captured', triggers: 1, captured: 1 } } );
 		const menu = ( route: string ) => run.entries[ `${ origin }/builder/${ route }` ]!.interactions?.states.find( state => state.trigger.label === 'Menu' );
@@ -329,6 +329,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				await phone.goto( new URL( route, site.url ).href );
 				await phone.getByText( 'Menu', { exact: true } ).click();
 				await expect.poll( () => phone.getByRole( 'dialog' ).getByText( 'About' ).isVisible() ).toBe( true );
+				// The drawer's own Close control closes it; no generated one is added.
+				expect( await phone.locator( 'button[data-blocks-engine-capture-dialog-close]' ).count() ).toBe( 0 );
+				await phone.getByRole( 'dialog' ).getByText( 'Close', { exact: true } ).click();
+				await expect.poll( () => phone.getByRole( 'dialog' ).getByText( 'About' ).isVisible() ).toBe( false );
 			}
 		} finally {
 			await browser.close();
