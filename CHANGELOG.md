@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.117] - 2026-11-04
+
+### Changed
+- regenerate plugin bundles
+- Bind a trigger-opened panel's own close control instead of generating one
+- Govern browser source traffic and back off on transport resets
+
+### Fixed
+- match shorthand var() repair rules by canonical prelude
+
 ## [0.33.116] - 2026-11-04
 
 ### Changed
