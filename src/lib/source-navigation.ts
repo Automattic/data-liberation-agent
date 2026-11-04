@@ -1,4 +1,4 @@
-import { fetchSourceRoute } from './browser-kit/source-traffic.js';
+import { fetchSourceRoute, sourceLoadInterruptions } from './browser-kit/source-traffic.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -249,7 +249,20 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * within what remains of the same budget, and `loadIncomplete` reports a
  * delivered document whose subresources were still pending when it ran out.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; subresourceLoss?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
+	for (let attempt = 1; ; attempt++) {
+		const before = sourceLoadInterruptions(page);
+		const result = await navigateSourceDocumentAttempt(page, requestedUrl, {...options, timeoutMs: Math.max(1, deadline - Date.now())});
+		if (sourceLoadInterruptions(page) === before || result.boundary || result.redirectedTo) return result;
+		// A reset/429/503 can finish the browser's load event without delivering
+		// the resource. Replay the document, not individual scripts/styles, so
+		// native streaming and execution order survive. Admission honors backoff.
+		if (attempt >= 4 || Date.now() >= deadline) return {...result, subresourceLoss: true};
+	}
+}
+
+async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; loadWaitMs?: number}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
