@@ -1947,17 +1947,19 @@ function responsiveMobileStyles(
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {
-				const delta = skip instanceof SharedStyles ? skip.mobile.get( original ) : undefined;
+				// Byte-identical counterparts have no raw delta, but aliasing can
+				// still change individual selectors in their phone replay.
+				const delta = ( skip instanceof SharedStyles ? skip.mobile.get( original ) : undefined ) ??
+					( skip.has( original ) ? '' : undefined );
 				// Common rules whose selector spelling changes still need a phone
 				// copy. Select before aliasing, retaining their original source order.
 				const selected = delta !== undefined && classAliases.size > 0
 					? projectStylesheet( () => {
 						const rules = parseCss( original );
 						const deltaKeys = new Set( parseCss( delta ).nodes.map( node => node.toString() ) );
-						let aliasChanged = false;
 						for ( const node of [ ...rules.nodes ] ) {
 							const css = node.toString();
-							aliasChanged ||= aliasResponsiveClasses( css, classAliases ) !== css;
+							const aliasChanged = aliasResponsiveClasses( css, classAliases ) !== css;
 							if ( ! aliasChanged && ! deltaKeys.has( css ) ) node.remove();
 						}
 						return rules.toString();

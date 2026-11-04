@@ -92,7 +92,50 @@ function page( body: string, head = '', bodyAttributes = '' ): string {
 	return `<html><head>${ head }</head><body${ bodyAttributes }>${ body }</body></html>`;
 }
 
+async function expectStylesheetParity( desktop: string, mobile: string, assembled: string, properties: string[], expectedPhone?: string[], selector = 'main' ): Promise<void> {
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		await tab.route( 'https://fixture.test/**', route => route.fulfill( { contentType: 'text/css', body: '.target{font-size:18px}' } ) );
+		for ( const width of [ 390, 768, 1440 ] ) {
+			await tab.setViewportSize( { width, height: 900 } );
+			const measure = async ( html: string ) => {
+				await tab.setContent( html );
+				return tab.locator( selector ).evaluate( ( node, names ) => {
+					const css = getComputedStyle( node );
+					return names.map( name => css.getPropertyValue( name ) );
+				}, properties );
+			};
+			const expected = await measure( width < 1200 ? mobile : desktop );
+			if ( width < 1200 && expectedPhone ) expect( expected ).toEqual( expectedPhone );
+			expect( await measure( assembled ), `computed styles at ${ width }px` ).toEqual( expected );
+		}
+	} finally { await browser.close(); }
+}
+
 describe( 'counterpart stylesheet deltas (#1286)', () => {
+	it( 'replays only alias-changed nodes from byte-identical Framer SSR sheets', async () => {
+		const common = '.framer-84zrh{display:flex;gap:40px;width:900px;height:90px}.framer-1vf3dh3{width:1px}';
+		const variant = '.framer-84zrh.framer-v-13gjlia{gap:24px;width:390px;height:76px}' +
+			'.framer-84zrh.framer-v-13gjlia .framer-1vf3dh3{flex:0 0 auto;width:100%}' +
+			'@supports (display:flex){.framer-84zrh.framer-v-13gjlia{align-items:center}}' +
+			'.framer-84zrh.framer-v-13gjlia .logo{height:20px}';
+		// Common nodes after the aliased rules must not inflate the replay.
+		const tail = '@media (min-width:300px){.unrelated{color:green}}.unrelated{padding:4px}';
+		const head = `<style data-framer-css-ssr-minified>${ common + variant + tail }</style>`;
+		const markup = ( classes: string ) => `<main id="header" class="framer-84zrh ${ classes }"><a id="logo" class="framer-1vf3dh3 logo">Logo</a></main>`;
+		const desktop = page( markup( 'framer-v-desktop' ), head );
+		const mobile = page( markup( 'framer-v-13gjlia' ).replace( '</main>', '<span id="phone-only">Phone menu</span></main>' ), head );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile, switchWidth: 1199 } );
+		expect( result.hasMobileDocument ).toBe( false );
+		const $ = cheerio.load( result.html );
+		const alias = $( '#header' ).attr( 'class' )!.split( /\s+/ ).find( token => token.startsWith( 'data-blocks-engine-capture-responsive-class-' ) );
+		expect( alias ).toBeDefined();
+		expect( $( 'style[media="(max-width:1199px)"]' ).text() ).toBe( variant.replaceAll( 'framer-v-13gjlia', alias! ) );
+		expect( $( 'style:not([media])' ).text() ).toContain( common + variant + tail );
+		await expectStylesheetParity( desktop, mobile, result.html, [ 'gap', 'width', 'height' ], [ '24px', '390px', '76px' ] );
+		await expectStylesheetParity( desktop, mobile, result.html, [ 'width' ], [ '390px' ], '#logo' );
+	} );
 	it.each( [
 		{ name: 'desktop duplicate keys', desktop: '.a{margin:0}.a{margin:0}', mobile: '.a{margin:0}', attributes: '' },
 		{ name: 'phone duplicate keys', desktop: '.a{margin:0}', mobile: '.a{margin:0}.a{margin:0}', attributes: '' },
@@ -141,24 +184,7 @@ describe( 'counterpart stylesheet deltas (#1286)', () => {
 		expect( phoneCss ).toBe( delta );
 		expect( Buffer.byteLength( phoneCss ) ).toBeLessThan( Buffer.byteLength( mobileCss ) / 10 );
 		expect( $( 'link' ) ).toHaveLength( 2 );
-		const browser = await chromium.launch();
-		try {
-			const tab = await browser.newPage();
-			await tab.route( 'https://fixture.test/**', route => route.fulfill( { contentType: 'text/css', body: '.target{font-size:18px}' } ) );
-			for ( const width of [ 390, 1440 ] ) {
-				await tab.setViewportSize( { width, height: 900 } );
-				const measure = async ( html: string ) => {
-					await tab.setContent( html );
-					return tab.locator( 'main' ).evaluate( node => {
-						const css = getComputedStyle( node );
-						return [ css.color, css.padding, css.marginLeft, css.fontSize, css.letterSpacing ];
-					} );
-				};
-				const expected = await measure( width === 390 ? mobile : desktop );
-				expect( expected[ 4 ] ).toBe( width === 390 ? '2px' : '1px' );
-				expect( await measure( result.html ) ).toEqual( expected );
-			}
-		} finally { await browser.close(); }
+		await expectStylesheetParity( desktop, mobile, result.html, [ 'color', 'padding', 'margin-left', 'font-size', 'letter-spacing' ], [ 'rgb(0, 0, 255)', '7px', '4px', '18px', '2px' ] );
 	} );
 } );
 
