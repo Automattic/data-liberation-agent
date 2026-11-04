@@ -1,4 +1,5 @@
-import type { APIResponse, BrowserContext, Request, Route } from 'playwright';
+import type { APIResponse, BrowserContext, Page, Request, Route } from 'playwright';
+import { isSourceTransportThrottle } from '../source-request-governor.js';
 import type { SourceRequestGovernors } from '../source-request-governor.js';
 
 const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string }>();
@@ -13,6 +14,7 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     entry.governor.observeSourceResponse();
     if (entry.status === 429 || entry.status === 503) {
       entry.throttled = true;
+      recordInterruptedLoad(response.request());
       entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after'], undefined, entry.routeUrl);
     }
   });
@@ -20,6 +22,7 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     const entry = nativeRequests.get(request);
     if (!entry) return;
     nativeRequests.delete(request);
+    if (failed && !entry.throttled && isSourceTransportThrottle(new Error(request.failure()?.errorText ?? ''))) recordInterruptedLoad(request);
     if (!entry.throttled) entry.governor.observeBrowserOutcome(failed ? undefined : entry.status, undefined,
       failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl, entry.refusalAdmission);
     if (entry.acquired) entry.governor.release();
@@ -31,6 +34,21 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
 export function sourceGovernorFor(context: BrowserContext, url: string) {
   const state = traffic.get(context);
   return state && new URL(url).origin === state.origin ? state.governors.forOrigin(url) : undefined;
+}
+
+const interruptedLoads = new WeakMap<Page, number>();
+
+/** Monotonic per-page generation: a later healthy request cannot erase an earlier loss. */
+export function sourceLoadInterruptions(page: Page): number {
+  return interruptedLoads.get(page) ?? 0;
+}
+
+function recordInterruptedLoad(request: Request): void {
+  if (request.isNavigationRequest() || request.method() !== 'GET') return;
+  try {
+    const page = request.frame().page();
+    interruptedLoads.set(page, sourceLoadInterruptions(page) + 1);
+  } catch { /* Service workers have no owning page. */ }
 }
 
 const nativeRequests = new WeakMap<Request, {

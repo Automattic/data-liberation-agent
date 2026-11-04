@@ -1,4 +1,4 @@
-import { fetchSourceRoute } from './browser-kit/source-traffic.js';
+import { fetchSourceRoute, sourceLoadInterruptions } from './browser-kit/source-traffic.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -47,6 +47,11 @@ export function isNavigationTimeout(error: unknown): boolean {
 export const SOURCE_LOAD_INCOMPLETE = 'source_load_incomplete';
 /** Proven policy/identity failures are permanent; transport failures retain normal navigation retry. */
 export class SourceNavigationError extends Error {}
+
+/** Explain an observed cross-site navigation without guessing why access is withheld. */
+export function externalNavigationMessage(destination: string): string {
+	return `This page sends visitors to another site (${new URL(destination).host}), so there is no public page to copy. If this is an editor, preview, or sign-in-protected link, publish the site and import its public address.`;
+}
 export type RedirectMechanism = 'http' | 'refresh-header' | 'meta-refresh';
 interface DocumentResponse { url: string; status: number; headers: Record<string, string>; body: string }
 interface RenderedResponse { url: string; status: number; headers: Record<string, string>; body: Buffer }
@@ -244,7 +249,20 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * within what remains of the same budget, and `loadIncomplete` reports a
  * delivered document whose subresources were still pending when it ran out.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; subresourceLoss?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
+	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
+	for (let attempt = 1; ; attempt++) {
+		const before = sourceLoadInterruptions(page);
+		const result = await navigateSourceDocumentAttempt(page, requestedUrl, {...options, timeoutMs: Math.max(1, deadline - Date.now())});
+		if (sourceLoadInterruptions(page) === before || result.boundary || result.redirectedTo) return result;
+		// A reset/429/503 can finish the browser's load event without delivering
+		// the resource. Replay the document, not individual scripts/styles, so
+		// native streaming and execution order survive. Admission honors backoff.
+		if (attempt >= 4 || Date.now() >= deadline) return {...result, subresourceLoss: true};
+	}
+}
+
+async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; loadWaitMs?: number}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
@@ -268,7 +286,10 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 				await replaySourceReload(route, address, Math.max(1, deadline - Date.now()));
 				return;
 			}
-			if (address !== expected || delivered) throw new SourceNavigationError('Unexplained source main-frame navigation');
+			if (address !== expected || delivered) {
+				// failure-class: representability:route
+				throw new SourceNavigationError(sameHttpSite(address, requestedUrl) ? 'Unexplained source main-frame navigation' : externalNavigationMessage(address));
+			}
 			if (!acquired) {
 				const acquireResponse = async (current: string, timeout: number) => {
 					const acquired = await readSourceResponse(route, current, timeout); rendered = acquired.rendered; return acquired.response;

@@ -8,7 +8,8 @@ import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-req
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
-import { navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
+import { sameHttpSite } from './same-origin.js';
+import { externalNavigationMessage, navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -883,6 +884,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let serverHtml: string | undefined;
 	let navigationUrl = url;
 	let releaseBaselineNavigation: () => Promise< void > = async () => {};
+	let externalNavigation: string | undefined;
 	let sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	// Both the initial visit and disclosure recovery own the same navigation,
 	// cleanup and readiness path. Recovery must not inherit the probed DOM.
@@ -944,6 +946,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				// The document arrived; capture's own bounded readiness takes over
 				// from here, so a pending subresource is evidence, not a failure.
 				if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ budgetMs }ms navigation budget; subresources were still pending` } );
+				if ( navigation.subresourceLoss ) args.diagnostics?.push( { code: 'source_subresource_loss', reason: 'Reset or throttled subresource loads remained after bounded document recovery' } );
 				if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 				// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
 				serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
@@ -1008,8 +1011,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// Initial declarations have been classified. Any later main-document
 		// request during baseline preparation is drift, even if aborting leaves the
 		// old DOM intact. Keep the network boundary without hiding the failure.
-		const baselineDrift = () => {
-			fail( 'content', 'route drift: unexplained navigation during source baseline capture' );
+		const baselineDrift = ( destination: string ) => {
+			if ( ! sameHttpSite( destination, url ) ) {
+				externalNavigation = externalNavigationMessage( destination );
+				fail( 'content', externalNavigation );
+			} else {
+				fail( 'content', 'route drift: unexplained navigation during source baseline capture' );
+			}
 		};
 		releaseBaselineNavigation = await lockMainFrameNavigation(page, baselineDrift, true);
 		await applySourceCleanup(page, sourcePolicy);
@@ -1330,7 +1338,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// and recording it — the same discipline as isStackingArtifact below — keeps
 			// the receipt honest instead of shipping a mismatched pair silently.
 			const capturedUrl = page.url();
-			if ( isRouteDrift( capturedUrl, navigationUrl ) ) {
+			if ( externalNavigation ) {
+				// A blocked external request leaves the loader DOM intact, not a public
+				// route; the failure was recorded when the lock blocked it.
+			} else if ( isRouteDrift( capturedUrl, navigationUrl ) ) {
 				fail( 'content', `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted` );
 			} else if ( isStackingArtifact( html ) ) {
 				fail( 'content', `nested document capture (${ countBodyTags( html ) } <body> in one page); HTML not persisted` );
@@ -1366,7 +1377,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// here too (this carry already silently skips on any other failure), so a
 			// drifted mobile capture just leaves the page desktop-only rather than
 			// recording a failure of its own.
-			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) && matchClientErrorShell( mhtml, args.clientErrorShellSelectors ) === undefined ) {
+			if ( ! externalNavigation && ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) && matchClientErrorShell( mhtml, args.clientErrorShellSelectors ) === undefined ) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
 				args.glyphColors?.defer( plan.paths.htmlMobile, mhtml );
@@ -3421,7 +3432,7 @@ export async function withReadOnlyProbes< T >( page: Page, probe: () => Promise<
  * document requests leaves the current document in place; every other request
  * falls through to the capture's existing routing.
  */
-export async function lockMainFrameNavigation( page: Page, onAttempt?: () => void, allowReload = false ): Promise< () => Promise< void > > {
+export async function lockMainFrameNavigation( page: Page, onAttempt?: ( destination: string ) => void, allowReload = false ): Promise< () => Promise< void > > {
 	if ( ! page.route ) return async () => {};
 	let reloads = 0;
 	const deadline = Date.now() + SOURCE_NAVIGATION_LIMITS.timeoutMs;
@@ -3438,7 +3449,7 @@ export async function lockMainFrameNavigation( page: Page, onAttempt?: () => voi
 					catch { /* A reload changing identity/outcome remains unexplained drift. */ }
 				}
 			}
-			onAttempt?.();
+			onAttempt?.( request.url() );
 			await route.abort( 'aborted' );
 			return;
 		}
