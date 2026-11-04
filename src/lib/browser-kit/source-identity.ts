@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
-import { fetchSourceRoute, governSourceContext, hasSourceGovernor } from './source-traffic.js';
-import type { SourceRequestGovernors } from '../source-request-governor.js';
+import { continueSourceRoute, fetchSourceRoute, governSourceContext, sourceGovernorFor } from './source-traffic.js';
+import { isSourceTransportThrottle, type SourceRequestGovernors } from '../source-request-governor.js';
 import { installProbeIntrinsics } from './probe-intrinsics.js';
 
 /** Shared identity for Node-side HTTP requests to source sites (not browser device profiles). */
@@ -63,10 +63,6 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
   await context.route('**/*', async route => {
     try { await applyIdentity(route); }
     catch {
-      if (hasSourceGovernor(route, context)) {
-        await route.abort('connectionreset').catch(() => {});
-        return;
-      }
       // Closing the page or context mid-request already handled this route;
       // for any other failure the request proceeds rather than stalling.
       await route.fallback().catch(() => {});
@@ -101,13 +97,18 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
       headers['sec-ch-ua-mobile'] = mobile ? '?1' : '?0';
       headers['sec-ch-ua-platform'] = JSON.stringify(platform);
     }
-    if (hasSourceGovernor(route, context) || !page || !ownedPages.has(page)) {
+    if (!page || !ownedPages.has(page)) {
       // Popup main requests have no target yet. Fetch with the context's cookies
       // and explicit identity instead of allowing Chromium to add native hints.
-      const response = await fetchSourceRoute(route, { headers, maxRedirects: 0 }, 4, context);
+      const response = await fetchSourceRoute(route, { headers, maxRedirects: 0 }, 4, context).catch(async error => {
+        if (!sourceGovernorFor(context, route.request().url()) || !isSourceTransportThrottle(error)) throw error; // failure-class: operational
+        await route.abort('connectionreset').catch(() => {});
+        return undefined;
+      });
+      if (!response) return;
       try { await route.fulfill({ response }); }
       finally { await response.dispose(); }
-    } else await route.continue({ headers });
+    } else await continueSourceRoute(route, context, { headers });
   }
   if (!chrome) await context.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, 'userAgentData', { configurable: true, get: () => undefined });

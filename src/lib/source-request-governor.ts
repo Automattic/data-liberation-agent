@@ -186,6 +186,18 @@ export class SourceRequestGovernor {
 		this.pausedUntil = Math.max( this.pausedUntil, Date.now() + delayMs );
 	}
 
+	/** Outcomes observed by the browser's native network stack. */
+	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown): void {
+		this.requests++;
+		this.firstRequestAt ??= Date.now();
+		if ((status !== undefined && THROTTLE_STATUSES.has(status)) || isSourceTransportThrottle(error)) {
+			this.recordThrottle(parseRetryAfter(retryAfter, { fallbackMs: this.fallbackRetryAfterMs, maxMs: this.maxRetryAfterMs }));
+		} else if (status !== undefined) this.recordSuccess();
+	}
+
+	/** Healthy native browser requests need no admission or bookkeeping slot. */
+	get isBrowserThrottled(): boolean { return this.browserThrottled; }
+
 	private recordSuccess() {
 		if ( !this.browserThrottled && this.limit >= this.maxConcurrency ) return;
 		if ( ++this.successes < this.recoveryStep ) return;
@@ -196,7 +208,7 @@ export class SourceRequestGovernor {
 	}
 
 	/** Wait for a free slot, then for any pause to pass. */
-	private async acquire( signal?: AbortSignal, browser = false ): Promise< void > {
+	async acquire( signal?: AbortSignal, browser = false ): Promise< void > {
 		for ( ;; ) {
 			if ( signal?.aborted ) throw abortReason( signal ); // failure-class: operational
 			if ( (browser && !this.browserThrottled) || this.active < this.limit ) {
@@ -224,7 +236,7 @@ export class SourceRequestGovernor {
 		}
 	}
 
-	private release() {
+	release() {
 		this.active--;
 		this.wake();
 	}

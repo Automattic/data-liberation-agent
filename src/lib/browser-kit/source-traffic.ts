@@ -1,4 +1,4 @@
-import type { APIResponse, BrowserContext, Route } from 'playwright';
+import type { APIResponse, BrowserContext, Request, Route } from 'playwright';
 import type { SourceRequestGovernors } from '../source-request-governor.js';
 
 const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string }>();
@@ -6,6 +6,25 @@ const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors;
 /** Capture-owned state; contexts outside capture and third-party origins stay unchanged. */
 export function governSourceContext(context: BrowserContext, governors: SourceRequestGovernors, sourceUrl: string): void {
   traffic.set(context, { governors, origin: new URL(sourceUrl).origin });
+  context.on('response', response => {
+    const entry = nativeRequests.get(response.request());
+    if (!entry) return;
+    entry.status = response.status();
+    if (entry.status === 429 || entry.status === 503) {
+      entry.throttled = true;
+      entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after']);
+    }
+  });
+  const finish = (request: Request, failed: boolean) => {
+    const entry = nativeRequests.get(request);
+    if (!entry) return;
+    nativeRequests.delete(request);
+    if (!entry.throttled) entry.governor.observeBrowserOutcome(failed ? undefined : entry.status, undefined,
+      failed ? new Error(request.failure()?.errorText ?? '') : undefined);
+    if (entry.acquired) entry.governor.release();
+  };
+  context.on('requestfinished', request => finish(request, false));
+  context.on('requestfailed', request => finish(request, true));
 }
 
 export function sourceGovernorFor(context: BrowserContext, url: string) {
@@ -13,8 +32,32 @@ export function sourceGovernorFor(context: BrowserContext, url: string) {
   return state && new URL(url).origin === state.origin ? state.governors.forOrigin(url) : undefined;
 }
 
-export function hasSourceGovernor(route: Route, context: BrowserContext): boolean {
-  return !!sourceGovernorFor(context, route.request().url());
+const nativeRequests = new WeakMap<Request, {
+  governor: ReturnType<SourceRequestGovernors['forOrigin']>;
+  acquired: boolean;
+  status?: number;
+  throttled?: boolean;
+}>();
+
+/** Preserve native streaming, multiplexing and range requests, even during recovery. */
+export async function continueSourceRoute(route: Route, context: BrowserContext, options: Parameters<Route['continue']>[0]): Promise<void> {
+  const request = route.request();
+  const governor = sourceGovernorFor(context, request.url());
+  if (!governor) return route.continue(options);
+  const acquired = governor.isBrowserThrottled;
+  if (acquired) {
+    const abort = new AbortController();
+    const close = () => abort.abort();
+    context.once('close', close);
+    try { await governor.acquire(abort.signal, true); }
+    finally { context.off('close', close); }
+  }
+  nativeRequests.set(request, { governor, acquired });
+  try { await route.continue(options); }
+  catch (error) {
+    if (nativeRequests.delete(request) && acquired) governor.release();
+    throw error; // failure-class: operational
+  }
 }
 
 /** Document-only re-sampling uses the same context identity and origin admission. */
