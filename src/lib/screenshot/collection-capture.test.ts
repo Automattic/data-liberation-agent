@@ -61,6 +61,29 @@ if(innerWidth<600)document.querySelector('#filter-panel').hidden=true;let offset
 	} finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 }, 180_000);
 
+// Each reduced article should take milliseconds, not the 15-second navigation timeout.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)).each([false, true])('ignores article actions without probing (beacon: %s)', async beacon => {
+	const source = `<!doctype html><html><head><title>Post</title></head><body><main><article>
+<div id="content-wrapper">
+  <div><p>Read the <a href="/guide">walking guide</a> first.</p></div>
+  <div><p>Then see <a href="/rspca">RSPCA advice</a>.</p><button aria-label="Expand image">⤢</button></div>
+</div>
+<div><button aria-label="Share via link">Share</button><button aria-label="Like post">♥</button></div>
+</article></main>${beacon ? "<script>setInterval(()=>fetch('/beacon?'+Date.now()),400)</script>" : ''}</body></html>`;
+	const server = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end(source); });
+	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const browser = await chromium.launch();
+	try {
+		const context = await browser.newContext();
+		const page = await context.newPage();
+		await page.goto(`http://127.0.0.1:${(server.address() as { port: number }).port}/`, { waitUntil: 'load' });
+		const started = performance.now();
+		const components = await captureCollections(page);
+		expect(performance.now() - started).toBeLessThan(2_000);
+		expect(components).toEqual([]);
+	} finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
+}, 20_000);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('does not treat a probe-excluded control as a collection control', async () => {
 	const browser = await chromium.launch();
 	try {

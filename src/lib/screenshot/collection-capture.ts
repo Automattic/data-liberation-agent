@@ -33,7 +33,7 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
 			let owner: Element | null = root.parentElement;
 			for (let depth = 0; owner && owner !== document.body && depth < 3; depth++, owner = owner.parentElement) {
 				// A control the adapter excluded from probing is never driven, so it cannot make a region a collection.
-				if (!Array.from(owner.querySelectorAll('button,input[type="search"],select')).some(control => !excluded || !control.matches(excluded))) continue;
+				if (!Array.from(owner.querySelectorAll('button,input[type="search"],select')).some(control => !children.some(member => member.contains(control)) && (!excluded || !control.matches(excluded)))) continue;
 				found.push({ selector: selector(root), owner: selector(owner) }); break;
 			}
 		}
@@ -60,10 +60,9 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 	const deadline = Date.now() + 60_000;
 	try {
 		for (const region of regions) {
-			await probe.goto(page.url(), { waitUntil: 'networkidle', timeout: 15_000 });
+			await probe.goto(page.url(), { waitUntil: 'load', timeout: 15_000 });
 			const evidence: CollectionEvidence = { members: [], states: [], controls: [], coverage: 'complete', limits, replay: 'unsupported' };
 			const component: CapturedComponent = { selector: region.selector, kind: 'collection', initial: 'initial', states: [{ id: 'initial', html: await probe.locator(region.selector).evaluate(node => node.outerHTML) }], transitions: [], status: 'captured', collection: evidence };
-			result.push(component);
 			const observe = async (): Promise<string[]> => {
 				const members = await probe.locator(region.selector).evaluate(root => Array.from(root.children).filter(child => {
 					const style = getComputedStyle(child); return !child.hasAttribute('hidden') && style.display !== 'none' && style.visibility !== 'hidden' && child.getBoundingClientRect().height > 0;
@@ -80,7 +79,8 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 				}
 				return members.map(member => member.key);
 			};
-			const controls = await probe.locator(region.owner).evaluate((root, excluded) => {
+			const controls = await probe.locator(region.owner).evaluate((root, { excluded, regionSelector }) => {
+				const members = Array.from(document.querySelector(regionSelector)!.children);
 				const selector = (node: Element): string => {
 					if (node.id) return '#' + CSS.escape(node.id);
 					const parts: string[] = [];
@@ -90,8 +90,8 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 					}
 					return 'body > ' + parts.join(' > ');
 				};
-				return Array.from(root.querySelectorAll('button,input[type="search"],select')).filter(node => !excluded || !node.matches(excluded)).map(node => ({ selector: selector(node), tag: node.tagName, label: node.getAttribute('aria-label') || node.textContent || '', options: node instanceof HTMLSelectElement ? Array.from(node.options).map(option => option.value) : [] }));
-			}, skip);
+				return Array.from(root.querySelectorAll('button,input[type="search"],select')).filter(node => !members.some(member => member.contains(node)) && (!excluded || !node.matches(excluded))).map(node => ({ selector: selector(node), tag: node.tagName, label: node.getAttribute('aria-label') || node.textContent || '', options: node instanceof HTMLSelectElement ? Array.from(node.options).map(option => option.value) : [] }));
+			}, { excluded: skip, regionSelector: region.selector });
 			evidence.controls = controls.map(control => control.selector);
 			if (controls.length > limits.controls) evidence.coverage = 'partial';
 			const next = controls.find(control => /^(?:next(?: page)?|load more|show more|older|›|»|→)$/i.test(control.label.trim()));
@@ -114,12 +114,17 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 				evidence.states.push({ id: id === 'initial' ? 'all-pages' : id, ...(trigger ? { trigger } : {}), members: union });
 			};
 			await exhaust('initial');
+			const initialMembers = JSON.stringify(evidence.states[0].members);
+			let changed = evidence.states.some(state => JSON.stringify(state.members) !== initialMembers);
+			// Reuse unchanged documents: member actions must not cause per-control navigation.
+			let reset = changed;
 			for (const [index, control] of controls.slice(0, limits.controls).entries()) {
 				if (Date.now() > deadline) { evidence.coverage = 'partial'; break; }
 				if (/^(?:next(?: page)?|previous(?: page)?|prev|load more|show more|older|›|»|→|‹|«|←)$/i.test(control.label.trim())) continue;
 				const values = control.tag === 'SELECT' ? control.options : control.tag === 'INPUT' ? [evidence.members[0]?.text.split(/\s+/)[0] ?? '', '__capture_no_matching_record__', ''] : [undefined];
 				for (const [variant, value] of values.entries()) {
-					await probe.goto(page.url(), { waitUntil: 'networkidle', timeout: 15_000 });
+					if (reset) await probe.goto(page.url(), { waitUntil: 'load', timeout: 15_000 });
+					reset = false;
 					const target = probe.locator(control.selector);
 					if (!await target.isVisible()) {
 						const opener = probe.locator(region.owner).getByRole('button', { name: /^filters?$/i }).first();
@@ -131,11 +136,16 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 						else if (action === 'select') await target.selectOption(value!, { timeout: 1_000 });
 						else await target.click({ timeout: 1_000 });
 						await probe.waitForTimeout(300);
-						if (new URL(probe.url()).pathname !== new URL(page.url()).pathname) { evidence.coverage = 'partial'; continue; }
+						if (new URL(probe.url()).pathname !== new URL(page.url()).pathname) { evidence.coverage = 'partial'; reset = true; continue; }
+						const stateStart = evidence.states.length;
 						await exhaust(`control-${index}-${variant}`, { selector: control.selector, action, ...(value !== undefined ? { value } : {}) });
-					} catch { evidence.coverage = 'partial'; }
+						reset = JSON.stringify(await observe()) !== initialMembers;
+						changed ||= evidence.states.slice(stateStart).some(state => JSON.stringify(state.members) !== initialMembers);
+					} catch { evidence.coverage = 'partial'; reset = true; }
 				}
 			}
+			if (!changed) continue;
+			result.push(component);
 			component.status = evidence.coverage === 'complete' ? 'captured' : 'partial';
 			component.reason = evidence.coverage === 'complete' ? 'Collection membership captured; collection control replay unsupported' : 'Collection exploration bounded or failed; member universe partial; collection control replay unsupported';
 		}
