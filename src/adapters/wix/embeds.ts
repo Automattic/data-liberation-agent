@@ -26,7 +26,10 @@ export const WIX_PORTED_MAP_ATTRIBUTE = 'data-blocks-engine-capture-ported-embed
 /** Marks the note left where a Wix-only widget could not be copied. */
 export const WIX_UNPORTED_EMBED_ATTRIBUTE = 'data-blocks-engine-capture-unported-embed';
 
-export const WIX_PINNED_CHAT_SELECTOR = '#pinnedBottomLeft > [id$="-pinned-layer"]:has([data-hook="AiAssistantWidgetContainer"]), #pinnedBottomRight > [id$="-pinned-layer"]:has(iframe[title*="chat" i])';
+/** Wix mounts its site-wide chat widgets in viewport-pinned layers; source cleanup removes them. */
+export const WIX_AI_ASSISTANT_LAYER = '#pinnedBottomLeft > [id$="-pinned-layer"]:has([data-hook="AiAssistantWidgetContainer"])';
+export const WIX_CHAT_LAUNCHER_LAYER = '#pinnedBottomRight > [id$="-pinned-layer"]:has(iframe[title*="chat" i])';
+const WIX_PINNED_CHAT_SELECTOR = `${ WIX_AI_ASSISTANT_LAYER }, ${ WIX_CHAT_LAUNCHER_LAYER }`;
 
 const MAP_LOCATION_WAIT_MILLISECONDS = 5_000;
 const MAP_EMBED_LOAD_MILLISECONDS = 5_000;
