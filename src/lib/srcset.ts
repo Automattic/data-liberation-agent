@@ -185,14 +185,14 @@ export function stripImageSetCandidates( content: string, drop: ( url: string ) 
 	return result + content.slice( offset );
 }
 
-/** Protect media attribute URL tokens from a general HTML/CSS/script replacement
+/** Protect resource attribute URL tokens from a general HTML/CSS/script replacement
  * pass. The callback for other content retains the caller's own policy. */
 export function rewriteMediaReferences(
 	content: string,
 	replaceUrl: ( url: string ) => string,
 	replaceOther: ( content: string ) => string
 ): string {
-	const attributes = /\s(srcset|data-srcset|src|poster|data-src|data-lazy-src|data-original|data-image|data-image-src)\s*=\s*(["'])([\s\S]*?)\2/gi;
+	const attributes = /\s(srcset|data-srcset|src|poster|data-src|data-lazy-src|data-original|data-image|data-image-src|href|xlink:href)\s*=\s*(["'])([\s\S]*?)\2/gi;
 	let result = '';
 	let offset = 0;
 	for ( const match of content.matchAll( attributes ) ) {

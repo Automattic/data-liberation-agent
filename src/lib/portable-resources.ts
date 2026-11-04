@@ -274,7 +274,7 @@ export function materializePortableResources( options: PortableResourceOptions )
 			}
 			writeFileSync(
 				destination,
-				preparePortableReplacements( resourceReplacements, rejectedReplacementKeys )( content )
+				preparePortableReplacements( resourceReplacements, rejectedReplacementKeys )( content, dependency.url )
 			);
 		} else {
 			copyFileSync( source, destination );

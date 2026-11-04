@@ -38,6 +38,57 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'localizes relative and absolute sprite references in routes and shared chrome', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-sprite-parts-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'resources/captured' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const sourceUrl = 'https://example.test/';
+		const sprite = '<svg xmlns="http://www.w3.org/2000/svg"><symbol id="a"/><symbol id="b"/></svg>';
+		writeFileSync( join( outputDir, 'resources/captured/sprite.svg' ), sprite );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: {
+			[ `${ sourceUrl }icons/sprite.svg` ]: { path: 'resources/captured/sprite.svg', contentType: 'image/svg+xml' },
+		} } ) );
+		const icons = '<svg><use href="/icons/sprite.svg#a"/><use href="https://example.test/icons/sprite.svg#b"/><use xlink:href="/icons/sprite.svg#b"/><use xlink:href="https://example.test/icons/sprite.svg#a"/></svg>';
+		const header = `<header>${ icons }<p>${ 'Shared brand '.repeat( 100 ) }</p></header>`;
+		const entries = Object.fromEntries( [ '', 'about/' ].map( ( route, i ) => {
+			const html = `html/${ i }.html`;
+			writeFileSync( join( outputDir, html ), `<html><body>${ header }<main><h1>Route ${ i }</h1>${ icons }</main></body></html>` );
+			return [ sourceUrl + route, { html } ];
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
+		for ( const route of receipt.routes ) {
+			const path = join( outputDir, route.path );
+			const compact = readFileSync( path, 'utf8' );
+			const parts = includeReferences( compact );
+			expect( parts ).toHaveLength( 1 );
+			for ( const html of [ readResolvedPage( join( outputDir, 'website' ), path ), readFileSync( join( outputDir, 'website', parts[ 0 ].path ), 'utf8' ) ] ) {
+				expect( html ).not.toContain( '/icons/sprite.svg' );
+				const $ = cheerio.load( html );
+				expect( $( 'use' ).length ).toBe( html.includes( '<main>' ) ? 8 : 4 );
+				$( 'use' ).each( ( _, element ) => {
+					const reference = $( element ).attr( 'href' ) ?? $( element ).attr( 'xlink:href' )!;
+					expect( reference ).toMatch( /^\/captured\/sprite\.svg#[ab]$/ );
+					expect( readFileSync( join( outputDir, 'website', reference.split( '#' )[ 0 ] ), 'utf8' ) ).toBe( sprite );
+				} );
+			}
+		}
+		// Exercise the same include-aware serving used by compare in Chromium.
+		const server = await startStaticServer( join( outputDir, 'website' ) );
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			const external: string[] = [];
+			page.on( 'request', request => {
+				if ( new URL( request.url() ).origin !== new URL( server.url ).origin ) external.push( request.url() );
+			} );
+			await page.goto( server.url, { waitUntil: 'networkidle' } );
+			expect( external ).toEqual( [] );
+		} finally {
+			await browser.close();
+			await server.close();
+		}
+	} );
 	it( 'compacts both landmarks after evidence projection within the published website tree', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-canonical-parts-' ) );
 		dirs.push( outputDir );
