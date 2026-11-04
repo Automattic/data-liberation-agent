@@ -148,6 +148,41 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       rmSync(outputDir, { recursive: true, force: true });
     }
   }, 60_000);
+  // Two timings cover initial navigation and the later baseline lock (~5s total).
+  it.each([0, 1500])('refuses a loader navigating to another site after %ims', async (delay) => {
+    mkdirSync(TMP_ROOT, { recursive: true });
+    const login = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<h1>Login</h1>');
+    });
+    await new Promise<void>((r) => login.listen(0, '127.0.0.1', r));
+    const destination = `http://127.0.0.1:${(login.address() as { port: number }).port}`;
+    const source = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<h1>Loading…</h1><script>setTimeout(() => location.href = '${destination}/login?redirectUrl=' + encodeURIComponent(location.href), ${delay})</script>`);
+    });
+    await new Promise<void>((r) => source.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(source.address() as { port: number }).port}/`;
+    const outputDir = mkdtempSync(join(TMP_ROOT, 'external-loader-'));
+    try {
+      const result = await captureScreenshots({
+        urls: [url], outputDir, concurrency: 1,
+        viewports: [{ id: 'desktop', width: 1440, height: 900 }],
+      });
+      expect(result.captured).toBe(0);
+      const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8'));
+      expect(manifest.entries[url]?.html).toBeUndefined();
+      expect(manifest.entries[url]?.mobileHtml).toBeUndefined();
+      expect(existsSync(join(outputDir, 'html', 'homepage.html'))).toBe(false);
+      expect(existsSync(join(outputDir, 'html-mobile', 'homepage.html'))).toBe(false);
+      const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8')) as Array<{ error: string }>;
+      expect(failures.some(({ error }) => error.includes(`This page sends visitors to another site (${new URL(destination).host})`))).toBe(true);
+    } finally {
+      await Promise.all([source, login].map((server) => new Promise<void>((r) => server.close(() => r()))));
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('resolves server-redirected routes to their target and still reports post-load drift', async () => {
     mkdirSync(TMP_ROOT, { recursive: true });
     const pages: Record<string, string> = {

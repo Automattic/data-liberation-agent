@@ -360,7 +360,6 @@
 			"throw new SourceNavigationError('Source reload budget exhausted')": 2,
 			"throw new SourceNavigationError('Source reload changed its document identity or response outcome')": 1,
 			"throw new SourceNavigationError('Source response identity mismatch')": 1,
-			"throw new SourceNavigationError('Unexplained source main-frame navigation')": 1,
 			"throw new SourceNavigationError(`Source document exceeds document byte budget (${SOURCE_DOCUMENT_MAX_BYTES} bytes; Content-Length)`)": 1,
 			"throw new SourceNavigationError(`Source document exceeds document byte budget (${body.length} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`)": 1,
 			"throw new SourceNavigationError(`Source document exceeds document byte budget (${bytes} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`)": 1,
