@@ -599,7 +599,7 @@ async function runCaptureWebsite(
 	);
 	progress( { phase: 'media', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const mediaStartedAt = Date.now();
-	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ) );
+	const downloadedSectionMedia = sourceGovernors.forOrigin( sourceUrl ).blockedClient ? 0 : await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ) );
 	process.stderr.write(
 		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
 	);
@@ -611,7 +611,7 @@ async function runCaptureWebsite(
 	// ordinary manifest entries before export, so export needs no second input
 	// kind. Any failure degrades to the pre-derivation state: the member keeps
 	// its `route_omitted_by_budget` diagnostic.
-	const derivedTemplateClusters = templateClusters && templateGrouping?.report
+	const derivedTemplateClusters = ! sourceGovernors.forOrigin( sourceUrl ).blockedClient && templateClusters && templateGrouping?.report
 		? await deriveTemplateClusterMembers( {
 				sourceUrl,
 				outputDir,
@@ -647,6 +647,7 @@ async function runCaptureWebsite(
 	// template-cluster derivative, so its omission row is replaced by the
 	// derivation's own loss row (`route_template_derived`).
 	const derivedUrls = new Set( derivedTemplateClusters?.summary.derivedUrls ?? [] );
+	const blockedClient = sourceGovernors.forOrigin( sourceUrl ).blockedClient;
 	const captureDiagnostics = [
 		...discoveryDiagnostics.filter( row => row.code !== ROUTE_OMITTED_BY_BUDGET || ! derivedUrls.has( row.url ) ),
 		...( screenshotResult.routeDiagnostics ?? [] ),
@@ -702,7 +703,7 @@ async function runCaptureWebsite(
 	}
 	if ( screenshotResult.deviceMode ) receipt.deviceMode = screenshotResult.deviceMode;
 	if ( screenshotResult.sharedChrome ) receipt.sharedChrome = screenshotResult.sharedChrome;
-	if ( adapter.engagementStats ) {
+	if ( adapter.engagementStats && ! blockedClient ) {
 		const engagementStartedAt = Date.now();
 		if ( timeBudget && engagementStartedAt >= timeBudget.abandonAt ) process.stderr.write( '[budget] engagement stats skipped: capture time budget spent\n' );
 		else {
@@ -758,6 +759,8 @@ async function runCaptureWebsite(
 	reference.finalize( captureReceiptPath );
 	process.stderr.write( `[timing] reference-finalize ${ Date.now() - referenceStartedAt }ms\n` );
 	progress( { phase: 'complete', current: urls.length, total: urls.length } );
+	if ( blockedClient ) throw blockedClient; // failure-class: operational
+
 	if ( options.strict && ! complete ) throw new IncompleteCaptureError( result );
 	return result;
 }

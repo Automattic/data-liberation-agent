@@ -10,9 +10,10 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     const entry = nativeRequests.get(response.request());
     if (!entry) return;
     entry.status = response.status();
+    entry.governor.observeSourceResponse();
     if (entry.status === 429 || entry.status === 503) {
       entry.throttled = true;
-      entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after']);
+      entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after'], undefined, entry.routeUrl);
     }
   });
   const finish = (request: Request, failed: boolean) => {
@@ -20,7 +21,7 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     if (!entry) return;
     nativeRequests.delete(request);
     if (!entry.throttled) entry.governor.observeBrowserOutcome(failed ? undefined : entry.status, undefined,
-      failed ? new Error(request.failure()?.errorText ?? '') : undefined);
+      failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl);
     if (entry.acquired) entry.governor.release();
   };
   context.on('requestfinished', request => finish(request, false));
@@ -35,6 +36,7 @@ export function sourceGovernorFor(context: BrowserContext, url: string) {
 const nativeRequests = new WeakMap<Request, {
   governor: ReturnType<SourceRequestGovernors['forOrigin']>;
   acquired: boolean;
+  routeUrl?: string;
   status?: number;
   throttled?: boolean;
 }>();
@@ -44,6 +46,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   const request = route.request();
   const governor = sourceGovernorFor(context, request.url());
   if (!governor) return route.continue(options);
+  if (governor.isConfirmingRefusal || governor.blockedClient) await governor.admitSourceRequest();
   const acquired = governor.isBrowserThrottled;
   if (acquired) {
     const abort = new AbortController();
@@ -52,7 +55,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
     try { await governor.acquire(abort.signal, true); }
     finally { context.off('close', close); }
   }
-  nativeRequests.set(request, { governor, acquired });
+  nativeRequests.set(request, { governor, acquired, routeUrl: owningDocumentUrl(request) });
   try { await route.continue(options); }
   catch (error) {
     if (nativeRequests.delete(request) && acquired) governor.release();
@@ -60,12 +63,17 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   }
 }
 
+function owningDocumentUrl(request: Request): string | undefined {
+  try { return request.isNavigationRequest() ? request.url() : request.frame().url(); }
+  catch { return undefined; /* Service-worker requests may have no frame. */ }
+}
+
 /** Document-only re-sampling uses the same context identity and origin admission. */
 export async function getSourceResponse(context: BrowserContext, url: string, options: NonNullable<Parameters<BrowserContext['request']['get']>[1]> = {}): Promise<APIResponse> {
   return governedResponse(context, url, () => context.request.get(url, options), 4);
 }
 
-async function governedResponse(context: BrowserContext, url: string, task: () => Promise<APIResponse>, maxAttempts: number): Promise<APIResponse> {
+async function governedResponse(context: BrowserContext, url: string, task: () => Promise<APIResponse>, maxAttempts: number, routeUrl: string | undefined = url): Promise<APIResponse> {
   const governor = sourceGovernorFor(context, url);
   if (!governor) return task();
   const result = await governor.run(async attempt => {
@@ -74,7 +82,7 @@ async function governedResponse(context: BrowserContext, url: string, task: () =
     const headers = new Headers(response.headers());
     if ((status === 429 || status === 503) && attempt < maxAttempts) await response.dispose();
     return { status, headers, response };
-  }, { browser: true, maxAttempts });
+  }, { browser: true, maxAttempts, routeUrl });
   return result.response.response;
 }
 
@@ -83,5 +91,5 @@ export async function fetchSourceRoute(route: Route, options: NonNullable<Parame
   const state = traffic.get(context);
   const url = options.url ?? route.request().url();
   if (!state || new URL(url).origin !== state.origin) return route.fetch(options);
-  return governedResponse(context, url, () => route.fetch({ ...options, maxRetries: 0, maxRedirects: 0 }), maxAttempts);
+  return governedResponse(context, url, () => route.fetch({ ...options, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()));
 }

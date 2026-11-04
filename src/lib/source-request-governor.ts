@@ -17,8 +17,8 @@
  * - Each `recoveryStep` consecutive successes raise the limit by one, back up
  *   to `concurrency`.
  *
- * The governor counts throttle events but stores no timestamps in anything a
- * caller reports; `stats()` timing is for logs only.
+ * Throttle rates stay log-only. Confirmed client refusal additionally exposes
+ * bounded evidence (first refusal time and request count) for the receipt.
  */
 
 export const SOURCE_REQUEST_GOVERNOR_DEFAULTS = {
@@ -52,7 +52,19 @@ export function parseRetryAfter( header: string | null | undefined, options: { f
 	return Math.min( maxMs, Math.max( 0, Number.isFinite( requested ) ? requested : fallbackMs ) );
 }
 
+/** Earlier success, three consecutive refusals, and at least two route paths are required. */
+export const SOURCE_REFUSAL_DEFAULTS = { consecutive: 3, probeAtMs: [2000, 8000, 20000, 60000], probeTimeoutMs: 3000 } as const;
+
+export class SourceBlockedClientError extends Error {
+	readonly code = 'source_blocked_client';
+	constructor(readonly evidence: { origin: string; requestsBeforeFirstRefusal: number; firstRefusalAt: string }) {
+		super(`source_blocked_client: The source ${evidence.origin} blocked this network; retry later or from another network.`);
+	}
+}
+
 export interface SourceRequestGovernorOptions {
+	/** Confirmation offsets, injectable for local fixtures; capped by maxRetryAfterMs. */
+	refusalProbeAtMs?: readonly number[];
 	concurrency?: number;
 	maxRetryAfterMs?: number;
 	fallbackRetryAfterMs?: number;
@@ -60,14 +72,17 @@ export interface SourceRequestGovernorOptions {
 }
 
 /** Transport refusals are source pressure signals, including nested Node fetch causes. */
-export function isSourceTransportThrottle(error: unknown): boolean {
+export function isSourceTransportThrottle(error: unknown, refusalOnly = false): boolean {
 	if (!error || typeof error !== 'object') return false;
 	const value = error as { message?: string; code?: string; cause?: unknown };
-	return /ECONNRESET|ECONNREFUSED|ERR_CONNECTION_(?:RESET|REFUSED)|CONTENT_LENGTH_MISMATCH|content length mismatch|body length mismatch|socket hang up|connection (?:reset|refused)/i.test(`${value.code ?? ''} ${value.message ?? ''}`)
-		|| (value.cause !== error && isSourceTransportThrottle(value.cause));
+	const match = /ECONNRESET|ECONNREFUSED|ERR_CONNECTION_(?:RESET|REFUSED)|connection (?:reset|refused)|(CONTENT_LENGTH_MISMATCH|content length mismatch|body length mismatch|socket hang up)/i.exec(`${value.code ?? ''} ${value.message ?? ''}`);
+	return !!(match && (!refusalOnly || !match[1]))
+		|| (value.cause !== error && isSourceTransportThrottle(value.cause, refusalOnly));
 }
 
 export interface GovernedRequestOptions {
+	/** Owning document URL, never an asset URL, for cross-route refusal proof. */
+	routeUrl?: string;
 	/** Browser fan-out is unlimited while healthy; shares the reduced limit during recovery. */
 	browser?: boolean;
 	/** Rejects waits and stops retrying once aborted. */
@@ -103,6 +118,80 @@ function abortReason( signal: AbortSignal ): unknown {
 export class SourceRequestGovernor {
 	readonly origin: string;
 	readonly maxConcurrency: number;
+	private hadResponse = false;
+	private responseGeneration = 0;
+	private refusalCount = 0;
+	private readonly refusalRoutes = new Set<string>();
+	private firstRefusal?: { requestsBeforeFirstRefusal: number; firstRefusalAt: string };
+	private confirmation?: Promise<void>;
+	private responseWake?: () => void;
+	private readonly probeAtMs: readonly number[];
+	blockedClient?: SourceBlockedClientError;
+
+	/** Persistent transport failures need navigation backoff as well as admission pacing. */
+	get hasSustainedRefusal(): boolean { return this.refusalCount >= 2; }
+
+	get isConfirmingRefusal(): boolean { return this.confirmation !== undefined; }
+
+	async admitSourceRequest(): Promise<void> {
+		await this.confirmation;
+		if (this.blockedClient) throw this.blockedClient; // failure-class: operational
+	}
+
+	/** An HTTP response, even a throttle/error status, disproves transport refusal. */
+	observeSourceResponse(): void {
+		this.reachable();
+	}
+
+	private reachable(): void {
+		this.hadResponse = true;
+		this.responseGeneration++;
+		this.responseWake?.();
+		this.refusalCount = 0;
+		this.refusalRoutes.clear();
+		this.firstRefusal = undefined;
+	}
+
+	private observeRefusal(error: unknown, routeUrl?: string): void {
+		if (!this.hadResponse || this.confirmation || !isSourceTransportThrottle(error, true)) return;
+		this.firstRefusal ??= { requestsBeforeFirstRefusal: this.requests - 1, firstRefusalAt: new Date().toISOString() };
+		this.refusalCount++;
+		if (routeUrl) this.refusalRoutes.add(new URL(routeUrl).pathname);
+		if (this.refusalCount < SOURCE_REFUSAL_DEFAULTS.consecutive || this.refusalRoutes.size < 2) return;
+		const evidence = { origin: this.origin, ...this.firstRefusal };
+		const generation = this.responseGeneration;
+		this.confirmation = this.confirmRefusal(routeUrl ?? this.origin, generation, evidence).finally(() => {
+			this.confirmation = undefined;
+			this.wake();
+		});
+	}
+
+	private async confirmRefusal(url: string, generation: number, evidence: SourceBlockedClientError['evidence']): Promise<void> {
+		const started = Date.now();
+		for (const offset of this.probeAtMs) {
+			// Reserve the probe timeout inside the total confirmation budget.
+			const deadline = started + this.maxRetryAfterMs;
+			await new Promise<void>(resolve => {
+				const timer = setTimeout(done, Math.max(0, Math.min(started + offset, deadline - SOURCE_REFUSAL_DEFAULTS.probeTimeoutMs) - Date.now()));
+				const governor = this;
+				function done() { clearTimeout(timer); governor.responseWake = undefined; resolve(); }
+				this.responseWake = done;
+			});
+			if (this.responseGeneration !== generation) return;
+			try {
+				this.requests++;
+				const response = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(Math.max(1, Math.min(SOURCE_REFUSAL_DEFAULTS.probeTimeoutMs, deadline - Date.now()))) });
+				await response.body?.cancel();
+				this.reachable();
+				return;
+			} catch (error) {
+				// A timeout or unrelated failure cannot prove a client refusal.
+				if (!isSourceTransportThrottle(error, true)) return;
+			}
+		}
+		if (this.responseGeneration === generation) this.blockedClient = new SourceBlockedClientError(evidence);
+	}
+
 	private readonly maxRetryAfterMs: number;
 	private readonly fallbackRetryAfterMs: number;
 	private readonly recoveryStep: number;
@@ -123,6 +212,7 @@ export class SourceRequestGovernor {
 		this.fallbackRetryAfterMs = options.fallbackRetryAfterMs ?? SOURCE_REQUEST_GOVERNOR_DEFAULTS.fallbackRetryAfterMs;
 		this.recoveryStep = Math.max( 1, options.recoveryStep ?? SOURCE_REQUEST_GOVERNOR_DEFAULTS.recoveryStep );
 		this.limit = this.maxConcurrency;
+		this.probeAtMs = options.refusalProbeAtMs ?? SOURCE_REFUSAL_DEFAULTS.probeAtMs;
 	}
 
 	/** Throttle responses seen by every caller of this governor. */
@@ -159,13 +249,21 @@ export class SourceRequestGovernor {
 				response = await task( attempt );
 			} catch (error) {
 				if (!isSourceTransportThrottle(error)) throw error; // failure-class: operational
+				this.observeRefusal(error, options.routeUrl);
 				throttles++;
 				this.recordThrottle(this.fallbackRetryAfterMs);
+				if (this.confirmation) {
+					await this.admitSourceRequest();
+					// Confirmation recovered: retry this interrupted acquisition, even
+					// when the caller delegates ordinary retries to navigation.
+					continue;
+				}
 				if (attempt >= maxAttempts) throw error; // failure-class: operational
 				continue;
 			} finally {
 				this.release();
 			}
+			this.reachable();
 			if ( ! THROTTLE_STATUSES.has( response.status ) ) {
 				this.recordSuccess();
 				return { response, attempts: attempt, throttles };
@@ -187,9 +285,11 @@ export class SourceRequestGovernor {
 	}
 
 	/** Outcomes observed by the browser's native network stack. */
-	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown): void {
+	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string): void {
 		this.requests++;
 		this.firstRequestAt ??= Date.now();
+		if (status !== undefined) this.reachable();
+		else this.observeRefusal(error, routeUrl);
 		if ((status !== undefined && THROTTLE_STATUSES.has(status)) || isSourceTransportThrottle(error)) {
 			this.recordThrottle(parseRetryAfter(retryAfter, { fallbackMs: this.fallbackRetryAfterMs, maxMs: this.maxRetryAfterMs }));
 		} else if (status !== undefined) this.recordSuccess();
@@ -210,6 +310,7 @@ export class SourceRequestGovernor {
 	/** Wait for a free slot, then for any pause to pass. */
 	async acquire( signal?: AbortSignal, browser = false ): Promise< void > {
 		for ( ;; ) {
+			if (this.confirmation || this.blockedClient) await this.admitSourceRequest();
 			if ( signal?.aborted ) throw abortReason( signal ); // failure-class: operational
 			if ( (browser && !this.browserThrottled) || this.active < this.limit ) {
 				const wait = this.pausedUntil - Date.now();

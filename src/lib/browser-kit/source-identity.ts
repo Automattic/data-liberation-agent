@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 import { continueSourceRoute, fetchSourceRoute, governSourceContext, sourceGovernorFor } from './source-traffic.js';
-import { isSourceTransportThrottle, type SourceRequestGovernors } from '../source-request-governor.js';
+import { SourceBlockedClientError, isSourceTransportThrottle, type SourceRequestGovernors } from '../source-request-governor.js';
 import { installProbeIntrinsics } from './probe-intrinsics.js';
 
 /** Shared identity for Node-side HTTP requests to source sites (not browser device profiles). */
@@ -62,7 +62,11 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
   };
   await context.route('**/*', async route => {
     try { await applyIdentity(route); }
-    catch {
+    catch (error) {
+      if (error instanceof SourceBlockedClientError) {
+        await route.abort('blockedbyclient').catch(() => {});
+        return;
+      }
       // Closing the page or context mid-request already handled this route;
       // for any other failure the request proceeds rather than stalling.
       await route.fallback().catch(() => {});

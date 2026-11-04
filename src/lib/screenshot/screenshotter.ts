@@ -4,7 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
 import { getSourceResponse, sourceGovernorFor } from '../browser-kit/source-traffic.js';
-import { isSourceTransportThrottle } from '../source-request-governor.js';
+import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
@@ -900,10 +900,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		let timedOut: { budgetMs: number; error: string } | undefined;
 		let navigated = false;
 		let attempt = 0;
-		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut;
+		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut && ! sourceGovernorFor(page.context?.(), url)?.blockedClient;
 		let redirectedTo: string | undefined;
 		while ( ++attempt <= MAX_NAV_ATTEMPTS ) {
 			try {
+				const governor = sourceGovernorFor(page.context?.(), url);
+				if (governor?.isConfirmingRefusal || governor?.blockedClient) await governor.admitSourceRequest();
 				args.phases?.enter( 'navigate' );
 				const started = Date.now();
 				const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope, timeoutMs: budgetMs});
@@ -957,7 +959,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					return false;
 				}
 				if ( mayRetry() && !(err instanceof SourceNavigationError) ) {
-					if (!sourceGovernorFor(page.context(), url) || !isSourceTransportThrottle(err)) await navSleep( navBackoffMs( attempt ) );
+					const governor = sourceGovernorFor(page.context?.(), url);
+					if (!governor || !isSourceTransportThrottle(err) || governor.hasSustainedRefusal) await navSleep( navBackoffMs( attempt ) );
 					continue;
 				}
 				loadFail( 'goto', err, attempt );
@@ -2327,6 +2330,7 @@ function runtimeMemoryLimit(): number {
 }
 
 export async function captureScreenshots( opts: ScreenshotOpts ): Promise< ScreenshotResult > {
+	opts = { ...opts, governors: opts.governors ?? new SourceRequestGovernors() };
 	const startTime = Date.now();
 
 	// --- validate + filter ----------------------------------------------------
@@ -3357,6 +3361,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Routes the time budget left uncaptured are missing routes: counted as failed.
 	const budgetDiagnostics = routeBudget?.diagnostics( urls ) ?? [];
 	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
+	for (const origin of new Set(urls.map(url => new URL(url).origin))) {
+		const blocked = opts.governors?.forOrigin(origin).blockedClient;
+		if (blocked) routeDiagnostics.push({ code: blocked.code, url: origin, reason: blocked.message, ...blocked.evidence });
+	}
 	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows );
 	return {
 		captured,
