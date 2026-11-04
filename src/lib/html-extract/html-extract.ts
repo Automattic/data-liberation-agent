@@ -25,6 +25,26 @@ export function extractHeading(html: string): string {
   return $('title').first().text().trim();
 }
 
+export function extractNavigationLandmarkLinks(html: string, baseUrl: string): NavLink[] {
+  const $ = cheerio.load(html);
+  const links: NavLink[] = [];
+  const seen = new Set<string>();
+  $('header a[href], nav a[href], footer a[href], [role="navigation"] a[href]').each((_, el) => {
+    const rawHref = $(el).attr('href') || '';
+    if (!rawHref || rawHref === '#') return;
+    let url: URL;
+    try {
+      url = new URL(rawHref, baseUrl);
+    } catch {
+      return;
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || seen.has(url.href)) return;
+    seen.add(url.href);
+    links.push({ text: $(el).text().trim(), href: url.href });
+  });
+  return links;
+}
+
 export function extractNavLinks(html: string, baseUrl: string): NavLink[] {
   const $ = cheerio.load(html);
   const links: NavLink[] = [];

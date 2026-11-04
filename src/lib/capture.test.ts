@@ -64,6 +64,7 @@ vi.mock( './media-fetch/media.js', async ( importOriginal ) => ( {
 import { existsSync } from 'node:fs';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { spreadSample } from './route-budget.js';
+import { RouteTimeBudget } from './capture-time-budget.js';
 import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_CAPTURE_TIME_BUDGET_MS, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture, templateGroupingLimits } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
@@ -163,6 +164,36 @@ describe( 'downloadCaptureSectionMedia', () => {
 } );
 
 describe( 'captureWebsite fluid learning', () => {
+	it( 'admits entry navigation destinations ahead of a truncated listing inventory', async () => {
+		const root = join( process.cwd(), '.tmp-test', 'capture-entry-navigation' );
+		const source = 'https://example.com/';
+		const menu = [ '/about/work/', '/support/overview/', '/contact/children/', '/information/materials/', '/information/library/' ].map( path => new URL( path, source ).href );
+		const inventory = [ '/news/', ...Array.from( { length: 24 }, ( _, i ) => `/news/article-${ i + 1 }/` ), ...menu.map( url => new URL( url ).pathname ) ];
+		const html = `<header><a href="${ menu[ 3 ] }">Materials</a></header><nav><a href="${ menu[ 2 ] }">Contact</a></nav><main><a href="/news/">News</a></main><footer><a href="${ menu[ 1 ] }">Support</a><a href="${ menu[ 0 ] }">About</a></footer><div role="navigation"><a href="${ menu[ 4 ] }">Library</a></div>`;
+		vi.mocked( safeFetch ).mockResolvedValueOnce( { finalUrl: source, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( html ) } );
+		captureScreenshotsMock.mockImplementationOnce( async input => {
+			const { urls, timeBudget } = input as { urls: string[]; timeBudget: ConstructorParameters<typeof RouteTimeBudget>[ 0 ] };
+			let now = timeBudget.abandonAt - timeBudget.timeBudgetMs;
+			const budget = new RouteTimeBudget( timeBudget, source, () => now );
+			const admitted: string[] = [];
+			for ( const url of urls ) {
+				if ( ! budget.admits( url, 1 ) ) break;
+				budget.start( url ); admitted.push( url ); now += 10_000; budget.finish( url );
+			}
+			return { urls: admitted, captured: admitted.length, skipped: 0, failed: 0, durationMs: 1 };
+		} );
+		try {
+			await captureWebsite( { url: source, outputDir: root, timeBudgetMs: 240_000 }, {
+				findAdapter: () => ( { id: 'generic', discover: async () => ( { urls: inventory.map( url => ( { url: new URL( url, source ).href, type: 'page' } ) ) } ) } as any ),
+			} );
+			const admitted = ( captureScreenshotsMock.mock.results.at( -1 )!.value as Promise<{ urls: string[] }> );
+			const result = await admitted;
+			expect( result.urls ).toContain( source );
+			expect( result.urls.filter( url => menu.includes( url ) ) ).toEqual( menu );
+			expect( result.urls.length ).toBeLessThan( inventory.length + 1 );
+			expect( inventory.filter( url => url.startsWith( '/news/article-' ) ).some( url => !result.urls.includes( new URL( url, source ).href ) ) ).toBe( true );
+		} finally { rmSync( root, { recursive: true, force: true } ); }
+	} );
 	afterEach( () => {
 		captureScreenshotsMock.mockClear();
 		rmSync( root, { recursive: true, force: true } );
