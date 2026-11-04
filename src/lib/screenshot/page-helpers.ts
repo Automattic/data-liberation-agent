@@ -1413,23 +1413,48 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const accept = controls.find(node => node !== reject && node !== policy && /accept|agree|allow|\bok\b|akkoord|zustimm|verstanden/i.test(label(node)))
       ?? controls.find(node => node !== reject && node !== policy && !/close|dismiss|settings|preferences|manage/i.test(label(node)));
     if (!accept || !label(accept)) return;
-    // Read rendered prose, excluding control and policy labels, without mutating live DOM.
+    // Read rendered prose without mutating live DOM. Keep inline link labels so
+    // sentences remain whole; standalone block links are recorded separately.
     const clone = root.cloneNode(true) as HTMLElement;
     const originals = Array.from(root.querySelectorAll<HTMLElement>('*'));
     const copies = Array.from(clone.querySelectorAll<HTMLElement>('*'));
-    for (let i = originals.length - 1; i >= 0; i--) {
-      if (!visible(originals[i]) || originals[i].matches('button, [role="button"], input, a, script, style')) copies[i].remove();
-    }
-    const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
-    if (!text) return;
-    const bounds = root.getBoundingClientRect();
-    const style = getComputedStyle(root);
-    const button = getComputedStyle(accept);
-    const position = bounds.top <= innerHeight * .1 ? 'top' as const : bounds.bottom >= innerHeight * .9 ? 'bottom' as const : 'center' as const;
     // Prefer an element's own prose over wrappers or text inside controls.
     const prose = originals.find(node => visible(node)
       && !node.closest('button, [role="button"], input, a, script, style')
       && Array.from(node.childNodes).some(child => child.nodeType === Node.TEXT_NODE && child.textContent?.trim()));
+    for (let i = originals.length - 1; i >= 0; i--) {
+      const node = originals[i];
+      if (!visible(node) || node === accept || node === reject
+        || node.matches('button, [role="button"], input, script, style')) copies[i].remove();
+      else if (node.matches('a') && !getComputedStyle(node).display.startsWith('inline')) copies[i].remove();
+    }
+    const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    // Measure the nearest painted element containing both prose and accept
+    // control; transparent viewport wrappers are positioning, not the surface.
+    const paintsBox = (node: HTMLElement) => {
+      const s = getComputedStyle(node);
+      const channels = s.backgroundColor.match(/[\d.]+/g) ?? [];
+      const alpha = s.backgroundColor.startsWith('rgb(') && channels.length === 3
+        ? 1 : parseFloat(channels[channels.length - 1] ?? '1');
+      return alpha > 0
+        || (s.borderStyle !== 'none' && s.borderWidth.split(/\s+/).some(width => parseFloat(width) > 0))
+        || s.boxShadow !== 'none';
+    };
+    let surface = root;
+    if (prose) {
+      const queue: HTMLElement[] = [root];
+      while (queue.length) {
+        const node = queue.shift()!;
+        if (node !== root && (!node.contains(prose) || !node.contains(accept))) continue;
+        if (paintsBox(node)) { surface = node; break; }
+        queue.push(...Array.from(node.children) as HTMLElement[]);
+      }
+    }
+    const bounds = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    const button = getComputedStyle(accept);
+    const position = bounds.top <= innerHeight * .1 ? 'top' as const : bounds.bottom >= innerHeight * .9 ? 'bottom' as const : 'center' as const;
     const typography = getComputedStyle(prose ?? root);
     const cssValues = (values: Record<string, string>) => Object.fromEntries(
       Object.entries(values).filter(([, value]) => value.trim() && value !== 'normal'),

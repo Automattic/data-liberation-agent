@@ -4,6 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 const SERVER = fileURLToPath( new URL( './mcp-server.ts', import.meta.url ) );
 
+// tsx's loader IPC binds a unix socket beneath TMPDIR, and the kernel rejects
+// socket paths longer than 108 bytes; a deeply nested TMPDIR then hangs the
+// boot instead of failing. Keep it only when a socket can still fit beneath it.
+const childEnv = { ...process.env };
+if ( ( childEnv.TMPDIR ?? '' ).length + '/tsx-0/0000000.pipe'.length > 107 ) delete childEnv.TMPDIR;
+
 /**
  * Boot the server over stdio and ask what it offers.
  *
@@ -13,7 +19,7 @@ const SERVER = fileURLToPath( new URL( './mcp-server.ts', import.meta.url ) );
  */
 function listTools(): Promise< Array< { name: string } > > {
 	return new Promise( ( resolve, reject ) => {
-		const child = spawn( 'npx', [ 'tsx', SERVER ], { stdio: [ 'pipe', 'pipe', 'pipe' ] } );
+		const child = spawn( 'npx', [ 'tsx', SERVER ], { stdio: [ 'pipe', 'pipe', 'pipe' ], env: childEnv } );
 		let buffer = '';
 		const timer = setTimeout( () => {
 			child.kill();

@@ -46,6 +46,30 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
   ]);
 });
 
+// One Chromium session (~1 second): a transparent full-viewport wrapper must not
+// obscure the painted panel, and inline links must remain part of the prose.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transparent wrapper and preserves inline link labels', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const fixture = readFileSync(new URL('./fixtures/consent-panel.html', import.meta.url), 'utf8');
+    await page.setContent(fixture);
+    const dismissed = await dismissOverlays(page);
+    const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+    expect(banner?.text).toBe('We collect personal information as specified in the privacy policy and use cookies as specified in the cookie policy. You can change your choice in the preferences panel.');
+    expect(banner?.position).toBe('bottom');
+    expect(banner?.presentation?.span).toBe('inset');
+    expect(banner?.presentation?.edge_offset).toBe('16px');
+    expect(banner?.presentation?.padding).toBe('24px');
+    expect(banner?.colors?.background).toBe('rgb(255, 255, 255)');
+    expect(banner?.accept_label).toBe('Accept');
+    expect(banner?.reject_label).toBe('Reject');
+  } finally {
+    await browser.close();
+  }
+});
+
 // One Chromium session (~1 second) covers border omission, gaps and margin-only bisection.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async () => {
   const { chromium } = await import('playwright');
