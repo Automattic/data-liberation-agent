@@ -395,8 +395,21 @@ export async function captureTriggeredDialogs(
 				( isButton && ( element.getAttribute( 'role' ) === 'listbox' || /\bmenu\b/i.test( name ) ) );
 		} );
 
+		// Site builders also render a menu control as a plain element their
+		// runtime binds a click to. Its pointer cursor and menu label are the
+		// authored affordance; the observed revealed panel still decides capture.
+		const pointerMenus = Array.from( document.querySelectorAll( 'div,span,p,li,img,svg' ) ).filter( element => {
+			if ( owned( element ) || ! visible( element ) ) return false;
+			if ( element.closest( 'a,button,label,form,[role],[tabindex],dialog,select,summary' ) ) return false;
+			if ( element.querySelector( 'a,button,input,select,textarea,[role="button"]' ) ) return false;
+			if ( getComputedStyle( element ).cursor !== 'pointer' ) return false;
+			const parent = element.parentElement;
+			if ( parent && getComputedStyle( parent ).cursor === 'pointer' ) return false;
+			const name = ( element.getAttribute( 'aria-label' ) || element.textContent || '' ).replace( /\s+/g, ' ' ).trim();
+			return name.length > 0 && name.length <= 30 && /\bmenu\b/i.test( name );
+		} );
 		const ordered = [ ...candidates ];
-		for ( const element of [ ...navDropdowns, ...plain ] ) {
+		for ( const element of [ ...pointerMenus, ...navDropdowns, ...plain ] ) {
 			if ( ! ordered.includes( element ) ) ordered.push( element );
 		}
 		return ordered.slice( 0, limit ).map( ( element, index ) => {
@@ -1020,9 +1033,15 @@ async function firstNewVisibleDialog(
 			dialog = dialog.parentElement;
 		}
 		const semanticSurface = ownedSurface ?? ( surface?.matches( semanticSelector ) ? surface : surface?.querySelector( semanticSelector ) );
+		// A link panel opened from site chrome, or from a control labelled as the
+		// menu (builder navbars are often plain elements, not landmarks).
+		const namesMenuControl = ( trigger: Element | null ): boolean => Boolean( trigger ) && (
+			Boolean( trigger!.closest( 'header,nav,[role="banner"],[role="navigation"]' ) ) ||
+			/\bmenu\b/i.test( ( trigger!.getAttribute( 'aria-label' ) || trigger!.textContent || '' ).replace( /\s+/g, ' ' ).trim().slice( 0, 30 ) )
+		);
 		const surfaceRole = semanticSurface?.getAttribute( 'role' ) ?? dialog.getAttribute( 'role' ) ??
 			( dialog.tagName === 'DIALOG' || dialog.getAttribute( 'aria-modal' ) === 'true' ? 'dialog' :
-				dialog.matches( 'nav,[role="navigation"]' ) || dialog.querySelector( 'a[href]' ) && document.querySelector( triggerSelector )?.closest( 'header,nav,[role="banner"],[role="navigation"]' ) ? 'menu' : undefined );
+				dialog.matches( 'nav,[role="navigation"]' ) || dialog.querySelector( 'a[href]' ) && namesMenuControl( document.querySelector( triggerSelector ) ) ? 'menu' : undefined );
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
 			: '[data-lib-interaction-dialog="captured"]';

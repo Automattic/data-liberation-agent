@@ -15,6 +15,12 @@ import type { CapturedDialogInteraction } from './interaction-capture.js';
  * reused state's selectors are rebased from the entrypoint root's prefix to the
  * route root's, and the state is kept only when every rebased selector names
  * the corresponding node on the route. Anything else is probed in place.
+ *
+ * Builder navbars are often plain elements with no landmark. A probed control
+ * outside every landmark then names its own root: its outermost ancestor that
+ * holds no page heading or main content (see `builderChromeRoots`). Templates
+ * place that root at different depths, so routes find it by its tag and classes
+ * and, like any root, reuse it only when its signature matches.
  */
 export const CHROME_LANDMARK_SELECTOR = 'header,nav,footer,[role="banner"],[role="navigation"],[role="contentinfo"]';
 /** Marks entrypoint chrome roots while the one-time chrome probe runs. */
@@ -39,6 +45,8 @@ export interface ChromeLandmark {
 	prefixes: [ compact: string, positional: string, panel: string ];
 	/** `tag[role]` with its first class, for diagnostics. */
 	label: string;
+	/** A builder chrome root's tag-and-class selector: a probed control named it, not a landmark element. */
+	identity?: string;
 }
 
 /** Where a recorded selector resolves, relative to the page's chrome roots. */
@@ -134,10 +142,10 @@ export function rebaseChromeState< T >( state: T, from: readonly string[], to: r
  * The page's outermost chrome landmarks, in document order. With `mark`, each
  * root also gets `CHROME_ROOT_ATTRIBUTE` (cleared by `clearChromeMarks`).
  */
-export async function readChromeLandmarks( page: Page, mark = false ): Promise< ChromeLandmark[] > {
+export async function readChromeLandmarks( page: Page, mark = false, builderRoots: readonly string[] = [] ): Promise< ChromeLandmark[] > {
 	await normalizeCaptureState( page );
 	await normalizeGeneratedIds( page );
-	const raw = await page.evaluate( ( { selector, attributes, rootAttribute, mark } ) => {
+	const raw = await page.evaluate( ( { selector, attributes, rootAttribute, mark, builderRoots } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
 		const kept = ( element: Element ) => ! skipped.has( element.tagName );
 		const sameTag = ( element: Element ) => Array.from( element.parentElement?.children ?? [] ).filter( sibling => sibling.tagName === element.tagName );
@@ -151,8 +159,14 @@ export async function readChromeLandmarks( page: Page, mark = false ): Promise< 
 			}
 			return `body > ${ parts.join( ' > ' ) }`;
 		};
-		const roots = Array.from( document.querySelectorAll( selector ) )
+		const landmarks = Array.from( document.querySelectorAll( selector ) )
 			.filter( element => ! element.parentElement?.closest( selector ) && ! element.closest( 'script,style,noscript,template' ) && kept( element ) );
+		const identities = new Map< Element, string >();
+		for ( const identity of builderRoots ) {
+			const found = Array.from( document.querySelectorAll( identity ) ).filter( element => ! element.closest( selector ) && ! element.querySelector( selector ) );
+			for ( const element of found ) if ( ! found.some( other => other !== element && other.contains( element ) ) && ! identities.has( element ) ) identities.set( element, identity );
+		}
+		const roots = [ ...landmarks, ...identities.keys() ];
 		return roots.map( root => {
 			const lines: string[] = [];
 			// UUIDs used only as runtime node identities are load-volatile. Keep
@@ -196,14 +210,40 @@ export async function readChromeLandmarks( page: Page, mark = false ): Promise< 
 				raw: `${ lines.join( '\n' ) }\n${ text.join( ' ' ) }`,
 				prefixes: [ chain( root, compact, false ), chain( root, positional, false ), chain( root, positional, true ) ],
 				label: `${ root.tagName.toLowerCase() }${ root.getAttribute( 'role' ) ? `[role=${ root.getAttribute( 'role' ) }]` : '' }${ root.classList[ 0 ] ? `.${ root.classList[ 0 ] }` : '' }`,
+				identity: identities.get( root ),
 			};
 		} );
-	}, { selector: CHROME_LANDMARK_SELECTOR, attributes: SIGNATURE_ATTRIBUTES, rootAttribute: CHROME_ROOT_ATTRIBUTE, mark } );
-	return raw.map( ( { raw: signature, prefixes, label } ) => ( {
+	}, { selector: CHROME_LANDMARK_SELECTOR, attributes: SIGNATURE_ATTRIBUTES, rootAttribute: CHROME_ROOT_ATTRIBUTE, mark, builderRoots: [ ...builderRoots ] } );
+	return raw.map( ( { raw: signature, prefixes, label, identity } ) => ( {
 		signature: createHash( 'sha256' ).update( signature ).digest( 'hex' ).slice( 0, 32 ),
 		prefixes: prefixes as ChromeLandmark['prefixes'],
 		label,
+		...( identity ? { identity } : {} ),
 	} ) );
+}
+
+/**
+ * Tag-and-class selectors of the builder chrome roots that hold these states'
+ * triggers: for a trigger outside every landmark, its outermost ancestor below
+ * `body` that holds no page heading or main content. A root is named only when
+ * its classes identify it uniquely on this page.
+ */
+export async function builderChromeRoots( page: Page, states: readonly CapturedDialogInteraction[] ): Promise< string[] > {
+	return page.evaluate( ( { selector, triggers } ) => {
+		const content = 'h1,main,[role="main"]';
+		const roots = new Set< string >();
+		for ( const trigger of triggers ) {
+			let element: Element | null = null;
+			try { element = document.querySelector( trigger ); } catch { continue; }
+			if ( ! element || element.closest( selector ) || element.closest( content ) ) continue;
+			let root = element;
+			while ( root.parentElement && root.parentElement !== document.body && ! root.parentElement.querySelector( content ) ) root = root.parentElement;
+			if ( root.querySelector( selector ) || ! root.classList.length ) continue;
+			const identity = root.tagName.toLowerCase() + Array.from( root.classList ).map( name => `.${ CSS.escape( name ) }` ).join( '' );
+			if ( document.querySelectorAll( identity ).length === 1 ) roots.add( identity );
+		}
+		return [ ...roots ];
+	}, { selector: CHROME_LANDMARK_SELECTOR, triggers: states.map( state => state.trigger.selector ) } );
 }
 
 /** Resolve selectors on the page and anchor each to the given chrome roots. */
@@ -302,7 +342,7 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		return { decision: { chromeReused: false, reason: probe.status === 'skipped' ? probe.reason ?? 'the entrypoint chrome was not probed' : `the entrypoint chrome probe failed: ${ probe.reason ?? 'no evidence' }` }, states: [] };
 	}
 	if ( ! evidence.landmarks.length ) return { decision: { chromeReused: false, reason: 'the entrypoint has no chrome landmarks' }, states: [] };
-	const landmarks = await readChromeLandmarks( page );
+	const landmarks = await readChromeLandmarks( page, false, evidence.landmarks.flatMap( landmark => landmark.identity ? [ landmark.identity ] : [] ) );
 	const counts = { route: landmarks.length, entrypoint: evidence.landmarks.length };
 	if ( ! landmarks.length ) return { decision: { chromeReused: false, reason: 'this route has no chrome landmarks', landmarks: { ...counts, matched: 0 } }, states: [] };
 	// The n-th occurrence of a signature pairs with its n-th occurrence here.

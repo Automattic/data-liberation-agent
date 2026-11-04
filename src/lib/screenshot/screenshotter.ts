@@ -96,7 +96,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import { inlineRuntimeHash, externalScriptSources, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
-import { anchorChromeStates, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
+import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /**
@@ -1886,7 +1886,8 @@ async function probePhoneOnlyChrome(
 			root.setAttribute( rootAttribute, '' );
 			for ( const element of [ root, ...Array.from( root.querySelectorAll( '*' ) ) ] ) {
 				if ( shown( element ) ) element.setAttribute( desktopAttribute, '' );
-				else if ( element.matches( control ) ) hidden++;
+				// A builder's menu control is a plain element with a pointer cursor.
+				else if ( element.matches( control ) || getComputedStyle( element ).cursor === 'pointer' ) hidden++;
 			}
 		}
 		return hidden;
@@ -2257,7 +2258,7 @@ async function probeChromeOnPage(
 	// Read the resting landmark identity before any exploration.
 	await restoreTopScrollState( page );
 	await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-	const landmarks = await readChromeLandmarks( page, true );
+	let landmarks = await readChromeLandmarks( page, true );
 	let states: CapturedDialogInteraction[] = [];
 	if ( landmarks.length ) {
 		const release = await lockMainFrameNavigation( page );
@@ -2268,6 +2269,9 @@ async function probeChromeOnPage(
 			await clearChromeMarks( page );
 		}
 	}
+	// Phone-only controls of a builder navbar with no landmark name their own root.
+	const builderRoots = await builderChromeRoots( page, options.additionalStates ?? [] );
+	if ( builderRoots.length ) landmarks = await readChromeLandmarks( page, false, builderRoots );
 	const anchored = await anchorChromeStates( page, landmarks, [ ...states, ...( options.additionalStates ?? [] ) ] );
 	const canonicalize = options.canonicalizeHtml;
 	return {
