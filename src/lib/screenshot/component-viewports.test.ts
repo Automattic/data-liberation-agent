@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { chromium } from 'playwright';
 import { exploreComponents, snapshotComponents } from './component-states.js';
 import { withReadOnlyProbes } from './screenshotter.js';
+import { wireCapturedComponents } from '../static-components.js';
 
 // One browser pass, approximately three seconds. Uses the screenshotter's
 // snapshot -> read-only exploration path, without a second capture pipeline.
@@ -20,7 +21,7 @@ it('explores responsive disclosures where they render and restores the capture v
 		#search { display:none } @media(max-width:767px) { #search { display:block } }
 		</style>
 		<header id="search"><button id="search-toggle" aria-label="Toggle search" aria-controls="search-form" aria-expanded="false">Search</button>
-		<form id="search-form" aria-hidden="true"><div class="search-form__lightbox"><input id="search-field" type="search"><button type="button" class="search-form__lightbox-close">Close</button></div></form></header>
+		<form id="search-form" aria-hidden="true"><div class="search-form__lightbox"><input id="search-field" type="search"><div role="button" tabindex="0" class="search-form__lightbox-close"><span>Close</span></div></div></form></header>
 		${['mobile', 'desktop', 'never'].map(id => `<section id="${id}"><button id="${id}-toggle" aria-expanded="false" aria-controls="${id}-panel">Search</button><div id="${id}-panel" hidden><input type="search"></div></section>`).join('')}
 		<script>document.querySelectorAll('button').forEach(button => button.onclick = () => {
 			const open = button.getAttribute('aria-expanded') !== 'true';
@@ -59,6 +60,24 @@ it('explores responsive disclosures where they render and restores the capture v
 		expect(components.some(node => node.reason === 'trigger activation failed')).toBe(false);
 		expect(page.viewportSize()).toEqual({ width: desktop.width, height: desktop.height });
 		expect(await page.locator('[aria-expanded="true"]').count()).toBe(0);
+
+		// Replay captured markup without the source runtime, including a nested
+		// click target inside the panel's non-button dismissal control.
+		await page.locator('script').evaluateAll(scripts => scripts.forEach(script => script.remove()));
+		const output = wireCapturedComponents(await page.content(), components);
+		await page.setViewportSize({ width: mobile.width, height: mobile.height });
+		await page.setContent(output);
+		const closedPanel = await page.evaluate(html => new DOMParser().parseFromString(html, 'text/html').getElementById('search-form')!.outerHTML, search.states.find(state => state.id === 'closed')!.html);
+		await page.locator('#search-toggle').click();
+		expect(await page.locator('#search-toggle').getAttribute('aria-expanded')).toBe('true');
+		expect(await page.locator('.search-form__lightbox').isVisible()).toBe(true);
+		await page.locator('.search-form__lightbox-close span').click();
+		expect(await page.locator('#search-toggle').getAttribute('aria-expanded')).toBe('false');
+		expect(await page.locator('#search-form').evaluate(panel => panel.outerHTML)).toBe(closedPanel);
+		// The replacement panel must resolve again on subsequent interactions.
+		await page.locator('#search-toggle').click();
+		await page.locator('.search-form__lightbox-close span').click();
+		expect(await page.locator('#search-toggle').getAttribute('aria-expanded')).toBe('false');
 	} finally {
 		await browser.close();
 	}
