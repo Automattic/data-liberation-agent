@@ -15,7 +15,7 @@ import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { applyCaptureRemovals } from './apply-removals.js';
-import { accessGateRemoval, applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
+import { accessGateRemoval, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
 import { accessGateNote, installAccessGatePlaceholder, openAccessGateShell, routeKeptContent, type AccessGateEvidence } from '../access-gate.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
@@ -879,7 +879,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	let serverHtml: string | undefined;
 	let navigationUrl = url;
 	let releaseBaselineNavigation: () => Promise< void > = async () => {};
-	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
+	let sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	// Both the initial visit and disclosure recovery own the same navigation,
 	// cleanup and readiness path. Recovery must not inherit the probed DOM.
 	const loadBaseline = async ( recovering = false ): Promise< boolean > => {
@@ -941,6 +941,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 				// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
 				serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
+				sourcePolicy = cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), new Headers(response?.headers()), serverHtml ?? '');
 				if ( serverHtml ) for ( const link of sameOriginPageAnchors( resolveDocumentReferences( serverHtml, navigationUrl ), navigationUrl ) ) args.serverLinks.add( link );
 				navigated = true;
 				break;
@@ -1998,7 +1999,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	const html = await navigation.response?.text().catch( () => undefined );
 	const settledAt = Date.now();
 	if ( timings ) timings.navigate = Math.max( timings.navigate, settledAt - startedAt );
-	await applySourceCleanup( page, args.cleanupPolicy ?? cleanupPolicy() );
+	await applySourceCleanup( page, cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), new Headers(navigation.response?.headers()), html ?? '') );
 	if ( mode === 'check' ) {
 		// Bounded after the document is parsed: up to CHECK_LOAD_WAIT_MS for
 		// `load`, up to 0.5 s of network quiet, the short scroll, then up to 1 s

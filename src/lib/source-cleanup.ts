@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import { documentRequestUrl } from './url/route-key.js';
+import { detectHosts, hostResidue } from '../platform/host.js';
 
 export const CLEANUP_SCHEMA = 'blocks-engine-capture/source-cleanup/v8';
 export const CLEANUP_CATEGORIES = ['advertisement', 'source-attribution', 'provider-service'] as const;
@@ -10,6 +11,9 @@ export interface CleanupRule {
    *  (a site-members login), so a copy can only ship it broken. */
   category: CleanupCategory;
   selector: string;
+  /** Detected deployment host and its residue attribution. */
+  host?: string;
+  evidence?: string;
   /** Credit links remove their attribution phrase, retaining owner footer text. */
   credit?: boolean;
   /** Generic acquisition bars require explicit promotion language. */
@@ -57,6 +61,8 @@ export interface CleanupRecord {
   category: CleanupRule['category'];
   selector: string;
   text: string;
+  host?: string;
+  evidence?: string;
   action: 'remove' | 'remove-credit-text';
   reclaimedBodyPadding: boolean;
   /** Custom properties zeroed because this removal took the space they reserved. */
@@ -110,6 +116,14 @@ const BUILDER_CHROME_RULE: CleanupRule = {
 export function cleanupPolicy(rules: CleanupRule[] = []): CleanupPolicy {
   return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, CAPTCHA_WIDGET_RULE, ...rules, BUILDER_CHROME_RULE],
     promotion: { ...PROMOTION_PATTERNS }, builderChrome: { ...BUILDER_CHROME_PATTERNS } };
+}
+
+/** Only the hosts serving this document contribute attribution cleanup. */
+export function cleanupPolicyForResponse(policy: CleanupPolicy, headers: Headers, html: string): CleanupPolicy {
+  const rules: CleanupRule[] = hostResidue(detectHosts(headers, html)).map((rule, index) => ({
+    ...rule, id: `host-${rule.host}-${index}`, category: 'source-attribution',
+  }));
+  return { ...policy, rules: [...rules, ...policy.rules] };
 }
 
 /** Source adapters supply identity; the matching/removal mechanism is shared. */
@@ -416,7 +430,7 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
         }
         const reclaimedVariables = reclaimReservedSpace(rule);
         if (report.records.length < 200) report.records.push({ rule: rule.id, category: rule.category,
-          selector: selectorFor(node), text: (node.textContent ?? '').trim().slice(0, 160), action: 'remove', reclaimedBodyPadding, ...(reclaimedVariables ? { reclaimedVariables } : {}) });
+          selector: selectorFor(node), text: (node.textContent ?? '').trim().slice(0, 160), action: 'remove', reclaimedBodyPadding, ...(rule.host ? { host: rule.host, evidence: rule.evidence } : {}), ...(reclaimedVariables ? { reclaimedVariables } : {}) });
         else report.truncated = true;
         let parent = node.parentElement;
         orphanIdsIn(node);
