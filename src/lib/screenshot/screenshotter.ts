@@ -946,6 +946,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				// The document arrived; capture's own bounded readiness takes over
 				// from here, so a pending subresource is evidence, not a failure.
 				if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ budgetMs }ms navigation budget; subresources were still pending` } );
+				if ( navigation.subresourceLoss ) args.diagnostics?.push( { code: 'source_subresource_loss', reason: 'Reset or throttled subresource loads remained after bounded document recovery' } );
 				if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 				// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
 				serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );

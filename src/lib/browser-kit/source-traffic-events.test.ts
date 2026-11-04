@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
-import type { BrowserContext, Request, Route } from 'playwright';
+import type { BrowserContext, Page, Request, Route } from 'playwright';
 import { expect, it, vi } from 'vitest';
 import { SourceRequestGovernors } from '../source-request-governor.js';
-import { continueSourceRoute, governSourceContext } from './source-traffic.js';
+import { continueSourceRoute, governSourceContext, sourceLoadInterruptions } from './source-traffic.js';
 
 it('observes native outcomes, admits only recovery traffic and releases failures', async () => {
   const context = new EventEmitter() as EventEmitter & BrowserContext;
@@ -11,8 +11,9 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   governSourceContext(context, governors, 'https://source.test');
   const acquire = vi.spyOn(governor, 'acquire');
   const release = vi.spyOn(governor, 'release');
+  const page = {} as Page;
   const routeFor = (url = 'https://source.test/image') => {
-    const request = { url: () => url, frame: () => ({ url: () => 'https://source.test/page' }), failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) } as Request;
+    const request = { url: () => url, isNavigationRequest: () => false, method: () => 'GET', frame: () => ({ page: () => page, url: () => 'https://source.test/page' }), failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) } as Request;
     const route = { request: () => request, continue: vi.fn().mockResolvedValue(undefined), fetch: vi.fn() };
     return { request, route: route as unknown as Route, native: route };
   };
@@ -23,6 +24,7 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   expect(healthy.native.fetch).not.toHaveBeenCalled();
   context.emit('requestfailed', healthy.request);
   expect(governor.throttleEvents).toBe(1);
+  expect(sourceLoadInterruptions(page)).toBe(1);
   const recovery = routeFor();
   await continueSourceRoute(recovery.route, context, {});
   expect(acquire).toHaveBeenCalledOnce();
@@ -30,6 +32,7 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   context.emit('requestfinished', recovery.request);
   expect(release).toHaveBeenCalledOnce();
   expect(governor.isBrowserThrottled).toBe(false);
+  expect(sourceLoadInterruptions(page)).toBe(1);
 
   const throttled = routeFor();
   await continueSourceRoute(throttled.route, context, {});
@@ -47,5 +50,6 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   await continueSourceRoute(thirdParty.route, context, {});
   context.emit('requestfailed', thirdParty.request);
   expect(governor.throttleEvents).toBe(3);
+  expect(sourceLoadInterruptions(page)).toBe(3);
   expect(acquire).toHaveBeenCalledTimes(2);
 });
