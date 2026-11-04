@@ -174,7 +174,17 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 						// Opening controls is source behavior, not a rewrite of captured
 						// geometry. Captured rules resume when that baseline state returns.
 						if ( ! role.stateMatches ) {
-							if ( returned.segment !== null ) element.removeAttribute( segmentAttribute );
+							if ( element.hasAttribute( segmentAttribute ) ) {
+								// Suspending a rule must not discard the only surviving length.
+								// Keep source rewrites; freeze only declarations we removed.
+								const computed = getComputedStyle( element );
+								for ( const entry of role.authority ?? [] ) {
+									if ( entry.segmented && ! element.style.getPropertyValue( entry.property ) ) {
+										element.style.setProperty( entry.property, computed.getPropertyValue( entry.property ) );
+									}
+								}
+								element.removeAttribute( segmentAttribute );
+							}
 						}
 						if ( ! ownStateMatches ) continue;
 						if ( role.stateMatches && element !== returned.element && document.documentElement.clientWidth === captureWidth ) {
@@ -199,6 +209,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 							if ( ! role.stateMatches && ( entry.property !== 'font-size' || entry.segmented ) ) continue;
 							const value = element.style.getPropertyValue( entry.property );
 							if ( entry.segmented ) {
+								if ( role.identity && element.getAttribute( segmentAttribute ) !== role.identity ) element.setAttribute( segmentAttribute, role.identity );
 								if ( value !== '' ) element.style.removeProperty( entry.property );
 							} else if ( value !== entry.css ) element.style.setProperty( entry.property, entry.css );
 						}

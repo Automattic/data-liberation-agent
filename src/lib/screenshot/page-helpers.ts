@@ -685,6 +685,23 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
             total = scrollHeight();
             bottom = Math.max(0, total - height());
           }
+          // The natural bottom leaves the last band outside an observer with
+          // a negative rootMargin. Give it one extra viewport of scroll space
+          // and move the original bottom to mid-viewport, letting the source's
+          // own observer reveal it (no guessed classes or synthetic callbacks).
+          // Absolute positioning avoids reflowing flex/grid body children.
+          if (target === window && Date.now() - started < maxMs && owner[poseKey] === generation) {
+            const tail = document.createElement('div');
+            tail.style.cssText = `position:absolute!important;top:${total}px!important;left:0!important;width:1px!important;height:${height()}px!important;pointer-events:none!important;visibility:hidden!important;`;
+            document.documentElement.appendChild(tail);
+            try {
+              target.scrollTo({ top: Math.max(0, Math.min(total - height() / 2, scrollHeight() - height())), left: 0, behavior: 'instant' });
+              await new Promise((r) => setTimeout(r, pauseMs));
+            } finally {
+              tail.remove();
+            }
+            total = scrollHeight();
+          }
           return total;
         },
         { step: 500, pauseMs: 200, maxMs, poseKey: SCROLL_POSE_GENERATION },
