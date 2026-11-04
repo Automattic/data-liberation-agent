@@ -57,6 +57,36 @@ describe( 'wixVideoRecord', () => {
 	} );
 } );
 
+/** A `data-video-info` record in the shape a background `<wix-video>` publishes. */
+function backgroundVideoInfo(): string {
+	return JSON.stringify( {
+		videoId: '498fe4_background',
+		videoWidth: 1920,
+		videoHeight: 1080,
+		autoPlay: true,
+		qualities: [
+			{ quality: '480p', size: 409920, url: 'video/498fe4_background/480p/mp4/file.mp4' },
+			{ quality: '720p', size: 921600, url: 'video/498fe4_background/720p/mp4/file.mp4' },
+			{ quality: '1080p', size: 2073600, url: 'video/498fe4_background/1080p/mp4/file.mp4' },
+		],
+	} );
+}
+
+describe( 'wixVideoRecord on a background-video record', () => {
+	it( 'reads the quality list, deriving each rendition from its label and the intrinsic size', () => {
+		const record = wixVideoRecord( backgroundVideoInfo() );
+		expect( record?.renditions.map( ( rendition ) => [ rendition.width, rendition.height, rendition.url ] ) ).toEqual( [
+			[ 853, 480, 'https://video.wixstatic.com/video/498fe4_background/480p/mp4/file.mp4' ],
+			[ 1280, 720, 'https://video.wixstatic.com/video/498fe4_background/720p/mp4/file.mp4' ],
+			[ 1920, 1080, 'https://video.wixstatic.com/video/498fe4_background/1080p/mp4/file.mp4' ],
+		] );
+	} );
+
+	it( 'refuses a background record with no intrinsic size to scale from', () => {
+		expect( wixVideoRecord( JSON.stringify( { qualities: [ { quality: '720p', url: 'video/x/720p/mp4/file.mp4' } ] } ) ) ).toBeNull();
+	} );
+} );
+
 describe( 'selectWixVideoRendition', () => {
 	const renditions = wixVideoRecord( videoInfo( 'https://video.example.test' ) )!.renditions;
 	const bytes = new Map( Object.entries( BYTES ).map( ( [ path, size ] ) => [ `https://video.example.test${ path }`, size ] ) );
@@ -156,6 +186,77 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix video player 
 			// A video outside the player component is not this contract.
 			expect( await page.locator( '#background wow-video' ).count() ).toBe( 1 );
 			expect( await page.content() ).not.toContain( 'data-blocks-engine-capture-wix-video' );
+		} finally {
+			await browser.close();
+		}
+	}, 30_000 );
+} );
+
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix background video at serialization', () => {
+	let server: Server;
+	let origin: string;
+
+	beforeAll( async () => {
+		server = createServer( ( request, response ) => {
+			const path = new URL( request.url ?? '/', 'http://localhost' ).pathname;
+			if ( path in BYTES ) {
+				response.writeHead( 200, { 'content-type': 'video/mp4', 'content-length': String( BYTES[ path ] ) } );
+				response.end();
+				return;
+			}
+			response.writeHead( 404 );
+			response.end();
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		origin = `http://127.0.0.1:${ ( server.address() as AddressInfo ).port }`;
+	} );
+
+	afterAll( async () => {
+		await new Promise( ( resolve ) => server.close( resolve ) );
+	} );
+
+	/** A background `<wix-video>` record: a quality list with absolute URLs, no per-entry dimensions. */
+	function backgroundVideoInfo(): string {
+		return JSON.stringify( {
+			videoId: '498fe4_background',
+			videoWidth: 1920,
+			videoHeight: 1080,
+			autoPlay: true,
+			qualities: [ '480p', '720p', '1080p' ].map( ( quality ) => ( {
+				quality,
+				size: Number( quality.slice( 0, -1 ) ) * 1024,
+				url: `${ origin }/video/clip/${ quality }/mp4/file.mp4`,
+			} ) ),
+		} );
+	}
+
+	it( 're-points a background video at a portable rendition and keeps its background semantics', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const info = backgroundVideoInfo().replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' );
+			await page.setContent( `<!doctype html><body style="margin:0">
+				<section style="position:relative;width:1440px;height:810px">
+					<wix-video data-video-info="${ info }" class="bgVideo" style="position:absolute;inset:0">
+						<video muted loop autoplay playsinline src="${ origin }/video/clip/1080p/mp4/file.mp4"></video>
+					</wix-video>
+				</section>
+			</body>` );
+			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
+
+			// The background element stays, classes and all: it is not a player.
+			const container = page.locator( 'wix-video.bgVideo' );
+			expect( await container.count() ).toBe( 1 );
+			const video = container.locator( 'video' );
+			expect( await video.count() ).toBe( 1 );
+			const attributes = await video.evaluate( ( element ) => Object.fromEntries(
+				[ ...element.attributes ].map( ( attribute ) => [ attribute.name, attribute.value ] )
+			) );
+			// 1440px wants 1080p, which a portable website cannot carry.
+			expect( attributes.src ).toBe( `${ origin }/video/clip/720p/mp4/file.mp4` );
+			// Background semantics are untouched: no controls appear.
+			expect( attributes ).toMatchObject( { muted: '', loop: '', autoplay: '', playsinline: '' } );
+			expect( attributes ).not.toHaveProperty( 'controls' );
 		} finally {
 			await browser.close();
 		}
