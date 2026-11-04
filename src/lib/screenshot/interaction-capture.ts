@@ -273,7 +273,13 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 		dataBindings: Object.fromEntries( Array.from( element.attributes ).filter( attr => attr.name.startsWith( 'data-' ) && !attr.name.startsWith( 'data-lib-' ) ).map( attr => [ attr.name, attr.value ] ) ),
 	} ) );
 	trigger.selector = selector;
-	await activateTrigger( page, selector );
+	const baselinePanel = await page.locator( selector ).evaluate( element => {
+		const id = element.getAttribute( 'aria-controls' );
+		return id ? '#' + CSS.escape( id ) : undefined;
+	} );
+	await activateTrigger( page, selector, async () => {
+		if ( baselinePanel ) await panelFootprintRestored( page, baselinePanel, true );
+	} );
 	await page.waitForTimeout( 150 );
 	const revealed = await firstNewVisibleDialog( page, [], selector, true );
 	if ( ! revealed ) return { restored: false };
@@ -294,8 +300,11 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 		} );
 		return overlay ? 'overlay' as const : getComputedStyle( panel ).position === 'static' ? 'in-place' as const : 'dropdown' as const;
 	} );
-	const dismissal = await closeCapturedDialog( page, revealed.selector, selector );
-	const restored = await page.locator( selector ).getAttribute( 'aria-expanded' ) === 'false' && ! await panelIntersectsViewport( page, revealed.selector );
+	const closed = () => baselinePanel
+		? panelFootprintRestored( page, baselinePanel )
+		: panelIntersectsViewport( page, revealed.selector ).then( visible => ! visible );
+	const dismissal = await closeCapturedDialog( page, revealed.selector, selector, closed );
+	const restored = await page.locator( selector ).getAttribute( 'aria-expanded' ) === 'false' && await closed();
 	const ancestorState = await verifyDropdownRestoration( page, ancestors, revealed.selector );
 	const restoredRoots = await rootClasses( page );
 	const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
@@ -1165,7 +1174,7 @@ export function dialogDismissalBinding( page: Page ): Promise< string > {
 	return binding;
 }
 
-async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string ): Promise< { selector: string; action: 'click' | 'keyboard' } | undefined > {
+async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string, closed = () => panelIntersectsViewport( page, selector ).then( visible => ! visible ) ): Promise< { selector: string; action: 'click' | 'keyboard' } | undefined > {
 	await page.keyboard.press( 'Escape' ).catch( () => undefined );
 	await page.waitForTimeout( 100 );
 	// Escape can start a closing transition (a fading overlay stays visible for
@@ -1179,12 +1188,12 @@ async function closeCapturedDialog( page: Page, selector: string, triggerSelecto
 			.map( animation => Promise.race( [ animation.finished.catch( () => undefined ), new Promise( resolve => setTimeout( resolve, limitMs ) ) ] ) ) );
 		return true;
 	}, { selector, limitMs: DIALOG_WAIT_MS } ).catch( () => true );
-	if ( ! present || ! ( await panelIntersectsViewport( page, selector ) ) ) return { selector, action: 'keyboard' };
+	if ( ! present || await closed() ) return { selector, action: 'keyboard' };
 	const close = page
 		.locator( selector )
 		.first()
 		.locator(
-			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-close],[data-testid*="close" i]'
+			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[class*="-close" i],[data-dismiss],[data-close],[data-testid*="close" i]'
 		)
 		.first();
 	if ( await close.isVisible().catch( () => false ) ) {
@@ -1198,14 +1207,34 @@ async function closeCapturedDialog( page: Page, selector: string, triggerSelecto
 			return parts.join( ' > ' );
 		} );
 		await close.click( { timeout: 1_000 } ).catch( () => undefined );
-		await page.waitForTimeout( 100 );
-		if ( ! await panelIntersectsViewport( page, selector ) ) return { selector: closeSelector, action: 'click' };
+		// Let the authored closing animation restore the baseline before toggling.
+		for ( let attempt = 0; attempt < 10 && ! await closed(); attempt++ ) await page.waitForTimeout( 100 );
+		if ( await closed() ) return { selector: closeSelector, action: 'click' };
 	}
-	if ( triggerSelector && ( await panelIntersectsViewport( page, selector ) ) ) {
+	if ( triggerSelector && ! await closed() ) {
 		await page.locator( triggerSelector ).first().click( { timeout: 1_000 } ).catch( () => undefined );
 		await page.waitForTimeout( 350 );
-		if ( ! await panelIntersectsViewport( page, selector ) ) return { selector: triggerSelector, action: 'click' };
+		if ( await closed() ) return { selector: triggerSelector, action: 'click' };
 	}
+}
+
+/** Compare rendered node identities, not the absolute visibility of an in-flow wrapper. */
+async function panelFootprintRestored( page: Page, selector: string, remember = false ): Promise< boolean > {
+	return page.evaluate( ( { selector, remember } ) => {
+		const state = globalThis as unknown as { __dlaPanelFootprints?: Map<string, Set<Element>> };
+		const baselines = state.__dlaPanelFootprints ??= new Map();
+		const panel = document.querySelector( selector );
+		const visible = new Set( panel ? [ panel, ...panel.querySelectorAll( '*' ) ].filter( node => {
+			const rect = node.getBoundingClientRect();
+			const style = getComputedStyle( node );
+			if ( style.display === 'none' || style.visibility === 'hidden' ) return false;
+			return Math.min( rect.right, innerWidth ) - Math.max( rect.left, 0 ) > 8 &&
+				Math.min( rect.bottom, innerHeight ) - Math.max( rect.top, 0 ) > 8;
+		} ) : [] );
+		if ( remember ) baselines.set( selector, visible );
+		const baseline = baselines.get( selector );
+		return !! baseline && baseline.size === visible.size && [ ...visible ].every( node => baseline.has( node ) );
+	}, { selector, remember } );
 }
 
 async function panelIntersectsViewport( page: Page, selector: string ): Promise< boolean > {
