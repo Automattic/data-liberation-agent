@@ -67,14 +67,14 @@ class ProbeRealm {
       // Resolve selectors with Playwright's pristine utility world, including its
       // role/text engines. A temporary DOM marker bridges the exact selected node
       // to the main-world probe without depending on page globals for serialization.
-      for (const method of ['evaluate', 'evaluateHandle']) target[method] = async (callback: unknown, arg: unknown) => {
+      for (const method of ['evaluate', 'evaluateHandle']) target[method] = async (callback: unknown, arg: unknown, options?: { timeout?: number }) => {
         const attribute = `data-blocks-engine-capture-probe-${randomUUID()}`;
         await realm.run((attribute: string) => {
           let index = 0;
           for (const node of document.querySelectorAll('*')) node.setAttribute(attribute, String(index++));
         }, [attribute]);
         try {
-          const id = await (target.getAttribute as (name: string) => Promise<string>)(attribute);
+          const id = await (target.getAttribute as (name: string, options?: { timeout?: number }) => Promise<string>)(attribute, options);
           const node = await realm.run((selector: string) => document.querySelector(selector), [`[${attribute}="${id}"]`], true);
           await realm.run((attribute: string) => {
             for (const node of document.querySelectorAll(`[${attribute}]`)) node.removeAttribute(attribute);

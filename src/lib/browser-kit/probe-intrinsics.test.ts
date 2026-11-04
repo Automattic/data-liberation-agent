@@ -37,6 +37,9 @@ it('protects page, locator and retained-handle probes across navigation', async 
     expect(await page.evaluate(() => Array.from([1, 2]).filter(Number.isFinite))).toEqual([1, 2]);
     expect(await page.evaluate('Math.max(parseFloat("3.5"), 2)')).toBe(3.5);
     expect(await page.locator('.box').evaluate(node => Number.parseFloat(getComputedStyle(node).paddingLeft))).toBeGreaterThan(0);
+    // A probe's bounded wait for an element that has gone stays bounded.
+    page.setDefaultTimeout(5_000);
+    await expect(page.locator('#absent').evaluate(node => node.id, undefined, { timeout: 100 })).rejects.toThrow(/Timeout 100ms/);
     const handle = await page.evaluateHandle(() => ({ value: () => Number.parseFloat('8.5') }));
     expect(await handle.evaluate(state => state.value() + Number.parseFloat('1'))).toBe(9.5);
     await handle.dispose();
