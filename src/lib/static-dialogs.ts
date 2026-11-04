@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { createHash } from 'node:crypto';
 import type { AnyNode, Element } from 'domhandler';
 import { DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN, type CapturedDropdownAncestorState } from './screenshot/dropdown-ancestor-state.js';
 import { wireCapturedCollections } from './static-collections.js';
@@ -193,7 +194,7 @@ export function wireCapturedDialogs(
 	);
 	const choiceStates = states.filter( isReplayableChoiceGroup );
 	const localDisclosures = html.includes('data-blocks-engine-capture-local-disclosure');
-	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 && !localDisclosures ) return html;
+	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 && !localDisclosures && !html.includes( 'data-blocks-engine-capture-source-selector' ) ) return html;
 	const $ = cheerio.load( html );
 	let wired = 0;
 	let listboxes = 0;
@@ -318,7 +319,10 @@ export function wireCapturedDialogs(
 				// outer closed token would keep its adopted panel closed in CSS.
 				if ( owner === scope && delta.root === 'body' ) $( 'body' ).removeClass( [ ...delta.removed, ...delta.added ].join( ' ' ) );
 				bindings.push( { selector: delta.root, tag: owner.tagName, depth: parents.indexOf( owner ) + 1,
-					closed: { class: delta.removed.join( ' ' ) }, opened: { class: delta.added.join( ' ' ) }, classTokensOnly: true } );
+					closed: { class: delta.removed.flatMap( token => {
+					const alias = `data-blocks-engine-capture-responsive-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
+					return $( owner ).hasClass( alias ) ? [ token, alias ] : [ token ];
+				} ).join( ' ' ) }, opened: { class: delta.added.join( ' ' ) }, classTokensOnly: true } );
 			}
 			if ( bindings.length ) trigger.attr( 'data-blocks-engine-capture-dialog-ancestor-state', JSON.stringify( bindings ) );
 			const triggerState = resolveTriggerState( trigger, state.dialog?.ancestorState );
@@ -488,6 +492,8 @@ export function wireCapturedDialogs(
 		}
 		$('head').append(`<script data-blocks-engine-capture-local-disclosure-runtime="true">${LOCAL_DISCLOSURE_RUNTIME}</script>`);
 	}
+	// Correspondence addresses are only needed while resolving captured wiring.
+	$( '[data-blocks-engine-capture-source-selector]' ).removeAttr( 'data-blocks-engine-capture-source-selector' );
 	return $.html();
 }
 
@@ -696,6 +702,18 @@ function selectByCapturedSelector(
 ) {
 	if ( ! selector ) return $( [] );
 	try {
+		// A correspondence collapse can insert the phone-only subtree at a
+		// different positional address. Prefer its retained capture address.
+		const retained = $( '[data-blocks-engine-capture-source-selector]' ).filter( ( _, node ) =>
+			$( node ).attr( 'data-blocks-engine-capture-source-selector' ) === selector && ( !tag || node.tagName === tag ) );
+		if ( retained.length ) return retained;
+		// Source cleanup may have removed a preceding sibling even before the
+		// merge. Relax indexes only within retained inserted nodes, and only
+		// when the full unchanged ancestry identifies exactly one candidate.
+		const ancestry = ( value: string ) => value.replace( /:nth-(?:of-type|child)\(\d+\)/g, '' );
+		const inserted = $( '[data-blocks-engine-capture-source-selector]' ).filter( ( _, node ) =>
+			ancestry( $( node ).attr( 'data-blocks-engine-capture-source-selector' )! ) === ancestry( selector ) && ( !tag || node.tagName === tag ) );
+		if ( inserted.length === 1 ) return inserted;
 		// Source body-relative paths must start at each responsive document,
 		// not at the assembled outer body whose children are now wrappers.
 		const scoped = selector.replace( /^body(?=\s*>)/, ':is(.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document)' );

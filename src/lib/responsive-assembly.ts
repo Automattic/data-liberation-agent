@@ -945,6 +945,33 @@ export function responsiveMovedBodyClasses( desktopClasses: readonly string[], m
 	return moved;
 }
 
+/** Keep device body gates width-local, including gates in linked stylesheets.
+ * Desktop-only tokens are private on the merged body; phone-only tokens use
+ * the reconciliation aliases. Mutable opened/closed tokens remain replayable.
+ */
+export function projectCollapsedBodyClassCss( css: string, moved: ReadonlyMap<string, string>, aliases: ReadonlyMap<string, string>, switchWidth: number ): string {
+	if ( !moved.size ) return css;
+	const root = parseCss( css );
+	const rules: postcss.Rule[] = [];
+	root.walkRules( rule => { rules.push( rule ); } );
+	rules.forEach( rule => {
+		const selectors = parseSelectorList( rule.selector );
+		if ( !selectors ) return;
+		let affected = false;
+		selectors.walkClasses( token => { if ( moved.has( token.value ) ) affected = true; } );
+		if ( !affected ) return;
+		const phone = rule.clone();
+		rule.selector = aliasResponsiveClasses( `${ rule.selector }{}`, new Map( [ ...moved ].filter( ( [ , scope ] ) => scope === DESKTOP_DOCUMENT_CLASS ).map( ( [ token ] ) => [ token, `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }desktop-${ token }` ] ) ) ).replace( /\{\}$/, '' );
+		phone.selector = aliasResponsiveClasses( `${ phone.selector }{}`, new Map( [ ...moved ].map( ( [ token, scope ] ) => [ token, scope === MOBILE_DOCUMENT_CLASS ? aliases.get( token ) ?? token : token ] ) ) ).replace( /\{\}$/, '' );
+		const desktopMedia = postcss.atRule( { name: 'media', params: `(min-width:${ switchWidth + 1 }px)` } );
+		const phoneMedia = postcss.atRule( { name: 'media', params: `(max-width:${ switchWidth }px)` } );
+		rule.replaceWith( desktopMedia, phoneMedia );
+		desktopMedia.append( rule );
+		phoneMedia.append( phone );
+	} );
+	return root.toString();
+}
+
 function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, string> ): string {
 	if ( aliases.size === 0 ) return css;
 	try {
@@ -1502,6 +1529,13 @@ function assembleResponsiveHtml(
 		// tree under their mapped parents and width-scoped visibility hides each
 		// side's unique elements on the other regime. Anchor, media, and
 		// counterpart evidence stay single-document; no mobile namespacing.
+		const classes = ( attributes: string ) => ( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+		const moved = responsiveMovedBodyClasses( classes( desktopBodyMatch?.attributes ?? '' ), classes( mobileBodyMatch?.attributes ?? '' ) );
+		const rewrite = ( html: string ) => html.replace( /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, ( _, open, css, close ) => `${ open }${ projectStylesheet( () => projectCollapsedBodyClassCss( css, moved, identitySubset.classAliases, switchWidth ), onUnparseable ) ?? css }${ close }` );
+		desktopHtml = rewrite( desktopHtml );
+		mobileHtml = rewrite( mobileHtml );
+		const mergedBody = rewrite( identitySubset.body );
+		const desktopBodyAliases = new Map( [ ...moved ].filter( ( [ , scope ] ) => scope === DESKTOP_DOCUMENT_CLASS ).map( ( [ token ] ) => [ token, `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }desktop-${ token }` ] ) );
 		const shared = sharedStyleContents( desktopHtml, mobileHtml );
 		// Projection and visibility rules are inserted before </head>; a document
 		// without one would silently lose them.
@@ -1509,7 +1543,7 @@ function assembleResponsiveHtml(
 			withMobileViewport( withHeadElement( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) ) ),
 			'body',
 			( { open, close } ) =>
-				`${ withBodyClasses( open, mobileBodyMatch?.attributes ?? '', identitySubset.classAliases ) }${ identitySubset.body }${ close }`
+				`${ withBodyClasses( open.replace( /class=(['"])(.*?)\1/i, ( _, quote, tokens ) => `class=${ quote }${ tokens.split( /\s+/ ).map( ( token: string ) => desktopBodyAliases.get( token ) ?? token ).join( ' ' ) }${ quote }` ), mobileBodyMatch?.attributes ?? '', identitySubset.classAliases ) }${ mergedBody }${ close }`
 		);
 		return {
 			html: insertBeforeHeadClose(

@@ -482,23 +482,39 @@ export function correspondenceMerge(
 		desktopOnlyElements++;
 	}
 
-	// A mobile-only subtree must not carry an id the merged tree already uses:
-	// the desktop copy keeps every matched id, and a duplicate id would move an
-	// anchor target. Keep both documents rather than rename source ids.
+	// Refuse a new id conflict, but retain duplicates the phone source already
+	// authors (for example a cloned menu). Never rename source identities.
 	const desktopIdValues = new Set< string >();
 	for ( const node of $d( '[id]' ).toArray() ) {
 		if ( ! isElementNode( node ) ) continue;
 		const id = node.attribs?.id ?? '';
 		if ( id ) desktopIdValues.add( id );
 	}
+	const mobileIdCounts = new Map<string, number>();
+	$m( '[id]' ).each( ( _, node ) => {
+		const id = $m( node ).attr( 'id' );
+		if ( id ) mobileIdCounts.set( id, ( mobileIdCounts.get( id ) ?? 0 ) + 1 );
+	} );
 	const carriesUsedId = ( element: Element ): boolean => {
 		const id = element.attribs?.id ?? '';
-		if ( id && desktopIdValues.has( id ) ) return true;
+		if ( id && desktopIdValues.has( id ) && ( mobileIdCounts.get( id ) ?? 0 ) < 2 ) return true;
 		return childElements( element ).some( carriesUsedId );
 	};
 	const insertions: Array< { parent: Element; before?: Element; html: string } > = [];
 	for ( const insertion of mobileOnlyInsertions ) {
 		if ( carriesUsedId( insertion.element ) ) return undefined;
+		// Preserve the phone capture's address before insertion changes sibling
+		// indexes. Interaction adoption must find this source panel, not synthesize
+		// a second copy when the desktop ancestry has a different shape.
+		for ( const node of [ insertion.element, ...$m( insertion.element ).find( '*' ).toArray().filter( isElementNode ) ] ) {
+			if ( node.attribs.id ) continue;
+			const parts: string[] = [];
+			for ( let current: Element | undefined = node; current && current !== bodyM; current = parentOf( current ) ) {
+				const siblings = childElements( parentOf( current )! ).filter( sibling => sibling.tagName === current!.tagName );
+				parts.unshift( siblings.length > 1 ? `${ current.tagName }:nth-of-type(${ siblings.indexOf( current ) + 1 })` : current.tagName );
+			}
+			$m( node ).attr( 'data-blocks-engine-capture-source-selector', `body > ${ parts.join( ' > ' ) }` );
+		}
 		$m( insertion.element ).addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
 		// Raw sibling indexes include viewport-only and inert nodes. Anchor to
 		// the next corresponding sibling instead, preserving the phone order.

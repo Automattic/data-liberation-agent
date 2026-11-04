@@ -1,4 +1,6 @@
 import * as cheerio from 'cheerio';
+import { chromium } from 'playwright';
+import { wireCapturedDialogs } from './static-dialogs.js';
 import { describe, expect, it } from 'vitest';
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { assembleResponsiveCapture } from './responsive-assembly.js';
@@ -51,6 +53,46 @@ describe( 'viewport URL correspondence', () => {
 			'https://source.test/assets/next', 'https://source.test/phone-assets/next',
 		] );
 		expect( $( `a.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).length ).toBe( 1 );
+	} );
+
+	it( 'collapses repeated source ids and phone body state while adopting a phone-only captured panel', async () => {
+		const css = '<style>body{margin:0}body.wide .toggle,body.wide .clone{display:none!important}body.closed .clone{display:none!important}body.phone .toggle{display:block}.clone{position:fixed;top:0;transform:translateY(-200px);display:none}body.open .clone{transform:translateY(0)}body.phone main{padding-top:40px}</style>';
+		const content = '<header><nav><ul id="links"><li>Desktop menu</li></ul></nav><button id="toggle" class="toggle">Open Menu</button></header><main><h1>Home</h1><ul id="links"><li>Content</li></ul></main>';
+		const desktop = `<html><head>${ css }</head><body class="wide"><div>${ content }</div><script>/* inert */</script><footer>Footer</footer></body></html>`;
+		const mobile = `<html><head>${ css }</head><body class="phone closed"><div>${ content }</div><div><nav class="clone"><ul id="links"><li><a href="#home">Home</a></li><li><a href="#services">Services</a></li></ul></nav></div><footer>Footer</footer></body></html>`;
+		const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		expect( assembly.evidence ).toMatchObject( { variants: 1, outcome: 'collapsed-identity-subset' } );
+		const html = wireCapturedDialogs( assembly.html, [ {
+			status: 'captured',
+			trigger: { selector: '#toggle', tag: 'button', ariaHaspopup: '', label: 'Open Menu', dataBindings: {} },
+			dialog: { selector: 'body > div:nth-of-type(3) > nav', tag: 'nav', presentation: 'dropdown', ariaModal: false,
+				html: '<nav class="clone" style="display:block !important"><ul id="links"><li><a href="#home">Home</a></li><li><a href="#services">Services</a></li></ul></nav>',
+				htmlBytes: 200, htmlTruncated: false, rootClassState: [ { root: 'body', removed: [ 'closed' ], added: [ 'open' ] } ] },
+		} ] );
+		const $ = cheerio.load( html );
+		expect( $( 'nav.clone' ).length ).toBe( 1 );
+		expect( $( 'nav.clone' ).attr( 'data-blocks-engine-capture-existing-panel' ) ).toBeDefined();
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.setContent( html );
+			expect( await page.locator( 'main' ).evaluate( node => getComputedStyle( node ).paddingTop ) ).toBe( '40px' );
+			await page.locator( '#toggle' ).click();
+			expect( await page.locator( 'nav.clone' ).evaluate( node => node.getBoundingClientRect().top ) ).toBe( 0 );
+			expect( await page.locator( 'nav.clone a:visible' ).allTextContents() ).toEqual( [ 'Home', 'Services' ] );
+			await page.locator( '#toggle' ).evaluate( node => ( node as HTMLButtonElement ).click() );
+			expect( await page.locator( 'nav.clone' ).isVisible() ).toBe( false );
+			await page.locator( '#toggle' ).click();
+			expect( await page.locator( 'nav.clone' ).evaluate( node => node.getBoundingClientRect().top ) ).toBe( 0 );
+			await page.setViewportSize( { width: 1440, height: 844 } );
+			expect( await page.locator( 'main' ).evaluate( node => getComputedStyle( node ).paddingTop ) ).toBe( '0px' );
+		} finally { await browser.close(); }
+	} );
+
+	it( 'refuses a mobile-only insertion that introduces a unique source id conflict', () => {
+		const desktop = '<body><h1>Home</h1><div id="unique">Desktop</div></body>';
+		const mobile = '<body><h1>Home</h1><nav id="unique">Phone</nav></body>';
+		expect( correspondenceMerge( desktop, mobile, 767 ) ).toBeUndefined();
 	} );
 
 	it( 'places phone-only siblings after matching chrome, ignoring inert source scripts', () => {
