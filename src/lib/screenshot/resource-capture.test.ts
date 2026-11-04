@@ -586,7 +586,7 @@ describe( 'CapturedResourceStore', () => {
 		const spriteUrl = 'https://example.com/sprite.svg';
 		const html = `<html><body>
 			<svg><use href="/sprite.svg#icon"/></svg>
-			<svg><use xlink:href="/sprite.svg#other"/></svg>
+			<svg><use xlink:href="${ spriteUrl }#other"/></svg>
 			<svg><use href="#inline"/></svg>
 			<svg><use href="https://cdn.example.net/remote.svg#icon"/></svg>
 		</body></html>`;

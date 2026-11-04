@@ -2097,13 +2097,13 @@ function buildExportCapture(
 			return `${ prefix }${ quote }${ retained.join( ', ' ).replace( /&/g, '&amp;' ) }${ quote }`;
 		}
 	);
-	const localizeInteractionMedia = ( text: string ): string =>
+	const localizeInteractionMedia = ( text: string, documentUrl: string ): string =>
 		localizeFamilyMediaUrls(
-			withoutCaptureBookkeeping( replaceResources( replaceMedia( text ) ) ),
+			withoutCaptureBookkeeping( replaceResources( replaceMedia( text ), documentUrl ) ),
 			portableUrlByFamily
 		);
 	for ( const entry of retainedEntries ) {
-		if ( entry.interactions ) localizeStringsInPlace( entry.interactions, localizeInteractionMedia );
+		if ( entry.interactions ) localizeStringsInPlace( entry.interactions, text => localizeInteractionMedia( text, entry.url ) );
 	}
 	// Give every selectable-set tab trigger its source key, so a consumer can
 	// match `?tab=<key>` links and select the tab without knowing the platform.
@@ -2136,7 +2136,8 @@ function buildExportCapture(
 					rewriteMediaUrls(
 						truthfulMixedSrcsets( content ),
 						portableMediaReplacements
-					)
+					),
+					url
 				),
 				portableUrlByFamily
 			)

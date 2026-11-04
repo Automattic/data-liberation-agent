@@ -38,7 +38,7 @@ export function omitDegenerateReplacements(
 export function preparePortableReplacements(
 	replacements: Map< string, string >,
 	rejectedKeys?: Set< string >
-): ( content: string ) => string {
+): ( content: string, documentUrl?: string ) => string {
 	const values = new Map< string, string >();
 	for ( const [ source, local ] of replacements ) {
 		if ( ! isSubstitutableReplacementKey( source ) ) {
@@ -58,9 +58,24 @@ export function preparePortableReplacements(
 			.join( '|' ) + ')' + URL_TERMINATOR_LOOKAHEAD,
 		'g'
 	);
-	return ( content ) => rewriteMediaReferences(
+	const replaceUrl = ( reference: string, documentUrl?: string ): string => {
+		const exact = values.get( reference );
+		if ( exact !== undefined ) return exact;
+		// A captured document owns all of its fragment targets. Resolve authored
+		// URL forms to that identity without treating #symbol as part of the file.
+		if ( reference.startsWith( '#' ) ) return reference;
+		const fragment = reference.indexOf( '#' );
+		const path = fragment < 0 ? reference : reference.slice( 0, fragment );
+		let local = values.get( path );
+		if ( local === undefined && documentUrl ) {
+			try { local = values.get( new URL( path.replace( /&amp;/g, '&' ), documentUrl ).href ); }
+			catch { /* Invalid authored URLs stay unchanged. */ }
+		}
+		return local === undefined ? reference : local + ( fragment < 0 ? '' : reference.slice( fragment ) );
+	};
+	return ( content, documentUrl ) => rewriteMediaReferences(
 		content,
-		url => values.get( url ) ?? url,
+		url => replaceUrl( url, documentUrl ),
 		other => other.replace( pattern, source => values.get( source ) ?? source )
 	);
 }
