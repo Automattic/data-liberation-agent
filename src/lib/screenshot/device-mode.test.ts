@@ -119,6 +119,7 @@ describe( 'device-mode evidence', () => {
  * each `reorder/` route moves a sibling below the nav breakpoint.
  */
 function page( fixture: string, userAgent: string, path: string ): string {
+	if ( fixture === 'builder' ) return builderPage( path );
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
 	const script = fixture === 'mixed' && path === 'runtime' ? '<script>if(innerWidth<600){const node=document.createElement("div");node.id="yui_3_17_2_1_123_45";node.innerHTML="<span>Widget</span>";document.body.prepend(node)}</script>' : fixture === 'mixed' && path === 'promo' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
 	const reorder = reorderFixture( path );
@@ -137,6 +138,28 @@ body{margin:0;font:16px Arial}header{display:flex;justify-content:space-between;
 <script>document.querySelector('.more').addEventListener('click',e=>{const d=document.getElementById('more-panel');d.hidden=!d.hidden;e.currentTarget.setAttribute('aria-expanded',String(!d.hidden))});
 document.querySelector('.search').addEventListener('click',()=>{const d=document.getElementById('search');d.hidden=!d.hidden});
 document.getElementById('menu-toggle').addEventListener('click',()=>{const open=document.getElementById('drawer');if(open){open.remove();return}const d=document.createElement('div');d.id='drawer';d.setAttribute('role','dialog');d.setAttribute('aria-label','Site menu');d.innerHTML='<a href="/${ fixture }/">Home</a><a href="/${ fixture }/about">About</a>';document.body.append(d)});</script>${ script }${ reorder.script }</body></html>`;
+}
+
+/**
+ * A site-builder navbar: no header, nav or main landmark, a plain-element
+ * "Menu" control its runtime binds a click to, and an off-canvas link drawer
+ * it slides in, hidden at desktop width. `about` places the navbar one level
+ * shallower; `contact` links its own translation from the navbar.
+ */
+function builderPage( path: string ): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Builder ${ path }</title><style>
+body{margin:0;font:16px Arial}.navbar{display:flex;justify-content:space-between;height:60px}.links a{margin-right:12px}
+.trigger{display:none;cursor:pointer;height:40px;padding:0 12px;background:#b7283d;color:#fff}
+.drawer{position:fixed;inset:0 0 0 auto;width:300px;display:flex;flex-direction:column;background:#222;transform:translate3d(101%,0,0)}
+@media (max-width:600px){.links{display:none}.trigger{display:flex;align-items:center}}
+</style></head><body>${ path === 'about' ? '' : '<div class="page">' }<div class="navbar"><a href="/builder/">Brand</a>
+<div class="links"><a href="/builder/">Home</a><a href="/builder/about">About</a><a href="/builder/fr${ path === 'contact' ? '/contact' : '' }">Français</a></div>
+<div class="drawer"><div class="close" style="cursor:pointer">Close</div><a href="/builder/">Home</a><a href="/builder/about">About</a></div>
+<div class="trigger"><p>Menu</p></div></div>
+<div class="hero"><h1>${ path || 'Welcome' }</h1></div>${ path === 'about' ? '' : '</div>' }
+<script>const drawer=document.querySelector('.drawer');
+document.querySelector('.trigger').addEventListener('click',()=>{drawer.style.transform='translate3d(0,0,0)'});
+document.querySelector('.close').addEventListener('click',()=>{drawer.style.transform='translate3d(101%,0,0)'});</script></body></html>`;
 }
 
 /**
@@ -285,6 +308,33 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			}
 		}, 60_000 );
 	} );
+
+	it( 'carries a builder navbar\'s phone-only menu control to every route and opens its drawer there', async () => {
+		const run = await capture( 'builder', { routes: [ 'about', 'contact' ] } );
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', phoneProbe: { status: 'captured', triggers: 1, captured: 1 } } );
+		const menu = ( route: string ) => run.entries[ `${ origin }/builder/${ route }` ]!.interactions?.states.find( state => state.trigger.label === 'Menu' );
+		// The same navbar at another depth is found by its classes and reused.
+		expect( run.entries[ `${ origin }/builder/about` ]!.sharedChrome ).toMatchObject( { chromeReused: true, reusedStates: 1 } );
+		expect( menu( 'about' ) ).toMatchObject( { status: 'captured', dialog: { role: 'menu' }, reusedFrom: `${ origin }/builder/` } );
+		// A navbar whose links differ is probed in place at phone width.
+		expect( run.entries[ `${ origin }/builder/contact` ]!.sharedChrome ).toMatchObject( { chromeReused: false } );
+		expect( menu( 'contact' ) ).toMatchObject( { status: 'captured', dialog: { role: 'menu' } } );
+		expect( menu( 'contact' )!.reusedFrom ).toBeUndefined();
+		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/builder/`, platform: 'neutral', summary: {}, failures: [], deviceMode: 'reflow-only' } );
+		const site = await startStaticServer( join( run.outputDir, 'website' ) );
+		const browser = await chromium.launch();
+		try {
+			const phone = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			for ( const route of [ '', 'about/', 'contact/' ] ) {
+				await phone.goto( new URL( route, site.url ).href );
+				await phone.getByText( 'Menu', { exact: true } ).click();
+				await expect.poll( () => phone.getByRole( 'dialog' ).getByText( 'About' ).isVisible() ).toBe( true );
+			}
+		} finally {
+			await browser.close();
+			await site.close();
+		}
+	}, 120_000 );
 
 	it( 'keeps both captures when the server sends phones different HTML', async () => {
 		const run = await capture( 'by-agent' );
