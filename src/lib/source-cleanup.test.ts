@@ -3,13 +3,35 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSyn
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupPolicy, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
+import { cleanupPolicy, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
 import { registerHost, unregisterHost } from '../platform/host.js';
 import { capture as wixCapture } from '../adapters/wix/capture.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { checkFidelity as checkLiveFidelity } from './fidelity/check.js';
 const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
+
+it('treats unavailable response headers as no host evidence while retaining source detection', () => {
+  const id = 'cleanup-response-test';
+  registerHost({ id, detection: {
+    httpSignals: [{ header: 'x-cleanup-host', signal: 'response header' }],
+    sourceSignals: [{ pattern: /cleanup-host-marker/, signal: 'source marker' }],
+  }, residue: [{ selector: '#host-badge', evidence: 'host badge' }] });
+  try {
+    const base = cleanupPolicy();
+    for (const response of [undefined, null, {}, { headers: () => undefined },
+      { headers: () => null }, { headers: () => [['invalid']] },
+      { headers: () => { throw new Error('headers unavailable'); } }]) {
+      expect(cleanupPolicyForResponse(base, response, '').rules).toEqual(base.rules);
+      expect(cleanupPolicyForResponse(base, response, 'cleanup-host-marker').rules)
+        .toContainEqual(expect.objectContaining({ host: id, selector: '#host-badge' }));
+    }
+    expect(cleanupPolicyForResponse(base, { headers: () => ({ 'x-cleanup-host': 'yes' }) }, '').rules)
+      .toContainEqual(expect.objectContaining({ host: id, selector: '#host-badge' }));
+  } finally {
+    unregisterHost(id);
+  }
+});
 
 let server: Server | undefined;
 let directory: string | undefined;

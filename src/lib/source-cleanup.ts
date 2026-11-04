@@ -119,7 +119,13 @@ export function cleanupPolicy(rules: CleanupRule[] = []): CleanupPolicy {
 }
 
 /** Only the hosts serving this document contribute attribution cleanup. */
-export function cleanupPolicyForResponse(policy: CleanupPolicy, headers: Headers, html: string): CleanupPolicy {
+export function cleanupPolicyForResponse(policy: CleanupPolicy, response: { headers?: () => unknown } | null | undefined, html: string): CleanupPolicy {
+  let headers = new Headers();
+  try {
+    headers = new Headers(response?.headers?.() as HeadersInit | undefined);
+  } catch {
+    // Unavailable or malformed response headers are not host evidence.
+  }
   const rules: CleanupRule[] = hostResidue(detectHosts(headers, html)).map((rule, index) => ({
     ...rule, id: `host-${rule.host}-${index}`, category: 'source-attribution',
   }));

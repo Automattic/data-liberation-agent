@@ -941,7 +941,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 				// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
 				serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
-				sourcePolicy = cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), new Headers(response?.headers()), serverHtml ?? '');
+				sourcePolicy = cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), response, serverHtml ?? '');
 				if ( serverHtml ) for ( const link of sameOriginPageAnchors( resolveDocumentReferences( serverHtml, navigationUrl ), navigationUrl ) ) args.serverLinks.add( link );
 				navigated = true;
 				break;
@@ -1999,7 +1999,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	const html = await navigation.response?.text().catch( () => undefined );
 	const settledAt = Date.now();
 	if ( timings ) timings.navigate = Math.max( timings.navigate, settledAt - startedAt );
-	await applySourceCleanup( page, cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), new Headers(navigation.response?.headers()), html ?? '') );
+	await applySourceCleanup( page, cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), navigation.response, html ?? '') );
 	if ( mode === 'check' ) {
 		// Bounded after the document is parsed: up to CHECK_LOAD_WAIT_MS for
 		// `load`, up to 0.5 s of network quiet, the short scroll, then up to 1 s
