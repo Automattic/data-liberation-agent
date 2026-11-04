@@ -101,19 +101,79 @@ function createShorthandVarCollapseRepair(): ( liveCssText: string, originalCssT
 		return rules;
 	}
 
+	/**
+	 * Canonical form of a rule prelude, so authored text and the CSSOM's
+	 * re-serialization of the same rule compare equal. Chromium re-spaces
+	 * selectors when it serializes them (`:is(#x,[id^=a])` becomes
+	 * `:is(#x, [id^=a])`, `a>b` becomes `a > b`), so a byte comparison misses.
+	 * Collapses whitespace runs to one space and drops whitespace around
+	 * commas, parentheses and the `>`, `+`, `~` combinators (except a space
+	 * after `)`, which is a descendant combinator). Quoted strings,
+	 * escapes and attribute selector brackets are copied verbatim. A lone space
+	 * (the descendant combinator) is kept, so `a b` and `ab` stay distinct.
+	 */
+	function preludeKey( prelude: string ): string {
+		// No space survives after an opener/separator or before a closer/separator.
+		// A space after `)` is kept: `:is(a) .b` and `:is(a).b` differ.
+		const TIGHT_AFTER = ',(>+~';
+		const TIGHT_BEFORE = ',()>+~';
+		let out = '';
+		let pendingSpace = false;
+		let quote: string | null = null;
+		let bracketDepth = 0;
+		for ( let i = 0; i < prelude.length; i++ ) {
+			const ch = prelude[ i ];
+			if ( quote ) {
+				out += ch;
+				if ( ch === '\\' && i + 1 < prelude.length ) out += prelude[ ++i ];
+				else if ( ch === quote ) quote = null;
+				continue;
+			}
+			if ( ch === '\\' ) {
+				if ( pendingSpace ) { out += ' '; pendingSpace = false; }
+				out += ch;
+				if ( i + 1 < prelude.length ) out += prelude[ ++i ];
+				continue;
+			}
+			if ( ch === '"' || ch === "'" ) {
+				if ( pendingSpace ) { out += ' '; pendingSpace = false; }
+				quote = ch;
+				out += ch;
+				continue;
+			}
+			if ( bracketDepth > 0 ) {
+				if ( ch === '[' ) bracketDepth++;
+				else if ( ch === ']' ) bracketDepth--;
+				out += ch;
+				continue;
+			}
+			if ( /\s/.test( ch ) ) {
+				pendingSpace = out.length > 0 && ! TIGHT_AFTER.includes( out[ out.length - 1 ] );
+				continue;
+			}
+			if ( pendingSpace && ! TIGHT_BEFORE.includes( ch ) ) out += ' ';
+			pendingSpace = false;
+			if ( ch === '[' ) bracketDepth++;
+			out += ch;
+		}
+		return out;
+	}
+
 	function repairNodes( liveNodes: CssRuleNode[], originalNodes: CssRuleNode[] ): string {
 		const originalByPrelude = new Map< string, CssRuleNode[] >();
 		for ( const node of originalNodes ) {
-			const list = originalByPrelude.get( node.prelude );
+			const key = preludeKey( node.prelude );
+			const list = originalByPrelude.get( key );
 			if ( list ) list.push( node );
-			else originalByPrelude.set( node.prelude, [ node ] );
+			else originalByPrelude.set( key, [ node ] );
 		}
 		const consumedIndex = new Map< string, number >();
 		const parts: string[] = [];
 		for ( const node of liveNodes ) {
-			const idx = consumedIndex.get( node.prelude ) ?? 0;
-			consumedIndex.set( node.prelude, idx + 1 );
-			const match = originalByPrelude.get( node.prelude )?.[ idx ];
+			const key = preludeKey( node.prelude );
+			const idx = consumedIndex.get( key ) ?? 0;
+			consumedIndex.set( key, idx + 1 );
+			const match = originalByPrelude.get( key )?.[ idx ];
 
 			if ( node.isGroup ) {
 				if ( match?.isGroup ) {
