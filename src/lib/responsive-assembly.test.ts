@@ -93,6 +93,23 @@ function page( body: string, head = '', bodyAttributes = '' ): string {
 }
 
 describe( 'counterpart stylesheet deltas (#1286)', () => {
+	it.each( [
+		{ name: 'desktop duplicate keys', desktop: '.a{margin:0}.a{margin:0}', mobile: '.a{margin:0}', attributes: '' },
+		{ name: 'phone duplicate keys', desktop: '.a{margin:0}', mobile: '.a{margin:0}.a{margin:0}', attributes: '' },
+		{ name: 'reordered common nodes', desktop: '.a{margin:0}@media (min-width:300px){.b{padding:0}}', mobile: '@media (min-width:300px){.b{padding:0}}.a{margin:0}', attributes: '' },
+		{ name: 'unaligned sheet layout', desktop: '.a{margin:0}', mobile: '.a{margin:0}', attributes: ' data-other' },
+		... [ '@import "a.css";', '@layer base;', '@layer base{.b{padding:0}}', '@charset "UTF-8";' ].map( rule => ( {
+			name: rule, desktop: `${ rule }.a{margin:0}`, mobile: `${ rule }.a{margin:0}`, attributes: '',
+		} ) ),
+	] )( 'retains full replay for $name', ( { desktop: base, mobile: phone, attributes } ) => {
+		const desktop = page( '<main>Hello</main>', `<style>${ base }.target{color:red}</style>` );
+		const mobileCss = `${ phone }.target{color:blue}`;
+		const mobile = page( '<main>Hello</main>', `<style${ attributes }>${ mobileCss }</style>` );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( result.html );
+		expect( $( 'style[media="(max-width:767px)"]' ).text() ).toBe( mobileCss );
+	} );
+
 	it( 'keeps later common rules after a mobile delta, including overlapping selectors', () => {
 		const desktopCss = '.common{margin:0}.target{color:red}.target.special{color:green}';
 		const mobileCss = '.common{margin:0}.target{color:blue}.target.special{color:green}';
@@ -104,9 +121,14 @@ describe( 'counterpart stylesheet deltas (#1286)', () => {
 	} );
 
 	it( 'measures the Framer SSR replay and preserves computed styles', async () => {
-		const common = Array.from( { length: 9 }, ( _, i ) => `.rule-${ i }{margin-left:${ i }px}` ).join( '' );
-		const desktopCss = `${ common }.target{color:red}`;
-		const mobileCss = `${ common }.target{color:blue}.added{padding:7px}`;
+		const common = Array.from( { length: 9 }, ( _, i ) => [
+			`.rule-${ i }{margin-left:${ i }px}`,
+			`@supports not (color:color(display-p3 1 1 1)){.rule-${ i }{color:rgb(1,2,3)}}`,
+			`@media (min-width:${ 200 + i * 10 }px){.rule-${ i }{border-left-width:${ i }px}}`,
+		].join( '' ) ).join( '' ) + '@font-face{font-family:fixture;src:local(Arial)}@keyframes fixture{from{opacity:0}to{opacity:1}}';
+		const desktopCss = `${ common }.target{color:red}.added{padding:3px}@media (min-width:300px){.target{letter-spacing:1px}}`;
+		const delta = '.target{color:blue}.added{padding:7px}@media (min-width:300px){.target{letter-spacing:2px}}';
+		const mobileCss = common + delta;
 		const links = '<link rel="stylesheet" href="https://fixture.test/a.css"><link rel="stylesheet" href="https://fixture.test/b.css">';
 		const markup = '<main class="target added rule-4">Hello</main>';
 		const desktop = page( markup, `${ links }<style data-framer-css-ssr-minified>${ desktopCss }</style>` );
@@ -114,11 +136,10 @@ describe( 'counterpart stylesheet deltas (#1286)', () => {
 		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile, switchWidth: 1199 } );
 		const $ = cheerio.load( result.html );
 		const phoneCss = $( 'style[media="(max-width:1199px)"]' ).text();
-		// Trunk: head 718 B, mobile replay 254 B. Links were already
-		// deduplicated on this path; keep that contract while reducing SSR CSS.
-		expect( Buffer.byteLength( $( 'head' ).html()! ) ).toBe( 549 );
-		expect( Buffer.byteLength( phoneCss ) ).toBe( 38 );
-		expect( phoneCss ).toBe( '.target{color:blue}.added{padding:7px}' );
+		// Only the two changed flat rules and changed media block replay;
+		// identical conditional blocks, font faces and keyframes stay common.
+		expect( phoneCss ).toBe( delta );
+		expect( Buffer.byteLength( phoneCss ) ).toBeLessThan( Buffer.byteLength( mobileCss ) / 10 );
 		expect( $( 'link' ) ).toHaveLength( 2 );
 		const browser = await chromium.launch();
 		try {
@@ -130,10 +151,12 @@ describe( 'counterpart stylesheet deltas (#1286)', () => {
 					await tab.setContent( html );
 					return tab.locator( 'main' ).evaluate( node => {
 						const css = getComputedStyle( node );
-						return [ css.color, css.padding, css.marginLeft, css.fontSize ];
+						return [ css.color, css.padding, css.marginLeft, css.fontSize, css.letterSpacing ];
 					} );
 				};
-				expect( await measure( result.html ) ).toEqual( await measure( width === 390 ? mobile : desktop ) );
+				const expected = await measure( width === 390 ? mobile : desktop );
+				expect( expected[ 4 ] ).toBe( width === 390 ? '2px' : '1px' );
+				expect( await measure( result.html ) ).toEqual( expected );
 			}
 		} finally { await browser.close(); }
 	} );

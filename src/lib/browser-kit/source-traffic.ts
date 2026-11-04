@@ -44,15 +44,6 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   const request = route.request();
   const governor = sourceGovernorFor(context, request.url());
   if (!governor) return route.continue(options);
-  // Stylesheets must survive transport resets: observing a failed native
-  // request cannot retry it after route.continue has surrendered the route.
-  // Unlike media, CSS needs neither native streaming nor range requests.
-  if (request.resourceType() === 'stylesheet') {
-    const response = await fetchSourceRoute(route, { headers: options?.headers }, 4, context);
-    try { await route.fulfill({ response }); }
-    finally { await response.dispose(); }
-    return;
-  }
   const acquired = governor.isBrowserThrottled;
   if (acquired) {
     const abort = new AbortController();

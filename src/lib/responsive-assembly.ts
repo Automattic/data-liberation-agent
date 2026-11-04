@@ -1871,13 +1871,26 @@ function sharedStyleContents( desktopHtml: string, mobileHtml: string ): SharedS
 		const projection = projectStylesheet( () => {
 			const base = parseCss( desktop[ index ] );
 			const phone = parseCss( mobile[ index ] );
-			// At-rules (layers, keyframes, imports, nested conditions) are atomic.
-			// Leave those sheets on the established full-replay path.
-			if ( [ ...base.nodes, ...phone.nodes ].some( node => node.type !== 'rule' && node.type !== 'comment' ) ) return;
+			// Compare whole top-level nodes, including conditional blocks, font
+			// faces and keyframes. Never split a block or promote order-sensitive
+			// imports, layer declarations/blocks or charset declarations.
+			let orderSensitive = false;
+			for ( const sheet of [ base, phone ] ) sheet.walkAtRules( rule => {
+				if ( /^(?:import|layer|charset)$/i.test( rule.name ) ) orderSensitive = true;
+			} );
+			if ( orderSensitive ) return;
 			const keys = base.nodes.map( node => node.toString() );
-			// Duplicate rules and reordered common rules cannot be identified by
+			const phoneKeys = phone.nodes.map( node => node.toString() );
+			// Duplicate keys and reordered common nodes cannot be identified by
 			// content alone. Fall back rather than promote the wrong occurrence.
-			if ( new Set( keys ).size !== keys.length ) return;
+			if ( new Set( keys ).size !== keys.length || new Set( phoneKeys ).size !== phoneKeys.length ) return;
+			let previous = -1;
+			for ( const key of phoneKeys ) {
+				const position = keys.indexOf( key );
+				if ( position === -1 ) continue;
+				if ( position < previous ) return;
+				previous = position;
+			}
 			const retained = new Set< string >();
 			let lastCommon = -1;
 			let changed = false;
