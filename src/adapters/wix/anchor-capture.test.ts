@@ -43,6 +43,32 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 		}
 	}, 20_000 );
 
+	it( 'resolves a fixed header fragment already at its top landing without changing a mid-page fragment', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
+				contentType: 'text/html',
+				body: `<style>body{margin:0}header{position:fixed;top:0;z-index:5}section{height:1000px}</style>
+					<header><a href="#welcome">Welcome</a> <a href="#about">About</a></header>
+					<section id="welcome-source">Welcome</section><section id="about-source">About</section><section>End</section>
+					<script>document.querySelectorAll('header a').forEach((link, index) => link.addEventListener('click', event => {
+						event.preventDefault();
+						if (event.isTrusted) window.scrollTo({top:index * 1000,behavior:'instant'});
+					}));</script>`,
+			} ) );
+			await page.goto( 'https://anchor.test/' );
+			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
+			for ( const [ fragment, top ] of [ [ 'welcome', 0 ], [ 'about', 1000 ] ] as const ) {
+				expect( await page.locator( `#${ fragment }-source > #${ fragment }[data-blocks-engine-capture-anchor-target="${ fragment }"]` ).count() ).toBe( 1 );
+				expect( await page.locator( `#${ fragment }` ).evaluate( landing ) ).toBe( top );
+				expect( await page.locator( `a[href="#${ fragment }"],a[href="/#${ fragment }"]` ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
+			}
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
+
 	it( 'keeps the runtime landing offset and follows its section when content above it changes height', async () => {
 		const browser = await chromium.launch( { headless: true } );
 		try {

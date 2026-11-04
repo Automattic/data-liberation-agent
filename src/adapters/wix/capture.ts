@@ -775,7 +775,9 @@ export const capture: LiberationHooks = {
 			// closed the menu, as the collapsed-menu runtime usually does on
 			// layouts where the drawer is not scroll-locking, this is a no-op).
 			if ( trigger.menu ) await closeOpenedMenu( page );
-			await page.evaluate( async ( { fragment, maxWait, noMoveMs, initialScroll } ) => {
+			// Share the existing no-move budget across the two possible starts;
+			// dead handlers must not pay an extra full wait for the retry.
+			const resolveLanding = ( initialScroll: number ) => page.evaluate( async ( { fragment, maxWait, noMoveMs, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ].filter( ( link ) => {
@@ -786,7 +788,7 @@ export const capture: LiberationHooks = {
 					}
 				} );
 				const markUnresolved = ( reason: string ) => {
-					for ( const link of links ) link.dataset.blocksEngineCaptureAnchorUnresolved = reason;
+					for ( const link of links ) link.dataset.blocksEngineCaptureAnchorUnresolved ??= reason;
 				};
 				let previous = scrollY;
 				const startHeight = document.documentElement.scrollHeight;
@@ -811,7 +813,7 @@ export const capture: LiberationHooks = {
 				}
 				if ( ! moved ) {
 					markUnresolved( 'runtime scroll did not move before timeout' );
-					return false;
+					return 'no-movement' as const;
 				}
 
 				const targetTop = scrollY;
@@ -852,9 +854,41 @@ export const capture: LiberationHooks = {
 				resolved.element.prepend( marker );
 				const margin = Math.round( resolved.top - targetTop );
 				if ( margin > 0 ) marker.style.scrollMarginTop = `${ margin }px`;
-				for ( const link of links ) link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
+				for ( const link of links ) {
+					link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
+					delete link.dataset.blocksEngineCaptureAnchorUnresolved;
+				}
 				return true;
-			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs: WIX_ANCHOR_NO_MOVE_MILLISECONDS, initialScroll } );
+			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs: WIX_ANCHOR_NO_MOVE_MILLISECONDS / 2, initialScroll } );
+			if ( await resolveLanding( initialScroll ) === 'no-movement' ) {
+				// A fixed trigger can already be at its runtime's landing (notably
+				// the first section at y=0). Displace once to distinguish that from
+				// a dead handler, without scrolling an in-flow trigger back into view.
+				const displaced = await page.evaluate( ( initialScroll ) => {
+					if ( Math.abs( scrollY - initialScroll ) > 1 ) return false;
+					const end = document.documentElement.scrollHeight - innerHeight;
+					window.scrollTo( { top: initialScroll < end / 2 ? end : 0, behavior: 'instant' } );
+					return Math.abs( scrollY - initialScroll ) > 1;
+				}, initialScroll );
+				if ( displaced ) {
+					try {
+						const visible = await link.evaluate( ( element ) => {
+							const rect = element.getBoundingClientRect();
+							const style = getComputedStyle( element );
+							return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight &&
+								rect.left >= 0 && rect.right <= innerWidth && style.visibility !== 'hidden' && style.opacity !== '0';
+						} );
+						if ( visible ) {
+							const displacedScroll = await page.evaluate( () => scrollY );
+							await link.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+							if ( trigger.menu ) await closeOpenedMenu( page );
+							await resolveLanding( displacedScroll );
+						}
+					} catch {
+						// Keep the original unresolved reason when the retry cannot click.
+					}
+				}
+			}
 		}
 
 		await restoreScroll();
