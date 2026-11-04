@@ -120,7 +120,7 @@ export interface CapturedDialogInteraction {
 		role?: string;
 		ariaModal: boolean;
 		ariaLabel?: string;
-		presentation?: 'modal' | 'dropdown';
+		presentation?: 'modal' | 'dropdown' | 'overlay' | 'in-place';
 		/** Source panel rests in normal flow at a width where its trigger is concealed. */
 		restingInline?: boolean;
 		html: string;
@@ -254,6 +254,71 @@ interface CloseControlDescriptor {
  * `skip` is a selector for controls another probe already owns; they are
  * never clicked, so the trigger budget goes to the rest.
  */
+/** Explore an authored aria-controls disclosure using the popup evidence contract. */
+export async function captureControlledDisclosure( page: Page, selector: string ): Promise< {
+	evidence?: CapturedDialogInteraction;
+	restored: boolean;
+	dismissal?: { selector: string; action: 'click' | 'keyboard' };
+} > {
+	await rememberBaselinePanels( page );
+	await markVisibleBeforeActivation( page );
+	await rememberDropdownAncestors( page, selector );
+	const closedRoots = await rootClasses( page );
+	const trigger = await page.locator( selector ).evaluate( element => ( {
+		selector: '', tag: element.tagName.toLowerCase(),
+		...( element.id ? { id: element.id } : {} ),
+		ariaHaspopup: element.getAttribute( 'aria-haspopup' ) ?? '',
+		ariaControls: element.getAttribute( 'aria-controls' ) ?? undefined,
+		label: element.getAttribute( 'aria-label' ) ?? element.textContent?.trim(),
+		dataBindings: Object.fromEntries( Array.from( element.attributes ).filter( attr => attr.name.startsWith( 'data-' ) && !attr.name.startsWith( 'data-lib-' ) ).map( attr => [ attr.name, attr.value ] ) ),
+	} ) );
+	trigger.selector = selector;
+	const baselinePanel = await page.locator( selector ).evaluate( element => {
+		const id = element.getAttribute( 'aria-controls' );
+		return id ? '#' + CSS.escape( id ) : undefined;
+	} );
+	await activateTrigger( page, selector, async () => {
+		if ( baselinePanel ) await panelFootprintRestored( page, baselinePanel, true );
+	} );
+	await page.waitForTimeout( 150 );
+	const revealed = await firstNewVisibleDialog( page, [], selector, true );
+	if ( ! revealed ) return { restored: false };
+	await waitForDialogContentStable( page, revealed.selector );
+	const snapshot = await snapshotDialog( page, revealed.selector );
+	if ( ! snapshot ) return { restored: false };
+	const panelSelector = await page.locator( revealed.selector ).evaluate( element =>
+		( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors?.get( element ) ?? null );
+	const ancestors = await observeDropdownAncestors( page, revealed.selector, true );
+	const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
+	const css = await rulesAddedSinceActivation( page );
+	const bounded = boundHtml( snapshot.html );
+	// The controlled form can be an in-flow wrapper around a fixed lightbox.
+	const presentation = await page.locator( revealed.selector ).evaluate( panel => {
+		const overlay = [ panel, ...panel.querySelectorAll( '*' ) ].some( element => {
+			const rect = element.getBoundingClientRect();
+			return getComputedStyle( element ).position === 'fixed' && rect.width * rect.height >= 0.6 * innerWidth * innerHeight;
+		} );
+		return overlay ? 'overlay' as const : getComputedStyle( panel ).position === 'static' ? 'in-place' as const : 'dropdown' as const;
+	} );
+	const closed = () => baselinePanel
+		? panelFootprintRestored( page, baselinePanel )
+		: panelIntersectsViewport( page, revealed.selector ).then( visible => ! visible );
+	const dismissal = await closeCapturedDialog( page, revealed.selector, selector, closed );
+	const restored = await page.locator( selector ).getAttribute( 'aria-expanded' ) === 'false' && await closed();
+	const ancestorState = await verifyDropdownRestoration( page, ancestors, revealed.selector );
+	const restoredRoots = await rootClasses( page );
+	const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
+	return { restored, dismissal, evidence: {
+		status: 'captured', kind: 'disclosure', trigger,
+		dialog: {
+			...snapshot, ...( revealed.role ? { role: revealed.role } : {} ),
+			selector: panelSelector ?? revealed.selector, presentation,
+			html: bounded.html, htmlBytes: bounded.bytes, htmlTruncated: bounded.truncated,
+			ancestorState, ...( rootsRestored ? { rootClassState } : {} ), ...( css ? { css } : {} ),
+		},
+	} };
+}
+
 export async function captureTriggeredDialogs(
 	page: Page,
 	sourceUrl: string,
@@ -922,9 +987,10 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 async function firstNewVisibleDialog(
 	page: Page,
 	before: string[],
-	triggerSelector: string
+	triggerSelector: string,
+	controlledDisclosure = false
 ): Promise< DialogDescriptor | undefined > {
-	return page.evaluate( ( { existing, surfaceSelector, semanticSelector, triggerSelector, runtimeRoots }: { existing: string[]; surfaceSelector: string; semanticSelector: string; triggerSelector: string; runtimeRoots: string } ) => {
+	return page.evaluate( ( { existing, surfaceSelector, semanticSelector, triggerSelector, runtimeRoots, controlledDisclosure }: { existing: string[]; surfaceSelector: string; semanticSelector: string; triggerSelector: string; runtimeRoots: string; controlledDisclosure: boolean } ) => {
 		const runtimeOwned = new Function( 'return (' + runtimeRoots + ')' )() as (element: Element) => boolean;
 		const visible = ( element: Element ): boolean => {
 			if ( runtimeOwned( element ) ) return false;
@@ -964,7 +1030,9 @@ async function firstNewVisibleDialog(
 		const ownedSurface = controlled.filter( ( element ): element is HTMLElement => !!element )
 			.map( element => element.matches( semanticSelector ) ? element : element.querySelector( semanticSelector ) )
 			.find( element => element && visible( element ) );
-		let owned = controlled.find( ( element ) => element && visible( element ) && !element.hasAttribute( 'data-lib-visible-before' ) );
+		let owned = controlled.find( ( element ) => element &&
+			( visible( element ) || Array.from( element.querySelectorAll( '*' ) ).some( visible ) ) &&
+			( controlledDisclosure || !element.hasAttribute( 'data-lib-visible-before' ) ) );
 		while ( owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) ) owned = owned.parentElement;
 		const surface = owned ?? candidates.find( ( element, index ) => {
 			if ( ! visible( element ) || wasVisible( element, index ) ) return false;
@@ -1081,6 +1149,7 @@ async function firstNewVisibleDialog(
 		};
 	}, {
 		existing: before,
+		controlledDisclosure,
 		runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE,
 		triggerSelector,
 		surfaceSelector: POPUP_SURFACE_SELECTOR,
@@ -1105,7 +1174,7 @@ export function dialogDismissalBinding( page: Page ): Promise< string > {
 	return binding;
 }
 
-async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string ): Promise< void > {
+async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string, closed = () => panelIntersectsViewport( page, selector ).then( visible => ! visible ) ): Promise< { selector: string; action: 'click' | 'keyboard' } | undefined > {
 	await page.keyboard.press( 'Escape' ).catch( () => undefined );
 	await page.waitForTimeout( 100 );
 	// Escape can start a closing transition (a fading overlay stays visible for
@@ -1119,21 +1188,53 @@ async function closeCapturedDialog( page: Page, selector: string, triggerSelecto
 			.map( animation => Promise.race( [ animation.finished.catch( () => undefined ), new Promise( resolve => setTimeout( resolve, limitMs ) ) ] ) ) );
 		return true;
 	}, { selector, limitMs: DIALOG_WAIT_MS } ).catch( () => true );
-	if ( ! present || ! ( await panelIntersectsViewport( page, selector ) ) ) return;
+	if ( ! present || await closed() ) return { selector, action: 'keyboard' };
 	const close = page
 		.locator( selector )
 		.first()
 		.locator(
-			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-close],[data-testid*="close" i]'
+			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[class*="-close" i],[data-dismiss],[data-close],[data-testid*="close" i]'
 		)
 		.first();
 	if ( await close.isVisible().catch( () => false ) ) {
+		const closeSelector = await close.evaluate( element => {
+			const parts: string[] = [];
+			for ( let node: Element | null = element; node && node !== document.body; node = node.parentElement ) {
+				if ( node.id ) { parts.unshift( '#' + CSS.escape( node.id ) ); break; }
+				const siblings = Array.from( node.parentElement?.children ?? [] ).filter( sibling => sibling.tagName === node!.tagName );
+				parts.unshift( `${node.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf( node ) + 1})` );
+			}
+			return parts.join( ' > ' );
+		} );
 		await close.click( { timeout: 1_000 } ).catch( () => undefined );
-		await page.waitForTimeout( 100 );
+		// Let the authored closing animation restore the baseline before toggling.
+		for ( let attempt = 0; attempt < 10 && ! await closed(); attempt++ ) await page.waitForTimeout( 100 );
+		if ( await closed() ) return { selector: closeSelector, action: 'click' };
 	}
-	if ( triggerSelector && ( await panelIntersectsViewport( page, selector ) ) ) {
+	if ( triggerSelector && ! await closed() ) {
 		await page.locator( triggerSelector ).first().click( { timeout: 1_000 } ).catch( () => undefined );
+		await page.waitForTimeout( 350 );
+		if ( await closed() ) return { selector: triggerSelector, action: 'click' };
 	}
+}
+
+/** Compare rendered node identities, not the absolute visibility of an in-flow wrapper. */
+async function panelFootprintRestored( page: Page, selector: string, remember = false ): Promise< boolean > {
+	return page.evaluate( ( { selector, remember } ) => {
+		const state = globalThis as unknown as { __dlaPanelFootprints?: Map<string, Set<Element>> };
+		const baselines = state.__dlaPanelFootprints ??= new Map();
+		const panel = document.querySelector( selector );
+		const visible = new Set( panel ? [ panel, ...panel.querySelectorAll( '*' ) ].filter( node => {
+			const rect = node.getBoundingClientRect();
+			const style = getComputedStyle( node );
+			if ( style.display === 'none' || style.visibility === 'hidden' ) return false;
+			return Math.min( rect.right, innerWidth ) - Math.max( rect.left, 0 ) > 8 &&
+				Math.min( rect.bottom, innerHeight ) - Math.max( rect.top, 0 ) > 8;
+		} ) : [] );
+		if ( remember ) baselines.set( selector, visible );
+		const baseline = baselines.get( selector );
+		return !! baseline && baseline.size === visible.size && [ ...visible ].every( node => baseline.has( node ) );
+	}, { selector, remember } );
 }
 
 async function panelIntersectsViewport( page: Page, selector: string ): Promise< boolean > {
@@ -1141,12 +1242,14 @@ async function panelIntersectsViewport( page: Page, selector: string ): Promise<
 		.locator( selector )
 		.first()
 		.evaluate( ( element ) => {
-			const rect = element.getBoundingClientRect();
-			const style = getComputedStyle( element );
-			if ( style.display === 'none' || style.visibility === 'hidden' ) return false;
-			const width = Math.min( rect.right, window.innerWidth ) - Math.max( rect.left, 0 );
-			const height = Math.min( rect.bottom, window.innerHeight ) - Math.max( rect.top, 0 );
-			return width > 8 && height > 8;
+			return [ element, ...element.querySelectorAll( '*' ) ].some( node => {
+				const rect = node.getBoundingClientRect();
+				const style = getComputedStyle( node );
+				if ( style.display === 'none' || style.visibility === 'hidden' || node !== element && style.position !== 'fixed' ) return false;
+				const width = Math.min( rect.right, window.innerWidth ) - Math.max( rect.left, 0 );
+				const height = Math.min( rect.bottom, window.innerHeight ) - Math.max( rect.top, 0 );
+				return width > 8 && height > 8;
+			} );
 		}, undefined, { timeout: 1_000 } )
 		.catch( () => false );
 }

@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import { snapshotCarousels, exploreCarousel, type Slideshow } from './carousel-components.js';
-import type { CapturedDialogInteraction, InteractionStatesReport } from './interaction-capture.js';
+import { captureControlledDisclosure, type CapturedDialogInteraction, type InteractionStatesReport } from './interaction-capture.js';
 
 /** A route's stateful surfaces, not an inventory of individual trigger clicks. */
 export interface CapturedComponent {
@@ -46,7 +46,7 @@ export async function snapshotComponents(page: Page): Promise<ComponentBaseline>
 			if (carousels.some(node => document.querySelector(node.selector)?.contains(root))) continue;
 			const surface = target?.matches('[role="dialog"],[role="listbox"],[role="menu"],dialog') ? target : target?.querySelector('[role="dialog"],[role="listbox"],[role="menu"],dialog');
 			const role = surface?.getAttribute('role') ?? (surface?.tagName === 'DIALOG' ? 'dialog' : root.getAttribute('aria-haspopup'));
-			const kind: CapturedComponent['kind'] = root.matches('[role="tablist"]') ? 'tabs' : root.matches('details') ? 'disclosure' : root.matches('[aria-roledescription="carousel"]') ? 'carousel' : role === 'dialog' || role === 'listbox' || role === 'menu' ? role : !role && target && !root.closest('header,nav,footer,[role="navigation"],[role="banner"]') ? 'disclosure' : 'unsupported';
+			const kind: CapturedComponent['kind'] = root.matches('[role="tablist"]') ? 'tabs' : root.matches('details') ? 'disclosure' : root.matches('[aria-roledescription="carousel"]') ? 'carousel' : role === 'dialog' || role === 'listbox' || role === 'menu' ? role : !role && target && (!root.closest('header,nav,footer,[role="navigation"],[role="banner"]') || !target.querySelector('a[href]')) ? 'disclosure' : 'unsupported';
 			const rootSelector = selector(root);
 			const dedicated = kind === 'tabs' || kind === 'disclosure' || kind === 'carousel';
 			const members = kind === 'disclosure' && !root.matches('details') ? [root as HTMLElement] : Array.from(root.querySelectorAll<HTMLElement>(kind === 'tabs' ? '[role="tab"]' : kind === 'disclosure' ? ':scope > summary' : 'button,[role="button"]'));
@@ -107,6 +107,23 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 		if (component.slideshow) {
 			try { await exploreCarousel(page, component); }
 			catch { component.status = 'partial'; component.reason = 'carousel exploration failed'; }
+			continue;
+		}
+		if (component.kind === 'disclosure' && component.initial === 'closed' && await page.locator(component.selector).getAttribute('aria-controls')) {
+			try {
+				const { evidence, restored, dismissal } = await captureControlledDisclosure(page, component.selector);
+				if (evidence?.dialog) {
+					const html = await page.locator(component.selector).evaluate((root, panelHtml) => {
+						const clone = root.cloneNode(true) as Element;
+						clone.setAttribute('aria-expanded', 'true');
+						return clone.outerHTML + panelHtml;
+					}, evidence.dialog.html);
+					component.states.push({ id: 'open', html, evidence });
+					component.transitions.push({ from: 'closed', to: 'open', trigger: { selector: component.selector, action: 'click' } });
+					if (restored && dismissal) component.transitions.push({ from: 'open', to: 'closed', trigger: dismissal });
+				}
+				if (!evidence || !restored) { component.status = 'partial'; component.reason = !evidence ? 'activation did not reveal a classified state' : 'disclosure dismissal did not restore baseline'; }
+			} catch { component.status = 'partial'; component.reason = 'disclosure exploration failed'; }
 			continue;
 		}
 		// Legacy caches without slideshow observations retain bounded exploration.

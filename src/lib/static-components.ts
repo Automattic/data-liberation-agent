@@ -18,7 +18,7 @@ export function wireCapturedComponents(html: string, components: CapturedCompone
 	let wired = false;
 	let collections = false;
 	const carousels: Array<{ selector: string; initial: string; states: Record<string, string>; transitions: CapturedComponent['transitions'] }> = [];
-	const disclosures: Array<{ trigger: string; panel: string; initial: string; states: Record<string, { trigger: string; panel: string }> }> = [];
+	const disclosures: Array<{ trigger: string; panel: string; initial: string; states: Record<string, { trigger: string; panel: string }>; transitions: CapturedComponent['transitions'] }> = [];
 	for (const component of components) {
 		if (component.kind === 'collection' && component.collection) {
 			const root = $(component.selector).first();
@@ -49,7 +49,7 @@ export function wireCapturedComponents(html: string, components: CapturedCompone
 			}
 			if (states.open && states.closed) {
 				trigger.attr('data-blocks-engine-capture-component-disclosure', String(disclosures.length));
-				disclosures.push({ trigger: component.selector, panel: panelId, initial: component.initial, states });
+				disclosures.push({ trigger: component.selector, panel: panelId, initial: component.initial, states, transitions: component.transitions });
 			}
 		}
 
@@ -76,7 +76,38 @@ export function wireCapturedComponents(html: string, components: CapturedCompone
 	}
 	if (disclosures.length) {
 		const config = JSON.stringify(disclosures).replace(/</g, '\\u003c');
-		$('head').append(`<script data-blocks-engine-capture-component-disclosure-runtime>(function(){var configs=${config};document.addEventListener('click',function(event){var trigger=event.target.closest('[data-blocks-engine-capture-component-disclosure]');if(!trigger)return;var key=trigger.getAttribute('data-blocks-engine-capture-component-disclosure'),config=configs[key];if(!config)return;var next=trigger.getAttribute('aria-expanded')==='true'?'closed':'open',state=config.states[next],holder=document.createElement('div');holder.innerHTML=state.trigger;var observed=holder.firstElementChild;Array.from(observed.attributes).forEach(function(attr){if(attr.name!=='id'&&!/^on/i.test(attr.name))trigger.setAttribute(attr.name,attr.value);});var panel=document.getElementById(config.panel);if(panel)panel.outerHTML=state.panel;else trigger.insertAdjacentHTML('afterend',state.panel);});})();</script>`);
+		$('head').append(`<script data-blocks-engine-capture-component-disclosure-runtime>(function(){
+var configs=${config};
+configs.forEach(function(config){config.current=config.initial;});
+document.addEventListener('click',function(event){
+	if(!(event.target instanceof Element))return;
+	configs.forEach(function(config,key){
+		var trigger=document.querySelector('[data-blocks-engine-capture-component-disclosure="'+key+'"]');
+		if(!trigger)return;
+		var next;
+		if(trigger.contains(event.target)){
+			next=trigger.getAttribute('aria-expanded')==='true'?'closed':'open';
+		}else{
+			var edge=config.transitions.find(function(edge){
+				return edge.from===config.current&&edge.trigger.action==='click'&&event.target.closest(edge.trigger.selector);
+			});
+			if(!edge)return;
+			next=edge.to;
+		}
+		var state=config.states[next];
+		if(!state)return;
+		var holder=document.createElement('div');
+		holder.innerHTML=state.trigger;
+		var observed=holder.firstElementChild;
+		Array.from(observed.attributes).forEach(function(attr){
+			if(attr.name!=='id'&&!/^on/i.test(attr.name))trigger.setAttribute(attr.name,attr.value);
+		});
+		var panel=document.getElementById(config.panel);
+		if(panel)panel.outerHTML=state.panel;else trigger.insertAdjacentHTML('afterend',state.panel);
+		config.current=next;
+	});
+});
+})();</script>`);
 	}
 	if (wired) $('head').append(`<script data-blocks-engine-capture-component-runtime>(function(){function ready(){document.querySelectorAll('[data-blocks-engine-capture-tabs]').forEach(function(root){var tabs=Array.from(root.querySelectorAll('[role="tab"]'));tabs.forEach(function(tab){tab.addEventListener('click',function(){tabs.forEach(function(other){var selected=other===tab;other.setAttribute('aria-selected',String(selected));other.tabIndex=selected?0:-1;var panel=document.getElementById(other.getAttribute('aria-controls'));if(panel)panel.hidden=!selected;});});});});}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();})();</script>`);
 	return wired || collections || disclosures.length || carousels.length ? $.html() : html;
