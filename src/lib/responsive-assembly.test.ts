@@ -92,6 +92,53 @@ function page( body: string, head = '', bodyAttributes = '' ): string {
 	return `<html><head>${ head }</head><body${ bodyAttributes }>${ body }</body></html>`;
 }
 
+describe( 'counterpart stylesheet deltas (#1286)', () => {
+	it( 'keeps later common rules after a mobile delta, including overlapping selectors', () => {
+		const desktopCss = '.common{margin:0}.target{color:red}.target.special{color:green}';
+		const mobileCss = '.common{margin:0}.target{color:blue}.target.special{color:green}';
+		const desktop = page( '<main class="target special common">Hello</main>', `<style>${ desktopCss }</style>` );
+		const mobile = page( '<main class="target special common">Hello</main>', `<style>${ mobileCss }</style>` );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( result.html );
+		expect( $( 'style[media="(max-width:767px)"]' ).text() ).toBe( '.target{color:blue}.target.special{color:green}' );
+	} );
+
+	it( 'measures the Framer SSR replay and preserves computed styles', async () => {
+		const common = Array.from( { length: 9 }, ( _, i ) => `.rule-${ i }{margin-left:${ i }px}` ).join( '' );
+		const desktopCss = `${ common }.target{color:red}`;
+		const mobileCss = `${ common }.target{color:blue}.added{padding:7px}`;
+		const links = '<link rel="stylesheet" href="https://fixture.test/a.css"><link rel="stylesheet" href="https://fixture.test/b.css">';
+		const markup = '<main class="target added rule-4">Hello</main>';
+		const desktop = page( markup, `${ links }<style data-framer-css-ssr-minified>${ desktopCss }</style>` );
+		const mobile = page( markup, `${ links }<style data-framer-css-ssr-minified>${ mobileCss }</style>` );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile, switchWidth: 1199 } );
+		const $ = cheerio.load( result.html );
+		const phoneCss = $( 'style[media="(max-width:1199px)"]' ).text();
+		// Trunk: head 718 B, mobile replay 254 B. Links were already
+		// deduplicated on this path; keep that contract while reducing SSR CSS.
+		expect( Buffer.byteLength( $( 'head' ).html()! ) ).toBe( 549 );
+		expect( Buffer.byteLength( phoneCss ) ).toBe( 38 );
+		expect( phoneCss ).toBe( '.target{color:blue}.added{padding:7px}' );
+		expect( $( 'link' ) ).toHaveLength( 2 );
+		const browser = await chromium.launch();
+		try {
+			const tab = await browser.newPage();
+			await tab.route( 'https://fixture.test/**', route => route.fulfill( { contentType: 'text/css', body: '.target{font-size:18px}' } ) );
+			for ( const width of [ 390, 1440 ] ) {
+				await tab.setViewportSize( { width, height: 900 } );
+				const measure = async ( html: string ) => {
+					await tab.setContent( html );
+					return tab.locator( 'main' ).evaluate( node => {
+						const css = getComputedStyle( node );
+						return [ css.color, css.padding, css.marginLeft, css.fontSize ];
+					} );
+				};
+				expect( await measure( result.html ) ).toEqual( await measure( width === 390 ? mobile : desktop ) );
+			}
+		} finally { await browser.close(); }
+	} );
+} );
+
 describe( 'moved body class selectors', () => {
 	it.each( [ true, false ] )( 'rewrites moved compounds with shared styles=%s', shared => {
 		const css = 'body.desk .grid{display:flex} body.mob .grid{display:block} body.page{margin:0} body.desk > .grid{gap:2px} body.page.desk[data-layout]:hover > .grid{gap:3px}';

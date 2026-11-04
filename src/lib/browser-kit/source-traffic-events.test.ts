@@ -12,7 +12,7 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   const acquire = vi.spyOn(governor, 'acquire');
   const release = vi.spyOn(governor, 'release');
   const routeFor = (url = 'https://source.test/image') => {
-    const request = { url: () => url, failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) } as Request;
+    const request = { url: () => url, resourceType: () => 'image', failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) } as Request;
     const route = { request: () => request, continue: vi.fn().mockResolvedValue(undefined), fetch: vi.fn() };
     return { request, route: route as unknown as Route, native: route };
   };
