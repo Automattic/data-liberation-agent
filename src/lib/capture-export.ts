@@ -1807,14 +1807,16 @@ function buildExportCapture(
 			exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
 			...( interactionMediaReferences.has( family ) ? { galleryFrame: true } : {} ),
 			bytes,
-			renderedDimension: renderedMediaDimensions.get( family ),
+			renderedDimension: Math.max( renderedMediaDimensions.get( family ) ?? 0,
+				...( imageAsset?.source_urls ?? [] ).map( url => renderedMediaDimensions.get( mediaFamily( url ) ) ?? 0 ) ),
 			dimension: imageAsset?.original ? Math.max( imageAsset.original.width ?? 0, imageAsset.original.height ?? 0 ) : mediaDimension( sourceUrl ),
 		};
 		// Inventory aliases describe one picture, not necessarily one file. Keep
 		// independently captured srcset bytes instead of rewriting every alias to
 		// the verified representative (notably same-path ?width=N CDN URLs).
 		// A distinct resolved original is authoritative only for resizes/re-encodes
-		// with the same aspect ratio. Cropped aliases retain their selected bytes.
+		// with the same aspect ratio. Keep those resizes as budget fallbacks;
+		// cropped aliases retain their selected bytes.
 		const capturedRenditions: MediaCandidate[] = [];
 		const selectedReferences = new Set( mediaReferences( candidate.sourceUrl, options.sourceUrl ) );
 		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) && imageAsset.original ) {
@@ -1839,7 +1841,14 @@ function buildExportCapture(
 						// cross-products so small resizes need no arbitrary ratio epsilon.
 						if ( originalWidth && originalHeight && width && height &&
 							Math.abs( width * originalHeight - height * originalWidth ) <=
-							( width + height + originalWidth + originalHeight ) / 2 ) continue;
+							( width + height + originalWidth + originalHeight ) / 2 ) {
+							if ( renditionContent.length <= maxFileBytes ) capturedRenditions.push( {
+								sourceUrl: url, localPath: path, references: candidate.references, exactReferences: [],
+								bytes: renditionContent.length, dimension: Math.max( width, height ),
+								renderedDimension: candidate.renderedDimension, budgetFallback: true,
+							} );
+							continue;
+						}
 					} catch {
 						// Unknown dimensions cannot prove that the original has the same crop.
 					}
@@ -1859,7 +1868,7 @@ function buildExportCapture(
 				} );
 			}
 		}
-		if ( capturedRenditions.length ) {
+		if ( capturedRenditions.some( rendition => ! rendition.budgetFallback ) ) {
 			for ( const reference of references ) mixedSrcsetReferences.set( reference, selectedReferences );
 		}
 		const smaller: MediaCandidate[] = ( imageAsset?.renditions ?? [] ).flatMap( rendition => {
@@ -1917,8 +1926,9 @@ function buildExportCapture(
 	for ( const [ url, bytes ] of exclusions.renditions ) routeCaptureDiagnostics.push( redundantRenditionDropped( url, bytes, budget ) );
 	mediaReplacements = resourceStage.mediaReplacements;
 	portablePathsBySource = resourceStage.portablePathsBySource;
+	const unresolvedMediaReasons = new Map( unresolvedMedia.map( ( { url, error } ) => [ url, error ] ) );
 	for ( const record of imageAssets ) {
-		if ( ! record.original || ! portablePathsBySource.has( record.original.source_url ) ) routeCaptureDiagnostics.push( { code: ! record.kind || record.kind === 'image' ? 'image_resource_unresolved' : 'asset_resource_unresolved', url: record.source_urls[ 0 ], reason: record.error ?? 'Verified resource original could not be exported within the portable limits', unit: 'asset', severity: 'error' } );
+		if ( ! record.original || ! portablePathsBySource.has( record.original.source_url ) ) routeCaptureDiagnostics.push( { code: ! record.kind || record.kind === 'image' ? 'image_resource_unresolved' : 'asset_resource_unresolved', url: record.source_urls[ 0 ], reason: unresolvedMediaReasons.get( record.original?.source_url ?? record.resolved_original ) ?? record.error ?? 'Verified resource original could not be exported within the portable limits', unit: 'asset', severity: 'error' } );
 	}
 	assets.push( ...resourceStage.assets );
 	const { resourceReplacements, unresolvedDependencies, rejectedReplacementKeys } = resourceStage;

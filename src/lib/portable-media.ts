@@ -150,7 +150,7 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			);
 			for ( const url of candidate.imageAsset?.source_urls ?? [] ) portablePathsBySource.set( url, `website/${ assetPath.replace( /\\/g, '/' ) }` );
 			fallbackAssetPath ||= assetPath;
-			for ( const reference of candidate.imageAsset ? candidate.references : candidate.exactReferences ) {
+			for ( const reference of candidate.imageAsset || candidate.budgetFallback ? candidate.references : candidate.exactReferences ) {
 				mediaReplacements.set( reference, portableAssetUrl( assetPath ) );
 			}
 		}
