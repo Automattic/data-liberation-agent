@@ -1099,7 +1099,9 @@ async function firstNewVisibleDialog(
 			( controlledDisclosure || !element.hasAttribute( 'data-lib-visible-before' ) ) );
 		// For an authored aria-controls disclosure, the controlled element is the
 		// panel. Do not promote it to an enclosing landmark (for example a header).
-		while ( ! controlledDisclosure && owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) ) owned = owned.parentElement;
+		// Climb only through wrappers the activation revealed: a box that stays
+		// zero-sized around fixed children (a Google Sites header) was never hidden.
+		while ( ! controlledDisclosure && owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) && visible( owned.parentElement ) ) owned = owned.parentElement;
 		const surface = owned ?? candidates.find( ( element, index ) => {
 			if ( ! visible( element ) || wasVisible( element, index ) ) return false;
 			if ( element.matches( semanticSelector ) ) return true;

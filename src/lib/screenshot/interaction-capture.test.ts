@@ -675,6 +675,43 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
+		'records a controlled drawer, not the zero-height header wrapping it and its trigger',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 800 } } );
+			try {
+				// Google Sites: every header child is fixed, so the header and its
+				// wrapper stay 0px tall whether the sidebar is open or closed.
+				await page.setContent( `<!doctype html><html><head><style>
+					#toggle { position: fixed; top: 0; left: 0; width: 48px; height: 48px; }
+					#drawer { display: none; position: fixed; top: 0; left: 0; width: 250px; height: 100%; background: #fff; }
+					#drawer.open { display: block; }
+					#scrim { position: fixed; inset: 0; width: 0; opacity: 0; background: #000; }
+					#scrim.open { width: 100%; opacity: .6; }
+				</style></head><body><header id="site-header"><div class="wrap">
+					<div id="toggle" role="button" tabindex="0" aria-haspopup="true" aria-controls="drawer" aria-expanded="false">Menu</div>
+					<nav id="drawer" role="navigation"><a href="/home">Home</a><a href="/about">About</a></nav>
+					<div id="scrim"></div>
+				</div></header><main><h1>About</h1></main><script>
+					const toggle = document.getElementById('toggle');
+					toggle.addEventListener('click', () => {
+						const open = toggle.getAttribute('aria-expanded') !== 'true';
+						toggle.setAttribute('aria-expanded', String(open));
+						for (const id of ['drawer', 'scrim']) document.getElementById(id).classList.toggle('open', open);
+					});
+				</script></body></html>` );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				const state = report.states.find( item => item.trigger.selector === '#toggle' );
+				expect( state ).toMatchObject( { status: 'captured', dialog: { id: 'drawer' } } );
+				expect( state?.dialog?.html ).not.toContain( 'scrim' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'waits for an opening menu instead of capturing a background inside its transparent ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
