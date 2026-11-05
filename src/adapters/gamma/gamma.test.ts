@@ -95,7 +95,7 @@ describe( 'gamma platform', () => {
 	it( 'turns toggles, nested ones included, into native details that open without Gamma', async () => {
 		const toggle = ( open: boolean, title: string, body: string ) =>
 			`<div class="react-renderer node-toggle block block-toggle"><div data-node-view-wrapper=""><div class="toggle box-style" data-open="${ open }"><div data-node-view-content=""><div data-node-view-content-inner="toggle">` +
-			`<div class="node-toggleSummary"><div data-node-view-wrapper=""><button type="button" data-testid="toggle-button"><svg></svg></button><div data-node-view-content=""><div data-node-view-content-inner="toggleSummary">${ title }</div></div></div></div>` +
+			`<div class="react-renderer node-toggleSummary" contenteditable="false" draggable="true"><div data-node-view-wrapper="" style="white-space:normal"><div class="chakra-text css-18qvlmk" style="display:flex;flex-direction:column;align-items:var(--flex-align)"><button type="button" contenteditable="false" draggable="true" class="chakra-button css-o7zlpc" data-testid="toggle-button"><p class="chakra-text css-c9cz2g"><svg class="svg-inline--fa fa-play"></svg></p></button><div dir="auto" class="themed-heading" style="white-space:pre-wrap;min-width:min(100%, 10em)"><div data-node-view-content-inner="toggleSummary">${ title }</div></div></div></div></div>` +
 			`${ body }</div></div></div></div></div>`;
 		const html = gammaPage( [] )
 			.replace( '<style>', '<style>.block-toggle [data-open="false"] [data-node-view-content-inner="toggle"] > :not(:first-child){display:none}.animatable-on-load-content-parent:not(.animate-has-animated){opacity:0}' )
@@ -106,6 +106,11 @@ describe( 'gamma platform', () => {
 			expect( await page.locator( 'details' ).count() ).toBe( 3 );
 			expect( await page.locator( 'details summary' ).allTextContents() ).toEqual( [ 'Archive 2025', 'More', 'Open one' ] );
 			expect( await page.locator( 'details button' ).count() ).toBe( 0 );
+			const summary = page.locator( 'summary' ).first();
+			expect( await summary.locator( ':scope > span.themed-heading' ).textContent() ).toBe( 'Archive 2025' );
+			expect( await summary.locator( ':scope > span.themed-heading' ).evaluate( ( node ) => ( node as HTMLElement ).style.whiteSpace ) ).toBe( 'pre-wrap' );
+			expect( await summary.locator( 'button, svg, .css-18qvlmk, [contenteditable], [draggable], [data-node-view-content]' ).count() ).toBe( 0 );
+			expect( await summary.evaluate( ( node ) => ( node as HTMLElement ).style.listStylePosition ) ).toBe( 'outside' );
 			expect( await page.locator( 'details details summary' ).textContent() ).toBe( 'More' );
 			expect( await page.locator( 'details.box-style' ).count() ).toBe( 3 );
 			expect( await page.locator( 'details' ).last().getAttribute( 'open' ) ).toBe( '' );
