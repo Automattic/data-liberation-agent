@@ -214,6 +214,8 @@ export async function captureSelectableSetStates(
 					if ( element === document.documentElement || element === document.body ) return false;
 					if ( limits.skip !== undefined && element.matches( limits.skip ) ) return false;
 					if ( ! visible( element ) ) return false;
+					if ( element.closest( '[role="region"].wixui-slideshow' ) &&
+						/^(?:previous|next)$/i.test( ( element.getAttribute( 'aria-label' ) || textOf( element ) ).trim() ) ) return false;
 					if ( element.getAttribute( 'aria-disabled' ) === 'true' || element.hasAttribute( 'disabled' ) ) {
 						return false;
 					}
@@ -724,6 +726,11 @@ export async function captureSelectableSetStates(
 				let capturedSets = 0;
 				let probedGroups = 0;
 				for ( const group of groups ) {
+					if ( group.members.some( ( member ) => {
+						const selector = sourceSelector( member );
+						try { return document.querySelectorAll( selector ).length !== 1 || ! group.root.contains( document.querySelector( selector ) ); }
+						catch { return true; }
+					} ) ) continue;
 					const original = selectedMember(group.members);
 					if ( capturedSets >= limits.maxSets ) break;
 					if ( probedGroups >= limits.maxProbeGroups ) break;

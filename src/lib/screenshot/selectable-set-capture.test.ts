@@ -209,6 +209,26 @@ describe( 'captureSelectableSetStates', () => {
 		await browser?.close();
 	} );
 
+	it.skipIf( skipBrowser )( 'does not record Wix grid icons or slideshow navigation as choice groups', async () => {
+		const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+		try {
+			await page.setContent( `<!doctype html><html><body>
+				<main><div class="mesh-grid"><div><div><div><div>
+					<div class="grid-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M0 0h24v24H0z"/></svg></div>
+					<div class="grid-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 1h22v22H1z"/></svg></div>
+					<div class="grid-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 2h20v20H2z"/></svg></div>
+				</div></div></div></div></div></main>
+				<div id="comp-mor322882" role="region" aria-label="Slideshow" class="wixui-slideshow">
+					<button class="wixui-slideshow__previous" aria-label="Previous">Previous</button>
+					<button class="wixui-slideshow__next" aria-label="Next">Next</button>
+					<div class="wixui-slideshow__slide">Slide one</div>
+				</div>
+			</body></html>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states ).toEqual( [] );
+		} finally { await page.close(); }
+	}, 30_000 );
+
 	it.skipIf( skipBrowser )( 'never classifies document roots as selectable triggers', async () => {
 		const page = await browser.newPage();
 		try {
