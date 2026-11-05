@@ -1081,6 +1081,24 @@ describe( 'captureSelectableSetStates', () => {
 		30_000
 	);
 
+	it.skipIf( skipBrowser )( 'does not record duplicate-selector SVG grid members as a choice group', async () => {
+		const page = await browser.newPage();
+		try {
+			await page.setContent(`<main><div id="grid"><div id="content">Initial content</div><div id="items"><div style="cursor:pointer"><svg><title>One</title></svg></div><div style="cursor:pointer"><svg><title>Two</title></svg></div><div style="cursor:pointer"><svg><title>Three</title></svg></div></div></div></main>`);
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.some( state => state.kind === 'choice-group' ) ).toBe( false );
+		} finally { await page.close(); }
+	}, 30_000 );
+
+	it.skipIf( skipBrowser )( 'does not treat slideshow Previous/Next controls as a choice group', async () => {
+		const page = await browser.newPage();
+		try {
+			await page.setContent(`<main><section role="region" aria-label="Slideshow" class="wixui-slideshow"><div><button>Previous</button><button>Next</button></div><div>Frame one</div></section></main>`);
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.some( state => state.kind === 'choice-group' ) ).toBe( false );
+		} finally { await page.close(); }
+	}, 30_000 );
+
 	it.skipIf( skipBrowser )(
 		'captures icon-only choice transitions that mutate styles inside their labeled group',
 		async () => {

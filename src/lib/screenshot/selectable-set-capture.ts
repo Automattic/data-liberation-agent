@@ -210,6 +210,11 @@ export async function captureSelectableSetStates(
 				};
 				const isPagerControl = ( element: Element ) =>
 					Boolean( element.closest( '[data-blocks-engine-capture-gallery-capture-width]' ) );
+				const isRelativeNavigation = ( element: Element ) => {
+					const label = ( element.getAttribute( 'aria-label' ) || element.getAttribute( 'title' ) || textOf( element ) ).replace( /\\s+/g, ' ' ).trim().toLowerCase();
+					if ( ! /^(?:previous|prev|next)(?: slide)?$/.test( label ) ) return false;
+					return Boolean( element.closest( '[role="region"][aria-label*="slideshow" i], [class*="slideshow" i], [aria-roledescription="carousel"]' ) );
+				};
 				const looksSelectable = ( element: Element ): boolean => {
 					if ( element === document.documentElement || element === document.body ) return false;
 					if ( limits.skip !== undefined && element.matches( limits.skip ) ) return false;
@@ -232,7 +237,7 @@ export async function captureSelectableSetStates(
 					for ( let parent = element.parentElement; parent; parent = parent.parentElement ) {
 						if ( parent.hasAttribute( 'aria-haspopup' ) || isDisclosureTrigger( parent ) ) return false;
 					}
-					if ( isPagerControl( element ) ) return false;
+					if ( isPagerControl( element ) || isRelativeNavigation( element ) ) return false;
 					if ( isChrome( element ) ) return false;
 					const tag = element.tagName.toLowerCase();
 					if (
@@ -937,7 +942,13 @@ export async function captureSelectableSetStates(
 						// alone cannot represent that collection transition.
 						( regionIdx < 0 || ( toggleGroup && ! exclusivePressed ) )
 					);
-					if ( shouldCaptureChoice ) {
+					const uniquelyAddressableMembers = group.members.every( ( member ) => {
+						const selector = sourceSelector( member );
+						try {
+							return document.querySelectorAll( selector ).length === 1 && group.root.contains( document.querySelector( selector ) );
+						} catch { return false; }
+					} );
+					if ( shouldCaptureChoice && uniquelyAddressableMembers ) {
 						const drivenCount = Math.min( group.members.length, limits.maxMembers );
 						const choiceRecordStart = records.length;
 						let replay: 'activation-determined' | 'unsupported' = 'activation-determined';
