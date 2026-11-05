@@ -152,6 +152,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		const browser = await chromium.launch( { headless: true } );
 		try {
 			const page = await browser.newPage();
+			// Only the vendor script URL identifies the app; never fetch it.
+			await page.route( 'https://bmusic.purplebear.co/**', ( route ) => route.abort() );
 			await page.setContent(`<style>body{margin:0}.host{width:240px;height:152px}</style>
 				<script src="https://bmusic.purplebear.co/js/wix-plugin/bmusic/wix-plugin.js?appId=9281aa55&appName=Music%20Player"></script>
 				<div class="host" data-testid="custom-element"><bmusic-site-widget data-selector="bmusic-id-0"><div id="bmusic-container"></div></bmusic-site-widget></div>`);
