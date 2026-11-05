@@ -67,7 +67,7 @@ export const SEGMENT_STYLE_ATTRIBUTE = 'data-blocks-engine-capture-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
 export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-blocks-engine-capture-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'transform-y', 'inset-top', 'inset-left', 'min-height' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'transform-y', 'transform-scale', 'inset-top', 'inset-left', 'min-height' ] as const;
 
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'left';
 
@@ -431,6 +431,13 @@ async function learnFluidGeometry(
 							containers[ property ] = null;
 							continue;
 						}
+						if ( property === 'transform-scale' ) {
+							const scale = state.uniformScale( element );
+							// Fit in pixel-sized units so the existing two-pixel tolerance
+							// means 0.2% scale error, not two whole scale factors.
+							values[ property ] = scale === null ? Number.NaN : scale * 1000;
+							continue;
+						}
 						if ( property === 'transform-x' || property === 'transform-y' ) {
 							values[ property ] = geometry.translation?.[ property === 'transform-x' ? 'x' : 'y' ] ?? null;
 							continue;
@@ -456,7 +463,7 @@ async function learnFluidGeometry(
 								: null;
 					}
 					for ( const property of elementProperties ) {
-						if ( property === 'transform-x' || property === 'transform-y' || property === 'inset-top' || property === 'inset-left' ) continue;
+						if ( property === 'transform-scale' || property === 'transform-x' || property === 'transform-y' || property === 'inset-top' || property === 'inset-left' ) continue;
 						if ( property === 'left' && ! relative ) {
 							values[ property ] = null;
 							continue;
@@ -603,6 +610,19 @@ async function learnFluidGeometry(
 		// Any non-relative sample invalidates the entire offset relationship.
 		// Fitting the remaining relative samples would erase authored positioning.
 		if ( property === 'left' && nonRelative.has( id ) ) continue;
+		if ( property === 'transform-scale' ) {
+			// Never fit a partial series through rotation, skew, translation or absence.
+			if ( samples.some( sample => ! Number.isFinite( sample.value ) ) ) continue;
+			const model = learnFluidModel( samples );
+			if ( model.kind === 'constant' ) continue;
+			if ( model.kind === 'breakpoint' || model.kind === 'container' ) { unmodelled++; continue; }
+			byKind[ model.kind ] = ( byKind[ model.kind ] ?? 0 ) + 1;
+			learned.push( {
+				id, property: 'transform', css: `scale(calc(${ model.css } / 1000px))`,
+				fallbackCss: null, containerRelative: false, sampledCss: null, segmentedCss: null,
+			} );
+			continue;
+		}
 		if ( property === 'transform-y' ) continue; // Both axes have one transform owner.
 		const transformX = property === 'transform-x';
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
@@ -801,6 +821,15 @@ async function learnFluidGeometry(
 			continue;
 		}
 		if ( entry.property !== 'transform' ) continue;
+		if ( entry.css.startsWith( 'scale(' ) ) {
+			if ( await baseline.evaluate( ( state, id ) => {
+				const element = state.element( id );
+				return element !== null && state.uniformScale( element ) !== null;
+			}, entry.id ) ) continue;
+			learned.splice( index, 1 );
+			unmodelled++;
+			continue;
+		}
 		const translation = await baseline.evaluate( ( state, id ) => state.translation( id ), entry.id );
 		if ( translation !== null ) continue;
 		learned.splice( index, 1 );
