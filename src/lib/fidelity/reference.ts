@@ -8,9 +8,9 @@ import { observePage, routeSourceMap } from './check.js';
 import { spreadSample } from '../route-budget.js';
 import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
-import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';
+import { isRouteDrift, navigationDocumentUrl, matchClientErrorShell } from '../screenshot/document-integrity.js';
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
-import { installImageReachability, observePageTraffic, type TelemetryRequest } from '../screenshot/page-helpers.js';
+import { installImageReachability, observePageTraffic, settleDocument, type TelemetryRequest } from '../screenshot/page-helpers.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
@@ -24,6 +24,7 @@ export interface ReferenceCollectorOptions {
 	publicUrlsOnly?: boolean;
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
+	clientErrorShellSelectors?: string[];
 	prepareCapture?: ( page: Page, ctx: { url: string; viewport: string } ) => Promise<void>;
 	/** The adapter's telemetry declaration; reference cells wait on the same quiet as capture. */
 	telemetryRequest?: TelemetryRequest;
@@ -157,13 +158,19 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					let referencePage: Page | undefined;
 					let ownedResource: BrowserContext | Page | undefined;
 					let runtimeErrors: Awaited< ReturnType< typeof watchSourceRuntimeErrors > > | undefined;
-					// Capture and this cell may watch the same page or the same source
-					// fault, so a reason both report is recorded once.
+					let admittedDocument = false;
+					// Only faults also seen in capture can inherit its admission. A new
+					// reference-only main-frame fault still leaves the cell unproven.
 					const recordRuntimeErrors = (): void => {
 						const settled = runtimeErrors?.settle();
 						runtimeErrors?.dispose(); runtimeErrors = undefined;
-						if ( settled?.diagnostics.length ) entry.readiness.diagnostics = settled.diagnostics;
-						for ( const reason of [ ...( settled?.reasons ?? [] ), ...errors ] ) if ( ! entry.readiness.reasons.includes( reason ) ) entry.readiness.reasons.push( reason );
+						const diagnostics = new Set( entry.readiness.diagnostics );
+						for ( const diagnostic of settled?.diagnostics ?? [] ) diagnostics.add( diagnostic );
+						for ( const reason of [ ...( settled?.reasons ?? [] ), ...errors ] ) {
+							if ( admittedDocument && reason.startsWith( 'source runtime error: ' ) && errors.includes( reason ) ) diagnostics.add( reason );
+							else if ( ! entry.readiness.reasons.includes( reason ) ) entry.readiness.reasons.push( reason );
+						}
+						if ( diagnostics.size ) entry.readiness.diagnostics = [ ...diagnostics ];
 					};
 					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
 					let releaseNavigation: (() => Promise<void>) | undefined;
@@ -239,7 +246,14 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const stem = `${ digest( url ).slice( 0, 24 ) }-${ digest( device ).slice( 0, 12 ) }-${ viewport }`;
 						entry.viewportMeta = await referencePage.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
 						entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
-						entry.document = store( `${ stem }.html`, await referencePage.content() );
+						const stability = await settleDocument( referencePage, 'reference-admission', { quietMs: 500, timeoutMs: 5_000, animations: true } );
+						if ( stability.reason !== 'quiet' ) entry.readiness.reasons.push( 'source document did not settle' );
+						const html = await referencePage.content();
+						const shell = matchClientErrorShell( html, options.clientErrorShellSelectors );
+						if ( shell ) entry.readiness.reasons.push( `source client error shell: ${ shell }` );
+						if ( isRouteDrift( referencePage.url(), navigationUrl ) && ! entry.readiness.reasons.includes( 'source route drift' ) ) entry.readiness.reasons.push( 'source route drift' );
+						admittedDocument = entry.readiness.reasons.length === 0;
+						entry.document = store( `${ stem }.html`, html );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
 						await collectViewportEntranceStartup( referencePage, page );
 						recordRuntimeErrors();

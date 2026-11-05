@@ -552,6 +552,7 @@ async function runCaptureWebsite(
 		telemetryRequest,
 		removeSelectors: adapter.liberation?.removeSelectors,
 		prepareCapture: adapter.liberation?.prepare,
+		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
 		referenceSample,
 	} );
 	const assetQueue = new AssetAcquisitionQueue( outputDir, sourceGovernors, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
