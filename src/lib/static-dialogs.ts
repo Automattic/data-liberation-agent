@@ -383,14 +383,17 @@ export function wireCapturedDialogs(
 				} ) );
 				if ( restingPanel.attr( 'hidden' ) !== undefined ) panel.attr( 'hidden', '' );
 				else panel.removeAttr( 'hidden' );
-				if ( reusePanel && state.dialog?.restingInline && !dropdown ) {
+				if ( reusePanel && state.dialog?.restingInline ) {
 					// Opened snapshots are replay evidence, not the initial authoring
 					// tree. Keep the source's closed content and root attributes even
 					// before (or without) the portable runtime running.
 					restoreRestingPanel( restingPanel, panel );
 					panel.attr( 'data-blocks-engine-capture-resting-panel', '' );
 				}
-				if ( sourcePlaced ) panel.attr( 'data-blocks-engine-capture-observed-placement', 'true' ).attr( 'hidden', '' );
+				if ( sourcePlaced ) {
+					panel.attr( 'data-blocks-engine-capture-observed-placement', 'true' );
+					if ( !reusePanel || !state.dialog?.restingInline ) panel.attr( 'hidden', '' );
+				}
 			}
 			panel.attr( 'id', panelId ).attr( 'data-blocks-engine-capture-dialog-panel', panelId );
 			if ( dropdown ) panel.addClass( 'data-blocks-engine-capture-dropdown' );
