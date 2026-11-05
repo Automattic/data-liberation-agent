@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.136] - 2026-11-05
+
+### Changed
+- regenerate plugin bundles
+- Verify fidelity gate passes for #1347
+- Recognize Wix password gates during capture
+- Replace Wix App Market custom elements with unported-embed notes
+- Port Wix gallery slideshows out of wix-iframe hosts
+- Freeze the load-time Wix header class after capture scrolling
+- Score lazy-rail image readiness against visible, comparable evidence
+- Prove reference cells whose admitted source runtime error leaves a stable document
+
 ## [0.33.135] - 2026-11-05
 
 ### Changed
