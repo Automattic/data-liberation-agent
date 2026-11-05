@@ -537,6 +537,7 @@ export async function observePage(
 				letterSpacing: number;
 				advance: number;
 				loaded: boolean;
+				primaryLoaded: boolean;
 			} > = [];
 			const canvas = document.createElement( 'canvas' );
 			const context = canvas.getContext( '2d' );
@@ -631,6 +632,10 @@ export async function observePage(
 				if ( ! text || typography.length >= 120 ) return;
 				const fontSize = Number.parseFloat( style.fontSize ) || 0;
 				const font = `${ style.fontStyle } ${ style.fontWeight } ${ style.fontSize } ${ style.fontFamily }`;
+				// Keep quoted commas inside a family name; query this document, not
+				// the host's installed-font inventory or the entire fallback stack.
+				const primary = style.fontFamily.match( /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,])+/ )?.[ 0 ].trim() ?? style.fontFamily;
+				const primaryFont = `${ style.fontStyle } ${ style.fontWeight } ${ style.fontSize } ${ primary }`;
 				if ( context ) context.font = font;
 				typography.push( {
 					key: text.slice( 0, 120 ),
@@ -641,6 +646,7 @@ export async function observePage(
 					letterSpacing: Number.parseFloat( style.letterSpacing ) || 0,
 					advance: Math.round( ( context?.measureText( text ).width ?? width ) * 100 ) / 100,
 					loaded: document.fonts.check( font, text ),
+					primaryLoaded: document.fonts.check( primaryFont, text ),
 				} );
 			};
 			const visit = ( node: Node ) => {

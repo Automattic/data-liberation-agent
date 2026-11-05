@@ -120,6 +120,52 @@ describe( 'checkTypography', () => {
 		expect( result.failures?.[ 0 ] ).toContain( 'advance 455px !== 480px' );
 	} );
 
+	it.each( [
+		{ name: 'tail fallback', source: '"Example Display", Georgia, "Times New Roman", serif', candidate: '"Example Display", Georgia, serif', left: true, right: true, pass: true },
+		{ name: 'middle fallback', source: 'A, B, sans-serif', candidate: 'A, sans-serif', left: true, right: true, pass: true },
+		{ name: 'case and quotes', source: '"Example Display", B, serif', candidate: "'example display', serif", left: true, right: true, pass: true },
+		{ name: 'quoted comma', source: '"Example, Display", B, serif', candidate: '"example, display", serif', left: true, right: true, pass: true },
+		{ name: 'different primary', source: 'A, B, sans-serif', candidate: 'B, sans-serif', left: true, right: true, pass: false },
+		{ name: 'candidate primary unavailable', source: 'A, B, sans-serif', candidate: 'A, sans-serif', left: true, right: false, pass: false },
+		{ name: 'both primaries unavailable', source: 'A, B, sans-serif', candidate: 'A, sans-serif', left: false, right: false, pass: false },
+		{ name: 'legacy evidence', source: 'A, B, sans-serif', candidate: 'A, sans-serif', left: undefined, right: undefined, pass: false },
+	] )( '$name', ( { source, candidate, left, right, pass } ) => {
+		const result = checkTypography(
+			observation( { typography: [ text( { fontFamily: source, primaryLoaded: left } ) ] } ),
+			observation( { typography: [ text( { fontFamily: candidate, primaryLoaded: right } ) ] } )
+		);
+		if ( pass ) expect( result ).toEqual( {} );
+		else expect( result.failures?.[ 0 ] ).toContain( 'family' );
+		if ( left && right === false ) expect( result.failures?.[ 0 ] ).toContain( 'font face is not loaded' );
+	} );
+
+	it( 'keeps metric and weight checks when loaded primaries match', () => {
+		const result = checkTypography(
+			observation( { typography: [ text( { primaryLoaded: true } ) ] } ),
+			observation( { typography: [ text( { primaryLoaded: true, fontFamily: 'aether, Georgia, sans-serif', fontWeight: '700', advance: 430 } ) ] } )
+		);
+		expect( result.failures?.[ 0 ] ).not.toContain( 'family' );
+		expect( result.failures?.[ 0 ] ).toContain( 'weight 700 !== 400' );
+		expect( result.failures?.[ 0 ] ).toContain( 'advance 430px !== 480px' );
+	} );
+
+	it( 'fails a missing primary even when the declared stacks are identical', () => {
+		const result = checkTypography(
+			observation( { typography: [ text( { primaryLoaded: true } ) ] } ),
+			observation( { typography: [ text( { primaryLoaded: false } ) ] } )
+		);
+		expect( result.failures?.[ 0 ] ).toContain( 'font face is not loaded' );
+	} );
+
+	it( 'uses primary-family equivalence when pairing duplicate runs', () => {
+		const source = [ text( { primaryLoaded: true } ), text( { primaryLoaded: true, fontFamily: 'other, serif' } ) ];
+		const candidate = [
+			text( { primaryLoaded: true, fontFamily: 'other, sans-serif' } ),
+			text( { primaryLoaded: true, fontFamily: 'aether, Georgia, sans-serif' } ),
+		];
+		expect( checkTypography( observation( { typography: source } ), observation( { typography: candidate } ) ) ).toEqual( {} );
+	} );
+
 	it( 'matches duplicate text runs by nearest style', () => {
 		const source = [ text(), text( { fontSize: 24, lineHeight: 30, advance: 180 } ) ];
 		const candidate = [ source[ 1 ], source[ 0 ] ];
