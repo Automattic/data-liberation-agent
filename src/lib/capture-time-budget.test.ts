@@ -67,6 +67,21 @@ describe( 'RouteTimeBudget', () => {
 		expect( budget.admits( entrypoint ) ).toBe( true );
 	} );
 
+	it( 'reserves only new checkpoint routes while retaining projection and asset-tail checks', () => {
+		const entrypoint = 'https://example.test/';
+		let assets = { queuedMs: 0, perRouteMs: 0 };
+		const budget = new RouteTimeBudget( {
+			...captureTimeBudgetWindow( 0, 600_000, 140_000 ), checkpoint: true,
+			projectAdmission: true, assetBacklog: () => assets,
+		}, entrypoint, () => 10_000 );
+		for ( const url of [ entrypoint, 'https://example.test/one', 'https://example.test/two' ] ) budget.reuse( url );
+		const last = 'https://example.test/last';
+		expect( budget.admits( last ) ).toBe( true );
+		assets = { queuedMs: 600_000, perRouteMs: 1_000 };
+		expect( budget.admits( last ) ).toBe( false );
+		expect( budget.diagnostics( [ last ] )[ 0 ].code ).toBe( 'route_capture_skipped_budget' );
+	} );
+
 	it( 'admits routes after a slow entrypoint: its one-time cost does not project onto later routes', () => {
 		let now = 0;
 		const entrypoint = 'https://example.test/';

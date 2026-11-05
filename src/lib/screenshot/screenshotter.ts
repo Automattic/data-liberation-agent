@@ -2480,7 +2480,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Under a time budget the entrypoint starts first, so the budget never skips it.
 	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
 	if ( budgetEntrypoint !== undefined ) urls = [ budgetEntrypoint, ...urls.filter( url => url !== budgetEntrypoint ) ];
-	const routeBudget = opts.timeBudget && budgetEntrypoint !== undefined ? new RouteTimeBudget( { ...opts.timeBudget, routeCount: () => urls.length }, budgetEntrypoint ) : undefined;
+	const routeBudget = opts.timeBudget && budgetEntrypoint !== undefined ? new RouteTimeBudget( opts.timeBudget, budgetEntrypoint ) : undefined;
 	// Per-route deadline (#817): a stalled route holds its slot for a bounded
 	// duration, not until some outer deadline ends the whole capture. Derived
 	// from the capture time budget and the admitted concurrency, floored, and

@@ -33,8 +33,6 @@ export interface CaptureTimeBudgetWindow {
 	timeBudgetMs: number;
 	/** Incomplete runs retain capture state without exporting it. */
 	checkpoint?: boolean;
-	/** Current scheduled route count, including linked routes. */
-	routeCount?: () => number;
 	/** Project admission from observed route cost rather than only the clock. */
 	projectAdmission?: boolean;
 	/**
@@ -181,9 +179,8 @@ export class RouteTimeBudget {
 	 */
 	private admitDeadline(): number {
 		const reserve = this.window.routeReserveMs;
-		// The last new route turns a checkpoint into an export of all pages.
-		const exporting = this.started.size + 1 >= ( this.window.routeCount?.() ?? Infinity );
-		const reused = this.window.checkpoint && ! exporting ? this.reused.size : 0;
+		// Checkpoint export admission happens after capture, never at the last route.
+		const reused = this.window.checkpoint ? this.reused.size : 0;
 		return reserve === undefined ? this.window.admitUntil : this.window.admitUntil - reserve * ( this.started.size - reused + 1 );
 	}
 
@@ -279,7 +276,7 @@ export class RouteTimeBudget {
 				// A reserve bounds what capture hands downstream, so a route it
 				// leaves out is a missing route like any other budget skip, not
 				// scope omission.
-				if ( this.window.projectAdmission && routeReserveMs === undefined && ! this.started.has( url ) ) rows.push( { code: ROUTE_OMITTED_BY_BUDGET, url, reason: `${ budget }: projected route cost exceeds remaining admission window` } );
+				if ( this.window.projectAdmission && ! this.window.checkpoint && routeReserveMs === undefined && ! this.started.has( url ) ) rows.push( { code: ROUTE_OMITTED_BY_BUDGET, url, reason: `${ budget }: projected route cost exceeds remaining admission window` } );
 				else rows.push( { code: ROUTE_CAPTURE_SKIPPED_BUDGET, url, reason, unit: 'route', severity: 'error', metrics: { timeBudgetMs } } );
 			}
 		}
