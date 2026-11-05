@@ -84,7 +84,8 @@ describe( 'Wix probe exclusions', () => {
 				before.match( /<section id="comments" data-hook="wc-root[\s\S]*?<\/section>/ )![ 0 ]
 			);
 			await page.close();
-		} );
+		// Two full probe passes include bounded waits for controls that do not open.
+		}, 60_000 );
 
 		it( 'records nothing on a route without the widget', async () => {
 			const page = await browser.newPage();
