@@ -13,6 +13,7 @@ function assertPortable(html: string) {
   const $ = load(html);
   expect($('body').text()).not.toMatch(/Skip to|Site actions|Report abuse|Submit|Cancel/);
   expect($('a[href*="viewer_footer"]').length).toBe(0);
+  expect($('#ow11, [data-last-updated-at-time]').length).toBe(0);
   expect($('#atIdViewHeader h1').text()).toBe('Community garden');
   expect($('nav a').attr('href')).toBe('/about');
   expect($('main p').text()).toBe('Grow together.');

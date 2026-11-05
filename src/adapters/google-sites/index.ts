@@ -26,6 +26,10 @@ export const googleSitesAdapter: PlatformAdapter = {
       'button[jsname="z2EeY"]', // Skip to main content
       'button[jsname="ilzYPe"]', // Skip to navigation
       '.LqzjUe', // Floating Site actions menu and its compact footer variant
+      // "Last updated" container holding the Site actions trigger. Its menu
+      // (Report abuse, Page details) mounts only on click, so removing the
+      // trigger before probing keeps that menu out of captured panels.
+      '[data-last-updated-at-time]',
       '[data-abuse-reporting-widget-proto]',
       '[role="dialog"]:has([data-abuse-reporting-widget-proto])',
       '[role="dialog"][aria-label="Report abuse"]',
