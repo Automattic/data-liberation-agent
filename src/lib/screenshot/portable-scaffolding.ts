@@ -21,7 +21,11 @@ export function cleanPortableScaffolding(source: Document, snapshot: HTMLElement
         report('dismissed_overlay_removed', node, `${evidence.kind} dismissed by ${evidence.method} (${evidence.selector})`);
       }
     }
-    if (node instanceof HTMLAnchorElement && node.getAttribute('href')?.startsWith('#')) {
+    // A link that declares a control is an opener whose href is a placeholder,
+    // hidden here because a breakpoint shows it at another width.
+    const haspopup = node.getAttribute('aria-haspopup');
+    const declaresControl = node.getAttribute('role') === 'button' || node.hasAttribute('aria-expanded') || node.hasAttribute('aria-controls') || (haspopup !== null && haspopup !== '' && haspopup !== 'false');
+    if (node instanceof HTMLAnchorElement && !declaresControl && node.getAttribute('href')?.startsWith('#')) {
       const fragment = node.getAttribute('href')!.slice(1);
       let target: Element | null = null;
       try { target = source.getElementById(decodeURIComponent(fragment)); } catch { /* malformed fragment has no target */ }
