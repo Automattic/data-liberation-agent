@@ -22,6 +22,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     <div id="app"><div id="dependent"><p>Selector-dependent content</p></div></div>
     <a id="hidden-top" href="#" style="position:absolute;width:0;height:0;overflow:hidden">Back to top</a>
     <a id="real-link" href="#real-target" style="display:none">Real destination</a><p id="real-target">Target</p>
+    <a id="hidden-menu-button" href="#" role="button" aria-label="Open menu" style="display:none"></a>
+    <a id="hidden-menu-popup" href="#" aria-haspopup="menu" aria-label="Open menu" style="display:none"></a>
+    <a id="hidden-menu-expander" href="#" aria-expanded="false" aria-label="Open menu" style="display:none"></a>
+    <a id="hidden-menu-controller" href="#" aria-controls="real-target" aria-label="Open menu" style="display:none"></a>
+    <a id="hidden-no-popup" href="#" aria-haspopup="false" style="position:absolute;width:0;height:0;overflow:hidden">Back to top</a>
     <div style="height:1000px">More real content to keep overlays below the page-text threshold.</div>
   </main></div></div>
   <div id="click-banner" class="consent">Cookie preferences <button onclick="this.parentNode.style.display='none'">Accept all</button></div>
@@ -46,6 +51,9 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     expect($('#click-banner, #hide-banner, #__next, #root, #app, #hidden-top').length).toBe(0);
     expect($('#styled-root').text()).toBe('Styled content');
     expect($('#real-link').length).toBe(1);
+    // Hidden at this width by CSS, shown at another: the capture must keep it.
+    expect($('#hidden-menu-button, #hidden-menu-popup, #hidden-menu-expander, #hidden-menu-controller').length).toBe(4);
+    expect($('#hidden-no-popup').length).toBe(0);
     expect($('#promo').text()).toContain('Genuine promotional content');
     const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots/manifest.json'), 'utf8'));
     const entry = manifest.entries[url];
