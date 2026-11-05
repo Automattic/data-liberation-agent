@@ -219,6 +219,7 @@ interface CapturePerViewportArgs {
 	resolveClientRedirect?: ( page: Page, url: string ) => Promise< string | undefined >;
 	/** Resolve a query rendition whose rendered rel=canonical is its query-less route to that route. */
 	canonicalQueryAlias?: boolean;
+	initScript?: ScreenshotOpts['initScript'];
 	beforeFluid?: ScreenshotOpts['beforeFluid'];
 	beforeSerialize?: (
 		page: import('playwright').Page,
@@ -2956,6 +2957,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeRuntimeStyleWrites );
 					await context.addInitScript( observeViewportWork );
 					const page = await context.newPage();
+					await opts.initScript?.( page ).catch( () => undefined );
 					errorGuard = guardPageErrors( page, reason => {
 						profileDiagnostics.push( { code: PAGE_ERROR_STORM, reason } );
 						profileFailures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `${ PAGE_ERROR_STORM }: ${ reason }`, timestamp: new Date().toISOString(), attempt: 1 } );

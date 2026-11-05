@@ -523,6 +523,11 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 		.catch( () => undefined );
 	// The handler is throttled, so its transition starts a beat after the event.
 	await page.waitForTimeout( 400 );
+	await page.evaluate( () => {
+		const frozen = ( window as Window & { __wixHeaderLoadClass?: string } ).__wixHeaderLoadClass;
+		const header = document.querySelector( '#SITE_HEADER' );
+		if ( frozen !== undefined && header ) header.className = frozen;
+	} ).catch( () => undefined );
 	await page
 		.evaluate( async () => {
 			// Ambient motion such as a spinner never finishes, so each wait is
@@ -579,6 +584,14 @@ export const WIX_PROBE_EXCLUSIONS = [
 ] as const;
 
 export const capture: LiberationHooks = {
+	initScript: async ( page ) => {
+		await page.addInitScript( () => {
+			document.addEventListener( 'DOMContentLoaded', () => {
+				const header = document.querySelector( '#SITE_HEADER' );
+				if ( header ) ( window as Window & { __wixHeaderLoadClass?: string } ).__wixHeaderLoadClass = header.className;
+			}, { once: true } );
+		} );
+	},
 	probeExclusions: WIX_PROBE_EXCLUSIONS,
 	documentSelection: wixDocumentSelection,
 	additionalProfiles: wixAdditionalProfiles,

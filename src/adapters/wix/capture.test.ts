@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs';
 import { load } from 'cheerio';
 import { JSDOM } from 'jsdom';
+import { chromium } from 'playwright';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	capture,
@@ -544,3 +546,25 @@ describe( 'Wix telemetry declaration', () => {
 } );
 
 afterEach( () => vi.unstubAllGlobals() );
+
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'scroll-reactive Wix header', () => {
+	it( 'freezes the load-time header class after capture-time scrolling', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			// Wix's handler hides the header on scroll down and leaves "returning"
+			// classes on scroll back up instead of restoring the resting state.
+			await page.route( 'https://wix.test/**', ( route ) => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">
+				<header id="SITE_HEADER" class="MLzr0a SITE_HEADER wixui-header">Header</header><main style="height:5000px"></main>
+				<script>addEventListener( 'scroll', () => { document.getElementById( 'SITE_HEADER' ).className = scrollY > 0 ? 'MLzr0a K5KBGW qTsNsd SITE_HEADER wixui-header' : 'MLzr0a chRHgk qTsNsd SITE_HEADER wixui-header'; } );</script>
+			</body></html>` } ) );
+			await capture.initScript?.( page );
+			await page.goto( 'https://wix.test/' );
+			// The lazy-load sweep and slideshow reveal scroll before serialization.
+			await page.evaluate( () => scrollTo( 0, 3000 ) );
+			await page.waitForFunction( () => document.getElementById( 'SITE_HEADER' )?.classList.contains( 'K5KBGW' ) );
+			await settleScrollReactiveChrome( page );
+			expect( await page.getAttribute( '#SITE_HEADER', 'class' ) ).toBe( 'MLzr0a SITE_HEADER wixui-header' );
+		} finally { await browser.close(); }
+	}, 30_000 );
+} );
