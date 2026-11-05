@@ -115,6 +115,8 @@ interface CaptureManifestEntry {
 	mobileHtml?: string;
 	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
 	redirectedTo?: string;
+	/** The phone identity was sent to this same-site route; the route ships its desktop document only. */
+	phoneSentTo?: string;
 	/** Bounded source inspection of a linked route absent from the capture schedule. */
 	externalRedirect?: boolean;
 	sourceOutcomes?: import('./source-navigation.js').ExternalBoundary[];
@@ -1511,9 +1513,12 @@ function buildExportCapture(
 					continue;
 				}
 			}
+			if ( entry.phoneSentTo ) routeCaptureDiagnostics.push( { code: 'phone_redirect_desktop_only', url, unit: 'profile', severity: 'warning', reason: `The phone identity is sent to ${ entry.phoneSentTo } (a separate mobile site) while desktop renders this route; the route ships its desktop document, reflowed at phone widths` } );
 			const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
+			// A route whose phone identity was sent elsewhere has no phone document,
+			// even if an earlier run left one at the conventional path.
 			const acquiredMobileHtml =
-				( options.deviceMode === 'reflow-only' || httpInput ? Boolean( entry.mobileHtml ) : true ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
+				! entry.phoneSentTo && ( options.deviceMode === 'reflow-only' || httpInput ? Boolean( entry.mobileHtml ) : true ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
 					? readFileSync( mobileHtmlPath, 'utf8' )
 					: undefined;
 			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');

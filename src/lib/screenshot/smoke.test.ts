@@ -205,8 +205,8 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       const path = (req.url || '/').split('?')[0];
       const redirect = redirects[path];
       if (path === '/phone-site' && /iPhone|Mobile/.test(req.headers['user-agent'] ?? '')) {
-        // fleetdown.net: every route answers phones with `302 /m/`, one
-        // separate mobile app, and desktop with the route's own document.
+        // A site that sends every phone visitor to a separate mobile site
+        // (`302 /m/`) and desktop to the route's own document.
         res.writeHead(302, { Location: '/m/' });
         res.end();
       } else if (req.url === '/?missing=1') {
@@ -255,12 +255,35 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       expect(JSON.stringify(manifest)).not.toContain('secret=');
       // A phone-only redirect to a separate mobile site keeps the route's
       // desktop document instead of failing it as disagreeing aliases.
-      const phoneSite = manifest.entries[`${origin}/phone-site`];
-      expect(phoneSite.html).toBe('html/phone-site.html');
-      expect(phoneSite.redirectedTo).toBeUndefined();
-      expect(phoneSite.mobileHtml).toBeUndefined();
-      expect(phoneSite.profiles.mobile.diagnostics).toEqual([expect.objectContaining({ code: 'phone_redirect_desktop_only' })]);
-      expect(failures.filter((f) => f.url === `${origin}/phone-site`)).toEqual([]);
+      const phoneOnly = (entries: Record<string, any>, runFailures: Array<{ url: string }>) => {
+        const phoneSite = entries[`${origin}/phone-site`];
+        expect(phoneSite.html).toBe('html/phone-site.html');
+        expect(phoneSite.phoneSentTo).toBe(`${origin}/m/`);
+        expect(phoneSite.redirectedTo).toBeUndefined();
+        expect(phoneSite.mobileHtml).toBeUndefined();
+        // No phone profile record: nothing downstream reads it as a phone document.
+        expect(phoneSite.profiles?.mobile).toBeUndefined();
+        expect(entries[`${origin}/m/`]).toBeUndefined();
+        expect(runFailures.filter((f) => f.url === `${origin}/phone-site`)).toEqual([]);
+      };
+      phoneOnly(manifest.entries, failures);
+      // Reruns reuse the desktop document. One whose manifest predates the
+      // marker reloads only the phone identity; one that has it reloads neither.
+      const manifestPath = join(outputDir, 'screenshots', 'manifest.json');
+      for (const dropMarker of [true, false]) {
+        const before = JSON.parse(readFileSync(manifestPath, 'utf8'));
+        if (dropMarker) delete before.entries[`${origin}/phone-site`].phoneSentTo;
+        writeFileSync(manifestPath, JSON.stringify(before));
+        await captureScreenshots({
+          urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa', '/phone-site'].map((path) => `${origin}${path}`),
+          outputDir,
+          concurrency: 2,
+        });
+        phoneOnly(
+          JSON.parse(readFileSync(manifestPath, 'utf8')).entries,
+          JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8')),
+        );
+      }
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
       rmSync(outputDir, { recursive: true, force: true });

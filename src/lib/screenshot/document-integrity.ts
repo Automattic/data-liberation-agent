@@ -226,7 +226,7 @@ export function navigationDocumentUrl(requestedUrl: string, responseUrl: string,
   return redirected && sameHttpSite(requestedUrl, responseUrl) ? responseUrl : requestedUrl;
 }
 
-/** Profile diagnostic: the phone identity was redirected away while desktop rendered the route. */
+/** Route diagnostic: the phone identity was sent to another same-site route while desktop rendered the route. */
 export const PHONE_REDIRECT_DESKTOP_ONLY = 'phone_redirect_desktop_only';
 
 /** What one capture profile observed when it loaded a route. */
@@ -246,10 +246,13 @@ export interface ProfileRouteOutcome {
  *   alias the same target).
  * - `disagree`: the profiles reached different documents; the route fails.
  * - `phone-only`: the desktop identity rendered the route's own document and
- *   only the phone identity was sent to another same-site route. That is
+ *   only the phone identity was sent to another same-site route (a server
+ *   redirect, or an adapter-confirmed client or canonical alias). That is
  *   user-agent sniffing into a separate mobile site (for example every page
  *   answering phones with `302 /m/`), not an alias of the route: the route
- *   keeps its desktop document and has no phone rendition of its own.
+ *   keeps its desktop document and has no phone rendition of its own. Where
+ *   the target is in fact that route's phone version, its phone layout is
+ *   replaced by the reflowed desktop document.
  *
  * Off-site destinations never reach `phone-only`: they are external boundaries,
  * not same-site redirect targets, and still disagree with a local document.

@@ -129,10 +129,10 @@ describe('isRouteDrift', () => {
     expect(serverRedirectTarget('https://example.com/old', 'ftp://example.com/new')).toBeUndefined();
   });
   describe('profileRedirectMerge', () => {
-    // fleetdown.net: desktop gets 200 at every route; every phone request is
-    // answered `302 Location: /m/`, a single jQuery Mobile app for the site.
+    // A site that sends every phone visitor to a separate mobile site:
+    // desktop gets 200 at every route, every phone request `302 Location: /m/`.
     const desktopRendered = { local: true, desktopLocal: true, external: false };
-    const phoneToM = { redirectedTo: 'https://www.fleetdown.net/m/', local: false, external: false };
+    const phoneToM = { redirectedTo: 'https://example.com/m/', local: false, external: false };
 
     it('keeps the desktop document when only the phone identity is sent to a separate mobile site', () => {
       expect(profileRedirectMerge('mobile', phoneToM, desktopRendered)).toBe('phone-only');
@@ -140,9 +140,9 @@ describe('isRouteDrift', () => {
 
     it('still refuses profiles that reach different documents', () => {
       // Desktop aliases one route, phone another.
-      expect(profileRedirectMerge('mobile', phoneToM, { redirectedTo: 'https://www.fleetdown.net/home/', local: false, desktopLocal: false, external: false })).toBe('disagree');
+      expect(profileRedirectMerge('mobile', phoneToM, { redirectedTo: 'https://example.com/home/', local: false, desktopLocal: false, external: false })).toBe('disagree');
       // Desktop redirected; a phone rendering the route is not its alias.
-      expect(profileRedirectMerge('mobile', { local: true, external: false }, { redirectedTo: 'https://www.fleetdown.net/home/', local: false, desktopLocal: false, external: false })).toBe('disagree');
+      expect(profileRedirectMerge('mobile', { local: true, external: false }, { redirectedTo: 'https://example.com/home/', local: false, desktopLocal: false, external: false })).toBe('disagree');
       // Desktop observed an off-site boundary.
       expect(profileRedirectMerge('mobile', phoneToM, { local: false, desktopLocal: false, external: true })).toBe('disagree');
       // An additional profile redirecting while desktop rendered is not a phone site.
