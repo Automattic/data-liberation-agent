@@ -29,6 +29,8 @@ export interface LiberateOptions {
 	/** Base directory; the site lands in a per-source subdirectory. */
 	outputBase: string;
 	resume?: boolean;
+	/** Defer export while time-budget-skipped routes remain. */
+	checkpoint?: boolean;
 	/** Capture PNG screenshots alongside the HTML. Default: false. */
 	screenshots?: boolean;
 	/** Serve the liberated site over HTTP. Default: true. */
@@ -62,6 +64,8 @@ export interface LiberateOptions {
 }
 
 export interface LiberateResult {
+	checkpoint?: boolean;
+	resumable?: boolean;
 	outputDir: string;
 	websiteDir: string;
 	routesDiscovered: number;
@@ -92,6 +96,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		url: options.url,
 		outputDir,
 		resume: options.resume,
+		checkpoint: options.checkpoint,
 		captureImages: options.screenshots,
 		learnFluid: options.learnFluid !== false,
 		referenceSample: options.referenceSample,
@@ -121,6 +126,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 	return {
 		outputDir,
 		websiteDir,
+		...( capture.checkpoint ? { checkpoint: true, resumable: true } : {} ),
 		routesDiscovered: capture.summary.routesDiscovered,
 		routesCaptured: capture.summary.routesCaptured,
 		routesSkipped: capture.summary.routesSkipped,
@@ -129,8 +135,8 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		complete: capture.complete,
 		entrypointCaptured: capture.entrypointCaptured,
 		missingRoutes: capture.missingRoutes,
-		usable: isUsableCapture( capture ),
+		usable: ! capture.checkpoint && isUsableCapture( capture ),
 		unresolvedAnchors: capture.unresolvedAnchors,
-		server: options.serve === false ? null : await startStaticServer( websiteDir ),
+		server: options.serve === false || capture.checkpoint ? null : await startStaticServer( websiteDir ),
 	};
 }

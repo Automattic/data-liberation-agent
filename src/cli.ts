@@ -66,6 +66,7 @@ const HELP = `
     --runtime-route-limit <n> Observe HTTP runtime regions on at most n routes (0-50)
     --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
+    --checkpoint         Defer export while time-budget-skipped routes remain
     --screenshots        Also capture full-page + scrolled PNG screenshots
     --serve              Keep a local server running on the liberated site until
                          interrupted, for browsing it. Liberation writes the site
@@ -348,6 +349,7 @@ if (args.includes('--help')) {
     url,
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),
+    checkpoint: args.includes('--checkpoint'),
     screenshots: args.includes('--screenshots'),
     learnFluid: !args.includes('--no-learn-fluid'),
     referenceSample,
@@ -373,7 +375,7 @@ if (args.includes('--help')) {
     `${acquisition === 'http' ? 'HTTP review candidate:' : 'Liberated'} ${result.routesCaptured + result.routesSkipped}/${result.routesDiscovered} routes` +
       (notes.length ? ` (${notes.join(', ')})` : ''),
   );
-  console.log(`Site: ${result.websiteDir}`);
+  console.log(result.checkpoint ? `Resumable checkpoint: ${result.outputDir}` : `Site: ${result.websiteDir}`);
   if (!result.complete) {
     const missing = result.unresolvedAnchors.filter((anchor) => anchor.reason === 'target route was not captured').length;
     process.stderr.write(
@@ -392,6 +394,8 @@ if (args.includes('--help')) {
     };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
+  } else if (result.checkpoint) {
+    process.stderr.write(`Continue with the same output directory and --resume --checkpoint; no site was exported.\n`);
   } else {
     // Guidance goes to stderr so stdout stays the machine-readable result.
     process.stderr.write(acquisition === 'http' ? 'HTTP review candidate: rendering and interactions remain unverified.\n' : `Browse it: data-liberation ${url} --resume --serve\n`);

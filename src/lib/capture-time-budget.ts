@@ -31,6 +31,10 @@ import { ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT } from './capture-u
  */
 export interface CaptureTimeBudgetWindow {
 	timeBudgetMs: number;
+	/** Incomplete runs retain capture state without exporting it. */
+	checkpoint?: boolean;
+	/** Current scheduled route count, including linked routes. */
+	routeCount?: () => number;
 	/** Project admission from observed route cost rather than only the clock. */
 	projectAdmission?: boolean;
 	/**
@@ -126,6 +130,7 @@ async function bounded( promise: Promise< unknown >, ms: number ): Promise< void
  */
 export class RouteTimeBudget {
 	private readonly started = new Set< string >();
+	private readonly reused = new Set< string >();
 	private readonly running = new Set< string >();
 	private readonly startTimes = new Map< string, number >();
 	/** Finished non-entrypoint routes: the evidence for what an ordinary route costs. */
@@ -176,7 +181,10 @@ export class RouteTimeBudget {
 	 */
 	private admitDeadline(): number {
 		const reserve = this.window.routeReserveMs;
-		return reserve === undefined ? this.window.admitUntil : this.window.admitUntil - reserve * ( this.started.size + 1 );
+		// The last new route turns a checkpoint into an export of all pages.
+		const exporting = this.started.size + 1 >= ( this.window.routeCount?.() ?? Infinity );
+		const reused = this.window.checkpoint && ! exporting ? this.reused.size : 0;
+		return reserve === undefined ? this.window.admitUntil : this.window.admitUntil - reserve * ( this.started.size - reused + 1 );
 	}
 
 	/** Admission has closed and the entrypoint has started: start no more work. */
@@ -188,6 +196,13 @@ export class RouteTimeBudget {
 		this.started.add( url );
 		this.running.add( url );
 		this.startTimes.set( url, this.now() );
+	}
+
+	/** Reused artifacts need no capture time or checkpoint downstream reserve. */
+	reuse( url: string ): void {
+		this.started.add( url );
+		this.reused.add( url );
+		this.committed.add( url );
 	}
 
 	finish( url: string, probeOverrunMs = 0 ): void {

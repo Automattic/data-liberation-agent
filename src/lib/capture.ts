@@ -133,6 +133,8 @@ export interface CaptureOptions {
 	 * minus the post-capture headroom (README, "Capture time budget").
 	 */
 	timeBudgetMs?: number;
+	/** Save resumable state without exporting when the time budget leaves missing routes. */
+	checkpoint?: boolean;
 	/**
 	 * Milliseconds of the capture time budget reserved per started route for
 	 * downstream work (browser acquisition only). Every route that starts —
@@ -224,6 +226,9 @@ export interface UnresolvedAnchor {
 }
 
 export interface CaptureResult {
+	/** True only when export was deferred; resume into the same output directory. */
+	checkpoint?: boolean;
+	resumable?: boolean;
 	captureReceiptPath: string;
 	outputDir: string;
 	summary: {
@@ -420,7 +425,7 @@ async function runCaptureWebsite(
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	const timeBudgetMs = options.timeBudgetMs ?? ( options.acquisition !== 'http' && options.routeLimit === undefined ? DEFAULT_CAPTURE_TIME_BUDGET_MS : undefined );
-	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs, options.routeReserveMs ), projectAdmission: options.routeLimit === undefined };
+	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs, options.routeReserveMs ), projectAdmission: options.routeLimit === undefined && ! options.checkpoint, checkpoint: options.checkpoint };
 	// One governor per source origin for every HTTP pass of this capture (#907).
 	const sourceGovernors = new SourceRequestGovernors();
 	let phase = '';
@@ -666,6 +671,25 @@ async function runCaptureWebsite(
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
 		...( screenshotResult.deviceMode?.routes ? { dualRoutes: screenshotResult.deviceMode.routes.dual.length } : {} ),
 	};
+	if ( options.checkpoint && captureDiagnostics.some( row => row.code === 'route_capture_skipped_budget' ) ) {
+		const entrypointCaptured = screenshotResult.captured + screenshotResult.skipped > 0 &&
+			! missingRoutes( captureDiagnostics ).some( row => normalizedUrl( row.url ) === normalizedUrl( sourceUrl ) );
+		const captureReceiptPath = join( outputDir, 'capture-checkpoint.json' );
+		const result: CaptureResult = {
+			captureReceiptPath, outputDir, checkpoint: true, resumable: true,
+			summary: { ...summary, complete: false, entrypointCaptured },
+			complete: false, entrypointCaptured,
+			missingRoutes: missingRoutes( captureDiagnostics ), failures,
+			discoveryDiagnostics: captureDiagnostics, unresolvedAnchors: [],
+			provenance: { provider: 'data-liberation/browser-capture', platform: detection.platform },
+			...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode } : {} ),
+			...( screenshotResult.sharedChrome ? { sharedChrome: screenshotResult.sharedChrome } : {} ),
+		};
+		writeFileSync( captureReceiptPath, `${ JSON.stringify( result, null, 2 ) }\n` );
+		progress( { phase: 'complete', current: screenshotResult.captured + screenshotResult.skipped, total: screenshotResult.urls.length } );
+		if ( blockedClient ) throw blockedClient; // failure-class: operational
+		return result;
+	}
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
 	const captureReceiptPath = exportWebsiteCapture( {
 		outputDir,

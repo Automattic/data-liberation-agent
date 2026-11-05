@@ -2480,7 +2480,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Under a time budget the entrypoint starts first, so the budget never skips it.
 	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
 	if ( budgetEntrypoint !== undefined ) urls = [ budgetEntrypoint, ...urls.filter( url => url !== budgetEntrypoint ) ];
-	const routeBudget = opts.timeBudget && budgetEntrypoint !== undefined ? new RouteTimeBudget( opts.timeBudget, budgetEntrypoint ) : undefined;
+	const routeBudget = opts.timeBudget && budgetEntrypoint !== undefined ? new RouteTimeBudget( { ...opts.timeBudget, routeCount: () => urls.length }, budgetEntrypoint ) : undefined;
 	// Per-route deadline (#817): a stalled route holds its slot for a bounded
 	// duration, not until some outer deadline ends the whole capture. Derived
 	// from the capture time budget and the admitted concurrency, floored, and
@@ -2724,13 +2724,15 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 	const capturedAt = () => new Date().toISOString();
 
-	const processUrl = async ( url: string ): Promise< void > => {
+	const reusedRoutes = new Set< string >();
+	const processUrl = async ( url: string, reuseOnly = false ): Promise< void > => {
 		const routeStartedAt = Date.now();
 		const base = slugify( url );
 		// On resume the URL may already have an entry — reuse its slug so the
 		// existing-artifact check hits the same files we wrote last run. Only
 		// claim a new slug for first-time URLs.
 		const existing = manifest.getEntry( url );
+		if ( reuseOnly && ! existing ) return;
 		const slug = existing ? existing.slug : await manifest.claimSlug( base );
 		const plan = planArtifacts( {
 			slug,
@@ -2749,6 +2751,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		let deviceCheckMs: number | undefined;
 		if ( reflowViewports ) {
 			if ( ! force && existing?.deviceMode ) routeDevice = existing.deviceMode;
+			else if ( reuseOnly ) return;
 			else if ( routeComparison ) {
 				const checkStartedAt = Date.now();
 				routeDevice = await checkRouteDeviceMode( { ...routeComparison, browser, url } );
@@ -2787,12 +2790,16 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			// Abandoned-at-deadline routes record nothing a later export could trip on.
 			if ( routeBudget && ! routeBudget.commit( url ) ) return;
 			if ( ! routeDeadlines.commit( url ) ) return;
+			routeBudget?.reuse( url );
+			reusedRoutes.add( url );
 			skipped++;
 			sendLog( server, `[skip] ${ url } (artifacts exist)` );
 			completed++;
 			opts.onProgress?.( completed, urls.length, url );
 			return;
 		}
+
+		if ( reuseOnly ) return;
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
@@ -3163,6 +3170,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	};
 
 	try {
+		// Reuse before admission: checkpoints must not lose existing pages just
+		// because the clock/reserve prevents starting another browser route.
+		if ( opts.timeBudget?.checkpoint && ! force ) {
+			for ( const url of urls ) await processUrl( url, true );
+		}
 		// --- worker pool with browser restart at segment boundaries ----------
 		// URLs are processed in segments of browserRestartEvery; WITHIN a segment a
 		// continuous pool of `concurrency` workers drains a shared cursor, so a slow
@@ -3213,7 +3225,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					return reserved !== undefined && available >= reserved;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
-				const budgetAdmits = (): boolean => ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 );
+				const budgetAdmits = (): boolean => {
+					while ( cursor < segEnd && reusedRoutes.has( urls[ cursor ]! ) ) cursor++;
+					return cursor < segEnd && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
+				};
 				try {
 					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
 						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admit( routeKind( urls[ cursor ]! ) ) ) {
