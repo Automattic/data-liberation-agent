@@ -113,6 +113,36 @@ async function expectStylesheetParity( desktop: string, mobile: string, assemble
 	} finally { await browser.close(); }
 }
 
+it( 'keeps body styles single-owned and width-local in dual assembly (#1312)', async () => {
+	const desktop = page( '<style>.frame{width:1440px}</style><div class="frame"><p>Desktop</p><nav>a</nav></div>' );
+	const mobile = page( '<style>.frame{width:402px}</style><div class="frame"><p>Phone</p><button>menu</button></div>' );
+	const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+	expect( assembled.evidence?.outcome ).toBe( 'dual-structural' );
+	const $ = cheerio.load( assembled.html );
+	expect( $( 'style' ).filter( ( _, node ) => $( node ).text().includes( 'width:1440px' ) ) ).toHaveLength( 1 );
+	expect( $( 'style' ).filter( ( _, node ) => $( node ).text().includes( 'width:402px' ) ) ).toHaveLength( 1 );
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		await tab.setContent( assembled.html );
+		for ( const [ width, expected ] of [ [ 1440, '1440px' ], [ 390, '402px' ] ] as const ) {
+			await tab.setViewportSize( { width, height: 900 } );
+			expect( await tab.locator( '.frame:visible' ).evaluate( node => getComputedStyle( node ).width ) ).toBe( expected );
+		}
+	} finally { await browser.close(); }
+} );
+
+it.each( [ false, true ] )( 'scopes body styles after single-document projection (subset=%s)', subset => {
+	const desktop = page( '<style>.frame{width:1440px}</style><main id="frame" class="frame" style="height:40px">Content</main>' );
+	const mobile = page( `<style>.frame{width:402px}</style><main id="frame" class="frame" style="height:20px">Content</main>${ subset ? '<aside id="phone">Phone</aside>' : '' }` );
+	const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+	expect( assembled.evidence?.outcome ).toBe( subset ? 'collapsed-identity-subset' : 'collapsed-equivalent' );
+	const $ = cheerio.load( assembled.html );
+	const desktopStyles = $( 'style' ).filter( ( _, node ) => $( node ).text().includes( 'width:1440px' ) );
+	expect( desktopStyles ).toHaveLength( 1 );
+	expect( desktopStyles.attr( 'media' ) ).toBe( '(min-width:768px)' );
+} );
+
 describe( 'counterpart stylesheet deltas (#1286)', () => {
 	it( 'replays only alias-changed nodes from byte-identical Framer SSR sheets', async () => {
 		const common = '.framer-84zrh{display:flex;gap:40px;width:900px;height:90px}.framer-1vf3dh3{width:1px}';
