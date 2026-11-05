@@ -105,6 +105,7 @@ Naming an unknown target lists the registered ones.
 | atom.bio | Tenant-scoped profile discovery |
 | Squarespace | Ready |
 | Substack | Ready |
+| Google Sites | Ready |
 | Webflow | Ready |
 | Weebly | Ready |
 | Wix | Ready |
