@@ -33,4 +33,9 @@ describe('sanitizeFrozenHtml', () => {
     expect($('iframe').attr('onclick')).toBeUndefined();
     expect($('iframe').html()).toBe('');
   });
+  it('keeps a rebuilt iframe inline sizing so a fluid embed keeps its aspect ratio', () => {
+    const $ = load(sanitizeFrozenHtml(`<main><iframe src="https://video.example.test/embed/1" style="width:100%;height:auto;aspect-ratio:16/9" data-blocks-engine-capture-visual-iframe-src="https://video.example.test/embed/1" data-blocks-engine-capture-visual-iframe-width="354" data-blocks-engine-capture-visual-iframe-height="199"></iframe></main>`));
+    expect($('iframe').attr('style')).toBe('width:100%;height:auto;aspect-ratio:16/9');
+    expect($('iframe').attr('height')).toBe('199');
+  });
 });

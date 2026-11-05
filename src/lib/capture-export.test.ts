@@ -2469,6 +2469,41 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $.html() ).not.toContain( 'data-blocks-engine-capture-visual-iframe-' );
 	} );
 
+	it( 'keeps a visual iframe inline sizing so a fluid embed is not frozen to one viewport', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-visual-iframe-style-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><main>' +
+				'<iframe src="https://video.example/embed/1" title="Video" style="display:block;width:100%;height:auto;aspect-ratio:16/9;border:0" data-blocks-engine-capture-visual-iframe-src="https://video.example/embed/1" data-blocks-engine-capture-visual-iframe-width="1035" data-blocks-engine-capture-visual-iframe-height="582"></iframe>' +
+			'</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'iframe' ) ).toHaveLength( 1 );
+		expect( $( 'iframe' ).attr( 'style' ) ).toContain( 'aspect-ratio:16/9' );
+		expect( $( 'iframe' ).attr( 'style' ) ).toContain( 'width:100%' );
+		expect( $( 'iframe' ).attr( 'width' ) ).toBe( '1035' );
+		expect( $( 'iframe' ).attr( 'height' ) ).toBe( '582' );
+	} );
+
 	it( 'rejects unsafe shared-style media attributes', () => {
 		expect( portableInlineStyle( ' media="screen & <style"', '.unsafe{}' ) ).toBeUndefined();
 		expect( portableInlineStyle( ' media="screen and (min-width: 1px)"', '.safe{}' ) ).toEqual( {

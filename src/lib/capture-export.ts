@@ -255,6 +255,9 @@ const VISUAL_IFRAME_ATTRIBUTES = new Set( [
 	'referrerpolicy',
 	'sandbox',
 	'src',
+	// Fluid sizing such as `width:100%;aspect-ratio:16/9` lives here; without it
+	// the measured width/height below would freeze one viewport's box.
+	'style',
 	'title',
 	'width',
 ] );
