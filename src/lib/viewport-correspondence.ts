@@ -148,6 +148,18 @@ export interface ViewportTreeReconciliation {
 	/** Width-scoped rules carrying each viewport's inline presentation. */
 	css: string;
 	classAliases: Map<string, string>;
+	/**
+	 * Aliased tokens the desktop tree also carries elsewhere. They are renamed
+	 * only where the phone rendering put them, and their phone rules keep the
+	 * original selector beside the alias.
+	 */
+	retainedClassTokens?: ReadonlySet<string>;
+	/**
+	 * Styled class tokens only the desktop rendering of a matched element
+	 * carries, renamed on that element so their rules reach it above the
+	 * switch only.
+	 */
+	desktopClassAliases?: ReadonlyMap<string, string>;
 	/** Shared components the phone layout re-parents; node correspondence declines instead of splitting, so it always returns 0. */
 	divergedComponents: number;
 	/** Which identity signal anchored the match, for the receipt reason. */

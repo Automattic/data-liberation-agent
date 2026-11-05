@@ -360,12 +360,18 @@ export function identitySubsetMerge(
 	const mobile = load( mobileBody );
 	const { names: attributes, repeated: repeatedAttributes } = discoverIdentityAttributes( desktop.$, mobile.$ );
 	const identities = new WeakMap<Element, string>();
-	for ( const document of [ desktop, mobile ] ) {
+	// An id only one capture renders (a runtime marking its active component)
+	// proves nothing about the counterpart; a discovered attribute both
+	// captures carry still does.
+	const sourceIds = [ new Set( desktop.ids.keys() ), new Set( mobile.ids.keys() ) ];
+	for ( const [ index, document ] of [ desktop, mobile ].entries() ) {
+		const otherIds = sourceIds[ 1 - index ] as Set<string>;
 		document.ids.clear();
 		for ( const node of document.$( 'body *' ).toArray().filter( isElementNode ) ) {
 			const id = node.attribs.id;
 			const attribute = attributes.find( name => Boolean( node.attribs[ name ]?.trim() ) && ! repeatedAttributes.has( JSON.stringify( [ name, node.attribs[ name ] ] ) ) );
-			const identity = id && isIdentityId( id ) ? id : attribute
+			const ownId = id && isIdentityId( id ) ? id : undefined;
+			const identity = ownId && ( otherIds.has( ownId ) || ! attribute ) ? ownId : attribute
 				? `attribute-${ createHash( 'sha256' ).update( JSON.stringify( [ attribute, node.attribs[ attribute ] ] ) ).digest( 'hex' ) }` : undefined;
 			if ( ! identity ) continue;
 			identities.set( node, identity );
@@ -398,6 +404,9 @@ export function identitySubsetMerge(
 		( $d( node ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) )
 	);
 	let unsafeClassAlias = false;
+	const retainedClassTokens = new Set<string>();
+	const desktopClassAliases = new Map<string, string>();
+	const desktopStyledClasses = new Set( [ ...styleBlocks( desktopHtml ).join( '' ).matchAll( /\.(-?[_a-zA-Z][\w-]*)/g ) ].map( match => match[ 1 ] as string ) );
 	const bodyClasses = ( html: string ) => {
 		const attributes = bodyAttributes( html );
 		return ( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
@@ -571,6 +580,7 @@ export function identitySubsetMerge(
 	// walk records the shared component it started from, and only that
 	// component ships once per viewport.
 	const divergedRoots = new Set< string >();
+	let anonymousMobileOnly = 0;
 	const deviceInlineRestores: Array<() => void> = [];
 	if ( deviceKey ) {
 		const placement = ( $: cheerio.CheerioAPI, node: Element ) => {
@@ -666,13 +676,29 @@ export function identitySubsetMerge(
 		const missing = mobileClasses.filter( ( token ) => ! desktopClasses.includes( token ) );
 		if ( missing.length > 0 ) {
 			// Mobile-only class names must not meet desktop rules in the merged DOM.
+			// A token the desktop tree also uses elsewhere (a content-hashed
+			// style class two components share) keeps its desktop occurrences.
 			const aliases = missing.map( ( token ) => {
-				if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
+				if ( desktopClassTokens.has( token ) ) retainedClassTokens.add( token );
 				const alias = classAliases.get( token ) ?? `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
 				classAliases.set( token, alias );
 				return alias;
 			} );
 			d.attr( 'class', [ ...( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ), ...aliases ].join( ' ' ) );
+			projected = true;
+		}
+		// A styled token only the desktop rendering carries must not meet the
+		// phone side: a content-hashed rule the two captures share would size
+		// the phone rendering like the desktop one.
+		const desktopOnly = deviceKey ? [] : desktopClasses.filter( token =>
+			! mobileClasses.includes( token ) && desktopStyledClasses.has( token ) && ! token.startsWith( RESPONSIVE_PROJECTION_CLASS_PREFIX ) );
+		if ( desktopOnly.length > 0 ) {
+			const renamed = new Map( desktopOnly.map( token => {
+				const alias = desktopClassAliases.get( token ) ?? `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }desktop-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
+				desktopClassAliases.set( token, alias );
+				return [ token, alias ];
+			} ) );
+			d.attr( 'class', ( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( token => renamed.get( token ) ?? token ).join( ' ' ) );
 			projected = true;
 		}
 		const desktopSizes = d.attr( 'sizes' );
@@ -682,15 +708,24 @@ export function identitySubsetMerge(
 			projected = true;
 		}
 		if ( projected ) projectedElements++;
+		pairChildren( d, m, path );
+	};
+	const pairChildren = (
+		d: cheerio.Cheerio< Element >,
+		m: cheerio.Cheerio< Element >,
+		path: string
+	): void => {
 		// Descend through id-less children only while both captures agree on
 		// their shape; id-bearing children are paired by identity on their own.
 		// Components only one capture rendered are placed by identity, not by
 		// position, so they sit outside the positional pairing.
 		const paired = ( $: cheerio.CheerioAPI ) => ( child: Element ): boolean => {
+			if ( UNRENDERED_TAGS.has( child.tagName ) ) return false;
 			const childId = identityOf( child );
 			return ! childId || shared( childId );
 		};
-		const desktopChildren = d.children().toArray().filter( paired( $d ) );
+		// Mobile-only elements already placed in the desktop tree are islands, not counterparts.
+		const desktopChildren = d.children().toArray().filter( paired( $d ) ).filter( child => ! $d( child ).hasClass( RESPONSIVE_MOBILE_ONLY_CLASS ) );
 		const mobileChildren = m.children().toArray().filter( paired( $m ) );
 		// A child that contains an identified component pairs with the child
 		// holding the same component (a form grid whose phone layout drops
@@ -706,13 +741,25 @@ export function identitySubsetMerge(
 				.find( ( id ) => shared( id ) );
 		const desktopAnchors = desktopChildren.map( ( child ) => anchorOf( $d, child as Element ) );
 		let cursor = 0;
-		for ( const mobileChild of mobileChildren ) {
+		const pairedDesktop = new Map< Element, Element >();
+		const settled = new Set< Element >();
+		// An anchor-free child pairs only between the desktop positions of its
+		// anchored neighbours: a wrapper the phone layout moved ahead of the
+		// content (a sticky background) is a device-only island on each side,
+		// not a pairing that renders it at the desktop position.
+		const anchoredAt = mobileChildren.map( ( child ) => {
+			const anchor = anchorOf( $m, child );
+			const index = anchor ? desktopAnchors.indexOf( anchor ) : -1;
+			return index >= 0 && ( desktopChildren[ index ] as Element ).tagName === child.tagName ? index : -1;
+		} );
+		for ( const [ position, mobileChild ] of mobileChildren.entries() ) {
 			const mobileAnchor = anchorOf( $m, mobileChild );
-			if ( deviceKey && mobileAnchor && divergedRoots.has( mobileAnchor ) ) continue;
+			const bound = anchoredAt.slice( position + 1 ).find( ( index ) => index >= cursor ) ?? desktopChildren.length;
+			if ( deviceKey && mobileAnchor && divergedRoots.has( mobileAnchor ) ) { settled.add( mobileChild ); continue; }
 			const mobileClass = $m( mobileChild ).attr( 'class' ) ?? '';
 			let match = mobileAnchor ? desktopAnchors.indexOf( mobileAnchor ) : -1;
 			if ( match >= 0 && ( desktopChildren[ match ] as Element ).tagName !== mobileChild.tagName ) match = -1;
-			for ( let index = cursor; match < 0 && index < desktopChildren.length; index++ ) {
+			for ( let index = cursor; match < 0 && index < ( mobileAnchor ? desktopChildren.length : bound ); index++ ) {
 				const candidate = desktopChildren[ index ] as Element;
 				if ( desktopAnchors[ index ] && mobileAnchor !== desktopAnchors[ index ] ) continue;
 				if ( candidate.tagName !== mobileChild.tagName ) continue;
@@ -723,15 +770,43 @@ export function identitySubsetMerge(
 			if ( match < 0 ) continue;
 			cursor = match + 1;
 			const desktopChild = desktopChildren[ match ] as Element;
+			pairedDesktop.set( mobileChild, desktopChild );
 			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) {
 				if ( deviceKey && ( divergedRoots.has( desktopAnchors[ match ] ?? '' ) || divergedRoots.has( mobileAnchor ?? '' ) ) ) continue;
-				divergedRoots.add( path.split( '/' )[ 0 ] as string );
+				// Below <body> the identity chains already proved each shared
+				// component's ancestry; there is no component to split.
+				if ( path !== BODY_PATH && ! path.startsWith( `${ BODY_PATH }/` ) ) divergedRoots.add( path.split( '/' )[ 0 ] as string );
 				continue;
 			}
 			if ( identityOf( desktopChild ) ) continue;
 			projectPair( $d( desktopChild ), $m( mobileChild ), `${ path }/${ match }` );
 		}
+		// An id-less sibling only one capture rendered (a phone menu toggle in
+		// place of the desktop link row) belongs to that side alone: it holds no
+		// identified component, so it travels as a device-only island instead
+		// of disappearing on one side and leaking onto the other.
+		const anonymous = ( $: cheerio.CheerioAPI, child: Element ): boolean =>
+			! identityOf( child ) && ! $( child ).find( '*' ).toArray().some( node => identityOf( node ) );
+		// Desktop-only components inside are hidden on the phone side anyway.
+		const matchedDesktop = new Set( pairedDesktop.values() );
+		if ( ! deviceKey ) for ( const child of desktopChildren ) {
+			if ( matchedDesktop.has( child ) || identityOf( child ) || sharedIdsIn( $d, child ) !== '' ) continue;
+			$d( child ).addClass( RESPONSIVE_DESKTOP_ONLY_CLASS );
+			hiddenDesktopOnly++;
+		}
+		if ( ! deviceKey ) mobileChildren.forEach( ( mobileChild, index ) => {
+			if ( pairedDesktop.has( mobileChild ) || settled.has( mobileChild ) || ! anonymous( $m, mobileChild ) ) return;
+			const island = $m( mobileChild ).clone().addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
+			const next = mobileChildren.slice( index + 1 ).map( sibling => pairedDesktop.get( sibling ) ).find( Boolean );
+			if ( next ) $d( next ).before( $m.html( island ) ?? '' );
+			else d.append( $m.html( island ) ?? '' );
+			anonymousMobileOnly++;
+		} );
 	};
+	// Chrome no identified component encloses (a builder's navbar) pairs from
+	// <body> down, like the content of a shared component. Device documents
+	// place components by request identity instead, one component at a time.
+	if ( ! deviceKey ) pairChildren( $d( 'body' ), $m( 'body' ), BODY_PATH );
 	for ( const [ id, desktopElement ] of desktopIds ) {
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
@@ -742,7 +817,8 @@ export function identitySubsetMerge(
 	if ( divergedComponents === undefined ) return cannotMerge( 'Divergent component anchor identity or placement cannot be preserved' );
 	$d( '[class]' ).each( ( _index, node ) => {
 		const element = $d( node );
-		element.attr( 'class', ( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => classAliases.get( token ) ?? token ).join( ' ' ) );
+		const phoneRendered = element.closest( `.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).length > 0;
+		element.attr( 'class', ( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => ( phoneRendered || ! retainedClassTokens.has( token ) ) ? classAliases.get( token ) ?? token : token ).join( ' ' ) );
 	} );
 	const css =
 		( desktopRules.length > 0
@@ -753,10 +829,12 @@ export function identitySubsetMerge(
 		body: $d( 'body' ).html() ?? desktopBody,
 		matchedNodes: sharedIdCount,
 		desktopOnlyElements: hiddenDesktopOnly,
-		mobileOnlyElements: insertions.length,
+		mobileOnlyElements: insertions.length + anonymousMobileOnly,
 		projectedElements,
 		css,
 		classAliases,
+		retainedClassTokens,
+		desktopClassAliases,
 		divergedComponents,
 		identityBasis: 'ids',
 	};
@@ -1026,22 +1104,47 @@ export function projectCollapsedBodyClassCss( css: string, moved: ReadonlyMap<st
 	return root.toString();
 }
 
-function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, string> ): string {
+function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, string>, retained: ReadonlySet<string> = new Set() ): string {
 	if ( aliases.size === 0 ) return css;
 	try {
 		const root = postcss.parse( css );
 		root.walkRules( ( rule ) => {
-			rule.selector = selectorParser( ( selectors ) => {
+			let keepsOriginal = false;
+			const aliased = selectorParser( ( selectors ) => {
 				selectors.walkClasses( ( node ) => {
 					const alias = aliases.get( node.value );
-					if ( alias ) node.value = alias;
+					if ( ! alias ) return;
+					if ( retained.has( node.value ) ) keepsOriginal = true;
+					node.value = alias;
 				} );
 			} ).processSync( rule.selector );
+			rule.selector = keepsOriginal ? `${ rule.selector },${ aliased }` : aliased;
 		} );
 		return root.toString();
 	} catch {
 		return css;
 	}
+}
+
+/**
+ * Each rule reaching a desktop-aliased token gains a desktop-scoped copy that
+ * names the alias, right after the original so the cascade order holds.
+ */
+function projectDesktopClassAliases( html: string, aliases: ReadonlyMap<string, string>, switchWidth: number, onUnparseable?: UnparseableStylesheetSink ): string {
+	if ( aliases.size === 0 ) return html;
+	return html.replace( /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, ( match, open: string, css: string, close: string ) => {
+		const projected = projectStylesheet( () => {
+			const root = parseCss( css );
+			root.walkRules( rule => {
+				if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( ( rule.parent as postcss.AtRule ).name ) ) return;
+				const aliased = aliasResponsiveClasses( `${ rule.selector }{}`, aliases ).replace( /\{\}$/, '' );
+				if ( aliased === rule.selector ) return;
+				rule.after( postcss.atRule( { name: 'media', params: `(min-width:${ switchWidth + 1 }px)` } ).append( rule.clone( { selector: aliased } ) ) );
+			} );
+			return root.toString();
+		}, onUnparseable );
+		return projected === undefined ? match : `${ open }${ projected }${ close }`;
+	} );
 }
 
 /** Attributes that name other elements by id, so a renamed subtree keeps its own references. */
@@ -1058,6 +1161,12 @@ const ID_REFERENCE_ATTRIBUTES = [ 'for', 'aria-labelledby', 'aria-describedby', 
  *
  * Returns the number of split components, or undefined to keep both documents.
  */
+/** Elements that render no box; neither capture's copy is a device-only island. */
+const UNRENDERED_TAGS = new Set( [ 'script', 'style', 'link', 'meta', 'noscript', 'template' ] );
+
+/** Hook path root for id-less chrome paired from <body>; no identity can take it. */
+const BODY_PATH = 'body';
+
 function splitDivergedComponents(
 	$d: cheerio.CheerioAPI,
 	$m: cheerio.CheerioAPI,
@@ -1602,8 +1711,8 @@ function assembleResponsiveHtml(
 		);
 		return {
 			html: insertBeforeHeadClose(
-				withBody,
-				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared, identitySubset.classAliases ) }${ identitySubsetVisibilityCss( switchWidth ) }${
+				projectDesktopClassAliases( withBody, identitySubset.desktopClassAliases ?? new Map(), switchWidth, onUnparseable ),
+				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared, identitySubset.classAliases, onUnparseable, identitySubset.retainedClassTokens ) }${ identitySubsetVisibilityCss( switchWidth ) }${
 					identitySubset.css ? `<style>${ identitySubset.css }</style>` : ''
 				}`
 			),
@@ -1966,7 +2075,8 @@ function responsiveMobileStyles(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH,
 	skip: ReadonlySet< string > = new Set(),
 	classAliases: ReadonlyMap<string, string> = new Map(),
-	onUnparseable?: UnparseableStylesheetSink
+	onUnparseable?: UnparseableStylesheetSink,
+	retainedClassTokens: ReadonlySet<string> = new Set()
 ): string {
 	const mobileBodyAttributes = bodyAttributes( mobileHtml );
 	const rootClasses = (
@@ -1994,15 +2104,18 @@ function responsiveMobileStyles(
 					? projectStylesheet( () => {
 						const rules = parseCss( original );
 						const deltaKeys = new Set( parseCss( delta ).nodes.map( node => node.toString() ) );
+						// A common rule already reaches retained tokens unscoped; only
+						// the phone-only delta needs them beside their alias.
 						for ( const node of [ ...rules.nodes ] ) {
 							const css = node.toString();
-							const aliasChanged = aliasResponsiveClasses( css, classAliases ) !== css;
-							if ( ! aliasChanged && ! deltaKeys.has( css ) ) node.remove();
+							const aliased = aliasResponsiveClasses( css, classAliases, deltaKeys.has( css ) ? retainedClassTokens : undefined );
+							if ( aliased === css && ! deltaKeys.has( css ) ) node.remove();
+							else if ( aliased !== css ) node.replaceWith( parseCss( aliased ).nodes );
 						}
 						return rules.toString();
 					}, onUnparseable ) ?? original
-					: delta ?? original;
-				const style = aliasResponsiveClasses( selected, classAliases );
+					: undefined;
+				const style = selected ?? aliasResponsiveClasses( delta ?? original, classAliases, retainedClassTokens );
 				if ( ! style.trim() ) return '';
 				const projected = scope ? projectStylesheet( () => scopeCss( style, { scope, rootClasses: [ ...rootClasses, DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] } ), onUnparseable ) : style;
 				return projected === undefined ? '' : `<style media="(max-width:${ switchWidth }px)">${ projected }</style>`;
