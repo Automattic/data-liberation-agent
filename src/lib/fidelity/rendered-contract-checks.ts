@@ -40,9 +40,20 @@ function normalizedFamily( family: string ): string {
 	return family.toLowerCase().replace( /["']/g, '' ).replace( /\s+/g, ' ' ).trim();
 }
 
+function sameFamily( source: RenderedTextStyle, candidate: RenderedTextStyle ): boolean {
+	if ( normalizedFamily( source.fontFamily ) === normalizedFamily( candidate.fontFamily ) ) return true;
+	// Old evidence has no primary-face proof: retain the conservative stack check.
+	return source.primaryLoaded === true && candidate.primaryLoaded === true &&
+		normalizedFamily( primaryFamily( source.fontFamily ) ) === normalizedFamily( primaryFamily( candidate.fontFamily ) );
+}
+
+function primaryFamily( family: string ): string {
+	return family.match( /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,])+/ )?.[ 0 ].trim() ?? '';
+}
+
 function styleDistance( source: RenderedTextStyle, candidate: RenderedTextStyle ): number {
 	return (
-		( normalizedFamily( source.fontFamily ) === normalizedFamily( candidate.fontFamily ) ? 0 : 1000 ) +
+		( sameFamily( source, candidate ) ? 0 : 1000 ) +
 		( source.fontWeight === candidate.fontWeight ? 0 : 100 ) +
 		Math.abs( source.fontSize - candidate.fontSize ) +
 		Math.abs( source.lineHeight - candidate.lineHeight ) +
@@ -83,7 +94,7 @@ function matchedTextStyles(
 
 function typographyDifferences( source: RenderedTextStyle, candidate: RenderedTextStyle ): string[] {
 	const differences: string[] = [];
-	if ( normalizedFamily( source.fontFamily ) !== normalizedFamily( candidate.fontFamily ) ) {
+	if ( ! sameFamily( source, candidate ) ) {
 		differences.push( `family ${ candidate.fontFamily } !== ${ source.fontFamily }` );
 	}
 	if ( source.fontWeight !== candidate.fontWeight ) {
@@ -99,7 +110,7 @@ function typographyDifferences( source: RenderedTextStyle, candidate: RenderedTe
 			differences.push( `${ label } ${ right }px !== ${ left }px` );
 		}
 	}
-	if ( source.loaded && ! candidate.loaded ) differences.push( 'font face is not loaded' );
+	if ( source.loaded && ! candidate.loaded || source.primaryLoaded === true && candidate.primaryLoaded === false ) differences.push( 'font face is not loaded' );
 	return differences;
 }
 

@@ -419,6 +419,27 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { rmSync(directory, { recursive: true, force: true }); }
 	}, 60_000);
 
+	it( 'records primary-face readiness from each document independently of fallbacks', async () => {
+		const page = await sharedBrowser.newPage();
+		try {
+			await page.route('http://fixture.invalid/primary.ttf', route => route.fulfill({ contentType: 'font/ttf', body: squareFont }));
+			await page.route('http://fixture.invalid/failed.ttf', route => route.fulfill({ status: 404, body: '' }));
+			for (const [primary, fallback, loaded, primaryLoaded] of [
+				['primary.ttf', 'failed.ttf', false, true],
+				['failed.ttf', 'primary.ttf', false, false],
+				['primary.ttf', 'primary.ttf', true, true],
+			] as const) {
+				await page.setContent(`<style>
+					@font-face{font-family:"Example, Display";src:url("http://fixture.invalid/${primary}")}
+					@font-face{font-family:Fallback;src:url("http://fixture.invalid/${fallback}")}
+					h1{font:40px "Example, Display",Fallback,sans-serif}
+					</style><h1>MMMM</h1>`);
+				const observation = await observePage(page, 'about:blank', 1280, 0, null, undefined, undefined, true);
+				expect(observation.typography![0]).toMatchObject({ loaded, primaryLoaded });
+			}
+		} finally { await page.close(); }
+	}, 30_000);
+
 	it( 'waits for a delayed declared stack before baseline screenshot and measurement', async () => {
 		const browser = sharedBrowser; const page = await browser.newPage();
 		let requests = 0;

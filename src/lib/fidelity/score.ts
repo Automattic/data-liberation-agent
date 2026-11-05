@@ -60,6 +60,9 @@ export interface RenderedTextStyle {
 	 * rendering when CSS still names a face that did not load. */
 	advance: number;
 	loaded: boolean;
+	/** This document's FontFaceSet check of the primary family for this run.
+	 * Absent in older frozen evidence; never infer it from the full stack. */
+	primaryLoaded?: boolean;
 }
 
 export interface LayoutObservation {
