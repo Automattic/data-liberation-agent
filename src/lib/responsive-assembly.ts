@@ -267,8 +267,52 @@ function cascadePropertiesOverlap( normal: string, important: string ): boolean 
 		( important === 'gap' && [ 'row-gap', 'column-gap' ].includes( normal ) );
 }
 
+// An identity attribute must anchor nearly all rendered text in both captures
+// (that is what the merge needs), name nearly one element per value (a value
+// repeated within a document is excluded like a repeated id), and mostly
+// recur across the captures, which per-render values never do.
+const IDENTITY_ATTRIBUTE_MIN_TEXT_COVERAGE = 0.9;
+const IDENTITY_ATTRIBUTE_MIN_UNIQUENESS = 0.98;
+const IDENTITY_ATTRIBUTE_MIN_OVERLAP = 0.9;
+
+function discoverIdentityAttributes( desktop: cheerio.CheerioAPI, mobile: cheerio.CheerioAPI ): { names: string[]; repeated: Set< string > } {
+	const inventory = ( $: cheerio.CheerioAPI ) => {
+		const attributes = new Map< string, { values: Map< string, number >; count: number } >();
+		for ( const element of $( 'body *' ).toArray().filter( isElementNode ) ) {
+			for ( const [ name, value ] of Object.entries( element.attribs ) ) {
+				if ( name === 'id' || name === 'class' || name === 'style' || ! value.trim() ) continue;
+				const entry = attributes.get( name ) ?? { values: new Map< string, number >(), count: 0 };
+				entry.values.set( value, ( entry.values.get( value ) ?? 0 ) + 1 );
+				entry.count++;
+				attributes.set( name, entry );
+			}
+		}
+		const texts = $( 'body *' ).contents().toArray().filter( node => node.type === 'text' && ( node.data ?? '' ).trim() !== '' && isElementNode( node.parent as AnyNode ) && ! [ 'script', 'style', 'noscript' ].includes( ( node.parent as Element ).tagName ) );
+		const textCoverage = ( name: string ): number => texts.filter( text => {
+			for ( let current = text.parent; current && isElementNode( current ); current = current.parent ) if ( current.attribs[ name ]?.trim() ) return true;
+			return false;
+		} ).length / Math.max( 1, texts.length );
+		return { attributes, textCoverage };
+	};
+	const d = inventory( desktop );
+	const m = inventory( mobile );
+	const repeated = new Set< string >();
+	const names = [ ...d.attributes.keys() ].filter( name => {
+		const left = d.attributes.get( name )!;
+		const right = m.attributes.get( name );
+		if ( ! right || left.values.size < left.count * IDENTITY_ATTRIBUTE_MIN_UNIQUENESS || right.values.size < right.count * IDENTITY_ATTRIBUTE_MIN_UNIQUENESS ) return false;
+		const shared = [ ...left.values.keys() ].filter( value => right.values.has( value ) ).length;
+		if ( shared / Math.max( left.values.size, right.values.size ) < IDENTITY_ATTRIBUTE_MIN_OVERLAP ) return false;
+		if ( d.textCoverage( name ) < IDENTITY_ATTRIBUTE_MIN_TEXT_COVERAGE || m.textCoverage( name ) < IDENTITY_ATTRIBUTE_MIN_TEXT_COVERAGE ) return false;
+		for ( const side of [ left, right ] ) for ( const [ value, count ] of side.values ) if ( count > 1 ) repeated.add( JSON.stringify( [ name, value ] ) );
+		return true;
+	} ).sort();
+	return { names, repeated };
+}
+
 /**
  * Reconciles two responsive captures into one body keyed on element identity.
+ * Stable ids take precedence over discovered unique, broadly shared attributes.
  * When the two documents share stable ids and every id-bearing mobile element
  * either exists in the desktop body or is a mobile-only element whose nearest
  * id-bearing ancestor exists there, the mobile document is a re-rendering of
@@ -312,11 +356,28 @@ export function identitySubsetMerge(
 		return { $, ids };
 	};
 	const isIdentityId = ( id: string ): boolean => isStableIdentityId( id ) && ! repeated.has( id );
+	const desktop = load( desktopBody );
+	const mobile = load( mobileBody );
+	const { names: attributes, repeated: repeatedAttributes } = discoverIdentityAttributes( desktop.$, mobile.$ );
+	const identities = new WeakMap<Element, string>();
+	for ( const document of [ desktop, mobile ] ) {
+		document.ids.clear();
+		for ( const node of document.$( 'body *' ).toArray().filter( isElementNode ) ) {
+			const id = node.attribs.id;
+			const attribute = attributes.find( name => Boolean( node.attribs[ name ]?.trim() ) && ! repeatedAttributes.has( JSON.stringify( [ name, node.attribs[ name ] ] ) ) );
+			const identity = id && isIdentityId( id ) ? id : attribute
+				? `attribute-${ createHash( 'sha256' ).update( JSON.stringify( [ attribute, node.attribs[ attribute ] ] ) ).digest( 'hex' ) }` : undefined;
+			if ( ! identity ) continue;
+			identities.set( node, identity );
+			document.ids.set( identity, node );
+		}
+	}
+	const identityOf = ( node: Element ): string | undefined => identities.get( node );
 	const nearestIdentityId = ( $: cheerio.CheerioAPI, node: AnyNode ): string | undefined => {
 		for ( let current = node.parent; current; current = current.parent ) {
 			if ( ! isElementNode( current ) ) continue;
-			const id = $( current ).attr( 'id' );
-			if ( id && isIdentityId( id ) ) return id;
+			const id = identityOf( current );
+			if ( id ) return id;
 		}
 		return undefined;
 	};
@@ -324,17 +385,11 @@ export function identitySubsetMerge(
 		const chain: string[] = [];
 		for ( let current = element.parent; current; current = current.parent ) {
 			if ( ! isElementNode( current ) ) continue;
-			const id = $( current ).attr( 'id' );
-			if ( id && isIdentityId( id ) ) chain.unshift( id );
+			const id = identityOf( current );
+			if ( id ) chain.unshift( id );
 		}
 		return chain;
 	};
-	const desktop = load( desktopBody );
-	const mobile = load( mobileBody );
-	for ( const id of repeated ) {
-		desktop.ids.delete( id );
-		mobile.ids.delete( id );
-	}
 	const { $: $d, ids: desktopIds } = desktop;
 	const { $: $m, ids: mobileIds } = mobile;
 	const classAliases = new Map<string, string>();
@@ -419,9 +474,9 @@ export function identitySubsetMerge(
 	for ( const id of desktopOnlyIds ) {
 		const element = $d( desktopIds.get( id ) as Element );
 		const wrapsShared = element
-			.find( '[id]' )
+			.find( '*' )
 			.toArray()
-			.some( ( node ) => shared( $d( node ).attr( 'id' ) ?? '' ) );
+			.some( ( node ) => shared( identityOf( node ) ?? '' ) );
 		if ( wrapsShared ) continue;
 		element.addClass( RESPONSIVE_DESKTOP_ONLY_CLASS );
 		hiddenDesktopOnly++;
@@ -437,7 +492,7 @@ export function identitySubsetMerge(
 		node
 			.children()
 			.toArray()
-			.filter( ( child ) => ! $( child ).attr( 'id' ) );
+			.filter( ( child ) => ! $( child ).attr( 'id' ) && ! identityOf( child ) );
 	const insertions: Insertion[] = [];
 	const insertedWrappers = new Set< Element >();
 	for ( const id of outermostMobileOnlyIds ) {
@@ -446,7 +501,7 @@ export function identitySubsetMerge(
 		const path: Element[] = [];
 		for ( let current = mobileElement.parent; current; current = current.parent ) {
 			if ( ! isElementNode( current ) ) continue;
-			if ( ancestorId ? $m( current ).attr( 'id' ) === ancestorId : current.tagName === 'body' ) break;
+			if ( ancestorId ? identityOf( current ) === ancestorId : current.tagName === 'body' ) break;
 			path.unshift( current );
 		}
 		let parent = ancestorId ? $d( desktopIds.get( ancestorId ) as Element ) : $d( 'body' );
@@ -473,9 +528,9 @@ export function identitySubsetMerge(
 					byClass.length === 0 &&
 					( candidates.length === 0 || candidates.length < mobileSiblings.length ) &&
 					! $m( step )
-						.find( '[id]' )
+						.find( '*' )
 						.toArray()
-						.some( ( node ) => shared( $m( node ).attr( 'id' ) ?? '' ) );
+						.some( ( node ) => shared( identityOf( node ) ?? '' ) );
 				if ( ! mobileOnlyWrapper ) return cannotMerge( 'Device-only component placement could not be resolved' );
 				island = step;
 				break;
@@ -521,7 +576,7 @@ export function identitySubsetMerge(
 		const placement = ( $: cheerio.CheerioAPI, node: Element ) => {
 			const steps: string[] = [];
 			for ( let parent = node.parent; parent && isElementNode( parent ) && parent.tagName !== 'body'; parent = parent.parent ) {
-				steps.unshift( $( parent ).attr( 'id' ) ?? `${ parent.tagName }.${ $( parent ).attr( 'class' ) ?? '' }` );
+				steps.unshift( identityOf( parent ) ?? `${ parent.tagName }.${ $( parent ).attr( 'class' ) ?? '' }` );
 			}
 			return steps.join( '/' );
 		};
@@ -532,9 +587,9 @@ export function identitySubsetMerge(
 	}
 	const sharedIdsIn = ( $: cheerio.CheerioAPI, node: Element ): string =>
 		$( node )
-			.find( '[id]' )
+			.find( '*' )
 			.toArray()
-			.map( ( child ) => $( child ).attr( 'id' ) ?? '' )
+			.map( ( child ) => identityOf( child ) ?? '' )
 			.filter( ( id ) => shared( id ) )
 			.sort()
 			.join( ' ' );
@@ -632,8 +687,8 @@ export function identitySubsetMerge(
 		// Components only one capture rendered are placed by identity, not by
 		// position, so they sit outside the positional pairing.
 		const paired = ( $: cheerio.CheerioAPI ) => ( child: Element ): boolean => {
-			const childId = $( child ).attr( 'id' );
-			return ! childId || ! isIdentityId( childId ) || shared( childId );
+			const childId = identityOf( child );
+			return ! childId || shared( childId );
 		};
 		const desktopChildren = d.children().toArray().filter( paired( $d ) );
 		const mobileChildren = m.children().toArray().filter( paired( $m ) );
@@ -645,9 +700,9 @@ export function identitySubsetMerge(
 		// does not stop the walk for the siblings both rendered.
 		const anchorOf = ( $: cheerio.CheerioAPI, child: Element ): string | undefined =>
 			$( child )
-				.find( '[id]' )
+				.find( '*' )
 				.toArray()
-				.map( ( node ) => $( node ).attr( 'id' ) ?? '' )
+				.map( ( node ) => identityOf( node ) ?? '' )
 				.find( ( id ) => shared( id ) );
 		const desktopAnchors = desktopChildren.map( ( child ) => anchorOf( $d, child as Element ) );
 		let cursor = 0;
@@ -673,8 +728,7 @@ export function identitySubsetMerge(
 				divergedRoots.add( path.split( '/' )[ 0 ] as string );
 				continue;
 			}
-			const childId = $d( desktopChild ).attr( 'id' );
-			if ( childId && isIdentityId( childId ) ) continue;
+			if ( identityOf( desktopChild ) ) continue;
 			projectPair( $d( desktopChild ), $m( mobileChild ), `${ path }/${ match }` );
 		}
 	};
@@ -684,7 +738,7 @@ export function identitySubsetMerge(
 	}
 	if ( unsafeClassAlias ) return cannotMerge( 'Class projection would change the authored cascade' );
 	deviceInlineRestores.forEach( restore => restore() );
-	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds, deviceKey );
+	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds, deviceKey, identityOf );
 	if ( divergedComponents === undefined ) return cannotMerge( 'Divergent component anchor identity or placement cannot be preserved' );
 	$d( '[class]' ).each( ( _index, node ) => {
 		const element = $d( node );
@@ -1010,7 +1064,8 @@ function splitDivergedComponents(
 	roots: Set< string >,
 	desktopIds: Map< string, Element >,
 	mobileIds: Map< string, Element >,
-	deviceKey?: string
+	deviceKey?: string,
+	identityOf: ( node: Element ) => string | undefined = node => node.attribs.id
 ): number | undefined {
 	if ( roots.size === 0 ) return 0;
 	const outermost = [ ...roots ].filter( ( id ) => {
@@ -1059,11 +1114,11 @@ function splitDivergedComponents(
 		if ( deviceKey ) {
 			const path: Element[] = [];
 			let ancestor = mobileElement.parent;
-			while ( ancestor && isElementNode( ancestor ) && ancestor.tagName !== 'body' && ! $m( ancestor ).attr( 'id' ) ) {
+			while ( ancestor && isElementNode( ancestor ) && ancestor.tagName !== 'body' && ! identityOf( ancestor ) ) {
 				path.unshift( ancestor ); ancestor = ancestor.parent;
 			}
 			let parent = ancestor && isElementNode( ancestor ) && ancestor.tagName !== 'body'
-				? $d( desktopIds.get( $m( ancestor ).attr( 'id' )! )! ) : $d( 'body' );
+				? $d( desktopIds.get( identityOf( ancestor )! )! ) : $d( 'body' );
 			for ( const step of path ) {
 				const candidates = parent.children().filter( ( _i, node ) => node.tagName === step.tagName && ( $d( node ).attr( 'class' ) ?? '' ) === ( $m( step ).attr( 'class' ) ?? '' ) );
 				if ( candidates.length !== 1 ) return undefined;

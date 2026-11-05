@@ -456,6 +456,28 @@ describe( 'assembleResponsiveCapture', () => {
 		expect( assembly.portableNormalization ).toBe( 'pending' );
 	} );
 
+	it.each( [
+		{ matching: true, outcome: 'collapsed-identity-subset' },
+		{ matching: false, outcome: 'dual-structural' },
+	] )( 'discovers position identities only when values overlap ($matching)', ( { matching, outcome } ) => {
+		const rawDesktop = page( '<main data-position="0"><div class="wide"><h1 data-position="1">Shared heading</h1><p data-position="2">Shared paragraph</p></div></main>' );
+		const rawMobile = page( `<main data-position="${ matching ? 0 : 10 }"><section class="narrow"><h1 data-position="${ matching ? 1 : 11 }">Shared heading</h1><p data-position="${ matching ? 2 : 12 }">Shared paragraph</p></section></main>` );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence?.outcome ).toBe( outcome );
+		if ( matching ) {
+			expect( assembly.evidence ).toMatchObject( { matchedNodes: 3, desktopOnlyElements: 0, mobileOnlyElements: 0 } );
+			const $ = cheerio.load( assembly.html );
+			expect( $( 'body' ).text().match( /Shared heading/g ) ).toHaveLength( 1 );
+			expect( $( 'body' ).text().match( /Shared paragraph/g ) ).toHaveLength( 1 );
+		}
+	} );
+
 	it( 'ships both documents when the mobile tree does not reconcile', () => {
 		const rawDesktop = page( '<main><h1>Desktop</h1></main>' );
 		const rawMobile = page( '<main><h1>Phone</h1><aside>Menu</aside></main>', '', ' class="phone"' );
