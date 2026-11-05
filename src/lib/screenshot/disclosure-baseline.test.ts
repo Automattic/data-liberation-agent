@@ -7,6 +7,8 @@ import { expect, it } from 'vitest';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { captureScreenshots } from './screenshotter.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
+import { componentReplayStates } from './component-states.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
 
@@ -115,6 +117,50 @@ it.skipIf(skipBrowser)('keeps the already saved initial document when a later di
     expect(html).toContain('aria-expanded="false"');
     expect(load(html)('#options').length).toBe(0);
     expect(html).not.toContain('data-blocks-engine-capture-hydrated-disclosure');
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(outputDir, { recursive: true, force: true });
+  }
+}, 30000);
+
+// #1295: display:contents leaves the header's controls visible without a header
+// box, so the old visibility marker incorrectly promoted its panel to the header.
+// One public browser capture (~5 seconds), with no fabricated interaction states.
+it.skipIf(skipBrowser)('keeps the header visible and its disclosure panel hidden at rest after capture and dialog wiring', async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader('content-type', 'text/html');
+    response.end(`<!doctype html><html><head><style>header{display:contents}#site-nav{position:absolute;top:40px;background:white}</style></head><body>
+      <header id="site-header"><button id="toggle" aria-controls="site-nav" aria-expanded="false">Show sidebar</button>
+        <nav id="site-nav" hidden><p>Disclosure content</p></nav>
+      </header><main id="content"><h1>Page content</h1></main>
+      <script>document.getElementById('toggle').onclick=function(){const open=this.getAttribute('aria-expanded')!=='true';this.setAttribute('aria-expanded',String(open));document.getElementById('site-nav').hidden=!open;};</script>
+      </body></html>`);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'disclosure-header-'));
+  try {
+    const result = await captureScreenshots({ urls: [url], outputDir, concurrency: 1, settleMs: 0,
+      viewports: [{ id: 'desktop', width: 1440, height: 900 }], learnFluid: false });
+    expect(result).toMatchObject({ captured: 1, failed: 0 });
+    const entry = JSON.parse(readFileSync(result.manifestPath, 'utf8')).entries[url];
+    const states = componentReplayStates(entry.interactions.components);
+    expect(states).toEqual(expect.arrayContaining([expect.objectContaining({
+      status: 'captured', trigger: expect.objectContaining({ id: 'toggle' }),
+      dialog: expect.objectContaining({ selector: '#site-nav' }),
+    })]));
+    const captured = readFileSync(join(outputDir, entry.html), 'utf8');
+    const resting = load(captured);
+    expect(resting('#site-header').attr('hidden')).toBeUndefined();
+    expect(resting('#site-nav').attr('hidden')).toBeDefined();
+    const $ = load(wireCapturedDialogs(captured, states));
+    expect($('#site-header')).toHaveLength(1);
+    expect($('#site-header').attr('hidden')).toBeUndefined();
+    expect($('#site-header').attr('data-blocks-engine-capture-dialog-panel')).toBeUndefined();
+    const panel = $('#site-nav');
+    expect(panel).toHaveLength(1);
+    expect(panel.attr('hidden')).toBeDefined();
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(outputDir, { recursive: true, force: true });
