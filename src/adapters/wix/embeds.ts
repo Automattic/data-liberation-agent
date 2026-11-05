@@ -176,8 +176,10 @@ async function wixMapView( frame: Frame ): Promise< MapView | null > {
 }
 
 /** Runs in the page: swap an iframe for a visible note of the same size. */
-function installWixEmbedNote( frame: Element, args: { note: string; attribute: string } ): void {
-	const bounds = frame.getBoundingClientRect();
+function installWixEmbedNote( frame: Element, args: { note: string; attribute: string; sizedByHost?: boolean } ): void {
+	// A custom element's Wix host owns its box; the element itself may be an
+	// empty inline placeholder until the vendor script renders into it.
+	const bounds = ( args.sizedByHost && frame.parentElement ? frame.parentElement : frame ).getBoundingClientRect();
 	if ( bounds.width <= 0 || bounds.height <= 0 ) {
 		// Invisible here (another viewport's copy, a collapsed panel): nothing
 		// would show, and capture drops hidden iframes anyway. Do not keep the token.
@@ -236,6 +238,23 @@ export async function portWixRuntimeEmbeds( page: Page ): Promise< void > {
 		const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
 		if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
 	} );
+	// App Market custom elements are registered by vendor scripts rather than
+	// loaded in Wix app iframes. Require the identifying appId/appName URL pair.
+	const appName = await page.evaluate( () => {
+		for ( const script of document.scripts ) {
+			try {
+				const url = new URL( script.src, location.href );
+				if ( url.searchParams.has( 'appId' ) && url.searchParams.has( 'appName' ) ) return url.searchParams.get( 'appName' );
+			} catch { /* Ignore malformed script URLs. */ }
+		}
+		return null;
+	} );
+	if ( appName ) {
+		for ( const handle of await page.$$( '[data-testid="custom-element"] > *' ) ) {
+			const isCustomElement = await handle.evaluate( ( element ) => element.localName.includes( '-' ) ).catch( () => false );
+			if ( isCustomElement ) await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( appName ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE, sizedByHost: true } );
+		}
+	}
 	for ( const handle of await page.$$( 'iframe[src]' ) ) {
 		const src = ( await handle.getAttribute( 'src' ).catch( () => null ) ) ?? '';
 		const title = ( await handle.getAttribute( 'title' ).catch( () => null ) ) ?? '';
