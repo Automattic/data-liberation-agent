@@ -125,6 +125,7 @@ interface CaptureManifestEntry {
 	/** Responsive learning outcome recorded during capture. */
 	fluid?: CaptureFluidEvidence;
 	fluidMobile?: CaptureFluidEvidence;
+	deviceMode?: import('./screenshot/device-mode.js').RouteDeviceDecision;
 	metadata?: {
 		openGraph?: Record< string, string >;
 	};
@@ -681,7 +682,8 @@ const DESKTOP_CAPTURE_WIDTH = 1440;
 /**
  * Legacy width-only export fallback. These are stylesheet geometry boundaries,
  * not evidence of a device switch. A source-owned device or observed width
- * contract bypasses this guess; undeclared captures keep their existing output.
+ * contract, or a route check's probed switch, bypasses this guess; undeclared
+ * captures keep their existing output.
  */
 function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined {
 	const path = join( outputDir, 'breakpoints.json' );
@@ -1531,7 +1533,7 @@ function buildExportCapture(
 				widthSelections.push( { url, ...selection } );
 			}
 			const detectedFloor =
-				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
+				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : entry.deviceMode?.switchWidth !== undefined ? entry.deviceMode.switchWidth : typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 					? Math.round( entry.fluid.canvasFloor )
 					: siteSwitchWidth;
 			if ( detectedFloor ) switchWidths.push( detectedFloor );
