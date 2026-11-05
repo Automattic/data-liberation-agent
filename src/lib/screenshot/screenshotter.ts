@@ -2790,7 +2790,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// Decide before capture opens its context: the check's comparison pair
 		// must not compete with capture's own loads (#1155). Its wall time is
 		// attributed to the desktop profile as `device-check`.
-		let routeDevice: RouteDeviceDecision | undefined;
+		// Preserve the site-level UA document evidence for export even when
+		// dual capture skips per-route comparison.
+		let routeDevice: RouteDeviceDecision | undefined = deviceMode?.mode === 'dual' && deviceMode.serverHtml === 'different'
+			? { mode: deviceMode.mode, reason: deviceMode.reason, serverHtml: deviceMode.serverHtml }
+			: undefined;
 		let deviceCheckMs: number | undefined;
 		if ( reflowViewports ) {
 			if ( ! force && existing?.deviceMode ) routeDevice = existing.deviceMode;

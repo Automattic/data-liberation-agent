@@ -58,6 +58,7 @@ import {
 	isSourceCaptureUrl,
 } from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
+import { COARSE_SWEEP_WIDTHS } from './screenshot/fluid-capture.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
 import { wireCapturedComponents } from './static-components.js';
 import { routeComponents, componentReplayStates } from './screenshot/component-states.js';
@@ -685,7 +686,7 @@ const DESKTOP_CAPTURE_WIDTH = 1440;
  * contract, or a route check's probed switch, bypasses this guess. The phone
  * document's own geometry evidence further bounds this fallback below.
  */
-function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined {
+function fallbackResponsiveSwitchWidth( outputDir: string, belowWidth = DESKTOP_CAPTURE_WIDTH ): number | undefined {
 	const path = join( outputDir, 'breakpoints.json' );
 	if ( ! existsSync( path ) ) return undefined;
 	try {
@@ -693,7 +694,7 @@ function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined 
 		if ( ! Array.isArray( data.maxWidth ) ) return undefined;
 		const candidates = data.maxWidth.filter(
 			( width ): width is number =>
-				typeof width === 'number' && Number.isInteger( width ) && width > 0 && width < DESKTOP_CAPTURE_WIDTH
+				typeof width === 'number' && Number.isInteger( width ) && width > 0 && width < belowWidth
 		);
 		return candidates.length > 0 ? Math.max( ...candidates ) : undefined;
 	} catch {
@@ -1337,6 +1338,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
 	const siteSwitchWidth = httpInput ? undefined : fallbackResponsiveSwitchWidth( outputDir );
+	// The third coarse sample is tablet. UA-selected phone documents must not
+	// inherit desktop stylesheet boundaries, even when their geometry is fluid.
+	const phoneSwitchWidth = httpInput ? undefined : fallbackResponsiveSwitchWidth( outputDir, COARSE_SWEEP_WIDTHS[ 2 ] );
 	const budget = resolveExportTotalBudget( options.limits );
 	// Build mutates manifest entries in place; a rebuild starts from the source.
 	const pristineEntries = JSON.stringify( capture.entries );
@@ -1348,7 +1352,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				capture.entries = JSON.parse( pristineEntries ) as ScreenshotManifest[ 'entries' ];
 				if ( httpInput ) httpInput.entries = capture.entries as typeof httpInput.entries;
 			}
-			const built = buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, stageDir, budget, exclusions );
+			const built = buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, phoneSwitchWidth, stageDir, budget, exclusions );
 			const plan = planExportBudget( { websiteDir: join( stageDir, 'website' ), budget, ...built, exclusions } );
 			if ( plan.withinBudget || ! plan.next ) {
 				recordExportBudget( stageDir, budget, plan, exclusions, pass );
@@ -1383,6 +1387,7 @@ function buildExportCapture(
 	embedded: ReturnType< typeof loadEmbeddedDocuments > | undefined,
 	embeddedSources: Set< string >,
 	siteSwitchWidth: number | undefined,
+	phoneSwitchWidth: number | undefined,
 	stageDir: string,
 	budget: ExportTotalBudget,
 	exclusions: ExportBudgetExclusions,
@@ -1543,8 +1548,11 @@ function buildExportCapture(
 				if ( ! Number.isInteger( selection.switchWidth ) || selection.switchWidth <= 0 || ! selection.evidence ) throw new IntegrityError( 'Invalid observed document switch' );
 				widthSelections.push( { url, ...selection } );
 			}
+			const deviceMode = entry.deviceMode;
 			const detectedFloor =
-				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : entry.deviceMode?.switchWidth !== undefined ? entry.deviceMode.switchWidth : typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
+				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : entry.deviceMode?.switchWidth !== undefined ? entry.deviceMode.switchWidth : deviceMode?.mode === 'dual' && deviceMode.serverHtml === 'different'
+					? phoneSwitchWidth ?? entry.profiles?.mobile?.viewport.width
+					: typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 					? Math.round( entry.fluid.canvasFloor )
 					: phoneResponsiveSwitchWidth( entry, siteSwitchWidth );
 			if ( detectedFloor ) switchWidths.push( detectedFloor );
