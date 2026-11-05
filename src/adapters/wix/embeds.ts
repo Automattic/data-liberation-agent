@@ -236,6 +236,23 @@ export async function portWixRuntimeEmbeds( page: Page ): Promise< void > {
 		const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
 		if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
 	} );
+	// App Market custom elements are registered by vendor scripts rather than
+	// loaded in Wix app iframes. Require the identifying appId/appName URL pair.
+	const appName = await page.evaluate( () => {
+		for ( const script of document.scripts ) {
+			try {
+				const url = new URL( script.src, location.href );
+				if ( url.searchParams.has( 'appId' ) && url.searchParams.has( 'appName' ) ) return url.searchParams.get( 'appName' );
+			} catch { /* Ignore malformed script URLs. */ }
+		}
+		return null;
+	} );
+	if ( appName ) {
+		for ( const handle of await page.$$( '[data-testid="custom-element"] > *' ) ) {
+			const isCustomElement = await handle.evaluate( ( element ) => element.localName.includes( '-' ) ).catch( () => false );
+			if ( isCustomElement ) await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( appName ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE } );
+		}
+	}
 	for ( const handle of await page.$$( 'iframe[src]' ) ) {
 		const src = ( await handle.getAttribute( 'src' ).catch( () => null ) ) ?? '';
 		const title = ( await handle.getAttribute( 'title' ).catch( () => null ) ) ?? '';
