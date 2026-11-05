@@ -51,7 +51,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 		}
 	}, 20_000 );
 
-	it( 'resolves a fixed header fragment already at its top landing without changing a mid-page fragment', async () => {
+	it.each( [ false, true ] )( 'resolves a fixed header fragment already at its top landing without changing a mid-page fragment (hide on scroll-down: %s)', async ( hideOnScrollDown ) => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
 			const page = await browser.newPage();
@@ -63,7 +63,14 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 					<script>document.querySelectorAll('header a').forEach((link, index) => link.addEventListener('click', event => {
 						event.preventDefault();
 						if (event.isTrusted) window.scrollTo({top:index * 1000,behavior:'instant'});
-					}));</script>`,
+					}));
+					if (${ hideOnScrollDown }) {
+						let previousY = scrollY;
+						addEventListener('scroll', () => {
+							document.querySelector('header').style.transform = scrollY > previousY ? 'translateY(-100%)' : '';
+							previousY = scrollY;
+						});
+					}</script>`,
 			} ) );
 			await page.goto( 'https://anchor.test/' );
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
