@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.131] - 2026-11-05
+
+### Changed
+- regenerate plugin bundles
+- Gamma toggles: put the title wrapper's hooks on the summary
+- Decide route device mode on body structure, report head differences as a diagnostic
+- Keep headers visible at rest when captured as disclosure panels
+
+### Fixed
+- Fix compare baseline pose restoration after callbacks
+
 ## [0.33.130] - 2026-11-05
 
 ### Changed
