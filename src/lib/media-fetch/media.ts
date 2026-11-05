@@ -237,6 +237,7 @@ export function extensionFromContentType(contentType: string): string {
     case 'application/x-7z-compressed': return '.7z';
     case 'application/zip': return '.zip';
     case 'application/rtf': return '.rtf';
+    case 'text/plain': return '.txt';
     case 'video/mp4': return '.mp4';
     case 'video/webm': return '.webm';
     case 'video/ogg': return '.ogv';

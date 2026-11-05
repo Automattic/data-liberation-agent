@@ -111,6 +111,16 @@ export function resourceContentType( bytes: Buffer, kind: NonNullable<ImageAsset
 		if ( bytes.subarray( 0, 2 ).equals( Buffer.from( [ 0x1f, 0x8b ] ) ) ) return 'application/gzip';
 		if ( bytes.subarray( 0, 6 ).equals( Buffer.from( [ 0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c ] ) ) ) return 'application/x-7z-compressed';
 		if ( bytes.toString( 'ascii', 0, 5 ) === '{\\rtf' ) return 'application/rtf';
+		if ( bytes.length === 0 ) return undefined;
+		let text: string;
+		try { text = new TextDecoder( 'utf-8', { fatal: true } ).decode( bytes ); }
+		catch { return undefined; }
+		if ( text.charCodeAt( 0 ) === 0xfeff ) text = text.slice( 1 );
+		for ( const byte of bytes ) {
+			if ( byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0c && byte !== 0x0d ) return undefined;
+		}
+		if ( /^\s*(?:<!doctype\s+html|<html)\b/i.test( text ) ) return undefined;
+		return 'text/plain';
 	}
 	if ( kind === 'video' ) {
 		if ( bytes.length >= 16 && bytes.toString( 'ascii', 4, 8 ) === 'ftyp' ) return 'video/mp4';
