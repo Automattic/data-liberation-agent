@@ -83,7 +83,7 @@ export function imageContentType( bytes: Buffer ): string | undefined {
 }
 
 /** Fail closed on unknown signatures; response headers and extensions are not evidence. */
-export function resourceContentType( bytes: Buffer, kind: NonNullable<ImageAssetRecord['kind']> ): string | undefined {
+export function resourceContentType( bytes: Buffer, kind: NonNullable<ImageAssetRecord['kind']>, declaredPath?: string ): string | undefined {
 	const magic = bytes.toString( 'latin1', 0, 4 );
 	if ( kind === 'font' ) {
 		if ( bytes.length < 12 ) return undefined;
@@ -111,7 +111,10 @@ export function resourceContentType( bytes: Buffer, kind: NonNullable<ImageAsset
 		if ( bytes.subarray( 0, 2 ).equals( Buffer.from( [ 0x1f, 0x8b ] ) ) ) return 'application/gzip';
 		if ( bytes.subarray( 0, 6 ).equals( Buffer.from( [ 0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c ] ) ) ) return 'application/x-7z-compressed';
 		if ( bytes.toString( 'ascii', 0, 5 ) === '{\\rtf' ) return 'application/rtf';
-		if ( bytes.length === 0 ) return undefined;
+		let declaredExtension = '';
+		try { declaredExtension = extname( new URL( declaredPath ?? '' ).pathname ).toLowerCase(); }
+		catch { declaredExtension = extname( declaredPath ?? '' ).toLowerCase(); }
+		if ( ! ['.txt', '.csv'].includes( declaredExtension ) || bytes.length === 0 ) return undefined;
 		let text: string;
 		try { text = new TextDecoder( 'utf-8', { fatal: true } ).decode( bytes ); }
 		catch { return undefined; }
@@ -393,7 +396,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					}
 					if ( ! result.localPath ) throw new Error( result.error ?? 'resource download failed' ); // failure-class: operational
 					const bytes = readFileSync( result.localPath );
-					const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind! );
+					const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind!, source );
 					if ( ! contentType ) throw new Error( 'unverified resource bytes or placeholder' ); // failure-class: operational
 					if ( record.kind === 'font' && record.references.some( ref => {
 						const format = ref.font_face?.format?.toLowerCase();
@@ -409,7 +412,8 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					const metadata = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : {};
 					if ( contentType === 'image/svg+xml' ) Object.assign( metadata, svgDeclaredSize( bytes ) );
 					// Even a lying response header's extension follows the verified bytes.
-					const extension = extensionFromContentType( contentType );
+					const extension = contentType === 'text/plain' && extname( new URL( source ).pathname ).toLowerCase() === '.csv'
+			? '.csv' : extensionFromContentType( contentType );
 					const currentExtension = extname( result.localPath );
 					let localPath = result.localPath;
 					if ( currentExtension.toLowerCase() !== extension ) {

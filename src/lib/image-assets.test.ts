@@ -16,12 +16,13 @@ import { MediaStubStore } from './resume-state/index.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 
 it.each([
- ['citation text', Buffer.from('Smith, J. (2024). A useful citation. Journal of Examples, 12(3), 45–67.') , 'text/plain'],
- ['HTML body', Buffer.from('  <!DOCTYPE html><html><body>not a document download</body></html>'), undefined],
- ['NUL-containing bytes', Buffer.from([0x61, 0x00, 0x62]), undefined],
- ['empty body', Buffer.alloc(0), undefined],
-])('verifies document bytes as plain text only when safe: %s', (_name, bytes, expected) => {
- expect(resourceContentType(bytes, 'document')).toBe(expected);
+ ['citation text', Buffer.from('Smith, J. (2024). A useful citation. Journal of Examples, 12(3), 45–67.'), '/citation.txt', 'text/plain'],
+ ['same text at PDF URL', Buffer.from('Smith, J. (2024). A useful citation. Journal of Examples, 12(3), 45–67.'), '/citation.pdf', undefined],
+ ['HTML body', Buffer.from('  <!DOCTYPE html><html><body>not a document download</body></html>'), '/citation.txt', undefined],
+ ['NUL-containing bytes', Buffer.from([0x61, 0x00, 0x62]), '/citation.txt', undefined],
+ ['empty body', Buffer.alloc(0), '/citation.txt', undefined],
+])('verifies document bytes as plain text only when safe: %s', (_name, bytes, path, expected) => {
+ expect(resourceContentType(bytes, 'document', path)).toBe(expected);
 });
 
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
