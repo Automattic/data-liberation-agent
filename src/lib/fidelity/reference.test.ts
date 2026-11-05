@@ -141,12 +141,19 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 90_000 );
-	it( 'records a cross-origin subframe runtime error as a diagnostic but blocks on a top-level one', async () => {
+	it.each( [ 'inline rejection', 'cross-origin classic script' ] )( 'records a cross-origin subframe runtime error (%s) as a diagnostic but blocks on a top-level one', async mode => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-subframe-error-' ) );
+		const script = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/javascript' );
+			response.end( "throw new Error('cross-origin script failure')" );
+		} );
+		await new Promise<void>( resolve => script.listen( 0, '127.0.0.2', resolve ) );
+		const scriptUrl = `http://127.0.0.2:${ ( script.address() as { port: number } ).port }/x.js`;
 		const frame = createServer( ( _request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
-			response.end( '<!DOCTYPE html><html><body style="margin:0;background:#333"><script>navigator.keyboard && navigator.keyboard.getLayoutMap();</script></body></html>' );
+			response.end( mode === 'cross-origin classic script' ? `<script src="${ scriptUrl }"></script>`
+				: '<!DOCTYPE html><html><body style="margin:0;background:#333"><script>navigator.keyboard && navigator.keyboard.getLayoutMap();</script></body></html>' );
 		} );
 		await new Promise<void>( resolve => frame.listen( 0, '127.0.0.1', resolve ) );
 		// `localhost` is a different site from `127.0.0.1`, so the frame is cross-origin.
@@ -165,7 +172,15 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const page = await context.newPage();
 		try {
 			const collect = async ( target: string ) => {
-				const collector = createReferenceCollector( directory, target, [ target ] );
+				const collector = createReferenceCollector( directory, target, [ target ], { prepareCapture: async cell => {
+					if ( target.endsWith( '/control' ) ) return;
+					const child = cell.frames().find( frame => frame.url() === frameUrl )!;
+					// A separate iframe target proves this exercises OOPIF attribution,
+					// not just contexts visible to the top-level Runtime session.
+					const session = await cell.context().newCDPSession( child );
+					try { expect( ( await session.send( 'Target.getTargetInfo' ) ).targetInfo.type ).toBe( 'iframe' ); }
+					finally { await session.detach(); }
+				} } );
 				await collector.observe( page, target, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
 				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
 				return ( JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference ).entries[ 0 ]!;
@@ -173,7 +188,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const embed = await collect( url );
 			expect( embed.readiness.reasons ).toEqual( [] );
 			expect( embed.readiness.ready ).toBe( true );
-			expect( embed.readiness.diagnostics ).toEqual( [ expect.stringMatching( new RegExp( `^subframe runtime error \\(${ new URL( frameUrl ).origin }\\): getLayoutMap\\(\\) must be called from a top-level browsing context` ) ) ] );
+			const expectedError = mode === 'cross-origin classic script' ? 'cross-origin script failure' : 'getLayoutMap() must be called from a top-level browsing context';
+			expect( embed.readiness.diagnostics ).toHaveLength( 1 );
+			expect( embed.readiness.diagnostics![ 0 ] ).toContain( `subframe runtime error (${ new URL( frameUrl ).origin }): ${ expectedError }` );
 			expect( () => readFrozenObservation( directory, embed ) ).not.toThrow();
 			const control = await collect( `${ url }control` );
 			expect( control.readiness.ready ).toBe( false );
@@ -181,7 +198,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( () => readFrozenObservation( directory, control ) ).toThrow( 'Source evidence unready: source runtime error: top-level own rejection' );
 		} finally {
 			await context.close();
-			for ( const server of [ source, frame ] ) { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); }
+			for ( const server of [ source, frame, script ] ) { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); }
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
