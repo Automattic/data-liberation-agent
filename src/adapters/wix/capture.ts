@@ -880,12 +880,20 @@ export const capture: LiberationHooks = {
 				}, initialScroll );
 				if ( displaced ) {
 					try {
-						const visible = await link.evaluate( ( element ) => {
+						const isVisible = () => link.evaluate( ( element ) => {
 							const rect = element.getBoundingClientRect();
 							const style = getComputedStyle( element );
 							return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight &&
 								rect.left >= 0 && rect.right <= innerWidth && style.visibility !== 'hidden' && style.opacity !== '0';
 						} );
+						let visible = await isVisible();
+						if ( ! visible ) {
+							// Scroll-down can hide fixed chrome. One real upward wheel
+							// reveals direction-aware headers without returning to the landing.
+							await page.mouse.wheel( 0, -300 );
+							await page.waitForTimeout( 400 );
+							visible = await isVisible();
+						}
 						if ( visible ) {
 							const displacedScroll = await page.evaluate( () => scrollY );
 							await link.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
