@@ -92,6 +92,102 @@ function page( body: string, head = '', bodyAttributes = '' ): string {
 	return `<html><head>${ head }</head><body${ bodyAttributes }>${ body }</body></html>`;
 }
 
+async function expectStylesheetParity( desktop: string, mobile: string, assembled: string, properties: string[], expectedPhone?: string[], selector = 'main' ): Promise<void> {
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		await tab.route( 'https://fixture.test/**', route => route.fulfill( { contentType: 'text/css', body: '.target{font-size:18px}' } ) );
+		for ( const width of [ 390, 768, 1440 ] ) {
+			await tab.setViewportSize( { width, height: 900 } );
+			const measure = async ( html: string ) => {
+				await tab.setContent( html );
+				return tab.locator( selector ).evaluate( ( node, names ) => {
+					const css = getComputedStyle( node );
+					return names.map( name => css.getPropertyValue( name ) );
+				}, properties );
+			};
+			const expected = await measure( width < 1200 ? mobile : desktop );
+			if ( width < 1200 && expectedPhone ) expect( expected ).toEqual( expectedPhone );
+			expect( await measure( assembled ), `computed styles at ${ width }px` ).toEqual( expected );
+		}
+	} finally { await browser.close(); }
+}
+
+describe( 'counterpart stylesheet deltas (#1286)', () => {
+	it( 'replays only alias-changed nodes from byte-identical Framer SSR sheets', async () => {
+		const common = '.framer-84zrh{display:flex;gap:40px;width:900px;height:90px}.framer-1vf3dh3{width:1px}';
+		const variant = '.framer-84zrh.framer-v-13gjlia{gap:24px;width:390px;height:76px}' +
+			'.framer-84zrh.framer-v-13gjlia .framer-1vf3dh3{flex:0 0 auto;width:100%}' +
+			'@supports (display:flex){.framer-84zrh.framer-v-13gjlia{align-items:center}}' +
+			'.framer-84zrh.framer-v-13gjlia .logo{height:20px}';
+		// Common nodes after the aliased rules must not inflate the replay.
+		const tail = '@media (min-width:300px){.unrelated{color:green}}.unrelated{padding:4px}';
+		const head = `<style data-framer-css-ssr-minified>${ common + variant + tail }</style>`;
+		const markup = ( classes: string ) => `<main id="header" class="framer-84zrh ${ classes }"><a id="logo" class="framer-1vf3dh3 logo">Logo</a></main>`;
+		const desktop = page( markup( 'framer-v-desktop' ), head );
+		const mobile = page( markup( 'framer-v-13gjlia' ).replace( '</main>', '<span id="phone-only">Phone menu</span></main>' ), head );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile, switchWidth: 1199 } );
+		expect( result.hasMobileDocument ).toBe( false );
+		const $ = cheerio.load( result.html );
+		const alias = $( '#header' ).attr( 'class' )!.split( /\s+/ ).find( token => token.startsWith( 'data-blocks-engine-capture-responsive-class-' ) );
+		expect( alias ).toBeDefined();
+		expect( $( 'style[media="(max-width:1199px)"]' ).text() ).toBe( variant.replaceAll( 'framer-v-13gjlia', alias! ) );
+		expect( $( 'style:not([media])' ).text() ).toContain( common + variant + tail );
+		await expectStylesheetParity( desktop, mobile, result.html, [ 'gap', 'width', 'height' ], [ '24px', '390px', '76px' ] );
+		await expectStylesheetParity( desktop, mobile, result.html, [ 'width' ], [ '390px' ], '#logo' );
+	} );
+	it.each( [
+		{ name: 'desktop duplicate keys', desktop: '.a{margin:0}.a{margin:0}', mobile: '.a{margin:0}', attributes: '' },
+		{ name: 'phone duplicate keys', desktop: '.a{margin:0}', mobile: '.a{margin:0}.a{margin:0}', attributes: '' },
+		{ name: 'reordered common nodes', desktop: '.a{margin:0}@media (min-width:300px){.b{padding:0}}', mobile: '@media (min-width:300px){.b{padding:0}}.a{margin:0}', attributes: '' },
+		{ name: 'unaligned sheet layout', desktop: '.a{margin:0}', mobile: '.a{margin:0}', attributes: ' data-other' },
+		... [ '@import "a.css";', '@layer base;', '@layer base{.b{padding:0}}', '@charset "UTF-8";' ].map( rule => ( {
+			name: rule, desktop: `${ rule }.a{margin:0}`, mobile: `${ rule }.a{margin:0}`, attributes: '',
+		} ) ),
+	] )( 'retains full replay for $name', ( { desktop: base, mobile: phone, attributes } ) => {
+		const desktop = page( '<main>Hello</main>', `<style>${ base }.target{color:red}</style>` );
+		const mobileCss = `${ phone }.target{color:blue}`;
+		const mobile = page( '<main>Hello</main>', `<style${ attributes }>${ mobileCss }</style>` );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( result.html );
+		expect( $( 'style[media="(max-width:767px)"]' ).text() ).toBe( mobileCss );
+	} );
+
+	it( 'keeps later common rules after a mobile delta, including overlapping selectors', () => {
+		const desktopCss = '.common{margin:0}.target{color:red}.target.special{color:green}';
+		const mobileCss = '.common{margin:0}.target{color:blue}.target.special{color:green}';
+		const desktop = page( '<main class="target special common">Hello</main>', `<style>${ desktopCss }</style>` );
+		const mobile = page( '<main class="target special common">Hello</main>', `<style>${ mobileCss }</style>` );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( result.html );
+		expect( $( 'style[media="(max-width:767px)"]' ).text() ).toBe( '.target{color:blue}.target.special{color:green}' );
+	} );
+
+	it( 'measures the Framer SSR replay and preserves computed styles', async () => {
+		const common = Array.from( { length: 9 }, ( _, i ) => [
+			`.rule-${ i }{margin-left:${ i }px}`,
+			`@supports not (color:color(display-p3 1 1 1)){.rule-${ i }{color:rgb(1,2,3)}}`,
+			`@media (min-width:${ 200 + i * 10 }px){.rule-${ i }{border-left-width:${ i }px}}`,
+		].join( '' ) ).join( '' ) + '@font-face{font-family:fixture;src:local(Arial)}@keyframes fixture{from{opacity:0}to{opacity:1}}';
+		const desktopCss = `${ common }.target{color:red}.added{padding:3px}@media (min-width:300px){.target{letter-spacing:1px}}`;
+		const delta = '.target{color:blue}.added{padding:7px}@media (min-width:300px){.target{letter-spacing:2px}}';
+		const mobileCss = common + delta;
+		const links = '<link rel="stylesheet" href="https://fixture.test/a.css"><link rel="stylesheet" href="https://fixture.test/b.css">';
+		const markup = '<main class="target added rule-4">Hello</main>';
+		const desktop = page( markup, `${ links }<style data-framer-css-ssr-minified>${ desktopCss }</style>` );
+		const mobile = page( markup, `${ links }<style data-framer-css-ssr-minified>${ mobileCss }</style>` );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile, switchWidth: 1199 } );
+		const $ = cheerio.load( result.html );
+		const phoneCss = $( 'style[media="(max-width:1199px)"]' ).text();
+		// Only the two changed flat rules and changed media block replay;
+		// identical conditional blocks, font faces and keyframes stay common.
+		expect( phoneCss ).toBe( delta );
+		expect( Buffer.byteLength( phoneCss ) ).toBeLessThan( Buffer.byteLength( mobileCss ) / 10 );
+		expect( $( 'link' ) ).toHaveLength( 2 );
+		await expectStylesheetParity( desktop, mobile, result.html, [ 'color', 'padding', 'margin-left', 'font-size', 'letter-spacing' ], [ 'rgb(0, 0, 255)', '7px', '4px', '18px', '2px' ] );
+	} );
+} );
+
 describe( 'moved body class selectors', () => {
 	it.each( [ true, false ] )( 'rewrites moved compounds with shared styles=%s', shared => {
 		const css = 'body.desk .grid{display:flex} body.mob .grid{display:block} body.page{margin:0} body.desk > .grid{gap:2px} body.page.desk[data-layout]:hover > .grid{gap:3px}';

@@ -1843,9 +1843,84 @@ function styleBlocks( html: string ): string[] {
  * survive assembly unscoped rather than being narrowed to whichever viewport's
  * copy happens to be kept, because the source served it to both.
  */
-function sharedStyleContents( desktopHtml: string, mobileHtml: string ): Set< string > {
-	const desktopBlocks = new Set( styleBlocks( desktopHtml ) );
-	return new Set( styleBlocks( mobileHtml ).filter( ( block ) => desktopBlocks.has( block ) ) );
+class SharedStyles extends Set< string > {
+	readonly desktop = new Map< string, Array< { common: boolean; css: string } > >();
+	readonly mobile = new Map< string, string >();
+}
+
+function sharedStyleContents( desktopHtml: string, mobileHtml: string ): SharedStyles {
+	const desktop = styleBlocks( desktopHtml );
+	const mobile = styleBlocks( mobileHtml );
+	const layout = ( html: string ): string => {
+		const $ = cheerio.load( html );
+		return $( 'head style,head link[rel~="stylesheet" i]' ).toArray().map( node => {
+			const sheet = $( node );
+			return sheet.is( 'style' ) ? `style:${ JSON.stringify( sheet.attr() ) }` : $.html( node );
+		} ).join( '\n' );
+	};
+	const shared = new SharedStyles( mobile.filter( block => desktop.includes( block ) ) );
+	// Pair only aligned source sheets. Moving rules between unrelated sheets
+	// would lose the cascade information this optimization relies on.
+	if ( desktop.length !== mobile.length || layout( desktopHtml ) !== layout( mobileHtml ) ) return shared;
+	// Promoting a common rule from a later sheet could move it before the
+	// preceding sheet's replay. Optimize one differing counterpart at a time;
+	// multiple differing sheets retain the established viewport-only cascade.
+	if ( mobile.filter( block => ! shared.has( block ) ).length !== 1 ) return shared;
+	for ( let index = 0; index < mobile.length; index++ ) {
+		if ( shared.has( mobile[ index ] ) ) continue;
+		const projection = projectStylesheet( () => {
+			const base = parseCss( desktop[ index ] );
+			const phone = parseCss( mobile[ index ] );
+			// Compare whole top-level nodes, including conditional blocks, font
+			// faces and keyframes. Never split a block or promote order-sensitive
+			// imports, layer declarations/blocks or charset declarations.
+			let orderSensitive = false;
+			for ( const sheet of [ base, phone ] ) sheet.walkAtRules( rule => {
+				if ( /^(?:import|layer|charset)$/i.test( rule.name ) ) orderSensitive = true;
+			} );
+			if ( orderSensitive ) return;
+			const keys = base.nodes.map( node => node.toString() );
+			const phoneKeys = phone.nodes.map( node => node.toString() );
+			// Duplicate keys and reordered common nodes cannot be identified by
+			// content alone. Fall back rather than promote the wrong occurrence.
+			if ( new Set( keys ).size !== keys.length || new Set( phoneKeys ).size !== phoneKeys.length ) return;
+			let previous = -1;
+			for ( const key of phoneKeys ) {
+				const position = keys.indexOf( key );
+				if ( position === -1 ) continue;
+				if ( position < previous ) return;
+				previous = position;
+			}
+			const retained = new Set< string >();
+			let lastCommon = -1;
+			let changed = false;
+			for ( const node of [ ...phone.nodes ] ) {
+				const key = node.toString();
+				const position = keys.indexOf( key );
+				// Once a delta has appeared, replay later common rules too: even
+				// different selectors can match the same node, and shorthands,
+				// custom properties and !important make property guesses unsafe.
+				if ( ! changed && position > lastCommon ) {
+					lastCommon = position;
+					retained.add( key );
+					node.remove();
+				} else changed = true;
+			}
+			if ( retained.size === 0 ) return;
+			const runs: Array< { common: boolean; css: string } > = [];
+			for ( const node of base.nodes ) {
+				const common = retained.has( node.toString() );
+				const last = runs.at( -1 );
+				if ( last?.common === common ) last.css += node.toString();
+				else runs.push( { common, css: node.toString() } );
+			}
+			return { runs, delta: phone.toString() };
+		} );
+		if ( ! projection ) continue;
+		shared.desktop.set( desktop[ index ], projection.runs );
+		shared.mobile.set( mobile[ index ], projection.delta );
+	}
+	return shared;
 }
 
 function responsiveMobileStyles(
@@ -1872,7 +1947,26 @@ function responsiveMobileStyles(
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {
-				const style = aliasResponsiveClasses( original, classAliases );
+				// Byte-identical counterparts have no raw delta, but aliasing can
+				// still change individual selectors in their phone replay.
+				const delta = ( skip instanceof SharedStyles ? skip.mobile.get( original ) : undefined ) ??
+					( skip.has( original ) ? '' : undefined );
+				// Common rules whose selector spelling changes still need a phone
+				// copy. Select before aliasing, retaining their original source order.
+				const selected = delta !== undefined && classAliases.size > 0
+					? projectStylesheet( () => {
+						const rules = parseCss( original );
+						const deltaKeys = new Set( parseCss( delta ).nodes.map( node => node.toString() ) );
+						for ( const node of [ ...rules.nodes ] ) {
+							const css = node.toString();
+							const aliasChanged = aliasResponsiveClasses( css, classAliases ) !== css;
+							if ( ! aliasChanged && ! deltaKeys.has( css ) ) node.remove();
+						}
+						return rules.toString();
+					}, onUnparseable ) ?? original
+					: delta ?? original;
+				const style = aliasResponsiveClasses( selected, classAliases );
+				if ( ! style.trim() ) return '';
 				const projected = scope ? projectStylesheet( () => scopeCss( style, { scope, rootClasses: [ ...rootClasses, DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] } ), onUnparseable ) : style;
 				return projected === undefined ? '' : `<style media="(max-width:${ switchWidth }px)">${ projected }</style>`;
 			}
@@ -1903,6 +1997,12 @@ function scopedStyles(
 			// width-independent by construction; narrowing them to one side of
 			// the switch would strand the other regime's rule.
 			if ( FLUID_RULES_STYLE_ATTRIBUTE.test( attributes ) ) return match;
+			const runs = skip instanceof SharedStyles ? skip.desktop.get( css.trim() ) : undefined;
+			if ( runs ) {
+				return runs.map( run =>
+					run.common ? `<style${ attributes }>${ run.css }</style>` : scopedStyles( `<style${ attributes }>${ run.css }</style>`, media )
+				).join( '' );
+			}
 			if ( skip.has( css.trim() ) ) return `<style${ attributes }>${ css }</style>`;
 			const existingMedia = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
 			if ( ! existingMedia ) return `<style${ attributes } media="${ media }">${ css }</style>`;
