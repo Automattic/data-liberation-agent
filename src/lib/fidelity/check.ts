@@ -25,6 +25,7 @@ import {
 	settleDocument,
 	triggerLazyLoad,
 	lazyLoadScrollPose,
+	restoreTopScrollState,
 	waitForStable,
 	type DismissedOverlay,
 	type OverlayTarget,
@@ -384,15 +385,26 @@ export async function observePage(
 			for ( const url of urls ) emojiUrls.add( url );
 			await restoreRuntimeEmoji( page );
 		}
-		// Evidence describes the settled baseline, not the page left behind by
-		// anchor/dialog probes (which can scroll or leave a popup open).
-		await onBaseline?.();
 		// The sweep owes the top pose back. Image and text geometry are
 		// viewport-relative, so a page still parked where an interrupted sweep
 		// left it would be scored as every image having moved.
 		if ( ! skipScrollProbe ) {
 			const pose = await page.evaluate( lazyLoadScrollPose );
 			if ( pose.x || pose.y || pose.innerY ) throw new Error( `Observation pose unproven: lazy-load sweep left the document scrolled to (${ pose.x }, ${ pose.y }), inner scroller at ${ pose.innerY }${ sweepInterruption ? ` after it was interrupted: ${ sweepInterruption }` : '' }` );
+		}
+		if ( onBaseline ) {
+			// Baseline consumers can scroll (e.g. fragment probes). Own their
+			// restore here, after proving the sweep, and before measuring geometry.
+			try {
+				await onBaseline();
+			} finally {
+				const pose = await page.evaluate( lazyLoadScrollPose );
+				if ( pose.x || pose.y || pose.innerY ) await restoreTopScrollState( page );
+			}
+			if ( ! skipScrollProbe ) {
+				const pose = await page.evaluate( lazyLoadScrollPose );
+				if ( pose.x || pose.y || pose.innerY ) throw new Error( `Observation pose unproven: baseline callback left the document scrolled to (${ pose.x }, ${ pose.y }), inner scroller at ${ pose.innerY }` );
+			}
 		}
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
