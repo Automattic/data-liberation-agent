@@ -70,6 +70,17 @@ describe( 'wix beforeFluid image geometry', () => {
 		}
 	}, 30_000 );
 
+	it( 'restores missing Wix image sources without changing hydrated images', async () => {
+		const tab = await browser.newPage();
+		try {
+			await tab.setContent('<!doctype html><html><body><main><a href="/post/"><div><wow-image data-image-info="{&quot;displayMode&quot;:&quot;fill&quot;,&quot;targetWidth&quot;:450,&quot;targetHeight&quot;:253,&quot;imageData&quot;:{&quot;width&quot;:1200,&quot;height&quot;:750,&quot;uri&quot;:&quot;9820c7_ead8a9bee4d04fc7bd3ef3a50ff53949~mv2.png&quot;,&quot;displayMode&quot;:&quot;fill&quot;}}"><img alt="Thumb"></wow-image></div></a><wow-image data-image-info="{}"><img src="kept.png"></wow-image></main></body></html>');
+			await wixAdapter.liberation!.beforeFluid!( tab, { url: 'https://example.com/', viewport: 'desktop' } );
+			expect( await tab.locator( 'wow-image img' ).first().getAttribute( 'src' ) ).toMatch( /^https:\/\/static\.wixstatic\.com\/media\/9820c7_ead8a9bee4d04fc7bd3ef3a50ff53949~mv2\.png/ );
+			expect( await tab.locator( 'wow-image img' ).first().getAttribute( 'width' ) ).toBe( '450' );
+			expect( await tab.locator( 'wow-image img' ).nth( 1 ).getAttribute( 'src' ) ).toBe( 'kept.png' );
+		} finally { await tab.close(); }
+	}, 30_000 );
+
 	it( 'leaves an image whose declared mode is not provably container-relative to the sweep', async () => {
 		const tab = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {

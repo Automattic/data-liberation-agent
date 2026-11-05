@@ -8,6 +8,7 @@
 // rediscovering it from pixels.
 //
 import type { Page } from 'playwright';
+import { wixStaticMediaUrl } from './capture.js';
 
 const WIX_IMAGE_HOST = 'wow-image[data-image-info]';
 
@@ -96,6 +97,45 @@ function applyWixImageGeometry( { selector, declared }: { selector: string; decl
 		applied++;
 	} );
 	return applied;
+}
+
+function applyWixImageSources( { selector, sources }: { selector: string; sources: Array< { info: string; src: string; width?: number; height?: number } | null > } ): number {
+	const hosts = [ ...document.querySelectorAll( selector ) ];
+	let applied = 0;
+	hosts.forEach( ( host, index ) => {
+		const source = sources[ index ];
+		if ( ! source || host.getAttribute( 'data-image-info' ) !== source.info ) return;
+		const image = host.querySelector< HTMLImageElement >( ':scope > img' );
+		if ( ! image || image.hasAttribute( 'src' ) || image.hasAttribute( 'srcset' ) ) return;
+		image.setAttribute( 'src', source.src );
+		if ( source.width && ! image.hasAttribute( 'width' ) ) image.setAttribute( 'width', String( source.width ) );
+		if ( source.height && ! image.hasAttribute( 'height' ) ) image.setAttribute( 'height', String( source.height ) );
+		applied++;
+	} );
+	return applied;
+}
+
+/** Supply the declared source for Wix images whose runtime never hydrated them. */
+export async function normalizeWixImageSources( page: Page ): Promise< number > {
+	const infos = await page.evaluate( selector =>
+		[ ...document.querySelectorAll( selector ) ].map( host => ( {
+			info: host.getAttribute( 'data-image-info' ),
+			missing: (() => { const image = host.querySelector( ':scope > img' ); return !!image && !image.hasAttribute( 'src' ) && !image.hasAttribute( 'srcset' ); })(),
+		} ) ), WIX_IMAGE_HOST );
+	const sources = infos.map( ( { info, missing } ) => {
+		if ( !info || !missing ) return null;
+		try {
+			const value = JSON.parse( info ) as { imageData?: { uri?: unknown }; targetWidth?: unknown; targetHeight?: unknown };
+			const uri = value.imageData?.uri;
+			if ( typeof uri !== 'string' || !uri ) return null;
+			const width = value.targetWidth;
+			const height = value.targetHeight;
+			const sized = typeof width === 'number' && width > 0 && typeof height === 'number' && height > 0;
+			const size = sized ? { width: width as number, height: height as number } : undefined;
+			return { info, src: wixStaticMediaUrl( uri, size ), ...( size ? { width: size.width, height: size.height } : {} ) };
+		} catch { return null; }
+	} );
+	return page.evaluate( applyWixImageSources, { selector: WIX_IMAGE_HOST, sources } );
 }
 
 /** Normalize every declared Wix image on the page; returns how many were rewritten. */

@@ -14,7 +14,7 @@ import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PRE
 import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
 import { portWixVideoPlayers, portWixBackgroundVideos } from './video.js';
-import { normalizeWixImageGeometry } from './image-geometry.js';
+import { normalizeWixImageGeometry, normalizeWixImageSources } from './image-geometry.js';
 import { normalizeWixGalleryStrips } from './gallery-strip-geometry.js';
 
 /**
@@ -944,6 +944,7 @@ export const capture: LiberationHooks = {
 	 * (see image-geometry.ts).
 	 */
 	beforeFluid: async ( page ) => {
+		await normalizeWixImageSources( page );
 		await normalizeWixImageGeometry( page );
 	},
 
