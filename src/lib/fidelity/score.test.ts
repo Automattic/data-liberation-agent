@@ -37,6 +37,18 @@ const img = ( key: string, x: number, y: number, width: number, height: number )
 } );
 
 describe( 'scoreViewport', () => {
+	it( 'fails visible decode regressions but not equally undecoded source images', () => {
+		const image = { ...img( 'card.png', 10, 10, 100, 100 ), decoded: false };
+		const copy = at( 390, { images: [ image ] } );
+		expect( scoreViewport( copy, copy ).pass ).toBe( true );
+		for ( const decoded of [ true, undefined ] ) {
+			expect( scoreViewport( at( 390, { images: [ { ...image, decoded } ] } ), copy ).failures )
+				.toContain( 'images 1 visible image(s) pending or failed decoding' );
+		}
+		const belowFold = at( 390, { images: [ { ...image, y: 1200, inViewport: false } ] } );
+		expect( scoreViewport( at( 390, { images: [ { ...image, decoded: true } ] } ), belowFold ).pass ).toBe( true );
+	} );
+
 	it( 'passes when the copy matches the source at an unsampled width', () => {
 		const score = scoreViewport( at( 1600 ), at( 1600 ) );
 		expect( score.pass ).toBe( true );

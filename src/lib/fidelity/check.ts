@@ -490,6 +490,17 @@ export async function observePage(
 				}
 				return parts.join( '/' );
 			};
+			const horizontallyVisible = ( image: HTMLImageElement ): boolean => {
+				const rect = image.getBoundingClientRect();
+				let left = Math.max( 0, rect.left ), right = Math.min( window.innerWidth, rect.right );
+				for ( let parent = image.parentElement; parent && left < right; parent = parent.parentElement ) {
+					if ( ! /^(auto|scroll|hidden|clip)$/.test( getComputedStyle( parent ).overflowX ) ) continue;
+					const box = parent.getBoundingClientRect();
+					left = Math.max( left, box.left + parent.clientLeft );
+					right = Math.min( right, box.left + parent.clientLeft + parent.clientWidth );
+				}
+				return left < right;
+			};
 			const images = await Promise.all(
 				[ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
 					.map( ( image ) => ( {
@@ -498,13 +509,16 @@ export async function observePage(
 						role: semanticRole( image ),
 						decoded: image.complete && image.naturalWidth > 0,
 						srcsets: renditionSrcsets( image ),
-						hidden: getComputedStyle( image ).visibility === 'hidden',
+						hidden: getComputedStyle( image ).visibility === 'hidden' || ! horizontallyVisible( image ),
 					} ) )
+					// Keep below-the-fold images for whole-page geometry checks, but
+					// not cards parked outside the horizontal viewport in lazy rails.
 					.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
 					.map( async ( { rect, src, srcsets, role, decoded } ) => ( {
 						key: src,
 						role,
 						decoded,
+						inViewport: rect.bottom > 0 && rect.top < window.innerHeight,
 						srcsets,
 						x: Math.round( rect.x ),
 						y: Math.round( rect.y ),

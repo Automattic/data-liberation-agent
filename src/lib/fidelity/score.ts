@@ -24,6 +24,8 @@ export interface RenderedImage {
 	role?: string;
 	/** False when the visible image has not decoded; an occupied box is not proof of real media. */
 	decoded?: boolean;
+	/** Intersects the observation viewport; absent in older evidence. */
+	inViewport?: boolean;
 	x: number;
 	y: number;
 	width: number;
@@ -393,7 +395,13 @@ export function scoreViewport(
 	if ( liberated.images.length > matchedImages ) {
 		notes.push( `images ${ liberated.images.length - matchedImages } extra in copy (not a failure)` );
 	}
-	const undecoded = liberated.images.filter( image => image.decoded === false );
+	// Readiness is relative to source evidence, not a demand that the copy
+	// repair an equally undecoded source image. Unknown legacy decode state
+	// is not evidence for an exemption.
+	const equallyUndecoded = new Set( matchRenderedImages( source.images, liberated.images )
+		.filter( pair => pair.source.decoded === false && pair.candidate.decoded === false )
+		.map( pair => pair.candidate ) );
+	const undecoded = liberated.images.filter( image => image.decoded === false && image.inViewport !== false && ! equallyUndecoded.has( image ) );
 	if ( undecoded.length ) failures.push( `images ${ undecoded.length } visible image(s) pending or failed decoding` );
 
 	if ( liberated.overflow && ! source.overflow ) {
