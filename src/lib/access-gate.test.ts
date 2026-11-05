@@ -45,9 +45,9 @@ const pages: Record< string, string > = {
 // The fixture's own runtime script spells the dialog out; assert on the document.
 const markup = ( html: string ) => html.replace( /<script[\s\S]*?<\/script>/gi, '' );
 
-async function source(): Promise< string > {
+async function source( routes: Record< string, string > = pages ): Promise< string > {
 	server = createServer( ( req, res ) => {
-		const page = pages[ new URL( req.url ?? '/', 'http://x' ).pathname ];
+		const page = routes[ new URL( req.url ?? '/', 'http://x' ).pathname ];
 		res.statusCode = page ? 200 : 404;
 		res.setHeader( 'content-type', 'text/html' );
 		res.end( page ?? 'not found' );
@@ -124,3 +124,18 @@ it( 'captures a members-only route as an editable placeholder over the public si
 	expect( log.join( '\n' ) ).toContain( 'captured as placeholders and are not compared against the live source: /dues' );
 	await expect( checkFidelity( { directory, widths: [ 1440 ], settleMs: 200, stage: 'drift', routes: [ '/dues' ] } ) ).rejects.toThrow( 'access-gate placeholder' );
 }, 240_000 );
+
+it( 'fails fast when the public shell stops answering while the placeholder is placed', async () => {
+	// The shell loads, then its script never yields again.
+	const home = await source( { ...pages, '/': shell( 'Home | Owner HOA', '<h1>Welcome neighbours</h1>', 'addEventListener(\'load\',()=>setTimeout(()=>{for(;;){}}));' ) } );
+	const dues = new URL( '/dues', home ).href;
+	mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
+	directory = mkdtempSync( join( process.cwd(), '.tmp-test', 'access-gate-' ) );
+	const result = await captureScreenshots( {
+		urls: [ dues ], primaryUrl: dues, outputDir: directory, viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
+		cleanupPolicy: cleanupPolicy( wixCapture.cleanupRules ), learnFluid: false, settleMs: 0, evaluateTimeoutMs: 1_000,
+	} );
+	expect( result.failed ).toBe( 1 );
+	const failures = JSON.parse( readFileSync( join( directory, 'screenshots', 'failures.json' ), 'utf8' ) );
+	expect( failures ).toMatchObject( [ { stage: 'evaluate', error: expect.stringMatching( /stopped responding while settling \(access-gate shell\)/ ) } ] );
+}, 150_000 );
