@@ -19,6 +19,9 @@ import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/captur
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 import { watchSourceRuntimeErrors } from '../source-readiness.js';
 
+/** Upper bound for in-flight source images to settle before the reference is frozen. */
+const MEDIA_READY_TIMEOUT_MS = 10_000;
+
 export interface ReferenceCollectorOptions {
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	publicUrlsOnly?: boolean;
@@ -236,13 +239,17 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// renditions do not become different origin/path documents.
 						if ( isRouteDrift( referencePage.url(), navigationUrl ) ) entry.readiness.reasons.push( 'source route drift' );
 						const reachabilityKey = await installImageReachability( referencePage );
-						const mediaReady = await referencePage.evaluate( key => {
+						// Poll rather than sample once: under load an in-flight image can
+						// finish moments after the cleanup pass, and app re-renders can
+						// replace an already-loaded <img> with a fresh, still-decoding one.
+						// Failed and never-loading images still time out as unready.
+						const mediaReady = await referencePage.waitForFunction( key => {
 							const unreachable = ( window as unknown as Record<symbol, ( image: HTMLImageElement ) => boolean> )[ Symbol.for( key ) ];
 							return [ ...document.images ].every( image => {
 								const rect = image.getBoundingClientRect();
 								return rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && image.naturalWidth > 0 );
 							} );
-						}, reachabilityKey );
+						}, reachabilityKey, { timeout: MEDIA_READY_TIMEOUT_MS, polling: 250 } ).then( () => true, () => false );
 						if ( ! mediaReady ) entry.readiness.reasons.push( 'source images pending or failed' );
 						entry.readiness.mediaReady = mediaReady;
 						entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
