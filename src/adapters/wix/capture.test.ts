@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	capture,
 	collectWixSlideshowSlides,
+	installWixGallerySlideshow,
 	isWixTelemetryRequest,
 	preserveWixSlideshowSlides,
 	revealAndCollectWixSlideshows,
@@ -173,6 +174,25 @@ describe( 'WIX_CAPTURE_CHROME_SELECTOR', () => {
 		expect( $( '#menu-hiddenA11ySubMenuIndication' ) ).toHaveLength( 0 );
 		expect( $( '#WIX_ADS' ) ).toHaveLength( 0 );
 		expect( $( '#authored-more' ).text() ).toBe( 'More' );
+	} );
+} );
+
+describe( 'installWixGallerySlideshow', () => {
+	it.each( [
+		[ 'is the wix-iframe wrapper', '<wix-iframe id="comp-x" class="comp-x" data-src=""><iframe src="https://example.test/gallery"></iframe></wix-iframe>' ],
+		[ 'contains the wix-iframe', '<div id="comp-x" class="comp-x"><wix-iframe data-src=""><iframe src="https://example.test/gallery"></iframe></wix-iframe></div>' ],
+	] )( 'leaves no iframe surface when the host %s', ( _case, host ) => {
+		const dom = new JSDOM( `<!doctype html><html><head></head><body>${ host }</body></html>` );
+		const originalDocument = globalThis.document;
+		Object.defineProperty( globalThis, 'document', { configurable: true, value: dom.window.document } );
+		try {
+			installWixGallerySlideshow( { compId: 'comp-x', markup: '<div class="data-blocks-engine-capture-slideshow"><img src="a.jpg" alt=""></div>', stylesheet: '' } );
+			const document = dom.window.document;
+			expect( document.querySelector( 'wix-iframe, iframe' ) ).toBeNull();
+			expect( document.querySelector( '#comp-x.comp-x .data-blocks-engine-capture-slideshow' ) ).not.toBeNull();
+		} finally {
+			Object.defineProperty( globalThis, 'document', { configurable: true, value: originalDocument } );
+		}
 	} );
 } );
 

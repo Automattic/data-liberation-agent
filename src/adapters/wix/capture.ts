@@ -578,6 +578,38 @@ export const WIX_PROBE_EXCLUSIONS = [
 	},
 ] as const;
 
+/**
+ * Install a ported gallery slideshow in its Wix component host (in-page).
+ * The host may itself be the `<wix-iframe>` platform wrapper; it is then
+ * replaced by a plain element keeping its id/class, so the component's sizing
+ * CSS still applies and no iframe surface survives around the slideshow.
+ */
+export function installWixGallerySlideshow( { compId, markup, stylesheet }: { compId: string; markup: string; stylesheet: string } ): void {
+	const host = document.getElementById( compId );
+	if ( ! host ) return;
+	if ( ! document.getElementById( 'data-blocks-engine-capture-slideshow-css' ) ) {
+		const style = document.createElement( 'style' );
+		style.id = 'data-blocks-engine-capture-slideshow-css';
+		style.textContent = stylesheet;
+		document.head.append( style );
+	}
+	const wrap = document.createElement( 'div' );
+	wrap.innerHTML = markup;
+	const slideshow = wrap.firstElementChild;
+	if ( ! slideshow ) return;
+	if ( host.localName === 'wix-iframe' ) {
+		const replacement = document.createElement( 'div' );
+		if ( host.id ) replacement.id = host.id;
+		if ( host.className ) replacement.className = host.className;
+		replacement.append( slideshow );
+		host.replaceWith( replacement );
+		return;
+	}
+	const frame = host.querySelector( 'iframe, wix-iframe' );
+	if ( frame ) frame.replaceWith( slideshow );
+	else host.replaceChildren( slideshow );
+}
+
 export const capture: LiberationHooks = {
 	probeExclusions: WIX_PROBE_EXCLUSIONS,
 	documentSelection: wixDocumentSelection,
@@ -965,26 +997,7 @@ export const capture: LiberationHooks = {
 				};
 			}, id );
 			const { html, css } = stripShowcaseMarkup( items, size );
-			await page.evaluate(
-				( { compId, markup, stylesheet } ) => {
-					const host = document.getElementById( compId );
-					if ( ! host ) return;
-					if ( ! document.getElementById( 'data-blocks-engine-capture-slideshow-css' ) ) {
-						const style = document.createElement( 'style' );
-						style.id = 'data-blocks-engine-capture-slideshow-css';
-						style.textContent = stylesheet;
-						document.head.append( style );
-					}
-					const wrap = document.createElement( 'div' );
-					wrap.innerHTML = markup;
-					const slideshow = wrap.firstElementChild;
-					if ( ! slideshow ) return;
-					const frame = host.querySelector( 'iframe, wix-iframe' );
-					if ( frame ) frame.replaceWith( slideshow );
-					else host.replaceChildren( slideshow );
-				},
-				{ compId: id, markup: html, stylesheet: css }
-			);
+			await page.evaluate( installWixGallerySlideshow, { compId: id, markup: html, stylesheet: css } );
 		}
 	},
 
