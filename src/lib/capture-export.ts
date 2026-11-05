@@ -682,8 +682,8 @@ const DESKTOP_CAPTURE_WIDTH = 1440;
 /**
  * Legacy width-only export fallback. These are stylesheet geometry boundaries,
  * not evidence of a device switch. A source-owned device or observed width
- * contract, or a route check's probed switch, bypasses this guess; undeclared
- * captures keep their existing output.
+ * contract, or a route check's probed switch, bypasses this guess. The phone
+ * document's own geometry evidence further bounds this fallback below.
  */
 function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined {
 	const path = join( outputDir, 'breakpoints.json' );
@@ -702,6 +702,17 @@ function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined 
 }
 
 
+/** A fixed phone document has no evidence supporting a tablet-width fallback. */
+function phoneResponsiveSwitchWidth( entry: CaptureManifestEntry, stylesheetWidth: number | undefined ): number | undefined {
+	const width = entry.profiles?.mobile?.viewport.width;
+	if ( ! width ) return stylesheetWidth;
+	const fluid = entry.fluidMobile;
+	const responsive = fluid && fluid.applied > 0 &&
+		fluid.sampledWidths?.some( sampled => sampled > width ) &&
+		Object.entries( fluid.byKind ).some( ( [ kind, count ] ) =>
+			count > 0 && ! [ 'constant', 'breakpoint', 'viewport-height' ].includes( kind ) );
+	return responsive ? stylesheetWidth : Math.min( width, stylesheetWidth ?? width );
+}
 
 function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
 	const media = new URL( sourceUrl );
@@ -1535,7 +1546,7 @@ function buildExportCapture(
 			const detectedFloor =
 				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : entry.deviceMode?.switchWidth !== undefined ? entry.deviceMode.switchWidth : typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 					? Math.round( entry.fluid.canvasFloor )
-					: siteSwitchWidth;
+					: phoneResponsiveSwitchWidth( entry, siteSwitchWidth );
 			if ( detectedFloor ) switchWidths.push( detectedFloor );
 			if ( entry.fluid ) fluidReports.push( entry.fluid );
 			if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );

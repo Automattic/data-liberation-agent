@@ -1097,7 +1097,9 @@ async function firstNewVisibleDialog(
 		let owned = controlled.find( ( element ) => element &&
 			( visible( element ) || Array.from( element.querySelectorAll( '*' ) ).some( visible ) ) &&
 			( controlledDisclosure || !element.hasAttribute( 'data-lib-visible-before' ) ) );
-		while ( owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) ) owned = owned.parentElement;
+		// For an authored aria-controls disclosure, the controlled element is the
+		// panel. Do not promote it to an enclosing landmark (for example a header).
+		while ( ! controlledDisclosure && owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) ) owned = owned.parentElement;
 		const surface = owned ?? candidates.find( ( element, index ) => {
 			if ( ! visible( element ) || wasVisible( element, index ) ) return false;
 			if ( element.matches( semanticSelector ) ) return true;

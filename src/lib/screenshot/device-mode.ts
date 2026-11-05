@@ -27,7 +27,7 @@ export const SERVER_HTML_IGNORED = [
 ] as const;
 
 /** Elements left out of the rendered structure comparison. */
-export const STRUCTURE_IGNORED = [ 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-lib-* probe markers or capture evidence attributes', 'the sibling position of empty HTML containers, elements with no child nodes other than void, replaced and form elements (their presence still counts)' ] as const;
+export const STRUCTURE_IGNORED = [ 'differences inside <head> (reported, not compared)', 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-lib-* probe markers or capture evidence attributes', 'the sibling position of empty HTML containers, elements with no child nodes other than void, replaced and form elements (their presence still counts)' ] as const;
 
 export interface DeviceModeDecision {
 	mode: DeviceMode;
@@ -54,9 +54,12 @@ export interface DeviceModeDecision {
 export interface StructureComparison {
 	desktopElements: number;
 	phoneElements: number;
-	/** Element paths present in one document and not the other, counted as a multiset. */
+	/** Element paths outside `<head>` present in one document and not the other, counted as a multiset. */
 	differingPaths: number;
 	firstDifference?: string;
+	/** Diagnostic only, present when the `<head>` paths differ in content or order. They never make a route dual. */
+	headDifferingPaths?: number;
+	firstHeadDifference?: string;
 }
 
 const TOKEN_NAME = String.raw`[\w:.-]*(?:csrf|xsrf|nonce|authenticity[_-]?token)[\w:.-]*`;
@@ -109,20 +112,34 @@ export async function resampleSiteServerHtml(
 	};
 }
 
-/** Compare two element-path lists, both in document order. */
-export function compareStructure( desktop: readonly string[], phone: readonly string[] ): StructureComparison {
+/** Differing paths of two element-path lists, counted as a multiset, and the first positional divergence. */
+function pathDifference( desktop: readonly string[], phone: readonly string[] ): { count: number; first?: string } {
 	const counts = new Map< string, number >();
 	for ( const path of desktop ) counts.set( path, ( counts.get( path ) ?? 0 ) + 1 );
 	for ( const path of phone ) counts.set( path, ( counts.get( path ) ?? 0 ) - 1 );
-	let differingPaths = 0;
-	for ( const count of counts.values() ) differingPaths += Math.abs( count );
+	let count = 0;
+	for ( const value of counts.values() ) count += Math.abs( value );
 	const index = desktop.findIndex( ( path, position ) => phone[ position ] !== path );
 	const at = index === -1 && desktop.length !== phone.length ? Math.min( desktop.length, phone.length ) : index;
+	return { count, ...( at === -1 ? {} : { first: `desktop ${ desktop[ at ] ?? '(end)' } / phone ${ phone[ at ] ?? '(end)' }` } ) };
+}
+
+const inHead = ( path: string ) => /^html>head\[\d+\](?:>|$)/.test( path );
+
+/**
+ * Compare two element-path lists, both in document order. Only the rendered
+ * body decides equivalence, as export's `documentsDiffer` does: `<head>`
+ * differences (meta order, a runtime-injected tag) are reported separately.
+ */
+export function compareStructure( desktop: readonly string[], phone: readonly string[] ): StructureComparison {
+	const rendered = pathDifference( desktop.filter( path => ! inHead( path ) ), phone.filter( path => ! inHead( path ) ) );
+	const head = pathDifference( desktop.filter( inHead ), phone.filter( inHead ) );
 	return {
 		desktopElements: desktop.length,
 		phoneElements: phone.length,
-		differingPaths,
-		...( at === -1 ? {} : { firstDifference: `desktop ${ desktop[ at ] ?? '(end)' } / phone ${ phone[ at ] ?? '(end)' }` } ),
+		differingPaths: rendered.count,
+		...( rendered.first ? { firstDifference: rendered.first } : {} ),
+		...( head.first ? { headDifferingPaths: head.count, firstHeadDifference: head.first } : {} ),
 	};
 }
 

@@ -15,6 +15,30 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.130] - 2026-11-05
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- Fix fixed-phone responsive fallback and stabilize probe test timeout
+
+## [0.33.129] - 2026-11-05
+
+### Changed
+- regenerate plugin bundles
+- Preserve Gamma toggle summary presentation
+
+## [0.33.128] - 2026-11-05
+
+### Changed
+- regenerate plugin bundles
+- Add resumable checkpoint captures for time-budgeted runs
+- Keep portable media rewrite patterns page-sized
+- Probe where a dual route's phone document starts instead of guessing the widest breakpoint
+- Attribute source runtime errors to their frame so subframe errors no longer block readiness
+- Add Google Sites detection and viewer-chrome cleanup
+
 ## [0.33.127] - 2026-11-05
 
 ### Changed

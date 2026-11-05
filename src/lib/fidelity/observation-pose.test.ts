@@ -23,6 +23,21 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { await browser.close(); }
 	}, 60_000 );
 
+	it( 'restores the baseline after a post-sweep fragment probe before measuring geometry', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
+			await page.setContent( fixture( false ) + '<a href="#target">Jump</a><div id="target">Target</div>' );
+			const observation = await observePage( page, 'about:blank', 800, 0, null, undefined, async () => {
+				expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
+				await page.locator( 'a' ).evaluate( link => ( link as HTMLAnchorElement ).click() );
+				expect( await page.evaluate( () => scrollY ) ).toBeGreaterThan( 0 );
+			}, true, false );
+			expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
+			expect( observation.images.map( image => [ image.x, image.y ] ) ).toEqual( [ [ 0, 0 ] ] );
+		} finally { await browser.close(); }
+	}, 60_000 );
+
 	it( 'refuses to report geometry from a page that will not return to the top', async () => {
 		const browser = await chromium.launch();
 		try {

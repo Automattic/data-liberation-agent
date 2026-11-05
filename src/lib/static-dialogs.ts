@@ -380,7 +380,9 @@ export function wireCapturedDialogs(
 						style: panel.attr( 'style' ) ?? null,
 						class: `${ panel.attr( 'class' ) ?? '' }${ dropdown ? ' data-blocks-engine-capture-dropdown' : '' }`.trim(),
 					},
-				} ) ).attr( 'hidden', '' );
+				} ) );
+				if ( restingPanel.attr( 'hidden' ) !== undefined ) panel.attr( 'hidden', '' );
+				else panel.removeAttr( 'hidden' );
 				if ( reusePanel && state.dialog?.restingInline && !dropdown ) {
 					// Opened snapshots are replay evidence, not the initial authoring
 					// tree. Keep the source's closed content and root attributes even

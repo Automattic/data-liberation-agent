@@ -260,7 +260,8 @@ async function anchorSelectors( page: Page, roots: readonly ChromeLandmark[], se
 		const bodyPath = ( element: Element ): number[] => {
 			const path: number[] = [];
 			for ( let node: Element | null = element; node && node !== document.body; node = node.parentElement ) {
-				path.unshift( Array.from( node.parentElement!.children ).filter( kept ).indexOf( node ) );
+				if ( ! node.parentElement ) return path;
+				path.unshift( Array.from( node.parentElement.children ).filter( kept ).indexOf( node ) );
 			}
 			return path;
 		};

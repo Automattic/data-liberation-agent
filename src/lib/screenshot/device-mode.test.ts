@@ -83,6 +83,27 @@ describe( 'device-mode evidence', () => {
 		} );
 	} );
 
+	it( 'decides on the rendered body: a head-only difference is a diagnostic, a body difference stays dual', () => {
+		const body = [ 'html>body[1]', 'html>body[1]>main[1]', 'html>body[1]>main[1]>h1[1]' ];
+		// Same HTML; the phone document carries one <meta> fewer before <title> (#1331).
+		const desktopPaths = [ 'html', 'html>head[1]', 'html>head[1]>meta[1]', 'html>head[1]>meta[2]', 'html>head[1]>title[1]', ...body ];
+		const phonePaths = [ 'html', 'html>head[1]', 'html>head[1]>meta[1]', 'html>head[1]>title[1]', ...body ];
+		const structure = compareStructure( desktopPaths, phonePaths );
+		expect( structure ).toEqual( {
+			desktopElements: 8, phoneElements: 7, differingPaths: 0,
+			headDifferingPaths: 1, firstHeadDifference: 'desktop html>head[1]>meta[2] / phone html>head[1]>title[1]',
+		} );
+		expect( decideRouteMode( { serverHtml: 'identical', structure } ).mode ).toBe( 'reflow-only' );
+		// Head child order alone (a <meta> moved after <title>) is reported and decides nothing.
+		const reordered = compareStructure( desktopPaths, [ ...phonePaths.slice( 0, 4 ), 'html>head[1]>meta[2]', ...body ] );
+		expect( reordered ).toMatchObject( { differingPaths: 0, headDifferingPaths: 0, firstHeadDifference: 'desktop html>head[1]>meta[2] / phone html>head[1]>title[1]' } );
+		expect( decideRouteMode( { serverHtml: 'identical', structure: reordered } ).mode ).toBe( 'reflow-only' );
+		// Control: the same head difference plus a phone-only body element is dual.
+		const bodyDiffers = compareStructure( desktopPaths, [ ...phonePaths, 'html>body[1]>aside[1]' ] );
+		expect( bodyDiffers ).toMatchObject( { differingPaths: 1, firstDifference: 'desktop (end) / phone html>body[1]>aside[1]' } );
+		expect( decideRouteMode( { serverHtml: 'identical', structure: bodyDiffers } ).mode ).toBe( 'dual' );
+	} );
+
 	it( 'uses export equivalence for runtime-injected phone nodes, but keeps real phone content dual', () => {
 		const desktop = '<html><head><title>Example</title></head><body><div><h1>Welcome</h1><button>Menu</button></div></body></html>';
 		const phone = desktop.replace( '</head>', '<link id="yui_3_17_2_1_123_46" rel="stylesheet" href="/widget.css"></head>' ).replace( '<body>', '<body><div id="yui_3_17_2_1_123_45"><span>Phone widget</span></div>' );
