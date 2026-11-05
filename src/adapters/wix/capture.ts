@@ -644,7 +644,7 @@ export const capture: LiberationHooks = {
     // from the "Sign In" control. The gate is listed first so a blocking gate
     // is recorded as the gate rather than as the dialog inside it.
     { id: 'wix-members-gate', category: 'provider-service',
-      selector: '[data-testid="siteMembersDialogBlockingLayer"]', accessGate: { provider: 'Wix' } },
+      selector: '[data-testid="siteMembersDialogBlockingLayer"], #SM_ROOT_COMP:has(input[type="password"])', accessGate: { provider: 'Wix' } },
     { id: 'wix-members-dialog', category: 'provider-service', selector: '[data-testid="siteMembersDialogLayout"]' },
     { id: 'wix-ai-assistant', category: 'provider-service', selector: WIX_AI_ASSISTANT_LAYER },
     { id: 'wix-chat-launcher', category: 'provider-service', selector: WIX_CHAT_LAUNCHER_LAYER },

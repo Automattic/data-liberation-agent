@@ -165,6 +165,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		} finally { await browser.close(); }
 	}, 30_000 );
 
+	it( 'recognizes and removes classic Wix password gates', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.setContent('<main><div id="SM_ROOT_COMP"><p>Please enter the password below.</p><input id="SM_ROOT_COMP_input" type="password"><button>Go</button></div></main>');
+			const policy = cleanupPolicy( wixAdapter.liberation?.cleanupRules );
+			await applySourceCleanup( page, policy );
+			const report = await readSourceCleanup( page, policy );
+			expect( report.records.map( record => record.rule ) ).toContain( 'wix-members-gate' );
+			expect( await page.locator( '#SM_ROOT_COMP' ).count() ).toBe( 0 );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it( 'cleans pinned chat overlays but preserves in-flow widgets and other pinned content', async () => {
 		const browser = await chromium.launch();
 		try {
