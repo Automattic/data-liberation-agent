@@ -263,6 +263,10 @@ function replayViewportEntrances(): void {
 	const named = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
 	named.__name ??= fn => fn;
 	const reduced = matchMedia( '(prefers-reduced-motion: reduce)' );
+	// Engines enumerate a keyframe's properties in different orders (Chromium
+	// changed it between releases), so the binding compares values, not order.
+	const signature = ( value: unknown ) => JSON.stringify( value, ( _key, field: unknown ) => field && typeof field === 'object' && ! Array.isArray( field )
+		? Object.fromEntries( Object.entries( field ).sort( ( [ left ], [ right ] ) => left < right ? -1 : left > right ? 1 : 0 ) ) : field );
 	for ( const element of document.querySelectorAll( '[data-blocks-engine-capture-viewport-entrance]' ) ) {
 		const state = JSON.parse( element.getAttribute( 'data-blocks-engine-capture-viewport-entrance' )! ) as EntranceState;
 		if ( element.closest( '[data-blocks-engine-capture-device-document]' ) && ! element.getClientRects().length ) continue;
@@ -291,8 +295,8 @@ function replayViewportEntrances(): void {
 			if ( running || complete ) return;
 			const effects = element.getAnimations().filter( ( animation ): animation is CSSAnimation => animation instanceof CSSAnimation &&
 				animation.timeline === document.timeline && state.cssAnimations!.some( binding => binding.name === animation.animationName ) );
-			const signatures = effects.map( effect => JSON.stringify( { name: effect.animationName, timing: effect.effect?.getTiming(), frames: ( effect.effect as KeyframeEffect ).getKeyframes() } ) ).sort();
-			if ( JSON.stringify( signatures ) !== JSON.stringify( state.cssAnimations!.map( binding => JSON.stringify( binding ) ).sort() ) ||
+			const signatures = effects.map( effect => signature( { name: effect.animationName, timing: effect.effect?.getTiming(), frames: ( effect.effect as KeyframeEffect ).getKeyframes() } ) ).sort();
+			if ( JSON.stringify( signatures ) !== JSON.stringify( state.cssAnimations!.map( binding => signature( binding ) ).sort() ) ||
 				effects.some( effect => effect.playState !== 'paused' || effect.currentTime !== 0 ) ) {
 				element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'authored paused CSS animation binding changed' ); return;
 			}

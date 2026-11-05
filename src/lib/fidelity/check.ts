@@ -904,6 +904,12 @@ export async function observePage(
 				entranceTransitions: ( window as typeof window & { __dlaEntrances?: { transitions: string[] } } ).__dlaEntrances?.transitions ?? [],
 				entranceLosses: Array.from( document.querySelectorAll( '[data-blocks-engine-capture-viewport-entrance-loss]' ) ).filter( element => element.getClientRects().length )
 					.map( element => `${ element.id || 'anonymous target' }: ${ element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) }` ),
+				// A lost binding whose authored entrance never started still paints its
+				// pending pose: what is measured is not what a visitor sees after entry.
+				entranceUnrevealed: Array.from( document.querySelectorAll( '[data-blocks-engine-capture-viewport-entrance-loss]' ) ).filter( element => element.getClientRects().length &&
+					element.getAnimations().some( animation => animation instanceof CSSAnimation && animation.timeline === document.timeline && animation.playState === 'paused' &&
+						animation.currentTime === 0 && animation.effect?.getComputedTiming().iterations !== Infinity ) )
+					.map( element => `${ element.id || 'anonymous target' }: ${ element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) }` ),
 				docWidth: document.documentElement.scrollWidth,
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
 				hashTargets,
@@ -949,6 +955,7 @@ export async function observePage(
 			responsiveAnimations: measured.responsiveAnimations,
 			entranceTransitions: measured.entranceTransitions,
 			entranceLosses: measured.entranceLosses,
+			entranceUnrevealed: measured.entranceUnrevealed,
 			docWidth: measured.docWidth,
 			overflow: measured.overflow,
 			externalHosts: [ ...new Set( requests.filter( request => ! ( request.image && emojiUrls.has( request.url ) ) )
@@ -1640,7 +1647,13 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
 						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, false, { runtimeEmoji, navigate: true } );
 					};
-					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await captureViewportScreenshot( page ); sourceViewport = await readViewport(); }
+					if ( stage === 'materialization' ) {
+						source = await measure( local );
+						// The frozen replay is the source here. If it left an entrance in its
+						// pending pose, the copy would be scored against content no visitor sees.
+						if ( source.entranceUnrevealed?.length ) throw new Error( `Source evidence unready: frozen viewport entrance never played: ${ source.entranceUnrevealed.join( '; ' ) }` );
+						sourcePng = await captureViewportScreenshot( page ); sourceViewport = await readViewport();
+					}
 					const liberated = await measure( candidate );
 					if ( ambiguousRenderedImages( source.images, liberated.images ).length ) throw new Error( 'Repeated image correspondence ambiguous: structural role/state does not uniquely identify occurrences' );
 					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), ...( profile ? [ evidenceSlug( profile ) ] : [] ), String( viewport ), state );

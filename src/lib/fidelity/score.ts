@@ -84,6 +84,8 @@ export interface LayoutObservation {
 	entranceTransitions?: string[];
 	/** Visible portable lifecycle bindings whose source/replay proof is unavailable. */
 	entranceLosses?: string[];
+	/** Lost bindings still paused in their pending pose: the entrance never played. */
+	entranceUnrevealed?: string[];
 	/** documentElement.scrollWidth. */
 	docWidth: number;
 	/** True when the document is wider than the viewport. */

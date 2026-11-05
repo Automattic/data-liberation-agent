@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { chromium, devices, type Page } from 'playwright';
 import { expect, it } from 'vitest';
+import * as cheerio from 'cheerio';
 import { observeViewportEntrances, stampViewportEntrances, collectViewportEntranceStartup } from './viewport-entrances.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { observePage } from './fidelity/check.js';
@@ -124,6 +125,42 @@ it( 'rejects altered authored timing even when every named CSS animation is regi
 		expect(await copy.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance-loss')).toBe('authored paused CSS animation binding changed');
 	} finally {await browser.close();if(!process.env.DLA_KEEP_DEVICE_EVIDENCE)rmSync(directory,{recursive:true,force:true})}
 },15_000 );
+
+it( 'replays a binding whose keyframe properties another engine enumerated in a different order', async () => {
+	const browser = await chromium.launch(); mkdirSync( '.tmp-test', { recursive: true } );
+	const directory = mkdtempSync( join( process.cwd(), '.tmp-test/finite-order-' ) );
+	try {
+		const source = await browser.newPage( { viewport: { width: 1000, height: 700 } } ); await source.addInitScript( observeViewportEntrances );
+		await source.goto( `data:text/html,${ encodeURIComponent( fixture( false ) ) }` );
+		await source.evaluate( () => scrollTo( 0, 1100 ) ); await source.waitForTimeout( 1200 );
+		const $ = cheerio.load( await exportSource( source, directory ) );
+		const entrance = $( '#entrance' );
+		const binding = JSON.parse( entrance.attr( 'data-blocks-engine-capture-viewport-entrance' )! );
+		const reversed = ( value: object ) => Object.fromEntries( Object.entries( value ).reverse() );
+		binding.cssAnimations = binding.cssAnimations.map( ( effect: { timing: object; frames: object[] } ) => reversed( { ...effect, timing: reversed( effect.timing ), frames: effect.frames.map( reversed ) } ) );
+		entrance.attr( 'data-blocks-engine-capture-viewport-entrance', JSON.stringify( binding ) );
+		const copy = await browser.newPage( { viewport: { width: 1000, height: 700 } } );
+		await copy.goto( `data:text/html,${ encodeURIComponent( $.html() ) }` );
+		await copy.evaluate( () => scrollTo( 0, 1100 ) ); await copy.waitForTimeout( 1200 );
+		expect( await copy.locator( '#entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ).toBeNull();
+		expect( await pose( copy ) ).toMatchObject( { state: 'complete', opacity: '1', effects: [] } );
+	} finally { await browser.close(); if ( ! process.env.DLA_KEEP_DEVICE_EVIDENCE ) rmSync( directory, { recursive: true, force: true } ); }
+}, 15_000 );
+
+it( 'reports an in-view entrance whose lost binding never played instead of measuring its pending pose', async () => {
+	const browser = await chromium.launch(); mkdirSync( '.tmp-test', { recursive: true } );
+	const directory = mkdtempSync( join( process.cwd(), '.tmp-test/finite-unrevealed-' ) );
+	try {
+		const source = await browser.newPage( { viewport: { width: 1000, height: 700 } } ); await source.addInitScript( observeViewportEntrances );
+		await source.goto( `data:text/html,${ encodeURIComponent( fixture( false, true ) ) }` ); await source.waitForTimeout( 1200 );
+		const portable = await exportSource( source, directory );
+		for ( const [ html, unrevealed ] of [ [ portable, [] ], [ portable.replace( 'neutralFade 450ms', 'neutralFade 451ms' ), [ 'entrance: authored paused CSS animation binding changed' ] ] ] as const ) {
+			const page = await browser.newPage( { viewport: { width: 1000, height: 700 } } );
+			const measured = await observePage( page, `data:text/html,${ encodeURIComponent( html ) }`, 1000, 1500, null, undefined, undefined, false, true );
+			expect( measured.entranceUnrevealed ).toEqual( unrevealed );
+		}
+	} finally { await browser.close(); if ( ! process.env.DLA_KEEP_DEVICE_EVIDENCE ) rmSync( directory, { recursive: true, force: true } ); }
+}, 30_000 );
 
 it( 'keeps cancelled source motion and unwitnessed pending lifecycles explicitly unproven', async () => {
 	const browser=await chromium.launch();
