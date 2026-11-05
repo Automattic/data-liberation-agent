@@ -17,7 +17,7 @@ import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type E
 import { lockMainFrameNavigation } from '../screenshot/screenshotter.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
-import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
+import { watchSourceRuntimeErrors } from '../source-readiness.js';
 
 export interface ReferenceCollectorOptions {
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
@@ -55,7 +55,7 @@ export interface ReferenceEntry {
 	device: string;
 	userAgent?: string;
 	state: string;
-	readiness: { ready: boolean; reasons: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean };
+	readiness: { ready: boolean; reasons: string[]; diagnostics?: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean };
 	observation?: ReferenceArtifact;
 	screenshot?: ReferenceArtifact;
 	document?: ReferenceArtifact;
@@ -156,7 +156,15 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					entries.push( entry );
 					let referencePage: Page | undefined;
 					let ownedResource: BrowserContext | Page | undefined;
-					const runtimeError = ( error: Error ) => { if ( ! isMediaPlaybackLifecycleAbort( error ) ) entry.readiness.reasons.push( `source runtime error: ${ error.message }` ); };
+					let runtimeErrors: Awaited< ReturnType< typeof watchSourceRuntimeErrors > > | undefined;
+					// Capture and this cell may watch the same page or the same source
+					// fault, so a reason both report is recorded once.
+					const recordRuntimeErrors = (): void => {
+						const settled = runtimeErrors?.settle();
+						runtimeErrors?.dispose(); runtimeErrors = undefined;
+						if ( settled?.diagnostics.length ) entry.readiness.diagnostics = settled.diagnostics;
+						for ( const reason of [ ...( settled?.reasons ?? [] ), ...errors ] ) if ( ! entry.readiness.reasons.includes( reason ) ) entry.readiness.reasons.push( reason );
+					};
 					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
 					let releaseNavigation: (() => Promise<void>) | undefined;
 					let navigationUrl = url;
@@ -192,7 +200,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							entry.readiness.ready = entry.readiness.reasons.length === 0;
 							return;
 						}
-						referencePage.on( 'pageerror', runtimeError );
+						runtimeErrors = await watchSourceRuntimeErrors( referencePage );
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
 						if ( url !== 'about:blank' ) {
@@ -234,14 +242,15 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.document = store( `${ stem }.html`, await referencePage.content() );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
 						await collectViewportEntranceStartup( referencePage, page );
-						entry.readiness.reasons.push( ...errors );
+						recordRuntimeErrors();
 						entry.readiness.ready = entry.readiness.reasons.length === 0;
 					} catch ( error ) {
 						entry.readiness.reasons.push( String( error ) );
 					} finally {
+						// Idempotent: a failed cell still reports its runtime errors.
+						recordRuntimeErrors();
 						try { await releaseNavigation?.(); }
 						finally {
-							referencePage?.off( 'pageerror', runtimeError );
 							referencePage?.off( 'crash', rendererCrash );
 							await ownedResource?.close().catch( () => {} );
 						}

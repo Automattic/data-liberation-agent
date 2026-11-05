@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { totalmem } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
-import { isMediaPlaybackLifecycleAbort } from '../source-readiness.js';
+import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
 import { getSourceResponse, sourceGovernorFor } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
@@ -843,11 +843,17 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.canonicalizeHtml ? canonicalizeInteractionReport( report, args.canonicalizeHtml ) : report;
 
 	resourceStore.observe( page );
-	const sourceErrors: string[] = [];
-	if ( args.observeSource ) {
-		page.on( 'pageerror', error => { if ( sourceErrors.length < 100 && ! isMediaPlaybackLifecycleAbort( error ) ) sourceErrors.push( `source runtime error: ${ error.message }` ); } );
-		page.on( 'crash', () => sourceErrors.push( 'source renderer crashed' ) );
-	}
+	const sourceCrashes: string[] = [];
+	const sourceRuntime = args.observeSource ? await watchSourceRuntimeErrors( page ) : undefined;
+	if ( args.observeSource ) page.on( 'crash', () => sourceCrashes.push( 'source renderer crashed' ) );
+	/** Blocking source errors so far; subframe errors become capture diagnostics. */
+	const sourceErrors = (): string[] => {
+		const settled = sourceRuntime?.settle();
+		for ( const reason of settled?.diagnostics ?? [] ) {
+			if ( ! args.diagnostics?.some( item => item.code === SOURCE_SUBFRAME_RUNTIME_ERROR && item.reason === reason ) ) args.diagnostics?.push( { code: SOURCE_SUBFRAME_RUNTIME_ERROR, reason } );
+		}
+		return [ ...( settled?.reasons ?? [] ), ...sourceCrashes ];
+	};
 	if ( publicUrlsOnly && page.route ) {
 		await page.route( '**/*', async ( route ) => {
 			const request = route.request();
@@ -919,7 +925,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				if (navigation.boundary) {
 					const boundary = storeExternalBoundary(outputDir, navigation.boundary, viewport.width, args.browserProfile ?? {isMobile: false, hasTouch: false});
 					entry.sourceOutcomes = [...(entry.sourceOutcomes ?? []), boundary];
-					await args.observeSource?.(page, url, viewport.id, sourceErrors, args.browserProfile, viewport, boundary);
+					await args.observeSource?.(page, url, viewport.id, sourceErrors(), args.browserProfile, viewport, boundary);
 					return false;
 				}
 				const response = navigation.response;
@@ -1184,7 +1190,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Must happen after removals (so stripped chrome is never modelled) and
 	// before serialization (so the learned CSS is what gets written).
 	args.phases?.enter( 'observe-source' );
-	await args.observeSource?.( page, url, viewport.id, sourceErrors, args.browserProfile, viewport );
+	await args.observeSource?.( page, url, viewport.id, sourceErrors(), args.browserProfile, viewport );
 	if ( args.rendererCrashed() ) return;
 	// A failed native timeline probe loses that block of evidence,
 	// not the page: record the loss and keep serializing once the page answers
