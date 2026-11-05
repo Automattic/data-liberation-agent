@@ -204,12 +204,17 @@ export function planPortableMediaFamilies(
 	homepageHtmlPath: string,
 ): PortableMediaPlan {
 	const homepagePriority = familyHomepagePriority( families, homepageHtmlPath );
-	const ranked = families.map( ( family, index ) => ( {
-		index,
-		eligible: selectMediaCandidates( family.candidates, true ),
-		preferred: selectMediaCandidates( family.candidates.filter( candidate => ! candidate.budgetFallback ) ),
-		homepagePriority: homepagePriority[ index ],
-	} ) );
+	const ranked = families.map( ( family, index ) => {
+		const eligible = selectMediaCandidates( family.candidates, true );
+		return {
+			index,
+			eligible,
+			// Decide limits with the whole family present. Removing budget fallbacks
+			// first can resurrect an oversized original that materialization omits.
+			preferred: selectMediaCandidates( eligible.filter( candidate => ! candidate.budgetFallback ) ),
+			homepagePriority: homepagePriority[ index ],
+		};
+	} );
 	const admissionOrder = [ ...ranked ].sort(
 		( left, right ) =>
 			Number( right.homepagePriority ) - Number( left.homepagePriority ) ||
