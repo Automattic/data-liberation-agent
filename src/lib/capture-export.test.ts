@@ -2435,7 +2435,7 @@ describe( 'exportWebsiteCapture', () => {
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
 			'<html><body><main>' +
-				'<iframe class="map" title="Map" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
+				'<iframe class="map" title="Map" style="width:100%;height:auto;aspect-ratio:16 / 9" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
 				'<iframe src="https://hidden.example/embed" width="500" height="300"></iframe>' +
 				'<iframe src="javascript:steal()" data-blocks-engine-capture-visual-iframe-src="javascript:steal()" data-blocks-engine-capture-visual-iframe-width="500" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
 				'<iframe src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-width="0" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
@@ -2463,6 +2463,8 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'iframe' ).attr( 'width' ) ).toBe( '1280' );
 		expect( $( 'iframe' ).attr( 'height' ) ).toBe( '350' );
 		expect( $( 'iframe' ).attr( 'class' ) ).toBe( 'map' );
+		// The authored box wins over the one viewport's attested pixel size.
+		expect( $( 'iframe' ).attr( 'style' ) ).toBe( 'width:100%;height:auto;aspect-ratio:16 / 9' );
 		expect( $( 'iframe' ).attr( 'frameborder' ) ).toBeUndefined();
 		expect( $( 'iframe' ).attr( 'onclick' ) ).toBeUndefined();
 		expect( $( 'iframe' ).attr( 'srcdoc' ) ).toBeUndefined();

@@ -255,6 +255,7 @@ const VISUAL_IFRAME_ATTRIBUTES = new Set( [
 	'referrerpolicy',
 	'sandbox',
 	'src',
+	'style',
 	'title',
 	'width',
 ] );
@@ -1001,7 +1002,7 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 			const height = Number( node.attr( 'height' ) );
 			if ( ! Number.isFinite( height ) || height <= 0 ) { node.remove(); return; }
 			for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
-				if ( ! VISUAL_IFRAME_ATTRIBUTES.has( attribute.toLowerCase() ) && ! [ 'id', 'style', 'aria-label', 'frameborder', 'scrolling', 'allowtransparency' ].includes( attribute.toLowerCase() ) ) node.removeAttr( attribute );
+				if ( ! VISUAL_IFRAME_ATTRIBUTES.has( attribute.toLowerCase() ) && ! [ 'id', 'aria-label', 'frameborder', 'scrolling', 'allowtransparency' ].includes( attribute.toLowerCase() ) ) node.removeAttr( attribute );
 			}
 			node.attr( 'src', embeddedSource );
 			node.attr( 'sandbox', 'allow-same-origin' );

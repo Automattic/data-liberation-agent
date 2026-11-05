@@ -62,7 +62,7 @@ export function sanitizeFrozenHtml(html: string): string {
     try { url = new URL(src); } catch { return; }
     if (url.protocol !== 'https:' || !url.hostname || !/^[1-9]\d*$/.test(width) || !/^[1-9]\d*$/.test(height)) return;
     const safe = $('<iframe></iframe>');
-    for (const name of ['allow','allowfullscreen','class','loading','referrerpolicy','sandbox','title']) {
+    for (const name of ['allow','allowfullscreen','class','loading','referrerpolicy','sandbox','style','title']) {
       const value = frame.attr(name);
       if (value !== undefined) safe.attr(name,value);
     }
