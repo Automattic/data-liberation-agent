@@ -107,12 +107,10 @@ describe( 'gamma platform', () => {
 			expect( await page.locator( 'details summary' ).allTextContents() ).toEqual( [ 'Archive 2025', 'More', 'Open one' ] );
 			expect( await page.locator( 'details button' ).count() ).toBe( 0 );
 			const summary = page.locator( 'summary' ).first();
-			expect( await summary.locator( '.node-toggleSummary > [data-node-view-wrapper] > .css-18qvlmk > .themed-heading' ).textContent() ).toBe( 'Archive 2025' );
-			expect( await summary.locator( '.css-18qvlmk' ).evaluate( ( node ) => ( node as HTMLElement ).style.flexDirection ) ).toBe( 'column' );
-			expect( await summary.locator( '.themed-heading' ).evaluate( ( node ) => ( node as HTMLElement ).style.whiteSpace ) ).toBe( 'pre-wrap' );
-			expect( await summary.locator( 'span.chakra-button.css-o7zlpc[data-testid="toggle-button"] svg.fa-play' ).count() ).toBe( 1 );
-			expect( await summary.locator( '[type], [contenteditable], [draggable]' ).count() ).toBe( 0 );
-			expect( await summary.evaluate( ( node ) => ( node as HTMLElement ).style.listStyle ) ).toBe( 'none' );
+			expect( await summary.locator( ':scope > span.themed-heading' ).textContent() ).toBe( 'Archive 2025' );
+			expect( await summary.locator( ':scope > span.themed-heading' ).evaluate( ( node ) => ( node as HTMLElement ).style.whiteSpace ) ).toBe( 'pre-wrap' );
+			expect( await summary.locator( 'button, svg, .css-18qvlmk, [contenteditable], [draggable], [data-node-view-content]' ).count() ).toBe( 0 );
+			expect( await summary.evaluate( ( node ) => ( node as HTMLElement ).style.listStylePosition ) ).toBe( 'outside' );
 			expect( await page.locator( 'details details summary' ).textContent() ).toBe( 'More' );
 			expect( await page.locator( 'details.box-style' ).count() ).toBe( 3 );
 			expect( await page.locator( 'details' ).last().getAttribute( 'open' ) ).toBe( '' );

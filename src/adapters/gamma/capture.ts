@@ -24,7 +24,7 @@
 //   `data-open="false"`, and its button only flips that attribute. No ARIA ties
 //   the button to the content, so capture sees no disclosure and the copy keeps
 //   the content hidden for good. Each toggle becomes a native `<details>` with
-//   the rendered summary row and copies of the content, which works without a runtime.
+//   the summary title (with its wrapper's attributes) and copies of the content, which works without a runtime.
 //   Inner toggles go first, so a parent copies its already-converted children.
 
 import type { Page } from 'playwright';
@@ -53,21 +53,16 @@ export async function prepareGammaPage( page: Page ): Promise< void > {
 			details.className = box.className;
 			details.open = box.dataset.open === 'true';
 			const summary = document.createElement( 'summary' );
-			summary.style.listStyle = 'none';
-			const row = content.firstElementChild!.cloneNode( true ) as Element;
-			for ( const button of row.querySelectorAll( 'button' ) ) {
-				const icon = document.createElement( 'span' );
-				for ( const attribute of button.attributes ) {
-					if ( ! [ 'type', 'contenteditable', 'draggable' ].includes( attribute.name ) ) icon.setAttribute( attribute.name, attribute.value );
-				}
-				icon.append( ...button.childNodes );
-				button.replaceWith( icon );
+			// The runtime draws its play button in the toggle's start gutter. The
+			// native marker sits there too once it is outside the summary box; the
+			// title keeps its own wrapper attributes (heading role, size token).
+			summary.style.listStylePosition = 'outside';
+			const label = document.createElement( 'span' );
+			for ( const attribute of title.parentElement?.attributes ?? [] ) {
+				if ( ! /^(?:contenteditable|draggable|data-node-view-content.*)$/.test( attribute.name ) ) label.setAttribute( attribute.name, attribute.value );
 			}
-			for ( const node of [ row, ...row.querySelectorAll( '*' ) ] ) {
-				node.removeAttribute( 'contenteditable' );
-				node.removeAttribute( 'draggable' );
-			}
-			summary.append( row );
+			label.append( ...[ ...title.childNodes ].map( ( node ) => node.cloneNode( true ) ) );
+			summary.append( label );
 			const body = [ ...content.children ].slice( 1 ).map( ( node ) => node.cloneNode( true ) as Element );
 			// Gamma fades blocks in once they scroll into view, by adding
 			// `animate-has-animated`. Closed content never did, so it would stay
