@@ -1995,6 +1995,25 @@ describe( 'exportWebsiteCapture', () => {
 		}
 	} );
 
+	it( 'guards projected desktop inline styles at the route check\'s probed switch width', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-switch-width-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		// Script reveals nav items at >=768 and tags the phone body; a tablet-only
+		// logo rule contributes the unrelated, largest 1279 boundary.
+		const page = ( bodyClass: string, itemStyle: string ) => `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0}.bar{display:flex;justify-content:space-between;padding:24px 48px}.logo{margin:0;font-size:20px}.menu{margin:0;padding:0;list-style:none;white-space:nowrap}.item{display:inline-block;padding-left:32px;visibility:hidden}.burger{display:none}@media (max-width:767px){.menu{display:none}.burger{display:block}}@media (min-width:1024px) and (max-width:1279px){.logo{font-size:18px}}</style></head><body${ bodyClass }><header class="bar"><p class="logo">Site Title</p><a class="burger" href="#menu">&#9776;</a><nav><ul class="menu">${ [ 'Home', 'Team', 'Partners', 'Store' ].map( label => `<li class="item"${ itemStyle }><a href="/${ label.toLowerCase() }/">${ label }</a></li>` ).join( '' ) }</ul></nav></header><main><p>Body text.</p></main></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), page( '', ' style="visibility: visible;"' ) );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), page( ' class="phone"', '' ) );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html',
+			deviceMode: { mode: 'dual', reason: 'the phone identity renders different body classes (+phone)', switchWidth: 767 } } } } ) );
+		writeFileSync( join( outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [ 1024 ], maxWidth: [ 767, 1279 ] } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'unknown', summary: {}, failures: [] } );
+		expect( JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) ) ).toMatchObject( { switchWidth: 767 } );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).toContain( '@media(min-width:768px){.data-blocks-engine-capture-responsive-' );
+		expect( html ).not.toContain( '(min-width:1280px)' );
+	} );
+
 	it( 'reconciles a nested mobile-only subtree and a desktop-only wrapper around shared components', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-nested-' ) );
 		dirs.push( outputDir );

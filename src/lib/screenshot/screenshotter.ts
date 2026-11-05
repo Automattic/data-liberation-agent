@@ -98,7 +98,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { inlineRuntimeHash, externalScriptSources, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetMaxWidths, summarizeRouteDecisions, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
 import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
@@ -2093,6 +2093,7 @@ async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'c
  */
 export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
 	const started = Date.now();
+	let switchCandidates: { widths: number[]; desktop: DesktopRendering } | undefined;
 	const result = await retryRouteDeviceCheck( async () => {
 		const contexts: BrowserContext[] = [];
 		try {
@@ -2116,22 +2117,34 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 		} finally {
 			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
 		}
-		const rendered = await renderedRouteDeviceMode( args );
+		switchCandidates = undefined;
+		const rendered = await renderedRouteDeviceMode( args, candidates => { switchCandidates = candidates; } );
 		if ( rendered.mode === 'reflow-only' && rendered.externalScripts && rendered.serverHtml !== 'unavailable' ) args.deviceEvidence?.record( args.url, rendered.externalScripts, rendered.inlineRuntimeHash! );
 		return rendered;
 	} );
+	// The same HTML renders differently per identity: find the width where it
+	// stops. A failed probe observes nothing and export keeps its fallback.
+	const serverHtml = result.serverHtml;
+	if ( result.mode === 'dual' && ( serverHtml === 'identical' || serverHtml === 'identical-after-normalization' ) && switchCandidates?.widths.length ) {
+		const switchWidth = await probeSwitchWidth( args, serverHtml, switchCandidates ).catch( () => undefined );
+		if ( switchWidth !== undefined ) result.switchWidth = switchWidth;
+	}
 	result.checkMs = Date.now() - started;
 	process.stderr.write( `[timing] device-check ${ JSON.stringify( { url: args.url, ...result.checkTimings, ...result, total: result.checkMs } ) }\n` );
 	return result;
 }
 
-async function renderedRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
+/** What the desktop identity rendered at its capture width, for the switch probe. */
+interface DesktopRendering { paths: string[]; bodyClasses: string[] }
+
+async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCandidates?: ( candidates: { widths: number[]; desktop: DesktopRendering } ) => void ): Promise< RouteDeviceDecision > {
 	const startedAt = Date.now();
 	const contexts: BrowserContext[] = [];
 	const checkTimings = { navigate: 0, settle: 0, equivalence: 0, recheck: 0 };
 	try {
 		const compared = await compareIdentities( args, 'check', contexts, checkTimings );
 		let { structure, bodyClasses } = compared;
+		let desktopRendered: DesktopRendering = { paths: compared.desktop.paths, bodyClasses: compared.desktop.bodyClasses };
 		const differs = () => structure.differingPaths > 0 || bodyClasses.desktopOnly.length > 0 || bodyClasses.phoneOnly.length > 0;
 		let rechecked = false;
 		// Two loads race third-party scripts (an embed swapping its placeholder
@@ -2159,6 +2172,7 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs ): Promise< R
 			const [ desktop, phone ] = await Promise.all( [ reread( compared.desktop.page ), reread( compared.phone.page ) ] );
 			structure = compareStructure( desktop.paths, phone.paths );
 			bodyClasses = compareBodyClasses( desktop.bodyClasses, phone.bodyClasses );
+			desktopRendered = desktop;
 			checkTimings.recheck = Date.now() - recheckStartedAt;
 			renderedDocuments = undefined;
 		}
@@ -2171,6 +2185,7 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs ): Promise< R
 		}
 		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, bodyClasses: differs() ? bodyClasses : undefined } );
 		checkTimings.equivalence += Date.now() - finalEquivalenceStartedAt;
+		if ( decided.mode === 'dual' && compared.serverHtml !== 'different' ) onSwitchCandidates?.( { widths: await withEvaluateTimeout( stylesheetMaxWidths( compared.desktop.page ), 10_000 ).catch( () => [] ), desktop: desktopRendered } );
 		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt, checkTimings };
 	} catch ( error ) {
 		// Both identities failed alike (an absent route, an off-site redirect):
@@ -2180,6 +2195,28 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs ): Promise< R
 	} finally {
 		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
 	}
+}
+
+/**
+ * Load the phone identity at each candidate width, the way the route check
+ * does, and find the first above which it renders what the desktop identity
+ * rendered at capture width: the width where the desktop/phone difference starts.
+ */
+async function probeSwitchWidth( args: DeviceComparisonArgs, serverHtml: 'identical' | 'identical-after-normalization', candidates: { widths: number[]; desktop: DesktopRendering } ): Promise< number | undefined > {
+	const phone = args.phone.viewport, wide = args.desktop.viewport?.width;
+	if ( ! phone || ! wide ) return undefined;
+	return observeSwitchWidth( candidates.widths, { phone: phone.width, desktop: wide }, async width => {
+		const contexts: BrowserContext[] = [];
+		try {
+			// Probe loads must not replace the capture-width identity headers.
+			const probe = await loadForComparison( { ...args, identityHeaders: undefined }, { ...args.phone, viewport: { ...phone, width } }, 'mobile', 'check', contexts );
+			const structure = compareStructure( candidates.desktop.paths, probe.paths );
+			const bodyClasses = compareBodyClasses( candidates.desktop.bodyClasses, probe.bodyClasses );
+			return decideRouteMode( { serverHtml, structure, bodyClasses } ).mode === 'reflow-only';
+		} finally {
+			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+		}
+	} );
 }
 
 /**

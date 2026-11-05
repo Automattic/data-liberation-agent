@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright';
 import { captureScreenshots, comparisonFailedAlike } from './screenshotter.js';
 import { SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -18,6 +18,18 @@ describe( 'device-mode evidence', () => {
 		expect( comparisonFailedAlike( new SourceNavigationError( 'Source navigation time budget exhausted' ), new SourceNavigationError( 'Source navigation time budget exhausted' ) ) ).toBe( false );
 		expect( comparisonFailedAlike( new Error( 'the desktop document answered HTTP 404' ), new Error( 'the mobile document answered HTTP 404' ) ) ).toBe( true );
 		expect( comparisonFailedAlike( new Error( 'the desktop document answered HTTP 404' ), new Error( 'the mobile document answered HTTP 500' ) ) ).toBe( false );
+	} );
+
+	it( 'switches at the boundary where the phone identity starts rendering the desktop document, not the widest one', async () => {
+		const probed: number[] = [];
+		const converges = ( from: number ) => async ( width: number ) => { probed.push( width ); return width >= from; };
+		expect( await observeSwitchWidth( [ 1279, 767 ], { phone: 402, desktop: 1440 }, converges( 768 ) ) ).toBe( 767 );
+		expect( probed ).toEqual( [ 768 ] );
+		probed.length = 0;
+		expect( await observeSwitchWidth( [ 320, 767, 1279, 1440 ], { phone: 402, desktop: 1440 }, converges( 1280 ) ) ).toBe( 1279 );
+		expect( probed ).toEqual( [ 768, 1280 ] );
+		// An identity that differs at every width observes no switch.
+		expect( await observeSwitchWidth( [ 767, 1279 ], { phone: 402, desktop: 1440 }, async () => false ) ).toBeUndefined();
 	} );
 
 	it( 'ignores per-request tokens and timestamps, and nothing else', () => {
@@ -118,8 +130,40 @@ describe( 'device-mode evidence', () => {
  * `mixed/promo` builds a phone-only element at narrow widths; `mixed/` reflows;
  * each `reorder/` route moves a sibling below the nav breakpoint.
  */
+/**
+ * Runtime-revealed nav (#1287): items become visible at >=768 and phones get a
+ * body class below it; a tablet-only logo rule adds an unrelated 1279 boundary.
+ */
+const SWITCH_FIXTURE = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Nav</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:sans-serif}
+.bar{display:flex;justify-content:space-between;align-items:center;padding:24px 48px}
+.logo{margin:0;font-size:20px}
+.menu{margin:0;padding:0;list-style:none;white-space:nowrap}
+.item{display:inline-block;padding-left:32px;visibility:hidden}
+.burger{display:none}
+@media (max-width:767px){.menu{display:none}.burger{display:block}}
+@media (min-width:1024px) and (max-width:1279px){.logo{font-size:18px}}
+</style></head>
+<body>
+<header class="bar"><p class="logo">Site Title</p><a class="burger" href="#menu">&#9776;</a>
+<nav><ul class="menu">
+<li class="item"><a href="/">Home</a></li><li class="item"><a href="/team/">Team</a></li>
+<li class="item"><a href="/partners/">Partners</a></li><li class="item"><a href="/store/">Store</a></li>
+</ul></nav></header>
+<main><p>Body text.</p></main>
+<script>
+function fit(){var wide=innerWidth>=768;document.querySelectorAll('.item').forEach(function(li){li.style.visibility=wide?'visible':'';});}
+if(innerWidth<768){document.body.classList.add("phone");}
+fit();addEventListener('resize',fit);
+</script>
+</body></html>`;
+
 function page( fixture: string, userAgent: string, path: string ): string {
 	if ( fixture === 'builder' ) return builderPage( path );
+	if ( fixture === 'switch' ) return SWITCH_FIXTURE;
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
 	const script = fixture === 'mixed' && path === 'runtime' ? '<script>if(innerWidth<600){const node=document.createElement("div");node.id="yui_3_17_2_1_123_45";node.innerHTML="<span>Widget</span>";document.body.prepend(node)}</script>' : fixture === 'mixed' && path === 'promo' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
 	const reorder = reorderFixture( path );
@@ -229,6 +273,28 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as { entries: Record< string, ManifestEntry > };
 		return { outputDir, result, entries: manifest.entries };
 	};
+
+	it( 'probes where a runtime-revealed phone document starts and guards the export at that width', async () => {
+		const run = await capture( 'switch' );
+		const entry = run.entries[ `${ origin }/switch/` ]!;
+		expect( entry.deviceMode ).toMatchObject( { mode: 'dual', reason: expect.stringContaining( '+phone' ), switchWidth: 767 } );
+		writeFileSync( join( run.outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [ 1024 ], maxWidth: [ 767, 1279 ] } ) );
+		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/switch/`, platform: 'generic', summary: {}, failures: [] } );
+		const html = readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).not.toContain( '(min-width:1280px)' );
+		const browser = await chromium.launch();
+		try {
+			const tab = await browser.newPage();
+			for ( const [ width, items ] of [ [ 390, 0 ], [ 767, 0 ], [ 768, 4 ], [ 900, 4 ], [ 1024, 4 ], [ 1440, 4 ] ] ) {
+				await tab.setViewportSize( { width, height: 900 } );
+				await tab.setContent( html );
+				const visible = await tab.evaluate( () => [ ...document.querySelectorAll( '.item' ) ].filter( item => item.getClientRects().length > 0 && getComputedStyle( item ).visibility === 'visible' ).length );
+				expect( { width, visible } ).toEqual( { width, visible: items } );
+			}
+		} finally {
+			await browser.close();
+		}
+	}, 120_000 );
 
 	it( 'confirms a transient entrypoint HTML difference before committing the site to dual', async () => {
 		const run = await capture( 'transient' );
@@ -360,8 +426,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( run.entries[ `${ origin }/mixed/runtime` ]!.deviceMode!.mode ).toBe( 'reflow-only' );
 		for ( const route of [ 'promo', 'runtime' ] ) {
 			const url = `${ origin }/mixed/${ route }`;
-			// Request pair plus rendered pair; a dual decision retries both pairs.
-			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 10 : 5 );
+			// Request pair plus rendered pair; a dual decision retries both pairs,
+			// then probes the phone identity just above its 600px boundary.
+			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 11 : 5 );
 			expect( run.entries[ url ]!.profiles!.desktop!.phases!.some( phase => phase.phase === 'device-check' ) ).toBe( true );
 			const line = stderr.split( '\n' ).find( line => line.startsWith( '[timing] route-phases ' ) && line.includes( url ) )!;
 			expect( JSON.parse( line.slice( '[timing] route-phases '.length ) )[ 'device-check' ] ).toBeGreaterThan( 0 );
@@ -380,7 +447,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', routes: { checked: 3, reflowOnly: 2, dual: [ { url: promo } ] } } );
 		expect( run.result.deviceMode!.routes!.dual[ 0 ]!.reason ).toContain( 'aside' );
 		expect( run.entries[ home ]!.deviceMode ).toMatchObject( { mode: 'reflow-only' } );
-		expect( run.entries[ promo ]!.deviceMode ).toMatchObject( { mode: 'dual', structure: { differingPaths: 1 }, rechecked: true } );
+		expect( run.entries[ promo ]!.deviceMode ).toMatchObject( { mode: 'dual', structure: { differingPaths: 1 }, rechecked: true, switchWidth: 600 } );
 		expect( run.entries[ promo ]!.deviceMode!.checkTimings!.recheck ).toBeGreaterThanOrEqual( 1_500 );
 		expect( Object.keys( run.entries[ home ]!.profiles ?? {} ) ).toEqual( [ 'desktop' ] );
 		expect( run.entries[ home ]!.mobileHtml ).toBeUndefined();

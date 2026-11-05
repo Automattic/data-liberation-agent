@@ -294,6 +294,52 @@ export interface RouteDeviceDecision {
 	structure?: StructureComparison;
 	/** The first reading differed, so both pages were read again after settling. */
 	rechecked?: boolean;
+	/**
+	 * Dual route only: the stylesheet `max-width` boundary just above which the
+	 * phone identity rendered the desktop document (see `observeSwitchWidth`).
+	 * Absent when it differed at every probed width.
+	 */
+	switchWidth?: number;
+}
+
+/** Each probe loads both identities once more; stop after the nearest few boundaries. */
+const SWITCH_PROBE_LIMIT = 4;
+
+/**
+ * Where a dual route's documents start to differ. Candidates are stylesheet
+ * `max-width` boundaries between the phone and desktop capture widths. The
+ * phone identity is loaded just above each one, nearest the phone first, and
+ * the first boundary above which it renders the desktop document is the
+ * switch. A boundary an unrelated tablet-only rule uses is never chosen merely
+ * for being the widest; no convergence observes nothing.
+ */
+export async function observeSwitchWidth(
+	candidates: readonly number[],
+	range: { phone: number; desktop: number },
+	converges: ( width: number ) => Promise< boolean >,
+): Promise< number | undefined > {
+	const widths = [ ...new Set( candidates ) ]
+		.filter( width => Number.isInteger( width ) && width >= range.phone && width < range.desktop )
+		.sort( ( a, b ) => a - b )
+		.slice( 0, SWITCH_PROBE_LIMIT );
+	for ( const width of widths ) if ( await converges( width + 1 ) ) return width;
+	return undefined;
+}
+
+/** `max-width` boundaries of the page's readable (same-origin) stylesheets. */
+export async function stylesheetMaxWidths( page: Page ): Promise< number[] > {
+	return page.evaluate( () => {
+		const widths = new Set< number >();
+		for ( const sheet of Array.from( document.styleSheets ) ) {
+			let rules: CSSRuleList;
+			try { rules = sheet.cssRules; } catch { continue; }
+			for ( const rule of Array.from( rules ) ) {
+				if ( ! ( rule instanceof CSSMediaRule ) ) continue;
+				for ( const match of rule.conditionText.matchAll( /max-width:\s*(\d+)px/gi ) ) widths.add( Number( match[ 1 ] ) );
+			}
+		}
+		return [ ...widths ];
+	} );
 }
 
 export interface RouteDeviceSummary {
