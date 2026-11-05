@@ -1040,16 +1040,17 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// answering during them arrives here; bound these reads too.
 		let accessGate: AccessGateEvidence | undefined;
 		let gate: ReturnType< typeof accessGateRemoval >;
+		let gateTitle = '';
 		try {
 			const gateRemoval = accessGateRemoval( await withEvaluateTimeout( readSourceCleanup( page, sourcePolicy ), evaluateTimeoutMs ), sourcePolicy );
 			gate = gateRemoval && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ? gateRemoval : undefined;
+			if ( gate ) gateTitle = ( await withEvaluateTimeout( page.title().catch( () => '' ), evaluateTimeoutMs ) ).trim();
 		} catch ( error ) {
 			if ( ! isEvaluateTimeout( error ) ) throw error; // failure-class: operational
 			loadFail( 'evaluate', `page stopped responding while settling (source cleanup / access gate): no answer to an evaluate within ${ evaluateTimeoutMs }ms` );
 			return false;
 		}
 		if ( gate ) {
-			const gateTitle = ( await withEvaluateTimeout( page.title(), evaluateTimeoutMs ).catch( () => '' ) ).trim();
 			// Loading the public shell is this capture's own explained navigation.
 			await releaseBaselineNavigation();
 			let shell: string | undefined;
