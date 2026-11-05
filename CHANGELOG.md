@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.134] - 2026-11-05
+
+### Changed
+- regenerate plugin bundles
+- Keep an attested iframe's authored inline style through capture and export
+- build expired fixture cert portably
+- Collapse builder captures keyed by discovered identity attributes into one document
+
+### Fixed
+- bound settled-document reads
+
 ## [0.33.133] - 2026-11-05
 
 ### Changed
