@@ -34,6 +34,8 @@ export interface LiberationHooks {
   probeExclusions?: readonly import('../lib/screenshot/probe-exclusions.js').ProbeExclusion[];
   /** CSS selectors removed from the DOM before portable artifacts are produced. */
   removeSelectors?: string[];
+  /** Register document-start instrumentation before navigation/capture scrolling. */
+  initScript?(page: Page): Promise<void>;
   /** Imperative escape hatch (wait-for-app, conditional removal). Runs AFTER
    *  removeSelectors. Best-effort: a throw is swallowed and liberation continues. */
   prepare?(page: Page, ctx: LiberationContext): Promise<void>;

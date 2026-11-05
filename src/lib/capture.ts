@@ -575,6 +575,7 @@ async function runCaptureWebsite(
 		learnFluid: options.learnFluid !== false,
 		force: options.resume !== true,
 		removeSelectors: adapter.liberation?.removeSelectors,
+		initScript: adapter.liberation?.initScript,
 		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
 		probeExclusions: adapter.liberation?.probeExclusions,
 		cleanupPolicy: (await import('./source-cleanup.js')).cleanupPolicy(adapter.liberation?.cleanupRules),
