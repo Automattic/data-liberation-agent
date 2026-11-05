@@ -26,6 +26,17 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			} catch { /* Unsupported transforms stay authored. */ }
 			return null;
 		};
+		// Only uniform, positive, untranslated 2D scales have a single owner.
+		// `none` is the identity sample, not an absent observation.
+		const uniformScale = ( node: HTMLElement ) => {
+			try {
+				const transform = getComputedStyle( node ).transform;
+				const matrix = new DOMMatrix( transform === 'none' ? undefined : transform );
+				if ( matrix.is2D && matrix.b === 0 && matrix.c === 0 && matrix.e === 0 && matrix.f === 0 &&
+					Number.isFinite( matrix.a ) && matrix.a > 0 && Math.abs( matrix.a - matrix.d ) < 0.00001 ) return matrix.a;
+			} catch { /* Unsupported transforms stay authored. */ }
+			return null;
+		};
 		// Keep both views: measurement interprets literal source declarations,
 		// while tagging/rest read CSSOM and rest retains the whole transform.
 		const readGeometry = ( node: HTMLElement ) => {
@@ -134,7 +145,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			...['aria-hidden', 'aria-expanded'].map( key => JSON.stringify( element.getAttribute( key ) ) ),
 		];
 		return {
-			pixel, elements, element, readGeometry, translation,
+			pixel, elements, element, readGeometry, translation, uniformScale,
 			bind: () => {
 				// Tagging happens in a later browser task than baseline creation. A
 				// runtime may have replaced a fitted child between those tasks; bind
