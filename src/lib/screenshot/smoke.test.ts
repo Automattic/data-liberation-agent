@@ -270,9 +270,13 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       // Reruns reuse the desktop document. One whose manifest predates the
       // marker reloads only the phone identity; one that has it reloads neither.
       const manifestPath = join(outputDir, 'screenshots', 'manifest.json');
-      for (const dropMarker of [true, false]) {
+      // A manifest from a build that failed the route instead (document plus
+      // the phone's alias, no marker) reloads both identities.
+      for (const shape of ['failed-build', 'unmarked', 'marked'] as const) {
         const before = JSON.parse(readFileSync(manifestPath, 'utf8'));
-        if (dropMarker) delete before.entries[`${origin}/phone-site`].phoneSentTo;
+        const prior = before.entries[`${origin}/phone-site`];
+        if (shape !== 'marked') delete prior.phoneSentTo;
+        if (shape === 'failed-build') prior.redirectedTo = `${origin}/m/`;
         writeFileSync(manifestPath, JSON.stringify(before));
         await captureScreenshots({
           urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa', '/phone-site'].map((path) => `${origin}${path}`),

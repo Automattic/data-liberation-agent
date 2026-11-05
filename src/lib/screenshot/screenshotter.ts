@@ -2779,11 +2779,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const existing = manifest.getEntry( url );
 		if ( reuseOnly && ! existing ) return;
 		const slug = existing ? existing.slug : await manifest.claimSlug( base );
+		// A document beside an alias is an ambiguous earlier outcome (a run whose
+		// profiles disagreed, or a route that began redirecting): recapture it.
+		const ambiguousDocument = Boolean( existing?.html && existing.redirectedTo );
 		const plan = planArtifacts( {
 			slug,
 			outputDir: opts.outputDir,
 			// Interrupted captures can leave files without the manifest needed to export them.
-			force: force || ! existing?.html || JSON.stringify(existing.cleanup?.policy) !== JSON.stringify(opts.cleanupPolicy ?? cleanupPolicy()),
+			force: force || ambiguousDocument || ! existing?.html || JSON.stringify(existing.cleanup?.policy) !== JSON.stringify(opts.cleanupPolicy ?? cleanupPolicy()),
 			captureImages: opts.captureImages,
 		} );
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;

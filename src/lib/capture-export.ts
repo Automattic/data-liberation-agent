@@ -1513,7 +1513,7 @@ function buildExportCapture(
 					continue;
 				}
 			}
-			if ( entry.phoneSentTo ) routeCaptureDiagnostics.push( { code: 'phone_redirect_desktop_only', url, unit: 'profile', severity: 'warning', reason: `The phone identity is sent to ${ entry.phoneSentTo } (a separate mobile site) while desktop renders this route; the route ships its desktop document, reflowed at phone widths` } );
+			if ( entry.phoneSentTo ) routeCaptureDiagnostics.push( { code: 'phone_redirect_desktop_only', url, unit: 'profile', profile: 'mobile', severity: 'warning', reason: `The phone identity is sent to ${ entry.phoneSentTo } while desktop renders this route; the route ships its desktop document, reflowed at phone widths` } );
 			const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
 			// A route whose phone identity was sent elsewhere has no phone document,
 			// even if an earlier run left one at the conventional path.
