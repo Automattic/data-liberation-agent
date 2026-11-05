@@ -226,6 +226,42 @@ export function navigationDocumentUrl(requestedUrl: string, responseUrl: string,
   return redirected && sameHttpSite(requestedUrl, responseUrl) ? responseUrl : requestedUrl;
 }
 
+/** Profile diagnostic: the phone identity was redirected away while desktop rendered the route. */
+export const PHONE_REDIRECT_DESKTOP_ONLY = 'phone_redirect_desktop_only';
+
+/** What one capture profile observed when it loaded a route. */
+export interface ProfileRouteOutcome {
+  /** Same-site route the profile was sent to instead of rendering this one. */
+  redirectedTo?: string;
+  /** The profile saved this route's own document. */
+  local: boolean;
+  /** The profile observed an initial-document boundary to another site. */
+  external: boolean;
+}
+
+/**
+ * How a profile's outcome joins the profiles already merged for its route.
+ *
+ * - `agree`: every profile tells the same story (all render the route, or all
+ *   alias the same target).
+ * - `disagree`: the profiles reached different documents; the route fails.
+ * - `phone-only`: the desktop identity rendered the route's own document and
+ *   only the phone identity was sent to another same-site route. That is
+ *   user-agent sniffing into a separate mobile site (for example every page
+ *   answering phones with `302 /m/`), not an alias of the route: the route
+ *   keeps its desktop document and has no phone rendition of its own.
+ *
+ * Off-site destinations never reach `phone-only`: they are external boundaries,
+ * not same-site redirect targets, and still disagree with a local document.
+ */
+export function profileRedirectMerge( profile: string, outcome: ProfileRouteOutcome, previous: ProfileRouteOutcome & { desktopLocal: boolean } ): 'agree' | 'disagree' | 'phone-only' {
+  if ( outcome.redirectedTo ) {
+    if ( profile === 'mobile' && previous.desktopLocal && ! previous.redirectedTo && ! previous.external ) return 'phone-only';
+    return ( previous.redirectedTo && previous.redirectedTo !== outcome.redirectedTo ) || previous.local || previous.external ? 'disagree' : 'agree';
+  }
+  return previous.redirectedTo && ( outcome.local || outcome.external ) ? 'disagree' : 'agree';
+}
+
 /**
  * The route a server redirect resolved `requestedUrl` to during navigation, or
  * undefined when it names the same path or another site. `finalUrl` is the

@@ -192,6 +192,8 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       '/missing-html': tallHtml('NOT CAPTURED'),
       // A client-routed control navigating the page away after load.
       '/spa': tallHtml('SPA').replace('</body>', '<script>addEventListener("load",()=>history.pushState({},"","/new"))</script></body>'),
+      '/phone-site': tallHtml('DESKTOP ROUTE'),
+      '/m/': tallHtml('SEPARATE MOBILE SITE'),
     };
     const redirects: Record<string, [number, string]> = {
       '/old': [301, '/new'],
@@ -202,7 +204,12 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     const server: HttpServer = createServer((req, res) => {
       const path = (req.url || '/').split('?')[0];
       const redirect = redirects[path];
-      if (req.url === '/?missing=1') {
+      if (path === '/phone-site' && /iPhone|Mobile/.test(req.headers['user-agent'] ?? '')) {
+        // fleetdown.net: every route answers phones with `302 /m/`, one
+        // separate mobile app, and desktop with the route's own document.
+        res.writeHead(302, { Location: '/m/' });
+        res.end();
+      } else if (req.url === '/?missing=1') {
         res.writeHead(404);
         res.end();
       } else if (redirect) {
@@ -221,7 +228,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     const outputDir = mkdtempSync(join(TMP_ROOT, 'redirect-out-'));
     try {
       await captureScreenshots({
-        urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa'].map((path) => `${origin}${path}`),
+        urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa', '/phone-site'].map((path) => `${origin}${path}`),
         outputDir,
         concurrency: 2,
       });
@@ -246,6 +253,14 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       expect(manifest.entries[`${origin}/?missing=1`]).toMatchObject({ sourceAbsentStatus: 404 });
       expect(manifest.entries[`${origin}/missing-html`]).toBeUndefined();
       expect(JSON.stringify(manifest)).not.toContain('secret=');
+      // A phone-only redirect to a separate mobile site keeps the route's
+      // desktop document instead of failing it as disagreeing aliases.
+      const phoneSite = manifest.entries[`${origin}/phone-site`];
+      expect(phoneSite.html).toBe('html/phone-site.html');
+      expect(phoneSite.redirectedTo).toBeUndefined();
+      expect(phoneSite.mobileHtml).toBeUndefined();
+      expect(phoneSite.profiles.mobile.diagnostics).toEqual([expect.objectContaining({ code: 'phone_redirect_desktop_only' })]);
+      expect(failures.filter((f) => f.url === `${origin}/phone-site`)).toEqual([]);
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
       rmSync(outputDir, { recursive: true, force: true });

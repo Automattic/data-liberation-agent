@@ -26,6 +26,8 @@ import {
 	isStackingArtifact,
 	matchClientErrorShell,
 	navigationDocumentUrl,
+	PHONE_REDIRECT_DESKTOP_ONLY,
+	profileRedirectMerge,
 	serverRedirectTarget,
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -2855,14 +2857,27 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const previousDocuments = entry.documents;
 			const previousNativeViewTimelines = entry.nativeViewTimelines;
 			const previousBlockLosses = entry.blockLosses ?? [];
-			const previousRedirect = entry.redirectedTo;
 			const previousOutcomes = entry.sourceOutcomes ?? [];
-			const previousLocal = Boolean( entry.html || entry.mobileHtml );
-			const profileLocal = Boolean( profileEntry.html || profileEntry.mobileHtml );
-			const aliasDisagreement = profileEntry.redirectedTo
-				? Boolean( ( previousRedirect && previousRedirect !== profileEntry.redirectedTo ) || previousLocal || previousOutcomes.length )
-				: Boolean( previousRedirect && ( profileLocal || profileEntry.sourceOutcomes?.length ) );
+			const redirectMerge = profileRedirectMerge( viewport.id, {
+				redirectedTo: profileEntry.redirectedTo,
+				local: Boolean( profileEntry.html || profileEntry.mobileHtml ),
+				external: Boolean( profileEntry.sourceOutcomes?.length ),
+			}, {
+				redirectedTo: entry.redirectedTo,
+				local: Boolean( entry.html || entry.mobileHtml ),
+				desktopLocal: Boolean( entry.html ),
+				external: Boolean( previousOutcomes.length ),
+			} );
+			const aliasDisagreement = redirectMerge === 'disagree';
 			const profileRecord = profileEntry.profiles?.[ viewport.id ];
+			if ( redirectMerge === 'phone-only' ) {
+				// The route keeps its desktop document; the phone identity's
+				// destination is another site section, not this route's alias.
+				const reason = `the phone identity is redirected to ${ profileEntry.redirectedTo } while desktop renders this route; captured at desktop only`;
+				sendLog( server, `[${ PHONE_REDIRECT_DESKTOP_ONLY }] ${ url } (${ viewport.id }): ${ reason }` );
+				if ( profileRecord ) profileRecord.diagnostics = [ ...( profileRecord.diagnostics ?? [] ), { code: PHONE_REDIRECT_DESKTOP_ONLY, reason } ];
+				profileEntry = { ...profileEntry, redirectedTo: undefined };
+			}
 			const { profiles: _profiles, ...passEntry } = profileEntry;
 			if ( viewport.id === 'desktop' ) Object.assign( entry, passEntry );
 			else if ( viewport.id === 'mobile' ) {
