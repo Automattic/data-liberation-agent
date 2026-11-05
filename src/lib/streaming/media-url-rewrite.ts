@@ -51,11 +51,15 @@ export function rewriteMediaUrls(
 ): string {
   if (!input || mapping.size === 0) return input;
 
-  const replacements = new Map(mapping);
+  const replacements = new Map<string, string>();
+  for (const [source, local] of mapping) {
+    if (source && source !== '/' && input.includes(source)) replacements.set(source, local);
+  }
   // Inline CSS and other HTML attributes serialize query separators as &amp;.
   for (const [source, local] of mapping) {
     if (source.includes('&')) {
-      replacements.set(source.replace(/&/g, '&amp;'), local.replace(/&/g, '&amp;'));
+      const encoded = source.replace(/&/g, '&amp;');
+      if (input.includes(encoded)) replacements.set(encoded, local.replace(/&/g, '&amp;'));
     }
   }
 

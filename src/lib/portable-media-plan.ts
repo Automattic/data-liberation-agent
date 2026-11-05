@@ -60,13 +60,17 @@ export interface PortableMediaPlan {
 }
 
 export function containsMediaReference( content: string, reference: string ): boolean {
-	for ( const candidate of [ reference, reference.replace( /&/g, '&amp;' ) ] ) {
+	const candidates = [ reference ];
+	if ( reference.includes( '&' ) ) candidates.push( reference.replace( /&/g, '&amp;' ) );
+	for ( const candidate of candidates ) {
 		let offset = content.indexOf( candidate );
+		if ( offset === -1 ) continue;
+		const hasQuery = Boolean( new URL( reference, 'https://example.com' ).search );
 		while ( offset !== -1 ) {
-			const suffix = content.slice( offset + candidate.length );
+			const end = offset + candidate.length;
 			if (
-				new URL( reference, 'https://example.com' ).search ||
-				( ! suffix.startsWith( '?' ) && ! suffix.startsWith( '&amp;' ) )
+				hasQuery ||
+				( ! content.startsWith( '?', end ) && ! content.startsWith( '&amp;', end ) )
 			) {
 				return true;
 			}
@@ -99,9 +103,11 @@ export function indexPortableMediaReferences(
 		if ( pending.size === 0 ) break;
 		const html = readFileSync( htmlPath, 'utf8' );
 		for ( const reference of pending ) {
-			if ( containsMediaReference( html, reference ) ) matched.add( reference );
+			if ( containsMediaReference( html, reference ) ) {
+				matched.add( reference );
+				pending.delete( reference );
+			}
 		}
-		for ( const reference of matched ) pending.delete( reference );
 	}
 	return { matched, indexed };
 }
