@@ -7,6 +7,21 @@ describe('rewriteMediaUrls', () => {
     expect(rewriteMediaUrls(html, new Map())).toBe(html);
   });
 
+  it('keeps rewrite patterns page-sized with a large site media map', () => {
+    const mapping = new Map(Array.from({ length: 20_000 }, (_, i) =>
+      [`https://cdn.example.com/photo-${i}.jpg`, `/media/photo-${i}.jpg`],
+    ));
+    const patterns = vi.spyOn(globalThis, 'RegExp');
+    try {
+      expect(rewriteMediaUrls('<img src="https://cdn.example.com/photo-42.jpg">', mapping))
+        .toBe('<img src="/media/photo-42.jpg">');
+      expect(patterns.mock.calls.reduce((size, [pattern]) => size + String(pattern).length, 0))
+        .toBeLessThan(1_000);
+    } finally {
+      patterns.mockRestore();
+    }
+  });
+
   it('rewrites <img src> when source URL is mapped', () => {
     const html = '<p>Hi</p><img src="https://cdn.example.com/a.jpg" alt="A">';
     const map = new Map([['https://cdn.example.com/a.jpg', 'http://localhost:8881/wp-content/uploads/2024/01/a.jpg']]);

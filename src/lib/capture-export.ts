@@ -2120,6 +2120,7 @@ function buildExportCapture(
 			tabKeysByRoute.set( routeKey, ( tabKeysByRoute.get( routeKey ) ?? new Set() ).add( key ) );
 		}
 	}
+	const metadataPathsBySource = new Map( [ ...mediaStage.metadataPathsBySource, ...portablePathsBySource ] );
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -2132,7 +2133,7 @@ function buildExportCapture(
 		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, options.routeScope, boundaryRoutes ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
-		const identityHtml = localizeMetadataImageReferences( originalHtml, url, new Map( [ ...mediaStage.metadataPathsBySource, ...portablePathsBySource ] ), content => bindSrcsetShapedImageSrc(
+		const identityHtml = localizeMetadataImageReferences( originalHtml, url, metadataPathsBySource, content => bindSrcsetShapedImageSrc(
 			localizeDataAttributeMedia(
 				replaceResources(
 					rewriteMediaUrls(
