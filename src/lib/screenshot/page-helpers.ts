@@ -803,6 +803,11 @@ export async function pageResponds(page: Page, ms: number = EVALUATE_GRACE_MS): 
   }
 }
 
+/** True when `withEvaluateTimeout` gave up waiting, not when the evaluate itself failed. */
+export function isEvaluateTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('evaluate timeout after');
+}
+
 /**
  * Race a page.evaluate promise against a hard timeout. Chatty scripts or
  * hostile origins shouldn't hang the capture indefinitely.
