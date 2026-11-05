@@ -40,9 +40,10 @@ describe.skipIf( ! supported )( 'capture/tls-incomplete-chain-aia', () => {
 		openssl( 'x509', '-req', '-in', 'intermediate.csr', '-CA', 'root.pem', '-CAkey', 'root.key', '-CAcreateserial', '-out', 'intermediate.pem', '-days', '2', '-extfile', 'ca.ext' );
 		openssl( 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-out', 'leaf.csr', '-subj', '/CN=localhost' );
 		writeFileSync( join( dir, 'leaf.ext' ), `basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nauthorityInfoAccess=caIssuers;URI:${ aiaOrigin }/issuer\n` );
-		for ( const [ name, days ] of [ [ 'leaf', '2' ], [ 'expired', '0' ] ] ) {
-			openssl( 'x509', '-req', '-in', 'leaf.csr', '-CA', 'intermediate.pem', '-CAkey', 'intermediate.key', '-CAcreateserial', '-out', `${ name }.pem`, '-days', days, '-extfile', 'leaf.ext' );
-		}
+		openssl( 'x509', '-req', '-in', 'leaf.csr', '-CA', 'intermediate.pem', '-CAkey', 'intermediate.key', '-CAcreateserial', '-out', 'leaf.pem', '-days', '2', '-extfile', 'leaf.ext' );
+		writeFileSync( join( dir, 'index.txt' ), '' );
+		writeFileSync( join( dir, 'ca.cnf' ), '[ca]\ndefault_ca=issuer\n[issuer]\ndatabase=index.txt\nserial=serial\nnew_certs_dir=.\ncertificate=intermediate.pem\nprivate_key=intermediate.key\ndefault_md=sha256\npolicy=subject\n[subject]\ncommonName=supplied\n' );
+		openssl( 'ca', '-batch', '-config', 'ca.cnf', '-rand_serial', '-in', 'leaf.csr', '-out', 'expired.pem', '-notext', '-startdate', '20000101000000Z', '-enddate', '20000102000000Z', '-extfile', 'leaf.ext' );
 		source = httpsServer( { key: pem( 'leaf.key' ), cert: pem( 'leaf.pem' ) }, ( _req, res ) => res.end( 'verified' ) );
 		origin = `https://127.0.0.1:${ await listen( source ) }`;
 	}, 20_000 );
@@ -83,7 +84,6 @@ describe.skipIf( ! supported )( 'capture/tls-incomplete-chain-aia', () => {
 		tls.setDefaultCACertificates( [ ...defaults, pem( 'root.pem' ) ] );
 		source.setSecureContext( { key: pem( 'leaf.key' ), cert: pem( 'expired.pem' ) } );
 		const before = tls.getCACertificates( 'default' );
-		await new Promise( resolve => setTimeout( resolve, 1100 ) );
 		await recover();
 		expect( tls.getCACertificates( 'default' ) ).toEqual( before );
 		await expect( fetch( origin ) ).rejects.toThrow();
