@@ -133,6 +133,8 @@ export interface CaptureOptions {
 	 * minus the post-capture headroom (README, "Capture time budget").
 	 */
 	timeBudgetMs?: number;
+	/** Save resumable state without exporting when the time budget leaves missing routes. */
+	checkpoint?: boolean;
 	/**
 	 * Milliseconds of the capture time budget reserved per started route for
 	 * downstream work (browser acquisition only). Every route that starts —
@@ -224,6 +226,11 @@ export interface UnresolvedAnchor {
 }
 
 export interface CaptureResult {
+	/** True only when export was deferred; resume into the same output directory. */
+	checkpoint?: boolean;
+	resumable?: boolean;
+	/** Captured pages still need a run with enough remaining export reserve. */
+	exportPending?: boolean;
 	captureReceiptPath: string;
 	outputDir: string;
 	summary: {
@@ -420,7 +427,7 @@ async function runCaptureWebsite(
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	const timeBudgetMs = options.timeBudgetMs ?? ( options.acquisition !== 'http' && options.routeLimit === undefined ? DEFAULT_CAPTURE_TIME_BUDGET_MS : undefined );
-	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs, options.routeReserveMs ), projectAdmission: options.routeLimit === undefined };
+	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs, options.routeReserveMs ), projectAdmission: options.routeLimit === undefined, checkpoint: options.checkpoint };
 	// One governor per source origin for every HTTP pass of this capture (#907).
 	const sourceGovernors = new SourceRequestGovernors();
 	let phase = '';
@@ -516,7 +523,7 @@ async function runCaptureWebsite(
 	// Navigation chrome is site-wide contract: rank its inventory destinations
 	// first, preserving discovery order within that tier, before template coverage
 	// and the general inventory spread.
-	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ], timeBudget?.projectAdmission );
+	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ], timeBudget?.projectAdmission && ! options.checkpoint );
 	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
@@ -666,6 +673,39 @@ async function runCaptureWebsite(
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
 		...( screenshotResult.deviceMode?.routes ? { dualRoutes: screenshotResult.deviceMode.routes.dual.length } : {} ),
 	};
+	// Export writes reused pages too. Decide only after capture so even the last
+	// new route can progress without holding reserve for earlier runs' pages.
+	let exportPending = false;
+	if ( options.checkpoint && timeBudget && ( timeBudget.routeReserveMs ?? 0 ) > 0 ) {
+		// Read the export's manifest, including retained entries from earlier runs.
+		const manifest = JSON.parse( readFileSync( screenshotResult.manifestPath, 'utf8' ) ) as { entries: Record< string, ManifestEntry > };
+		const exportRoutes = Object.entries( manifest.entries ).filter( ( [ url, entry ] ) => {
+			if ( new URL( url ).origin !== new URL( sourceUrl ).origin || ! routeInScope( url, routeScope ) ||
+				! entry.html || entry.redirectedTo || entry.externalRedirect || entry.sourceAbsentStatus ) return false;
+			const htmlPath = resolve( outputDir, entry.html );
+			return pathWithin( outputDir, htmlPath ) && existsSync( htmlPath );
+		} ).length;
+		exportPending = exportRoutes * timeBudget.routeReserveMs! > timeBudget.abandonAt - Date.now();
+	}
+	if ( options.checkpoint && ( exportPending || captureDiagnostics.some( row => row.code === 'route_capture_skipped_budget' ) ) ) {
+		const entrypointCaptured = screenshotResult.captured + screenshotResult.skipped > 0 &&
+			! missingRoutes( captureDiagnostics ).some( row => normalizedUrl( row.url ) === normalizedUrl( sourceUrl ) );
+		const captureReceiptPath = join( outputDir, 'capture-checkpoint.json' );
+		const result: CaptureResult = {
+			captureReceiptPath, outputDir, checkpoint: true, resumable: true, exportPending,
+			summary: { ...summary, complete: false, entrypointCaptured },
+			complete: false, entrypointCaptured,
+			missingRoutes: missingRoutes( captureDiagnostics ), failures,
+			discoveryDiagnostics: captureDiagnostics, unresolvedAnchors: [],
+			provenance: { provider: 'data-liberation/browser-capture', platform: detection.platform },
+			...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode } : {} ),
+			...( screenshotResult.sharedChrome ? { sharedChrome: screenshotResult.sharedChrome } : {} ),
+		};
+		writeFileSync( captureReceiptPath, `${ JSON.stringify( result, null, 2 ) }\n` );
+		progress( { phase: 'complete', current: screenshotResult.captured + screenshotResult.skipped, total: screenshotResult.urls.length } );
+		if ( blockedClient ) throw blockedClient; // failure-class: operational
+		return result;
+	}
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
 	const captureReceiptPath = exportWebsiteCapture( {
 		outputDir,

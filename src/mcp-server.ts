@@ -60,6 +60,7 @@ const TOOLS = [
         trustedOrigins: { type: 'array', items: { type: 'string' }, description: 'Origins the caller vouches for, e.g. http://localhost:8884/ for a local development site on this machine. Each entry is an absolute http(s) URL; its exact origin (scheme, host, port) bypasses the loopback/private-host guard for the entry URL, subresources and redirects. Other internal targets stay blocked. Default: none.' },
         outputDir: { type: 'string', description: 'Output base directory. Defaults to ~/data-liberation.' },
         resume: { type: 'boolean', description: 'Reuse artifacts already on disk instead of recapturing.' },
+        checkpoint: { type: 'boolean', description: 'Defer export/archive finalization while time-budget-skipped routes remain. Returns a resumable checkpoint; resume into the same output directory. When no routes remain, exports normally.' },
         screenshots: { type: 'boolean', description: 'Also capture full-page and scrolled PNGs.' },
         acquisition: { type: 'string', enum: ['browser', 'http'], description: 'Browser by default; HTTP produces an explicitly unverified review candidate.' },
         routeLimit: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'string', enum: ['all'] }], description: 'Route budget shared by browser and HTTP capture, entrypoint included: the entrypoint plus an even spread of the rest, linked pages counted. Browser default: observed-time admission within 17 minutes; HTTP default all. Explicit limits override default time admission. Omitted routes are diagnosed (route_omitted_by_budget) and counted in routesOmitted, never failed.' },
@@ -153,6 +154,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         url: String(args.url ?? ''),
         outputBase: typeof args.outputDir === 'string' ? args.outputDir : resolveOutputBase(),
         resume: args.resume === true,
+        checkpoint: args.checkpoint === true,
         screenshots: args.screenshots === true,
         portableMotion: args.portableMotion && typeof args.portableMotion === 'object' ? args.portableMotion as import('./lib/portable-motion.js').PortableMotionRecipe : undefined,
         // A tool call has no terminal to hold, so it never serves.
