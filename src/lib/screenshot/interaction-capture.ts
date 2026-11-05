@@ -1341,8 +1341,13 @@ async function observeInlineRestingPanel( page: Page, trigger: string, panel: st
 				const buttonStyle = getComputedStyle( control ), buttonRect = control.getBoundingClientRect();
 				const concealed = buttonStyle.display === 'none' || buttonStyle.visibility === 'hidden' || buttonRect.width === 0 || buttonRect.height === 0;
 				const style = getComputedStyle( surface ), rect = surface.getBoundingClientRect();
+				// A pinned sidebar or fixed bar is resting chrome; a visible surface
+				// covering the viewport is an open overlay, not an inline panel.
+				const positioned = style.position === 'fixed' || style.position === 'absolute';
+				const overlay = positioned && ( rect.right <= 0 || rect.left >= innerWidth ||
+					rect.width >= innerWidth * 0.9 && rect.height >= innerHeight * 0.9 );
 				return concealed && style.display !== 'none' && style.visibility !== 'hidden' &&
-					style.position !== 'fixed' && style.position !== 'absolute' && rect.width > 0 && rect.height > 0;
+					!overlay && rect.width > 0 && rect.height > 0;
 			}, { trigger, panel } );
 			if ( inline ) return true;
 		}
