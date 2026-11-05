@@ -128,6 +128,10 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 		 * route the receipt exports for it. An entrypoint that redirects still
 		 * freezes the homepage.
 		 */
+		/** `url` has no document for `profile`; its declared cells for that profile are withdrawn. */
+		withdraw( url: string, profile: string ): void {
+			for ( const [ key, cell ] of cells ) if ( cell.sourceUrl === url && cell.profile === profile ) cells.delete( key );
+		},
 		alias( url: string, target: string ): void {
 			for ( const [ key, cell ] of cells ) if ( cell.sourceUrl === url ) cells.delete( key );
 			if ( sampleLimit !== undefined && sampledUrls.delete( url ) ) sampledUrls.add( target );

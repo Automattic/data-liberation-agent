@@ -93,6 +93,7 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `route_capture_degraded` | route | warning | HTML saved, but some stages failed. `metrics.failedStages`. | no | #764 |
 | `route_profile_uncaptured` | profile | error | A declared capture profile produced no document. Makes `complete: false`. | no | #764 |
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
+| `phone_redirect_desktop_only` | profile | warning | The phone identity was sent to another same-site route (a separate mobile site) while desktop rendered the route; the route ships its desktop document alone, reflowed at phone widths. `profile: mobile`; loss class `degraded_unit` (the default for codes outside `SOURCE_FINDING_LOSS_CLASSES`). | no | #1338 |
 | `native_timeline_unproven` | block | warning | Native view-timeline evidence was lost on a saved page. | no | #773 |
 | `disclosure_unrestored` | block | error | Disclosure probe could not restore its baseline; hydrated panels were not kept. | no | #773 |
 | `interaction_unreplayable` | block | warning | A probed choice group cannot be replayed offline (`replay: unsupported`, unverified restoration, partial coverage or a truncated transition); its static markup ships without the interaction. | no | #901 |
