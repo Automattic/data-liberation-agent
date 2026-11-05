@@ -64,7 +64,7 @@ import { availableRuntimeMemory } from './runtime-memory.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument, observePageTraffic } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument, observePageTraffic } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -1036,11 +1036,24 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// placeholder inside the site's public shell instead (see access-gate.ts).
 		// Read before any probe clicks, so a login pop-up a control opens later is
 		// never mistaken for a gated route.
+		// The settle waits are bounded and best-effort, so a page that stopped
+		// answering during them arrives here; bound these reads too.
 		let accessGate: AccessGateEvidence | undefined;
-		const gateRemoval = accessGateRemoval( await readSourceCleanup( page, sourcePolicy ), sourcePolicy );
-		const gate = gateRemoval && ! ( await routeKeptContent( page ) ) ? gateRemoval : undefined;
+		let gate: ReturnType< typeof accessGateRemoval >;
+		let gateTitle = '';
+		const stoppedResponding = ( error: unknown, during: string ): false => {
+			if ( ! isEvaluateTimeout( error ) ) throw error; // failure-class: operational
+			loadFail( 'evaluate', `page stopped responding while settling (${ during }): no answer to an evaluate within ${ evaluateTimeoutMs }ms` );
+			return false;
+		};
+		try {
+			const gateRemoval = accessGateRemoval( await withEvaluateTimeout( readSourceCleanup( page, sourcePolicy ), evaluateTimeoutMs ), sourcePolicy );
+			gate = gateRemoval && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ? gateRemoval : undefined;
+			if ( gate ) gateTitle = ( await withEvaluateTimeout( page.title().catch( () => '' ), evaluateTimeoutMs ) ).trim();
+		} catch ( error ) {
+			return stoppedResponding( error, 'source cleanup / access gate' );
+		}
 		if ( gate ) {
-			const gateTitle = ( await page.title().catch( () => '' ) ).trim();
 			// Loading the public shell is this capture's own explained navigation.
 			await releaseBaselineNavigation();
 			let shell: string | undefined;
@@ -1049,16 +1062,20 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} finally {
 				releaseBaselineNavigation = await lockMainFrameNavigation( page, baselineDrift, true );
 			}
-			if ( shell ) {
-				await applySourceCleanup( page, sourcePolicy );
-				await waitForStable( page );
+			try {
+				if ( shell ) {
+					await withEvaluateTimeout( applySourceCleanup( page, sourcePolicy ), evaluateTimeoutMs );
+					await waitForStable( page );
+				}
+				accessGate = { ...gate, ...( shell ? { shell } : {} ) };
+				const placed = await withEvaluateTimeout( page.evaluate( installAccessGatePlaceholder, {
+					route: url, gateTitle, note: accessGateNote( gate.provider ), provider: gate.provider,
+				} ), evaluateTimeoutMs );
+				accessGate.label = placed.label;
+				entry.accessGate = accessGate;
+			} catch ( error ) {
+				return stoppedResponding( error, 'access-gate shell' );
 			}
-			accessGate = { ...gate, ...( shell ? { shell } : {} ) };
-			const placed = await page.evaluate( installAccessGatePlaceholder, {
-				route: url, gateTitle, note: accessGateNote( gate.provider ), provider: gate.provider,
-			} );
-			accessGate.label = placed.label;
-			entry.accessGate = accessGate;
 		}
 		// Dismiss takeover modals / consent banners BEFORE lazy-load (a modal's
 		// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can

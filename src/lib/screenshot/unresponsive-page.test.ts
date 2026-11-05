@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { captureScreenshots } from './screenshotter.js';
+import type { Viewport } from './types.js';
 
 // A page whose own script takes over the main thread once it is scrolled: the
 // renderer never answers another evaluate, and never crashes either.
@@ -14,31 +15,57 @@ const SPIN_ON_SCROLL = `<!doctype html><html><body>
   </script>
 </body></html>`;
 
+// A page that keeps changing until the settle wait is under way, then takes
+// over its main thread before the settled document is read.
+const SPIN_WHILE_SETTLING = `<!doctype html><html><body>
+  <h1>Heading</h1>
+  <p id="status">loading</p>
+  <script>
+    addEventListener('load', function () {
+      var ticks = 0;
+      var timer = setInterval(function () {
+        document.getElementById('status').textContent = 'tick ' + ++ticks;
+        if (ticks < 20) return;
+        clearInterval(timer);
+        for (;;) {}
+      }, 100);
+    });
+  </script>
+</body></html>`;
+
 describe('captureScreenshots — page whose script never yields (real Chromium)', () => {
   it.skipIf(process.env.SKIP_BROWSER_TESTS)('records a bounded, accurate failure instead of hanging', async () => {
-    const root = join(process.cwd(), '.tmp-test');
-    mkdirSync(root, { recursive: true });
-    const outputDir = mkdtempSync(join(root, 'unresponsive-'));
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(SPIN_ON_SCROLL);
-    });
-    await new Promise<void>((r) => server.listen(0, r));
-    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-    try {
-      const started = Date.now();
-      await captureScreenshots({ urls: [url], outputDir, settleMs: 0, evaluateTimeoutMs: 100 });
-      expect(Date.now() - started).toBeLessThan(90_000);
+    await expectStoppedResponding(SPIN_ON_SCROLL, /stopped responding while settling \(overlay dismissal \/ lazy load\)/);
+  }, 150_000);
 
-      const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8'));
-      expect(failures.map((f: { viewport: string }) => f.viewport).sort()).toEqual(['desktop', 'mobile']);
-      for (const f of failures) {
-        expect(f.stage).toBe('evaluate');
-        expect(f.error).toMatch(/stopped responding/);
-      }
-    } finally {
-      await new Promise<void>((r) => server.close(() => r()));
-      rmSync(outputDir, { recursive: true, force: true });
-    }
+  it.skipIf(process.env.SKIP_BROWSER_TESTS)('fails fast when the page stops answering before the settled document is read', async () => {
+    await expectStoppedResponding(SPIN_WHILE_SETTLING, /stopped responding while settling \(source cleanup \/ access gate\)/, [{ id: 'desktop', width: 1440, height: 900 }]);
   }, 150_000);
 });
+
+async function expectStoppedResponding(html: string, reason: RegExp, viewports?: Viewport[]): Promise<void> {
+  const root = join(process.cwd(), '.tmp-test');
+  mkdirSync(root, { recursive: true });
+  const outputDir = mkdtempSync(join(root, 'unresponsive-'));
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(html);
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  try {
+    const started = Date.now();
+    await captureScreenshots({ urls: [url], outputDir, settleMs: 0, evaluateTimeoutMs: 100, ...(viewports ? { viewports } : {}) });
+    expect(Date.now() - started).toBeLessThan(90_000);
+
+    const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8'));
+    expect(failures.map((f: { viewport: string }) => f.viewport).sort()).toEqual((viewports ?? [{ id: 'desktop' }, { id: 'mobile' }]).map((v) => v.id));
+    for (const f of failures) {
+      expect(f.stage).toBe('evaluate');
+      expect(f.error).toMatch(reason);
+    }
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    rmSync(outputDir, { recursive: true, force: true });
+  }
+}
