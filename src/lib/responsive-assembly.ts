@@ -1515,7 +1515,7 @@ function assembleResponsiveHtml(
 			html: withProjectionStyle(
 				insertBeforeHeadClose(
 					withMobileViewport(
-						withProjectedBody( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) )
+						scopedStyles( withProjectedBody( desktopHtml ), `(min-width:${ switchWidth + 1 }px)`, shared )
 					),
 					responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared )
 				)
@@ -1543,7 +1543,7 @@ function assembleResponsiveHtml(
 			withMobileViewport( withHeadElement( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) ) ),
 			'body',
 			( { open, close } ) =>
-				`${ withBodyClasses( open.replace( /class=(['"])(.*?)\1/i, ( _, quote, tokens ) => `class=${ quote }${ tokens.split( /\s+/ ).map( ( token: string ) => desktopBodyAliases.get( token ) ?? token ).join( ' ' ) }${ quote }` ), mobileBodyMatch?.attributes ?? '', identitySubset.classAliases ) }${ mergedBody }${ close }`
+				`${ withBodyClasses( open.replace( /class=(['"])(.*?)\1/i, ( _, quote, tokens ) => `class=${ quote }${ tokens.split( /\s+/ ).map( ( token: string ) => desktopBodyAliases.get( token ) ?? token ).join( ' ' ) }${ quote }` ), mobileBodyMatch?.attributes ?? '', identitySubset.classAliases ) }${ scopedStyles( mergedBody, `(min-width:${ switchWidth + 1 }px)`, shared ) }${ close }`
 		);
 		return {
 			html: insertBeforeHeadClose(
@@ -1621,8 +1621,12 @@ function assembleResponsiveHtml(
 	const rewrite = ( html: string ) => scopedStyles( html, undefined, new Set(), movedBodyClasses, onUnparseable );
 	desktopHtml = rewrite( desktopHtml );
 	mobileHtml = rewrite( mobileHtml );
-	desktopBody = rewrite( desktopBody );
-	mobileBody = rewrite( mobileBody );
+	const shared = gatedByMobileClass ? new Set< string >() : sharedStyleContents( desktopHtml, mobileHtml );
+	// The desktop body is replaced below: scope its retained styles just like
+	// the head. Phone styles (including learned rules) have one owner in
+	// responsiveMobileStyles, so none remain in the phone body.
+	desktopBody = scopedStyles( rewrite( desktopBody ), `(min-width:${ switchWidth + 1 }px)`, shared );
+	mobileBody = mobileBody.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' );
 	const mobileBodyClasses = new Set( bodyClasses( mobileBodyMatch?.attributes ?? '' ) );
 	const sharedBodyClasses = [ ...new Set( bodyClasses( desktopBodyMatch?.attributes ?? '' ) ) ].filter(
 		( className ) => mobileBodyClasses.has( className )
@@ -1639,29 +1643,7 @@ function assembleResponsiveHtml(
 		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.attributes ?? ''
 	) } data-blocks-engine-capture-document-scope>${ mobileBody }</div>`;
-	const sharedStyles = styleBlocks( desktopHtml );
 	const evidence = dualStructuralEvidence( gatedByMobileClass );
-	if (
-		! gatedByMobileClass &&
-		sharedStyles.length > 0 &&
-		sharedStyles.join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' )
-	) {
-		return {
-			html: replaceDocumentElement(
-				insertBeforeHeadClose(
-					withMobileViewport( desktopHtml ),
-					`<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style>`
-				),
-				'body',
-				( { close } ) => `${ outerBody }${ responsiveBody }${ close }`
-			),
-			evidence,
-		};
-	}
-	// A stylesheet present in both captures must apply at every width, so it is
-	// left out of both scoping passes below and kept exactly once, unscoped, from
-	// the desktop copy that already carries it.
-	const shared = gatedByMobileClass ? new Set< string >() : sharedStyleContents( desktopHtml, mobileHtml );
 	const mobileStyles = responsiveMobileStyles(
 		mobileHtml,
 		`.${ MOBILE_DOCUMENT_CLASS }`,
