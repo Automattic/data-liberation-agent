@@ -456,6 +456,90 @@ describe( 'assembleResponsiveCapture', () => {
 		expect( assembly.portableNormalization ).toBe( 'pending' );
 	} );
 
+	it.each( [
+		{ matching: true, outcome: 'collapsed-identity-subset' },
+		{ matching: false, outcome: 'dual-structural' },
+	] )( 'discovers position identities only when values overlap ($matching)', ( { matching, outcome } ) => {
+		const rawDesktop = page( '<main data-position="0"><div class="wide"><h1 data-position="1">Shared heading</h1><p data-position="2">Shared paragraph</p></div></main>' );
+		const rawMobile = page( `<main data-position="${ matching ? 0 : 10 }"><section class="narrow"><h1 data-position="${ matching ? 1 : 11 }">Shared heading</h1><p data-position="${ matching ? 2 : 12 }">Shared paragraph</p></section></main>` );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence?.outcome ).toBe( outcome );
+		if ( matching ) {
+			expect( assembly.evidence ).toMatchObject( { matchedNodes: 3, desktopOnlyElements: 0, mobileOnlyElements: 0 } );
+			const $ = cheerio.load( assembly.html );
+			expect( $( 'body' ).text().match( /Shared heading/g ) ).toHaveLength( 1 );
+			expect( $( 'body' ).text().match( /Shared paragraph/g ) ).toHaveLength( 1 );
+		}
+	} );
+
+	it( 'swaps id-less chrome per device and pairs components by attribute when an id is one-sided', () => {
+		const card = ( id: string, text: string, own = '' ) =>
+			`<section data-card-id="${ id }"${ own }><div class="frame"><p data-pos="${ id }">${ text }</p></div></section>`;
+		// Cards carry most of the text, so their attributes are discovered identities.
+		const cards = 'bcdefghijk'.split( '' ).map( id => card( id, `Card ${ id }` ) ).join( '' );
+		const rawDesktop = page(
+			'<nav><img class="logo" src="/logo.png" alt=""><div class="links"><a href="#a">News</a></div></nav>' +
+			card( 'a', 'First card', ' id="card-a"' ) + cards + '<div></div>'
+		);
+		const rawMobile = page(
+			'<div><div class="doc-background"></div></div>' +
+			'<nav><img class="logo" src="/logo.png" alt=""><button class="toggle" aria-label="Menu"></button></nav>' +
+			card( 'a', 'First card' ) + cards + '<div></div>'
+		);
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence?.outcome ).toBe( 'collapsed-identity-subset' );
+		const $ = cheerio.load( assembly.html );
+		expect( $( 'body' ).text().match( /First card/g ) ).toHaveLength( 1 );
+		expect( $( 'nav' ) ).toHaveLength( 1 );
+		expect( $( 'nav > .links.data-blocks-engine-capture-desktop-only' ) ).toHaveLength( 1 );
+		expect( $( 'nav > .toggle.data-blocks-engine-capture-mobile-only' ) ).toHaveLength( 1 );
+		// The phone's leading background stays ahead of the content, not at
+		// the later desktop position that happens to share its shape.
+		expect( $( 'body > .data-blocks-engine-capture-mobile-only:has(> .doc-background) + nav' ) ).toHaveLength( 1 );
+	} );
+
+	it( 'keeps class tokens only one rendering of a shared element carries width-local', async () => {
+		// The phone rendering adds `shown`, which desktop also uses elsewhere;
+		// only the desktop rendering carries the styled `wide`.
+		const styles = '<style>.wide{width:300px}.shown{color:rgb(0, 128, 0)}</style>';
+		const cards = 'bcdefghijk'.split( '' ).map( id => `<section data-card-id="${ id }"><p data-pos="${ id }" class="${ id === 'b' ? 'shown' : '' }">Card ${ id }</p></section>` ).join( '' );
+		const target = ( classes: string ) => `<section data-card-id="a"><p data-pos="a" class="${ classes }">Target</p></section>`;
+		const rawDesktop = page( '<nav class="links"></nav>' + target( 'copy wide' ) + cards, styles );
+		const rawMobile = page( target( 'copy shown' ) + cards, styles );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		expect( assembly.evidence?.outcome ).toBe( 'collapsed-identity-subset' );
+		const browser = await chromium.launch();
+		try {
+			const tab = await browser.newPage();
+			for ( const [ width, source ] of [ [ 390, rawMobile ], [ 1440, rawDesktop ] ] as const ) {
+				await tab.setViewportSize( { width, height: 900 } );
+				const measure = async ( html: string ) => {
+					await tab.setContent( html );
+					return Promise.all( [ '[data-pos="a"]', '[data-pos="b"]' ].map( selector =>
+						tab.locator( selector ).evaluate( node => [ getComputedStyle( node ).width, getComputedStyle( node ).color ] ) ) );
+				};
+				expect( await measure( assembly.html ), `computed styles at ${ width }px` ).toEqual( await measure( source ) );
+			}
+		} finally { await browser.close(); }
+	} );
+
 	it( 'ships both documents when the mobile tree does not reconcile', () => {
 		const rawDesktop = page( '<main><h1>Desktop</h1></main>' );
 		const rawMobile = page( '<main><h1>Phone</h1><aside>Menu</aside></main>', '', ' class="phone"' );
