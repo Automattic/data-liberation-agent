@@ -1557,6 +1557,12 @@ function buildExportCapture(
 					? Math.round( entry.fluid.canvasFloor )
 					: phoneResponsiveSwitchWidth( entry, siteSwitchWidth );
 			if ( detectedFloor ) switchWidths.push( detectedFloor );
+			const middle = entry.deviceMode?.switchWidth === detectedFloor ? entry.deviceMode?.uncapturedLayout : undefined;
+			if ( middle ) routeCaptureDiagnostics.push( {
+				code: 'responsive_layout_uncaptured', url, unit: 'profile', severity: 'warning',
+				reason: `source renders a third layout, neither the phone nor the desktop document, from ${ middle.minWidth }px${ middle.maxWidth === undefined ? '' : ` to ${ middle.maxWidth }px` }; the copy serves the desktop document there`,
+				metrics: { minWidth: middle.minWidth, ...( middle.maxWidth === undefined ? {} : { maxWidth: middle.maxWidth } ) },
+			} );
 			if ( entry.fluid ) fluidReports.push( entry.fluid );
 			if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
 			if ( selection?.kind !== 'device' && embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {

@@ -92,6 +92,7 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `route_exceeds_total_budget` | route | error | Non-entry route dropped, last in route order first, once dropping assets could not bring `website/` within the total budget. Never the entrypoint. `metrics.bytes` (page plus files only it referenced), `metrics.limit`, `metrics.fileLimit`. | yes | #761 |
 | `route_capture_degraded` | route | warning | HTML saved, but some stages failed. `metrics.failedStages`. | no | #764 |
 | `route_profile_uncaptured` | profile | error | A declared capture profile produced no document. Makes `complete: false`. | no | #764 |
+| `responsive_layout_uncaptured` | profile | warning | A dual route's source renders a third width-selected layout between its phone and desktop documents. The copy switches at the source's first boundary and serves the desktop document across the range. `metrics.minWidth`, `metrics.maxWidth` (absent when no probed boundary reached the desktop document). | no | #1379 |
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
 | `native_timeline_unproven` | block | warning | Native view-timeline evidence was lost on a saved page. | no | #773 |
 | `disclosure_unrestored` | block | error | Disclosure probe could not restore its baseline; hydrated panels were not kept. | no | #773 |
