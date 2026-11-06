@@ -211,11 +211,11 @@ export async function waitForDeclaredLoadingState(page: Page, timeoutMs: number 
       const spansViewport = (element: Element) => {
         const box = element.getBoundingClientRect();
         return box.left <= 0 && box.top <= 0 && box.right >= innerWidth && box.bottom >= innerHeight &&
-          !(element as HTMLElement).innerText?.trim();
+          !(element as HTMLElement).innerText?.trim() && !element.querySelector('iframe');
       };
       // At every sampled point, the first thing the visitor reaches below any
       // small fixed widgets (a floating chat or privacy button) is the same
-      // textless viewport-spanning fixed layer, not page content.
+      // textless viewport-spanning fixed layer that embeds no document, not page content.
       const covered = () => {
         let layer: Element | null = null;
         for (const [fx, fy] of [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) {
