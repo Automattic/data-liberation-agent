@@ -255,7 +255,7 @@ A capture is `complete: true` only when every route inside the [route budget](#r
 | `summary.routesOmitted` | Discovered routes the [route budget](#route-budget) left out, one `route_omitted_by_budget` diagnostic each. Never counted as failed or missing. |
 | `unresolvedAnchors` | Links to missing routes stay unresolved anchors. Links to budget-omitted routes carry reason `target route was omitted by the route budget`. |
 
-Recommended default policy (`USABLE_PARTIAL_CAPTURE_POLICY`, version 2; `isUsableCapture(result)`; surfaced as `usable` by `liberate` and the MCP tool): a capture is usable when the entrypoint was captured and it is either complete or its failed routes are at most `max(1, 10%)` of the routes attempted. Routes the caller's budgets left out count in neither: route-budget omissions are not in `summary.routesDiscovered`, and time-budget skips (`route_capture_skipped_budget`) stay in `missingRoutes` but are excluded from both counts, so a deadline bounds scope instead of failing the capture. A capture whose entrypoint failed is never usable. Import a usable partial capture and report `missingRoutes` instead of failing. Capture itself never applies the policy.
+Recommended default policy (`USABLE_PARTIAL_CAPTURE_POLICY`, version 3; `isUsableCapture(result)`; surfaced as `usable` by `liberate` and the MCP tool): any resolved capture with its entrypoint is usable, regardless of how many other routes failed. A capture whose entrypoint failed is never usable. Import any capture with its entrypoint and report `missingRoutes` instead of failing. Capture itself never applies the policy.
 
 ## Using it from an agent
 

@@ -69,7 +69,7 @@ describe( 'source findings (static-site-importer/source-findings/v1)', () => {
 			schema: SOURCE_FINDINGS_SCHEMA,
 			entrypoint: 'index.html',
 			complete: false,
-			usable: false,
+			usable: true,
 			summary: { routes_discovered: 4, routes_captured: 2, routes_failed: 2, routes_omitted: 1, unresolved_anchors: 1, omitted_findings: 0 },
 			findings: [
 				{ code: 'disclosure_unrestored', severity: 'error', unit: 'block', loss_class: 'degraded_unit', location: { url: 'https://example.test/', profile: 'desktop' }, message: 'baseline not restored', owning_layer },

@@ -892,18 +892,16 @@ describe( 'captureWebsite phase progress', () => {
 } );
 
 describe( 'isUsableCapture policy', () => {
-	const capture = ( failed: number, discovered: number, entrypointCaptured = true ) => ( {
-		complete: false, entrypointCaptured, missingRoutes: Array.from( { length: failed }, () => ( {} ) ), summary: { routesDiscovered: discovered },
-	} );
-	it( 'allows max(1, 10%) failed routes', () => {
-		expect( isUsableCapture( capture( 1, 12 ) ) ).toBe( true );
-		expect( isUsableCapture( capture( 2, 12 ) ) ).toBe( false );
-		expect( isUsableCapture( capture( 5, 52 ) ) ).toBe( true );
-		expect( isUsableCapture( capture( 6, 52 ) ) ).toBe( false );
-	} );
-	it( 'is unusable without the entrypoint, whatever happened elsewhere', () => {
-		expect( isUsableCapture( capture( 0, 12, false ) ) ).toBe( false );
-		expect( isUsableCapture( { ...capture( 0, 12, false ), complete: true } ) ).toBe( false );
+	it.each( [
+		{ name: 'complete', complete: true, entrypointCaptured: true, failed: 0, usable: true },
+		{ name: 'entrypoint captured with most routes failed', complete: false, entrypointCaptured: true, failed: 490, usable: true },
+		{ name: 'entrypoint missing', complete: true, entrypointCaptured: false, failed: 0, usable: false },
+	] )( '$name → $usable', ( { complete, entrypointCaptured, failed, usable } ) => {
+		expect( isUsableCapture( {
+			complete, entrypointCaptured,
+			missingRoutes: Array.from( { length: failed }, () => ( { code: 'route_capture_failed' } ) ),
+			summary: { routesDiscovered: 506 },
+		} ) ).toBe( usable );
 	} );
 } );
 

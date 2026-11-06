@@ -47,7 +47,10 @@ describe( 'runtime-written stylesheet offsets', () => {
 			// sparse samples the shared fitter may choose a different equivalent fit.
 			for ( const width of [ 390, 768, 980, 1024, 1440, 1600, 1920 ] ) {
 				await reference.setViewportSize( { width, height: 900 } );
-				await reference.waitForTimeout( 30 );
+				// Wait for the source resize handler, not a timer: under suite load
+				// Chromium can still expose the preceding viewport's sheet after 30ms.
+				await reference.waitForFunction( width =>
+					document.getElementById( 'wrap' )!.style.width === `${ Math.max( 980, width ) }px`, width );
 				await copy.setViewportSize( { width, height: 900 } );
 				for ( const id of [ '#first', '#second', '#still' ] ) {
 					const expected = await reference.locator( id ).boundingBox();

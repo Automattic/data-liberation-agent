@@ -7337,6 +7337,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
 
+	// This writes and exports 4,097 route files; allow for filesystem contention
+	// when the full gate runs alongside the browser suites.
 	it( 'retains every route beyond a former compiler file boundary', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-file-boundary-' ) );
 		dirs.push( outputDir );
@@ -7358,7 +7360,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes ).toHaveLength( 4_097 );
 		expect( existsSync( join( outputDir, 'website', 'page-4096', 'index.html' ) ) ).toBe( true );
-	}, 180_000 );
+	}, 360_000 );
 
 	it( 'reserves repeated hoisted stylesheets before allocating constrained artifact media', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-style-budget-' ) );
