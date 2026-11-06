@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import type { BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page, Request, Response } from 'playwright';
 import { installProbeIntrinsics } from '../browser-kit/probe-intrinsics.js';
 import { PNG } from 'pngjs';
 import { observePage, routeSourceMap } from './check.js';
@@ -59,7 +59,7 @@ export interface ReferenceEntry {
 	device: string;
 	userAgent?: string;
 	state: string;
-	readiness: { ready: boolean; reasons: string[]; diagnostics?: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean };
+	readiness: { ready: boolean; reasons: string[]; diagnostics?: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean; sourceBrokenImages?: Array<{ url: string; status: number }> };
 	observation?: ReferenceArtifact;
 	screenshot?: ReferenceArtifact;
 	document?: ReferenceArtifact;
@@ -160,6 +160,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					entries.push( entry );
 					let referencePage: Page | undefined;
 					let ownedResource: BrowserContext | Page | undefined;
+					let stopImageRequests: (() => void) | undefined;
 					let runtimeErrors: Awaited< ReturnType< typeof watchSourceRuntimeErrors > > | undefined;
 					// A fault observed by capture is inherited source behaviour, even
 					// when another readiness check rejects this cell. Only the same
@@ -210,6 +211,26 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							entry.readiness.ready = entry.readiness.reasons.length === 0;
 							return;
 						}
+						// Only completed browser image requests prove settled HTTP breakage.
+						// A response alone is insufficient: its body may still fail in transit.
+						const imageStatuses = new WeakMap<Request, number>();
+						const brokenImages = new Map<string, number>();
+						const imageRequested = ( request: Request ) => { if ( request.resourceType() === 'image' ) brokenImages.delete( request.url() ); };
+						const imageResponse = ( response: Response ) => {
+							if ( response.request().resourceType() === 'image' ) imageStatuses.set( response.request(), response.status() );
+						};
+						const imageFinished = ( request: Request ) => {
+							const status = imageStatuses.get( request );
+							if ( status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429 ) brokenImages.set( request.url(), status );
+						};
+						referencePage.on( 'request', imageRequested );
+						referencePage.on( 'response', imageResponse );
+						referencePage.on( 'requestfinished', imageFinished );
+						stopImageRequests = () => {
+							referencePage!.off( 'request', imageRequested );
+							referencePage!.off( 'response', imageResponse );
+							referencePage!.off( 'requestfinished', imageFinished );
+						};
 						runtimeErrors = await watchSourceRuntimeErrors( referencePage );
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
@@ -242,16 +263,16 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// Poll rather than sample once: under load an in-flight image can
 						// finish moments after the cleanup pass, and app re-renders can
 						// replace an already-loaded <img> with a fresh, still-decoding one.
-						// Failed and never-loading images still time out as unready. Polls
+						// Network failures and never-loading images still time out as unready. Polls
 						// through page.evaluate so the probe realm protects it from source
 						// globals; waitForFunction would run against the page's own realm.
-						const imagesSettled = () => referencePage!.evaluate( key => {
+						const imagesSettled = () => referencePage!.evaluate( ( { key, broken } ) => {
 							const unreachable = ( window as unknown as Record<symbol, ( image: HTMLImageElement ) => boolean> )[ Symbol.for( key ) ];
 							return [ ...document.images ].every( image => {
 								const rect = image.getBoundingClientRect();
-								return rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && image.naturalWidth > 0 );
+								return rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && ( image.naturalWidth > 0 || broken.some( item => item.url === ( image.currentSrc || image.src ) ) ) );
 							} );
-						}, reachabilityKey );
+						}, { key: reachabilityKey, broken: [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) } );
 						const mediaDeadline = Date.now() + MEDIA_READY_TIMEOUT_MS;
 						let mediaReady = await imagesSettled();
 						while ( ! mediaReady && Date.now() < mediaDeadline ) {
@@ -260,6 +281,8 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						}
 						if ( ! mediaReady ) entry.readiness.reasons.push( 'source images pending or failed' );
 						entry.readiness.mediaReady = mediaReady;
+						const sourceBrokenImages = await referencePage.evaluate( broken => broken.filter( item => [ ...document.images ].some( image => image.complete && image.naturalWidth === 0 && ( image.currentSrc || image.src ) === item.url ) ), [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) );
+						if ( sourceBrokenImages.length ) entry.readiness.sourceBrokenImages = sourceBrokenImages;
 						entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
 						if ( ! entry.readiness.fontsReady ) entry.readiness.reasons.push( 'source fonts pending or failed' );
 						const stem = `${ digest( url ).slice( 0, 24 ) }-${ digest( device ).slice( 0, 12 ) }-${ viewport }`;
@@ -281,6 +304,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					} finally {
 						// Idempotent: a failed cell still reports its runtime errors.
 						recordRuntimeErrors();
+						stopImageRequests?.();
 						try { await releaseNavigation?.(); }
 						finally {
 							referencePage?.off( 'crash', rendererCrash );
