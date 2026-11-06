@@ -629,7 +629,7 @@ export async function captureTriggeredDialogs(
 			const restoredRoots = await rootClasses( page );
 			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
-			const restingInline = !dropdown && await observeInlineRestingPanel( page, trigger.probeSelector, dialog.selector );
+			const restingInline = await observeInlineRestingPanel( page, trigger.probeSelector, dialog.selector );
 			const resolvedRole = dialog.role === 'navigation' ? 'menu' : dialog.role ?? ( [ 'dialog', 'listbox', 'menu' ].includes( trigger.ariaHaspopup ) ? trigger.ariaHaspopup : undefined );
 			const classified = dialog.tag === 'dialog' || [ 'dialog', 'listbox', 'menu' ].includes( resolvedRole ?? '' );
 			states.push( {
