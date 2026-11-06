@@ -27,6 +27,9 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
 		const found: Array<{ selector: string; owner: string }> = [];
 		for (const root of document.querySelectorAll('main *,section,ul,[role="list"]')) {
 			if (root.closest('header,footer,nav') || excluded && root.matches(excluded)) continue;
+			// An unrendered region (hidden itself, inside a hidden ancestor such as a dismissed dialog, or zero-size) is not a collection.
+			const box = root.getBoundingClientRect();
+			if (!root.checkVisibility({ visibilityProperty: true }) || !box.width || !box.height) continue;
 			const children = Array.from(root.children);
 			if (children.length < 2 || children.length > 200 || !children.every(child => child.tagName === children[0].tagName && child.querySelector('a[href]') && (child.textContent ?? '').trim())) continue;
 			if (found.some(region => root.closest(region.selector))) continue;
@@ -61,6 +64,8 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 	try {
 		for (const region of regions) {
 			await probe.goto(page.url(), { waitUntil: 'load', timeout: 15_000 });
+			// A region the fresh document does not render (e.g. a consent dialog gone once consent is stored) cannot be probed.
+			if (!await probe.locator(region.selector).count()) continue;
 			const evidence: CollectionEvidence = { members: [], states: [], controls: [], coverage: 'complete', limits, replay: 'unsupported' };
 			const component: CapturedComponent = { selector: region.selector, kind: 'collection', initial: 'initial', states: [{ id: 'initial', html: await probe.locator(region.selector).evaluate(node => node.outerHTML) }], transitions: [], status: 'captured', collection: evidence };
 			const observe = async (): Promise<string[]> => {
