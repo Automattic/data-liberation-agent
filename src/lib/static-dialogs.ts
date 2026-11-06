@@ -749,14 +749,15 @@ function findTriggers(
 		const named = matches.filter( ( _, element ) => normalizedText( $( element ).attr( 'aria-label' ) || $( element ).text() ).toLowerCase() === label );
 		return named.length ? named : matches;
 	};
-	if ( trigger.id ) {
-		const byId = $( `#${ cssEscape( trigger.id ) }` );
-		if ( byId.length ) return labelled( byId );
-	}
+	// Labels are recorded truncated to 40 characters.
+	const named = ( element: AnyNode ) => normalizedText( $( element ).attr( 'aria-label' ) || $( element ).text() ).slice( 0, 40 ).trim().toLowerCase() === label;
+	const byId = trigger.id ? $( `#${ cssEscape( trigger.id ) }` ) : $( [] );
+	// A per-load ID observed in one device document can belong to an
+	// unrelated control in the shipped document. Prefer a labelled match.
+	if ( byId.length && ( ! label || byId.toArray().some( named ) ) ) return labelled( byId );
 	const bySelector = selectByCapturedSelector( $, trigger.selector, trigger.tag );
-	if ( bySelector.length ) return labelled( bySelector );
-	if ( ! label ) return $( [] );
-	return $( 'button,summary,a,[role="button"]' ).filter( ( _, element ) => {
+	if ( bySelector.length && ( ! label || ! byId.length || bySelector.toArray().some( named ) ) ) return labelled( bySelector );
+	const byLabel = label ? $( 'button,summary,a,[role="button"]' ).filter( ( _, element ) => {
 		if ( trigger.tag && element.tagName !== trigger.tag ) return false;
 		if ( isNavigatingAnchor( $, element ) ) return false;
 		const text = ( $( element ).attr( 'aria-label' ) || $( element ).text() )
@@ -765,7 +766,9 @@ function findTriggers(
 			.toLowerCase();
 		if ( ! text ) return false;
 		return text.includes( label ) || label.includes( text );
-	} );
+	} ) : $( [] );
+	if ( byLabel.length ) return byLabel;
+	return byId.length ? labelled( byId ) : labelled( bySelector );
 }
 
 function selectByCapturedSelector(
