@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { sameMediaAspectRatio } from './media-aspect-ratio.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
 import { withoutPlatformDefaultIcons } from './platform-default-icons.js';
@@ -1854,13 +1853,11 @@ function buildExportCapture(
 		// Inventory aliases describe one picture, not necessarily one file. Keep
 		// independently captured srcset bytes instead of rewriting every alias to
 		// the verified representative (notably same-path ?width=N CDN URLs).
-		// A distinct resolved original is authoritative only for resizes/re-encodes
-		// with the same aspect ratio. Keep those resizes as budget fallbacks;
-		// cropped aliases retain their selected bytes.
+		// The URL serialized by each profile owns its captured bytes, even for
+		// same-aspect resizes: natural dimensions can be part of the layout.
 		const capturedRenditions: MediaCandidate[] = [];
 		const selectedReferences = new Set( mediaReferences( candidate.sourceUrl, options.sourceUrl ) );
 		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) && imageAsset.original ) {
-			const originalIsRendition = imageAsset.rendition_widths?.[ imageAsset.original.source_url ] !== undefined;
 			for ( const url of imageAsset.source_urls ) {
 				if ( url === candidate.sourceUrl || exclusions.renditions.has( url ) || exclusions.assets.has( url ) ) continue;
 				const resource = resourceManifest.resources[ url ];
@@ -1873,20 +1870,16 @@ function buildExportCapture(
 					for ( const reference of mediaReferences( url, options.sourceUrl ) ) selectedReferences.add( reference );
 					continue;
 				}
-				if ( ! originalIsRendition ) {
-					try {
-						const { width, height } = imageSize( renditionContent );
-						if ( sameMediaAspectRatio( { width, height }, imageAsset.original ) ) {
-							if ( renditionContent.length <= maxFileBytes ) capturedRenditions.push( {
-								sourceUrl: url, localPath: path, references: candidate.references, exactReferences: [],
-								bytes: renditionContent.length, dimension: Math.max( width, height ),
-								renderedDimension: candidate.renderedDimension, budgetFallback: true,
-							} );
-							continue;
-						}
-					} catch {
-						// Unknown dimensions cannot prove that the original has the same crop.
+				// A same-size re-encode can still use the verified original (for
+				// example, an opaque proxy of an alpha-preserving original).
+				try {
+					const { width, height } = imageSize( renditionContent );
+					if ( width === imageAsset.original.width && height === imageAsset.original.height ) {
+						for ( const reference of mediaReferences( url, options.sourceUrl ) ) selectedReferences.add( reference );
+						continue;
 					}
+				} catch {
+					// Unknown dimensions cannot prove a same-size substitution.
 				}
 				const renditionReferences = mediaReferences( url, options.sourceUrl );
 				const exact = renditionReferences.filter( reference => referenceIndex.indexed.has( reference ) && mediaReferenceMatched( referenceIndex, reference ) );
