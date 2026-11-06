@@ -122,6 +122,12 @@ finite document-timeline effects, including effects they chain, while paused
 viewport-pending entrances remain pending. The controlled-scroll motion proof counts
 starts, pauses, seeks and scroll-timeline progress; clock progress or completion of
 an effect already running before the probe is not a scroll response.
+Image geometry and typography use resting authored styles: animation keyframes
+(including ancestor, infinite, and scroll-driven effects) are temporarily removed
+on both sides, with static transforms preserved. Original keyframes are restored
+in a `finally` block before motion probing; geometry does not seek, finish or
+cancel animations. Screenshots still show the visitor's animated pose. Existing
+frozen observations must be recaptured to use this measurement precondition.
 Viewport evidence uses Chromium's complete compositor frame and verifies its exact
 requested dimensions before readiness. This preserves fixed-width mobile viewport
 scaling without clipping a fractional bottom row or resizing the resulting raster.

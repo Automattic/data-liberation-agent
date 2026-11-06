@@ -501,6 +501,16 @@ export async function observePage(
 				}
 				return left < right;
 			};
+			// Geometry has a resting-layout precondition, not a wall-clock phase.
+			// Empty keyframes temporarily expose authored styles (including static
+			// transforms) on images AND their ancestors. Unlike cancel/finish or
+			// seeking currentTime, this also works for infinite/view timelines and
+			// leaves play state, timeline bindings and motion evidence intact.
+			const { images, widestImage, typography, paintedTextRects } = await ( async () => {
+			const effects = document.getAnimations().flatMap( animation =>
+				animation.effect instanceof KeyframeEffect ? [ { effect: animation.effect, frames: animation.effect.getKeyframes() } ] : [] );
+			try {
+			for ( const { effect } of effects ) effect.setKeyframes( [] );
 			const images = await Promise.all(
 				[ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
 					.map( ( image ) => ( {
@@ -720,6 +730,11 @@ export async function observePage(
 			};
 			visit( document.body );
 			flush();
+			return { images, widestImage, typography, paintedTextRects };
+			} finally {
+				for ( const { effect, frames } of effects ) effect.setKeyframes( frames );
+			}
+			} )();
 
 			// Animation names are not identities. Removing an earlier same-name
 			// effect must not make a still-paused sibling look scroll-responsive.
