@@ -58,8 +58,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
-	// About 15 seconds: one successful swap plus failed and bounded stalled cells.
-	it( 'settles a scripted image rendition swap through reference navigation guards without accepting failed or stalled images', async () => {
+	// About 35 seconds: a quick and a slow swap settle; failed and stalled cells run to the readiness bound.
+	it( 'settles scripted image rendition swaps, including ones slower than the capture wait, without accepting failed or stalled images', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-image-swap-' ) );
 		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
@@ -71,10 +71,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const source = createServer( ( request, response ) => {
 			if ( request.url === '/stalled.png' ) return;
 			if ( request.url === '/failed.png' ) { response.writeHead( 404 ); response.end(); return; }
-			if ( request.url === '/rendition.png' ) {
+			if ( request.url === '/rendition.png' || request.url === '/slow.png' ) {
 				// Observation's independent pixel-hash fetch must not accidentally
 				// settle the element request: only the image rendition is delayed.
-				setTimeout( () => { served.push( request.url! ); response.writeHead( 200, { 'content-type': 'image/png' } ); response.end( image ); }, request.headers[ 'sec-fetch-dest' ] === 'image' ? 2000 : 0 );
+				setTimeout( () => { served.push( request.url! ); response.writeHead( 200, { 'content-type': 'image/png' } ); response.end( image ); }, request.headers[ 'sec-fetch-dest' ] !== 'image' ? 0 : request.url === '/slow.png' ? 6000 : 2000 );
 				return;
 			}
 			response.writeHead( 200, { 'content-type': 'text/html' } ); response.end( html );
@@ -84,7 +84,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const context = await sharedBrowser.newContext();
 		const page = await context.newPage();
 		try {
-			for ( const rendition of [ 'rendition', 'failed', 'stalled' ] ) {
+			for ( const rendition of [ 'rendition', 'slow', 'failed', 'stalled' ] ) {
 				const collector = createReferenceCollector( directory, url, [ url ], {
 					routeScope: { origin: new URL( url ).origin, pathPrefixes: [ '/' ] },
 					prepareCapture: async cell => {
@@ -95,9 +95,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
 				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
 				const entry = ( JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference ).entries[ 0 ];
-				expect( entry.readiness.mediaReady ).toBe( rendition === 'rendition' );
-				if ( rendition === 'rendition' ) {
-					expect( served ).toContain( '/rendition.png' );
+				const settles = rendition === 'rendition' || rendition === 'slow';
+				expect( entry.readiness.mediaReady ).toBe( settles );
+				if ( settles ) {
+					expect( served ).toContain( `/${ rendition }.png` );
 					expect( () => readFrozenObservation( directory, entry ) ).not.toThrow();
 				} else {
 					expect( () => readFrozenObservation( directory, entry ) ).toThrow( 'source images pending or failed' );
@@ -108,7 +109,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await new Promise<void>( resolve => source.close( () => resolve() ) );
 			rmSync( directory, { recursive: true, force: true } );
 		}
-	}, 60_000 );
+	}, 90_000 );
 	it( 'records a cross-origin subframe runtime error as a diagnostic but blocks on a top-level one', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-subframe-error-' ) );
