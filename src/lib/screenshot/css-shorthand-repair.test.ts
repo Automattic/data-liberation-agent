@@ -104,6 +104,29 @@ describe( 'repairShorthandVarCollapse', () => {
 		expect( repairShorthandVarCollapse( live, original ) ).toContain( 'font-weight: ;' );
 	} );
 
+	it( 'ignores comments in the authored source when matching rules', () => {
+		// Authored <style> text keeps comments; the CSSOM drops them. A comment
+		// before a rule, inside its selector, or holding a brace must not stop
+		// the rule from matching its live serialization.
+		const original =
+			'/* gradient numerals */\n' +
+			'.n { font-size: 40px; background: var(--g, linear-gradient(135deg, #0066dd, #004aad)); ' +
+			'/* clip */ background-clip: text; -webkit-text-fill-color: transparent; }\n' +
+			'/* { stray brace } */\n' +
+			'.a /* x */ > /* y */ .b { font: var(--x); color: red; }';
+		const live =
+			'.n { font-size: 40px; background-image: ; background-position-x: ; background-position-y: ; ' +
+			'background-size: ; background-repeat: ; background-attachment: ; background-origin: ; ' +
+			'background-color: ; background-clip: text; -webkit-text-fill-color: transparent; }\n' +
+			'.a > .b { font-weight: ; font-family: ; color: red; }';
+
+		const result = repairShorthandVarCollapse( live, original );
+		expect( result ).toContain( 'background: var(--g, linear-gradient(135deg, #0066dd, #004aad));' );
+		expect( result ).toContain( '.a > .b { font: var(--x); color: red; }' );
+		expect( result ).not.toContain( 'background-image: ;' );
+		expect( result ).not.toContain( 'font-family: ;' );
+	} );
+
 	it( 'does not repair when the candidate original rule is itself empty (nothing to recover)', () => {
 		const live = '.foo { font-weight: ; color: red; }';
 		const original = '.foo { font-weight: ; color: red; }';
