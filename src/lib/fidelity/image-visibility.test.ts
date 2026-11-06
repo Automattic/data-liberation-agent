@@ -5,7 +5,30 @@ import { observePage } from './check.js';
 import { scoreViewport } from './score.js';
 
 const skipped = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
-describe.skipIf( skipped )( 'lazy rail image readiness', () => {
+describe.skipIf( skipped )( 'image visibility', () => {
+	it( 'compares CSS hero backgrounds with native cover images and detects a dropped or shrunken hero', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		try {
+			const asset = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1440' height='300'%3E%3Crect width='1440' height='300' fill='blue'/%3E%3C/svg%3E";
+			const fixture = ( hero: string ) => `<style>body{margin:0}.hero{height:300px;width:100%}.hero img{width:100%;height:100%;object-fit:cover}.logo{width:min(440px,calc(100% - 48px));height:80px}</style>${ hero }<img class="logo" src="${ asset }">`;
+			const observe = ( width: number ) => observePage( page, page.url(), width, 0, null, undefined, undefined, true, true );
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( fixture( `<div class="hero" style="background:linear-gradient(transparent,transparent),url(&quot;${ asset }&quot;) center/cover"></div>` ) );
+				const source = await observe( width );
+				await page.setContent( fixture( `<div class="hero"><img class="wp-block-cover__image-background" src="${ asset }"></div>` ) );
+				const candidate = await observe( width );
+				const widestFailures = ( observation: typeof candidate ) => scoreViewport( source, observation ).failures.filter( failure => failure.startsWith( 'widest image' ) );
+				expect( widestFailures( candidate ) ).toEqual( [] );
+				expect( source.widestImage ).toBe( width );
+				await page.locator( '.hero' ).evaluate( element => { ( element as HTMLElement ).style.width = '200px'; } );
+				expect( widestFailures( await observe( width ) ) ).not.toEqual( [] );
+				await page.locator( '.hero' ).evaluate( element => element.remove() );
+				expect( widestFailures( await observe( width ) ) ).not.toEqual( [] );
+			}
+		} finally { await browser.close(); }
+	}, 30_000 );
 	it( 'ignores parked cards, including cards clipped inside the viewport, but detects a visible decode regression', async () => {
 		const browser = await chromium.launch();
 		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
