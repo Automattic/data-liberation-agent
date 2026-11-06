@@ -3276,7 +3276,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					urlsSinceRestart = 0;
 				}
 				// Appended aliases and linked documents belong to the next wave.
-				const segEnd = browserRestartEvery > 0
+				// Finish the entrypoint before admitting its successors when the
+				// caller learns priorities from that already-rendered document.
+				const entryFirst = segStart === 0 && opts.prioritizePendingRoutes;
+				if ( segStart === 1 && opts.prioritizePendingRoutes ) {
+					urls.splice( segStart, urls.length - segStart, ...opts.prioritizePendingRoutes( urls.slice( segStart ) ) );
+				}
+				const segEnd = entryFirst ? 1 : browserRestartEvery > 0
 					? Math.min( waveEnd, segStart + browserRestartEvery - urlsSinceRestart )
 					: waveEnd;
 				let cursor = segStart;

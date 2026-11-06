@@ -147,6 +147,8 @@ export interface ScreenshotOpts {
 	 * smaller working set. Default: every route opens reference pages.
 	 */
 	referenceSampleUrls?: readonly string[];
+	/** Reorder only unstarted inventory routes after the entrypoint has rendered. */
+	prioritizePendingRoutes?: ( urls: string[] ) => string[];
 	/**
 	 * A route resolved to a server redirect alias of `target`, the queued route
 	 * that captures its document. Evidence owed to the alias follows the target.

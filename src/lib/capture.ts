@@ -585,7 +585,23 @@ async function runCaptureWebsite(
 		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
 		beforeFluid: adapter.liberation?.beforeFluid,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
-		observeSource: reference.observe,
+		observeSource: async ( ...args ) => {
+			const [ page, url ] = args;
+			if ( normalizedUrl( url ) === normalizedUrl( sourceUrl ) ) {
+				for ( const link of extractNavigationLandmarkLinks( await page.content(), url ) ) navigationTargets.add( normalizedUrl( link.href ) );
+			}
+			await reference.observe( ...args );
+		},
+		// Source evidence already renders the entrypoint. Promote its client-only
+		// menu before subsequent admissions, without opening another browser page.
+		...( timeBudget?.projectAdmission ? {
+			prioritizePendingRoutes: ( pending: string[] ) => {
+				const pendingRoutes = new Set( pending );
+				const promoted = prunedInventoryUrls.filter( url => pendingRoutes.has( url ) && navigationTargets.has( normalizedUrl( url ) ) );
+				const promotedRoutes = new Set( promoted );
+				return [ ...promoted, ...pending.filter( url => ! promotedRoutes.has( url ) ) ];
+			},
+		} : {} ),
 		// Memory admission reserves for what a route opens: bounded samples
 		// leave most routes without fresh reference pages.
 		...( reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
