@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mergeConsentLayouts } from './consent-banner-layout.js';
+import { normalizedUrl } from './url/route-key.js';
+import { scopedRouteKey, routeInScope } from './url/route-scope.js';
 import { dirname, join, resolve } from 'node:path';
 import type { MediaStubStore } from './resume-state/index.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
@@ -67,6 +69,8 @@ export interface CaptureEvidenceInput {
 	} >;
 	routes: {
 		retained: ReadonlyArray< { url: string; path: string; responsiveVariants?: ResponsiveVariantEvidence; fluidGeometry?: CaptureDocumentFluidEvidence; accessGate?: import( './access-gate.js' ).AccessGateEvidence } >;
+		/** The same allocated, root-relative destinations used by page links. */
+		links?: ReadonlyMap< string, string >;
 		excluded: ReadonlyArray< string >;
 		duplicates: ReadonlyArray< { url: string; canonicalUrl: string; path: string } >;
 	};
@@ -664,6 +668,19 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		}
 	}
 
+	// Localize only after comparing source observations, so the projected href
+	// cannot make otherwise identical banners appear different.
+	if (consentBanner?.policy_link && input.routes.links) {
+		const policy = consentBanner.policy_link;
+		try {
+			const resolved = new URL(policy.href, consentUrl);
+			if (routeInScope(resolved.href, options.routeScope)) {
+				const exact = input.routes.links.get(scopedRouteKey(resolved.href, options.routeScope));
+				const route = exact ?? [...input.routes.links].find(([url]) => normalizedUrl(url) === normalizedUrl(resolved.href))?.[1];
+				if (route) policy.href = route.includes('#') ? route : `${route}${resolved.hash}`;
+			}
+		} catch { /* An invalid policy URL remains source evidence. */ }
+	}
 	if (consentBanner) writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(consentBanner, null, 2)}\n`);
 
 	const receiptPath = join( stageDir, 'capture-receipt.json' );

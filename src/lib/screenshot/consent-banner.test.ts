@@ -136,19 +136,19 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test/consent-'));
   try {
-    const result = await captureScreenshots({ urls: [url, `${url}other`], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'dual', viewports: [
+    const result = await captureScreenshots({ urls: [url, `${url}other`, `${url}privacy`], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'dual', viewports: [
       { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 },
     ] });
     expect(result.failed).toBe(0);
     const exportSite = () => exportWebsiteCapture({ outputDir, sourceUrl: url, platform: 'default', summary: {
-      routesDiscovered: 2, routesCaptured: result.captured, routesSkipped: result.skipped,
+      routesDiscovered: 3, routesCaptured: result.captured, routesSkipped: result.skipped,
       routesFailed: result.failed, durationMs: result.durationMs,
     }, failures: [] });
     exportSite();
     const fact = JSON.parse(readFileSync(join(outputDir, 'website/consent-banner.json'), 'utf8'));
     expect(fact).toEqual({ schema: 'static-site-importer/consent-banner/v1',
       text: 'This website uses cookies for analytics.', accept_label: 'Accept', reject_label: 'Reject',
-      policy_link: { label: 'Privacy policy', href: `${url}privacy` }, position: 'bottom',
+      policy_link: { label: 'Privacy policy', href: '/privacy/index.html' }, position: 'bottom',
       colors: { background: 'rgb(34, 34, 34)', text: 'rgb(255, 255, 255)', button_background: 'rgb(153, 153, 153)', button_text: 'rgb(255, 255, 255)' },
       presentation: {
         span: 'full', edge_offset: '0px', padding: '12px', gap: '8px',
@@ -161,7 +161,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
       },
       source_selector: 'div.cc-window.cc-banner',
     });
-    for (const route of ['index.html', 'other/index.html']) {
+    for (const route of ['index.html', 'other/index.html', 'privacy/index.html']) {
       expect(readFileSync(join(outputDir, 'website', route), 'utf8')).not.toContain('This website uses cookies');
     }
     const receipt = JSON.parse(readFileSync(join(outputDir, 'capture-receipt.json'), 'utf8'));
@@ -170,6 +170,16 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
     const manifestPath = join(outputDir, 'screenshots/manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifest.entries[url].dismissed[0].kind).toBe('consent');
+    // The same export keeps an uncaptured policy URL absolute.
+    const uncapturedPolicyUrl = `${url}uncaptured-policy`;
+    for (const entry of Object.values(manifest.entries) as Array<{ dismissed: Array<{ consentBanner?: { policy_link?: { href: string } } }> }>) {
+      for (const overlay of entry.dismissed) {
+        if (overlay.consentBanner?.policy_link) overlay.consentBanner.policy_link.href = uncapturedPolicyUrl;
+      }
+    }
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    exportSite();
+    expect(JSON.parse(readFileSync(join(outputDir, 'website/consent-banner.json'), 'utf8')).policy_link.href).toBe(uncapturedPolicyUrl);
     for (const entry of Object.values(manifest.entries) as Array<{ dismissed: unknown[] }>) entry.dismissed = [];
     writeFileSync(manifestPath, JSON.stringify(manifest));
     exportSite();
