@@ -120,8 +120,9 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			continue;
 		}
 		localizedMediaFamilies.add( family );
-		// Family references include distinct pictures (for example WordPress hard
-		// crops). Only their own file or a proven same-aspect resize may claim them.
+		// An admitted rendition owns its exact references: even a same-aspect
+		// resize changes natural dimensions. Family fallback is only for references
+		// whose own file was not admitted (for example after budget selection).
 		const referenceOwners = new Map< string, PortableMediaCandidate[] >();
 		for ( const candidate of candidates ) {
 			for ( const reference of candidate.exactReferences ) {
@@ -132,6 +133,8 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 		}
 		const canClaimReference = ( candidate: PortableMediaCandidate, reference: string ): boolean => {
 			const owners = referenceOwners.get( reference );
+			const admittedOwners = owners?.filter( owner => admitted.some( entry => entry.candidate === owner ) );
+			if ( admittedOwners?.length ) return admittedOwners.includes( candidate );
 			return ! owners || owners.some( owner => owner === candidate ||
 				( candidate.budgetFallback && owner.references === candidate.references ) ||
 				( !! owner.imageAsset?.original && !! candidate.imageAsset?.original &&

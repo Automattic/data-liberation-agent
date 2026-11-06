@@ -13,8 +13,57 @@ import { startStaticServer } from './replicate/local-site/static-server.js';
 import { observePage } from './fidelity/check.js';
 import { normalizeImageKey } from './fidelity/score.js';
 import { CapturedResourceStore } from './screenshot/resource-capture.js';
+import { capture as adapterCapture } from '../adapters/wix/capture.js';
 
 describe( 'selected same-path srcset export', () => {
+	it( 'keeps profile renditions when the per-media-id map names only the phone image', async () => {
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-mapped-renditions-' ) );
+		try {
+			for ( const folder of [ 'html', 'html-mobile', 'screenshots', 'media' ] ) mkdirSync( join( directory, folder ) );
+			const source = 'https://profiles.test/';
+			const id = '123456_abcdef0123456789abcdef0123456789';
+			const profiles = [
+				{ name: 'desktop', width: 1920, height: 635, folder: 'html' },
+				{ name: 'mobile', width: 1000, height: 331, folder: 'html-mobile' },
+			].map( profile => {
+				const url = `https://static.wixstatic.com/media/${ id }.png/v1/fill/w_${ profile.width },h_${ profile.height },al_c/${ id }.png`;
+				const png = new PNG( { width: profile.width, height: profile.height } );
+				png.data.fill( 255 );
+				const bytes = PNG.sync.write( png );
+				const file = join( directory, 'media', `${ profile.name }.png` );
+				writeFileSync( file, bytes );
+				writeFileSync( join( directory, profile.folder, 'home.html' ), `<html><body><main class="${ profile.name }"><h1>${ profile.name } layout</h1><img style="object-fit:none" src="${ url }">${ profile.name === 'mobile' ? '<nav>Phone navigation</nav>' : '' }</main></body></html>` );
+				return { ...profile, url, bytes, file };
+			} );
+			// Use the adapter's actual per-media-id collector, as the mobile capture
+			// does. The map has just one entry, not one entry per profile.
+			const page = { evaluate: vi.fn().mockResolvedValue( [ profiles[ 1 ].url ] ) } as unknown as Page;
+			const variants = await adapterCapture.responsiveImages!( page, { url: source, viewport: 'mobile' } );
+			expect( variants ).toEqual( { [ id ]: profiles[ 1 ].url } );
+			writeFileSync( join( directory, 'responsive-images.json' ), JSON.stringify( variants ) );
+			// Both renditions are independently downloaded inventory records, unlike
+			// srcset aliases backed by a single representative's resource manifest.
+			const ordered = [ profiles.find( profile => profile.url === variants[ id ] )!, profiles[ 0 ] ];
+			const media = MediaStubStore.load( directory );
+			for ( const profile of ordered ) media.markSuccess( profile.url, profile.file );
+			media.flush();
+			writeFileSync( join( directory, 'image-assets.json' ), JSON.stringify( { images: ordered.map( profile => ( {
+				kind: 'image', source_urls: [ profile.url ], resolved_original: profile.url, local_path: profile.file,
+				references: [ { kind: 'content', document_url: source, location: 'image:0:src', source_url: profile.url } ],
+				original: { source_url: profile.url, content_type: 'image/png', width: profile.width, height: profile.height, sha256: createHash( 'sha256' ).update( profile.bytes ).digest( 'hex' ) },
+			} ) ) } ) );
+			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ source ]: { slug: 'home', html: 'html/home.html' } } } ) );
+			exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
+			const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
+			for ( const profile of profiles ) {
+				const path = $( `.${ profile.name } img` ).attr( 'src' )!;
+				expect( path ).toMatch( /^\/media\// );
+				const bytes = readFileSync( join( directory, 'website', path ) );
+				expect( imageSize( bytes ) ).toMatchObject( { width: profile.width, height: profile.height } );
+				expect( bytes ).toEqual( profile.bytes );
+			}
+		} finally { rmSync( directory, { recursive: true, force: true } ); }
+	} );
 	it( 'keeps each document’s painted rendition and natural dimensions', () => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-profile-renditions-' ) );
 		try {
