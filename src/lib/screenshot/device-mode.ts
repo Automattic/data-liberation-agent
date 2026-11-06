@@ -312,39 +312,71 @@ export interface RouteDeviceDecision {
 	/** The first reading differed, so both pages were read again after settling. */
 	rechecked?: boolean;
 	/**
-	 * Dual route only: the stylesheet `max-width` boundary just above which the
-	 * phone identity rendered the desktop document (see `observeSwitchWidth`).
-	 * Absent when it differed at every probed width.
+	 * Dual route only: the stylesheet width boundary (a `max-width` value, or
+	 * one below a `min-width` value) just above which the phone identity stops
+	 * rendering the phone document (see `observeSwitchWidth`). Absent when it
+	 * rendered the phone document at every probed width.
 	 */
 	switchWidth?: number;
+	/**
+	 * Dual route only: the source renders a third layout, neither the phone nor
+	 * the desktop document, from `minWidth` up to `maxWidth` (inclusive; absent
+	 * when no probed boundary reached the desktop document). Capture keeps two
+	 * documents, so the copy serves the desktop document across this range.
+	 */
+	uncapturedLayout?: { minWidth: number; maxWidth?: number };
 }
 
-/** Each probe loads both identities once more; stop after the nearest few boundaries. */
+/** Each probe loads the phone identity once more; stop after the nearest few boundaries. */
 const SWITCH_PROBE_LIMIT = 4;
 
+/** What the phone identity rendered just above one boundary. */
+export type SwitchProbeRendering = 'phone' | 'desktop' | 'other';
+
+export interface ObservedSwitch {
+	switchWidth: number;
+	uncapturedLayout?: { minWidth: number; maxWidth?: number };
+}
+
 /**
- * Where a dual route's documents start to differ. Candidates are stylesheet
- * `max-width` boundaries between the phone and desktop capture widths. The
- * phone identity is loaded just above each one, nearest the phone first, and
- * the first boundary above which it renders the desktop document is the
- * switch. A boundary an unrelated tablet-only rule uses is never chosen merely
- * for being the widest; no convergence observes nothing.
+ * Where a dual route's phone document ends. Candidates are stylesheet width
+ * boundaries between the phone and desktop capture widths. The phone identity
+ * is loaded just above each one, nearest the phone first, and the first
+ * boundary above which it no longer renders the phone document is the switch:
+ * the source's own boundary, never a point between the two sampled widths.
+ * When that rendering is not the desktop document either, the source has a
+ * middle layout; later boundaries are probed for where the desktop document
+ * starts, and the range is reported as uncaptured. A boundary is never chosen
+ * merely for being the widest; rendering the phone document everywhere
+ * observes nothing.
  */
 export async function observeSwitchWidth(
 	candidates: readonly number[],
 	range: { phone: number; desktop: number },
-	converges: ( width: number ) => Promise< boolean >,
-): Promise< number | undefined > {
+	classify: ( width: number ) => Promise< SwitchProbeRendering >,
+): Promise< ObservedSwitch | undefined > {
 	const widths = [ ...new Set( candidates ) ]
 		.filter( width => Number.isInteger( width ) && width >= range.phone && width < range.desktop )
 		.sort( ( a, b ) => a - b )
 		.slice( 0, SWITCH_PROBE_LIMIT );
-	for ( const width of widths ) if ( await converges( width + 1 ) ) return width;
+	for ( const [ index, width ] of widths.entries() ) {
+		const rendered = await classify( width + 1 );
+		if ( rendered === 'phone' ) continue;
+		if ( rendered === 'desktop' ) return { switchWidth: width };
+		for ( const wider of widths.slice( index + 1 ) ) {
+			if ( await classify( wider + 1 ) === 'desktop' ) return { switchWidth: width, uncapturedLayout: { minWidth: width + 1, maxWidth: wider } };
+		}
+		return { switchWidth: width, uncapturedLayout: { minWidth: width + 1 } };
+	}
 	return undefined;
 }
 
-/** `max-width` boundaries of the page's readable (same-origin) stylesheets. */
-export async function stylesheetMaxWidths( page: Page ): Promise< number[] > {
+/**
+ * Width boundaries of the page's readable (same-origin) stylesheets, in
+ * `max-width` form: a `max-width:N` query switches above N, a `min-width:N`
+ * query above N - 1. These are the boundaries `breakpoints.json` records.
+ */
+export async function stylesheetSwitchBoundaries( page: Page ): Promise< number[] > {
 	return page.evaluate( () => {
 		const widths = new Set< number >();
 		for ( const sheet of Array.from( document.styleSheets ) ) {
@@ -352,7 +384,7 @@ export async function stylesheetMaxWidths( page: Page ): Promise< number[] > {
 			try { rules = sheet.cssRules; } catch { continue; }
 			for ( const rule of Array.from( rules ) ) {
 				if ( ! ( rule instanceof CSSMediaRule ) ) continue;
-				for ( const match of rule.conditionText.matchAll( /max-width:\s*(\d+)px/gi ) ) widths.add( Number( match[ 1 ] ) );
+				for ( const match of rule.conditionText.matchAll( /(min|max)-width:\s*(\d+)px/gi ) ) widths.add( Number( match[ 2 ] ) - ( match[ 1 ]!.toLowerCase() === 'min' ? 1 : 0 ) );
 			}
 		}
 		return [ ...widths ];
