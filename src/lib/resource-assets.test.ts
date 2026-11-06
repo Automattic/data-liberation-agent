@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
@@ -23,6 +23,10 @@ it('verifies query variants before merging and rejects font format mismatches wi
  const url = `http://127.0.0.1:${(server.address() as {port:number}).port}/`;
  mkdirSync('.tmp-test', {recursive:true});
  const root = mkdtempSync(join(process.cwd(), '.tmp-test/resource-aliases-'));
+ // Seed capture evidence so this test still exercises font byte verification.
+ mkdirSync(join(root, 'resources'));
+ writeFileSync(join(root, 'resources/font.woff'), font);
+ writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({resources:{[`${url}font`]:{path:'resources/font.woff', contentType:'font/woff'}}}));
  try {
   const records = await runWithTrustedOrigins([url], () => captureAssets(root, [{url, html:'<a href="/terms.pdf?a">A</a><a href="/terms.pdf?b">B</a><a href="/terms.pdf?different">C</a><style>@font-face{src:url(/font) format("woff2")}</style>'}]));
   expect(records).toHaveLength(3);
@@ -43,6 +47,39 @@ it('records downloads and video sources at their owning elements, not as image c
 });
 
 describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public capture fixture (~15s)', () => {
+ it('records only the used family from a three-family font catalog (~15s)', async () => {
+  const font = readFileSync('test/fixtures/resource-assets/roboto-latin-400-normal.woff2');
+  const requests: string[] = [];
+  const css = ['Used', 'Unused', 'Other'].map(family => `@font-face{font-family:${family};src:url(/${family}.woff2) format('woff2')}`).join('');
+  const server = createServer((req, res) => {
+   requests.push(req.url!);
+   if (req.url === '/catalog.css') { res.setHeader('content-type', 'text/css'); res.end(css); }
+   else if (req.url!.endsWith('.woff2')) { res.setHeader('content-type', 'font/woff2'); res.end(req.url === '/Used.woff2' ? font : readFileSync(`test/fixtures/resource-assets/roboto-${req.url === '/Unused.woff2' ? 'greek-400-normal.woff2' : 'latin-400-normal.woff'}`)); }
+   else { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>Font catalog</title><link rel="stylesheet" href="/catalog.css"><p style="font-family:Used">Hello</p>'); }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as {port:number}).port}/`;
+  mkdirSync('.tmp-test', {recursive:true});
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test/font-catalog-'));
+  try {
+   const result = await captureWebsite({url, outputDir:root, trustedOrigins:[url], learnFluid:false, routeLimit:1}, {findAdapter:()=>({id:'fixture', detect:()=>true, discover:async()=>({urls:[]})})});
+   const records = JSON.parse(readFileSync(join(root, 'image-assets.json'), 'utf8')).images.filter((record:any)=>record.kind === 'font');
+   console.info(`font catalog records: ${records.length}`);
+   expect(records.map((record:any)=>record.references[0].font_face.family)).toEqual(['Used']);
+   expect(requests).not.toContain('/Unused.woff2');
+   expect(requests).not.toContain('/Other.woff2');
+   const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+   expect(receipt.assets.filter((asset:any)=>asset.source_url === records[0].resolved_original)).toHaveLength(1);
+   const exportedCss = receipt.assets.filter((asset:any)=>asset.path.endsWith('.css')).map((asset:any)=>readFileSync(join(root, asset.path), 'utf8')).join('\n');
+   expect(exportedCss).not.toMatch(/(?:Unused|Other)\.woff2/);
+   const sources = [...exportedCss.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(match=>match[1]);
+   expect(sources).toHaveLength(1);
+   expect(resourceContentType(readFileSync(join(root, 'website', sources[0])), 'font')).toBe('font/woff2');
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));
+   rmSync(root,{recursive:true,force:true});
+  }
+ }, 120_000);
  it('captures real fonts behind a same-origin stylesheet proxy, PDF aliases, video and poster', async () => {
   const files = new Map<string, Buffer>();
   for (const subset of ['latin', 'greek']) for (const format of ['woff', 'woff2']) {
@@ -84,10 +121,10 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
   try {
    const result = await captureWebsite({url, outputDir:root, trustedOrigins:[url, cdnUrl], learnFluid:false, routeLimit:1}, {findAdapter:()=>({id:'fixture', detect:()=>true, discover:async()=>({urls:[]})})});
    const records = JSON.parse(readFileSync(join(root, 'image-assets.json'), 'utf8')).images;
-   expect(records).toHaveLength(9); // four fonts, PDF, ZIP, video, poster, unresolved font
+   expect(records).toHaveLength(5); // observed WOFF2, PDF, ZIP, video, poster
    const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
    const assets = receipt.assets.filter((asset:any)=>asset.original);
-   expect(assets).toHaveLength(8);
+   expect(assets).toHaveLength(5);
    const html = readFileSync(join(root, 'website/index.html'), 'utf8');
    const exportedCss = receipt.assets.filter((asset:any)=>asset.path.endsWith('.css')).map((asset:any)=>readFileSync(join(root, asset.path), 'utf8')).join('\n');
    for (const record of records.filter((r:any)=>r.original)) {
@@ -113,7 +150,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
     for (const source of record.source_urls) expect(html + exportedCss).not.toContain(source);
    }
    const fonts = records.filter((r:any)=>r.kind === 'font' && r.original);
-   expect(fonts).toHaveLength(4);
+   expect(fonts).toHaveLength(1);
    for (const font of fonts) {
     expect(font.resolved_original).toBe(font.resolved_original.includes('latin')
      ? `${url}static/fonts/${new URL(font.resolved_original).pathname.split('/').at(-1)}`
@@ -121,14 +158,12 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
    }
    // Inspect the emitted face src itself, not just the presence of an asset.
    const fontSources = [...exportedCss.matchAll(/url\(["']?([^"')]+)["']?\)\s*format\(["'](woff2?)["']\)/g)];
-   expect(fontSources).toHaveLength(4);
+   expect(fontSources).toHaveLength(1);
    for (const [, src, format] of fontSources) {
     const path = join(root, 'website', new URL(src, 'http://portable.test/').pathname);
     expect(resourceContentType(readFileSync(path), 'font')).toBe(`font/${format}`);
    }
-   const missing = records.find((r:any)=>r.kind === 'font' && !r.original);
-   expect(missing).toMatchObject({original:null, error:expect.any(String), source_urls:[`${url}static/fonts/missing.woff2`]});
-   expect(missing.error.length).toBeGreaterThan(0);
+   expect(records.some((r:any)=>r.source_urls.includes(`${url}static/fonts/missing.woff2`))).toBe(false);
    const pdf = records.find((r:any)=>r.original?.content_type === 'application/pdf');
    expect(pdf.source_urls).toHaveLength(2);
    expect(pdf.original.content_type).toBe('application/pdf');
@@ -142,10 +177,9 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
    expect(exportedCss).not.toContain('placeholder.svg');
    expect(exportedCss).not.toContain('data:image');
    expect(exportedCss).not.toContain('/missing.woff2');
-   expect(exportedCss.match(/format\(['"]woff2['"]\)/g)).toHaveLength(2);
-   expect(exportedCss.match(/format\(['"]woff['"]\)/g)).toHaveLength(2);
-   const findings = JSON.parse(readFileSync(join(root,'website/source-findings.json'),'utf8')).findings;
-   expect(findings).toEqual(expect.arrayContaining([expect.objectContaining({code:'asset_resource_unresolved', unit:'asset', loss_class:'omitted_unit', location:{url:`${url}static/fonts/missing.woff2`}})]));
+   expect(exportedCss.match(/format\(['"]woff2['"]\)/g)).toHaveLength(1);
+   expect(exportedCss.match(/format\(['"]woff['"]\)/g)).toBeNull();
+   // Unobserved faces use the same self-containment policy as any unrecorded URL.
   } finally {
    server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));
    cdn.closeAllConnections(); await new Promise<void>(resolve=>cdn.close(()=>resolve()));

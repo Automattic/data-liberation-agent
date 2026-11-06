@@ -129,7 +129,7 @@ export function readAssets( root: string ): ImageAssetRecord[] {
  * other URL aliases join only after their hashes verify identical bytes.
  * Documents are streamed: only the identity inventory outlives each parsed page.
  */
-export function collectAssets( documents: ImageDocuments, resolve?: ImageResolver ): ImageAssetRecord[] {
+export function collectAssets( documents: ImageDocuments, resolve?: ImageResolver, storedFont: ( url: string ) => boolean = () => true ): ImageAssetRecord[] {
 	const groups: Array<{ urls: Set<string>; original: string; size: number; references: ImageAssetReference[]; kind: NonNullable<ImageAssetRecord['kind']> }> = [];
 	const add = ( values: string[], preferred: string, base: string, references: ImageAssetReference[], size = 0, kind: NonNullable<ImageAssetRecord['kind']> = 'image' ) => {
 		const urls = new Set<string>();
@@ -239,6 +239,8 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 						for ( const match of declaration.value.matchAll( /url\(\s*["']?([^\s"')]+)["']?\s*\)(?:\s*format\(\s*["']?([^"')]+)["']?\s*\))?/gi ) ) {
 							if ( match[ 2 ]?.toLowerCase() === 'embedded-opentype' ) continue;
 							const refs = reference( match[ 1 ], 'CSS', location );
+							// Capture keeps only observed sources, not unused formats, weights or ranges.
+							if ( ! refs.length || ! storedFont( refs[ 0 ].source_url ) ) continue;
 							for ( const ref of refs ) ref.font_face = { family: descriptors.get( 'font-family' ), weight: descriptors.get( 'font-weight' ), style: descriptors.get( 'font-style' ), unicode_range: descriptors.get( 'unicode-range' ), format: match[ 2 ] };
 							add( [ match[ 1 ] ], match[ 1 ], url, refs, 0, 'font' );
 						}
@@ -332,7 +334,10 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 			yield { html, url };
 		}
 	}
-	const images = collectAssets( inventory(), resolve );
+	const manifestPath = join( root, 'resources', 'manifest.json' );
+	const resources: CapturedResourceManifest['resources'] = existsSync( manifestPath )
+		? JSON.parse( readFileSync( manifestPath, 'utf8' ) ).resources ?? {} : {};
+	const images = collectAssets( inventory(), resolve, source => Boolean( resources[ source ] ) );
 	for ( const record of images ) for ( const source of record.source_urls ) {
 		const parsed = new URL( source );
 		const cdnWidth = Number( parsed.searchParams.get( 'w' ) ?? parsed.searchParams.get( 'width' ) ) ||
@@ -344,9 +349,6 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	}
 	mkdirSync( root, { recursive: true } );
 	const stubs = MediaStubStore.load( root );
-	const manifestPath = join( root, 'resources', 'manifest.json' );
-	const resources: CapturedResourceManifest['resources'] = existsSync( manifestPath )
-		? JSON.parse( readFileSync( manifestPath, 'utf8' ) ).resources ?? {} : {};
 	const mediaDir = join( root, 'media' );
 	const names = existingMediaNames( mediaDir );
 	let browser: import('playwright').Browser | undefined;
