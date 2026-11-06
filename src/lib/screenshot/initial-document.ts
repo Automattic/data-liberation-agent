@@ -1,7 +1,9 @@
 import * as cheerio from 'cheerio';
+import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import type { Page } from 'playwright';
 import { isStackingArtifact } from './document-integrity.js';
+import { WIDTH_CLASSES_ATTRIBUTE } from './viewport-class-states.js';
 
 const NODE = 'data-blocks-engine-capture-initial-node';
 // Every property capture rewrites in the live DOM must be listed: an unlisted
@@ -29,6 +31,24 @@ export async function markInitialDocument(page: Page): Promise<void> {
 	}, NODE);
 }
 
+/** The element wears each width-dependent token as its width-scoped alias. */
+function applyWidthClasses(target: cheerio.Cheerio<Element>): void {
+	const marked = target.attr(WIDTH_CLASSES_ATTRIBUTE);
+	if (marked === undefined) return;
+	target.removeAttr(WIDTH_CLASSES_ATTRIBUTE);
+	let pairs: unknown;
+	try {
+		pairs = JSON.parse(marked);
+	} catch {
+		return;
+	}
+	if (!Array.isArray(pairs)) return;
+	for (const pair of pairs) {
+		if (!Array.isArray(pair) || typeof pair[0] !== 'string' || typeof pair[1] !== 'string') continue;
+		target.removeClass(pair[0]).addClass(pair[1]);
+	}
+}
+
 /** Only learned style declarations may cross back from exploration to the initial tree. */
 export function projectInitialDocument(initial: string, learned: string): string {
 	// Parsing would repair nested bodies and hide the integrity violation.
@@ -46,6 +66,7 @@ export function projectInitialDocument(initial: string, learned: string): string
 			for (const [name, value] of Object.entries(source.attr() ?? {})) {
 				if (name.startsWith('data-blocks-engine-capture-') && name !== NODE) target.attr(name, value);
 			}
+			applyWidthClasses(target);
 			if (source.attr('style') !== undefined || source.attr('data-blocks-engine-capture-fluid-segment')) {
 				target.attr('style', learnedStyle(target.attr('style') ?? '', source.attr('style') ?? ''));
 				for (const name of ['data-blocks-engine-capture-fluid-id', 'data-blocks-engine-capture-fluid-segment']) {
