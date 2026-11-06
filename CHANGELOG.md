@@ -15,6 +15,21 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.141] - 2026-11-06
+
+### Changed
+- regenerate plugin bundles
+- Preserve sampled transform origins with learned scales
+- Switch responsive documents at the source's own min-width boundary and report an uncaptured middle layout
+- Exclude consent overlays from device structure comparison
+- Skip unrendered regions in collection probing
+- Wait for source exit beacon in fidelity test
+- Read block-flow consent cards with spaced text and stacked layout
+- Limit captured font assets to stored capture evidence
+
+### Fixed
+- accept captures with their entrypoint
+
 ## [0.33.140] - 2026-11-06
 
 ### Changed
