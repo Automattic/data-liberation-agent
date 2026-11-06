@@ -75,21 +75,44 @@ export const capture: LiberationHooks = {
 	beforeSerialize: async ( page, context ) => {
 		await preserveSquarespaceProductJsonLd( page, context );
 		await page.evaluate( () => {
-			// Slideshow galleries size each caption from script whenever its slide
-			// activates: width is the slide width, and a caption taller than 90% of
-			// the slide gets `.overflow` and 40% of the slide height. The runtime
-			// ignores resize and keeps rewriting px as slides cycle during capture,
-			// so serialized inline values would freeze one width. Restate its rule
-			// relative to the slide (the caption's containing block).
-			const selector = '.sqs-gallery-design-stacked .slide > .meta';
-			if ( ! document.querySelector( selector ) ) return;
-			let style = document.querySelector< HTMLStyleElement >( 'style[data-blocks-engine-capture-squarespace-caption-style]' );
+			// Slideshow galleries size their slides' contents from script, once per
+			// slide activation and never on resize, so serialized inline px would
+			// freeze one width. Restate the runtime's rules relative to the slide.
+			// Captions: width is the slide width, and a caption taller than 90% of
+			// the slide gets `.overflow` and 40% of the slide height.
+			// Images: the loader cover-fits each image into its slide-sized,
+			// clipping fill and centres its focal point. The slide keeps one aspect
+			// ratio at every width, so whether an image fills the slide's width or
+			// its height is width-independent; the offset is relative to both boxes.
+			const gallery = '.sqs-gallery-design-stacked .slide';
+			if ( ! document.querySelector( gallery ) ) return;
+			// The runtime replaces whole style attributes as slides cycle, so each
+			// image's fit lives in the stylesheet, keyed by an attribute it keeps.
+			const fill = 'data-blocks-engine-capture-squarespace-fill';
+			const image = `${ gallery } :is(.content-fill,.sqs-video-overlay) > img`;
+			const fits = new Map< string, string >();
+			for ( const img of document.querySelectorAll< HTMLImageElement >( `${ image }[data-image-dimensions]` ) ) {
+				const [ width, height ] = ( img.dataset.imageDimensions ?? '' ).split( 'x' ).map( Number );
+				const box = img.parentElement!.getBoundingClientRect();
+				if ( ! width || ! height || ! box.width || ! box.height ) continue;
+				const [ x = 0.5, y = 0.5 ] = ( img.dataset.imageFocalPoint ?? '' ).split( ',' ).map( Number ).filter( Number.isFinite );
+				const wide = width / height > box.width / box.height;
+				const key = `${ wide ? 'height' : 'width' } ${ wide ? x : y } ${ width }x${ height }`;
+				img.setAttribute( fill, key );
+				const offset = `${ ( wide ? x : y ) * -100 }%`;
+				fits.set( key, `aspect-ratio:${ width }/${ height };` + ( wide
+					? `height:100%!important;width:auto!important;top:0!important;left:50%!important;transform:translateX(${ offset })!important`
+					: `width:100%!important;height:auto!important;left:0!important;top:50%!important;transform:translateY(${ offset })!important` ) );
+			}
+			let style = document.querySelector< HTMLStyleElement >( 'style[data-blocks-engine-capture-squarespace-slideshow-style]' );
 			if ( ! style ) {
 				style = document.createElement( 'style' );
-				style.setAttribute( 'data-blocks-engine-capture-squarespace-caption-style', '' );
+				style.setAttribute( 'data-blocks-engine-capture-squarespace-slideshow-style', '' );
 				( document.body ?? document.head ?? document.documentElement ).append( style );
 			}
-			style.textContent = `${ selector }{width:100%!important}${ selector }.overflow{height:40%!important}`;
+			style.textContent = `${ gallery } > .meta{width:100%!important}${ gallery } > .meta.overflow{height:40%!important}`
+				+ `${ image }[${ fill }]{position:relative!important;max-width:none!important}`
+				+ [ ...fits ].map( ( [ key, css ] ) => `${ image }[${ fill }="${ key }"]{${ css }}` ).join( '' );
 		} );
 		const configs = await page.evaluate( ( marker ) => {
 			const configs: string[] = [];
