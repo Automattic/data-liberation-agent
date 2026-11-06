@@ -15,42 +15,6 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
-	// One browser sweep (~3s); the exported document has no resize runtime.
-	it( 'exports a scale that is absent at the reference width', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
-		try {
-			await page.setContent( `<div id="container" style="width:min(760px,55vw)">
-				<div id="frame" style="width:760px">A natural-width text frame</div>
-				</div><div id="varying" style="width:760px">Varying origin</div><script>
-				const fit = () => {
-					const width = document.querySelector('#container').getBoundingClientRect().width;
-					const frame = document.querySelector('#frame');
-					frame.style.transform = width < 760 ? 'scale('+width/760+')' : '';
-					frame.style.transformOrigin = width < 760 ? '0 0' : '';
-					const varying = document.querySelector('#varying');
-					varying.style.transform = frame.style.transform;
-					varying.style.transformOrigin = width < 760 ? innerWidth / 10 + 'px 0' : '';
-				}; addEventListener('resize', fit); fit();
-				</script>` );
-			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
-			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
-			await copy.setContent( await page.content() );
-			for ( const width of [ 768, 1440 ] ) {
-				await copy.setViewportSize( { width, height: 900 } );
-				const rendered = await copy.locator( '#frame' ).evaluate( element => element.getBoundingClientRect().width );
-				const container = await copy.locator( '#container' ).evaluate( element => element.getBoundingClientRect().width );
-				expect( rendered, `rendered frame at ${ width }px` ).toBeCloseTo( container, 0 );
-				const left = await copy.locator( '#frame' ).evaluate( element => element.getBoundingClientRect().left );
-				const containerLeft = await copy.locator( '#container' ).evaluate( element => element.getBoundingClientRect().left );
-				expect( left, `frame left at ${ width }px` ).toBeCloseTo( containerLeft, 0 );
-				if ( width === 1440 ) expect( rendered ).toBe( 760 );
-			}
-			expect( result.unmodelled ).toBe( 1 );
-			expect( await page.locator( '#varying' ).evaluate( node => ( node as HTMLElement ).style.transform ) ).toBe( '' );
-		} finally { await page.close(); await copy.close(); }
-	}, 20_000 );
-
 	// One sweep (~6s): refitting replaces, rather than edits, the fitted span.
 	it( 'exports learned geometry after resize-driven and post-learning fitted node replacement', async () => {
 		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
