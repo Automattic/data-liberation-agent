@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import { observePage } from './check.js';
 import { createReferenceCollector } from './reference.js';
+import { checkImageGeometry } from './rendered-contract-checks.js';
 import { triggerLazyLoad, settleDocument } from '../screenshot/page-helpers.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'settled motion evidence', () => {
@@ -24,6 +25,49 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( elapsed ).toBeLessThan( 2_500 );
 		} finally { await browser.close(); }
 	}, 20_000 );
+
+	it( 'measures resting image geometry across clock and view phases without masking real differences', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 800, height: 400 } } );
+			const html = `<style>body{margin:0;height:2400px}
+				@keyframes drift{from{transform:scale(1.04)}to{transform:scale(1.5)}}
+				@keyframes enter{from{transform:scale(0)}to{transform:scale(1)}}
+				#clock{width:300px;animation:drift 24s infinite}
+				#view{width:300px;margin-top:180px;animation:enter 1s both;animation-timeline:view();animation-range:entry 0% cover 40%}
+				img{width:300px;height:100px}#static{transform:scale(.8);transform-origin:0 0}
+				</style><div id="clock"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div>
+				<div id="view"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div>
+				<div id="static"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div>`;
+			await page.setContent( html );
+			const sample = async ( time: number, changed = false ) => observePage( page, page.url(), 800, 0, null, undefined, async () => {
+				await page.evaluate( ( { time, changed } ) => {
+					const animation = document.getElementById( 'clock' )!.getAnimations()[ 0 ];
+					animation.pause(); animation.currentTime = time;
+					// Source runtime parks the entrance at rest; the copy uses a
+					// live view timeline at its current scroll-dependent phase.
+					const entrance = document.getElementById( 'view' )!;
+					entrance.style.animationName = 'none';
+					getComputedStyle( entrance ).animationName;
+					entrance.style.animationTimeline = time === 0 ? 'auto' : 'view()';
+					entrance.style.animationName = 'enter';
+					const reveal = entrance.getAnimations()[ 0 ];
+					if ( time === 0 ) { reveal.pause(); reveal.currentTime = 1000; }
+					document.querySelector<HTMLImageElement>( '#view img' )!.style.width = changed ? '360px' : '300px';
+				}, { time, changed } );
+			}, true, true );
+			const source = await sample( 0 );
+			const candidate = await sample( 18_000 );
+			expect( source.images?.map( image => image.width ) ).toEqual( [ 300, 300, 240 ] );
+			expect( candidate.images ).toEqual( source.images );
+			expect( checkImageGeometry( source, candidate ).failures ?? [] ).toEqual( [] );
+			expect( candidate.animations ).toContain( 'enter' );
+			expect( await page.locator( '#view' ).evaluate( element => element.getAnimations()[ 0 ].playState ) ).toBe( 'running' );
+			expect( await page.locator( '#clock' ).evaluate( element => ( element.getAnimations()[ 0 ].effect as KeyframeEffect ).getKeyframes().length ) ).toBe( 2 );
+			const changed = await sample( 12_000, true );
+			expect( checkImageGeometry( source, changed ).failures?.join( ' ' ) ).toContain( 'image geometry differs' );
+		} finally { await browser.close(); }
+	}, 60_000 );
 
 	it( 'brings every region into a layout viewport shorter than the sweep step', async () => {
 		const browser = await chromium.launch();
