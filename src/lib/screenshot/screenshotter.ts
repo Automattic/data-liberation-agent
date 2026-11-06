@@ -2172,11 +2172,17 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 		// evidence, not a site-wide guess: server HTML and body gates must match.
 		let equivalent = false;
 		let renderedDocuments: { desktop: string; phone: string } | undefined;
+		let runtimeStyles: { desktop: Array<[ string, string ]>; phone: Array<[ string, string ]> } | undefined;
 		const equivalenceStartedAt = Date.now();
+		if ( compared.serverHtml === 'identical' || compared.serverHtml === 'identical-after-normalization' ) {
+			const readStyles = ( page: Page ) => withEvaluateTimeout( page.evaluate( () => Array.from( document.querySelectorAll<HTMLStyleElement>( 'style[id]' ), style => [ style.id, style.textContent ?? '' ] as [ string, string ] ) ), 10_000 );
+			const [ desktop, phone ] = await Promise.all( [ readStyles( compared.desktop.page ), readStyles( compared.phone.page ) ] );
+			runtimeStyles = { desktop, phone };
+		}
 		if ( ( compared.serverHtml === 'identical' || compared.serverHtml === 'identical-after-normalization' ) && structure.differingPaths > 0 && ! bodyClasses.desktopOnly.length && ! bodyClasses.phoneOnly.length ) {
 			const [ desktop, phone ] = await Promise.all( [ compared.desktop.page.content(), compared.phone.page.content() ] );
 			renderedDocuments = { desktop, phone };
-			equivalent = decideRouteMode( { serverHtml: compared.serverHtml, structure, bodyClasses, renderedDocuments } ).mode === 'reflow-only';
+			equivalent = decideRouteMode( { serverHtml: compared.serverHtml, structure, bodyClasses, renderedDocuments, runtimeStyles } ).mode === 'reflow-only';
 		}
 		checkTimings.equivalence += Date.now() - equivalenceStartedAt;
 		if ( compared.serverHtml !== 'different' && differs() && ! equivalent ) {
@@ -2201,7 +2207,7 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 			const [ desktop, phone ] = await Promise.all( [ compared.desktop.page.content(), compared.phone.page.content() ] );
 			renderedDocuments = { desktop, phone };
 		}
-		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, bodyClasses: differs() ? bodyClasses : undefined } );
+		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, runtimeStyles, bodyClasses: differs() ? bodyClasses : undefined } );
 		checkTimings.equivalence += Date.now() - finalEquivalenceStartedAt;
 		if ( decided.mode === 'dual' && compared.serverHtml !== 'different' ) onSwitchCandidates?.( { widths: await withEvaluateTimeout( stylesheetMaxWidths( compared.desktop.page ), 10_000 ).catch( () => [] ), desktop: desktopRendered } );
 		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt, checkTimings };
