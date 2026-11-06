@@ -249,10 +249,11 @@ export async function portWixRuntimeEmbeds( page: Page ): Promise< void > {
 		}
 		return null;
 	} );
-	if ( appName ) {
-		for ( const handle of await page.$$( '[data-testid="custom-element"] > *' ) ) {
-			const isCustomElement = await handle.evaluate( ( element ) => element.localName.includes( '-' ) ).catch( () => false );
-			if ( isCustomElement ) await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( appName ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE, sizedByHost: true } );
+	for ( const handle of await page.$$( '[data-testid="custom-element"] > *' ) ) {
+		const tagName = await handle.evaluate( ( element ) => element.localName ).catch( () => '' );
+		if ( tagName.includes( '-' ) ) {
+			const label = appName || tagName.split( '-' ).filter( Boolean ).map( ( part ) => part.charAt( 0 ).toUpperCase() + part.slice( 1 ) ).join( ' ' );
+			await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( label ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE, sizedByHost: true } );
 		}
 	}
 	for ( const handle of await page.$$( 'iframe[src]' ) ) {
