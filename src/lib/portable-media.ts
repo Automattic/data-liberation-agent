@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { sameMediaAspectRatio } from './media-aspect-ratio.js';
 import { basename, dirname, extname, join, relative } from 'node:path';
 import { copyExclusive } from './media-fetch/exclusive-file.js';
 import { safeFilename } from './media-fetch/media.js';
@@ -119,6 +120,23 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			continue;
 		}
 		localizedMediaFamilies.add( family );
+		// Family references include distinct pictures (for example WordPress hard
+		// crops). Only their own file or a proven same-aspect resize may claim them.
+		const referenceOwners = new Map< string, PortableMediaCandidate[] >();
+		for ( const candidate of candidates ) {
+			for ( const reference of candidate.exactReferences ) {
+				const owners = referenceOwners.get( reference ) ?? [];
+				owners.push( candidate );
+				referenceOwners.set( reference, owners );
+			}
+		}
+		const canClaimReference = ( candidate: PortableMediaCandidate, reference: string ): boolean => {
+			const owners = referenceOwners.get( reference );
+			return ! owners || owners.some( owner => owner === candidate ||
+				( candidate.budgetFallback && owner.references === candidate.references ) ||
+				( !! owner.imageAsset?.original && !! candidate.imageAsset?.original &&
+					sameMediaAspectRatio( owner.imageAsset.original, candidate.imageAsset.original ) ) );
+		};
 		let fallbackAssetPath = '';
 		for ( const { candidate, contentHash } of admitted ) {
 			let assetPath = assetPathsByHash.get( contentHash );
@@ -151,11 +169,11 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 			for ( const url of candidate.imageAsset?.source_urls ?? [] ) portablePathsBySource.set( url, `website/${ assetPath.replace( /\\/g, '/' ) }` );
 			fallbackAssetPath ||= assetPath;
 			for ( const reference of candidate.imageAsset || candidate.budgetFallback ? candidate.references : candidate.exactReferences ) {
-				mediaReplacements.set( reference, portableAssetUrl( assetPath ) );
+				if ( canClaimReference( candidate, reference ) ) mediaReplacements.set( reference, portableAssetUrl( assetPath ) );
 			}
 		}
 		for ( const reference of retainedReferences.get( family ) ?? [] ) {
-			if ( ! mediaReplacements.has( reference ) )
+			if ( ! mediaReplacements.has( reference ) && canClaimReference( admitted[ 0 ].candidate, reference ) )
 				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
 		}
 		if ( fallbackAssetPath ) {

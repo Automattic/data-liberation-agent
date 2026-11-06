@@ -7645,6 +7645,39 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'website', 'media', 'prefix.png' ) ) ).toBe( false );
 	} );
 
+	it( 'keeps original and hard-crop references with their own pictures in one media family', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-hard-crop-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const images = [
+			{ name: 'photo.jpg', width: 1140, page: 'homepage', route: '' },
+			{ name: 'photo-750x350.jpg', width: 750, page: 'crop', route: 'crop/' },
+		];
+		const stubs = MediaStubStore.load( outputDir );
+		const records = images.map( ( { name, width, page }, index ) => {
+			const url = `https://example.com/uploads/${ name }`;
+			const localPath = join( outputDir, 'media', name );
+			const bytes = Buffer.alloc( 1000 - index, index + 1 );
+			writeFileSync( localPath, bytes );
+			writeFileSync( join( outputDir, 'html', `${ page }.html` ), `<main><img width="${ width }" height="350" src="${ url }"></main>` );
+			stubs.markSuccess( url, localPath );
+			return { kind: 'image', source_urls: [ url ], references: [], resolved_original: url, local_path: localPath,
+				original: { source_url: url, content_type: 'image/jpeg', width, height: 350, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) } };
+		} );
+		stubs.flush();
+		writeFileSync( join( outputDir, 'image-assets.json' ), JSON.stringify( { version: 1, images: records } ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1,
+			entries: Object.fromEntries( images.map( ( { page, route } ) => [ `https://example.com/${ route }`, { html: `html/${ page }.html` } ] ) ) } ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		for ( const { name, route } of images ) {
+			const html = readFileSync( join( outputDir, 'website', route, 'index.html' ), 'utf8' );
+			expect( html ).toContain( `src="/media/${ name }"` );
+			expect( readFileSync( join( outputDir, 'website/media', name ) ) ).toEqual( readFileSync( join( outputDir, 'media', name ) ) );
+		}
+	} );
+
 	it( 'localizes independently verified responsive bytes before budget blanking, or counts a blank when unavailable', () => {
 		for ( const budget of [ 600, 3000 ] ) for ( const available of [ true, false ] ) {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-budget-' ) );

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sameMediaAspectRatio } from './media-aspect-ratio.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
 import { withoutPlatformDefaultIcons } from './platform-default-icons.js';
@@ -1868,14 +1869,9 @@ function buildExportCapture(
 					continue;
 				}
 				if ( ! originalIsRendition ) {
-					const { width: originalWidth, height: originalHeight } = imageAsset.original;
 					try {
 						const { width, height } = imageSize( renditionContent );
-						// Each measured edge can be rounded by half a pixel. Compare
-						// cross-products so small resizes need no arbitrary ratio epsilon.
-						if ( originalWidth && originalHeight && width && height &&
-							Math.abs( width * originalHeight - height * originalWidth ) <=
-							( width + height + originalWidth + originalHeight ) / 2 ) {
+						if ( sameMediaAspectRatio( { width, height }, imageAsset.original ) ) {
 							if ( renditionContent.length <= maxFileBytes ) capturedRenditions.push( {
 								sourceUrl: url, localPath: path, references: candidate.references, exactReferences: [],
 								bytes: renditionContent.length, dimension: Math.max( width, height ),
