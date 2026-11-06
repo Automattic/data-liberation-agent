@@ -532,14 +532,18 @@ function renderedHtml( html: string ): string {
 		const isContentInfoLandmark =
 			node.is( 'footer' ) ||
 			/(?:^|\s)contentinfo(?:\s|$)/i.test( node.attr( 'role' ) ?? '' );
-		// Role names start a class/id token (possibly with a suffix like
-		// `modal-root`); behavior tokens like `has-popup` do not name a role.
+		// A token names an overlay role (`ReactModalPortal`, `site-footer`);
+		// a state or behavior token (`has-popup`, `is-modal-open`) does not.
+		const namesScaffoldingRole = idAndClass
+			.split( /\s+/ )
+			.some(
+				( token ) =>
+					! /^(?:has|is)-/i.test( token ) &&
+					/(?:account.*app|app.*account|footer|modal|mount|portal|popup|toast)/i.test( token )
+			);
 		if (
 			/(?:^|;)\s*(?:position\s*:\s*(?:fixed|absolute)|bottom\s*:)/i.test( style ) ||
-			( ! isContentInfoLandmark &&
-				/(?:^|\s)(?:account[^\s]*app|app[^\s]*account|footer|modal|mount|portal|popup|toast)(?=$|[\s_-])/i.test(
-					idAndClass
-				) )
+			( ! isContentInfoLandmark && namesScaffoldingRole )
 		) {
 			node.remove();
 		}

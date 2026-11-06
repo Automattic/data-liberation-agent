@@ -4976,7 +4976,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			</style></head><body><div class="size-box"><div class="element-main-box has-popup">
 			<div class="element-background-layer has-popup"><div class="element-background-image"><div class="image-box-image-wrapper" style="width:1275px;height:687px"><div class="image-box-background-image"></div></div></div></div>
 			<div class="element-border-box has-popup"><div class="element-content-box has-popup"><div class="content-container has-popup" style="width:1275px;min-height:687px"></div></div></div>
-			</div></div><div id="modal-root"></div><div class="portal"></div><div class="toast-root"></div><div id="mount"></div><div id="account-app"></div>
+			</div></div><div id="modal-root"></div><div class="ReactModalPortal"></div><div class="chakra-portal"></div><div class="portal"></div><div class="toast-root"></div><div id="mount"></div><div id="account-app"></div>
 			<div id="fixed-box" style="position:fixed"></div><div id="absolute-box" style="position:absolute"></div><div id="bottom-box" style="bottom:0"></div></body></html>`
 		);
 		writeFileSync(
@@ -4988,7 +4988,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '.element-border-box > .element-content-box > .content-container' ).attr( 'style' ) ).toBe( 'width:1275px;min-height:687px' );
 		expect( $( '.element-background-layer .image-box-image-wrapper' ).attr( 'style' ) ).toBe( 'width:1275px;height:687px' );
-		expect( $( '#modal-root,.portal,.toast-root,#mount,#account-app,#fixed-box,#absolute-box,#bottom-box' ) ).toHaveLength( 0 );
+		expect( $( '#modal-root,.ReactModalPortal,.chakra-portal,.portal,.toast-root,#mount,#account-app,#fixed-box,#absolute-box,#bottom-box' ) ).toHaveLength( 0 );
 	} );
 
 	it( 'collapses responsive forms whose only difference is a generated target id', () => {
