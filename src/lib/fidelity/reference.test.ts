@@ -58,6 +58,58 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
+	// About 35 seconds: a quick and a slow swap settle; failed and stalled cells run to the readiness bound.
+	it( 'settles scripted image rendition swaps, including ones slower than the capture wait, without accepting failed or stalled images', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-image-swap-' ) );
+		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
+		const initial = `data:image/png;base64,${ image.toString( 'base64' ) }`;
+		const html = `<meta name="viewport" content="width=device-width,initial-scale=1"><h1>Rendition swap</h1>
+			<img width="200" height="200" src="${ initial }">
+			<script>window.swapRendition = path => { document.images[0].src = path; };</script>`;
+		const served: string[] = [];
+		const source = createServer( ( request, response ) => {
+			if ( request.url === '/stalled.png' ) return;
+			if ( request.url === '/failed.png' ) { response.writeHead( 404 ); response.end(); return; }
+			if ( request.url === '/rendition.png' || request.url === '/slow.png' ) {
+				// Observation's independent pixel-hash fetch must not accidentally
+				// settle the element request: only the image rendition is delayed.
+				setTimeout( () => { served.push( request.url! ); response.writeHead( 200, { 'content-type': 'image/png' } ); response.end( image ); }, request.headers[ 'sec-fetch-dest' ] !== 'image' ? 0 : request.url === '/slow.png' ? 6000 : 2000 );
+				return;
+			}
+			response.writeHead( 200, { 'content-type': 'text/html' } ); response.end( html );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		const context = await sharedBrowser.newContext();
+		const page = await context.newPage();
+		try {
+			for ( const rendition of [ 'rendition', 'slow', 'failed', 'stalled' ] ) {
+				const collector = createReferenceCollector( directory, url, [ url ], {
+					routeScope: { origin: new URL( url ).origin, pathPrefixes: [ '/' ] },
+					prepareCapture: async cell => {
+						expect( await cell.evaluate( () => document.images[ 0 ].complete && document.images[ 0 ].naturalWidth > 0 ) ).toBe( true );
+						await cell.evaluate( path => ( window as unknown as { swapRendition: ( path: string ) => void } ).swapRendition( path ), `/${ rendition }.png` );
+					},
+				} );
+				await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
+				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+				const entry = ( JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference ).entries[ 0 ];
+				const settles = rendition === 'rendition' || rendition === 'slow';
+				expect( entry.readiness.mediaReady ).toBe( settles );
+				if ( settles ) {
+					expect( served ).toContain( `/${ rendition }.png` );
+					expect( () => readFrozenObservation( directory, entry ) ).not.toThrow();
+				} else {
+					expect( () => readFrozenObservation( directory, entry ) ).toThrow( 'source images pending or failed' );
+				}
+			}
+		} finally {
+			await context.close(); source.closeAllConnections();
+			await new Promise<void>( resolve => source.close( () => resolve() ) );
+			rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 90_000 );
 	it( 'records a cross-origin subframe runtime error as a diagnostic but blocks on a top-level one', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-subframe-error-' ) );
