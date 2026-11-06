@@ -158,16 +158,16 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					let referencePage: Page | undefined;
 					let ownedResource: BrowserContext | Page | undefined;
 					let runtimeErrors: Awaited< ReturnType< typeof watchSourceRuntimeErrors > > | undefined;
-					let admittedDocument = false;
-					// Only faults also seen in capture can inherit its admission. A new
-					// reference-only main-frame fault still leaves the cell unproven.
+					// A fault observed by capture is inherited source behaviour, even
+					// when another readiness check rejects this cell. Only the same
+					// main-frame message may inherit; reference-only faults still block.
 					const recordRuntimeErrors = (): void => {
 						const settled = runtimeErrors?.settle();
 						runtimeErrors?.dispose(); runtimeErrors = undefined;
 						const diagnostics = new Set( entry.readiness.diagnostics );
 						for ( const diagnostic of settled?.diagnostics ?? [] ) diagnostics.add( diagnostic );
 						for ( const reason of [ ...( settled?.reasons ?? [] ), ...errors ] ) {
-							if ( admittedDocument && reason.startsWith( 'source runtime error: ' ) && errors.includes( reason ) ) diagnostics.add( reason );
+							if ( reason.startsWith( 'source runtime error: ' ) && errors.includes( reason ) ) diagnostics.add( reason );
 							else if ( ! entry.readiness.reasons.includes( reason ) ) entry.readiness.reasons.push( reason );
 						}
 						if ( diagnostics.size ) entry.readiness.diagnostics = [ ...diagnostics ];
@@ -252,7 +252,6 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const shell = matchClientErrorShell( html, options.clientErrorShellSelectors );
 						if ( shell ) entry.readiness.reasons.push( `source client error shell: ${ shell }` );
 						if ( isRouteDrift( referencePage.url(), navigationUrl ) && ! entry.readiness.reasons.includes( 'source route drift' ) ) entry.readiness.reasons.push( 'source route drift' );
-						admittedDocument = entry.readiness.reasons.length === 0;
 						entry.document = store( `${ stem }.html`, html );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
 						await collectViewportEntranceStartup( referencePage, page );
