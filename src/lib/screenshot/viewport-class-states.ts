@@ -18,7 +18,7 @@ import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
  * applied it. The copies live in a capture-generated rules block, which the
  * responsive assembly keeps intact with its own media conditions.
  */
-export const VIEWPORT_CLASS_PREFIX = 'blocks-engine-capture-width-class-';
+export const VIEWPORT_CLASS_PREFIX = 'data-blocks-engine-capture-width-class-';
 
 const STATE_KEY = 'data-liberation.viewport-class-states';
 
