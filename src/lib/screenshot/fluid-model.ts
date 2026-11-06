@@ -25,6 +25,11 @@ export interface GeometrySample {
 	container?: number | null;
 	/** Computed origin for an observed uniform scale (not interpolated). */
 	transformOrigin?: string;
+	/**
+	 * Declared inline value of a custom property whose value is not pixels
+	 * (`100%`, `auto`, a `calc()`), recorded alongside a `NaN` value.
+	 */
+	cssValue?: string;
 }
 
 export type FluidModel =
@@ -319,7 +324,10 @@ export function interpolateSamples( samples: readonly GeometrySample[], sampled:
 		const low = at.get( widths[ upper - 1 ]! ), high = at.get( widths[ upper ]! );
 		if ( ! low || ! high ) continue;
 		if ( ! Number.isFinite( low.value ) || ! Number.isFinite( high.value ) ) {
-			filled.push( { viewport, value: Number.NaN } );
+			// A declared non-pixel value holds across the gap only when both
+			// neighbours declared the same one.
+			const cssValue = low.cssValue !== undefined && low.cssValue === high.cssValue ? low.cssValue : undefined;
+			filled.push( { viewport, value: Number.NaN, ...( cssValue !== undefined ? { cssValue } : {} ) } );
 			continue;
 		}
 		const share = ( viewport - low.viewport ) / ( high.viewport - low.viewport );

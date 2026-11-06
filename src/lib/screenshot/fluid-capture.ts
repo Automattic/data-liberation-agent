@@ -19,6 +19,7 @@ import {
 	segmentedCss,
 	type FluidModel,
 	type FluidModelSegment,
+	type ViewportFluidModel,
 	type GeometrySample,
 } from './fluid-model.js';
 import type { Page } from 'playwright';
@@ -422,6 +423,7 @@ async function learnFluidGeometry(
 					const geometry = state.readGeometry( element );
 					const style = geometry.literal;
 					const values: Record< string, number | null > = {};
+					const declared: Record< string, string > = {};
 					const containers: Record< string, number | null > = {};
 					const customProperties = [ ...style.matchAll( /(?:^|;)\s*(--[-a-zA-Z0-9_]+)\s*:\s*[^;]+/g ) ].map( ( match ) => match[ 1 ]! );
 					const elementProperties = [ ...new Set( [ ...properties, ...customProperties ] ) ];
@@ -475,11 +477,16 @@ async function learnFluidGeometry(
 						if ( property.startsWith( '--' ) && ! match ) {
 							const computed = getComputedStyle( element ).getPropertyValue( property ).trim();
 							if ( computed ) values[ property ] = null;
+							// Keep the declared non-pixel value (`100%`, a calc()) so the
+							// learner can carry that regime instead of discarding it.
+							const raw = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*([^;]+)` ).exec( style )?.[ 1 ]
+								?.replace( /\s*!\s*important\s*$/i, '' ).trim();
+							if ( raw ) declared[ property ] = raw;
 						}
 					}
 					const transformOrigin = getComputedStyle( element ).transformOrigin;
 					const rect = element.getBoundingClientRect();
-					return { id: element.getAttribute( attribute )!, values, containers, relative, transformOrigin,
+					return { id: element.getAttribute( attribute )!, values, declared, containers, relative, transformOrigin,
 						clip: element.style.clipPath, clipWidth: rect.width, clipHeight: rect.height };
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties }
@@ -506,7 +513,8 @@ async function learnFluidGeometry(
 				const list = observations.get( key ) ?? [];
 				if ( value === null || value === undefined ) {
 					if ( property.startsWith( '--' ) || property === 'min-height' ) {
-						list.push( { viewport: width, value: Number.NaN } );
+						const cssValue = entry.declared?.[ property ];
+						list.push( { viewport: width, value: Number.NaN, ...( cssValue ? { cssValue } : {} ) } );
 						observations.set( key, list );
 					}
 					continue;
@@ -658,7 +666,27 @@ async function learnFluidGeometry(
 		const customProperty = property.startsWith( '--' );
 		// A constant minimum already survives serialization without learned CSS.
 		if ( property === 'min-height' && constantAcross( new Map( [ [ key, samples ] ] ), samples.length, new Set() ) ) continue;
-		const modelSamples = customProperty ? widestFiniteRun( samples ) : samples;
+		// A runtime can switch a custom property between pixels and a declared
+		// non-pixel value (`100%`) with width. Each contiguous regime gets its
+		// own bounded rule so no fit leaks into a width range it never observed.
+		if ( customProperty && samples.some( sample => ! Number.isFinite( sample.value ) ) ) {
+			const regimes = customPropertyRegimes( samples );
+			unmodelled += regimes.unmodelled;
+			if ( regimes.segments.length === 0 ) continue;
+			byKind.segmented = ( byKind.segmented ?? 0 ) + 1;
+			for ( const segment of regimes.segments ) if ( segment.minWidth !== null ) breakpoints.add( segment.minWidth );
+			learned.push( {
+				id,
+				property,
+				css: '',
+				fallbackCss: null,
+				containerRelative: false,
+				sampledCss: null,
+				segmentedCss: segmentedCss( `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, property, regimes.segments ),
+			} );
+			continue;
+		}
+		const modelSamples = samples;
 		const wholeRangeModel = learnFluidModel( modelSamples );
 		const model: FluidModel = learnWidestFluidModel( modelSamples );
 		byKind[ model.kind ] = ( byKind[ model.kind ] ?? 0 ) + 1;
@@ -1418,17 +1446,66 @@ async function replayReplacedEntrances( page: Page, baseline: Awaited<ReturnType
 	await settleDocument( page, 'fluid-entrance-replay', { quietMs: 200, timeoutMs: 2_000, animations: true } );
 }
 
-/** The last contiguous stretch of numeric pixel custom-property observations. */
-function widestFiniteRun( samples: readonly GeometrySample[] ): GeometrySample[] {
-	const runs: GeometrySample[][] = [];
-	let run: GeometrySample[] = [];
+/**
+ * Bounded rules for a custom property that switches between pixel runs and
+ * declared non-pixel values (`100%`) with width.
+ *
+ * Each contiguous run of the width-sorted series is one regime, governing from
+ * its first sampled width up to the width before the next regime begins (the
+ * outermost regimes extend indefinitely). A pixel run is fitted alone; a
+ * non-pixel run carries its declared literal when every sample agrees on it,
+ * and is otherwise left unmodelled.
+ */
+function customPropertyRegimes( samples: readonly GeometrySample[] ): { segments: FluidModelSegment[]; unmodelled: number } {
+	const regimes: GeometrySample[][] = [];
 	for ( const sample of [ ...samples ].sort( ( a, b ) => a.viewport - b.viewport ) ) {
-		if ( Number.isFinite( sample.value ) ) run.push( sample );
-		else if ( run.length ) {
-			runs.push( run );
-			run = [];
-		}
+		const current = regimes.at( -1 );
+		if ( current && Number.isFinite( current[ 0 ]!.value ) === Number.isFinite( sample.value ) ) current.push( sample );
+		else regimes.push( [ sample ] );
 	}
-	if ( run.length ) runs.push( run );
-	return runs.at( -1 ) ?? [];
+	const segments: FluidModelSegment[] = [];
+	let unmodelled = 0;
+	const constantPx = ( value: number ): ViewportFluidModel => {
+		const rounded = Math.round( value * 100 ) / 100;
+		return { kind: 'constant', css: `${ rounded }px`, value: rounded };
+	};
+	regimes.forEach( ( run, index ) => {
+		const minWidth = index === 0 ? null : run[ 0 ]!.viewport;
+		const maxWidth = index === regimes.length - 1 ? null : regimes[ index + 1 ]![ 0 ]!.viewport - 1;
+		const clip = ( segment: FluidModelSegment ): FluidModelSegment => ( {
+			model: segment.model,
+			minWidth: segment.minWidth === null ? minWidth : minWidth === null ? segment.minWidth : Math.max( segment.minWidth, minWidth ),
+			maxWidth: segment.maxWidth === null ? maxWidth : maxWidth === null ? segment.maxWidth : Math.min( segment.maxWidth, maxWidth ),
+		} );
+		if ( ! Number.isFinite( run[ 0 ]!.value ) ) {
+			const literal = run[ 0 ]!.cssValue;
+			if ( literal && run.every( sample => sample.cssValue === literal ) ) {
+				segments.push( { model: { kind: 'constant', css: literal, value: Number.NaN }, minWidth, maxWidth } );
+			} else unmodelled++;
+			return;
+		}
+		if ( run.length < 3 ) {
+			// Too few observations for a relationship: hold each one from its width.
+			const sub = run.map( ( sample, at ) => ( {
+				model: constantPx( sample.value ),
+				minWidth: at === 0 ? null : sample.viewport,
+				maxWidth: at === run.length - 1 ? null : run[ at + 1 ]!.viewport - 1,
+			} ) );
+			segments.push( ...sub.map( clip ) );
+			return;
+		}
+		const fitted = learnWidestFluidModel( run );
+		const model = fitted.kind === 'container'
+			? learnWidestFluidModel( run.map( ( { viewport, value } ) => ( { viewport, value } ) ) )
+			: fitted;
+		if ( model.kind !== 'breakpoint' && model.kind !== 'container' ) {
+			segments.push( { model, minWidth, maxWidth } );
+			return;
+		}
+		const segmented = learnSegmentedFluidModel( run, { holdUnfitted: true, holdNarrowForBoundedAffine: true } );
+		if ( segmented === null ) { unmodelled++; return; }
+		segments.push( ...segmented.segments.map( clip ).filter( segment =>
+			segment.minWidth === null || segment.maxWidth === null || segment.minWidth <= segment.maxWidth ) );
+	} );
+	return { segments, unmodelled };
 }
