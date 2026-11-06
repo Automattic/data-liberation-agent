@@ -6,6 +6,7 @@ export function isMediaPlaybackLifecycleAbort( error: { name?: string; message?:
 }
 
 export const SOURCE_SUBFRAME_RUNTIME_ERROR = 'source_subframe_runtime_error';
+export const SOURCE_RUNTIME_ERROR = 'source_runtime_error';
 
 interface FrameErrorReport { main: boolean; origin: string; message: string }
 
@@ -50,8 +51,8 @@ function reportFrameErrors( page: Page ): Promise< FrameErrorReport[] > {
 /**
  * Collects the source document's uncaught errors and rejections. Playwright's
  * `pageerror` fires for every frame without naming it, so each error is matched
- * to the frame that reported it: only errors a subframe reported become
- * diagnostics; main-frame and unattributable errors block readiness.
+ * to the frame that reported it. Errors remain diagnostics regardless of frame:
+ * readiness is established independently by settlement, cleanup and media checks.
  */
 export async function watchSourceRuntimeErrors( page: Page, limit = 100 ) {
 	const reports = await reportFrameErrors( page );
@@ -66,7 +67,7 @@ export async function watchSourceRuntimeErrors( page: Page, limit = 100 ) {
 			const diagnostics: string[] = [];
 			for ( const message of errors ) {
 				const index = subframe.findIndex( report => report.message === message );
-				if ( index < 0 ) reasons.push( `source runtime error: ${ message }` );
+				if ( index < 0 ) diagnostics.push( `source runtime error: ${ message }` );
 				else diagnostics.push( `subframe runtime error (${ subframe.splice( index, 1 )[ 0 ]!.origin }): ${ message }` );
 			}
 			return { reasons: [ ...new Set( reasons ) ], diagnostics: [ ...new Set( diagnostics ) ] };
