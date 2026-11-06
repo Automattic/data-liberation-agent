@@ -9,6 +9,7 @@ import { parseCss, parseSelectorList, projectStylesheet, scopeCss, type Unparsea
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { documentElementTags } from './screenshot/document-integrity.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
+import { CONSENT_OVERLAY_DIALOG_SELECTOR, CONSENT_VENDOR_RE, isConsentOverlayRoot } from './consent-overlay.js';
 import {
 	correspondenceMerge,
 	hasLearnedTransform,
@@ -143,6 +144,8 @@ function childNodes( node: AnyNode ): AnyNode[] {
  * Text is ignored because desktop and mobile captures are taken seconds
  * apart, so any live value — a countdown, a cart count, relative time —
  * would otherwise ship two copies of the same responsive document.
+ * Consent overlay subtrees (`isConsentOverlayRoot`) are left out: consent
+ * managers lay out their own chrome per viewport.
  */
 export function documentsDiffer( desktopHtml: string, mobileHtml: string ): boolean {
 	const desktopBody = documentElement( desktopHtml, 'body' )?.content;
@@ -2169,6 +2172,19 @@ function scopedStyles(
 function responsiveBodySignature( body: string ): string {
 	const $ = cheerio.load( `<body>${ body }</body>` );
 	$( 'script,style,noscript,iframe' ).remove();
+	// Consent managers lay out their own chrome per viewport; it is not the page.
+	$( 'body *' )
+		.filter( ( _index, element ) => $( element ).is( CONSENT_OVERLAY_DIALOG_SELECTOR ) || CONSENT_VENDOR_RE.test( `${ $( element ).attr( 'id' ) ?? '' } ${ $( element ).attr( 'class' ) ?? '' }` ) )
+		.filter( ( _index, element ) => isConsentOverlayRoot( {
+			tag: element.tagName,
+			id: $( element ).attr( 'id' ) ?? '',
+			className: $( element ).attr( 'class' ) ?? '',
+			role: $( element ).attr( 'role' ) ?? null,
+			ariaModal: $( element ).attr( 'aria-modal' ) === 'true',
+			ariaLabel: $( element ).attr( 'aria-label' ) ?? null,
+			text: $( element ).text().slice( 0, 4000 ),
+		} ) )
+		.remove();
 	$( '[id]' ).each( ( _index, element ) => {
 		if ( isYuiRuntimeId( $( element ).attr( 'id' ) ?? '' ) ) $( element ).remove();
 	} );
