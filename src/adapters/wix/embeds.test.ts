@@ -165,6 +165,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		} finally { await browser.close(); }
 	}, 30_000 );
 
+	it( 'replaces Wix-hosted module custom elements without an App Market script', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent('<style>body{margin:0}.host{width:240px;height:152px}</style><div class="host" data-testid="custom-element"><zeffy-donation-widget></zeffy-donation-widget></div>');
+			await portWixRuntimeEmbeds( page );
+			expect( await page.locator( 'zeffy-donation-widget' ).count() ).toBe( 0 );
+			const note = page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' );
+			expect( await note.textContent() ).toBe( wixEmbedNote( 'Zeffy Donation Widget' ) );
+			expect( await note.evaluate( ( element ) => [ element.getBoundingClientRect().width, element.getBoundingClientRect().height ] ) ).toEqual( [ 240, 152 ] );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it( 'recognizes and removes classic Wix password gates', async () => {
 		const browser = await chromium.launch();
 		try {
