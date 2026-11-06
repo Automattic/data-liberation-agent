@@ -77,11 +77,7 @@ export async function captureScrollStates(
 	};
 	if ( ! await documentCanScroll( page ) ) return empty;
 
-	const scrollTo = async ( y: number ): Promise< void > => {
-		// A source's `scroll-behavior: smooth` would animate this jump and every
-		// snapshot would land mid-scroll; the probe needs the position itself.
-		await page.evaluate( ( value ) => window.scrollTo( { top: value, behavior: 'instant' } ), y );
-	};
+	const scrollTo = ( y: number ): Promise< void > => scrollPage( page, y );
 
 	let baseline: ContainerSnapshot[];
 	try {
@@ -203,13 +199,71 @@ export async function captureScrollStates(
 		} );
 	}
 
+	await dropClassDerivedProperties( page, toggles );
+
 	return {
 		schema: SCROLL_STATES_SCHEMA,
 		sourceUrl,
 		viewport,
 		capturedAt: new Date().toISOString(),
-		toggles,
+		toggles: toggles.filter( ( toggle ) =>
+			toggle.classes.add.length > 0 || toggle.classes.remove.length > 0 || toggle.styleTargets.length > 0
+		),
 	};
+}
+
+/** A source's `scroll-behavior: smooth` would animate the jump and a snapshot would land mid-scroll. */
+async function scrollPage( page: Page, y: number ): Promise< void > {
+	await page.evaluate( ( value ) => window.scrollTo( { top: value, behavior: 'instant' } ), y );
+}
+
+/**
+ * A computed change the toggled classes explain on their own is a consequence of
+ * those classes (a header whose height follows a logo the class shrinks), not a
+ * value to pin: the materialized class toggle already carries it, at every
+ * viewport. Scrolled with transitions frozen, revert only the class change and
+ * keep just the properties that do not return to rest.
+ */
+async function dropClassDerivedProperties( page: Page, toggles: ScrollToggle[] ): Promise< void > {
+	const probes = toggles.flatMap( ( toggle, index ) => {
+		const self = toggle.styleTargets.find( ( target ) => target.selector === ':scope' );
+		if ( ! self || ( toggle.classes.add.length === 0 && toggle.classes.remove.length === 0 ) ) return [];
+		return [ { index, selector: toggle.target.selector, add: toggle.classes.add, remove: toggle.classes.remove, properties: self.properties } ];
+	} );
+	if ( probes.length === 0 ) return;
+	const frames = () => page.evaluate( () => new Promise< void >( ( resolve ) => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) ) );
+	const freeze = await page.addStyleTag( { content: '*,*::before,*::after{transition:none!important;animation:none!important}' } ).catch( () => null );
+	if ( ! freeze ) return;
+	let derived: string[][] = probes.map( () => [] );
+	try {
+		await scrollPage( page, PROBE_OFFSET_PX );
+		await frames();
+		derived = await page.evaluate( ( entries ) => entries.map( ( entry ) => {
+			const element = document.querySelector( entry.selector );
+			if ( ! element || ! entry.add.every( ( name ) => element.classList.contains( name ) ) || entry.remove.some( ( name ) => element.classList.contains( name ) ) ) return [];
+			const scrolled = element.getAttribute( 'class' )!;
+			element.classList.remove( ...entry.add );
+			element.classList.add( ...entry.remove );
+			const style = getComputedStyle( element );
+			const explained = Object.entries( entry.properties )
+				.filter( ( [ property, { rest } ] ) => style.getPropertyValue( property ) === rest )
+				.map( ( [ property ] ) => property );
+			element.setAttribute( 'class', scrolled );
+			return explained;
+		} ), probes );
+	} catch {
+		// Keep every observed property when the probe cannot run.
+	} finally {
+		await scrollPage( page, 0 ).catch( () => undefined );
+		await frames().catch( () => undefined );
+		await freeze.evaluate( ( node ) => ( node as Element ).remove() ).catch( () => undefined );
+	}
+	probes.forEach( ( probe, position ) => {
+		const toggle = toggles[ probe.index ]!;
+		const self = toggle.styleTargets.find( ( target ) => target.selector === ':scope' )!;
+		for ( const property of derived[ position ] ?? [] ) delete self.properties[ property ];
+		if ( Object.keys( self.properties ).length === 0 ) toggle.styleTargets = toggle.styleTargets.filter( ( target ) => target !== self );
+	} );
 }
 
 function changedContainerKeys(

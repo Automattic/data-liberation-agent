@@ -56,7 +56,41 @@ const BODY_AFFIX_INNER_BAR_FIXTURE = `<!doctype html><html><head><style>
 	</script>
 </body></html>`;
 
+const CLASS_DERIVED_HEIGHT_FIXTURE = `<!doctype html><html><head><style>
+	body { margin: 0; height: 3000px; }
+	header { position: sticky; top: 0; transition: background-color .2s; }
+	header img { display: block; width: 40px; height: 96px; transition: height .35s; }
+	header.compact { background-color: rgb(250, 250, 250); }
+	header.compact img { height: 58px; }
+</style></head>
+<body>
+	<header><img alt="logo" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBTAA7"></header>
+	<script>
+		window.addEventListener('scroll', () => document.querySelector('header').classList.toggle('compact', window.scrollY > 50));
+	</script>
+</body></html>`;
+
 describe( 'captureScrollStates', () => {
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'leaves geometry the toggled class already produces to that class',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( CLASS_DERIVED_HEIGHT_FIXTURE );
+				const report = await captureScrollStates( page, 'https://example.test/' );
+				expect( report.toggles ).toHaveLength( 1 );
+				expect( report.toggles[ 0 ]!.classes.add ).toEqual( [ 'compact' ] );
+				// The header's 96px -> 58px height follows its logo; pinning it would fix one viewport's pixels everywhere.
+				expect( report.toggles[ 0 ]!.styleTargets ).toEqual( [] );
+				expect( await page.evaluate( () => document.querySelector( 'header' )!.className ) ).toBe( '' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'returns the empty report without scrolling when the document fits the viewport',
 		async () => {
