@@ -679,16 +679,19 @@ describe( 'captureTriggeredDialogs', () => {
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
 			try {
-				for ( const [ desktop, resting ] of [
-					[ 'width: 250px; height: 100%;', true ],
-					[ 'inset: 0; width: auto; height: auto;', undefined ],
+				// The last row pins the sidebar the way runtimes like Google Sites do:
+				// a debounced resize handler, not a media query.
+				for ( const [ desktop, resting, deferred ] of [
+					[ 'width: 250px; height: 100%;', true, false ],
+					[ 'inset: 0; width: auto; height: auto;', undefined, false ],
+					[ '', true, true ],
 				] as const ) {
 					const page = await browser.newPage( { viewport: { width: 390, height: 800 } } );
 					await page.setContent( `<!doctype html><html><head><style>
 						#toggle { position: fixed; top: 0; left: 0; width: 48px; height: 48px; }
 						#drawer { display: none; position: fixed; top: 0; left: 0; width: 250px; height: 100%; background: #fff; }
 						#drawer.open { display: block; }
-						@media (min-width: 1280px) { #toggle { display: none; } #drawer { display: block; ${ desktop } } }
+						${ deferred ? '#toggle.pinned { display: none; } #drawer.pinned { display: block; }' : `@media (min-width: 1280px) { #toggle { display: none; } #drawer { display: block; ${ desktop } } }` }
 					</style></head><body><header>
 						<div id="toggle" role="button" tabindex="0" aria-haspopup="true" aria-controls="drawer" aria-expanded="false">Menu</div>
 						<nav id="drawer"><a href="/home">Home</a><a href="/about">About</a></nav>
@@ -699,6 +702,7 @@ describe( 'captureTriggeredDialogs', () => {
 							toggle.setAttribute('aria-expanded', String(open));
 							document.getElementById('drawer').classList.toggle('open', open);
 						});
+						${ deferred ? "addEventListener('resize', () => setTimeout(() => { for (const id of ['toggle', 'drawer']) document.getElementById(id).classList.toggle('pinned', innerWidth >= 1280); }, 150));" : '' }
 					</script></body></html>` );
 					const report = await captureTriggeredDialogs( page, 'https://example.test/' );
 					const state = report.states.find( item => item.trigger.selector === '#toggle' );

@@ -1333,8 +1333,13 @@ async function observeInlineRestingPanel( page: Page, trigger: string, panel: st
 	const viewport = page.viewportSize();
 	if ( !viewport || await page.locator( panel ).count() !== 1 ) return false;
 	try {
-		for ( const width of new Set( [ viewport.width, 390, 768, 1440 ] ) ) {
-			if ( page.viewportSize()?.width !== width ) await page.setViewportSize( { ...viewport, width } );
+		// Widest first: a sidebar pinned at desktop is the common resting panel.
+		for ( const width of new Set( [ viewport.width, 1440, 768, 390 ] ) ) {
+			if ( page.viewportSize()?.width !== width ) {
+				await page.setViewportSize( { ...viewport, width } );
+				// Runtimes often pin a sidebar from a debounced resize handler.
+				await settleDocument( page, 'inline-resting-panel', { quietMs: 300, timeoutMs: DIALOG_WAIT_MS, animations: true } );
+			}
 			const inline = await page.evaluate( ( { trigger, panel } ) => {
 				const control = document.querySelector( trigger ), surface = document.querySelector( panel );
 				if ( !control || !surface ) return false;
@@ -1353,7 +1358,10 @@ async function observeInlineRestingPanel( page: Page, trigger: string, panel: st
 		}
 		return false;
 	} finally {
-		await page.setViewportSize( viewport );
+		if ( page.viewportSize()?.width !== viewport.width ) {
+			await page.setViewportSize( viewport );
+			await settleDocument( page, 'inline-resting-panel', { quietMs: 300, timeoutMs: DIALOG_WAIT_MS, animations: true } );
+		}
 	}
 }
 
