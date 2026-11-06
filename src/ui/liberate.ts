@@ -78,7 +78,7 @@ export interface LiberateResult {
 	complete: boolean;
 	entrypointCaptured: boolean;
 	missingRoutes: MissingRoute[];
-	/** Recommended policy (README "Usable partial captures"): entrypoint captured and few failed routes. */
+	/** Recommended policy (README "Usable partial captures"): entrypoint captured, regardless of missing routes. */
 	usable: boolean;
 	unresolvedAnchors: UnresolvedAnchor[];
 	/** Running local server, or null when serving is disabled. */

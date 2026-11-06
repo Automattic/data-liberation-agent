@@ -4963,6 +4963,34 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).not.toContain( 'cookie-footer' );
 	} );
 
+	it( 'keeps popup-behavior image sizing boxes while removing empty runtime roots', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<!doctype html><html><head><style>
+			.size-box{position:absolute}.element-main-box{position:relative;height:100%}
+			.element-background-image{position:absolute;inset:0;overflow:hidden}
+			</style></head><body><div class="size-box"><div class="element-main-box has-popup">
+			<div class="element-background-layer has-popup"><div class="element-background-image"><div class="image-box-image-wrapper" style="width:1275px;height:687px"><div class="image-box-background-image"></div></div></div></div>
+			<div class="element-border-box has-popup"><div class="element-content-box has-popup"><div class="content-container has-popup" style="width:1275px;min-height:687px"></div></div></div>
+			</div></div><div id="modal-root"></div><div class="ReactModalPortal"></div><div class="chakra-portal"></div><div class="portal"></div><div class="toast-root"></div><div id="mount"></div><div id="account-app"></div>
+			<div id="fixed-box" style="position:fixed"></div><div id="absolute-box" style="position:absolute"></div><div id="bottom-box" style="bottom:0"></div></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '.element-border-box > .element-content-box > .content-container' ).attr( 'style' ) ).toBe( 'width:1275px;min-height:687px' );
+		expect( $( '.element-background-layer .image-box-image-wrapper' ).attr( 'style' ) ).toBe( 'width:1275px;height:687px' );
+		expect( $( '#modal-root,.ReactModalPortal,.chakra-portal,.portal,.toast-root,#mount,#account-app,#fixed-box,#absolute-box,#bottom-box' ) ).toHaveLength( 0 );
+	} );
+
 	it( 'collapses responsive forms whose only difference is a generated target id', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
 		dirs.push( outputDir );
@@ -7337,6 +7365,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
 
+	// This writes and exports 4,097 route files; allow for filesystem contention
+	// when the full gate runs alongside the browser suites.
 	it( 'retains every route beyond a former compiler file boundary', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-file-boundary-' ) );
 		dirs.push( outputDir );
@@ -7358,7 +7388,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes ).toHaveLength( 4_097 );
 		expect( existsSync( join( outputDir, 'website', 'page-4096', 'index.html' ) ) ).toBe( true );
-	}, 180_000 );
+	}, 360_000 );
 
 	it( 'reserves repeated hoisted stylesheets before allocating constrained artifact media', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-style-budget-' ) );

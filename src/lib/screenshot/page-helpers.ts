@@ -2,6 +2,7 @@ import type { Page, Request } from 'playwright';
 import { mergeConsentLayouts } from '../consent-banner-layout.js';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
+import { isConsentNotice } from '../consent-overlay.js';
 
 /** Slack given to an in-page step beyond its own budget before Node gives up on it. */
 const EVALUATE_GRACE_MS = 5_000;
@@ -946,21 +947,13 @@ export function scoreOverlay(
   return { score, signals };
 }
 
-const CONSENT_TEXT_RE = /\bcookies?\b|\bconsent\b|\bgdpr\b|\bccpa\b|\baccept all\b|privacy (policy|preferences)/i;
-const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc|cookieyes|\bcc-window\b|\bcc-banner\b/i;
-
 /**
  * A looser, separate classifier for cookie/consent banners. They frequently do
  * NOT lock scroll and are thin strips, so they won't clear the takeover score;
  * we flag them by consent keywords / known vendors in their text/aria/selector.
  */
 export function isConsentBanner(c: OverlayCandidate): boolean {
-  // A pinned header that holds the site's menu commonly links to a "Privacy
-  // Policy" or "Cookie Policy" page. Those menu labels are navigation, not a
-  // consent notice: judge such chrome by the text outside its links only.
-  const text = c.hasMenu && c.nonLinkText !== undefined ? c.nonLinkText : c.text;
-  const hay = `${text} ${c.ariaLabel ?? ''} ${c.selector}`;
-  return CONSENT_TEXT_RE.test(hay) || CONSENT_VENDOR_RE.test(hay);
+  return isConsentNotice(c);
 }
 
 /** Hosting-platform acquisition chrome is not authored site content. */
@@ -1433,6 +1426,15 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
         || node.matches('button, [role="button"], input, script, style')) copies[i].remove();
       else if (node.matches('a') && !getComputedStyle(node).display.startsWith('inline')) copies[i].remove();
     }
+    // textContent drops boundaries between block elements. Insert whitespace at
+    // rendered block boundaries while retaining inline text (including link labels).
+    for (let i = originals.length - 1; i >= 0; i--) {
+      const display = getComputedStyle(originals[i]).display;
+      if (display === 'block' || display === 'flex' || display === 'grid' || display === 'list-item' || display === 'table') {
+        copies[i].prepend(document.createTextNode(' '));
+        copies[i].append(document.createTextNode(' '));
+      }
+    }
     const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
     if (!text) return;
     // Measure the nearest painted element containing both prose and accept
@@ -1486,7 +1488,9 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const end = contentBounds.right - parseFloat(contentStyle.borderRightWidth) - parseFloat(contentStyle.paddingRight);
     const buttonAlign = Math.abs(controlBounds.left - start) <= 2 ? 'start' as const
       : Math.abs(controlBounds.right - end) <= 2 ? 'end' as const : undefined;
-    const direction = contentStyle.flexDirection === 'column' ? 'column' as const : 'row' as const;
+    const proseBounds = prose?.getBoundingClientRect();
+    const proseStacked = !!proseBounds && controlBounds.top >= proseBounds.bottom - 2;
+    const direction = contentStyle.flexDirection === 'column' || proseStacked ? 'column' as const : 'row' as const;
     return {
       schema: 'static-site-importer/consent-banner/v1' as const,
       text, accept_label: label(accept),

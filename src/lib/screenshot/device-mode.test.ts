@@ -20,16 +20,27 @@ describe( 'device-mode evidence', () => {
 		expect( comparisonFailedAlike( new Error( 'the desktop document answered HTTP 404' ), new Error( 'the mobile document answered HTTP 500' ) ) ).toBe( false );
 	} );
 
-	it( 'switches at the boundary where the phone identity starts rendering the desktop document, not the widest one', async () => {
+	it( 'switches at the first boundary where the phone identity stops rendering the phone document', async () => {
 		const probed: number[] = [];
-		const converges = ( from: number ) => async ( width: number ) => { probed.push( width ); return width >= from; };
-		expect( await observeSwitchWidth( [ 1279, 767 ], { phone: 402, desktop: 1440 }, converges( 768 ) ) ).toBe( 767 );
+		const renders = ( layouts: Array< [ number, 'phone' | 'desktop' | 'other' ] > ) => async ( width: number ) => {
+			probed.push( width );
+			return [ ...layouts ].reverse().find( ( [ from ] ) => width >= from )?.[ 1 ] ?? 'phone';
+		};
+		expect( await observeSwitchWidth( [ 1279, 767 ], { phone: 402, desktop: 1440 }, renders( [ [ 768, 'desktop' ] ] ) ) ).toEqual( { switchWidth: 767 } );
 		expect( probed ).toEqual( [ 768 ] );
 		probed.length = 0;
-		expect( await observeSwitchWidth( [ 320, 767, 1279, 1440 ], { phone: 402, desktop: 1440 }, converges( 1280 ) ) ).toBe( 1279 );
+		// A boundary the phone document still renders above is not the switch.
+		expect( await observeSwitchWidth( [ 320, 767, 1279, 1440 ], { phone: 402, desktop: 1440 }, renders( [ [ 1280, 'desktop' ] ] ) ) ).toEqual( { switchWidth: 1279 } );
 		expect( probed ).toEqual( [ 768, 1280 ] );
-		// An identity that differs at every width observes no switch.
-		expect( await observeSwitchWidth( [ 767, 1279 ], { phone: 402, desktop: 1440 }, async () => false ) ).toBeUndefined();
+		probed.length = 0;
+		// A middle layout keeps the source's first boundary and reports its range.
+		expect( await observeSwitchWidth( [ 799, 1279 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ], [ 1280, 'desktop' ] ] ) ) )
+			.toEqual( { switchWidth: 799, uncapturedLayout: { minWidth: 800, maxWidth: 1279 } } );
+		expect( probed ).toEqual( [ 800, 1280 ] );
+		expect( await observeSwitchWidth( [ 799 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ] ] ) ) )
+			.toEqual( { switchWidth: 799, uncapturedLayout: { minWidth: 800 } } );
+		// An identity that renders the phone document at every width observes no switch.
+		expect( await observeSwitchWidth( [ 767, 1279 ], { phone: 402, desktop: 1440 }, async () => 'phone' ) ).toBeUndefined();
 	} );
 
 	it( 'ignores per-request tokens and timestamps, and nothing else', () => {
@@ -184,9 +195,36 @@ fit();addEventListener('resize',fit);
 </script>
 </body></html>`;
 
+/**
+ * Three runtime-rendered layouts selected by `min-width` queries at 1 / 800 /
+ * 1280 (#1379): each renders a structurally different tree for its range.
+ */
+const LAYOUTS_FIXTURE = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Layouts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:sans-serif}
+@media (min-width:1px){.stack p{margin:0 0 12px}}
+@media (min-width:800px){.grid{display:grid;grid-template-columns:1fr 1fr}}
+@media (min-width:1280px){.columns{display:flex}.columns aside{width:240px}}
+</style></head>
+<body><main id="root"></main>
+<script>
+var layouts={
+phone:'<section class="stack" data-layout="phone"><p>One</p><p>Two</p></section>',
+middle:'<div class="grid" data-layout="middle"><article><h2>One</h2></article><article><h2>Two</h2></article></div>',
+desktop:'<div class="columns" data-layout="desktop"><aside><ul><li>Index</li></ul></aside><div><article><h2>One</h2><p>Lead</p></article><article><h2>Two</h2><p>Lead</p></article></div></div>'
+};
+var current;
+function render(){var key=matchMedia('(min-width:1280px)').matches?'desktop':matchMedia('(min-width:800px)').matches?'middle':'phone';if(key===current)return;current=key;document.getElementById('root').innerHTML=layouts[key];}
+render();addEventListener('resize',render);
+</script>
+</body></html>`;
+
 function page( fixture: string, userAgent: string, path: string ): string {
 	if ( fixture === 'builder' ) return builderPage( path );
 	if ( fixture === 'switch' ) return SWITCH_FIXTURE;
+	if ( fixture === 'layouts' ) return LAYOUTS_FIXTURE;
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
 	const script = fixture === 'mixed' && path === 'runtime' ? '<script>if(innerWidth<600){const node=document.createElement("div");node.id="yui_3_17_2_1_123_45";node.innerHTML="<span>Widget</span>";document.body.prepend(node)}</script>' : fixture === 'mixed' && path === 'promo' ? '<script>if(innerWidth<600){const aside=document.createElement("aside");aside.textContent="Phone promo";document.body.append(aside)}</script>' : '';
 	const reorder = reorderFixture( path );
@@ -313,6 +351,30 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				await tab.setContent( html );
 				const visible = await tab.evaluate( () => [ ...document.querySelectorAll( '.item' ) ].filter( item => item.getClientRects().length > 0 && getComputedStyle( item ).visibility === 'visible' ).length );
 				expect( { width, visible } ).toEqual( { width, visible: items } );
+			}
+		} finally {
+			await browser.close();
+		}
+	}, 120_000 );
+
+	it( 'switches at the source\'s own min-width boundary and reports a middle layout it does not capture', async () => {
+		const run = await capture( 'layouts' );
+		const entry = run.entries[ `${ origin }/layouts/` ]!;
+		expect( entry.deviceMode ).toMatchObject( { mode: 'dual', switchWidth: 799, uncapturedLayout: { minWidth: 800, maxWidth: 1279 } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/layouts/`, platform: 'neutral', summary: {}, failures: [] } ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
+			code: 'responsive_layout_uncaptured', url: `${ origin }/layouts/`, unit: 'profile', metrics: { minWidth: 800, maxWidth: 1279 },
+		} ) );
+		const html = readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' );
+		const browser = await chromium.launch();
+		try {
+			const tab = await browser.newPage();
+			// 1024 is the uncaptured middle range: the copy serves the desktop document there.
+			for ( const [ width, layout ] of [ [ 390, 'phone' ], [ 768, 'phone' ], [ 799, 'phone' ], [ 800, 'desktop' ], [ 1024, 'desktop' ], [ 1440, 'desktop' ] ] as const ) {
+				await tab.setViewportSize( { width, height: 900 } );
+				await tab.setContent( html );
+				const visible = await tab.evaluate( () => [ ...document.querySelectorAll( '[data-layout]' ) ].filter( node => node.getClientRects().length > 0 ).map( node => node.getAttribute( 'data-layout' ) ) );
+				expect( { width, visible } ).toEqual( { width, visible: [ layout ] } );
 			}
 		} finally {
 			await browser.close();

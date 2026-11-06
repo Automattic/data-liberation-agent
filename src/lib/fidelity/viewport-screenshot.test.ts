@@ -29,6 +29,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		try {
 			const page = await browser.newPage( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 0.7 } );
 			await page.setContent( '<main>Neutral desktop frame</main>' );
+			// Raw CDP capture does not wait for the initial compositor frame like
+			// Playwright's screenshot API does. Let the new page paint first.
+			await page.evaluate( () => new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) ) );
 			const raster = PNG.sync.read( await captureViewportScreenshot( page ) );
 			expect( [ raster.width, raster.height ] ).toEqual( [ 1440, 900 ] );
 		} finally { await browser.close(); }

@@ -94,3 +94,30 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('does not treat a probe-exclu
 		expect(await collectionRegions(page, skip)).toEqual([]);
 	} finally { await browser.close(); }
 });
+
+// A consent dialog hidden in place after dismissal, and never rendered once consent is stored, is not a collection.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('skips lists inside a dismissed consent dialog without waiting on them', async () => {
+	const source = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Consent collections</title><style>#consent{position:fixed;inset:auto 0 0 0;background:#fff;padding:1rem}</style></head><body>
+<main><h1>Welcome</h1><p>A short paragraph of page content.</p></main>
+<script>
+if (!document.cookie.includes('consent=')) {
+  const dialog = document.createElement('div');
+  dialog.id = 'consent'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-label', 'Cookie consent');
+  dialog.innerHTML = '<p>This website uses cookies.</p><div class="detail"><button type="button">Details</button><ul id="consent-vendors"><li><a href="/privacy#a">Analytics vendor</a></li><li><a href="/privacy#b">Marketing vendor</a></li><li><a href="/privacy#c">Video vendor</a></li></ul></div><button type="button" id="consent-decline">Decline</button> <button type="button" id="consent-accept">Accept all</button>';
+  document.body.prepend(dialog);
+  for (const button of dialog.querySelectorAll('#consent-decline,#consent-accept')) button.addEventListener('click', () => { document.cookie = 'consent=' + button.id + '; path=/'; dialog.style.display = 'none'; });
+}
+</script></body></html>`;
+	const server = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end(source); });
+	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const browser = await chromium.launch();
+	try {
+		const page = await (await browser.newContext()).newPage();
+		await page.goto(`http://127.0.0.1:${(server.address() as { port: number }).port}/`, { waitUntil: 'load' });
+		await page.click('#consent-accept');
+		expect(await collectionRegions(page)).toEqual([]);
+		const started = performance.now();
+		expect(await captureCollections(page)).toEqual([]);
+		expect(performance.now() - started).toBeLessThan(2_000);
+	} finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
+}, 45_000);

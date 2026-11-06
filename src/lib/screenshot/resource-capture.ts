@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
+import postcss from 'postcss';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
@@ -716,7 +717,16 @@ export class CapturedResourceStore {
 							.map( ( _, element ) => $( element ).attr( 'style' ) ?? '' )
 							.get(),
 				  ].join( '\n' );
-			for ( const match of css.matchAll(
+			// A catalog declaration is not evidence that a face is used. Fonts
+			// already requested by the browser are stored by the response listener;
+			// do not let fallback crawling turn unused faces into stored evidence.
+			let dependencyCss: string;
+			try {
+				const sheet = postcss.parse( css );
+				sheet.walkAtRules( rule => { if ( rule.name.toLowerCase() === 'font-face' ) rule.remove(); } );
+				dependencyCss = sheet.toString();
+			} catch { return; /* Malformed CSS has no reliable dependency inventory. */ }
+			for ( const match of dependencyCss.matchAll(
 				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s*(?:url\(\s*)?["']([^"']+)["'])/gi
 			) )
 				// CSS images, unlike <img src>, are blockable rather than

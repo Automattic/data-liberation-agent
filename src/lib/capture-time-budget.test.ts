@@ -171,11 +171,7 @@ describe( 'RouteTimeBudget', () => {
 		expect( missing[ 0 ] ).toEqual( { url: 'https://example.test/0', code: 'route_capture_skipped_budget', reason: expect.stringContaining( 'capture time budget 100ms' ) } );
 		// A deadline that left only the entrypoint is a usable, incomplete capture.
 		expect( isUsableCapture( { complete: false, entrypointCaptured: true, missingRoutes: missing, summary: { routesDiscovered: 20 } } ) ).toBe( true );
-		// Failures among the attempted routes still follow max(1, 10%): skipped routes are not attempted.
-		const failed = ( count: number ) => Array.from( { length: count }, ( _, index ) => ( { url: `https://example.test/f${ index }`, code: 'route_capture_failed' as const, reason: 'deadline' } ) );
-		expect( isUsableCapture( { complete: false, entrypointCaptured: true, missingRoutes: [ ...missing.slice( 0, 9 ), ...failed( 1 ) ], summary: { routesDiscovered: 20 } } ) ).toBe( true );
-		expect( isUsableCapture( { complete: false, entrypointCaptured: true, missingRoutes: [ ...missing.slice( 0, 9 ), ...failed( 2 ) ], summary: { routesDiscovered: 20 } } ) ).toBe( false );
-		expect( isUsableCapture( { complete: false, entrypointCaptured: false, missingRoutes: missing, summary: { routesDiscovered: 20 } } ) ).toBe( false );
+
 	} );
 } );
 

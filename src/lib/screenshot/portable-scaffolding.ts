@@ -21,7 +21,12 @@ export function cleanPortableScaffolding(source: Document, snapshot: HTMLElement
         report('dismissed_overlay_removed', node, `${evidence.kind} dismissed by ${evidence.method} (${evidence.selector})`);
       }
     }
-    if (node instanceof HTMLAnchorElement && node.getAttribute('href')?.startsWith('#')) {
+    // A targetless `#` link with control semantics is a script-owned control
+    // (a menu toggle, for example) that width-dependent CSS may hide only at
+    // this capture width; it is not a disposable in-page navigation affordance.
+    if (node instanceof HTMLAnchorElement && node.getAttribute('href')?.startsWith('#')
+      && node.getAttribute('role')?.trim().toLowerCase() !== 'button'
+      && !['aria-haspopup', 'aria-expanded', 'aria-controls'].some(name => node.hasAttribute(name))) {
       const fragment = node.getAttribute('href')!.slice(1);
       let target: Element | null = null;
       try { target = source.getElementById(decodeURIComponent(fragment)); } catch { /* malformed fragment has no target */ }
