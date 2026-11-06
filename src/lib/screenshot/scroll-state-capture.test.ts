@@ -70,7 +70,44 @@ const CLASS_DERIVED_HEIGHT_FIXTURE = `<!doctype html><html><head><style>
 	</script>
 </body></html>`;
 
+// An in-flow sticky header that shrinks by more than the distance past its
+// threshold: scroll anchoring would pull a 100px probe back under 60px.
+const SHRINKING_STICKY_HEADER_FIXTURE = `<!doctype html><html><head><style>
+	body { margin: 0; }
+	header { position: sticky; top: 0; height: 160px; background: rgb(255, 255, 255); }
+	header.compact { height: 100px; }
+	main p { height: 300px; margin: 0; }
+</style></head>
+<body>
+	<header>Header</header><main>${ '<p>Section</p>'.repeat( 12 ) }</main>
+	<script>
+		window.addEventListener('scroll', () => document.querySelector('header').classList.toggle('compact', window.scrollY > 60));
+	</script>
+</body></html>`;
+
 describe( 'captureScrollStates', () => {
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'holds each probe offset while a toggle resizes in-flow chrome',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( SHRINKING_STICKY_HEADER_FIXTURE );
+				// Scroll somewhere first so the browser has an anchor to adjust against.
+				await page.evaluate( () => window.scrollTo( { top: 400, behavior: 'instant' } ) );
+				await page.evaluate( () => window.scrollTo( { top: 0, behavior: 'instant' } ) );
+				// Anchoring makes the toggle flip at the probe offset; repeat so a lucky sample cannot pass.
+				const reports = [];
+				for ( let run = 0; run < 3; run++ ) reports.push( ( await captureScrollStates( page, 'https://example.test/' ) ).toggles.map( ( toggle ) => [ toggle.thresholdPx, toggle.classes.add ] ) );
+				expect( reports ).toEqual( Array( 3 ).fill( [ [ 100, [ 'compact' ] ] ] ) );
+				expect( await page.evaluate( () => getComputedStyle( document.documentElement ).overflowAnchor ) ).toBe( 'auto' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'leaves geometry the toggled class already produces to that class',
 		async () => {

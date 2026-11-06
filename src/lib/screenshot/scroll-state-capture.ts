@@ -67,6 +67,21 @@ export async function captureScrollStates(
 	page: Page,
 	sourceUrl: string
 ): Promise< ScrollStatesReport > {
+	// Scroll anchoring moves the position when a toggle resizes in-flow chrome:
+	// a sticky header shrinking past its threshold would be scrolled back under
+	// it and flip forever. Each probe must hold the offset it asked for.
+	const pinned = await page.addStyleTag( { content: 'html,body{overflow-anchor:none!important}' } ).catch( () => null );
+	try {
+		return await probeScrollStates( page, sourceUrl );
+	} finally {
+		await pinned?.evaluate( ( node ) => ( node as Element ).remove() ).catch( () => undefined );
+	}
+}
+
+async function probeScrollStates(
+	page: Page,
+	sourceUrl: string
+): Promise< ScrollStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
 	const empty: ScrollStatesReport = {
 		schema: SCROLL_STATES_SCHEMA,
