@@ -23,6 +23,8 @@ export interface GeometrySample {
 	 * the container-relative candidate rather than changing the other fits.
 	 */
 	container?: number | null;
+	/** Non-pixel custom-property declaration observed instead of pixels. */
+	cssValue?: string;
 	/** Computed origin for an observed uniform scale (not interpolated). */
 	transformOrigin?: string;
 }
@@ -319,7 +321,7 @@ export function interpolateSamples( samples: readonly GeometrySample[], sampled:
 		const low = at.get( widths[ upper - 1 ]! ), high = at.get( widths[ upper ]! );
 		if ( ! low || ! high ) continue;
 		if ( ! Number.isFinite( low.value ) || ! Number.isFinite( high.value ) ) {
-			filled.push( { viewport, value: Number.NaN } );
+			filled.push( { viewport, value: Number.NaN, ...( low.cssValue === high.cssValue && low.cssValue ? { cssValue: low.cssValue } : {} ) } );
 			continue;
 		}
 		const share = ( viewport - low.viewport ) / ( high.viewport - low.viewport );
