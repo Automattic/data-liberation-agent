@@ -490,7 +490,7 @@ export async function observePage(
 				}
 				return parts.join( '/' );
 			};
-			const horizontallyVisible = ( image: HTMLImageElement ): boolean => {
+			const horizontallyVisible = ( image: Element ): boolean => {
 				const rect = image.getBoundingClientRect();
 				let left = Math.max( 0, rect.left ), right = Math.min( window.innerWidth, rect.right );
 				for ( let parent = image.parentElement; parent && left < right; parent = parent.parentElement ) {
@@ -527,6 +527,20 @@ export async function observePage(
 						...( await contentHashFor( src ) ?? { contentHash: null, assetHash: null } ),
 					} ) )
 			);
+
+			// Backgrounds and native images represent the same painted geometry
+			// for this check. Keep background boxes out of the img-only identity
+			// and decoding evidence: CSS layers do not have img load semantics.
+			// One DOM pass, no resource fetches or per-layer expansion. Gradients
+			// alone are decoration, not image candidates.
+			let widestImage: number | null = images.length ? Math.max( ...images.map( image => image.width ) ) : null;
+			for ( const element of document.querySelectorAll( '*' ) ) {
+				const rect = element.getBoundingClientRect();
+				if ( rect.width <= 50 || rect.height <= 50 ) continue;
+				const style = getComputedStyle( element );
+				if ( ! /url\(\s*["']?[^\s"')]/i.test( style.backgroundImage ) || style.visibility === 'hidden' || ! horizontallyVisible( element ) ) continue;
+				widestImage = Math.max( widestImage ?? 0, Math.round( rect.width ) );
+			}
 
 			const typography: Array< {
 				key: string;
@@ -926,9 +940,7 @@ export async function observePage(
 			return {
 				title,
 				textChars,
-				widestImage: images.length
-					? Math.max( ...images.map( ( image ) => image.width ) )
-					: null,
+				widestImage,
 				images,
 				typography,
 				animations,
