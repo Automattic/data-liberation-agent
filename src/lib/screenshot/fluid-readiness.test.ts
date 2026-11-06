@@ -44,8 +44,11 @@ describe( 'responsive readiness contract', () => {
 	it.each( [ 'source', 'node' ] )( 'revisits a pending native-lazy image after a delayed %s replacement', async replacement => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 500 } } );
 		try {
+			let revisited!: () => void;
+			const secondSweep = new Promise<void>( resolve => { revisited = resolve; } );
+			await page.exposeFunction( 'revisited', () => revisited() );
 			await page.route( 'https://neutral.test/replacement.svg', async route => {
-				await new Promise( resolve => setTimeout( resolve, 1500 ) );
+				await secondSweep;
 				await route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"/>' } );
 			} );
 			await page.setContent( `<style>body{margin:0}</style>
@@ -55,14 +58,26 @@ describe( 'responsive readiness contract', () => {
 				<script>
 				window.positions = [];
 				const scroll = window.scrollTo.bind(window);
-				window.scrollTo = options => { if (options.top > 0) positions.push(options.top); scroll(options); };
+				let replaced = false;
+				window.scrollTo = options => {
+					if (options.top > 0) {
+						positions.push(options.top);
+						if (replaced) window.revisited();
+					}
+					scroll(options);
+					// Replace only after the first sweep has returned to the top.
+					// Keep its response pending until a second sweep visits it, so
+					// machine speed cannot turn this into a completed-image case.
+					if (options.top === 0 && positions.length && !replaced) {
+						replaced = true;
+						setTimeout(() => {
+							const image = document.querySelector('#image');
+							${ replacement === 'node' ? "const next = image.cloneNode(); next.src = 'https://neutral.test/replacement.svg'; image.replaceWith(next);" : "image.src = 'https://neutral.test/replacement.svg';" }
+						}, 100);
+					}
+				};
 				addEventListener('resize', () => {
 					document.querySelector('#box').style.width = innerWidth / 2 + 'px';
-					if (innerWidth !== 768) return;
-					setTimeout(() => {
-						const image = document.querySelector('#image');
-						${ replacement === 'node' ? "const next = image.cloneNode(); next.src = 'https://neutral.test/replacement.svg'; image.replaceWith(next);" : "image.src = 'https://neutral.test/replacement.svg';" }
-					}, 100);
 				});
 				</script>` );
 			await learnAndApplyFluidGeometry( page, {

@@ -644,16 +644,30 @@ async function learnFluidGeometry(
 			if ( samples.some( sample => ! Number.isFinite( sample.value ) ) ) continue;
 			const model = learnFluidModel( samples );
 			if ( model.kind === 'constant' ) continue;
-			if ( model.kind === 'breakpoint' || model.kind === 'container' ) { unmodelled++; continue; }
+			// Scale has no percentage length basis: fit container-dependent series
+			// against the viewport and carry each fitted regime as a media rule.
+			const segmented = model.kind === 'breakpoint' || model.kind === 'container'
+				? learnSegmentedFluidModel( samples.map( ( { viewport, value } ) => ( { viewport, value } ) ), { holdNarrowForBoundedAffine: true } )
+				: null;
+			if ( ( model.kind === 'breakpoint' || model.kind === 'container' ) && segmented === null ) { unmodelled++; continue; }
 			// Only actual non-identity observations own the origin; the reference
 			// may have neither transform nor origin. Never invent an origin model.
 			const origins = new Set( samples.filter( sample => sample.value !== 1000 && sample.transformOrigin !== undefined )
 				.map( sample => sample.transformOrigin! ) );
 			if ( origins.size !== 1 ) { unmodelled++; continue; }
-			byKind[ model.kind ] = ( byKind[ model.kind ] ?? 0 ) + 1;
+			const kind = segmented ? 'segmented' : model.kind;
+			byKind[ kind ] = ( byKind[ kind ] ?? 0 ) + 1;
+			for ( const segment of segmented?.segments ?? [] ) {
+				if ( segment.minWidth !== null ) breakpoints.add( segment.minWidth );
+			}
 			learned.push( {
-				id, property: 'transform', css: `scale(calc(${ model.css } / 1000px))`,
-				fallbackCss: null, containerRelative: false, sampledCss: null, segmentedCss: null,
+				// Keep the scale owner identifiable during final-state validation;
+				// segmented rules, not this inline placeholder, own its value.
+				id, property: 'transform', css: model.kind === 'breakpoint' || model.kind === 'container' ? 'scale(1)' : `scale(calc(${ model.css } / 1000px))`,
+				fallbackCss: null, containerRelative: false, sampledCss: null,
+				segmentedCss: segmented ? segmentedCss( `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, 'transform', segmented.segments.map( segment => ( {
+					...segment, model: { ...segment.model, css: `scale(calc(${ segment.model.css } / 1000px))` },
+				} ) ) ) : null,
 			}, {
 				id, property: 'transform-origin', css: [ ...origins ][ 0 ]!,
 				fallbackCss: null, containerRelative: false, sampledCss: null, segmentedCss: null,
