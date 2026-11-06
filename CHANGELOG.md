@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.147] - 2026-11-06
+
+### Changed
+- regenerate plugin bundles
+- Prioritize client-rendered entry navigation under capture time budgets
+- settle in-flight source images before freezing the reference
+- Bound runtime custom-property regimes that switch between px and non-px values
+
+### Fixed
+- Fix blank routes caused by incomplete dual-device captures
+- Fix breakpoint-dependent fluid transform scales and stabilize gate tests
+
 ## [0.33.146] - 2026-11-06
 
 ### Changed
