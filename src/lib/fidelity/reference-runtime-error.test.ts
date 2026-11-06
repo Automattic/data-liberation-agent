@@ -58,7 +58,7 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 			// turn a failed settlement check into admitted evidence.
 			const unsettledUrl = `${ url }unsettled`;
 			const unsettledCollector = createReferenceCollector( root, unsettledUrl, [ unsettledUrl ] );
-			await unsettledCollector.observe( page, unsettledUrl, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
+			await unsettledCollector.observe( page, unsettledUrl, 'desktop', [ `source runtime error: ${ message }` ], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
 			const unsettled = ( JSON.parse( readFileSync( unsettledCollector.finalize( receipt ), 'utf8' ) ) as FidelityReference ).entries[ 0 ];
 			expect( unsettled.readiness.ready ).toBe( false );
 			expect( unsettled.readiness.reasons ).toContain( 'source document did not settle' );

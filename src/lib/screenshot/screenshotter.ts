@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { totalmem } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
-import { SOURCE_RUNTIME_ERROR, SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
+import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
 import { getSourceResponse, sourceGovernorFor } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
@@ -847,12 +847,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	const sourceCrashes: string[] = [];
 	const sourceRuntime = args.observeSource ? await watchSourceRuntimeErrors( page ) : undefined;
 	if ( args.observeSource ) page.on( 'crash', () => sourceCrashes.push( 'source renderer crashed' ) );
-	/** Runtime faults are diagnostics; renderer crashes still block admission. */
+	/** Blocking source errors so far; subframe errors become capture diagnostics. */
 	const sourceErrors = (): string[] => {
 		const settled = sourceRuntime?.settle();
 		for ( const reason of settled?.diagnostics ?? [] ) {
-			const code = reason.startsWith( 'subframe runtime error (' ) ? SOURCE_SUBFRAME_RUNTIME_ERROR : SOURCE_RUNTIME_ERROR;
-			if ( ! args.diagnostics?.some( item => item.code === code && item.reason === reason ) ) args.diagnostics?.push( { code, reason } );
+			if ( ! args.diagnostics?.some( item => item.code === SOURCE_SUBFRAME_RUNTIME_ERROR && item.reason === reason ) ) args.diagnostics?.push( { code: SOURCE_SUBFRAME_RUNTIME_ERROR, reason } );
 		}
 		return [ ...( settled?.reasons ?? [] ), ...sourceCrashes ];
 	};

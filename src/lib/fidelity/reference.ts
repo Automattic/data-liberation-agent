@@ -158,15 +158,16 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					let referencePage: Page | undefined;
 					let ownedResource: BrowserContext | Page | undefined;
 					let runtimeErrors: Awaited< ReturnType< typeof watchSourceRuntimeErrors > > | undefined;
-					// Runtime faults do not establish failure to render. Independent
-					// readiness checks below decide whether this document is admissible.
+					// A fault observed by capture is inherited source behaviour, even
+					// when another readiness check rejects this cell. Only the same
+					// main-frame message may inherit; reference-only faults still block.
 					const recordRuntimeErrors = (): void => {
 						const settled = runtimeErrors?.settle();
 						runtimeErrors?.dispose(); runtimeErrors = undefined;
 						const diagnostics = new Set( entry.readiness.diagnostics );
 						for ( const diagnostic of settled?.diagnostics ?? [] ) diagnostics.add( diagnostic );
 						for ( const reason of [ ...( settled?.reasons ?? [] ), ...errors ] ) {
-							if ( reason.startsWith( 'source runtime error: ' ) ) diagnostics.add( reason );
+							if ( reason.startsWith( 'source runtime error: ' ) && errors.includes( reason ) ) diagnostics.add( reason );
 							else if ( ! entry.readiness.reasons.includes( reason ) ) entry.readiness.reasons.push( reason );
 						}
 						if ( diagnostics.size ) entry.readiness.diagnostics = [ ...diagnostics ];

@@ -58,7 +58,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
-	it( 'records both cross-origin subframe and settled top-level runtime errors as diagnostics', async () => {
+	it( 'records a cross-origin subframe runtime error as a diagnostic but blocks on a top-level one', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-subframe-error-' ) );
 		const frame = createServer( ( _request, response ) => {
@@ -93,10 +93,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( embed.readiness.diagnostics ).toEqual( [ expect.stringMatching( new RegExp( `^subframe runtime error \\(${ new URL( frameUrl ).origin }\\): getLayoutMap\\(\\) must be called from a top-level browsing context` ) ) ] );
 			expect( () => readFrozenObservation( directory, embed ) ).not.toThrow();
 			const control = await collect( `${ url }control` );
-			expect( control.readiness.ready ).toBe( true );
-			expect( control.readiness.reasons ).toEqual( [] );
-			expect( control.readiness.diagnostics ).toContain( 'source runtime error: top-level own rejection' );
-			expect( () => readFrozenObservation( directory, control ) ).not.toThrow();
+			expect( control.readiness.ready ).toBe( false );
+			expect( control.readiness.reasons ).toEqual( [ 'source runtime error: top-level own rejection' ] );
+			expect( () => readFrozenObservation( directory, control ) ).toThrow( 'Source evidence unready: source runtime error: top-level own rejection' );
 		} finally {
 			await context.close();
 			for ( const server of [ source, frame ] ) { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); }
