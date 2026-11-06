@@ -15,6 +15,12 @@ describe('isNonDocumentUrl', () => {
     }
   });
 
+  it('excludes the reserved /cdn-cgi/ path, but not a page that only mentions it', () => {
+    expect(isNonDocumentUrl('https://example.com/cdn-cgi/l/email-protection')).toBe(true);
+    expect(isNonDocumentUrl('https://example.com/cdn-cgi/l/email-protection#abc123')).toBe(true);
+    expect(isNonDocumentUrl('https://example.com/docs/cdn-cgi/')).toBe(false);
+  });
+
   it('reads a dotted slug as non-document, which is the known cost of reading the extension', () => {
     // Recorded deliberately: a page whose slug ends in a listed token reads as a
     // file. A trailing slash -- what WordPress, Hugo and Jekyll emit -- survives,
