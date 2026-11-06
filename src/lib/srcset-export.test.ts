@@ -15,6 +15,48 @@ import { normalizeImageKey } from './fidelity/score.js';
 import { CapturedResourceStore } from './screenshot/resource-capture.js';
 
 describe( 'selected same-path srcset export', () => {
+	it( 'keeps each document’s painted rendition and natural dimensions', () => {
+		const directory = mkdtempSync( join( tmpdir(), 'liberation-profile-renditions-' ) );
+		try {
+			for ( const folder of [ 'html', 'html-mobile', 'screenshots', 'media', 'resources' ] ) mkdirSync( join( directory, folder ) );
+			const source = 'https://profiles.test/';
+			const profiles = [
+				{ name: 'desktop', width: 1920, height: 640, folder: 'html' },
+				{ name: 'mobile', width: 990, height: 330, folder: 'html-mobile' },
+			].map( profile => {
+				const url = `${ source }hero.png?w=${ profile.width }&h=${ profile.height }`;
+				const png = new PNG( { width: profile.width, height: profile.height } );
+				png.data.fill( 255 );
+				const bytes = PNG.sync.write( png );
+				const path = `resources/${ profile.name }.png`;
+				writeFileSync( join( directory, path ), bytes );
+				writeFileSync( join( directory, profile.folder, 'home.html' ), `<html><body><main class="${ profile.name }"><h1>${ profile.name } layout</h1><img style="object-fit:none" src="${ url }">${ profile.name === 'mobile' ? '<nav>Phone navigation</nav>' : '' }</main></body></html>` );
+				return { ...profile, url, path, bytes };
+			} );
+			const representative = profiles[ 1 ];
+			const file = join( directory, 'media/hero.png' );
+			writeFileSync( file, representative.bytes );
+			const media = MediaStubStore.load( directory );
+			for ( const profile of profiles ) media.markSuccess( profile.url, file );
+			media.flush();
+			writeFileSync( join( directory, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources: Object.fromEntries( profiles.map( profile => [ profile.url, { path: profile.path, contentType: 'image/png' } ] ) ), failures: [] } ) );
+			writeFileSync( join( directory, 'image-assets.json' ), JSON.stringify( { images: [ {
+				kind: 'image', source_urls: profiles.map( profile => profile.url ), resolved_original: representative.url, local_path: file,
+				references: profiles.map( profile => ( { kind: 'content', document_url: source, location: 'image:0:src', source_url: profile.url } ) ),
+				original: { source_url: representative.url, content_type: 'image/png', width: representative.width, height: representative.height, sha256: createHash( 'sha256' ).update( representative.bytes ).digest( 'hex' ) },
+			} ] } ) );
+			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ source ]: { slug: 'home', html: 'html/home.html' } } } ) );
+			exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
+			const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
+			for ( const profile of profiles ) {
+				const path = $( `.${ profile.name } img` ).attr( 'src' )!;
+				expect( path ).toMatch( /^\/media\// );
+				const bytes = readFileSync( join( directory, 'website', path ) );
+				expect( imageSize( bytes ) ).toMatchObject( { width: profile.width, height: profile.height } );
+				expect( bytes ).toEqual( profile.bytes );
+			}
+		} finally { rmSync( directory, { recursive: true, force: true } ); }
+	} );
 	it.each( [
 		{ name: '1:1 crops', cropped: true },
 		{ name: 'rounded 2:3 resizes', cropped: false },
@@ -57,10 +99,10 @@ describe( 'selected same-path srcset export', () => {
 			const candidates = $( 'img' ).attr( 'srcset' )!.split( ',' ).map( candidate => candidate.trim().split( /\s+/ ) );
 			expect( candidates.map( ( [ , descriptor ] ) => descriptor ) ).toEqual( widths.map( width => `${ width }w` ) );
 			const paths = candidates.map( ( [ path ] ) => path );
-			expect( new Set( paths ).size ).toBe( cropped ? widths.length : 1 );
+			expect( new Set( paths ).size ).toBe( widths.length );
 			for ( const [ index, path ] of paths.entries() ) {
-				expect( readFileSync( join( directory, 'website', path ) ) ).toEqual( cropped ? bytes[ index ] : originalBytes );
-				if ( cropped ) expect( path ).not.toBe( $( 'a' ).attr( 'href' ) );
+				expect( readFileSync( join( directory, 'website', path ) ) ).toEqual( bytes[ index ] );
+				expect( path ).not.toBe( $( 'a' ).attr( 'href' ) );
 			}
 			expect( readFileSync( join( directory, 'website', $( 'a' ).attr( 'href' )! ) ) ).toEqual( originalBytes );
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
