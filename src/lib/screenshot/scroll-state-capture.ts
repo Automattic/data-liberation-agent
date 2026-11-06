@@ -78,7 +78,9 @@ export async function captureScrollStates(
 	if ( ! await documentCanScroll( page ) ) return empty;
 
 	const scrollTo = async ( y: number ): Promise< void > => {
-		await page.evaluate( ( value ) => window.scrollTo( 0, value ), y );
+		// A source's `scroll-behavior: smooth` would animate this jump and every
+		// snapshot would land mid-scroll; the probe needs the position itself.
+		await page.evaluate( ( value ) => window.scrollTo( { top: value, behavior: 'instant' } ), y );
 	};
 
 	let baseline: ContainerSnapshot[];

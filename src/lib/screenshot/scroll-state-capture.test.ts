@@ -116,6 +116,24 @@ describe( 'captureScrollStates', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'probes exact scroll positions on a page with smooth scrolling',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				// The header sticks just short of the 200px probe, which a smooth scroll reaches last.
+				await page.setContent( STICKY_HEADER_FIXTURE.replace( '<style>', '<style>html { scroll-behavior: smooth; }' ).replace( 'window.scrollY > 50', 'window.scrollY > 196' ) );
+				const report = await captureScrollStates( page, 'https://example.test/' );
+				expect( report.toggles.map( ( toggle ) => toggle.thresholdPx ) ).toEqual( [ 200 ] );
+				expect( await page.evaluate( () => window.scrollY ) ).toBe( 0 );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'reports no toggles for a static header that never changes on scroll',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
