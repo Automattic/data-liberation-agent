@@ -21,14 +21,19 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		const copy = await browser.newPage();
 		try {
 			await page.setContent( `<div id="container" style="width:min(760px,55vw)">
-				<div id="frame" style="width:760px;transform-origin:0 0">A natural-width text frame</div>
-				</div><script>
+				<div id="frame" style="width:760px">A natural-width text frame</div>
+				</div><div id="varying" style="width:760px">Varying origin</div><script>
 				const fit = () => {
 					const width = document.querySelector('#container').getBoundingClientRect().width;
-					document.querySelector('#frame').style.transform = width < 760 ? 'scale('+width/760+')' : '';
+					const frame = document.querySelector('#frame');
+					frame.style.transform = width < 760 ? 'scale('+width/760+')' : '';
+					frame.style.transformOrigin = width < 760 ? '0 0' : '';
+					const varying = document.querySelector('#varying');
+					varying.style.transform = frame.style.transform;
+					varying.style.transformOrigin = width < 760 ? innerWidth / 10 + 'px 0' : '';
 				}; addEventListener('resize', fit); fit();
 				</script>` );
-			await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
 			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
 			await copy.setContent( await page.content() );
 			for ( const width of [ 768, 1440 ] ) {
@@ -36,8 +41,13 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				const rendered = await copy.locator( '#frame' ).evaluate( element => element.getBoundingClientRect().width );
 				const container = await copy.locator( '#container' ).evaluate( element => element.getBoundingClientRect().width );
 				expect( rendered, `rendered frame at ${ width }px` ).toBeCloseTo( container, 0 );
+				const left = await copy.locator( '#frame' ).evaluate( element => element.getBoundingClientRect().left );
+				const containerLeft = await copy.locator( '#container' ).evaluate( element => element.getBoundingClientRect().left );
+				expect( left, `frame left at ${ width }px` ).toBeCloseTo( containerLeft, 0 );
 				if ( width === 1440 ) expect( rendered ).toBe( 760 );
 			}
+			expect( result.unmodelled ).toBe( 1 );
+			expect( await page.locator( '#varying' ).evaluate( node => ( node as HTMLElement ).style.transform ) ).toBe( '' );
 		} finally { await page.close(); await copy.close(); }
 	}, 20_000 );
 
