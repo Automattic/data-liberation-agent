@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { totalmem } from 'node:os';
+import { incompleteDeviceDocument } from '../responsive-assembly.js';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
@@ -243,6 +244,8 @@ interface CapturePerViewportArgs {
 	url: string;
 	slug: string;
 	settleMs: number;
+	/** Additional bounded rendering time for a content-incomplete device retry. */
+	recoverIncompleteDocument?: boolean;
 	screenshotTimeoutMs: number;
 	evaluateTimeoutMs: number;
 	failures: FailureEntry[];
@@ -1031,6 +1034,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 		// --- settle, dismiss overlays, lazy load ----------------------------------
 		args.phases?.enter( 'settle' );
+		if ( args.recoverIncompleteDocument ) await page.waitForTimeout( Math.max( settleMs, 3_000 ) );
 		await waitForStable( page );
 		// A provider login withholding the whole route (a members-only page) was
 		// removed by the policy, leaving nothing of the page. Capture it as a
@@ -2925,10 +2929,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			if ( profileRecord ) entry.profiles![ viewport.id ] = profileRecord;
 			return aliasDisagreement;
 		};
-		const captureProfile = async ( viewport: Viewport ): Promise< { profileEntry: ManifestEntry; failures: FailureEntry[]; additional: boolean } | undefined > => {
+		const captureProfile = async ( viewport: Viewport, recovery = false ): Promise< { profileEntry: ManifestEntry; failures: FailureEntry[]; additional: boolean } | undefined > => {
 			// A route abandoned at its deadline captures no further profiles.
 			if ( ! routeDeadlines.commit( url ) ) return undefined;
-			const vpPlan = profilePlan( viewport );
+			const vpPlan = recovery
+				? planArtifacts( { outputDir: opts.outputDir, slug, force: true, captureImages: opts.captureImages } )[ viewport.id as 'desktop' | 'mobile' ]
+				: profilePlan( viewport );
 			if ( ! vpPlan.needsLoad ) return undefined;
 			const additional = ! [ 'desktop', 'mobile' ].includes( viewport.id );
 			const profileEntry: ManifestEntry = { slug, capturedAt: capturedAt() };
@@ -2996,6 +3002,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							url,
 							slug,
 							settleMs,
+							recoverIncompleteDocument: recovery,
 							screenshotTimeoutMs,
 							evaluateTimeoutMs,
 							failures: profileFailures,
@@ -3137,6 +3144,33 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const before = routeProfiles.length;
 				declareAdditional( readFileSync( join( opts.outputDir, entry.html ), 'utf8' ) );
 				for ( const profile of routeProfiles.slice( before ) ) opts.declareSourceProfile?.( url, profile );
+			}
+		}
+		// Only now do both fully serialized device documents exist. Retry a
+		// content-poor shell through the same capture owner, in a fresh context,
+		// with all artifacts forced and a longer settling interval.
+		if ( entry.html && entry.mobileHtml && ! entry.redirectedTo ) {
+			const assess = () => incompleteDeviceDocument(
+				readFileSync( join( opts.outputDir, entry.html! ), 'utf8' ),
+				readFileSync( join( opts.outputDir, entry.mobileHtml! ), 'utf8' )
+			);
+			const before = assess();
+			if ( before ) {
+				const viewport = builtInProfiles.find( profile => profile.id === before.device );
+				const retry = viewport && await captureProfile( viewport, true );
+				if ( retry ) {
+					urlFailures.push( ...retry.failures );
+					mergeProfile( viewport!, retry.profileEntry, false );
+				}
+				const after = assess();
+				const record = entry.profiles?.[ before.device ];
+				if ( record ) {
+					const diagnostic = { code: 'device_document_incomplete', reason: JSON.stringify( { before, after: after ?? null, recovery: after ? 'single-document' : 'recaptured' } ) };
+					( record.diagnostics ??= [] ).push( diagnostic );
+					sendLog( server, `[${ diagnostic.code }] ${ url }: ${ diagnostic.reason }` );
+				}
+				// Retain both raw artifacts as evidence. Responsive assembly uses
+				// the same assessment to ship only the complete document if needed.
 			}
 		}
 		for ( const viewport of routeProfiles.filter( profile => ! [ 'desktop', 'mobile' ].includes( profile.id ) ) ) {
