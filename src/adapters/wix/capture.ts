@@ -877,9 +877,18 @@ export const capture: LiberationHooks = {
 					.sort(
 						( left, right ) => Math.abs( left.top - targetTop ) - Math.abs( right.top - targetTop )
 					);
-				const resolved = candidates[ 0 ];
+				const clamped = Math.abs( targetTop - Math.max( 0, document.documentElement.scrollHeight - innerHeight ) ) < 1;
+				// A short final section cannot reach the viewport's top. At the
+				// scroll limit, use the nearest section start in the final viewport,
+				// preferring one beyond the click's starting position.
+				const clampedCandidates = clamped
+					? candidates.filter( ( candidate ) => candidate.top >= targetTop && candidate.top < targetTop + innerHeight )
+					: [];
+				const resolved = clamped
+					? clampedCandidates.find( ( candidate ) => candidate.top > initialScroll ) ?? clampedCandidates[ 0 ]
+					: candidates[ 0 ];
 				const headerOffset = document.querySelector< HTMLElement >( 'header' )?.getBoundingClientRect().height ?? 0;
-				if ( ! resolved || Math.abs( resolved.top - targetTop ) > Math.max( 4, Math.ceil( headerOffset ) + 8 ) ) {
+				if ( ! resolved || ( ! clamped && Math.abs( resolved.top - targetTop ) > Math.max( 4, Math.ceil( headerOffset ) + 8 ) ) ) {
 					markUnresolved( 'runtime scroll did not resolve to a section boundary' );
 					return false;
 				}

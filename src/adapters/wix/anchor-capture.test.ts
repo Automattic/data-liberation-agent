@@ -51,6 +51,30 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 		}
 	}, 20_000 );
 
+	it( 'resolves a short final section when the runtime scroll clamps at the document bottom', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1024, height: 800 } } );
+			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
+				contentType: 'text/html',
+				body: `<style>body{margin:0}nav{position:fixed;top:0;z-index:5}section{height:1000px}#final-source{height:200px}</style>
+					<nav><a href="#final-runtime">Contact</a></nav>
+					<section>Introduction</section><section id="final-source">Contact details</section>
+					<script>document.querySelector('a').addEventListener('click', event => {
+						event.preventDefault();
+						if (event.isTrusted) window.scrollTo({top:document.getElementById('final-source').offsetTop,behavior:'instant'});
+					});</script>`,
+			} ) );
+			await page.goto( 'https://anchor.test/' );
+			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
+			expect( await page.locator( '#final-source > #final-runtime[data-blocks-engine-capture-anchor-target="final-runtime"]' ).count() ).toBe( 1 );
+			expect( await page.locator( 'a' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
+			expect( await page.locator( '#final-runtime' ).evaluate( landing ) ).toBe( 400 );
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
+
 	it.each( [ false, true ] )( 'resolves a fixed header fragment already at its top landing without changing a mid-page fragment (hide on scroll-down: %s)', async ( hideOnScrollDown ) => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
