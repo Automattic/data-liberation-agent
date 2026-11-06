@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
+import { isSecurityServiceRejection } from './screenshot/navigation-rejection.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import type { CanonicalRouteAlias } from './route-aliases.js';
 import type { SourceDataScript } from './source-data.js';
@@ -116,7 +117,12 @@ function entrypointAbsenceReason(
 ): string | undefined {
 	const sourceIdentity = normalizedUrl( sourceUrl );
 	const recorded = routeDiagnostics.find( ( { url } ) => documentIdentity( url ) === sourceIdentity );
-	if ( recorded ) return `Source homepage ${ sourceUrl } was not captured: ${ recorded.reason }`;
+	if ( recorded ) {
+		const failure = `Source homepage ${ sourceUrl } was not captured: ${ recorded.reason }`;
+		return isSecurityServiceRejection( recorded.reason )
+			? `${ failure }. The source's security service refused the request, so its content could not be captured. Try a publicly accessible URL or provide a supported HTML capture.`
+			: failure;
+	}
 	const redirect = redirectAliases.find( ( { url } ) => documentIdentity( url ) === sourceIdentity );
 	if ( ! redirect ) return undefined;
 	const targetIdentity = documentIdentity( redirect.target );

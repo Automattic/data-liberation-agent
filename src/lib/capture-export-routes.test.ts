@@ -255,6 +255,14 @@ describe( 'entrypoint failure reporting', () => {
 		] ) ).toThrow( 'Source homepage https://example.com/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
 	} );
 
+	it( 'adds guidance when the source security service refused the homepage', () => {
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-blocked-' );
+		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
+		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
+			{ code: 'route_capture_failed', url: 'https://example.com/', reason: 'desktop/goto: HTTP 403; blocked: cloudflare; mobile/goto: HTTP 403; blocked: cloudflare' },
+		] ) ).toThrow( 'Source homepage https://example.com/ was not captured: desktop/goto: HTTP 403; blocked: cloudflare; mobile/goto: HTTP 403; blocked: cloudflare. The source\'s security service refused the request, so its content could not be captured. Try a publicly accessible URL or provide a supported HTML capture.' );
+	} );
+
 	it( 'matches the recorded failure by document identity, not by exact string', () => {
 		const dir = stage( 'data-blocks-engine-capture-entrypoint-identity-' );
 		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );

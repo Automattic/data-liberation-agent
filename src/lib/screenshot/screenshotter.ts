@@ -945,7 +945,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 						if (!sourceGovernorFor(page.context(), url)) await navSleep( navBackoffMs( attempt, response?.headers()[ 'retry-after' ] ) );
 						continue;
 					}
-					loadFail( 'goto', rejectedNavigationReason( status, response?.headers?.() ), attempt );
+					// Evidence only: a body that cannot be read leaves the plain status.
+					const rejectedBody = status === 403 ? await Promise.resolve().then( () => response?.text() ).catch( () => undefined ) : undefined;
+					loadFail( 'goto', rejectedNavigationReason( status, response?.headers?.(), rejectedBody ), attempt );
 					return false;
 				}
 				const notHtml = nonHtmlDocumentError( response?.headers?.()?.[ 'content-type' ] );
