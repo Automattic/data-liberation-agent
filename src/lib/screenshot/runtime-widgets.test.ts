@@ -15,8 +15,13 @@ vi.mock('../browser-kit/browser-kit.js', async importOriginal => {
 import { captureScreenshots } from './screenshotter.js';
 
 // One two-profile Chromium capture, approximately 15s. Different loopback
-// hostnames stand in for different registrable domains; no vendor signatures.
-it('removes third-party runtime islands but preserves authored and first-party forms', async () => {
+// hostnames and ports exercise differing runtime script origins; no vendor signatures.
+it('removes cross-origin runtime islands but preserves authored and same-origin forms', async () => {
+	const sibling = createServer((_request, response) => {
+		response.setHeader('Content-Type', 'application/javascript');
+		response.end(`const widget = document.createElement('div'); widget.id = 'sibling-origin-widget'; widget.style.position = 'fixed'; document.body.append(widget);`);
+	});
+	await new Promise<void>(resolve => sibling.listen(0, resolve));
 	const server = createServer((request, response) => {
 		if (request.url === '/widget.js') {
 			response.setHeader('Content-Type', 'application/javascript');
@@ -52,6 +57,7 @@ it('removes third-party runtime islands but preserves authored and first-party f
 				<form id="authored" style="position:fixed"><input name="newsletter"></form>
 				<script>const own = document.createElement('div'); own.id = 'own-widget'; own.style.position = 'fixed'; own.innerHTML = '<form id="own-form"></form>'; document.body.append(own);</script>
 				<script>document.body.insertAdjacentHTML('beforeend', '<div id="own-html-widget" style="position:fixed"><form id="own-html-form"></form></div>');</script>
+				<script src="http://localhost:${(sibling.address() as { port: number }).port}/widget.js"></script>
 				<script src="http://127.0.0.1:${port}/widget.js"></script></body></html>`);
 		}
 	});
@@ -72,6 +78,7 @@ it('removes third-party runtime islands but preserves authored and first-party f
 			expect(html).toContain('<section id="html-in-flow"');
 			expect(html).toContain('<form id="own-html-form"');
 			// Scripts remain in this intermediate capture, so match markup only.
+			expect(html).not.toContain('<div id="sibling-origin-widget"');
 			expect(html).not.toContain('<div id="neutral-widget"');
 			expect(html).not.toContain('<div id="neutral-shell"');
 			expect(html).not.toContain('<div id="html-widget"');
@@ -91,6 +98,7 @@ it('removes third-party runtime islands but preserves authored and first-party f
 		}
 	} finally {
 		await new Promise<void>(resolve => server.close(() => resolve()));
+		await new Promise<void>(resolve => sibling.close(() => resolve()));
 		rmSync(outputDir, { recursive: true, force: true });
 	}
 }, 90_000);

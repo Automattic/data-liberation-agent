@@ -1,5 +1,4 @@
 import type { BrowserContext, Page } from 'playwright';
-import { isFirstParty } from './first-party.js';
 
 /** Runs before source scripts. Ownership is private: no attributes leak into HTML.
  * Only newly created elements qualify, never authored nodes moved by a script.
@@ -91,7 +90,7 @@ function observeRuntimeWidgets(): void {
 				const origin = new URL(source).origin;
 				if (!origins.includes(origin) || root.parentElement !== document.body) continue;
 				// A runtime script can render legitimate in-flow content. Only a
-				// detached overlay island is excluded, not arbitrary third-party DOM.
+				// detached overlay island is excluded, not arbitrary cross-origin DOM.
 				if (!isOverlayIsland(root)) continue;
 				removed.push({ root: root.tagName.toLowerCase() + (root.id ? `#${root.id}` : '') + [...root.classList].map(name => `.${name}`).join(''), origin });
 				root.remove();
@@ -112,14 +111,17 @@ export async function installRuntimeWidgetAttribution(context: BrowserContext): 
 	await context.addInitScript(observeRuntimeWidgets);
 }
 
-/** Best-effort: a page that cannot answer keeps its DOM and capture continues. */
+/** Remove overlay islands when their runtime script origin differs from the page origin.
+ * Best-effort: a page that cannot answer keeps its DOM and capture continues.
+ */
 export async function removeRuntimeWidgets(page: Page): Promise<{ code: string; reason: string }[]> {
 	try {
 		const origins: unknown = await page.evaluate(() => (window as WidgetWindow).__captureRuntimeWidgets?.origins() ?? []);
 		if (!Array.isArray(origins)) return [];
-		const thirdParty = origins.filter((origin): origin is string => typeof origin === 'string' && !isFirstParty(origin, page.url()));
-		if (!thirdParty.length) return [];
-		const removed: unknown = await page.evaluate(origins => (window as WidgetWindow).__captureRuntimeWidgets?.remove(origins) ?? [], thirdParty);
+		const pageOrigin = new URL(page.url()).origin;
+		const crossOrigin = origins.filter((origin): origin is string => typeof origin === 'string' && origin !== pageOrigin);
+		if (!crossOrigin.length) return [];
+		const removed: unknown = await page.evaluate(origins => (window as WidgetWindow).__captureRuntimeWidgets?.remove(origins) ?? [], crossOrigin);
 		return Array.isArray(removed) ? diagnostics(removed) : [];
 	} catch {
 		return [];
