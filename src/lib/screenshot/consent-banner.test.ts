@@ -87,6 +87,32 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
   }
 });
 
+// One Chromium session (~1 second), through the real readConsentBanner path.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads Portuguese CookieLawInfo controls independently of their language', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.setContent(`<style>
+      #cookie-law-info-bar { position:fixed;bottom:0;left:0;width:100%;padding:20px;background:white }
+    </style><main><h1>Page title</h1></main>
+    <div id="cookie-law-info-bar"><span><div class="cli-bar-container cli-style-v2">
+      <div class="cli-bar-message">Usamos cookies … Ao clicar em “Aceitar Cookies” …</div>
+      <div class="cli-bar-btn_container">
+        <a href="https://www.dgti.uerj.br/politica-de-privacidade/" id="CONSTANT_OPEN_URL" target="_blank" class="medium cli-plugin-button cli-plugin-main-link">Política de Privacidade</a>
+        <a id="wt-cli-accept-all-btn" tabindex="0" role="button" data-cli_action="accept_all" class="wt-cli-element medium cli-plugin-button wt-cli-accept-all-btn cookie_action_close_header cli_action_button">Aceitar Cookies</a>
+      </div></div></span></div>`);
+    const dismissed = await dismissOverlays(page);
+    const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+    expect(banner?.accept_label).toBe('Aceitar Cookies');
+    expect(banner?.policy_link).toEqual({
+      label: 'Política de Privacidade', href: 'https://www.dgti.uerj.br/politica-de-privacidade/',
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
 // One Chromium session (~1 second) covers border omission, gaps and margin-only bisection.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async () => {
   const { chromium } = await import('playwright');
