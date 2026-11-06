@@ -242,14 +242,22 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// Poll rather than sample once: under load an in-flight image can
 						// finish moments after the cleanup pass, and app re-renders can
 						// replace an already-loaded <img> with a fresh, still-decoding one.
-						// Failed and never-loading images still time out as unready.
-						const mediaReady = await referencePage.waitForFunction( key => {
+						// Failed and never-loading images still time out as unready. Polls
+						// through page.evaluate so the probe realm protects it from source
+						// globals; waitForFunction would run against the page's own realm.
+						const imagesSettled = () => referencePage!.evaluate( key => {
 							const unreachable = ( window as unknown as Record<symbol, ( image: HTMLImageElement ) => boolean> )[ Symbol.for( key ) ];
 							return [ ...document.images ].every( image => {
 								const rect = image.getBoundingClientRect();
 								return rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && image.naturalWidth > 0 );
 							} );
-						}, reachabilityKey, { timeout: MEDIA_READY_TIMEOUT_MS, polling: 250 } ).then( () => true, () => false );
+						}, reachabilityKey );
+						const mediaDeadline = Date.now() + MEDIA_READY_TIMEOUT_MS;
+						let mediaReady = await imagesSettled();
+						while ( ! mediaReady && Date.now() < mediaDeadline ) {
+							await referencePage.waitForTimeout( 250 );
+							mediaReady = await imagesSettled();
+						}
 						if ( ! mediaReady ) entry.readiness.reasons.push( 'source images pending or failed' );
 						entry.readiness.mediaReady = mediaReady;
 						entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
