@@ -52,7 +52,7 @@ export class AssetAcquisitionQueue {
 			.map( path => join( this.outputDir, path ) )
 			.filter( path => existsSync( path ) )
 			.map( path => ( { url, html: readFileSync( path, 'utf8' ) } ) );
-		for ( const record of collectAssets( documents, this.resolve ) ) {
+		for ( const record of collectAssets( documents, this.resolve, stored ) ) {
 			const source = record.resolved_original;
 			if ( this.seen.has( source ) ) continue;
 			this.seen.add( source );

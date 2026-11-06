@@ -126,7 +126,7 @@ describe( 'CapturedResourceStore', () => {
 		await store.flush();
 		expect( fetchMedia ).not.toHaveBeenCalled();
 		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
-		expect( manifest.failures.map( ( failure: { url: string } ) => failure.url ).sort() ).toEqual( [ 'http://assets.example/font.woff2', 'http://assets.example/style.css' ] );
+		expect( manifest.failures.map( ( failure: { url: string } ) => failure.url ).sort() ).toEqual( [ 'http://assets.example/style.css' ] );
 	} );
 
 	it( 'does not treat a stale manifest as browser evidence for an insecure stylesheet', async () => {
@@ -971,7 +971,7 @@ describe( 'CapturedResourceStore', () => {
 		}
 	} );
 
-	it( 'fetches lazy DOM dependencies and compact cross-origin nested CSS font imports missed by responses', async () => {
+	it( 'fetches lazy dependencies and nested CSS without crawling unobserved font sources', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-' ) );
 		dirs.push( outputDir );
 		const transformedImage =
@@ -1006,8 +1006,9 @@ describe( 'CapturedResourceStore', () => {
 			readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
 		);
 		expect( Object.keys( manifest.resources ) ).toEqual(
-			expect.arrayContaining( Object.keys( bodies ) )
+			expect.arrayContaining( Object.keys( bodies ).filter( url => ! url.endsWith( '.woff2' ) ) )
 		);
+		expect( manifest.resources[ 'https://fonts.example.net/fonts/font.woff2' ] ).toBeUndefined();
 	} );
 
 	it( 'captures and localizes linked audio without fetching ordinary page links', async () => {
@@ -1251,7 +1252,15 @@ describe( 'CapturedResourceStore', () => {
 			body: Buffer.from( 'font' ),
 		} ) );
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', fetchMedia );
-
+		const page = new EventEmitter();
+		store.observe( page as never );
+		page.emit( 'response', {
+			url: () => 'https://cdn.example/site.woff2', status: () => 200,
+			headers: () => ( { 'content-type': 'application/font-woff2' } ),
+			body: async () => Buffer.from( 'font' ),
+			request: () => ( { resourceType: () => 'font', method: () => 'GET' } ),
+		} );
+		await store.settle( page as never );
 		await store.captureDomDependencies( html, 'https://example.com/' );
 		await store.flush();
 		exportWebsiteCapture( {
@@ -1270,12 +1279,7 @@ describe( 'CapturedResourceStore', () => {
 			/^resources\//,
 			''
 		);
-		expect( fetchMedia ).toHaveBeenCalledOnce();
-		expect( fetchMedia ).toHaveBeenCalledWith(
-			'https://cdn.example/site.woff2',
-			expect.any( Number ),
-			expect.any( Number )
-		);
+		expect( fetchMedia ).not.toHaveBeenCalled();
 		expect( diagnostics.resourceFailures ).toEqual( [] );
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 		expect( resourceManifest.resources[ 'https://cdn.example/site.woff2' ].contentType ).toBe(
@@ -1314,10 +1318,15 @@ describe( 'CapturedResourceStore', () => {
 			body: Buffer.alloc( 0 ),
 		} ) );
 
-		await store.captureDomDependencies(
-			`<style>@font-face{src:url("${ fontUrl }")}</style>`,
-			'https://example.com/'
-		);
+		const page = new EventEmitter();
+		store.observe( page as never );
+		page.emit( 'response', {
+			url: () => fontUrl, status: () => 200,
+			headers: () => ( { 'content-type': 'font/woff2' } ),
+			body: async () => Buffer.alloc( 0 ),
+			request: () => ( { resourceType: () => 'font', method: () => 'GET' } ),
+		} );
+		await store.settle( page as never );
 		await store.flush();
 
 		const manifest = JSON.parse(
@@ -1327,7 +1336,7 @@ describe( 'CapturedResourceStore', () => {
 		// report a clean capture for a font that renders as nothing.
 		expect( manifest.resources[ fontUrl ] ).toBeUndefined();
 		expect( manifest.failures ).toContainEqual(
-			expect.objectContaining( { url: fontUrl, error: 'render dependency response body is empty' } )
+			expect.objectContaining( { url: fontUrl, error: expect.stringContaining( 'empty' ) } )
 		);
 	} );
 
