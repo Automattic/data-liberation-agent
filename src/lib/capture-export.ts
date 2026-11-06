@@ -1504,6 +1504,11 @@ function buildExportCapture(
 				} );
 				continue;
 			}
+			for ( const profile of Object.values( entry.profiles ?? {} ) ) {
+				for ( const diagnostic of profile.diagnostics ?? [] ) {
+					if ( diagnostic.code === 'device_document_incomplete' ) routeCaptureDiagnostics.push( { ...diagnostic, url } );
+				}
+			}
 			const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
 			const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
 			let rawDesktopHtml = embedded && options.input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, options.input.desktopVariant, desktopHash, embedded.receipt.regions), url, options.input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;

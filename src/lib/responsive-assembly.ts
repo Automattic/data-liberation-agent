@@ -1331,6 +1331,29 @@ function responsiveHtml(
 
 export type ResponsivePortableNormalization = 'absent' | 'applied' | 'pending';
 
+/** Content evidence excludes bootstrap payloads and authored hidden content. This
+ * is a conservative completeness check, not an equivalence test: a large loss
+ * of BOTH sections and text indicates a shell, not ordinary device reflow.
+ */
+export function incompleteDeviceDocument( desktopHtml: string, mobileHtml: string ) {
+	const measure = ( html: string ) => {
+		const $ = cheerio.load( html );
+		$( 'script,style,noscript,template,[hidden],[aria-hidden="true"]' ).remove();
+		return {
+			sections: $( 'body section' ).length,
+			textLength: $( 'body' ).text().replace( /\s+/g, ' ' ).trim().length,
+			media: $( 'body img,body video,body svg,body canvas,body iframe' ).length,
+		};
+	};
+	const desktop = measure( desktopHtml );
+	const mobile = measure( mobileHtml );
+	const deficient = ( a: typeof desktop, b: typeof desktop ) =>
+		( b.sections >= 4 && a.sections <= b.sections / 4 && b.textLength >= 400 && a.textLength < b.textLength / 2 ) ||
+		( a.textLength === 0 && a.media === 0 && ( b.textLength >= 100 || b.media >= 3 ) );
+	const device = deficient( mobile, desktop ) ? 'mobile' : deficient( desktop, mobile ) ? 'desktop' : undefined;
+	return device ? { device, desktop, mobile } : undefined;
+}
+
 export interface ResponsiveAssemblyInput {
 	/** Captured desktop document, before portable rendering normalization. */
 	rawDesktopHtml: string;
@@ -1371,6 +1394,16 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 	if ( input.rawMobileHtml === undefined ) {
 		return {
 			html: input.portableDesktopHtml,
+			hasMobileDocument: false,
+			portableNormalization: 'absent',
+		};
+	}
+	// Last line of defence for old captures and unsuccessful capture retries:
+	// never scope the only substantive document to just one device.
+	const incomplete = incompleteDeviceDocument( input.rawDesktopHtml, input.rawMobileHtml );
+	if ( incomplete ) {
+		return {
+			html: incomplete.device === 'mobile' ? input.portableDesktopHtml : ( input.portableMobileHtml ?? input.rawMobileHtml ),
 			hasMobileDocument: false,
 			portableNormalization: 'absent',
 		};
