@@ -42,16 +42,12 @@ export interface MissingRoute {
 
 /**
  * Recommended default policy for callers deciding whether an incomplete
- * capture is still worth importing: the entrypoint was captured and routes
- * that failed are at most max(1, 10%) of the routes attempted. Routes the
- * caller's budgets left out (route budget or time budget) are scope, not
- * failure, and count in neither. Callers may adopt a stricter or looser rule;
- * capture itself never applies it.
+ * capture is still worth importing: the entrypoint was captured, regardless
+ * of how many other routes failed. Import the capture and report missingRoutes
+ * instead of failing. Capture itself never applies this policy.
  */
 export const USABLE_PARTIAL_CAPTURE_POLICY = {
-	version: 2,
-	minFailedRoutes: 1,
-	maxFailedFraction: 0.1,
+	version: 3,
 } as const;
 
 const isMissingRouteCode = ( code: unknown ): code is MissingRoute['code'] =>
@@ -109,12 +105,9 @@ export function withExportDroppedRoutes< S extends Record< string, unknown > >(
 }
 
 /**
- * Apply `USABLE_PARTIAL_CAPTURE_POLICY`. A capture without its entrypoint is
- * never usable. Budget-omitted routes are neither missing nor discovered for
- * this policy (`routesDiscovered` counts the attempted route set), and routes
- * the time budget skipped are likewise left out of both counts: a caller's
- * deadline bounds scope the way a route budget does, so it never makes a
- * capture less usable. They stay in `missingRoutes` and keep `complete` false.
+ * Apply `USABLE_PARTIAL_CAPTURE_POLICY`: a resolved capture with its entrypoint
+ * is usable. Missing routes stay reported in `missingRoutes` and keep
+ * `complete` false, but never make the capture unusable.
  */
 export function isUsableCapture( result: {
 	complete: boolean;
@@ -122,10 +115,5 @@ export function isUsableCapture( result: {
 	missingRoutes: ReadonlyArray< { code?: unknown } >;
 	summary: { routesDiscovered: number };
 } ): boolean {
-	if ( ! result.entrypointCaptured ) return false;
-	if ( result.complete ) return true;
-	const { minFailedRoutes, maxFailedFraction } = USABLE_PARTIAL_CAPTURE_POLICY;
-	const skipped = result.missingRoutes.filter( route => route.code === ROUTE_CAPTURE_SKIPPED_BUDGET ).length;
-	const failed = result.missingRoutes.length - skipped;
-	return failed <= Math.max( minFailedRoutes, maxFailedFraction * ( result.summary.routesDiscovered - skipped ) );
+	return result.entrypointCaptured;
 }
