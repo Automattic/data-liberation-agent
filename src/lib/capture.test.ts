@@ -68,6 +68,8 @@ import { RouteTimeBudget } from './capture-time-budget.js';
 import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_CAPTURE_TIME_BUDGET_MS, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture, templateGroupingLimits } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
+import * as reference from './fidelity/reference.js';
+import type { ScreenshotOpts } from './screenshot/types.js';
 
 const root = join( process.cwd(), '.tmp-test', 'capture-section-media' );
 const sourceUrl = 'https://example.com/';
@@ -164,6 +166,44 @@ describe( 'downloadCaptureSectionMedia', () => {
 } );
 
 describe( 'captureWebsite fluid learning', () => {
+	it( 'admits client-rendered entry navigation before deep inventory routes under the time budget', async () => {
+		const root = join( process.cwd(), '.tmp-test', 'capture-rendered-navigation' );
+		const menu = [ 'https://example.com/about-us', 'https://example.com/contact' ];
+		const inventory = [ ...Array.from( { length: 30 }, ( _, i ) => `https://example.com/blog/article-${ i }` ), ...menu ];
+		vi.mocked( safeFetch ).mockResolvedValueOnce( { finalUrl: sourceUrl, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( '<div id="app"></div>' ) } );
+		const createCollector = reference.createReferenceCollector;
+		const collectorSpy = vi.spyOn( reference, 'createReferenceCollector' ).mockImplementationOnce( ( ...args ) => ( { ...createCollector( ...args ), observe: vi.fn() } ) );
+		const admitted: string[] = [];
+		captureScreenshotsMock.mockImplementationOnce( async input => {
+			const opts = input as ScreenshotOpts;
+			const timeBudget = opts.timeBudget!;
+			let now = timeBudget.abandonAt - timeBudget.timeBudgetMs;
+			const budget = new RouteTimeBudget( timeBudget, sourceUrl, () => now );
+			const pending = [ ...opts.urls ];
+			while ( pending.length ) {
+				const url = pending.shift()!;
+				if ( ! budget.admits( url, 1 ) ) break;
+				budget.start( url ); admitted.push( url );
+				if ( url === sourceUrl ) {
+					const page = { content: async () => `<nav>${ menu.map( href => `<a href="${ href }">Menu</a>` ).join( '' ) }</nav>` };
+					await opts.observeSource?.( page as any, url, 'desktop', [] );
+				}
+				now += 10_000; budget.finish( url );
+				pending.splice( 0, pending.length, ...( opts.prioritizePendingRoutes?.( pending ) ?? pending ) );
+			}
+			return { urls: admitted, captured: admitted.length, skipped: 0, failed: 0, durationMs: 1 };
+		} );
+		try {
+			await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 240_000 }, {
+				findAdapter: () => ( { id: 'generic', discover: async () => ( { urls: inventory.map( url => ( { url } ) ) } ) } as any ),
+			} );
+			expect( admitted.slice( 0, 3 ) ).toEqual( [ sourceUrl, ...menu ] );
+			expect( admitted.length ).toBeLessThan( inventory.length );
+		} finally {
+			collectorSpy.mockRestore();
+			rmSync( root, { recursive: true, force: true } );
+		}
+	} );
 	it( 'admits entry navigation destinations ahead of a truncated listing inventory', async () => {
 		const root = join( process.cwd(), '.tmp-test', 'capture-entry-navigation' );
 		const source = 'https://example.com/';
