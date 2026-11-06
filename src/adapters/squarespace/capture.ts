@@ -74,6 +74,23 @@ export const capture: LiberationHooks = {
 	 */
 	beforeSerialize: async ( page, context ) => {
 		await preserveSquarespaceProductJsonLd( page, context );
+		await page.evaluate( () => {
+			// Slideshow galleries size each caption from script whenever its slide
+			// activates: width is the slide width, and a caption taller than 90% of
+			// the slide gets `.overflow` and 40% of the slide height. The runtime
+			// ignores resize and keeps rewriting px as slides cycle during capture,
+			// so serialized inline values would freeze one width. Restate its rule
+			// relative to the slide (the caption's containing block).
+			const selector = '.sqs-gallery-design-stacked .slide > .meta';
+			if ( ! document.querySelector( selector ) ) return;
+			let style = document.querySelector< HTMLStyleElement >( 'style[data-blocks-engine-capture-squarespace-caption-style]' );
+			if ( ! style ) {
+				style = document.createElement( 'style' );
+				style.setAttribute( 'data-blocks-engine-capture-squarespace-caption-style', '' );
+				( document.body ?? document.head ?? document.documentElement ).append( style );
+			}
+			style.textContent = `${ selector }{width:100%!important}${ selector }.overflow{height:40%!important}`;
+		} );
 		const configs = await page.evaluate( ( marker ) => {
 			const configs: string[] = [];
 			for ( const video of document.querySelectorAll( 'video' ) ) {
