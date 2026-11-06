@@ -448,6 +448,23 @@ export function identitySubsetMerge(
 	// both. A wrapper only one capture renders (a desktop transition layer) is
 	// not a nesting difference: it stays in the tree, hidden on the other side.
 	const shared = ( id: string ): boolean => desktopIds.has( id ) && mobileIds.has( id );
+	// Identity alone does not account for anonymous layout containers. Compare
+	// wrapper counts in each interval between shared ancestors, not just total
+	// depth: dropping a phone row/cell (or retaining a desktop absolute box)
+	// cannot be repaired by projecting styles onto the shared component. Treat
+	// every wrapper as potentially layout-bearing; CSS selectors and inherited
+	// sizing make an authored-property whitelist insufficient. Equal-depth trees
+	// remain eligible for the existing paired inline/class projection, including
+	// builders that only restyle their wrappers. Device-key reconciliation keeps
+	// divergent placements separately rather than collapsing them.
+	const wrapperIntervals = ( element: Element ): number[] => {
+		const intervals = [ 0 ];
+		for ( let parent = element.parent; parent && isElementNode( parent ) && parent.tagName !== 'body'; parent = parent.parent ) {
+			if ( shared( identityOf( parent ) ?? '' ) ) intervals.push( 0 );
+			else intervals[ intervals.length - 1 ]!++;
+		}
+		return intervals;
+	};
 	for ( const [ id, desktopElement ] of desktopIds ) {
 		if ( ! mobileIds.has( id ) ) continue;
 		const desktopChain = identityChain( $d, desktopElement ).filter( shared );
@@ -457,6 +474,12 @@ export function identitySubsetMerge(
 			desktopChain.some( ( value, index ) => value !== mobileChain[ index ] )
 		)
 			return cannotMerge( 'Shared component ancestry differs' );
+		if ( ! deviceKey ) {
+			const desktopWrappers = wrapperIntervals( desktopElement );
+			const mobileWrappers = wrapperIntervals( mobileIds.get( id ) as Element );
+			if ( desktopWrappers.some( ( count, index ) => count !== mobileWrappers[ index ] ) )
+				return cannotMerge( 'Shared component wrapper ancestry differs' );
+		}
 	}
 	// Text the mobile capture rendered must live inside a mapped parent, or the
 	// documents carry different content and collapsing would drop it. Script

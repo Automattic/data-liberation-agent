@@ -510,6 +510,21 @@ describe( 'assembleResponsiveCapture', () => {
 		expect( $( 'body > .data-blocks-engine-capture-mobile-only:has(> .doc-background) + nav' ) ).toHaveLength( 1 );
 	} );
 
+	it( 'keeps UA-selected phone row/cell ancestry around shared components (#1407)', () => {
+		const rawDesktop = page( '<main id="site"><div class="design-element" style="position:absolute;left:50%;width:900px"><h1 id="hero">Shared heading</h1></div></main>', '', ' class="pc-client"' );
+		const rawMobile = page( '<main id="site"><div class="row-element" style="position:relative;width:340px;margin-left:25px"><div class="cell-element" style="width:100%"><h1 id="hero">Shared heading</h1></div></div></main>', '', ' class="mobile-client"' );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence?.outcome ).toBe( 'dual-structural' );
+		const $ = cheerio.load( assembly.html );
+		expect( $( '.row-element > .cell-element > h1' ) ).toHaveLength( 1 );
+	} );
+
 	it( 'keeps class tokens only one rendering of a shared element carries width-local', async () => {
 		// The phone rendering adds `shown`, which desktop also uses elsewhere;
 		// only the desktop rendering carries the styled `wide`.
