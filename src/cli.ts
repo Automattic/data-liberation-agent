@@ -142,6 +142,17 @@ const HELP = `
     SPACEFAST_TOKEN      Publish token for the spacefast target
 `;
 
+try {
+await main();
+} catch (error) {
+  const failure = error as { message?: string; code?: string; evidence?: unknown };
+  process.stderr.write(failure.code || failure.evidence
+    ? `${JSON.stringify({ error: failure.message ?? String(error), ...(failure.code ? { code: failure.code } : {}), ...(failure.evidence ? { evidence: failure.evidence } : {}) })}\n`
+    : `${failure.message ?? String(error)}\n`);
+  process.exitCode = 1;
+}
+
+async function main(): Promise<void> {
 if (args.includes('--help')) {
   // --help always prints usage, whatever precedes it — a subcommand typo
   // like `capture --help` should never reach argument parsing below.
@@ -400,4 +411,5 @@ if (args.includes('--help')) {
     // Guidance goes to stderr so stdout stays the machine-readable result.
     process.stderr.write(acquisition === 'http' ? 'HTTP review candidate: rendering and interactions remain unverified.\n' : `Browse it: data-liberation ${url} --resume --serve\n`);
   }
+}
 }

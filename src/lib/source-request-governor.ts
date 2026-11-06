@@ -21,6 +21,11 @@
  * bounded evidence (first refusal time and request count) for the receipt.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+/** Avoid accounting a safeFetch inside an already governed acquisition twice. */
+export const governedAcquisition = new AsyncLocalStorage<boolean>();
+
 export const SOURCE_REQUEST_GOVERNOR_DEFAULTS = {
 	/** Requests in flight per origin, as in rendered inspection (#746). */
 	concurrency: 6,
@@ -55,9 +60,12 @@ export function parseRetryAfter( header: string | null | undefined, options: { f
 /** Earlier success, three consecutive refusals, and at least two route paths are required. */
 export const SOURCE_REFUSAL_DEFAULTS = { consecutive: 3, probeAtMs: [2000, 8000, 20000, 60000], probeTimeoutMs: 3000 } as const;
 
+export type SourceRequestCategory = 'document' | 'device-check' | 'asset-original' | 'refusal-probe' | 'retry';
+export type SourceRequestCounts = Record<SourceRequestCategory, number>;
+
 export class SourceBlockedClientError extends Error {
 	readonly code = 'source_blocked_client';
-	constructor(readonly evidence: { origin: string; requestsBeforeFirstRefusal: number; firstRefusalAt: string }) {
+	constructor(readonly evidence: { origin: string; requestsBeforeFirstRefusal: number; firstRefusalAt: string; requestCounts?: SourceRequestCounts }) {
 		super(`source_blocked_client: The source ${evidence.origin} blocked this network; retry later or from another network.`);
 	}
 }
@@ -81,6 +89,7 @@ export function isSourceTransportThrottle(error: unknown, refusalOnly = false): 
 }
 
 export interface GovernedRequestOptions {
+	category?: SourceRequestCategory;
 	/** Owning document URL, never an asset URL, for cross-route refusal proof. */
 	routeUrl?: string;
 	/** Browser fan-out is unlimited while healthy; shares the reduced limit during recovery. */
@@ -102,6 +111,7 @@ export interface GovernedResponse< T > {
 }
 
 export interface SourceRequestGovernorStats {
+	requestCounts: SourceRequestCounts;
 	origin: string;
 	requests: number;
 	throttleEvents: number;
@@ -187,7 +197,7 @@ export class SourceRequestGovernor {
 			});
 			if (this.responseGeneration !== generation) return;
 			try {
-				this.requests++;
+				this.recordRequest('refusal-probe');
 				const response = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(Math.max(1, Math.min(SOURCE_REFUSAL_DEFAULTS.probeTimeoutMs, deadline - Date.now()))) });
 				await response.body?.cancel();
 				this.reachable();
@@ -197,7 +207,7 @@ export class SourceRequestGovernor {
 				if (!isSourceTransportThrottle(error, true)) return;
 			}
 		}
-		if (this.responseGeneration === generation) this.blockedClient = new SourceBlockedClientError(evidence);
+		if (this.responseGeneration === generation) this.blockedClient = new SourceBlockedClientError({ ...evidence, requestCounts: this.stats().requestCounts });
 	}
 
 	private readonly maxRetryAfterMs: number;
@@ -209,6 +219,13 @@ export class SourceRequestGovernor {
 	private browserThrottled = false;
 	private pausedUntil = 0;
 	private requests = 0;
+	private readonly requestCounts: SourceRequestCounts = { document: 0, 'device-check': 0, 'asset-original': 0, 'refusal-probe': 0, retry: 0 };
+
+	private recordRequest(category: SourceRequestCategory): void {
+		this.requests++;
+		this.requestCounts[category]++;
+		this.firstRequestAt ??= Date.now();
+	}
 	private throttles = 0;
 	private firstRequestAt: number | undefined;
 	private readonly waiters: Array< () => void > = [];
@@ -235,7 +252,7 @@ export class SourceRequestGovernor {
 
 	stats(): SourceRequestGovernorStats {
 		const elapsed = this.firstRequestAt === undefined ? 0 : ( Date.now() - this.firstRequestAt ) / 1000;
-		return { origin: this.origin, requests: this.requests, throttleEvents: this.throttles, concurrency: this.limit, sustainedRate: elapsed > 0 ? this.requests / elapsed : 0 };
+		return { origin: this.origin, requests: this.requests, requestCounts: { ...this.requestCounts }, throttleEvents: this.throttles, concurrency: this.limit, sustainedRate: elapsed > 0 ? this.requests / elapsed : 0 };
 	}
 
 	/**
@@ -253,9 +270,8 @@ export class SourceRequestGovernor {
 			const refusalAdmission = this.refusalAdmission();
 			let response: T;
 			try {
-				this.requests++;
-				this.firstRequestAt ??= Date.now();
-				response = await task( attempt );
+				this.recordRequest(attempt > 1 ? 'retry' : options.category ?? 'document');
+				response = await governedAcquisition.run(true, () => task( attempt ));
 			} catch (error) {
 				if (!isSourceTransportThrottle(error)) throw error; // failure-class: operational
 				this.observeRefusal(error, options.routeUrl, refusalAdmission);
@@ -294,9 +310,8 @@ export class SourceRequestGovernor {
 	}
 
 	/** Outcomes observed by the browser's native network stack. */
-	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string, admission?: number): void {
-		this.requests++;
-		this.firstRequestAt ??= Date.now();
+	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string, admission?: number, category: SourceRequestCategory = 'document'): void {
+		this.recordRequest(category);
 		if (status !== undefined) this.reachable();
 		else this.observeRefusal(error, routeUrl, admission);
 		if ((status !== undefined && THROTTLE_STATUSES.has(status)) || isSourceTransportThrottle(error)) {
@@ -380,6 +395,10 @@ export class SourceRequestGovernors {
 	private readonly byOrigin = new Map< string, SourceRequestGovernor >();
 
 	constructor( private readonly defaults: SourceRequestGovernorOptions = {} ) {}
+
+	stats(): SourceRequestGovernorStats[] {
+		return [...this.byOrigin.values()].map(governor => governor.stats());
+	}
 
 	forOrigin( url: string, options: SourceRequestGovernorOptions = {} ): SourceRequestGovernor {
 		const origin = new URL( url ).origin;

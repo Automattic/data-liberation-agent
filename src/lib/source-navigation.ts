@@ -1,4 +1,4 @@
-import { fetchSourceRoute, sourceLoadInterruptions } from './browser-kit/source-traffic.js';
+import { fetchSourceRoute, sourceLoadInterruptions, takeSourceDocument, rememberSourceDocument } from './browser-kit/source-traffic.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -78,7 +78,9 @@ function safeTarget(url: string, publicUrlsOnly: boolean): URL {
 	return target;
 }
 
-async function readSourceResponse(route: Route, url: string, timeout: number): Promise<{response: DocumentResponse; rendered: RenderedResponse}> {
+async function readSourceResponse(route: Route, url: string, timeout: number, reuse = true): Promise<{response: DocumentResponse; rendered: RenderedResponse}> {
+	const cached = reuse && await takeSourceDocument(route.request().frame().page().context(), url, await route.request().allHeaders());
+	if (cached) return { rendered: cached, response: { ...cached, body: cached.body.toString('utf8') } };
 	const acquired = await fetchSourceRoute(route, {url, maxRedirects: 0, maxRetries: 0, timeout}, 1);
 	try {
 		const headers = acquired.headers();
@@ -91,6 +93,7 @@ async function readSourceResponse(route: Route, url: string, timeout: number): P
 		if (Number(headers['content-length'] ?? 0) > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${SOURCE_DOCUMENT_MAX_BYTES} bytes; Content-Length)`);
 		const body = await acquired.body();
 		if (body.length > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${body.length} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`);
+		if (reuse) await rememberSourceDocument(route.request().frame().page().context(), url, await route.request().allHeaders(), { url, status, headers, body });
 		return {rendered: {url, status, headers, body}, response: {url, status, headers: declared, body: body.toString('utf8')}};
 	} finally { await acquired.dispose(); }
 }
@@ -110,7 +113,7 @@ function insideTemplate(element: import('domhandler').AnyNode): boolean {
 export async function replaySourceReload(route: Route, url: string, timeoutMs: number = SOURCE_NAVIGATION_LIMITS.timeoutMs): Promise<void> {
 	let rendered: RenderedResponse | undefined;
 	const inspected = await inspectSourceDocument(url, async (current, timeout) => {
-		const acquired = await readSourceResponse(route, current, timeout); rendered = acquired.rendered; return acquired.response;
+		const acquired = await readSourceResponse(route, current, timeout, false); rendered = acquired.rendered; return acquired.response;
 	}, false, timeoutMs);
 	if (inspected.boundary || inspected.finalUrl !== url || inspected.status >= 400 || nonHtmlDocumentError(inspected.response?.headers['content-type'])) throw new Error('Source reload changed its document identity or response outcome');
 	await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});

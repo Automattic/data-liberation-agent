@@ -1,3 +1,4 @@
+import { sourceFetch as fetch } from '../media-fetch/capture-requests.js';
 import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 
 // src/lib/detect-platform/detect-platform.ts

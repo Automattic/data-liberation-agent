@@ -3,7 +3,7 @@ import { totalmem } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
-import { getSourceResponse, sourceGovernorFor } from '../browser-kit/source-traffic.js';
+import { categorizeSourceContext, forgetSourceDocument, getSourceResponse, sourceGovernorFor, sourceDocumentHtml } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
@@ -2007,6 +2007,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	const startedAt = Date.now();
 	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url } );
 	contexts.push( context );
+	categorizeSourceContext(context, 'device-check');
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
 	// The comparison and shared-chrome probes wait on the same render-affecting
@@ -2121,9 +2122,7 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 				contexts.push( context );
 				const headers = args.identityHeaders?.[ identity ];
 				if ( ! headers ) return undefined;
-				const response = await getSourceResponse(context, args.url, { headers: replayableRequestHeaders( headers ), maxRedirects: 0, maxRetries: 0, timeout: 30_000 });
-				try { return response.ok() ? await response.text() : undefined; }
-				finally { await response.dispose(); }
+				return sourceDocumentHtml(context, args.url, replayableRequestHeaders(headers));
 			} ) );
 			const [ desktop, phone ] = documents;
 			if ( desktop !== undefined && phone !== undefined ) {
@@ -2940,6 +2939,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			// error shell, in a fresh context once. A disconnected browser also needs
 			// the shared relaunch before the retry.
 			for ( let crashRetry = false; ; crashRetry = true ) {
+				if (crashRetry) forgetSourceDocument(opts.governors, url);
 				const attemptBrowser = browser;
 				const failuresBefore = profileFailures.length;
 				let context: BrowserContext | undefined;

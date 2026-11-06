@@ -1,6 +1,7 @@
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 import { continueSourceRoute, fetchSourceRoute, governSourceContext, sourceGovernorFor } from './source-traffic.js';
 import { SourceBlockedClientError, isSourceTransportThrottle, type SourceRequestGovernors } from '../source-request-governor.js';
+import { captureRequests } from '../media-fetch/capture-requests.js';
 import { installProbeIntrinsics } from './probe-intrinsics.js';
 
 /** Shared identity for Node-side HTTP requests to source sites (not browser device profiles). */
@@ -124,7 +125,9 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
 export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}, traffic?: { governors?: SourceRequestGovernors; sourceUrl: string }): Promise<BrowserContext> {
   const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
   try {
-    if (traffic?.governors) governSourceContext(context, traffic.governors, traffic.sourceUrl);
+    const governors = traffic?.governors ?? captureRequests.getStore()?.governors;
+    const sourceUrl = traffic?.sourceUrl ?? options.baseURL;
+    if (governors && sourceUrl) governSourceContext(context, governors, sourceUrl);
     await installProbeIntrinsics(context);
     await installSourceIdentity(context, options);
     return context;

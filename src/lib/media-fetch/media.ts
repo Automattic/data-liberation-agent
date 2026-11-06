@@ -1,5 +1,6 @@
 import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { createHash } from 'crypto';
+import { captureRequests } from './capture-requests.js';
 import { basename, extname, join, resolve } from 'path';
 import { pipeline } from 'stream/promises';
 import {
@@ -298,11 +299,13 @@ async function fetchMediaResponse(rawUrl: string, preserveOriginal = false, dead
   let currentUrl = assertPublicHttpUrl(rawUrl).toString();
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const cookie = await sourceSessionCookieHeader(new URL(currentUrl).origin);
-    const res = await fetch(currentUrl, {
+    const request = () => fetch(currentUrl, {
       signal: AbortSignal.timeout(Math.max(1, Math.min(30000, (deadline ?? Infinity) - Date.now()))),
       redirect: 'manual',
       headers: { 'User-Agent': SOURCE_USER_AGENT, accept: preserveOriginal ? '*/*' : BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
     });
+    const governor = captureRequests.getStore()?.governors.forOrigin(currentUrl);
+    const res = governor ? (await governor.run(request, { category: 'asset-original' })).response : await request();
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       try { await res.body?.cancel(); } catch { /* ignore */ }
@@ -327,6 +330,24 @@ async function fetchMediaResponse(rawUrl: string, preserveOriginal = false, dead
 const svgExtrasByLocalPath = new Map<string, Pick<DownloadResult, 'svgRisky' | 'rasterPath' | 'rasterError'>>();
 
 export async function downloadMedia(
+  url: string,
+  outputDir: string,
+  seenNames: Map<string, number>,
+  seenHashes?: Map<string, string>,
+  opts?: DownloadMediaOpts,
+): Promise<DownloadResult> {
+  const cache = captureRequests.getStore()?.originals;
+  if (!cache || !opts?.preserveOriginal) return downloadMediaOnce(url, outputDir, seenNames, seenHashes, opts);
+  const key = JSON.stringify([url, outputDir]);
+  let pending = cache.get(key);
+  if (!pending) {
+    pending = downloadMediaOnce(url, outputDir, seenNames, seenHashes, opts);
+    cache.set(key, pending);
+  }
+  return pending;
+}
+
+async function downloadMediaOnce(
   url: string,
   outputDir: string,
   seenNames: Map<string, number>,
