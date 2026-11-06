@@ -53,6 +53,31 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace heade
 	}, 20_000 );
 } );
 
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace autoplay galleries', () => {
+	it( 'stops autoplay and returns to the first slide once the current one settles', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			// The gallery attribute contract the Squarespace runtime exposes:
+			// autoplay advances on a timer; index changes are refused mid-motion.
+			await page.setContent( `<script>
+				const state = { autoplay: true, currentIndex: 3, inMotion: true };
+				setTimeout( () => { state.inMotion = false; }, 300 );
+				setInterval( () => { if ( state.autoplay ) state.currentIndex++; }, 100 );
+				window.Y = { Squarespace: { GalleryManager: { _galleries: [ {
+					get: name => state[ name ],
+					set: ( name, value ) => { if ( name !== 'currentIndex' || ! state.inMotion ) state[ name ] = value; },
+				} ] } } };
+			</script>` );
+			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
+			await page.waitForTimeout( 300 );
+			expect( await page.evaluate( () => [ 'autoplay', 'currentIndex' ].map( name => ( window as any ).Y.Squarespace.GalleryManager._galleries[ 0 ].get( name ) ) ) ).toEqual( [ false, 0 ] );
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
+} );
+
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace slideshow', () => {
 	it( 'restates script-written caption and image geometry relative to its slide', async () => {
 		const browser = await chromium.launch();
