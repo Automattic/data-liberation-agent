@@ -46,6 +46,23 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
   ]);
 });
 
+// Regression for normal-flow card banners: block prose boundaries are spaces and
+// rendered control placement, not flex-direction alone, determines the layout.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads block-flow consent cards as spaced stacked content', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.setContent(`<style>.banner{position:fixed;right:24px;bottom:24px;width:280px;padding:24px;background:#898989;color:#000}.banner h4{margin:0 0 8px}.banner p{margin:0 0 16px}.banner button{display:block;width:100%}</style><main style="min-height:1200px"><h1>Page title</h1></main><div class="banner" id="cookie-banner"><h4>This website uses cookies.</h4><p>We use cookies to analyze website traffic.</p><button onclick="this.parentNode.remove()">ACCEPT</button></div>`);
+    const dismissed = await dismissOverlays(page);
+    const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+    expect(banner?.text).toBe('This website uses cookies. We use cookies to analyze website traffic.');
+    expect(banner?.presentation?.layout?.[0].direction).toBe('column');
+  } finally {
+    await browser.close();
+  }
+});
+
 // One Chromium session (~1 second): a transparent full-viewport wrapper must not
 // obscure the painted panel, and inline links must remain part of the prose.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transparent wrapper and preserves inline link labels', async () => {

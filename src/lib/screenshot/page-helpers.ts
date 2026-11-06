@@ -1433,6 +1433,15 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
         || node.matches('button, [role="button"], input, script, style')) copies[i].remove();
       else if (node.matches('a') && !getComputedStyle(node).display.startsWith('inline')) copies[i].remove();
     }
+    // textContent drops boundaries between block elements. Insert whitespace at
+    // rendered block boundaries while retaining inline text (including link labels).
+    for (let i = originals.length - 1; i >= 0; i--) {
+      const display = getComputedStyle(originals[i]).display;
+      if (display === 'block' || display === 'flex' || display === 'grid' || display === 'list-item' || display === 'table') {
+        copies[i].prepend(document.createTextNode(' '));
+        copies[i].append(document.createTextNode(' '));
+      }
+    }
     const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
     if (!text) return;
     // Measure the nearest painted element containing both prose and accept
@@ -1486,7 +1495,9 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const end = contentBounds.right - parseFloat(contentStyle.borderRightWidth) - parseFloat(contentStyle.paddingRight);
     const buttonAlign = Math.abs(controlBounds.left - start) <= 2 ? 'start' as const
       : Math.abs(controlBounds.right - end) <= 2 ? 'end' as const : undefined;
-    const direction = contentStyle.flexDirection === 'column' ? 'column' as const : 'row' as const;
+    const proseBounds = prose?.getBoundingClientRect();
+    const proseStacked = !!proseBounds && controlBounds.top >= proseBounds.bottom - 2;
+    const direction = contentStyle.flexDirection === 'column' || proseStacked ? 'column' as const : 'row' as const;
     return {
       schema: 'static-site-importer/consent-banner/v1' as const,
       text, accept_label: label(accept),
