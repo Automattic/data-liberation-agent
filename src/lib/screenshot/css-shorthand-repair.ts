@@ -57,9 +57,11 @@ function createShorthandVarCollapseRepair(): ( liveCssText: string, originalCssT
 
 	/**
 	 * Splits CSS text into a flat list of top-level rules, tracking brace depth
-	 * and skipping braces inside quoted strings (so a `content: "{"` declaration
-	 * does not desynchronize the split). Not a full CSS tokenizer — sufficient
-	 * for text a browser's own CSSOM has already validated and serialized.
+	 * and skipping braces inside quoted strings and CSS comments (so a
+	 * `content: "{"` declaration or a commented-out brace does not
+	 * desynchronize the split). Comments stay in the raw prelude/body text;
+	 * `preludeKey` ignores them. Not a full CSS tokenizer — sufficient for a
+	 * browser's CSSOM serialization and for authored `<style>` source text.
 	 */
 	function splitRules( css: string ): CssRuleNode[] {
 		const rules: CssRuleNode[] = [];
@@ -80,6 +82,11 @@ function createShorthandVarCollapseRepair(): ( liveCssText: string, originalCssT
 					continue;
 				}
 				if ( ch === '"' || ch === "'" ) { quote = ch; continue; }
+				if ( ch === '/' && css[ i + 1 ] === '*' ) {
+					const end = css.indexOf( '*/', i + 2 );
+					i = end === -1 ? n : end + 1;
+					continue;
+				}
 				if ( ch === '{' ) {
 					if ( depth === 0 ) bodyStart = i + 1;
 					else sawNested = true;
@@ -111,6 +118,8 @@ function createShorthandVarCollapseRepair(): ( liveCssText: string, originalCssT
 	 * after `)`, which is a descendant combinator). Quoted strings,
 	 * escapes and attribute selector brackets are copied verbatim. A lone space
 	 * (the descendant combinator) is kept, so `a b` and `ab` stay distinct.
+	 * CSS comments are dropped: authored source keeps them, the CSSOM
+	 * does not.
 	 */
 	function preludeKey( prelude: string ): string {
 		// No space survives after an opener/separator or before a closer/separator.
@@ -133,6 +142,11 @@ function createShorthandVarCollapseRepair(): ( liveCssText: string, originalCssT
 				if ( pendingSpace ) { out += ' '; pendingSpace = false; }
 				out += ch;
 				if ( i + 1 < prelude.length ) out += prelude[ ++i ];
+				continue;
+			}
+			if ( ch === '/' && prelude[ i + 1 ] === '*' ) {
+				const end = prelude.indexOf( '*/', i + 2 );
+				i = end === -1 ? prelude.length : end + 1;
 				continue;
 			}
 			if ( ch === '"' || ch === "'" ) {
