@@ -132,6 +132,8 @@ describe( 'device-mode evidence', () => {
 		expect( decideSiteMode( { requested: 'reflow-only', serverHtml: 'different' } ).mode ).toBe( 'reflow-only' );
 		const same = { desktopElements: 3, phoneElements: 3, differingPaths: 0 };
 		expect( decideRouteMode( { serverHtml: 'identical', structure: same } ).mode ).toBe( 'reflow-only' );
+		expect( decideRouteMode( { serverHtml: 'identical', structure: same, renderedDocuments: { desktop: '<html><head><style id="fit">#x{font-size:56px!important}</style></head><body></body></html>', phone: '<html><head><style id="fit">#x{font-size:32px!important}</style></head><body></body></html>' } } ).mode ).toBe( 'dual' );
+		expect( decideRouteMode( { serverHtml: 'identical', structure: same, renderedDocuments: { desktop: '<style id="fit">#x{font-size:32px}</style>', phone: '<style id="fit">#x{font-size:32px}</style>' } } ).mode ).toBe( 'reflow-only' );
 		expect( decideRouteMode( { serverHtml: 'identical', structure: { ...same, phoneElements: 4, differingPaths: 1 } } ).mode ).toBe( 'dual' );
 		expect( decideRouteMode( { serverHtml: 'different', structure: same } ).mode ).toBe( 'dual' );
 		expect( decideRouteMode( { error: 'HTTP 401' } ) ).toEqual( { mode: 'dual', reason: 'the phone check failed: HTTP 401' } );

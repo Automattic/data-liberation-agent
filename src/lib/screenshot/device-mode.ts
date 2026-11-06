@@ -2,6 +2,7 @@ import type { Page } from 'playwright';
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import { documentsDiffer } from '../responsive-assembly.js';
+import * as cheerio from 'cheerio';
 
 /**
  * Whether a capture renders the phone profile as its own document.
@@ -272,6 +273,20 @@ export function decideSiteMode( input: {
 	return { mode: 'reflow-only', reason: 'the entrypoint serves the same HTML to the desktop and phone identities; each route is captured at desktop only unless its phone check finds a different document' };
 }
 
+/** Detect viewport-dependent text in keyed style elements without treating ordinary head noise as a device variant. */
+function runtimeStyleTextDiffers( desktop: string, phone: string ): boolean {
+	const styles = ( html: string ) => {
+		const $ = cheerio.load( html );
+		const result = new Map<string, string>();
+		$( 'style[id]' ).each( ( _, element ) => { result.set( $( element ).attr( 'id' )!, $( element ).text() ); } );
+		return result;
+	};
+	const a = styles( desktop );
+	const b = styles( phone );
+	for ( const [ id, text ] of a ) if ( b.has( id ) && b.get( id ) !== text ) return true;
+	return false;
+}
+
 /** One route's decision under a `reflow-only` site, from its cheap phone check. */
 export function decideRouteMode( input: {
 	serverHtml?: DeviceModeDecision['serverHtml'];
@@ -287,6 +302,9 @@ export function decideRouteMode( input: {
 	if ( ! input.structure ) return { mode: 'dual', reason: 'the rendered structure could not be compared' };
 	const classes = input.bodyClasses ? [ ...input.bodyClasses.desktopOnly.map( token => `-${ token }` ), ...input.bodyClasses.phoneOnly.map( token => `+${ token }` ) ] : [];
 	if ( classes.length ) return { mode: 'dual', reason: `the phone identity renders different body classes (${ classes.join( ' ' ) })` };
+	if ( input.renderedDocuments && runtimeStyleTextDiffers( input.renderedDocuments.desktop, input.renderedDocuments.phone ) ) {
+		return { mode: 'dual', reason: 'the phone profile has different runtime-injected style rules' };
+	}
 	if ( input.structure.differingPaths > 0 && input.renderedDocuments && ! documentsDiffer( input.renderedDocuments.desktop, input.renderedDocuments.phone ) ) {
 		return { mode: 'reflow-only', reason: 'the phone DOM differs only in runtime-injected nodes or other differences that export treats as equivalent' };
 	}
