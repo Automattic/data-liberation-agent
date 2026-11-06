@@ -1406,14 +1406,25 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const label = (node: HTMLElement) => (node.innerText || node.getAttribute('aria-label') || (node as HTMLInputElement).value || '').trim();
     // Navigating anchors are links even when styled or labelled as buttons.
     // Classify by structure first; language-specific keywords only rank candidates.
-    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(node =>
-      visible(node) && /^https?:/.test(node.href));
+    const documentUrl = new URL(location.href);
+    documentUrl.hash = '';
+    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(node => {
+      if (!visible(node)) return false;
+      try {
+        const url = new URL(node.href);
+        url.hash = '';
+        return /^https?:$/.test(url.protocol) && url.href !== documentUrl.href;
+      } catch {
+        return false;
+      }
+    });
     const controls = Array.from(root.querySelectorAll<HTMLElement>('button, [role="button"], input[type="button"], input[type="submit"], a'))
       .filter(node => visible(node) && !links.includes(node as HTMLAnchorElement));
     const reject = controls.find(node => /reject|decline|deny|refuse|disagree|weigeren|ablehnen/i.test(label(node)));
     const policy = links.find(node => /privacy|policy|cookie|datenschutz/i.test(`${label(node)} ${node.href}`)) ?? links[0];
     const accept = controls.find(node => node !== reject && node !== policy && /accept|agree|allow|\bok\b|akkoord|zustimm|verstanden/i.test(label(node)))
-      ?? controls.find(node => node !== reject && node !== policy && !/close|dismiss|settings|preferences|manage/i.test(label(node)));
+      ?? controls.find(node => node !== reject && node !== policy && !/close|dismiss|settings|preferences|manage/i.test(label(node)))
+      ?? (controls.length === 0 ? links.find(node => node !== policy) : undefined);
     if (!accept || !label(accept)) return;
     // Read rendered prose without mutating live DOM. Keep inline link labels so
     // sentences remain whole; standalone block links are recorded separately.
