@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.157] - 2026-11-06
+
+### Changed
+- regenerate plugin bundles
+- treat terminal HTTP errors on source images as settled source state
+- Keep each exported document's painted image rendition
+
 ## [0.33.156] - 2026-11-06
 
 ### Changed
