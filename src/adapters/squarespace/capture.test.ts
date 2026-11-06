@@ -90,20 +90,28 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace slide
 						<a class="content-fill"><img data-image-dimensions="800x1000" width="800" height="1000" data-image-focal-point="0.5,0.5" style="position:relative;left:0px;top:-216px;width:576px;height:720px"></a>
 						<div class="meta overflow" style="left:0px;width:576px;height:115.2px">${ 'caption '.repeat( 400 ) }</div>
 					</div>
-				</div>` );
+				</div>
+				<div style="width:40vw"><div class="embed-block-wrapper" style="position:relative;padding-bottom:50%">
+					<div class="sqs-video-overlay" style="position:absolute;inset:0;overflow:hidden"><img id="poster" data-image-dimensions="100x84" style="position:relative;left:0px;top:-197.92px;width:576px;height:483.84px"></div>
+				</div></div>` );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
 			// The runtime keeps replacing inline styles as slides cycle.
-			await page.locator( 'img' ).evaluate( img => img.setAttribute( 'style', 'position:relative;left:0px;top:-216px;width:576px;height:720px' ) );
+			await page.locator( 'img' ).first().evaluate( img => img.setAttribute( 'style', 'position:relative;left:0px;top:-216px;width:576px;height:720px' ) );
 			await page.setContent( await page.content() );
 			await page.setViewportSize( { width: 768, height: 900 } );
 			// At 768 the slide is 307.2x153.6: the caption is 100% x 40% of it,
 			// and the 4:5 image is cover-scaled to its width and centred, as the
 			// loader would write it at 768 (top -115.2 = (153.6 - 384) / 2).
 			expect( await page.locator( '.meta' ).boundingBox() ).toMatchObject( { width: 307.1875, height: 61.4375 } );
-			const img = await page.locator( 'img' ).boundingBox();
+			const img = await page.locator( 'img' ).first().boundingBox();
 			expect( img ).toMatchObject( { width: 307.1875 } );
 			expect( img!.height ).toBeCloseTo( 384, 0 );
 			expect( img!.y - 8 ).toBeCloseTo( -115.2, 0 );
+			// A video poster in its aspect-locked embed wrapper follows the same fit.
+			const wrapper = await page.locator( '.embed-block-wrapper' ).boundingBox();
+			const poster = await page.locator( '#poster' ).boundingBox();
+			expect( poster!.width ).toBeCloseTo( wrapper!.width, 0 );
+			expect( poster!.y - wrapper!.y ).toBeCloseTo( ( wrapper!.height - poster!.height ) / 2, 0 );
 		} finally {
 			await browser.close();
 		}
