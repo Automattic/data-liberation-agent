@@ -17,11 +17,13 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     #click-banner { bottom:100px } #mask { position:fixed; inset:0; background:#0003 }
     #styled-root { padding:12px; background:rgb(240,240,240) }
     #dependent > p { color:rgb(30,40,50) }
+    #menu-toggle { display:none } @media (max-width: 767px) { #menu-toggle { display:flex; width:40px; height:40px } }
   </style></head><body><div id="__next"><div id="root"><main><h1>Real heading</h1>
     <p>Real prose stays exactly here.</p><div id="styled-root">Styled content</div>
     <div id="app"><div id="dependent"><p>Selector-dependent content</p></div></div>
     <a id="hidden-top" href="#" style="position:absolute;width:0;height:0;overflow:hidden">Back to top</a>
     <a id="real-link" href="#real-target" style="display:none">Real destination</a><p id="real-target">Target</p>
+    <a id="menu-toggle" href="#" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="Open menu"><svg viewBox="0 0 24 24" width="40" height="40"><path d="M4 8h16V6H4z"></path></svg></a>
     <div style="height:1000px">More real content to keep overlays below the page-text threshold.</div>
   </main></div></div>
   <div id="click-banner" class="consent">Cookie preferences <button onclick="this.parentNode.style.display='none'">Accept all</button></div>
@@ -46,6 +48,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     expect($('#click-banner, #hide-banner, #__next, #root, #app, #hidden-top').length).toBe(0);
     expect($('#styled-root').text()).toBe('Styled content');
     expect($('#real-link').length).toBe(1);
+    // A targetless link with control semantics hidden only at the capture width stays for its phone rules.
+    expect($('#menu-toggle[aria-haspopup="menu"]').length).toBe(1);
     expect($('#promo').text()).toContain('Genuine promotional content');
     const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots/manifest.json'), 'utf8'));
     const entry = manifest.entries[url];

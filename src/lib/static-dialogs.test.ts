@@ -77,6 +77,16 @@ describe( 'wireCapturedDialogs', () => {
 		expect( $( '[data-blocks-engine-capture-dialog-trigger]' ).toArray().map( node => $( node ).attr( 'aria-label' ) ) ).toEqual( [ 'Open menu' ] );
 		expect( $( '.desktop a' ).attr( 'href' ) ).toBe( '/projects' );
 	} );
+	it( 'wires the labelled control when a phone-observed trigger ID names another control in the shipped document', () => {
+		// The phone runtime gave the menu toggle ID 1; the shipped (desktop-identity) document gave it 6 and ID 1 to an unrelated control.
+		const html = '<html><body><header><a id="1" role="button" aria-haspopup="menu" href="#">More</a>'
+			+ '<a id="6" role="button" aria-haspopup="menu" aria-label="Open menu" href="#"></a></header><div id="menu" hidden><a href="/about">About</a></div></body></html>';
+		const $ = cheerio.load( wireCapturedDialogs( html, [ {
+			...captured,
+			trigger: { ...captured.trigger, selector: '#\\31 ', id: '1', tag: 'a', ariaHaspopup: 'menu', label: 'Open menu' },
+		} ] ) );
+		expect( $( '[data-blocks-engine-capture-dialog-trigger]' ).toArray().map( node => $( node ).attr( 'id' ) ) ).toEqual( [ '6' ] );
+	} );
 	// ~1 second: reduced mebenedetto.com /jujuy-2022/ dual-document tree.
 	it( 'restores duplicate source panel IDs inside synthesized responsive menus', async () => {
 		const document = ( device: string ) => `<div class="${ device }"><header><nav>
