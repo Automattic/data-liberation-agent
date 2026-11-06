@@ -532,10 +532,12 @@ function renderedHtml( html: string ): string {
 		const isContentInfoLandmark =
 			node.is( 'footer' ) ||
 			/(?:^|\s)contentinfo(?:\s|$)/i.test( node.attr( 'role' ) ?? '' );
+		// Role names start a class/id token (possibly with a suffix like
+		// `modal-root`); behavior tokens like `has-popup` do not name a role.
 		if (
 			/(?:^|;)\s*(?:position\s*:\s*(?:fixed|absolute)|bottom\s*:)/i.test( style ) ||
 			( ! isContentInfoLandmark &&
-				/(?:account.*app|app.*account|footer|modal|mount|portal|popup|toast)/i.test(
+				/(?:^|\s)(?:account[^\s]*app|app[^\s]*account|footer|modal|mount|portal|popup|toast)(?=$|[\s_-])/i.test(
 					idAndClass
 				) )
 		) {
