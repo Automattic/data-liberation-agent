@@ -352,12 +352,19 @@ describe( 'assembleResponsiveCapture', () => {
 		try {
 			const source = await browser.newPage( { viewport: { width: 402, height: 681 } } );
 			await source.setContent( mobile );
+			const waitForPhase = async ( target: typeof source, width: number ) => {
+				await target.waitForFunction( expected => {
+					const x = expected < 768 ? expected - 16 : expected < 800 ? expected - 11 : expected - 38;
+					return document.querySelector( '#inactive' )!.getBoundingClientRect().x === x;
+				}, width );
+			};
+			await waitForPhase( source, 402 );
 			const sourcePhoneX = ( await source.locator( '#inactive' ).boundingBox() )!.x;
 			await source.setViewportSize( { width: 768, height: 900 } );
-			await source.waitForTimeout( 30 );
+			await waitForPhase( source, 768 );
 			const sourceTabletX = ( await source.locator( '#inactive' ).boundingBox() )!.x;
 			await source.setViewportSize( { width: 402, height: 681 } );
-			await source.waitForTimeout( 30 );
+			await waitForPhase( source, 402 );
 			const capturedMobile = await source.evaluate( () => { document.querySelectorAll( 'script' ).forEach( script => script.remove() ); return document.documentElement.outerHTML; } );
 			const desktopSource = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			await desktopSource.setContent( desktop );
@@ -365,12 +372,12 @@ describe( 'assembleResponsiveCapture', () => {
 			const sourcePhase = new Map<number, number>();
 			for ( const width of [ 390, 402, 768, 1440 ] ) {
 				await desktopSource.setViewportSize( { width, height: 900 } );
-				await desktopSource.waitForTimeout( 20 );
+				await waitForPhase( desktopSource, width );
 				sourcePhase.set( width, ( await desktopSource.locator( '#inactive' ).boundingBox() )!.x );
 			}
 			for ( const width of widths ) {
 				await desktopSource.setViewportSize( { width, height: 900 } );
-				await desktopSource.waitForTimeout( 10 );
+				await waitForPhase( desktopSource, width );
 			}
 			await learnAndApplyFluidGeometry( desktopSource, { widths, settleMs: 10 } );
 			const capturedDesktop = await desktopSource.evaluate( () => { document.querySelectorAll( 'script' ).forEach( script => script.remove() ); return document.documentElement.outerHTML; } );
