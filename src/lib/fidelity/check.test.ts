@@ -715,7 +715,7 @@ describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on 
 	const exitBeacon = `<script>addEventListener('beforeunload', () => navigator.sendBeacon('/ping', 'left'));</script>`;
 
 	/** Serve a live source that beacons on exit, write `copy` (given the source origin) to disk, and compare. */
-	async function compare( copy: ( origin: string ) => string ) {
+	async function compare( copy: ( origin: string ) => string, waitForBeacon = false ) {
 		let pings = 0;
 		const server = createServer( ( request, response ) => {
 			if ( request.url === '/ping' || request.url === '/pixel.gif' ) {
@@ -743,6 +743,12 @@ describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on 
 		try {
 			const report = await checkFidelity( { directory: dir, widths: [ 1440 ], settleMs: 200 } );
 			const external = report.scores.flatMap( ( score ) => score.failures.filter( ( failure ) => failure.startsWith( 'copy requested' ) ) );
+			if ( waitForBeacon ) {
+				const deadline = Date.now() + 3_000;
+				while ( pings === 0 && Date.now() < deadline ) {
+					await new Promise( resolve => setTimeout( resolve, 50 ) );
+				}
+			}
 			return { pings, external };
 		} finally {
 			server.closeAllConnections();
@@ -751,7 +757,7 @@ describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on 
 	}
 
 	it( 'does not blame the copy for the source page\'s exit beacons', async () => {
-		const { pings, external } = await compare( () => html() );
+		const { pings, external } = await compare( () => html(), true );
 		// The scenario is real: the source did send its exit beacon.
 		expect( pings ).toBeGreaterThan( 0 );
 		expect( external ).toEqual( [] );
