@@ -2252,7 +2252,7 @@ function buildExportCapture(
 			slug: entry.slug, url: entry.url, routePath: routePathOf( entry.url ),
 			identityHtmlPath: entry.identityHtmlPath!, hasMobileDocument: entry.hasMobileDocument,
 		} ) ),
-		routes: { retained: routes, excluded: excludedRoutes, duplicates: duplicateRoutes },
+		routes: { retained: routes, links: sourceRouteLinks, excluded: excludedRoutes, duplicates: duplicateRoutes },
 		states: { interactions: interactionPages, scroll: scrollStatesPages },
 		layout: { fluidReports, switchWidths, deviceSelections, widthSelections },
 		assets: {
