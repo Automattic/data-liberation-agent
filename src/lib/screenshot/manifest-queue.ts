@@ -178,6 +178,11 @@ export class ManifestQueue {
     return this.manifest.entries[url];
   }
 
+  /** Snapshot captured route entries for cross-route evidence projection. */
+  getEntries(): Array<[ string, ManifestEntry ]> {
+    return Object.entries( this.manifest.entries );
+  }
+
   /** Claim a slug through the serialization chain. */
   claimSlug(base: string): Promise<string> {
     let result: string = base;

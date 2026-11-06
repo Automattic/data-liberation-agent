@@ -3468,6 +3468,19 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// Settle glyphs deferred on earlier routes with colours learned later.
 		glyphColors.resolveDeferred();
 		await resourceStore.flush();
+		if ( sharedChromeEnabled && entrypoint ) {
+			const source = manifest.getEntry( entrypoint );
+			const toggles = source?.scrollStates?.toggles.filter( toggle =>
+				sharedChromeResults.get( 'desktop' )?.evidence?.landmarks.some( landmark =>
+					toggle.target.selector === landmark.prefixes[ 0 ] || toggle.target.selector.startsWith( `${ landmark.prefixes[ 0 ] } ` )
+				)
+			) ?? [];
+			if ( toggles.length ) for ( const [ route, entry ] of manifest.getEntries() ) {
+				if ( route === entrypoint || ! entry.sharedChrome?.chromeReused || entry.scrollStates?.toggles.length ) continue;
+				const report = source!.scrollStates!;
+				await manifest.updateEntry( route, { scrollStates: { ...report, sourceUrl: route, toggles } } );
+			}
+		}
 		await manifest.flush();
 		if (frontier) writeFileSync(join(opts.outputDir, 'linked-page-coverage.json'), JSON.stringify(frontier.coverage(), null, 2));
 		// Persist the accumulated responsive-image map (mobile variants) for the
