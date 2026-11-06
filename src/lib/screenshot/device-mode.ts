@@ -2,6 +2,7 @@ import type { Page } from 'playwright';
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import { documentsDiffer } from '../responsive-assembly.js';
+import { CONSENT_OVERLAY_DIALOG_SELECTOR, CONSENT_VENDOR_RE, isConsentOverlayRoot, type ConsentOverlayElement } from '../consent-overlay.js';
 
 /**
  * Whether a capture renders the phone profile as its own document.
@@ -27,7 +28,7 @@ export const SERVER_HTML_IGNORED = [
 ] as const;
 
 /** Elements left out of the rendered structure comparison. */
-export const STRUCTURE_IGNORED = [ 'differences inside <head> (reported, not compared)', 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-lib-* probe markers or capture evidence attributes', 'the sibling position of empty HTML containers, elements with no child nodes other than void, replaced and form elements (their presence still counts)' ] as const;
+export const STRUCTURE_IGNORED = [ 'differences inside <head> (reported, not compared)', 'script', 'style', 'noscript', 'template', 'invisible (at most 1 px or visibility:hidden) iframes and images appended directly to <body>, such as tracking pixels', 'elements carrying data-lib-* probe markers or capture evidence attributes', 'cookie/consent overlay subtrees (consent dialogs and consent vendor elements), which consent managers lay out per viewport', 'the sibling position of empty HTML containers, elements with no child nodes other than void, replaced and form elements (their presence still counts)' ] as const;
 
 export interface DeviceModeDecision {
 	mode: DeviceMode;
@@ -144,14 +145,46 @@ export function compareStructure( desktop: readonly string[], phone: readonly st
 }
 
 /**
+ * Drop the subtrees rooted at `roots` from a document-order path list and
+ * renumber the remaining paths, so an excluded element does not shift the
+ * position of its later same-tag siblings.
+ */
+export function withoutSubtrees( paths: readonly string[], roots: readonly string[] ): string[] {
+	if ( ! roots.length ) return [ ...paths ];
+	const excluded = ( path: string ) => roots.some( root => path === root || path.startsWith( `${ root }>` ) );
+	const renamed = new Map< string, string >();
+	const positions = new Map< string, number >();
+	const kept: string[] = [];
+	for ( const path of paths ) {
+		if ( excluded( path ) ) continue;
+		const cut = path.lastIndexOf( '>' );
+		if ( cut === -1 ) { renamed.set( path, path ); kept.push( path ); continue; }
+		const parent = renamed.get( path.slice( 0, cut ) ) ?? path.slice( 0, cut );
+		const [ , tag, index ] = /^(.*)\[(\d*)\]$/.exec( path.slice( cut + 1 ) ) ?? [ '', path.slice( cut + 1 ), '' ];
+		let next = `${ parent }>${ tag }[]`;
+		if ( index !== '' ) {
+			const key = `${ parent }>${ tag }`;
+			const position = ( positions.get( key ) ?? 0 ) + 1;
+			positions.set( key, position );
+			next = `${ parent }>${ tag }[${ position }]`;
+		}
+		renamed.set( path, next );
+		kept.push( next );
+	}
+	return kept;
+}
+
+/**
  * The rendered element-path structure of a page, in document order. A path is
  * the tag chain from `<html>` with each element's position among its kept
- * same-tag siblings, e.g. `html>body>div[2]>nav[1]`. When `mark` is given,
- * elements whose path is in it get that attribute (used to carry a desktop
- * observation onto the same elements of a structurally identical phone page).
+ * same-tag siblings, e.g. `html>body>div[2]>nav[1]`. Consent overlay subtrees
+ * (`isConsentOverlayRoot`) are left out. When `mark` is given, elements whose
+ * raw path (consent overlays included, as `visibleControlPaths` reads it) is
+ * in it get that attribute (used to carry a desktop observation onto the same
+ * elements of a structurally identical phone page).
  */
 export async function renderedElementPaths( page: Page, mark?: { attribute: string; paths: readonly string[] } ): Promise< string[] > {
-	return page.evaluate( ( mark ) => {
+	const { paths, overlays } = await page.evaluate( ( { mark, dialogSelector, vendorSource } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
 		// Invisible frames and pixels appended to <body> are tracking and messaging
 		// channels that third-party scripts inject on their own schedule, not page
@@ -160,6 +193,10 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 			( ( rect => rect.width <= 1 || rect.height <= 1 )( element.getBoundingClientRect() ) || getComputedStyle( element ).visibility === 'hidden' );
 		const owned = ( element: Element ) => Array.from( element.attributes ).some( attribute => /^data-(?:lib|blocks-engine-capture)-/.test( attribute.name ) && attribute.name !== mark?.attribute );
 		const marked = mark ? new Set( mark.paths ) : undefined;
+		// Possible consent overlay roots, classified in Node by the shared consent classifier.
+		const vendor = new RegExp( vendorSource, 'i' );
+		const className = ( element: Element ) => typeof element.className === 'string' ? element.className : ( element.getAttribute( 'class' ) ?? '' );
+		const overlays: Array< { path: string; element: ConsentOverlayElement } > = [];
 		// An empty container is compared by presence, not by its place among its
 		// siblings, so a script reordering one at another width does not shift
 		// every content-bearing sibling. Void, replaced and form elements are
@@ -178,13 +215,18 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 				const path = empty ? `${ prefix }>${ tag }[]` : `${ prefix }>${ tag }[${ position }]`;
 				paths.push( path );
 				if ( marked?.has( path ) ) child.setAttribute( mark!.attribute, '' );
+				// An empty container has no subtree, and its path is shared by its empty siblings.
+				if ( ! empty && ( child.matches( dialogSelector ) || vendor.test( `${ child.id } ${ className( child ) }` ) ) ) {
+					overlays.push( { path, element: { tag, id: child.id, className: className( child ), role: child.getAttribute( 'role' ), ariaModal: child.getAttribute( 'aria-modal' ) === 'true', ariaLabel: child.getAttribute( 'aria-label' ), text: ( child.textContent ?? '' ).slice( 0, 4000 ) } } );
+				}
 				walk( child, path );
 			}
 		};
 		paths.push( 'html' );
 		walk( document.documentElement, 'html' );
-		return paths;
-	}, mark );
+		return { paths, overlays };
+	}, { mark, dialogSelector: CONSENT_OVERLAY_DIALOG_SELECTOR, vendorSource: CONSENT_VENDOR_RE.source } );
+	return withoutSubtrees( paths, overlays.filter( overlay => isConsentOverlayRoot( overlay.element ) ).map( overlay => overlay.path ) );
 }
 
 /** Class tokens on `<body>` that one identity rendered and the other did not. */

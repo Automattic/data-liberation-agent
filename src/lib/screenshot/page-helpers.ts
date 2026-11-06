@@ -2,6 +2,7 @@ import type { Page, Request } from 'playwright';
 import { mergeConsentLayouts } from '../consent-banner-layout.js';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
+import { isConsentNotice } from '../consent-overlay.js';
 
 /** Slack given to an in-page step beyond its own budget before Node gives up on it. */
 const EVALUATE_GRACE_MS = 5_000;
@@ -946,21 +947,13 @@ export function scoreOverlay(
   return { score, signals };
 }
 
-const CONSENT_TEXT_RE = /\bcookies?\b|\bconsent\b|\bgdpr\b|\bccpa\b|\baccept all\b|privacy (policy|preferences)/i;
-const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc|cookieyes|\bcc-window\b|\bcc-banner\b/i;
-
 /**
  * A looser, separate classifier for cookie/consent banners. They frequently do
  * NOT lock scroll and are thin strips, so they won't clear the takeover score;
  * we flag them by consent keywords / known vendors in their text/aria/selector.
  */
 export function isConsentBanner(c: OverlayCandidate): boolean {
-  // A pinned header that holds the site's menu commonly links to a "Privacy
-  // Policy" or "Cookie Policy" page. Those menu labels are navigation, not a
-  // consent notice: judge such chrome by the text outside its links only.
-  const text = c.hasMenu && c.nonLinkText !== undefined ? c.nonLinkText : c.text;
-  const hay = `${text} ${c.ariaLabel ?? ''} ${c.selector}`;
-  return CONSENT_TEXT_RE.test(hay) || CONSENT_VENDOR_RE.test(hay);
+  return isConsentNotice(c);
 }
 
 /** Hosting-platform acquisition chrome is not authored site content. */
