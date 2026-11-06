@@ -274,15 +274,9 @@ export function decideSiteMode( input: {
 }
 
 /** Detect viewport-dependent text in keyed style elements without treating ordinary head noise as a device variant. */
-function runtimeStyleTextDiffers( desktop: string, phone: string ): boolean {
-	const styles = ( html: string ) => {
-		const $ = cheerio.load( html );
-		const result = new Map<string, string>();
-		$( 'style[id]' ).each( ( _, element ) => { result.set( $( element ).attr( 'id' )!, $( element ).text() ); } );
-		return result;
-	};
-	const a = styles( desktop );
-	const b = styles( phone );
+function runtimeStyleTextDiffers( desktop: Array<[ string, string ]>, phone: Array<[ string, string ]> ): boolean {
+	const a = new Map( desktop );
+	const b = new Map( phone );
 	for ( const [ id, text ] of a ) if ( b.has( id ) && b.get( id ) !== text ) return true;
 	return false;
 }
@@ -291,6 +285,8 @@ function runtimeStyleTextDiffers( desktop: string, phone: string ): boolean {
 export function decideRouteMode( input: {
 	serverHtml?: DeviceModeDecision['serverHtml'];
 	structure?: StructureComparison;
+	/** Settled keyed style text, collected directly from both rendered pages. */
+	runtimeStyles?: { desktop: Array<[ string, string ]>; phone: Array<[ string, string ]> };
 	/** Settled documents, read after the path recheck when paths still differ. */
 	renderedDocuments?: { desktop: string; phone: string };
 	bodyClasses?: { desktopOnly: string[]; phoneOnly: string[] };
@@ -302,7 +298,7 @@ export function decideRouteMode( input: {
 	if ( ! input.structure ) return { mode: 'dual', reason: 'the rendered structure could not be compared' };
 	const classes = input.bodyClasses ? [ ...input.bodyClasses.desktopOnly.map( token => `-${ token }` ), ...input.bodyClasses.phoneOnly.map( token => `+${ token }` ) ] : [];
 	if ( classes.length ) return { mode: 'dual', reason: `the phone identity renders different body classes (${ classes.join( ' ' ) })` };
-	if ( input.renderedDocuments && runtimeStyleTextDiffers( input.renderedDocuments.desktop, input.renderedDocuments.phone ) ) {
+	if ( input.runtimeStyles && runtimeStyleTextDiffers( input.runtimeStyles.desktop, input.runtimeStyles.phone ) ) {
 		return { mode: 'dual', reason: 'the phone profile has different runtime-injected style rules' };
 	}
 	if ( input.structure.differingPaths > 0 && input.renderedDocuments && ! documentsDiffer( input.renderedDocuments.desktop, input.renderedDocuments.phone ) ) {

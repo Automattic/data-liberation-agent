@@ -16,6 +16,10 @@ it( 'inherits only rendered script proofs, preserves identity differences, and r
 			return;
 		}
 		res.setHeader( 'content-type', 'text/html' );
+		if ( req.url === '/fit' ) {
+			res.end( `<!doctype html><head><script>addEventListener('DOMContentLoaded',()=>{const fit=()=>{let s=document.getElementById('t-style');if(!s){s=document.createElement('style');s.id='t-style';document.head.append(s)}s.textContent='#t{font-size:'+ (innerWidth<768?32:56) +'px!important}'};fit();addEventListener('resize',fit)})</script></head><body><h1 id="t">Strategy and Communication</h1><p>Body text.</p></body>` );
+			return;
+		}
 		res.end( `<body><script nonce="${ req.headers[ 'user-agent' ] === 'Desktop' ? 'a' : 'b' }"></script><p>${ req.url === '/server' && /iPhone/.test( req.headers[ 'user-agent' ] ?? '' ) ? 'phone' : 'same' }</p><script src="${ req.url === '/client' ? '/new.js' : '/known.js' }"></script></body>` );
 	} );
 	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
@@ -28,6 +32,8 @@ it( 'inherits only rendered script proofs, preserves identity differences, and r
 			deviceEvidence: new RouteDeviceEvidence(),
 			identityHeaders: { desktop: { 'user-agent': 'Desktop' }, mobile: { 'user-agent': devices[ 'iPhone 13' ]!.userAgent } },
 		};
+		const fit = await checkRouteDeviceMode( { ...args, url: `${ base }/fit` } );
+		expect( fit ).toMatchObject( { mode: 'dual', reason: 'the phone profile has different runtime-injected style rules' } );
 		const first = await checkRouteDeviceMode( { ...args, url: `${ base }/first` } );
 		expect( first.mode ).toBe( 'reflow-only' );
 		expect( first.inheritedFrom ).toBeUndefined();
