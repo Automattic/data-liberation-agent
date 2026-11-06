@@ -2,8 +2,8 @@ import type { Page } from 'playwright';
 import { documentRequestUrl } from './url/route-key.js';
 import { detectHosts, hostResidue } from '../platform/host.js';
 
-export const CLEANUP_SCHEMA = 'blocks-engine-capture/source-cleanup/v8';
-export const CLEANUP_CATEGORIES = ['advertisement', 'source-attribution', 'provider-service'] as const;
+export const CLEANUP_SCHEMA = 'blocks-engine-capture/source-cleanup/v9';
+export const CLEANUP_CATEGORIES = ['advertisement', 'source-attribution', 'provider-service', 'tracking'] as const;
 export type CleanupCategory = typeof CLEANUP_CATEGORIES[number];
 export interface CleanupRule {
   id: string;
@@ -20,6 +20,8 @@ export interface CleanupRule {
   promotion?: boolean;
   /** Unnamed builder chrome requires an authoring affordance plus its vendor's assets. */
   builderChrome?: boolean;
+  /** Browser-measured invisible/tiny images without authored link or alt content. */
+  trackingImage?: boolean;
   /** Adapter-owned brand spelling for plain-text footer credit removal. */
   creditText?: string;
   /** Custom properties this chrome publishes its own height into, so the space
@@ -113,8 +115,13 @@ const BUILDER_CHROME_RULE: CleanupRule = {
   selector: 'body > div,body > aside,body > a,body > span,footer > div',
 };
 
+const TRACKING_IMAGE_RULE: CleanupRule = {
+  id: 'tracking-image', category: 'tracking', selector: 'img', trackingImage: true,
+  evidence: 'Loaded 1×1 image, at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source',
+};
+
 export function cleanupPolicy(rules: CleanupRule[] = []): CleanupPolicy {
-  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, CAPTCHA_WIDGET_RULE, ...rules, BUILDER_CHROME_RULE],
+  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, CAPTCHA_WIDGET_RULE, TRACKING_IMAGE_RULE, ...rules, BUILDER_CHROME_RULE],
     promotion: { ...PROMOTION_PATTERNS }, builderChrome: { ...BUILDER_CHROME_PATTERNS } };
 }
 
@@ -343,6 +350,16 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
     return parts.join(' > ');
   };
   const eligible = (node: Element, rule: CleanupRule) => {
+    if (rule.trackingImage) {
+      if (node.tagName !== 'IMG' || node.closest('a[href],[role="link"]') || node.getAttribute('alt')?.trim()) return false;
+      // A tracking pixel is a loaded 1×1 resource. Hidden slides, tabs and
+      // responsive images load real dimensions; lazy placeholders name their source.
+      const image = node as HTMLImageElement;
+      if (!image.complete || image.naturalWidth < 1 || image.naturalWidth > 1 || image.naturalHeight > 1) return false;
+      if ([...image.getAttributeNames()].some(name => /^(?:srcset|data-(?:src|srcset|lazy.*|original))$/i.test(name))) return false;
+      const rect = image.getBoundingClientRect();
+      return (rect.width <= 1 && rect.height <= 1) || !image.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+    }
     if (rule.hosts) {
       let host: string;
       try { host = new URL(node.getAttribute('href') ?? node.getAttribute('src') ?? '', location.href).hostname; }
@@ -436,7 +453,7 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
         }
         const reclaimedVariables = reclaimReservedSpace(rule);
         if (report.records.length < 200) report.records.push({ rule: rule.id, category: rule.category,
-          selector: selectorFor(node), text: (node.textContent ?? '').trim().slice(0, 160), action: 'remove', reclaimedBodyPadding, ...(rule.host ? { host: rule.host, evidence: rule.evidence } : {}), ...(reclaimedVariables ? { reclaimedVariables } : {}) });
+          selector: selectorFor(node), text: (node.textContent ?? '').trim().slice(0, 160), action: 'remove', reclaimedBodyPadding, ...(rule.host ? { host: rule.host } : {}), ...(rule.evidence ? { evidence: rule.evidence } : {}), ...(reclaimedVariables ? { reclaimedVariables } : {}) });
         else report.truncated = true;
         let parent = node.parentElement;
         orphanIdsIn(node);

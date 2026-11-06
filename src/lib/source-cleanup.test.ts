@@ -120,6 +120,49 @@ it('captures clean artifacts and compares intentional removals while rejecting d
   expect(JSON.parse(readFileSync(join(directory, 'compare', 'cleanup-evidence.json'), 'utf8')).completed).toBe(false);
 }, 90_000);
 
+it('drops script-injected tracking images from processed and exported HTML with cleanup evidence', async () => {
+  const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==';
+  server = createServer((_req, res) => {
+    res.setHeader('content-type', 'text/html');
+    res.end(`<!doctype html><html><head><title>Images</title></head><body>
+      <main><h1>Owner content</h1><img id="content-image" src="${photo}" width="120" height="80" alt="Owner landscape">
+      <img id="hidden-slide" src="${photo}" width="120" height="80" style="display:none">
+      <img id="lazy-placeholder" src="${image}" data-src="${photo}" width="1" height="1">
+      <a href="#content-image"><img id="linked-image" src="${image}" width="1" height="1"></a>
+      <img id="labelled-image" src="${image}" width="1" height="1" alt="Meaningful label"></main>
+      <script>
+        const beacon = new Image(1, 1); beacon.id = 'runtime-beacon'; beacon.src = '${image}'; document.body.append(beacon);
+        const hidden = new Image(6, 5); hidden.id = 'hidden-beacon'; hidden.style.display = 'none'; hidden.src = '${image}'; document.body.append(hidden);
+      </script></body></html>`);
+  });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+  mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
+  directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'cleanup-images-'));
+  const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir: directory,
+    captureImages: true, learnFluid: false, settleMs: 100 });
+  expect(result.failed).toBe(0);
+  exportWebsiteCapture({ outputDir: directory, sourceUrl: url, platform: 'default', summary: {}, failures: [] });
+  const manifest = JSON.parse(readFileSync(join(directory, 'screenshots', 'manifest.json'), 'utf8'));
+  for (const path of [manifest.entries[url].html, 'website/index.html']) {
+    const document = readFileSync(join(directory, path), 'utf8');
+    expect(document).toContain('id="content-image"');
+    expect(document).toContain('id="linked-image"');
+    expect(document).toContain('id="labelled-image"');
+    expect(document).toContain('id="hidden-slide"');
+    expect(document).toContain('id="lazy-placeholder"');
+    expect(document).not.toContain('id="runtime-beacon"');
+    expect(document).not.toContain('id="hidden-beacon"');
+  }
+  const ledger = JSON.parse(readFileSync(join(directory, 'cleanup-evidence.json'), 'utf8'));
+  const records = ledger.pages[0].reports.flatMap((report: { records: unknown[] }) => report.records);
+  for (const selector of ['#runtime-beacon', '#hidden-beacon']) {
+    expect(records).toContainEqual(expect.objectContaining({ rule: 'tracking-image', selector,
+      action: 'remove', evidence: 'Loaded 1×1 image, at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source' }));
+  }
+}, 60_000);
+
 it('captures detected host residue as attribution cleanup but keeps the same frame without detection', async () => {
   registerHost({ id: 'fixture-host', detection: { httpSignals: [{ header: 'x-fixture-host', signal: 'fixture header' }] },
     residue: [{ selector: 'iframe#hud-badge', evidence: 'fixture host badge frame' }] });
