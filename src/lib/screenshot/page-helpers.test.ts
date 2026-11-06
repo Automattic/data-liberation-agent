@@ -255,10 +255,13 @@ describe('declared loading state', () => {
     }
   });
 
-  it('does not treat a textual full-viewport layer as a loading cover', async () => {
+  it.each([
+    ['textual content', '<p>We use cookies. Accept or reject.</p>'],
+    ['an embedded document', '<iframe srcdoc="<p>Join our newsletter</p><button>Sign up</button>"></iframe>'],
+  ])('does not treat a full-viewport layer with %s as a loading cover', async (_description, coverContent) => {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     try {
-      await page.setContent(coverFixture(3_000, '<p>We use cookies. Accept or reject.</p>'));
+      await page.setContent(coverFixture(3_000, coverContent));
       const started = Date.now();
       await waitForDeclaredLoadingState(page, 5_000);
       expect(Date.now() - started).toBeLessThan(1_500);
