@@ -977,6 +977,32 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await source.close();
 	}, 30_000 );
 
+	// #1414: px, `100%` and px regimes each stay bounded to the widths they were observed at.
+	it( 'bounds runtime custom-property regimes that switch between px and 100%', async () => {
+		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		const expected = ( width: number ) => width < 700 ? `${ width * 0.3256 }px` : width < 768 ? '100%' : `${ width * 0.3 + 30 }px`;
+		try {
+			await source.setContent( `<style>body{margin:0}#frame{height:400px}#box{height:var(--h)}</style>
+				<div id="frame" style="--h:462px"><div id="box"></div></div>
+				<script>const expected=${ expected.toString() };
+				const update=()=>document.querySelector('#frame').style.setProperty('--h',expected(innerWidth));
+				addEventListener('resize',update);update();</script>` );
+			await learnAndApplyFluidGeometry( source, { widths: [ 390, 600, 700, 740, 767, 768, 1024, 1440 ], settleMs: 10 } );
+			await source.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			await copy.setContent( await source.content() );
+			for ( const width of [ 390, 740, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				const [ declared, height ] = await copy.locator( '#frame' ).evaluate( node => [
+					getComputedStyle( node ).getPropertyValue( '--h' ).trim(),
+					node.querySelector( '#box' )!.getBoundingClientRect().height,
+				] as const );
+				if ( width === 740 ) expect( declared, 'declared at 740' ).toBe( '100%' );
+				else expect( Math.abs( height - parseFloat( expected( width ) ) ), `height at ${ width }` ).toBeLessThanOrEqual( 2 );
+			}
+		} finally { await source.close(); await copy.close(); }
+	}, 30_000 );
+
 	// One sweep (~3s): all siblings retain both coordinates across a row wrap.
 	it( 'carries every translated grid item through shared wrap bands', async () => {
 		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
