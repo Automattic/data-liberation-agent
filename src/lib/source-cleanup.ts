@@ -117,7 +117,7 @@ const BUILDER_CHROME_RULE: CleanupRule = {
 
 const TRACKING_IMAGE_RULE: CleanupRule = {
   id: 'tracking-image', category: 'tracking', selector: 'img', trackingImage: true,
-  evidence: 'Loaded 1×1 image, at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source',
+  evidence: 'Loaded image of at most 8×8 px, rendered at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source',
 };
 
 export function cleanupPolicy(rules: CleanupRule[] = []): CleanupPolicy {
@@ -352,10 +352,11 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
   const eligible = (node: Element, rule: CleanupRule) => {
     if (rule.trackingImage) {
       if (node.tagName !== 'IMG' || node.closest('a[href],[role="link"]') || node.getAttribute('alt')?.trim()) return false;
-      // A tracking pixel is a loaded 1×1 resource. Hidden slides, tabs and
-      // responsive images load real dimensions; lazy placeholders name their source.
+      // A tracking pixel is a loaded resource of a few pixels (Jetpack Stats
+      // serves 6×5). Hidden slides, tabs and responsive images load real
+      // dimensions; lazy placeholders name their source.
       const image = node as HTMLImageElement;
-      if (!image.complete || image.naturalWidth < 1 || image.naturalWidth > 1 || image.naturalHeight > 1) return false;
+      if (!image.complete || image.naturalWidth < 1 || image.naturalWidth > 8 || image.naturalHeight > 8) return false;
       if ([...image.getAttributeNames()].some(name => /^(?:srcset|data-(?:src|srcset|lazy.*|original))$/i.test(name))) return false;
       const rect = image.getBoundingClientRect();
       return (rect.width <= 1 && rect.height <= 1) || !image.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });

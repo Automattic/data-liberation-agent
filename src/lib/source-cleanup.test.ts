@@ -122,7 +122,8 @@ it('captures clean artifacts and compares intentional removals while rejecting d
 
 it('drops script-injected tracking images from processed and exported HTML with cleanup evidence', async () => {
   const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-  const photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==';
+  const photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAIAAADRv8uKAAAAKUlEQVR4nO3NoQ0AAAwCMP5/ensBh2lS31wysVnFYrFYLBaLxWKxWFx5Pp2rjeB5c/4AAAAASUVORK5CYII=';
+  const statsPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAYAAAAFCAIAAADpOgqxAAAAEklEQVR4nGP4z8CAhtD5lAgBAKn7HeOzBEccAAAAAElFTkSuQmCC';
   server = createServer((_req, res) => {
     res.setHeader('content-type', 'text/html');
     res.end(`<!doctype html><html><head><title>Images</title></head><body>
@@ -133,7 +134,7 @@ it('drops script-injected tracking images from processed and exported HTML with 
       <img id="labelled-image" src="${image}" width="1" height="1" alt="Meaningful label"></main>
       <script>
         const beacon = new Image(1, 1); beacon.id = 'runtime-beacon'; beacon.src = '${image}'; document.body.append(beacon);
-        const hidden = new Image(6, 5); hidden.id = 'hidden-beacon'; hidden.style.display = 'none'; hidden.src = '${image}'; document.body.append(hidden);
+        const hidden = new Image(6, 5); hidden.id = 'hidden-beacon'; hidden.style.display = 'none'; hidden.src = '${statsPixel}'; document.body.append(hidden);
       </script></body></html>`);
   });
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
@@ -159,7 +160,7 @@ it('drops script-injected tracking images from processed and exported HTML with 
   const records = ledger.pages[0].reports.flatMap((report: { records: unknown[] }) => report.records);
   for (const selector of ['#runtime-beacon', '#hidden-beacon']) {
     expect(records).toContainEqual(expect.objectContaining({ rule: 'tracking-image', selector,
-      action: 'remove', evidence: 'Loaded 1×1 image, at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source' }));
+      action: 'remove', evidence: 'Loaded image of at most 8×8 px, rendered at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source' }));
   }
 }, 60_000);
 
