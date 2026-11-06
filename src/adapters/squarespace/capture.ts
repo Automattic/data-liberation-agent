@@ -54,6 +54,23 @@ export const capture: LiberationHooks = {
 				}
 			}
 		} );
+		// Autoplaying galleries keep advancing while capture runs, so the frozen
+		// slide (and the thumbnail strip scrolled to follow it) depends on elapsed
+		// time. Both the reference and the capture run this hook: stop autoplay
+		// through the gallery's own attribute and return to the slide a visitor
+		// sees on load. The runtime rejects index changes while a slide is moving.
+		await page.evaluate( async () => {
+			type Gallery = { get( name: string ): unknown; set( name: string, value: unknown ): void };
+			const galleries = ( window as unknown as { Y?: { Squarespace?: { GalleryManager?: { _galleries?: Gallery[] } } } } ).Y?.Squarespace?.GalleryManager?._galleries ?? [];
+			if ( ! galleries.some( gallery => gallery.get( 'autoplay' ) ) ) return;
+			const settled = async () => {
+				for ( let wait = 0; wait < 40 && galleries.some( gallery => gallery.get( 'inMotion' ) ); wait++ ) await new Promise( resolve => setTimeout( resolve, 100 ) );
+			};
+			for ( const gallery of galleries ) gallery.set( 'autoplay', false );
+			await settled();
+			for ( const gallery of galleries ) if ( gallery.get( 'currentIndex' ) !== 0 ) gallery.set( 'currentIndex', 0 );
+			await settled();
+		} );
 		// Squarespace may also have committed collapsed-header geometry into its
 		// runtime model while scrolling, which removing the presentation class
 		// alone does not recompute. A desktop-width round trip makes its own
