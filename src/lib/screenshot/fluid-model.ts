@@ -380,7 +380,7 @@ export type ViewportFluidModel = Exclude< FluidModel, { kind: 'breakpoint' } >;
  * parent box exactly as the source did, which a layout frozen into static flow
  * cannot promise — a viewport fit carries no such assumption.
  */
-function viewportModelForRun( run: readonly GeometrySample[], allowBoundedAffine = false ): ViewportFluidModel | null {
+function viewportModelForRun( run: readonly GeometrySample[], allowBoundedAffine = false, allowSignedAffine = false ): ViewportFluidModel | null {
 	if ( run.length < 2 ) return null;
 	if ( run.length === 2 ) {
 		const [ first, second ] = run;
@@ -397,7 +397,7 @@ function viewportModelForRun( run: readonly GeometrySample[], allowBoundedAffine
 		// gutter; rejecting the run freezes the first phone offset over tablets.
 		const slope = ( second.value - first.value ) / ( second.viewport - first.viewport );
 		const intercept = first.value - slope * first.viewport;
-		if ( allowBoundedAffine && slope > 0 && slope * first.viewport + intercept > 0 ) {
+		if ( allowSignedAffine || ( allowBoundedAffine && slope > 0 && slope * first.viewport + intercept > 0 ) ) {
 			const offset = round( Math.abs( intercept ) );
 			return {
 				kind: 'affine',
@@ -409,6 +409,14 @@ function viewportModelForRun( run: readonly GeometrySample[], allowBoundedAffine
 		return null;
 	}
 	const model = learnFluidModel( run );
+	// Clip coordinates are offsets, not sizes: negative intercepts and slopes
+	// are meaningful inside an observed regime. Never use an unfitted hold.
+	if ( allowSignedAffine && model.kind === 'breakpoint' ) {
+		const line = leastSquaresLine( run );
+		if ( line && fits( run, viewport => line.slope * viewport + line.intercept ) ) {
+			return { kind: 'affine', ...line, css: `calc(${ round( line.slope * 100, 4 ) }vw ${ line.intercept < 0 ? '-' : '+' } ${ round( Math.abs( line.intercept ), 4 ) }px)` };
+		}
+	}
 	if (
 		model.kind === 'constant' ||
 		model.kind === 'proportional' ||
@@ -453,7 +461,7 @@ function viewportModelForRun( run: readonly GeometrySample[], allowBoundedAffine
  */
 export function learnSegmentedFluidModel(
 	samples: readonly GeometrySample[],
-	options: { holdUnfitted?: boolean; holdNarrowForBoundedAffine?: boolean; preserveAbsence?: boolean } = {}
+	options: { holdUnfitted?: boolean; holdNarrowForBoundedAffine?: boolean; preserveAbsence?: boolean; allowSignedAffine?: boolean } = {}
 ): SegmentedFluidModel | null {
 	// Missing inline pixels are a real regime: remove the captured declaration
 	// and emit nothing there, allowing authored CSS and intrinsic sizing to win.
@@ -465,7 +473,7 @@ export function learnSegmentedFluidModel(
 			let end = start + 1;
 			while ( end < ordered.length && Number.isFinite( ordered[ end ]!.value ) ) end++;
 			const run = ordered.slice( start, end );
-			const model = viewportModelForRun( run, options.holdNarrowForBoundedAffine );
+			const model = viewportModelForRun( run, options.holdNarrowForBoundedAffine, options.allowSignedAffine );
 			const fitted = model ? [ { model, minWidth: null, maxWidth: null } ] : learnSegmentedFluidModel( run, { ...options, preserveAbsence: false } )?.segments;
 			if ( ! fitted ) return null;
 			segments.push( ...fitted.map( ( segment, index ) => ( {
@@ -489,7 +497,7 @@ export function learnSegmentedFluidModel(
 	// but is safe above a measured switch when its value is positive at the
 	// switch. Keep the narrower regime's independently fitted rule below it.
 	for ( let split = 2; split <= usable.length - MIN_SAMPLES; split++ ) {
-		const narrow = viewportModelForRun( usable.slice( 0, split ), options.holdNarrowForBoundedAffine );
+		const narrow = viewportModelForRun( usable.slice( 0, split ), options.holdNarrowForBoundedAffine, options.allowSignedAffine );
 		const wide = usable.slice( split );
 		const line = leastSquaresLine( wide );
 		if ( ( narrow === null && ! options.holdNarrowForBoundedAffine ) || learnContinuousModel( wide ).kind !== 'breakpoint' || line === null ||
@@ -533,7 +541,7 @@ export function learnSegmentedFluidModel(
 	while ( start < usable.length ) {
 		let matched: { model: ViewportFluidModel; end: number } | null = null;
 		for ( let end = usable.length; end > start + 1; end-- ) {
-			const model = viewportModelForRun( usable.slice( start, end ), options.holdNarrowForBoundedAffine );
+			const model = viewportModelForRun( usable.slice( start, end ), options.holdNarrowForBoundedAffine, options.allowSignedAffine );
 			if ( model !== null ) {
 				matched = { model, end };
 				break;
@@ -582,7 +590,7 @@ export function learnSegmentedFluidModel(
 		}
 		merged.push( { ...run } );
 	}
-	if ( merged.length < 2 ) return null;
+	if ( merged.length < 2 && ! options.allowSignedAffine ) return null;
 
 	const segments: FluidModelSegment[] = merged.map( ( run, index ) => ( {
 		model: run.model,

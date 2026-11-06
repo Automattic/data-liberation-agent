@@ -69,9 +69,9 @@ describe( 'authored portable motion after capture', () => {
 		expect( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) ).toBe( unchanged );
 		recipe.routes[ '/' ].busyHidden = [ '#lamp' ];
 		const authored = await authorPortableMotion( directory, recipe );
-		expect( authored.pass, JSON.stringify( authored, null, 2 ) ).toBe( true );
+		expect( authored.pass ).toBe( true );
 		const normal = await checkFidelity( { directory, widths: [ 390, 768, 1440 ], settleMs: 0 } );
-		expect( normal.pass, JSON.stringify( normal, null, 2 ) ).toBe( true );
+		expect( normal.pass ).toBe( true );
 		expect( normal.motionEvidence ).toHaveLength( 3 );
 		const htmlPath = join( directory, 'website/index.html' );
 		writeFileSync( htmlPath, readFileSync( htmlPath, 'utf8' ).replace( '<p id="status" data-motion-target="true">Ready</p>', '<p id="status" data-motion-target="true">Edited</p>' ) );

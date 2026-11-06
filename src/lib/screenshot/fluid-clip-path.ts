@@ -29,11 +29,14 @@ export function learnClipPath( template: string, series: GeometrySample[][], sel
 			kinds.push( model.kind );
 			continue;
 		}
-		const segmented = learnSegmentedFluidModel( samples );
+		// Shape edges need one-pixel accuracy. The shared size fitter allows
+		// two pixels, so fit doubled viewport-only coordinates and scale the
+		// emitted length back down. Percentages would use a different box.
+		const segmented = learnSegmentedFluidModel( samples.map( sample => ( { viewport: sample.viewport, value: sample.value * 2 } ) ), { allowSignedAffine: true } );
 		if ( ! segmented ) return null;
 		const property = `--${ prefix }-${ index }`;
 		rules.push( segmentedCss( selector, property, segmented.segments ) );
-		expressions.push( `calc(var(${ property }))` );
+		expressions.push( `calc(var(${ property }) / 2)` );
 		kinds.push( 'segmented' );
 	}
 	let index = 0;
