@@ -237,6 +237,37 @@ describe( 'checkFidelity', () => {
 		}
 	}, 90_000 );
 
+	it.skipIf( skipBrowserTests )( 'measures the painted image when the copy moves its padding to a wrapping figure', async () => {
+		// Same painted image: the source pads the img itself, the copy pads a figure around it.
+		const head = '<style>*{box-sizing:border-box}body{margin:0}.box{width:400px}img{display:block;width:100%}</style>';
+		const source = `${ head }<main><h1>Home</h1><div class="box"><img src="/photo.svg" alt="Photo" style="padding:10%"></div></main>`;
+		const candidate = `${ head }<main><h1>Home</h1><div class="box"><figure style="margin:0;padding:10%"><img src="/photo.svg" alt="Photo"></figure></div></main>`;
+		const server = createServer( ( request, response ) => {
+			if ( request.url === '/photo.svg' ) {
+				response.setHeader( 'content-type', 'image/svg+xml' );
+				response.end( '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="teal"/></svg>' );
+				return;
+			}
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( `<!doctype html><html><head><title>Home</title></head><body>${ request.headers.host?.startsWith( 'localhost' ) ? candidate : source }</body></html>` );
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		const port = ( server.address() as { port: number } ).port;
+		const directory = liberatedRun();
+		writeFileSync( join( directory, 'website', 'index.html' ), `<!doctype html><html><head><title>Home</title></head><body>${ source }</body></html>` );
+		writeFileSync( join( directory, 'capture-receipt.json' ), JSON.stringify( { source: { url: `http://127.0.0.1:${ port }/` }, websiteRoot: 'website', routes: [ { url: `http://127.0.0.1:${ port }/`, path: 'website/index.html' } ] } ) );
+		try {
+			const report = await checkFidelity( { directory, candidateUrl: `http://localhost:${ port }`, widths: [ 1600 ], settleMs: 0 } );
+			const score = report.scores[ 0 ]!;
+			expect( score.source.widestImage ).toBe( 320 );
+			expect( score.liberated.widestImage ).toBe( 320 );
+			expect( score.failures.filter( ( failure ) => failure.includes( 'image' ) ) ).toEqual( [] );
+		} finally {
+			server.closeAllConnections();
+			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+		}
+	}, 90_000 );
+
 	it.skipIf( skipBrowserTests )( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
 		// A client-routed builder: the subpage's nav links to sections of the home
 		// page. Following one routes the app home, so the source must be measured

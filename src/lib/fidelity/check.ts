@@ -511,10 +511,21 @@ export async function observePage(
 				animation.effect instanceof KeyframeEffect ? [ { effect: animation.effect, frames: animation.effect.getKeyframes() } ] : [] );
 			try {
 			for ( const { effect } of effects ) effect.setKeyframes( [] );
+			// The painted image is the content box. Padding and borders are the
+			// element's frame, which a copy may legitimately move to a wrapper
+			// (a figure around the image) without changing what is painted.
+			const contentRect = ( image: HTMLImageElement ): DOMRect => {
+				const rect = image.getBoundingClientRect(), style = getComputedStyle( image );
+				const left = parseFloat( style.paddingLeft ) + parseFloat( style.borderLeftWidth );
+				const top = parseFloat( style.paddingTop ) + parseFloat( style.borderTopWidth );
+				const right = parseFloat( style.paddingRight ) + parseFloat( style.borderRightWidth );
+				const bottom = parseFloat( style.paddingBottom ) + parseFloat( style.borderBottomWidth );
+				return new DOMRect( rect.x + left, rect.y + top, Math.max( 0, rect.width - left - right ), Math.max( 0, rect.height - top - bottom ) );
+			};
 			const images = await Promise.all(
 				[ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
 					.map( ( image ) => ( {
-						rect: image.getBoundingClientRect(),
+						rect: contentRect( image ),
 						src: image.currentSrc || image.getAttribute( 'src' ) || '',
 						role: semanticRole( image ),
 						decoded: image.complete && image.naturalWidth > 0,
