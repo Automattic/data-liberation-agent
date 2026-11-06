@@ -41,6 +41,7 @@ import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dia
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
+import { captureViewportClassStates } from './viewport-class-states.js';
 import { RootClassEvidence, rootClassContracts, sampleRootClassLadder, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
 import {
 	captureTriggeredDialogs,
@@ -205,6 +206,8 @@ interface CapturePerViewportArgs {
 	learnFluid?: boolean;
 	/** Swept fluid series shared across this capture's routes. */
 	fluidMemo?: FluidSeriesMemo;
+	/** Class-state breakpoints located on earlier routes of this capture. */
+	classBreakpoints?: Set< number >;
 	fluidWidths?: number[];
 	collectResponsiveImages?: (
 		page: import('playwright').Page,
@@ -1278,6 +1281,16 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {},
 				diagnostic: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
 			};
+		}
+		// Script-toggled class state follows the viewport like inline geometry
+		// does. The desktop document serves every width above the phone switch.
+		if ( isDesktop ) {
+			const classes = await captureViewportClassStates( page, {
+				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
+				settleMs: Math.max( args.settleMs, 800 ),
+				...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
+			} ).catch( () => undefined );
+			if ( classes && classes.aliased > 0 && entry.fluid ) entry.fluid.byKind[ 'viewport-class' ] = classes.aliased;
 		}
 	}
 	if ( args.rendererCrashed() ) return;
@@ -2465,6 +2478,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	};
 	const rawConcurrency = opts.concurrency ?? 6;
 	const fluidMemo: FluidSeriesMemo = new Map();
+	const classBreakpoints = new Set< number >();
 	const concurrency = Math.max( 1, Math.floor( Math.min( 10, rawConcurrency ) ) || 1 );
 	// Node reports the process group's memory constraint, including Chromium's
 	// children. RSS of this Node process alone misses the dominant capture owner.
@@ -3023,7 +3037,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.collectResponsiveImages
 								? { collectResponsiveImages: opts.collectResponsiveImages }
 								: {} ),
-							...( opts.learnFluid ? { learnFluid: true, fluidMemo } : {} ),
+							...( opts.learnFluid ? { learnFluid: true, fluidMemo, classBreakpoints } : {} ),
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
