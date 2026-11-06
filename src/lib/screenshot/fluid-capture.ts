@@ -166,7 +166,7 @@ function reuseSweptSeries(
 		if ( ! stored || ! series || stored.size !== properties.get( id ) ) return null;
 		for ( const sample of probed ) {
 			const match = series.find( candidate => candidate.viewport === sample.viewport );
-			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) ) return null;
+			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) || match.transformOrigin !== sample.transformOrigin ) return null;
 		}
 		reused.set( key, series.map( sample => ( { ...sample } ) ) );
 	}
@@ -475,7 +475,8 @@ async function learnFluidGeometry(
 							if ( computed ) values[ property ] = null;
 						}
 					}
-					return { id: element.getAttribute( attribute )!, values, containers, relative };
+					const transformOrigin = getComputedStyle( element ).transformOrigin;
+					return { id: element.getAttribute( attribute )!, values, containers, relative, transformOrigin };
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties }
 		);
@@ -492,7 +493,9 @@ async function learnFluidGeometry(
 					}
 					continue;
 				}
-				list.push( { viewport: width, value, container: entry.containers?.[ property ] ?? null } );
+				list.push( { viewport: width, value, container: entry.containers?.[ property ] ?? null,
+					...( property === 'transform-scale' ? { transformOrigin: entry.transformOrigin } : {} ),
+				} );
 				observations.set( key, list );
 			}
 		}
@@ -616,9 +619,17 @@ async function learnFluidGeometry(
 			const model = learnFluidModel( samples );
 			if ( model.kind === 'constant' ) continue;
 			if ( model.kind === 'breakpoint' || model.kind === 'container' ) { unmodelled++; continue; }
+			// Only actual non-identity observations own the origin; the reference
+			// may have neither transform nor origin. Never invent an origin model.
+			const origins = new Set( samples.filter( sample => sample.value !== 1000 && sample.transformOrigin !== undefined )
+				.map( sample => sample.transformOrigin! ) );
+			if ( origins.size !== 1 ) { unmodelled++; continue; }
 			byKind[ model.kind ] = ( byKind[ model.kind ] ?? 0 ) + 1;
 			learned.push( {
 				id, property: 'transform', css: `scale(calc(${ model.css } / 1000px))`,
+				fallbackCss: null, containerRelative: false, sampledCss: null, segmentedCss: null,
+			}, {
+				id, property: 'transform-origin', css: [ ...origins ][ 0 ]!,
 				fallbackCss: null, containerRelative: false, sampledCss: null, segmentedCss: null,
 			} );
 			continue;
@@ -834,6 +845,15 @@ async function learnFluidGeometry(
 		if ( translation !== null ) continue;
 		learned.splice( index, 1 );
 		unmodelled++;
+	}
+
+	// The origin belongs to the scale: a rejected final transform must not
+	// leave an otherwise-unlearned origin behind.
+	for ( let index = learned.length - 1; index >= 0; index-- ) {
+		const entry = learned[ index ]!;
+		if ( entry.property === 'transform-origin' && ! learned.some( candidate => candidate.id === entry.id && candidate.property === 'transform' ) ) {
+			learned.splice( index, 1 );
+		}
 	}
 
 	const { reverted, frozen, frozenWidths, sampled, appliedCss } = await baseline.evaluate(

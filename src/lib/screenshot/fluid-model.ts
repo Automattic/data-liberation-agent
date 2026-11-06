@@ -23,6 +23,8 @@ export interface GeometrySample {
 	 * the container-relative candidate rather than changing the other fits.
 	 */
 	container?: number | null;
+	/** Computed origin for an observed uniform scale (not interpolated). */
+	transformOrigin?: string;
 }
 
 export type FluidModel =
