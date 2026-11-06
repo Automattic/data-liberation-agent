@@ -74,6 +74,22 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( derivation.html ).toContain( '<h1 class="post-title">post-2</h1>' );
 	} );
 
+	it( 'derives member text and body classes when only volatile post IDs differ (#1455)', () => {
+		const page = ( id: number, text: string ) => `<html><head><title>Post</title></head><body class="postid-${ id }"><article><p>${ text }</p></article><script>window.siteReady = true;</script></body></html>`;
+		const repServerHtml = page( 750, 'Representative article' );
+		const result = deriveMemberDocument( {
+			repServerHtml,
+			// Capture keeps a runtime-added body class; the member keeps it too.
+			repProcessedHtml: repServerHtml.replace( 'class="postid-750"', 'class="postid-750 runtime-ready"' ),
+			memberServerHtml: page( 407, 'Member article' ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<p>Member article</p>' );
+		expect( result.html ).toContain( '<body class="runtime-ready postid-407">' );
+	} );
+
 	it( 'rejects a member whose cluster key drifted (the fingerprint is what admits derivation)', () => {
 		// Same skeleton, different page-local style: a stale or A/B-variant member
 		// must never ship as derived.

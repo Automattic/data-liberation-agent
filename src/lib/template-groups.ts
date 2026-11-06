@@ -157,8 +157,8 @@ const isContentContainer = ( element: Element ): boolean => element.name === 'ar
 
 const PROSE_SKELETON = digest( '~prose' );
 
-/** `tag.stable.classes[role=…]`: an element's template identity. */
-const elementDescriptor = ( element: Element ): string =>
+/** `tag.stable.classes[role=…]`: an element's template identity, shared by grouping and member slot derivation. */
+export const elementDescriptor = ( element: Element ): string =>
 	`${ element.name }${ stableClassTokens( element ).map( token => `.${ token }` ).join( '' ) }${ element.attribs.role ? `[role=${ element.attribs.role }]` : '' }`;
 
 /**
