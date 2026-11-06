@@ -675,6 +675,45 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
+		'treats a fixed sidebar pinned at desktop as resting inline, but not a full-viewport overlay',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			try {
+				for ( const [ desktop, resting ] of [
+					[ 'width: 250px; height: 100%;', true ],
+					[ 'inset: 0; width: auto; height: auto;', undefined ],
+				] as const ) {
+					const page = await browser.newPage( { viewport: { width: 390, height: 800 } } );
+					await page.setContent( `<!doctype html><html><head><style>
+						#toggle { position: fixed; top: 0; left: 0; width: 48px; height: 48px; }
+						#drawer { display: none; position: fixed; top: 0; left: 0; width: 250px; height: 100%; background: #fff; }
+						#drawer.open { display: block; }
+						@media (min-width: 1280px) { #toggle { display: none; } #drawer { display: block; ${ desktop } } }
+					</style></head><body><header>
+						<div id="toggle" role="button" tabindex="0" aria-haspopup="true" aria-controls="drawer" aria-expanded="false">Menu</div>
+						<nav id="drawer"><a href="/home">Home</a><a href="/about">About</a></nav>
+					</header><main><h1>About</h1></main><script>
+						const toggle = document.getElementById('toggle');
+						toggle.addEventListener('click', () => {
+							const open = toggle.getAttribute('aria-expanded') !== 'true';
+							toggle.setAttribute('aria-expanded', String(open));
+							document.getElementById('drawer').classList.toggle('open', open);
+						});
+					</script></body></html>` );
+					const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+					const state = report.states.find( item => item.trigger.selector === '#toggle' );
+					expect( state ).toMatchObject( { status: 'captured', dialog: { id: 'drawer' } } );
+					expect( state?.dialog?.restingInline ).toBe( resting );
+					await page.close();
+				}
+			} finally {
+				await browser.close();
+			}
+		},
+		60_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'records a controlled drawer, not the zero-height header wrapping it and its trigger',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
