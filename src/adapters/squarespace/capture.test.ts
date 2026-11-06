@@ -53,20 +53,32 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace heade
 	}, 20_000 );
 } );
 
-describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace slideshow captions', () => {
-	it( 'restates script-written caption geometry relative to its slide', async () => {
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace slideshow', () => {
+	it( 'restates script-written caption and image geometry relative to its slide', async () => {
 		const browser = await chromium.launch();
 		try {
 			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-			const html = ( style: string ) => `<style>.slide{position:absolute;inset:0}.meta{position:absolute;bottom:0;overflow:auto}</style>
+			// Inline px as the runtime writes them at 1440 (slide 576x288).
+			await page.setContent( `<style>.slide,.content-fill{position:absolute;inset:0}.content-fill{overflow:hidden}.meta{position:absolute;bottom:0;overflow:auto}</style>
 				<div class="sqs-gallery sqs-gallery-design-stacked" style="position:relative;width:40vw;height:20vw">
-					<div class="slide sqs-active-slide"><div class="meta overflow" style="${ style }">${ 'caption '.repeat( 400 ) }</div></div>
-				</div>`;
-			await page.setContent( html( 'left:0px;width:576px;height:115.2px' ) );
+					<div class="slide sqs-active-slide">
+						<a class="content-fill"><img data-image-dimensions="800x1000" width="800" height="1000" data-image-focal-point="0.5,0.5" style="position:relative;left:0px;top:-216px;width:576px;height:720px"></a>
+						<div class="meta overflow" style="left:0px;width:576px;height:115.2px">${ 'caption '.repeat( 400 ) }</div>
+					</div>
+				</div>` );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
+			// The runtime keeps replacing inline styles as slides cycle.
+			await page.locator( 'img' ).evaluate( img => img.setAttribute( 'style', 'position:relative;left:0px;top:-216px;width:576px;height:720px' ) );
 			await page.setContent( await page.content() );
 			await page.setViewportSize( { width: 768, height: 900 } );
+			// At 768 the slide is 307.2x153.6: the caption is 100% x 40% of it,
+			// and the 4:5 image is cover-scaled to its width and centred, as the
+			// loader would write it at 768 (top -115.2 = (153.6 - 384) / 2).
 			expect( await page.locator( '.meta' ).boundingBox() ).toMatchObject( { width: 307.1875, height: 61.4375 } );
+			const img = await page.locator( 'img' ).boundingBox();
+			expect( img ).toMatchObject( { width: 307.1875 } );
+			expect( img!.height ).toBeCloseTo( 384, 0 );
+			expect( img!.y - 8 ).toBeCloseTo( -115.2, 0 );
 		} finally {
 			await browser.close();
 		}
