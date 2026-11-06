@@ -7,6 +7,7 @@
 // replaces the runtime-written inline pixels, which is what lets the liberated
 // copy keep reflowing after that runtime is stripped.
 //
+import { parseClipPath, learnClipPath } from './fluid-clip-path.js';
 import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
 import { VIEWPORT_WORK_KEY, observeViewportWork, type ViewportWork } from './viewport-work.js';
 import {
@@ -358,7 +359,7 @@ async function learnFluidGeometry(
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*(?:matrix\(|translate(?:3d|x)?\()/i.test( style );
 				const carriesAbsoluteInset = geometry.inset !== null;
-				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
+				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset && ! /^(polygon|inset|rect)\(/.test( element.style.clipPath ) ) {
 					continue;
 				}
 				element.setAttribute( attribute, `${ prefix }${ index++ }` );
@@ -400,6 +401,7 @@ async function learnFluidGeometry(
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
+	const clips = new Map<string, { template: string; count: number; valid: boolean }>();
 	const nonRelative = new Set( options.learnRelativeOffsets ? await baseline.evaluate( ( state, attribute ) =>
 		state.elements().filter( element => state.readGeometry( element ).position !== 'relative' )
 			.map( element => element.getAttribute( attribute )! ), ID_ATTRIBUTE ) : [] );
@@ -476,12 +478,28 @@ async function learnFluidGeometry(
 						}
 					}
 					const transformOrigin = getComputedStyle( element ).transformOrigin;
-					return { id: element.getAttribute( attribute )!, values, containers, relative, transformOrigin };
+					const rect = element.getBoundingClientRect();
+					return { id: element.getAttribute( attribute )!, values, containers, relative, transformOrigin,
+						clip: element.style.clipPath, clipWidth: rect.width, clipHeight: rect.height };
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties }
 		);
 		for ( const entry of measured ) {
 			if ( ! entry.relative ) nonRelative.add( entry.id );
+			const shape = parseClipPath( entry.clip );
+			if ( shape || clips.has( entry.id ) || /^(polygon|inset|rect)\(/.test( entry.clip ) ) {
+				const clip = clips.get( entry.id ) ?? { template: shape?.template ?? '', count: shape?.values.length ?? 0, valid: shape !== null && sampledWidths.length === 1 };
+				clip.valid &&= shape !== null && shape.template === clip.template;
+				clips.set( entry.id, clip );
+				for ( let index = 0; index < clip.count; index++ ) {
+					const key = `${ entry.id }:clip-${ index }`;
+					const list = observations.get( key ) ?? [];
+					list.push( { viewport: width, value: shape?.values[ index ] ?? NaN,
+						container: clip.template.startsWith( 'inset(' ) && clip.count === 1 ? null
+							: shape?.vertical[ index ] ? entry.clipHeight : entry.clipWidth } );
+					observations.set( key, list );
+				}
+			}
 			for ( const property of Object.keys( entry.values ) as LearnableProperty[] ) {
 				const value = entry.values[ property ];
 				const key = `${ entry.id }:${ property }`;
@@ -608,7 +626,7 @@ async function learnFluidGeometry(
 
 	for ( const [ key, samples ] of observations ) {
 		// Not a geometry series, so neither learned nor unmodelled.
-		if ( ! holdsPixels( samples ) ) continue;
+		if ( ! holdsPixels( samples ) || key.includes( ':clip-' ) ) continue;
 		const [ id, property ] = key.split( ':' ) as [ string, LearnableProperty ];
 		// Any non-relative sample invalidates the entire offset relationship.
 		// Fitting the remaining relative samples would erase authored positioning.
@@ -803,6 +821,17 @@ async function learnFluidGeometry(
 			sampledCss,
 			kind: model.kind,
 		} );
+	}
+
+	const movingClips = await perpetual();
+	for ( const [ id, clip ] of clips ) {
+		if ( movingClips.has( id ) ) { unmodelled++; continue; }
+		const series = Array.from( { length: clip.count }, ( _, index ) => observations.get( `${ id }:clip-${ index }` ) ?? [] );
+		const shape = clip.valid ? learnClipPath( clip.template, series, `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, `capture-clip-${ id }` ) : null;
+		if ( ! shape ) { unmodelled++; continue; }
+		for ( const kind of shape.kinds ) byKind[ kind ] = ( byKind[ kind ] ?? 0 ) + 1;
+		learned.push( { id, property: 'clip-path', css: shape.css, fallbackCss: null, containerRelative: false,
+			sampledCss: null, segmentedCss: shape.rules ? `${ shape.rules }\n[${ SEGMENT_ATTRIBUTE }="${ id }"] { clip-path: ${ shape.css }; }` : null } );
 	}
 
 	// Seed each source role with its capture baseline BEFORE returning the
@@ -1162,7 +1191,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 					// Keep the whole transform, not just X: scale/rotation must invalidate
 					// rest even when the translation component stays unchanged.
 					style.transform, style.transform ? getComputedStyle( element ).transform : null,
-					style.inset, geometry.position,
+					style.clipPath ? `${ style.inset };clip-path:${ style.clipPath }` : style.inset, geometry.position,
 					pixel( style.width ) === null ? null : geometry.parent?.clientWidth,
 					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ] ) ] as const;
 			} ) );

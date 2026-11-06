@@ -7,7 +7,7 @@ const NODE = 'data-blocks-engine-capture-initial-node';
 // Every property capture rewrites in the live DOM must be listed: an unlisted
 // one keeps its initial value, e.g. a max-height lifted to 100vh alongside its
 // height would serialize back as the capture viewport's pixels and clamp it.
-const GEOMETRY = new Set(['width', 'height', 'font-size', 'padding-top', 'transform', 'transform-origin', 'inset', 'top', 'left', 'min-height', 'max-height', 'aspect-ratio']);
+const GEOMETRY = new Set(['width', 'height', 'font-size', 'padding-top', 'transform', 'transform-origin', 'clip-path', 'inset', 'top', 'left', 'min-height', 'max-height', 'aspect-ratio']);
 
 function learnedStyle(initial: string, learned: string): string {
 	try {
