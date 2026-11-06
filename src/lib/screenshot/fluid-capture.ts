@@ -122,7 +122,9 @@ export interface FluidLearningResult {
  *
  * This is the resolution the default sweep can reach, not what it samples:
  * see COARSE_SWEEP_WIDTHS and refinementWidths. */
-export const DEFAULT_SWEEP_WIDTHS = [ 320, 360, 390, 414, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
+// Desktop scale regimes can drop below the reference before returning to
+// identity (rather than simply clamping). Keep samples inside that regime.
+export const DEFAULT_SWEEP_WIDTHS = [ 320, 360, 390, 414, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 900, 1024, 1200, 1280, 1366, 1440, 1536, 1840, 1920 ];
 
 /**
  * Widths every varying default sweep samples; the ladder refines between them.
@@ -646,8 +648,10 @@ async function learnFluidGeometry(
 			if ( model.kind === 'constant' ) continue;
 			// Scale has no percentage length basis: fit container-dependent series
 			// against the viewport and carry each fitted regime as a media rule.
+			// Hold unfitted observations rather than rejecting fitted desktop runs
+			// because the same document has a nonlinear narrow-screen regime.
 			const segmented = model.kind === 'breakpoint' || model.kind === 'container'
-				? learnSegmentedFluidModel( samples.map( ( { viewport, value } ) => ( { viewport, value } ) ), { holdNarrowForBoundedAffine: true } )
+				? learnSegmentedFluidModel( samples.map( ( { viewport, value } ) => ( { viewport, value } ) ), { holdUnfitted: true, holdNarrowForBoundedAffine: true } )
 				: null;
 			if ( ( model.kind === 'breakpoint' || model.kind === 'container' ) && segmented === null ) { unmodelled++; continue; }
 			// Only actual non-identity observations own the origin; the reference
@@ -676,6 +680,10 @@ async function learnFluidGeometry(
 		}
 		if ( property === 'transform-y' ) continue; // Both axes have one transform owner.
 		const transformX = property === 'transform-x';
+		// Identity scale samples also parse as translations. A partial translation
+		// fit must not overwrite the scale owner's rules in those wider regimes.
+		const scales = observations.get( `${ id }:transform-scale` );
+		if ( transformX && scales?.some( sample => Number.isFinite( sample.value ) && sample.value !== 1000 ) ) continue;
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );
 		// A constant minimum already survives serialization without learned CSS.

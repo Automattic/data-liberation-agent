@@ -462,9 +462,9 @@ describe( 'responsive readiness contract', () => {
 		try {
 			await page.setContent( writer( 'innerWidth >= 783 ? 600 : 300' ) );
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0 } );
-			// 801 bisects 768–1024, 783 bisects 768–801, 775 bisects 768–783;
+			// 900 bisects 768–1024, then 801, 783 and 775 locate the switch;
 			// 775–783 holds no ladder width, so the switch is located exactly.
-			expect( result.sampledWidths ).toEqual( [ 320, 360, 390, 414, 600, 768, 775, 783, 801, 1024, 1440, 1920 ] );
+			expect( result.sampledWidths ).toEqual( [ 320, 360, 390, 414, 600, 768, 775, 783, 801, 900, 1024, 1440, 1920 ] );
 			expect( result.breakpoints ).toContain( 783 );
 		} finally { await page.close(); }
 	}, 60_000 );
