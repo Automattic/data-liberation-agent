@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.150] - 2026-11-06
+
+### Changed
+- regenerate plugin bundles
+- restate slideshow caption geometry relative to its slide
+- Leave class-derived scroll-state geometry to the toggled class
+- Scroll-state capture probes exact positions on smooth-scrolling pages
+
+### Fixed
+- Fix cross-origin runtime widget removal for same-site services
+- ignore CSS comments when matching shorthand var() repair source rules
+
 ## [0.33.149] - 2026-11-06
 
 ### Changed
