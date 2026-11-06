@@ -18,6 +18,36 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 	let sharedBrowser: Awaited< ReturnType< typeof chromium.launch > >;
 	beforeAll( async () => { sharedBrowser = await chromium.launch(); } );
 	afterAll( async () => { await sharedBrowser?.close(); }, 30_000 );
+	// About 5 seconds: one reference cell and one offline replay.
+	it( 'proves a settled HTTP-broken source image and reports its URL and status', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-source-broken-' ) );
+		const html = '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><main><h1>Community notice</h1><p>Normal content alongside an unavailable photograph.</p><img src="/missing.png" style="display:block;width:200px;height:200px" alt="Unavailable photograph"></main>';
+		const source = createServer( ( request, response ) => {
+			if ( request.url === '/missing.png' ) { response.writeHead( 404 ); response.end(); return; }
+			response.writeHead( 200, { 'content-type': 'text/html' } ); response.end( html );
+		} );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		const context = await sharedBrowser.newContext();
+		try {
+			mkdirSync( join( directory, 'website' ) );
+			writeFileSync( join( directory, 'website', 'index.html' ), html );
+			const collector = createReferenceCollector( directory, url, [ url ] );
+			await collector.observe( await context.newPage(), url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
+			const receipt = join( directory, 'capture-receipt.json' );
+			writeFileSync( receipt, JSON.stringify( { source: { url }, websiteRoot: 'website', routes: [ { url, path: 'website/index.html' } ] } ) );
+			collector.finalize( receipt );
+			const report = await checkFidelity( { directory, stage: 'capture', widths: [ 1440 ] } );
+			expect( report.pending ).toEqual( [] );
+			expect( report.status ).toBe( 'proven' );
+			expect( report ).toHaveProperty( 'sourceBrokenImages', [ { sourceUrl: url, profile: 'desktop', viewport: 1440, state: 'baseline', url: `${ url }missing.png`, status: 404 } ] );
+		} finally {
+			await context.close(); source.closeAllConnections();
+			await new Promise<void>( resolve => source.close( () => resolve() ) );
+			rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 45_000 );
 	it( 'ignores unreachable lazy marquee images but rejects a visible broken image', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-clipped-images-' ) );
@@ -58,7 +88,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
-	// About 35 seconds: a quick and a slow swap settle; failed and stalled cells run to the readiness bound.
+	// About 50 seconds: quick/slow swaps settle; network, retryable and stalled cells reach the readiness bound.
 	it( 'settles scripted image rendition swaps, including ones slower than the capture wait, without accepting failed or stalled images', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-image-swap-' ) );
@@ -70,7 +100,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const served: string[] = [];
 		const source = createServer( ( request, response ) => {
 			if ( request.url === '/stalled.png' ) return;
-			if ( request.url === '/failed.png' ) { response.writeHead( 404 ); response.end(); return; }
+			if ( request.url === '/failed.png' ) { request.socket.destroy(); return; }
+			if ( request.url === '/retry.png' ) { response.writeHead( 429 ); response.end(); return; }
 			if ( request.url === '/rendition.png' || request.url === '/slow.png' ) {
 				// Observation's independent pixel-hash fetch must not accidentally
 				// settle the element request: only the image rendition is delayed.
@@ -84,7 +115,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const context = await sharedBrowser.newContext();
 		const page = await context.newPage();
 		try {
-			for ( const rendition of [ 'rendition', 'slow', 'failed', 'stalled' ] ) {
+			for ( const rendition of [ 'rendition', 'slow', 'failed', 'retry', 'stalled' ] ) {
 				const collector = createReferenceCollector( directory, url, [ url ], {
 					routeScope: { origin: new URL( url ).origin, pathPrefixes: [ '/' ] },
 					prepareCapture: async cell => {

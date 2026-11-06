@@ -163,6 +163,8 @@ function candidateBase( candidateUrl: string ): string {
 export type RouteScore = ViewportScore & { route: string; stage?: FidelityStage; state?: string; profile?: string };
 
 export interface FidelityReport {
+	/** Settled terminal HTTP image failures observed in the frozen source. */
+	sourceBrokenImages?: Array<{ sourceUrl: string; profile?: string; viewport: number; state: string; url: string; status: number }>;
 	stage?: FidelityStage;
 	status?: 'proven' | 'failed' | 'unproven';
 	pending?: Array<{ stage: FidelityStage; route: string; viewport: number; state: string; profile?: string; reason: string }>;
@@ -1777,6 +1779,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 		pending: pending.filter( cell => cell.profile === profile ).length,
 	} ] ) );
 	const report: FidelityReport = { ...summary, pass, stage, status: pending.length ? 'unproven' : pass ? 'proven' : 'failed', pending,
+		sourceBrokenImages: required.flatMap( cell => manifest?.entries.filter( entry => entry.sourceUrl === sources.get( cell.route ) && entry.viewport === cell.viewport && entry.state === cell.state && ( ! cell.profile || entry.profile === cell.profile ) ).flatMap( entry => ( entry.readiness.sourceBrokenImages ?? [] ).map( image => ( { sourceUrl: entry.sourceUrl, profile: entry.profile, viewport: entry.viewport, state: entry.state, ...image } ) ) ) ?? [] ),
 		coverage: { required: required.length + missingRequired, measured: scores.length, observedOutcomes: outcomes.length, unknowns, profiles: profileCoverage }, outcomes,
 		profiles: [ ...new Set( required.flatMap( cell => cell.profile ? [ cell.profile ] : [] ) ) ],
 		sourceUrl: receipt.source?.url ?? '', websiteDir, widths, routes, routesAvailable: sources.size, routesCleanupUnproven: [], selfConsistency, scores, overlays: [] };
