@@ -645,7 +645,6 @@ async function runCaptureWebsite(
 				sourceUrl,
 				outputDir,
 				report: templateGrouping.report,
-				capturedUrls: screenshotResult.urls,
 				routeScope,
 				timeBudgetMs: options.timeBudgetMs,
 			} )
@@ -678,9 +677,8 @@ async function runCaptureWebsite(
 	const derivedUrls = new Set( derivedTemplateClusters?.summary.derivedUrls ?? [] );
 	const blockedClient = sourceGovernors.forOrigin( sourceUrl ).blockedClient;
 	const captureDiagnostics = [
-		...discoveryDiagnostics.filter( row => row.code !== ROUTE_OMITTED_BY_BUDGET || ! derivedUrls.has( row.url ) ),
-		...( screenshotResult.routeDiagnostics ?? [] ),
-		...linkedDiagnostics,
+		...[ ...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics ]
+			.filter( row => row.code !== ROUTE_OMITTED_BY_BUDGET || ! derivedUrls.has( row.url ) ),
 		...( derivedTemplateClusters?.diagnostics ?? [] ),
 	];
 	const summary = {
@@ -928,7 +926,6 @@ async function deriveTemplateClusterMembers( input: {
 	sourceUrl: string;
 	outputDir: string;
 	report: import('./template-groups.js').TemplateGroupsReport;
-	capturedUrls: readonly string[];
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	timeBudgetMs?: number;
 } ): Promise< TemplateClusterDerivation > {
@@ -950,11 +947,14 @@ async function deriveTemplateClusterMembers( input: {
 	const manifestPath = join( input.outputDir, 'screenshots', 'manifest.json' );
 	const queue = new ManifestQueue( manifestPath );
 	await queue.init();
-	const capturedUrls = new Set( input.capturedUrls.map( documentRequestUrl ) );
+	// The admitted URL inventory includes budget omissions; only a manifest
+	// entry with HTML proves that capture produced a document.
+	const capturedEntry = ( url: string ) => queue.getEntry( documentRequestUrl( url ) ) ?? queue.getEntry( url );
+	const isCaptured = ( url: string ) => Boolean( capturedEntry( url )?.html );
 	try {
 		for ( const group of input.report.groups ) {
 			if ( group.size < 2 ) continue;
-			const repEntry = queue.getEntry( documentRequestUrl( group.representative ) ) ?? queue.getEntry( group.representative );
+			const repEntry = capturedEntry( group.representative );
 			if ( ! repEntry?.html || repEntry.redirectedTo ) continue;
 			const repHtmlPath = resolve( input.outputDir, repEntry.html );
 			if ( ! pathWithin( input.outputDir, repHtmlPath ) || ! existsSync( repHtmlPath ) ) continue;
@@ -977,23 +977,23 @@ async function deriveTemplateClusterMembers( input: {
 				// mismatch (or a missing verification capture) fails the cluster: no
 				// member of it is ever derived (§3.5).
 				const members = group.members
-					.filter( url => ! capturedUrls.has( documentRequestUrl( url ) ) )
+					.filter( url => ! isCaptured( url ) )
 					.sort( ( a, b ) => a.localeCompare( b ) );
 				// A captured member is the stronger verification: its real capture
 				// exists on disk, so the derived-vs-real comparison is actually
 				// scored. Preferred verification members are already in the budget.
 				const capturedMembers = group.members
-					.filter( url => url !== group.representative && capturedUrls.has( documentRequestUrl( url ) ) )
+					.filter( url => url !== group.representative && isCaptured( url ) )
 					.sort( ( a, b ) => a.localeCompare( b ) );
 				const verificationUrl = capturedMembers[ 0 ] ?? members[ 0 ];
 				const verificationCaptured = verificationUrl !== undefined &&
-					Boolean( queue.getEntry( documentRequestUrl( verificationUrl ) ) ?? queue.getEntry( verificationUrl ) );
+					isCaptured( verificationUrl );
 				let verified = false;
 				let verificationRecord: import('./template-clusters.js').TemplateClusterRecord['verification'] =
 					{ url: verificationUrl ?? group.representative, captured: verificationCaptured };
 				if ( verificationUrl === undefined ) continue;
 				if ( verificationCaptured ) {
-					const realEntry = queue.getEntry( documentRequestUrl( verificationUrl ) ) ?? queue.getEntry( verificationUrl )!;
+					const realEntry = capturedEntry( verificationUrl )!;
 					const realHtml = readFileSync( resolve( input.outputDir, realEntry.html! ), 'utf8' );
 					const memberFetch = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } );
 					const derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberFetch.body.toString( 'utf8' ), baseUrl: group.representative } );
