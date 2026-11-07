@@ -684,6 +684,14 @@ async function learnFluidGeometry(
 		// fit must not overwrite the scale owner's rules in those wider regimes.
 		const scales = observations.get( `${ id }:transform-scale` );
 		if ( transformX && scales?.some( sample => Number.isFinite( sample.value ) && sample.value !== 1000 ) ) continue;
+		// Scaled frames keep unscaled inline dimensions. Preserve fitted wider
+		// regimes when a varying dimension has an unfittable narrow regime,
+		// just as the scale owner does. Constant dimensions must retain their
+		// existing path: container-relative observations can otherwise produce
+		// spurious dimension rules and invalidate the learned scale.
+		const scaledDimension = ( property === 'width' || property === 'height' ) &&
+			scales?.some( sample => Number.isFinite( sample.value ) && sample.value !== 1000 ) &&
+			! constantAcross( new Map( [ [ key, samples ] ] ), samples.length, new Set() );
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );
 		// A constant minimum already survives serialization without learned CSS.
@@ -740,7 +748,7 @@ async function learnFluidGeometry(
 				? learnSegmentedFluidModel( property === 'left'
 					? modelSamples.map( ( { viewport, value } ) => ( { viewport, value } ) ) : modelSamples, customProperty
 					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
-					: { holdUnfitted: transformX || property === 'min-height', holdNarrowForBoundedAffine: true, preserveAbsence: property === 'min-height' } )
+					: { holdUnfitted: transformX || scaledDimension || property === 'min-height', holdNarrowForBoundedAffine: true, preserveAbsence: property === 'min-height' } )
 				: null;
 		if ( customProperty && model.kind !== 'breakpoint' && modelSamples.length >= 3 ) {
 			const customModel =
