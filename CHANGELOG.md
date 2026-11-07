@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.162] - 2026-11-07
+
+### Changed
+- regenerate plugin bundles
+- Transplant responsive image attributes and verify srcsets in template derivation
+- Derive budget-omitted template members: capture state comes from the manifest
+- Verify plain-text document assets from bytes
+- Keep displayed renditions when linked originals exceed portable limits
+- Keep fitted regimes for a scaled frame's varying inline dimensions
+
 ## [0.33.161] - 2026-11-07
 
 ### Changed
