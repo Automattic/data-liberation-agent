@@ -367,9 +367,6 @@
 		},
 		"src/lib/url/route-scope.ts": {
 			"throw new Error( 'Invalid adapter route scope' )": 1
-		},
-		"src/lib/viewport-entrances.ts": {
-			"throw new Error( 'Invalid viewport entrance evidence' )": 1
 		}
 	}
 }

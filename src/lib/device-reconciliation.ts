@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 import { identitySubsetMerge } from './responsive-assembly.js';
 import type { DeviceDocumentSelection } from './document-selection.js';
 import { RESPONSIVE_DESKTOP_ONLY_CLASS, RESPONSIVE_MOBILE_ONLY_CLASS } from './viewport-correspondence.js';
@@ -36,9 +37,25 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 			devices[ key ] = { outcome: 'dual-structural', reason: 'Divergent component ids require rewriting a linked stylesheet; native selector cascade retained as a separate document' };
 			continue;
 		}
+		const $ = cheerio.load( `<body>${ pair.body }</body>` );
+		const entrances = new Map<string, string>();
+		let incompatibleEntrance = false;
+		$( `[${ NODE }]` ).filter( ( _i, node ) => $( node ).closest( `.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).length === 0 ).each( ( _i, node ) => {
+			const source = $( node );
+			const id = source.attr( NODE )!;
+			const target = merged( `[${ NODE }="${ id }"]` );
+			const left = target.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ), right = source.attr( VIEWPORT_ENTRANCE_ATTRIBUTE );
+			if ( left === undefined && right === undefined ) return;
+			const state = mergeViewportEntranceStates( left, right );
+			if ( state === undefined ) incompatibleEntrance = true;
+			else entrances.set( id, state );
+		} );
+		if ( incompatibleEntrance ) {
+			devices[ key ] = { outcome: 'dual-structural', reason: 'Viewport entrance evidence conflicts with an already reconciled device' };
+			continue;
+		}
 		reconciled.add( key );
 		devices[ key ] = { outcome: 'collapsed-identity-subset', matchedNodes: pair.matchedNodes, desktopOnlyElements: pair.desktopOnlyElements, mobileOnlyElements: pair.mobileOnlyElements, projectedElements: pair.projectedElements, divergedComponents: pair.divergedComponents };
-		const $ = cheerio.load( `<body>${ pair.body }</body>` );
 		// Variant clones inherit source markers; only their default-side copies
 		// may update the shared tree. New islands are inserted at their pair's
 		// actual parent and order, including re-parented components.
@@ -51,6 +68,8 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 			if ( source.hasClass( RESPONSIVE_DESKTOP_ONLY_CLASS ) ) {
 				target.attr( HIDE, [ target.attr( HIDE ), key ].filter( Boolean ).join( ' ' ) );
 			}
+			const entrance = entrances.get( source.attr( NODE )! );
+			if ( entrance !== undefined ) target.attr( VIEWPORT_ENTRANCE_ATTRIBUTE, entrance );
 			if ( source.attr( INLINE ) ) {
 				target.attr( INLINE, JSON.stringify( { ...JSON.parse( target.attr( INLINE ) ?? '{}' ), ...JSON.parse( source.attr( INLINE )! ) } ) );
 			}
