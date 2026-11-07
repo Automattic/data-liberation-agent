@@ -65,6 +65,10 @@ export interface RenderedTextStyle {
 	/** This document's FontFaceSet check of the primary family for this run.
 	 * Absent in older frozen evidence; never infer it from the full stack. */
 	primaryLoaded?: boolean;
+	/** Document coordinates of the run's first painted line box. Absent in
+	 * older frozen evidence. */
+	top?: number;
+	left?: number;
 }
 
 export interface LayoutObservation {
@@ -78,6 +82,9 @@ export interface LayoutObservation {
 	/** Images rendering with real layout space at this viewport. Tracking
 	 *  pixels and hidden decorations are excluded by the observer. */
 	images: RenderedImage[];
+	/** Painted boxes of elements with CSS background images. Absent in older
+	 *  frozen evidence. */
+	backgrounds?: Array< { x: number; y: number; width: number; height: number } >;
 	/** Representative visible text runs and their computed rendering. */
 	typography?: RenderedTextStyle[];
 	/** Finite CSS animation names currently attached to rendered elements. */
@@ -93,6 +100,8 @@ export interface LayoutObservation {
 	entranceUnrevealed?: string[];
 	/** documentElement.scrollWidth. */
 	docWidth: number;
+	/** documentElement.scrollHeight. Absent in older frozen evidence. */
+	docHeight?: number;
 	/** True when the document is wider than the viewport. */
 	overflow: boolean;
 	/** Hosts the page requested that are not the local copy. */

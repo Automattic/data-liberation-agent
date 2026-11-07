@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	checkImageGeometry,
+	checkLayoutGeometry,
 	checkMotion,
 	checkTypography,
 } from './rendered-contract-checks.js';
@@ -40,6 +41,23 @@ const text = ( extra: Partial< RenderedTextStyle > = {} ): RenderedTextStyle => 
 	advance: 480,
 	loaded: true,
 	...extra,
+} );
+
+describe( 'checkLayoutGeometry', () => {
+	const hero = { x: 0, y: 50, width: 1600, height: 585 };
+	it.each( [
+		[ 'matching layout', {}, undefined ],
+		[ 'a shorter page', { docHeight: 1160 }, 'page height 1160px !== source 1385px' ],
+		[ 'moved text', { typography: [ text( { top: 184, left: 429 } ) ] }, 'text position differs for 1' ],
+		[ 'a background painted as a cover img', { backgrounds: [], images: [ image( 'hero.jpg', 0, 50, 1600, 585 ) ] }, undefined ],
+		[ 'a shorter background', { backgrounds: [], images: [ image( 'hero.jpg', 0, 50, 1600, 360 ) ] }, 'background geometry differs for 1' ],
+		[ 'older evidence without geometry', { docHeight: undefined, backgrounds: undefined, typography: [ text() ] }, undefined ],
+	] as Array< [ string, Partial< LayoutObservation >, string | undefined ] > )( '%s', ( _label, copy, failure ) => {
+		const source = observation( { docHeight: 1385, backgrounds: [ hero ], typography: [ text( { top: 337, left: 417 } ) ] } );
+		const result = checkLayoutGeometry( source, observation( { docHeight: 1385, backgrounds: [ hero ], typography: [ text( { top: 338, left: 420 } ) ], ...copy } ) );
+		if ( failure ) expect( result.failures?.join( ' ' ) ).toContain( failure );
+		else expect( result ).toEqual( {} );
+	} );
 } );
 
 describe( 'checkImageGeometry', () => {

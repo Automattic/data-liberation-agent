@@ -19,7 +19,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const source = createServer((request, response) => {
 			response.setHeader('content-type', 'text/html');
 			if (request.url === '/outbound?link=authored') response.end(`<meta http-equiv="refresh" content="0;URL=${target}"><a href="${target}">Forward</a>`);
-			else response.end('<meta name="viewport" content="width=device-width,initial-scale=1"><h1>Local editorial document</h1><a href="/outbound?link=authored#meaning">Strategic directions</a>');
+			else response.end('<!DOCTYPE html><meta name="viewport" content="width=device-width,initial-scale=1"><h1>Local editorial document</h1><a href="/outbound?link=authored#meaning">Strategic directions</a>');
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port:number}).port}`;
@@ -122,7 +122,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			else if (request.url === '/meta') response.end('<meta http-equiv="refresh" content="1;URL=/article?view=full#section">');
 			else if (request.url === '/article?view=full') response.end('<meta name="viewport" content="width=device-width,initial-scale=1"><h1 id="section">Full article</h1>');
 			else if (request.url === '/article?view=short') response.end('<meta name="viewport" content="width=device-width,initial-scale=1"><h1 id="section">Short article</h1>');
-			else response.end('<meta name="viewport" content="width=device-width,initial-scale=1"><h1>Local home</h1><a href="/legacy?edition=retained#old">Legacy article</a><a href="/meta">Declarative alias</a><a href="/variant">Short article</a>');
+			else response.end('<!DOCTYPE html><meta name="viewport" content="width=device-width,initial-scale=1"><h1>Local home</h1><a href="/legacy?edition=retained#old">Legacy article</a><a href="/meta">Declarative alias</a><a href="/variant">Short article</a>');
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port:number}).port}`;

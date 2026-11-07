@@ -508,7 +508,7 @@ export async function observePage(
 			// transforms) on images AND their ancestors. Unlike cancel/finish or
 			// seeking currentTime, this also works for infinite/view timelines and
 			// leaves play state, timeline bindings and motion evidence intact.
-			const { images, widestImage, typography, paintedTextRects } = await ( async () => {
+			const { images, backgrounds, widestImage, typography, paintedTextRects } = await ( async () => {
 			const effects = document.getAnimations().flatMap( animation =>
 				animation.effect instanceof KeyframeEffect ? [ { effect: animation.effect, frames: animation.effect.getKeyframes() } ] : [] );
 			try {
@@ -557,12 +557,14 @@ export async function observePage(
 			// One DOM pass, no resource fetches or per-layer expansion. Gradients
 			// alone are decoration, not image candidates.
 			let widestImage: number | null = images.length ? Math.max( ...images.map( image => image.width ) ) : null;
+			const backgrounds: Array< { x: number; y: number; width: number; height: number } > = [];
 			for ( const element of document.querySelectorAll( '*' ) ) {
 				const rect = element.getBoundingClientRect();
 				if ( rect.width <= 50 || rect.height <= 50 ) continue;
 				const style = getComputedStyle( element );
 				if ( ! /url\(\s*["']?[^\s"')]/i.test( style.backgroundImage ) || style.visibility === 'hidden' || ! horizontallyVisible( element ) ) continue;
 				widestImage = Math.max( widestImage ?? 0, Math.round( rect.width ) );
+				backgrounds.push( { x: Math.round( rect.x ), y: Math.round( rect.y ), width: Math.round( rect.width ), height: Math.round( rect.height ) } );
 			}
 
 			const typography: Array< {
@@ -575,6 +577,8 @@ export async function observePage(
 				advance: number;
 				loaded: boolean;
 				primaryLoaded: boolean;
+				top: number;
+				left: number;
 			} > = [];
 			const canvas = document.createElement( 'canvas' );
 			const context = canvas.getContext( '2d' );
@@ -660,10 +664,10 @@ export async function observePage(
 				'fontStretch', 'fontVariant', 'fontFeatureSettings', 'fontVariationSettings', 'fontKerning',
 				'whiteSpace', 'textTransform', 'wordSpacing', 'direction', 'writingMode', 'verticalAlign',
 				'color', 'textDecorationLine', 'textDecorationStyle', 'textDecorationColor' ] as const;
-			let run: { text: string; style: CSSStyleDeclaration; signature: string; last: DOMRect; width: number } | undefined;
+			let run: { text: string; style: CSSStyleDeclaration; signature: string; first: DOMRect; last: DOMRect; width: number } | undefined;
 			const flush = () => {
 				if ( ! run ) return;
-				const { style, width } = run;
+				const { style, width, first } = run;
 				const text = run.text.replace( /\s+/g, ' ' ).trim();
 				run = undefined;
 				if ( ! text || typography.length >= 120 ) return;
@@ -684,6 +688,9 @@ export async function observePage(
 					advance: Math.round( ( context?.measureText( text ).width ?? width ) * 100 ) / 100,
 					loaded: document.fonts.check( font, text ),
 					primaryLoaded: document.fonts.check( primaryFont, text ),
+					// The run's first painted line box, in the same frame as image boxes.
+					top: Math.round( first.top ),
+					left: Math.round( first.left ),
 				} );
 			};
 			const visit = ( node: Node ) => {
@@ -739,11 +746,11 @@ export async function observePage(
 						first.y > run.last.y && first.y - run.last.y <= ( Number.parseFloat( style.lineHeight ) || rect.height * 1.2 ) + 2 ) );
 				if ( run && ( run.signature !== signature || ! adjacent ) ) flush();
 				if ( run ) { run.text += node.textContent; run.last = last; run.width += rect.width; }
-				else run = { text: node.textContent, style, signature, last, width: rect.width };
+				else run = { text: node.textContent, style, signature, first, last, width: rect.width };
 			};
 			visit( document.body );
 			flush();
-			return { images, widestImage, typography, paintedTextRects };
+			return { images, backgrounds, widestImage, typography, paintedTextRects };
 			} finally {
 				for ( const { effect, frames } of effects ) effect.setKeyframes( frames );
 			}
@@ -970,6 +977,7 @@ export async function observePage(
 				textChars,
 				widestImage,
 				images,
+				backgrounds,
 				typography,
 				animations,
 				responsiveAnimations,
@@ -983,6 +991,7 @@ export async function observePage(
 						animation.currentTime === 0 && animation.effect?.getComputedTiming().iterations !== Infinity ) )
 					.map( element => `${ element.id || 'anonymous target' }: ${ element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) }` ),
 				docWidth: document.documentElement.scrollWidth,
+				docHeight: document.documentElement.scrollHeight,
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
 				hashTargets,
 				internalPaths,
@@ -1022,6 +1031,7 @@ export async function observePage(
 				}
 				return { ...observed, key, renditions };
 			} ),
+			backgrounds: measured.backgrounds,
 			typography: measured.typography,
 			animations: measured.animations,
 			responsiveAnimations: measured.responsiveAnimations,
@@ -1029,6 +1039,7 @@ export async function observePage(
 			entranceLosses: measured.entranceLosses,
 			entranceUnrevealed: measured.entranceUnrevealed,
 			docWidth: measured.docWidth,
+			docHeight: measured.docHeight,
 			overflow: measured.overflow,
 			externalHosts: [ ...new Set( requests.filter( request => ! ( request.image && emojiUrls.has( request.url ) ) )
 				.map( request => externalRequestHost( request.url, localOrigin ) ).filter( ( host ): host is string => host !== null ) ) ].sort(),

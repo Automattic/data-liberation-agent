@@ -36,6 +36,50 @@ export function checkImageGeometry(
 	};
 }
 
+/**
+ * Layout drift that content checks cannot see: a page that renders shorter,
+ * text runs that moved, and CSS background boxes the copy paints at another
+ * size. A source background is matched by box against any painted image box
+ * in the copy, background or `<img>`, because a copy may render it either way.
+ */
+export function checkLayoutGeometry(
+	source: LayoutObservation,
+	candidate: LayoutObservation
+): FidelityCheckResult {
+	const failures: string[] = [];
+	if ( source.docHeight !== undefined && candidate.docHeight !== undefined &&
+		Math.abs( source.docHeight - candidate.docHeight ) > IMAGE_POSITION_TOLERANCE_PX ) {
+		failures.push( `page height ${ candidate.docHeight }px !== source ${ source.docHeight }px (Δ${ candidate.docHeight - source.docHeight })` );
+	}
+
+	const moved = matchedTextStyles( source.typography ?? [], candidate.typography ?? [] ).filter( ( { source: left, candidate: right } ) =>
+		left.top !== undefined && left.left !== undefined && right.top !== undefined && right.left !== undefined && (
+			Math.abs( left.top - right.top ) > IMAGE_POSITION_TOLERANCE_PX ||
+			Math.abs( left.left - right.left ) > IMAGE_POSITION_TOLERANCE_PX ) );
+	if ( moved.length ) {
+		failures.push( `text position differs for ${ moved.length } matched text run(s): ${ moved
+			.slice( 0, 3 )
+			.map( ( { source: left, candidate: right } ) => `"${ left.key.slice( 0, 40 ) }" source (${ left.left },${ left.top }), copy (${ right.left },${ right.top })` )
+			.join( '; ' ) }` );
+	}
+
+	if ( candidate.backgrounds ) {
+		const painted = [ ...candidate.backgrounds, ...candidate.images ];
+		const lost = ( source.backgrounds ?? [] ).filter( box => ! painted.some( other =>
+			Math.abs( box.x - other.x ) <= IMAGE_POSITION_TOLERANCE_PX &&
+			Math.abs( box.y - other.y ) <= IMAGE_POSITION_TOLERANCE_PX &&
+			Math.abs( box.width - other.width ) <= IMAGE_SIZE_TOLERANCE_PX &&
+			Math.abs( box.height - other.height ) <= IMAGE_SIZE_TOLERANCE_PX ) );
+		if ( lost.length ) {
+			failures.push( `background geometry differs for ${ lost.length } source background(s): ${ lost
+				.slice( 0, 3 )
+				.map( box => `${ box.width }x${ box.height } at (${ box.x },${ box.y }) has no painted box in the copy` )
+				.join( '; ' ) }` );
+		}
+	}
+	return failures.length ? { failures } : {};
+}
+
 function normalizedFamily( family: string ): string {
 	return family.toLowerCase().replace( /["']/g, '' ).replace( /\s+/g, ' ' ).trim();
 }
