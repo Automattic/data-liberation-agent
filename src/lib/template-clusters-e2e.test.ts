@@ -125,6 +125,53 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		}
 	}, 240_000 );
 
+	it( 'derives a crawl-only frontier member omitted by the time budget (#1477)', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'template-clusters-frontier-' ) );
+		const url = `${ BASE }:${ port }/`;
+		const memberUrl = `${ new URL( url ).origin }/frontier/`;
+		const originalHome = rendered.get( '/' )!;
+		// Only a captured interior page links here: neither discovery nor the
+		// entrypoint's navigation inventory can know this route in advance.
+		const originalPost = rendered.get( '/post-1/' )!;
+		rendered.set( '/post-1/', originalPost.replace( '</article>', '<p><a href="/frontier/">Frontier</a></p></article>' ) );
+		rendered.set( '/frontier/', member( 'frontier', { heading: 'Frontier Post' } ) );
+		const admits = RouteTimeBudget.prototype.admits;
+		const diagnostics = RouteTimeBudget.prototype.diagnostics;
+		let omittedUrls: string[] = [];
+		const admissionSpy = vi.spyOn( RouteTimeBudget.prototype, 'admits' ).mockImplementation( function ( this: RouteTimeBudget, candidate, concurrency ) {
+			return candidate !== memberUrl && admits.call( this, candidate, concurrency );
+		} );
+		const diagnosticsSpy = vi.spyOn( RouteTimeBudget.prototype, 'diagnostics' ).mockImplementation( function ( this: RouteTimeBudget, urls ) {
+			const rows = diagnostics.call( this, urls );
+			omittedUrls = rows.filter( row => row.code === 'route_omitted_by_budget' ).map( row => row.url );
+			expect( omittedUrls ).toContain( memberUrl );
+			const entries = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ).entries;
+			expect( entries[ memberUrl ]?.html ).toBeUndefined();
+			return rows;
+		} );
+		try {
+			const captured = await captureWebsite( { url, outputDir, captureImages: true, templateClusters: true, timeBudgetMs: 600_000 }, {
+				findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: sitemapPaths.map( path => ( { url: `${ new URL( url ).origin }${ path }`, type: 'page' } ) ) } ) } ),
+			} );
+			const receipt = JSON.parse( readFileSync( join( outputDir, 'template-clusters.json' ), 'utf8' ) ) as { clusters: Array<{ derived: Array<{ url: string }> }> };
+			const derived = receipt.clusters.flatMap( cluster => cluster.derived.map( member => member.url ) );
+			expect( derived ).toContain( memberUrl );
+			expect( existsSync( join( outputDir, 'website', 'frontier', 'index.html' ) ) ).toBe( true );
+			expect( captured.summary.routesOmitted ).toBe( omittedUrls.filter( omitted => ! derived.includes( omitted ) ).length );
+			expect( captured.discoveryDiagnostics?.some( row => row.url === memberUrl && row.code === 'route_omitted_by_budget' ) ).toBe( false );
+			const groups = JSON.parse( readFileSync( join( outputDir, 'template-groups.json' ), 'utf8' ) );
+			expect( groups.groups.find( ( group: { members: string[] } ) => group.members.includes( memberUrl ) ).frontierMembers ).toContain( memberUrl );
+		} finally {
+			admissionSpy.mockRestore();
+			diagnosticsSpy.mockRestore();
+			rendered.set( '/', originalHome );
+			rendered.set( '/post-1/', originalPost );
+			rendered.delete( '/frontier/' );
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 240_000 );
+
 	it( 'derives the shared-template members and they equal their real captures', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const outputDir = join( mkdtempSync( join( parent, 'template-clusters-e2e-' ) ) );
