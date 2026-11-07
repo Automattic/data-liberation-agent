@@ -1,5 +1,5 @@
 import type { Page, Request } from 'playwright';
-import { mergeConsentLayouts } from '../consent-banner-layout.js';
+import { mergeConsentLayouts, sameConsentLayout } from '../consent-banner-layout.js';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
 import { isConsentNotice } from '../consent-overlay.js';
@@ -1398,9 +1398,24 @@ async function dismissOne(
 
 /** Read intent while the banner and its rendered controls are still visible. */
 async function readConsentBanner(page: Page, target: OverlayTarget): Promise<import('../consent-banner.js').ConsentBanner | undefined> {
-  return page.evaluate(({ idx, selector, viewportWidth }) => {
+  return page.evaluate(async ({ idx, selector, viewportWidth }) => {
     const root = document.querySelector<HTMLElement>(`[data-lib-overlay="${idx}"]`);
     if (!root) return;
+    // Read the resting panel, not a frame of its slide-in. A panel parked
+    // off-screen may still be waiting for its entrance to start.
+    const settleBy = performance.now() + 1500;
+    const offscreen = () => {
+      const box = root.getBoundingClientRect();
+      return box.bottom <= 0 || box.top >= innerHeight || box.right <= 0 || box.left >= innerWidth;
+    };
+    while (offscreen() && !root.getAnimations({ subtree: true }).length && performance.now() < settleBy) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    }
+    // The banner is dismissed after this read, so jumping its finite entrance
+    // and resize transitions to their end state is safe and keeps probes fast.
+    for (const animation of root.getAnimations({ subtree: true })) {
+      try { animation.finish(); } catch { /* Infinite animations have no end state. */ }
+    }
     const visible = (node: HTMLElement) => !!node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
     if (!visible(root)) return;
     const label = (node: HTMLElement) => (node.innerText || node.getAttribute('aria-label') || (node as HTMLInputElement).value || '').trim();
@@ -1447,12 +1462,17 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     // screen-reader-only text are not prose.
     const ownText = (node: HTMLElement) => Array.from(node.childNodes)
       .filter(child => child.nodeType === Node.TEXT_NODE).map(child => child.textContent ?? '').join('').trim().length;
+    // A heading that leads the prose is the banner's title, with its own type.
+    const heading = originals.find(node => node.matches('h1, h2, h3, h4, h5, h6, [role="heading"]') && visible(node)
+      && !visuallyHidden(node) && !node.closest('button, [role="button"], a') && !!node.innerText.trim());
     const prose = originals.filter(node => visible(node) && !visuallyHidden(node) && ownText(node) > 0
-      && !node.closest('button, [role="button"], input, label, a, script, style'))
+      && !heading?.contains(node) && !node.closest('button, [role="button"], input, label, a, script, style'))
       .sort((a, b) => ownText(b) - ownText(a))[0];
+    const title = heading && prose && heading.compareDocumentPosition(prose) & Node.DOCUMENT_POSITION_FOLLOWING
+      ? heading.innerText.replace(/\s+/g, ' ').trim() : undefined;
     for (let i = originals.length - 1; i >= 0; i--) {
       const node = originals[i];
-      if (!visible(node) || visuallyHidden(node) || node === accept || node === reject
+      if (!visible(node) || visuallyHidden(node) || node === accept || node === reject || (title && node === heading)
         || node.matches('button, [role="button"], input, label, script, style')) copies[i].remove();
       else if (node.matches('a') && !getComputedStyle(node).display.startsWith('inline')) copies[i].remove();
     }
@@ -1491,6 +1511,11 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const bounds = surface.getBoundingClientRect();
     const style = getComputedStyle(surface);
     const button = getComputedStyle(accept);
+    // Pixel-snapped viewport geometry of the resting panel.
+    const viewport = document.documentElement.clientWidth || innerWidth;
+    // A panel resting wholly in view is measured; a partly hidden one keeps
+    // its computed inset, since a pending transform still displaces it.
+    const settled = bounds.top >= -1 && bounds.bottom <= innerHeight + 1;
     const position = bounds.top <= innerHeight * .1 ? 'top' as const : bounds.bottom >= innerHeight * .9 ? 'bottom' as const : 'center' as const;
     const typography = getComputedStyle(prose ?? root);
     const cssValues = (values: Record<string, string>) => Object.fromEntries(
@@ -1505,6 +1530,9 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       ...(button.borderStyle !== 'none' && button.borderWidth.split(/\s+/).some(width => parseFloat(width) > 0)
         ? { border_width: button.borderWidth, border_style: button.borderStyle, border_color: button.borderColor } : {}),
       font_size: button.fontSize, font_family: button.fontFamily, line_height: button.lineHeight,
+      font_weight: button.fontWeight, letter_spacing: button.letterSpacing,
+      ...(parseFloat(button.minHeight) > 0 ? { min_height: pixels(parseFloat(button.minHeight)) } : {}),
+      ...(/[1-9]/.test(button.margin) ? { margin: roundedPadding(button.margin) } : {}),
     });
     // Use the common content container when controls are nested in a wrapper.
     let content = accept.parentElement ?? root;
@@ -1516,28 +1544,41 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const controlBounds = accept.getBoundingClientRect();
     const start = contentBounds.left + parseFloat(contentStyle.borderLeftWidth) + parseFloat(contentStyle.paddingLeft);
     const end = contentBounds.right - parseFloat(contentStyle.borderRightWidth) - parseFloat(contentStyle.paddingRight);
-    const buttonAlign = Math.abs(controlBounds.left - start) <= 2 ? 'start' as const
-      : Math.abs(controlBounds.right - end) <= 2 ? 'end' as const : undefined;
+    const fromStart = Math.abs(controlBounds.left - start) <= 2;
+    const toEnd = Math.abs(controlBounds.right - end) <= 2;
+    const buttonAlign = fromStart && toEnd ? 'stretch' as const : fromStart ? 'start' as const : toEnd ? 'end' as const : undefined;
+    const full = Math.abs(bounds.width - viewport) <= 1;
+    const startGap = bounds.left;
+    const endGap = viewport - bounds.right;
+    const inline = Math.abs(startGap - endGap) <= 2 ? 'center' as const : startGap < endGap ? 'start' as const : 'end' as const;
+    const titleStyle = title && heading ? getComputedStyle(heading) : undefined;
+    // Only a fixed surface's computed inset is a viewport offset; measure others.
+    const edgeOffset = position === 'center' ? {} : { edge_offset: pixels(position === 'bottom'
+      ? (settled || style.position !== 'fixed' || style.bottom === 'auto' ? innerHeight - bounds.bottom : parseFloat(style.bottom))
+      : (settled || style.position !== 'fixed' || style.top === 'auto' ? bounds.top : parseFloat(style.top))) };
     const proseBounds = prose?.getBoundingClientRect();
     const proseStacked = !!proseBounds && controlBounds.top >= proseBounds.bottom - 2;
     const direction = contentStyle.flexDirection === 'column' || proseStacked ? 'column' as const : 'row' as const;
     return {
       schema: 'static-site-importer/consent-banner/v1' as const,
-      text, accept_label: label(accept),
+      text, ...(title ? { title } : {}), accept_label: label(accept),
       ...(reject ? { reject_label: label(reject) } : {}),
       ...(policy ? { policy_link: { label: label(policy), href: policy.href } } : {}),
       position,
       presentation: {
-        span: Math.abs(bounds.width - innerWidth) <= 1 ? 'full' as const : 'inset' as const,
+        span: full ? 'full' as const : 'inset' as const,
         gap: rowGap === columnGap ? rowGap : `${rowGap} ${columnGap}`,
-        // Only a fixed surface's computed inset is a viewport offset; measure others.
-        ...(position === 'center' ? {} : { edge_offset: pixels(position === 'bottom'
-          ? (style.position !== 'fixed' || style.bottom === 'auto' ? innerHeight - bounds.bottom : parseFloat(style.bottom))
-          : (style.position !== 'fixed' || style.top === 'auto' ? bounds.top : parseFloat(style.top))) }),
+        ...edgeOffset,
         ...cssValues({ padding: roundedPadding(style.padding), font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight, text_margin: typography.margin }),
+        ...(style.boxShadow !== 'none' ? { box_shadow: style.boxShadow } : {}),
+        ...(titleStyle ? { title: cssValues({ font_size: titleStyle.fontSize, line_height: titleStyle.lineHeight, font_weight: titleStyle.fontWeight, margin: roundedPadding(titleStyle.margin), padding: roundedPadding(titleStyle.padding) }) } : {}),
         layout: [{ min_width: viewportWidth, max_width: viewportWidth, direction,
           ...cssValues({ align_items: contentStyle.alignItems, text_margin: typography.margin }),
           ...(buttonAlign ? { button_align: buttonAlign } : {}),
+          ...edgeOffset,
+          ...(/[1-9]/.test(style.borderRadius) ? { border_radius: roundedPadding(style.borderRadius) } : {}),
+          ...(full ? { span: 'full' as const } : { span: 'inset' as const, inline, width: Math.round(bounds.width),
+            ...(inline === 'center' ? {} : { inline_offset: Math.max(0, Math.round(inline === 'start' ? startGap : endGap)) }) }),
         }],
         ...(Object.keys(buttonPresentation).length ? { button: buttonPresentation } : {}),
       },
@@ -1574,9 +1615,6 @@ export async function dismissOverlays(
           const deadline = Date.now() + 4000;
           let resizes = 0;
           const layouts = consentBanner.presentation.layout ?? [];
-          const same = (a: typeof layouts[number], b: typeof layouts[number]) =>
-            a.direction === b.direction && a.align_items === b.align_items && a.button_align === b.button_align
-            && a.text_margin === b.text_margin;
           const sampleAt = async (viewport: { width: number; height: number }) => {
             if (resizes >= 32 || Date.now() >= deadline) return undefined;
             resizes++;
@@ -1593,7 +1631,7 @@ export async function dismissOverlays(
             while (resizes < 32 && Date.now() < deadline) {
               const ordered = [...layouts].sort((a, b) => a.min_width! - b.min_width!);
               const index = ordered.findIndex((high, i) => i > 0
-                && !same(ordered[i - 1], high) && high.min_width! - ordered[i - 1].max_width! > 1);
+                && !sameConsentLayout(ordered[i - 1], high) && high.min_width! - ordered[i - 1].max_width! > 1);
               if (index < 0) break;
               // Keep actual observations on both sides, never a guessed midpoint.
               // Re-sort each time: an intermediate sample may reveal a third layout.

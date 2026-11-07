@@ -46,18 +46,25 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
   ]);
 });
 
-// Regression for normal-flow card banners: block prose boundaries are spaces and
-// rendered control placement, not flex-direction alone, determines the layout.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads block-flow consent cards as spaced stacked content', async () => {
+// Regression for builder card banners (GoDaddy): a heading title above block-flow
+// prose, a stretched control, and a card that slides in by transform to rest at
+// one edge on desktop but spans the viewport on mobile.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its resting edge, width and stretched control', async () => {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await page.setContent(`<style>.banner{position:fixed;right:24px;bottom:24px;width:280px;padding:24px;background:#898989;color:#000}.banner h4{margin:0 0 8px}.banner p{margin:0 0 16px}.banner button{display:block;width:100%}</style><main style="min-height:1200px"><h1>Page title</h1></main><div class="banner" id="cookie-banner"><h4>This website uses cookies.</h4><p>We use cookies to analyze website traffic.</p><button onclick="this.parentNode.remove()">ACCEPT</button></div>`);
-    const dismissed = await dismissOverlays(page);
+    await page.setContent(`<style>.banner{position:fixed;right:0;bottom:-500px;width:400px;margin:24px;box-sizing:border-box;padding:24px;background:#898989;border-radius:7px;box-shadow:0 2px 6px rgba(0,0,0,.3);color:#000;transition:transform .3s}.banner.in{transform:translateY(-500px)}.banner h4{margin:0;padding-bottom:8px;font-size:22px;line-height:27.5px}.banner p{margin:0 0 16px;font-size:16px}.banner button{display:block;width:100%;min-height:40px;margin:24px 0 4px;font-weight:700;letter-spacing:1px}@media (max-width:767px){.banner{left:0;width:auto;margin:0;border-radius:0}}</style><main style="min-height:1200px"><h1>Page title</h1></main><div class="banner" id="cookie-banner"><h4>This website uses cookies.</h4><p>We use cookies to analyze website traffic.</p><button onclick="this.parentNode.remove()">ACCEPT</button></div><script>requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector('.banner').classList.add('in')))</script>`);
+    const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 390, height: 844 }] });
     const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
-    expect(banner?.text).toBe('This website uses cookies. We use cookies to analyze website traffic.');
-    expect(banner?.presentation?.layout?.[0].direction).toBe('column');
+    expect(banner?.title).toBe('This website uses cookies.');
+    expect(banner?.text).toBe('We use cookies to analyze website traffic.');
+    expect(banner?.presentation).toMatchObject({ edge_offset: '24px', font_size: '16px', box_shadow: 'rgba(0, 0, 0, 0.3) 0px 2px 6px 0px', title: { font_size: '22px', line_height: '27.5px', margin: '0px', padding: '0px 0px 8px' },
+      button: { font_weight: '700', letter_spacing: '1px', min_height: '40px', margin: '24px 0px 4px' } });
+    expect(banner?.presentation?.layout).toEqual([
+      expect.objectContaining({ direction: 'column', button_align: 'stretch', span: 'full', edge_offset: '0px' }),
+      expect.objectContaining({ direction: 'column', button_align: 'stretch', span: 'inset', inline: 'end', width: 400, inline_offset: 24, edge_offset: '24px', border_radius: '7px' }),
+    ]);
   } finally {
     await browser.close();
   }
@@ -81,7 +88,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as
       <button>Decline</button><button>Allow selection</button><button>Accept all</button></div>`);
     const dismissed = await dismissOverlays(page);
     const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
-    expect(banner?.text).toBe('This website uses cookies We use cookies to personalise content and ads and to analyse our traffic.');
+    expect(banner?.title).toBe('This website uses cookies');
+    expect(banner?.text).toBe('We use cookies to personalise content and ads and to analyse our traffic.');
     expect(banner?.presentation?.font_size).toBe('14px');
     expect(banner?.presentation?.font_family).toBe('Arial, sans-serif');
     expect(banner?.accept_label).toBe('Accept all');
@@ -185,8 +193,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects m
         expect(presentation?.button).not.toHaveProperty(field);
       }
       expect(presentation?.layout).toEqual([
-        { max_width: 414, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 0px 15px' },
-        { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px' },
+        { max_width: 414, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 0px 15px', edge_offset: '0px', span: 'full' },
+        { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px', edge_offset: '0px', span: 'full' },
       ]);
     }
   } finally {
@@ -224,10 +232,10 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
         span: 'full', edge_offset: '0px', padding: '12px', gap: '8px',
         font_family: 'Calibri, sans-serif', font_size: '15px', line_height: '18px', text_margin: '0px 15px 0px 0px',
         layout: [
-          { max_width: 414, direction: 'column', align_items: 'stretch', button_align: 'end', text_margin: '0px 0px 15px' },
-          { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px' },
+          { max_width: 414, direction: 'column', align_items: 'stretch', button_align: 'end', text_margin: '0px 0px 15px', edge_offset: '0px', span: 'full' },
+          { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px', edge_offset: '0px', span: 'full' },
         ],
-        button: { border_radius: '5px', border_width: '2px', border_style: 'solid', border_color: 'rgb(255, 255, 255)', padding: '8px 40px', font_size: '13.5px', font_family: 'Calibri, sans-serif', line_height: '16.2px' },
+        button: { border_radius: '5px', border_width: '2px', border_style: 'solid', border_color: 'rgb(255, 255, 255)', padding: '8px 40px', font_size: '13.5px', font_family: 'Calibri, sans-serif', line_height: '16.2px', font_weight: '400' },
       },
       source_selector: 'div.cc-window.cc-banner',
     });
