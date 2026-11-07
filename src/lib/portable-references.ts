@@ -100,11 +100,11 @@ export function localizeMetadataImageReferences(
 		try { localPaths.set( key( new URL( source, documentUrl ) ), path ); }
 		catch { /* Not a URL identity. */ }
 	}
-	return rewriteAroundMetadataImages( html, rewriteOther, value => {
+	return rewriteAroundMetadataImages( html, rewriteOther, ( value, preserveUnmapped ) => {
 		try {
 			const absolute = new URL( value, documentUrl );
 			const path = localPaths.get( key( new URL( absolute.href ) ) );
-			return path?.startsWith( 'website/' ) ? `/${ path.slice( 'website/'.length ) }` : absolute.href;
+			return path?.startsWith( 'website/' ) ? `/${ path.slice( 'website/'.length ) }` : preserveUnmapped ? value : absolute.href;
 		} catch { return value; } // Invalid authored metadata is not a resource.
 	} );
 }
@@ -112,7 +112,7 @@ export function localizeMetadataImageReferences(
 function rewriteAroundMetadataImages(
 	html: string,
 	rewriteOther: ( html: string ) => string,
-	mapUrl: ( url: string ) => string = url => url
+	mapUrl: ( url: string, preserveUnmapped?: boolean ) => string = url => url
 ): string {
 	const $ = cheerio.load( html, { sourceCodeLocationInfo: true } );
 	let result = '';
@@ -126,14 +126,14 @@ function rewriteAroundMetadataImages(
 			try {
 				const data: unknown = JSON.parse( node.text() );
 				mapMetadataImages( data, mapUrl );
-				node.text( JSON.stringify( data ).replace( /</g, '\\u003c' ) );
+				node.text( JSON.stringify( data ).replace( /<\//g, '<\\/' ) );
 			} catch { return; }
 		} else if ( element.tagName === 'img' ) {
 			let fallback: string | undefined;
 			for ( const attribute of [ 'data-src', 'data-lazy-src', 'data-original', 'data-image', 'data-image-src', 'data-srcset' ] ) {
 				const value = node.attr( attribute );
 				if ( ! value ) continue;
-				const mapped = attribute === 'data-srcset' ? rewriteSrcset( value, mapUrl ) : mapUrl( value );
+				const mapped = attribute === 'data-srcset' ? rewriteSrcset( value, url => mapUrl( url, true ) ) : mapUrl( value, true );
 				node.attr( attribute, mapped );
 				const candidate = attribute === 'data-srcset' ? srcsetCandidates( mapped )[ 0 ]?.url : mapped;
 				if ( candidate?.startsWith( '/' ) && candidate !== value ) fallback ??= candidate;
@@ -148,7 +148,11 @@ function rewriteAroundMetadataImages(
 		if ( ! location || ! value ) return;
 		node.attr( 'content', mapUrl( value ) );
 		}
-		result += rewriteOther( html.slice( offset, location.startOffset ) ) + $.html( element );
+		// Lazy attributes augment the ordinary image rewrite; only metadata is
+		// protected from visual-media replacements and dangling-image stubs.
+		const serialized = $.html( element );
+		result += rewriteOther( html.slice( offset, location.startOffset ) ) +
+			( element.tagName === 'img' ? rewriteOther( serialized ) : serialized );
 		offset = location.endOffset;
 	} );
 	return result + rewriteOther( html.slice( offset ) );
