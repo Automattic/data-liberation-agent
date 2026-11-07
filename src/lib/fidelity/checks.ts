@@ -16,6 +16,7 @@
 import { scoreViewport, type LayoutObservation } from './score.js';
 import {
 	checkImageGeometry,
+	checkLayoutGeometry,
 	checkMotion,
 	checkTypography,
 } from './rendered-contract-checks.js';
@@ -146,6 +147,11 @@ registerFidelityCheck( {
 registerFidelityCheck( {
 	name: 'image-geometry',
 	run: ( { source, candidate } ) => checkImageGeometry( source, candidate ),
+} );
+
+registerFidelityCheck( {
+	name: 'layout-geometry',
+	run: ( { source, candidate } ) => checkLayoutGeometry( source, candidate ),
 } );
 
 registerFidelityCheck( {
