@@ -223,6 +223,8 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 			expect( diagnostics.filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ) ).toEqual( [ expect.objectContaining( { url: `${ origin }/budget-only/` } ) ] );
 			expect( diagnostics.some( row => row.url === `${ origin }/post-1` && ( row.code === ROUTE_OMITTED_BY_BUDGET || row.code === 'linked_page_budget_exhausted' ) ) ).toBe( false );
 			expect( captured.summary.routesOmitted ).toBe( 1 );
+			const exported = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ).discoveryDiagnostics as Array<{ code: string; url: string }>;
+			expect( exported.filter( row => row.url === `${ origin }/budget-only/` && /budget/.test( row.code ) ) ).toHaveLength( 1 );
 		} finally {
 			admissionSpy.mockRestore(); finishSpy.mockRestore(); closedSpy.mockRestore(); frontierSpy.mockRestore();
 			rendered = originals;

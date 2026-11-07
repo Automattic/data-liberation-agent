@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mergeConsentLayouts } from './consent-banner-layout.js';
 import { normalizedUrl } from './url/route-key.js';
+import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
 import { scopedRouteKey, routeInScope } from './url/route-scope.js';
 import { dirname, join, resolve } from 'node:path';
 import type { MediaStubStore } from './resume-state/index.js';
@@ -641,7 +642,11 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const linkedPageCoverage = existsSync( linkedPageCoveragePath ) ? JSON.parse( readFileSync( linkedPageCoveragePath, 'utf8' ) ) as import( './screenshot/types.js' ).ScreenshotResult['linkedPageCoverage'] : undefined;
 	const discoveryDiagnostics = [
 		...( options.discoveryDiagnostics ?? [] ),
-		...( linkedPageCoverage?.diagnostics ?? [] ).filter( row => ! options.discoveryDiagnostics?.some( prior => prior.code === row.code && prior.url === row.url && prior.reason === row.reason ) ),
+		// Capture reclassifies frontier budget refusals as route budget omissions;
+		// one budget explanation per document is enough.
+		...( linkedPageCoverage?.diagnostics ?? [] ).filter( row => ! options.discoveryDiagnostics?.some( prior =>
+			( prior.code === row.code && prior.url === row.url && prior.reason === row.reason ) ||
+			( row.code === 'linked_page_budget_exhausted' && prior.code === ROUTE_OMITTED_BY_BUDGET && normalizedUrl( prior.url ) === normalizedUrl( row.url ) ) ) ),
 		...( httpInput?.diagnostics ?? [] ),
 		...routeCaptureDiagnostics,
 	];
