@@ -270,9 +270,9 @@ document.querySelector('.close').addEventListener('click',()=>{drawer.style.tran
 
 /**
  * A navbar whose runtime numbers its rendered controls in render order, as
- * some site builders do: at desktop width the desktop-only More dropdown is
- * `#1` and the hidden phone menu button has no ID; at phone width, where More
- * is not rendered, the menu button is `#1`. The document is otherwise identical.
+ * some site builders do, skipping the desktop-only More dropdown at phone
+ * width: at desktop width More is `#1` and the phone menu button `#2`; at
+ * phone width the menu button is `#1`. The document is otherwise identical.
  */
 function counterPage(): string {
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Counter</title><style>
@@ -285,7 +285,7 @@ body{margin:0;font:16px Arial}nav{display:flex;justify-content:space-between;hei
 <div id="more-list" class="panel" role="menu" aria-label="More pages" hidden><a href="/counter/">Extra</a></div>
 <div id="drawer" class="panel" role="menu" aria-label="Site menu" hidden><a href="/counter/">Home</a><a href="/counter/">About</a></div>
 <main><h1>Welcome</h1></main>
-<script>let next=1;for(const control of document.querySelectorAll('[data-counted]'))if(getComputedStyle(control).display!=='none')control.id=String(next++);
+<script>let next=1;for(const control of document.querySelectorAll('[data-counted]'))if(innerWidth>600||!control.matches('.more'))control.id=String(next++);
 const toggle=(button,panel)=>button.addEventListener('click',()=>{const d=document.getElementById(panel);d.hidden=!d.hidden});
 toggle(document.querySelector('.more'),'more-list');toggle(document.querySelector('.burger'),'drawer');</script></body></html>`;
 }
@@ -519,7 +519,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', phoneProbe: { status: 'captured', triggers: 1, captured: 1 } } );
 		const home = run.entries[ `${ origin }/counter/` ]!;
 		const state = ( label: string ) => home.interactions?.states.find( item => item.trigger.label === label );
-		// The phone rendering numbered the menu button `1`, the desktop document's More.
+		// The phone rendering numbered the menu button `1`, the desktop document's
+		// More. Its ID differs per rendering, so it is named by position.
 		expect( state( 'Menu' ) ).toMatchObject( { status: 'captured', trigger: { selector: 'body > nav:nth-of-type(1) > button:nth-of-type(2)' }, dialog: { id: 'drawer' } } );
 		expect( state( 'Menu' )!.trigger.id ).toBeUndefined();
 		expect( state( 'More' ) ).toMatchObject( { status: 'captured', trigger: { id: '1' }, dialog: { id: 'more-list' } } );
