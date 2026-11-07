@@ -351,7 +351,7 @@ export function identitySubsetMerge(
 		const $ = cheerio.load( `<body>${ body }</body>` );
 		const ids = new Map< string, Element >();
 		for ( const node of $( '[id]' ).toArray() ) {
-			if ( ! isElementNode( node ) ) continue;
+			if ( ! isElementNode( node ) || isUnrenderedElement( node ) ) continue;
 			const id = $( node ).attr( 'id' ) ?? '';
 			if ( ! isStableIdentityId( id ) ) continue;
 			if ( ids.has( id ) ) repeated.add( id );
@@ -372,6 +372,9 @@ export function identitySubsetMerge(
 		const otherIds = sourceIds[ 1 - index ] as Set<string>;
 		document.ids.clear();
 		for ( const node of document.$( 'body *' ).toArray().filter( isElementNode ) ) {
+			// Non-rendering subtrees retain the default document's copy, not a
+			// component identity that could require per-device splitting.
+			if ( isUnrenderedElement( node ) ) continue;
 			const id = node.attribs.id;
 			const attribute = attributes.find( name => Boolean( node.attribs[ name ]?.trim() ) && ! repeatedAttributes.has( JSON.stringify( [ name, node.attribs[ name ] ] ) ) );
 			const ownId = id && isIdentityId( id ) ? id : undefined;
@@ -492,9 +495,7 @@ export function identitySubsetMerge(
 					return true;
 			} else if (
 				isElementNode( child ) &&
-				child.tagName !== 'script' &&
-				child.tagName !== 'style' &&
-				child.tagName !== 'noscript' &&
+				! UNRENDERED_TAGS.has( child.tagName ) &&
 				unmappedText( child )
 			)
 				return true;
@@ -1197,6 +1198,13 @@ const ID_REFERENCE_ATTRIBUTES = [ 'for', 'aria-labelledby', 'aria-describedby', 
  */
 /** Elements that render no box; neither capture's copy is a device-only island. */
 const UNRENDERED_TAGS = new Set( [ 'script', 'style', 'link', 'meta', 'noscript', 'template' ] );
+
+function isUnrenderedElement( element: Element ): boolean {
+	for ( let node: AnyNode | null = element; node; node = node.parent ) {
+		if ( isElementNode( node ) && UNRENDERED_TAGS.has( node.tagName ) ) return true;
+	}
+	return false;
+}
 
 /** Hook path root for id-less chrome paired from <body>; no identity can take it. */
 const BODY_PATH = 'body';

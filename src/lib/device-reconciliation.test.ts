@@ -22,6 +22,41 @@ const documentWithEntrance = ( evidence: unknown ) => {
 	return $.html();
 };
 
+describe( 'device component reconciliation', () => {
+	const document = ( content: string ) => `<!doctype html><html><head><link rel="stylesheet" href="/layout.css"></head><body><main id="content"><p id="intro">Shared content</p>${ content }</main></body></html>`;
+
+	it( 'collapses differing data scripts with a linked stylesheet, keeping the default copy', () => {
+		const script = ( device: string ) => `<script id="model" type="application/json">{"device":"${ device }"}</script>`;
+		const result = reconcileDeviceDocuments( { desktop: document( script( 'desktop' ) ), tablet: document( script( 'tablet' ) ) }, selection );
+		expect( result.evidence.devices.tablet.outcome ).toBe( 'collapsed-identity-subset' );
+		expect( result.reconciled.has( 'tablet' ) ).toBe( true );
+		const $ = cheerio.load( result.body );
+		expect( $( 'script' ) ).toHaveLength( 1 );
+		expect( $( '#model' ).text() ).toBe( '{"device":"desktop"}' );
+		expect( $( '#content' ) ).toHaveLength( 1 );
+	} );
+
+	it.each( [ 'style', 'link', 'meta', 'noscript', 'template' ] )( 'keeps the default %s subtree without splitting a component', tag => {
+		const subtree = ( device: string ) => tag === 'link' || tag === 'meta'
+			? `<${ tag } id="metadata" class="${ device }">`
+			: `<${ tag } id="metadata"><span id="nested" class="${ device }">${ device }</span></${ tag }>`;
+		const result = reconcileDeviceDocuments( { desktop: document( subtree( 'desktop' ) ), tablet: document( subtree( 'tablet' ) ) }, selection );
+		expect( result.evidence.devices.tablet.outcome ).toBe( 'collapsed-identity-subset' );
+		const $ = cheerio.load( result.body );
+		expect( $( '#metadata' ) ).toHaveLength( 1 );
+		expect( $.html() ).not.toContain( 'class="tablet"' );
+	} );
+
+	it( 'keeps re-parented rendered components separate when a stylesheet is linked', () => {
+		const result = reconcileDeviceDocuments( {
+			desktop: document( '<div class="left"><section id="card">Card</section></div><div class="right"></div>' ),
+			tablet: document( '<div class="left"></div><div class="right"><section id="card">Card</section></div>' ),
+		}, selection );
+		expect( result.reconciled.has( 'tablet' ) ).toBe( false );
+		expect( result.evidence.devices.tablet ).toMatchObject( { outcome: 'dual-structural', reason: expect.stringContaining( 'linked stylesheet' ) } );
+	} );
+} );
+
 describe( 'device entrance reconciliation', () => {
 	it( 'unions startup evidence on matched nodes without duplicating contexts', () => {
 		const desktop = state( 1440, 900 ), tablet = state( 980, 1148 );
