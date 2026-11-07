@@ -356,6 +356,8 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
       // serves 6×5). Hidden slides, tabs and responsive images load real
       // dimensions; lazy placeholders name their source.
       const image = node as HTMLImageElement;
+      // Inert local placeholders are not network beacons.
+      if (/^(?:data|blob):/i.test(image.currentSrc || image.src)) return false;
       if (!image.complete || image.naturalWidth < 1 || image.naturalWidth > 8 || image.naturalHeight > 8) return false;
       if ([...image.getAttributeNames()].some(name => /^(?:srcset|data-(?:src|srcset|lazy.*|original))$/i.test(name))) return false;
       const rect = image.getBoundingClientRect();
