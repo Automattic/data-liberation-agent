@@ -24,6 +24,20 @@ it('merges slash identities while preserving query, depth and time boundaries', 
 	]);
 });
 
+it('allows alias identity replacement only for the redirecting owner', () => {
+	const frontier = new LinkedFrontier({ capturePageLimit: 2 }, 0);
+	const owner = 'https://source.test/a%3A.html';
+	const redirect = `${owner}?view=full`;
+	expect(frontier.admit(owner, 0, 0, 'inventory')).toBe(true);
+	expect(frontier.admit(redirect, 0, 0, 'inventory')).toBe(true);
+	expect(frontier.admit('https://source.test/a:.html', 0, 0, 'alias', redirect)).toBe(false);
+	expect(frontier.coverage()).toMatchObject({ scheduled: 2, diagnostics: [] });
+	expect(frontier.admit('https://source.test/a:.html/', 0, 0, 'alias', owner)).toBe(true);
+	// The replacement now owns this identity, not the earlier request address.
+	expect(frontier.admit('https://source.test/a:.html', 0, 0, 'alias', owner)).toBe(false);
+	expect(frontier.diagnostics).toEqual([]);
+});
+
 it('rejects non-document links once without spending page budgets or requiring evidence', () => {
 	const frontier = new LinkedFrontier({maxPages: 2, capturePageLimit: 2}, 0);
 	const files = ['/media/a.mp4', '/media/b.zip', '/media/c.pdf'];

@@ -7,22 +7,32 @@ import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
 
 describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('percent-encoded route discovery (real Chromium)', () => {
-	it('captures and exports one document for encoded and literal path spellings', async () => {
+	it.each(['literal link', 'redirect', 'queued redirect'] as const)('captures and exports one document for encoded and literal path spellings: %s', async mode => {
 		const server = createServer((request, response) => {
-			const path = decodeURIComponent(new URL(request.url!, 'http://fixture.test').pathname);
+			const requested = new URL(request.url!, 'http://fixture.test');
+			if (requested.search === '?view=full') {
+				response.writeHead(302, { location: '/a:.html' }).end();
+				return;
+			}
+			const path = decodeURIComponent(requested.pathname);
 			response.setHeader('content-type', 'text/html; charset=utf-8');
 			if (path !== '/' && path !== '/a:.html') {
 				response.writeHead(404).end();
 				return;
 			}
-			response.end(`<!doctype html><html><head><title>Route fixture</title></head><body><main>${path === '/' ? '<h1>Home</h1><a href="/a%3A.html">Encoded</a><a href="/a:.html">Literal</a>' : '<h1>One document</h1>'}</main></body></html>`);
+			const links = ['<a href="/a%3A.html">Encoded</a>', `<a href="${mode === 'literal link' ? '/a:.html' : '/a%3A.html?view=full'}">Other spelling</a>`];
+			if (mode === 'queued redirect') links.reverse();
+			response.end(`<!doctype html><html><head><title>Route fixture</title></head><body><main>${path === '/' ? `<h1>Home</h1>${links.join('')}` : '<h1>One document</h1>'}</main></body></html>`);
 		});
 		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 		const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
 		mkdirSync('.tmp-test', { recursive: true });
 		const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'route-encoding-'));
 		try {
+			const aliases: [string, string][] = [];
 			const capture = await captureScreenshots({
+				onRouteAlias: (from, to) => { aliases.push([from, to]); },
+				referenceSampleUrls: [`${url}a%3A.html?view=full`],
 				urls: [url], primaryUrl: url, outputDir,
 				linkedPages: { maxPages: 10, timeoutMs: 120_000 },
 				concurrency: 1, settleMs: 0, learnFluid: false,
@@ -30,6 +40,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.
 			});
 			expect(capture.failed).toBe(0);
 			expect(capture.captured).toBe(2); // Index plus one canonical document, not both spellings.
+			if (mode !== 'literal link') expect(aliases).toEqual([[`${url}a%3A.html?view=full`, `${url}a%3A.html`]]);
 			const receiptPath = exportWebsiteCapture({ outputDir, sourceUrl: url, platform: 'default', summary: { routesFailed: capture.failed }, failures: [] });
 			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
 			expect(receipt.routes).toHaveLength(2);
