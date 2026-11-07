@@ -7,6 +7,8 @@ import { observeViewportEntrances, stampViewportEntrances, collectViewportEntran
 import { exportWebsiteCapture } from './capture-export.js';
 import { observePage } from './fidelity/check.js';
 import { checkMotion } from './fidelity/rendered-contract-checks.js';
+import { createReferenceCollector } from './fidelity/reference.js';
+import type { DeviceDocumentSelection } from './document-selection.js';
 
 const fixture = ( repeat: boolean, startup = false ) => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 body{margin:0;width:980px}.spacer{height:${ startup ? 350 : 1100 }px}.entrance{position:relative;left:${ startup ? 10 : 740 }px;width:200px;height:150px;background:red}
@@ -21,7 +23,56 @@ setTimeout(()=>{const effects=entry.target.getAnimations();effects.forEach(effec
 document.querySelectorAll('.entrance').forEach(element=>observer.observe(element));
 </script></body></html>`;
 
-const pose = ( page: Page ) => page.locator( '#entrance' ).evaluate( element => {
+it( 'retains each device document’s observed CSS entrance startup contexts through export', async () => {
+	const browser = await chromium.launch();
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const directory = mkdtempSync( join( process.cwd(), '.tmp-test/finite-profiles-' ) );
+	const selection: DeviceDocumentSelection = {
+		kind: 'device', id: 'neutral-entrances/v1', documents: [ 'desktop', 'tablet' ], defaultDocument: 'desktop',
+		rules: [ { userAgent: 'NeutralTablet', document: 'tablet' } ], evidence: 'Request identity selects the source document.',
+	};
+	try {
+		for ( const key of selection.documents ) {
+			const context = await browser.newContext( { ...( key === 'tablet' ? devices['iPad (gen 7)'] : {} ), userAgent: key === 'tablet' ? 'NeutralTablet' : 'NeutralDesktop', viewport: { width: 1440, height: 900 } } );
+			await context.addInitScript( observeViewportEntrances );
+			const source = await context.newPage();
+			// Same stable content, but independent profile-specific startup evidence.
+			const html = fixture( false ).replace( 'left:740px', 'left:10px' ).replace( 'width=device-width,initial-scale=1', key === 'tablet' ? 'width=980,user-scalable=yes' : 'width=device-width,initial-scale=1' );
+			const url = `data:text/html,${ encodeURIComponent( html ) }`;
+			await source.goto( url );
+			const collector = createReferenceCollector( directory, url, [ url ] );
+			await collector.observe( source, url, key, [], { isMobile: key === 'tablet', hasTouch: key === 'tablet' }, { id: key, width: 1440, height: 900, ...( key === 'tablet' ? { device: 'iPad (gen 7)' } : {} ), context: { userAgent: key === 'tablet' ? 'NeutralTablet' : 'NeutralDesktop' }, referenceWidths: [ 390, 768, 1440 ] } );
+			await source.evaluate( () => scrollTo( 0, 1100 ) );
+			await source.waitForTimeout( 1200 );
+			await source.evaluate( () => scrollTo( 0, 0 ) );
+			await stampViewportEntrances( source );
+			mkdirSync( join( directory, `html-${ key }` ) );
+			writeFileSync( join( directory, `html-${ key }/home.html` ), await source.content() );
+			await context.close();
+		}
+		mkdirSync( join( directory, 'screenshots' ) );
+		writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://fixture.test/': {
+			html: 'html-desktop/home.html', profiles: { tablet: { html: 'html-tablet/home.html' } },
+		} } } ) );
+		exportWebsiteCapture( { outputDir: directory, sourceUrl: 'https://fixture.test/', platform: 'generic', summary: {}, failures: [], resolveDocumentSelection: () => selection } );
+		const portable = readFileSync( join( directory, 'website/index.html' ), 'utf8' );
+		for ( const key of selection.documents ) {
+			const copy = await browser.newPage( { ...( key === 'tablet' ? devices['iPad (gen 7)'] : {} ), userAgent: key === 'tablet' ? 'NeutralTablet' : 'NeutralDesktop' } );
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				await copy.goto( `data:text/html,${ encodeURIComponent( portable ) }` );
+				await copy.waitForTimeout( 100 );
+				expect( await copy.locator( '[data-blocks-engine-capture-viewport-entrance-loss]' ).evaluateAll( elements => elements.map( element => element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ) ), `${ key } at ${ width }` ).toEqual( [] );
+				await copy.evaluate( () => scrollTo( 0, 1100 ) );
+				await copy.waitForTimeout( 1000 );
+				expect( await pose( copy ), `${ key } at ${ width }` ).toMatchObject( { state: 'complete', opacity: '1', effects: [] } );
+			}
+			await copy.close();
+		}
+	} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+}, 30_000 );
+
+const pose = ( page: Page ) => page.locator( '#entrance:visible' ).evaluate( element => {
 	const style = getComputedStyle( element );
 	return { opacity: style.opacity, clipPath: style.clipPath, state: element.getAttribute( 'data-state' ), effects: element.getAnimations().map( animation => ( {
 		name: ( animation as CSSAnimation ).animationName, state: animation.playState, timeline: animation.timeline === document.timeline,
