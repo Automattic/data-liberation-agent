@@ -511,7 +511,7 @@ async function runCaptureWebsite(
 	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all', governors: sourceGovernors } )
+		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
 	// Verification members (#784 §4.2): one per multi-member cluster, kept right
 	// after the representatives so a budget that fits every template also fits
@@ -858,8 +858,9 @@ async function groupInventoryTemplates( input: { sourceUrl: string; urls: string
 }
 
 /**
- * Grouping bounds for a capture. Whole-inventory capture (`routeLimit: 'all'`)
- * makes every inventory route a candidate and, with a capture time budget,
+ * Grouping bounds for a capture. Whole-inventory capture (`routeLimit: 'all'`,
+ * or `templateClusters`, which can derive only fingerprinted members) makes
+ * every inventory route a candidate and, with a capture time budget,
  * spends up to a quarter of it. Otherwise: the default spread sample, and at
  * most a tenth of a capture time budget, never over the default pass time.
  */
