@@ -184,14 +184,11 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 					<script>document.querySelectorAll('header a').forEach((link) => link.addEventListener('click', (event) => event.preventDefault()));</script>`,
 			} ) );
 			await page.goto( 'https://anchor.test/' );
-			const started = Date.now();
 			await capture.prepare!( page, { url: page.url(), viewport: 'mobile' } );
-			const elapsed = Date.now() - started;
 			expect( await page.locator( 'a[href$="#dead-one"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
 			expect( await page.locator( 'a[href$="#dead-two"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
-			// Fixed chrome pays the full first no-move beat and a half-beat retry
-			// per fragment, still less than two full 3s scroll bounds plus the sweep.
-			expect( elapsed ).toBeLessThan( 6_500 );
+			// Timer bounds are checked with virtual time in anchor-scroll.test.ts;
+			// browser scheduling and the preparation sweep are not part of that bound.
 		} finally {
 			await browser.close();
 		}

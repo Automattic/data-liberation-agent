@@ -239,7 +239,17 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				const page = await context.newPage();
 				store.observe( page );
 				await page.goto( url );
-				await page.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).decode() );
+				// Lazy images do not delay navigation's load event. Wait for the
+				// selected candidate before decode(), which can reject while srcset
+				// selection is still changing even though the PNG bytes are valid.
+				const waitForImage = async ( target: Page ) => {
+					await target.waitForFunction( () => {
+						const image = document.querySelector( 'img' );
+						return image?.complete && image.naturalWidth > 0;
+					}, {}, { timeout: 5000 } );
+					await target.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).decode() );
+				};
+				await waitForImage( page );
 				await store.captureSelectedSrcsets( page );
 				await store.captureDomDependencies( html, url );
 				await store.settle( page );
@@ -262,7 +272,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 						try {
 							const sample = await fresh.newPage();
 							await sample.goto( address );
-							await sample.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).decode() );
+							await waitForImage( sample );
 							const current = await sample.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).currentSrc );
 							selected.push( Buffer.from( await ( await fetch( current ) ).arrayBuffer() ) );
 						} finally { await fresh.close(); }
