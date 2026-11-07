@@ -681,12 +681,23 @@ async function runCaptureWebsite(
 	// template-cluster derivative, so its omission row is replaced by the
 	// derivation's own loss row (`route_template_derived`).
 	const derivedUrls = new Set( derivedTemplateClusters?.summary.derivedUrls ?? [] );
+	const derivedIdentities = new Set( [ ...derivedUrls ].map( normalizedUrl ) );
 	const blockedClient = sourceGovernors.forOrigin( sourceUrl ).blockedClient;
+	// Frontier timeouts and late-pass refusals are capture-budget omissions too.
+	// Keep the first explanation per document, regardless of which stage found
+	// it or which slash spelling it used; derived documents keep no omission.
+	const budgetRows = new Set< string >();
 	const captureDiagnostics = [
-		...[ ...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics ]
-			.filter( row => row.code !== ROUTE_OMITTED_BY_BUDGET || ! derivedUrls.has( row.url ) ),
-		...( derivedTemplateClusters?.diagnostics ?? [] ).filter( row => row.code !== 'linked_page_budget_exhausted' || ! derivedUrls.has( row.url ) ),
-	];
+		...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics,
+		...( derivedTemplateClusters?.diagnostics ?? [] ),
+	].map( row => row.code === 'linked_page_budget_exhausted' ? { ...row, code: ROUTE_OMITTED_BY_BUDGET } : row )
+		.filter( row => {
+			if ( row.code !== ROUTE_OMITTED_BY_BUDGET ) return true;
+			const identity = normalizedUrl( row.url );
+			if ( derivedIdentities.has( identity ) || budgetRows.has( identity ) ) return false;
+			budgetRows.add( identity );
+			return true;
+		} );
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
 		routesDiscovered: screenshotResult.urls.length - ( screenshotResult.routeDiagnostics ?? [] ).filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ).length,
@@ -958,14 +969,16 @@ async function deriveTemplateClusterMembers( input: {
 	await queue.init();
 	// The admitted URL inventory includes budget omissions; only a manifest
 	// entry with HTML proves that capture produced a document.
-	const capturedEntry = ( url: string ) => queue.getEntry( documentRequestUrl( url ) ) ?? queue.getEntry( url );
+	const documentUrls = new Set< string >( Object.keys( JSON.parse( readFileSync( manifestPath, 'utf8' ) ).entries ) );
+	const documentIdentities = new Map( [ ...documentUrls ].map( url => [ normalizedUrl( url ), url ] ) );
+	const capturedEntry = ( url: string ) => queue.getEntry( documentIdentities.get( normalizedUrl( url ) ) ?? documentRequestUrl( url ) );
 	const isCaptured = ( url: string ) => Boolean( capturedEntry( url )?.html );
 	const { sameOriginPageAnchors } = await import( './screenshot/unscheduled-anchors.js' );
 	const { stateChangingAction } = await import( './url/action-url.js' );
 	const { isNonDocumentUrl } = await import( './extraction/sitemap.js' );
 	const { resolveDocumentReferences } = await import( './document-resource-base.js' );
-	const documentUrls = new Set< string >( Object.keys( JSON.parse( readFileSync( manifestPath, 'utf8' ) ).entries ) );
 	const offered = new Set< string >();
+	const diagnosed = new Set< string >();
 	const { TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
 	const lateLimits = { ...TEMPLATE_GROUPING_LIMITS, ...await templateGroupingLimits( { timeBudgetMs: input.timeBudgetMs, wholeInventory: false } ) };
 	const lateDeadline = Date.now() + lateLimits.timeBudgetMs;
@@ -998,7 +1011,11 @@ async function deriveTemplateClusterMembers( input: {
 		}
 		const candidates = [ ...targets ].filter( url => ! isCaptured( url ) && ! grouped.has( url ) && ! offered.has( url ) ).slice( 0, remainingRoutes );
 		for ( const url of targets ) {
-			if ( ! isCaptured( url ) && ! offered.has( url ) ) diagnostics.push( { code: 'linked_page_budget_exhausted', url, reason: 'post-capture linked route exceeds the browser capture budget' } );
+			const identity = normalizedUrl( url );
+			if ( ! isCaptured( url ) && ! diagnosed.has( identity ) ) {
+				diagnostics.push( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: 'post-capture linked route exceeds the browser capture budget' } );
+				diagnosed.add( identity );
+			}
 		}
 		for ( const url of candidates ) offered.add( url );
 		remainingRoutes -= candidates.length;
@@ -1135,6 +1152,7 @@ async function deriveTemplateClusterMembers( input: {
 					record.derived.push( { url, slots: derivation.stats.slots, subtreeSlots: derivation.stats.subtreeSlots } );
 					derivedUrls.push( url );
 					documentUrls.add( url );
+					documentIdentities.set( normalizedUrl( url ), url );
 					derivedInCluster++;
 				}
 				await store.flush();
