@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { Page } from 'playwright';
 import * as cheerio from 'cheerio';
 import { withEvaluateTimeout } from './screenshot/page-helpers.js';
@@ -327,31 +328,58 @@ function replayViewportEntrances(): void {
 	}
 }
 
+/** Combine only equivalent lifecycles with nonconflicting observed canvas sizes. */
+export function mergeViewportEntranceStates( left: string | undefined, right: string | undefined ): string | undefined {
+	const a = parseViewportEntranceState( left ), b = parseViewportEntranceState( right );
+	if ( ! a || ! b ) return undefined;
+	const { startupContexts: aContexts, ...aLifecycle } = a;
+	const { startupContexts: bContexts, ...bLifecycle } = b;
+	if ( ! isDeepStrictEqual( aLifecycle, bLifecycle ) ) return undefined;
+	const contexts: NonNullable<EntranceState['startupContexts']> = [];
+	for ( const context of [ ...( aContexts ?? [] ), ...( bContexts ?? [] ) ] ) {
+		const previous = contexts.find( pose => pose.width === context.width && pose.height === context.height );
+		if ( previous && previous.started !== context.started ) return undefined;
+		if ( ! previous ) contexts.push( context );
+	}
+	return JSON.stringify( { ...aLifecycle, ...( aContexts || bContexts ? { startupContexts: contexts } : {} ) } );
+}
+
+function parseViewportEntranceState( raw: string | undefined ): EntranceState | undefined {
+	try {
+		const state: EntranceState = JSON.parse( raw! );
+		if ( ! state ) return undefined;
+		return validViewportEntranceState( state ) ? state : undefined;
+	} catch { return undefined; }
+}
+
+function validViewportEntranceState( state: EntranceState ): boolean {
+	return ! ( typeof state.rootMargin !== 'string' || ! /^-?\d+(?:\.\d+)?(?:px|%)(?:\s+-?\d+(?:\.\d+)?(?:px|%)){0,3}$/.test( state.rootMargin ) || ! Array.isArray( state.threshold ) || ! state.threshold.length ||
+		state.threshold.some( value => typeof value !== 'number' || value < 0 || value > 1 ) ||
+		typeof state.repeat !== 'boolean' || ! state.attributes || Object.keys( state.attributes ).length === 0 ||
+		( state.cssAnimations !== undefined && ( state.threshold.length !== 1 || ! Array.isArray( state.cssAnimations ) || ! state.cssAnimations.length || state.cssAnimations.length > 32 ||
+			state.cssAnimations.some( binding => ! binding || typeof binding.name !== 'string' || ! binding.name || ! binding.timing || ! Array.isArray( binding.frames ) ) ) ) ||
+		( state.startupContexts !== undefined && ( ! Array.isArray( state.startupContexts ) || state.startupContexts.some( pose => ! pose || ! Number.isFinite( pose.width ) || ! Number.isFinite( pose.height ) || typeof pose.started !== 'boolean' ) ) ) ||
+		Object.entries( state.attributes ).some( ( [ name, values ] ) =>
+			! /^(class|style|data-[a-z0-9_.:-]+)$/.test( name ) || name.startsWith( 'data-blocks-engine-capture-' ) ||
+			! values || [ values.before, values.after ].some( value => value !== null && ( typeof value !== 'string' ||
+				( name === 'style' && /expression\s*\(|-moz-binding|url\s*\(\s*["']?\s*(?:javascript|vbscript|data:text\/html)/i.test( value ) ) ) )
+		) );
+}
+
 export function withViewportEntrances( html: string ): string {
 	if ( ! html.includes( VIEWPORT_ENTRANCE_ATTRIBUTE ) ) return html;
 	const $ = cheerio.load( html );
 	let count = 0;
 	$( `[${ VIEWPORT_ENTRANCE_ATTRIBUTE }]` ).each( ( _, element ) => {
 		const node = $( element );
-		try {
-			const state: EntranceState = JSON.parse( node.attr( VIEWPORT_ENTRANCE_ATTRIBUTE )! );
-			if ( typeof state.rootMargin !== 'string' || ! /^-?\d+(?:\.\d+)?(?:px|%)(?:\s+-?\d+(?:\.\d+)?(?:px|%)){0,3}$/.test( state.rootMargin ) || ! Array.isArray( state.threshold ) || ! state.threshold.length ||
-				state.threshold.some( value => typeof value !== 'number' || value < 0 || value > 1 ) ||
-				typeof state.repeat !== 'boolean' || ! state.attributes || Object.keys( state.attributes ).length === 0 ||
-				( state.cssAnimations !== undefined && ( state.threshold.length !== 1 || ! Array.isArray( state.cssAnimations ) || ! state.cssAnimations.length || state.cssAnimations.length > 32 ||
-					state.cssAnimations.some( binding => ! binding || typeof binding.name !== 'string' || ! binding.name || ! binding.timing || ! Array.isArray( binding.frames ) ) ) ) ||
-				( state.startupContexts !== undefined && ( ! Array.isArray( state.startupContexts ) || state.startupContexts.some( pose => ! pose || ! Number.isFinite( pose.width ) || ! Number.isFinite( pose.height ) || typeof pose.started !== 'boolean' ) ) ) ||
-				Object.entries( state.attributes ).some( ( [ name, values ] ) =>
-					! /^(class|style|data-[a-z0-9_.:-]+)$/.test( name ) || name.startsWith( 'data-blocks-engine-capture-' ) ||
-					! values || [ values.before, values.after ].some( value => value !== null && ( typeof value !== 'string' ||
-						( name === 'style' && /expression\s*\(|-moz-binding|url\s*\(\s*["']?\s*(?:javascript|vbscript|data:text\/html)/i.test( value ) ) ) )
-				) ) throw new Error( 'Invalid viewport entrance evidence' );
+		const state = parseViewportEntranceState( node.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ) );
+		if ( state ) {
 			count++;
 			for ( const [ name, values ] of Object.entries( state.attributes ) ) {
 				if ( values.after === null ) node.removeAttr( name );
 				else node.attr( name, values.after );
 			}
-		} catch { node.removeAttr( VIEWPORT_ENTRANCE_ATTRIBUTE ); node.attr( 'data-blocks-engine-capture-viewport-entrance-loss', 'Invalid viewport entrance evidence' ); }
+		} else { node.removeAttr( VIEWPORT_ENTRANCE_ATTRIBUTE ); node.attr( 'data-blocks-engine-capture-viewport-entrance-loss', 'Invalid viewport entrance evidence' ); }
 	} );
 	$( 'script[data-blocks-engine-capture-viewport-entrances]' ).remove();
 	if ( count ) $( 'body' ).append( `<script data-blocks-engine-capture-viewport-entrances>(${ replayViewportEntrances.toString() })();</script>` );

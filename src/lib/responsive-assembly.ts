@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
@@ -608,6 +609,7 @@ export function identitySubsetMerge(
 	const divergedRoots = new Set< string >();
 	let anonymousMobileOnly = 0;
 	const deviceInlineRestores: Array<() => void> = [];
+	let incompatibleEntrance = false;
 	if ( deviceKey ) {
 		const placement = ( $: cheerio.CheerioAPI, node: Element ) => {
 			const steps: string[] = [];
@@ -658,6 +660,11 @@ export function identitySubsetMerge(
 		if ( referenceOf( d.get( 0 )! ) !== referenceOf( m.get( 0 )! ) ) {
 			divergedRoots.add( path.split( '/' )[ 0 ] as string );
 			return;
+		}
+		if ( deviceKey && ( d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ) !== undefined || m.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ) !== undefined ) ) {
+			const state = mergeViewportEntranceStates( d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ), m.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ) );
+			if ( state === undefined ) incompatibleEntrance = true;
+			else d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE, state );
 		}
 		let projected = false;
 		const desktopStyle = d.attr( 'style' ) ?? '';
@@ -837,6 +844,7 @@ export function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
+	if ( incompatibleEntrance ) return cannotMerge( 'Viewport entrance evidence is invalid or incompatible across device documents' );
 	if ( unsafeClassAlias ) return cannotMerge( 'Class projection would change the authored cascade' );
 	deviceInlineRestores.forEach( restore => restore() );
 	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds, deviceKey, identityOf );
