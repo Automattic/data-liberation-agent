@@ -1404,6 +1404,11 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const visible = (node: HTMLElement) => !!node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
     if (!visible(root)) return;
     const label = (node: HTMLElement) => (node.innerText || node.getAttribute('aria-label') || (node as HTMLInputElement).value || '').trim();
+    // Screen-reader-only text (a 1px clipped box) is not rendered prose.
+    const visuallyHidden = (node: HTMLElement) => {
+      const box = node.getBoundingClientRect();
+      return box.width <= 1 && box.height <= 1 && getComputedStyle(node).overflow !== 'visible';
+    };
     // Navigating anchors are links even when styled or labelled as buttons.
     // Classify by structure first; language-specific keywords only rank candidates.
     const documentUrl = new URL(location.href);
@@ -1421,8 +1426,14 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const controls = Array.from(root.querySelectorAll<HTMLElement>('button, [role="button"], input[type="button"], input[type="submit"], a'))
       .filter(node => visible(node) && !links.includes(node as HTMLAnchorElement));
     const reject = controls.find(node => /reject|decline|deny|refuse|disagree|weigeren|ablehnen/i.test(label(node)));
-    const policy = links.find(node => /privacy|policy|cookie|datenschutz/i.test(`${label(node)} ${node.href}`)) ?? links[0];
-    const accept = controls.find(node => node !== reject && node !== policy && /accept|agree|allow|\bok\b|akkoord|zustimm|verstanden/i.test(label(node)))
+    // A policy link reads as text; an icon-only link (a vendor logo) is branding.
+    const textLinks = links.filter(node => node.innerText.trim());
+    const policy = textLinks.find(node => /privacy|policy|cookie|datenschutz/i.test(`${label(node)} ${node.href}`)) ?? textLinks[0];
+    // Several consent controls can match (`Allow selection`, `Accept all`): an
+    // explicit accept outranks a softer allow/ok, and accepting all outranks a subset.
+    const acceptRank = (node: HTMLElement) => (/accept|agree|akkoord|zustimm/i.test(label(node)) ? 2 : 0) + (/\ball\b/i.test(label(node)) ? 1 : 0);
+    const accept = controls.filter(node => node !== reject && node !== policy && /accept|agree|allow|\bok\b|akkoord|zustimm|verstanden/i.test(label(node)))
+      .sort((a, b) => acceptRank(b) - acceptRank(a))[0]
       ?? controls.find(node => node !== reject && node !== policy && !/close|dismiss|settings|preferences|manage/i.test(label(node)))
       ?? (controls.length === 0 ? links.find(node => node !== policy) : undefined);
     if (!accept || !label(accept)) return;
@@ -1431,14 +1442,18 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const clone = root.cloneNode(true) as HTMLElement;
     const originals = Array.from(root.querySelectorAll<HTMLElement>('*'));
     const copies = Array.from(clone.querySelectorAll<HTMLElement>('*'));
-    // Prefer an element's own prose over wrappers or text inside controls.
-    const prose = originals.find(node => visible(node)
-      && !node.closest('button, [role="button"], input, a, script, style')
-      && Array.from(node.childNodes).some(child => child.nodeType === Node.TEXT_NODE && child.textContent?.trim()));
+    // The message body is the element with the most prose of its own; a short
+    // heading above it does not set the banner's typography. Control labels and
+    // screen-reader-only text are not prose.
+    const ownText = (node: HTMLElement) => Array.from(node.childNodes)
+      .filter(child => child.nodeType === Node.TEXT_NODE).map(child => child.textContent ?? '').join('').trim().length;
+    const prose = originals.filter(node => visible(node) && !visuallyHidden(node) && ownText(node) > 0
+      && !node.closest('button, [role="button"], input, label, a, script, style'))
+      .sort((a, b) => ownText(b) - ownText(a))[0];
     for (let i = originals.length - 1; i >= 0; i--) {
       const node = originals[i];
-      if (!visible(node) || node === accept || node === reject
-        || node.matches('button, [role="button"], input, script, style')) copies[i].remove();
+      if (!visible(node) || visuallyHidden(node) || node === accept || node === reject
+        || node.matches('button, [role="button"], input, label, script, style')) copies[i].remove();
       else if (node.matches('a') && !getComputedStyle(node).display.startsWith('inline')) copies[i].remove();
     }
     // textContent drops boundaries between block elements. Insert whitespace at
