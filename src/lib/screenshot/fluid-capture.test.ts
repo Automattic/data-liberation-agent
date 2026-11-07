@@ -15,6 +15,25 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
+	it.each( [
+		{ name: 'redundant minimum without another sweep trigger', extra: '', expectedSweep: false, redundant: true },
+		{ name: 'redundant minimum during another element sweep', extra: '<div id="vary"></div><script>const resize=()=>document.querySelector(\'#vary\').style.width=innerWidth/2+\'px\';addEventListener(\'resize\',resize);resize();</script>', expectedSweep: true, redundant: true },
+		{ name: 'minimum taller than content', extra: '', expectedSweep: true, redundant: false },
+	] )( 'handles $name', async ( { extra, expectedSweep, redundant } ) => {
+		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
+		try {
+			await page.setContent( `<style>.wrap{width:90%}</style><div class="wrap">${ 'reflowing content '.repeat(100) }</div>${ extra }
+				<script>const fit=()=>{const el=document.querySelector('.wrap');el.style.minHeight='';el.style.minHeight=(el.offsetHeight${ redundant ? '' : '+200' })+'px'};addEventListener('resize',fit);addEventListener('load',fit);fit();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			if ( expectedSweep ) expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
+			else expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+			const style = await page.locator( '.wrap' ).getAttribute( 'style' ) ?? '';
+			if ( redundant ) expect( style ).not.toMatch( /min-height/i );
+			else expect( style ).toMatch( /min-height/i );
+			if ( ! redundant ) expect( style ).toMatch( /min-height:\s*(?:clamp|calc)/i );
+		} finally { await page.close(); }
+	}, 20_000 );
+
 	// One sweep (~6s): refitting replaces, rather than edits, the fitted span.
 	it( 'exports learned geometry after resize-driven and post-learning fitted node replacement', async () => {
 		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );

@@ -594,6 +594,9 @@ async function learnFluidGeometry(
 			if ( reused ) observations.set( key, reused.get( key )! );
 			else if ( ! moving.has( key.slice( 0, key.indexOf( ':' ) ) ) ) observations.set( key, interpolateSamples( samples, sampledWidths, widths ) );
 		}
+		// A redundant minimum can be sampled again by another element's sweep;
+		// discard it after the sweep too, so its partial series cannot be fitted.
+		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 		// A sweep past the probes is what later routes may reuse.
 		if ( memo && ! reused && sampledWidths.length > PROBE_WIDTHS.length && moving.size === 0 ) {
 			const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
