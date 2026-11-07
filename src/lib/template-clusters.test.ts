@@ -42,6 +42,17 @@ const REAL_CAPTURE = ( title: string ): string => PROCESSED( title )
 
 
 describe( 'template-clusters (phase 1 transplant, #784)', () => {
+	it( 'keeps capture-annotated mobile navigation and detects its removal', () => {
+		const server = ( text: string ) => `<html><head><title>Post</title></head><body><header><nav><a href="#">Menu</a></nav></header><main><p>${ text }</p></main></body></html>`;
+		const repServerHtml = server( 'Representative' );
+		const processed = repServerHtml.replace( '<a href="#">Menu</a>', '<a href="#" id="pull" class="data-blocks-engine-capture-mobile-only">Menu</a>' );
+		const result = deriveMemberDocument( { repServerHtml, repProcessedHtml: processed, memberServerHtml: server( 'Member' ), baseUrl: BASE } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		const link = '<a href="#" id="pull" class="data-blocks-engine-capture-mobile-only">Menu</a>';
+		expect( result.html ).toContain( link );
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: result.html.replace( link, '' ), baseUrl: BASE } ).equal ).toBe( false );
+	} );
 	it( 'groups shared-template posts and isolates the divergent members', () => {
 		const regular = templateFingerprint( serverDocument( 'post-1' ), BASE );
 		expect( templateFingerprint( serverDocument( 'post-2' ), BASE ).key ).toBe( regular.key );

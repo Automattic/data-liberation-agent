@@ -203,7 +203,10 @@ function resolveAnchor( body: Element, anchor: SlotAnchor ): Element | undefined
 		node = matches[ 0 ]!;
 	}
 	for ( const index of anchor.path ) {
-		const next = slotChildren( node )[ index ];
+		// Capture adds responsive-only annotations to otherwise unchanged source
+		// nodes. They are absent from server-side paths and must not shift slots.
+		const children = slotChildren( node ).filter( child => ! ( child.attribs.class ?? '' ).split( /\s+/ ).includes( 'data-blocks-engine-capture-mobile-only' ) );
+		const next = children[ index ];
 		if ( ! next ) return undefined;
 		node = next;
 	}
