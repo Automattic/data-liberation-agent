@@ -14,7 +14,7 @@ import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { extractNavigationLandmarkLinks } from './html-extract/index.js';
 import { decodeHtml } from './decode-html.js';
 import { normalizeDiscoveredRoutes } from './extraction/sitemap.js';
-import { routeInScope, validateRouteScope } from './url/route-scope.js';
+import { routeInScope, scopedRouteKey, validateRouteScope } from './url/route-scope.js';
 import { actionUrlExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
@@ -685,7 +685,7 @@ async function runCaptureWebsite(
 	const captureDiagnostics = [
 		...[ ...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics ]
 			.filter( row => row.code !== ROUTE_OMITTED_BY_BUDGET || ! derivedUrls.has( row.url ) ),
-		...( derivedTemplateClusters?.diagnostics ?? [] ),
+		...( derivedTemplateClusters?.diagnostics ?? [] ).filter( row => row.code !== 'linked_page_budget_exhausted' || ! derivedUrls.has( row.url ) ),
 	];
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
@@ -960,25 +960,61 @@ async function deriveTemplateClusterMembers( input: {
 	// entry with HTML proves that capture produced a document.
 	const capturedEntry = ( url: string ) => queue.getEntry( documentRequestUrl( url ) ) ?? queue.getEntry( url );
 	const isCaptured = ( url: string ) => Boolean( capturedEntry( url )?.html );
+	const { sameOriginPageAnchors } = await import( './screenshot/unscheduled-anchors.js' );
+	const { stateChangingAction } = await import( './url/action-url.js' );
+	const { isNonDocumentUrl } = await import( './extraction/sitemap.js' );
+	const { resolveDocumentReferences } = await import( './document-resource-base.js' );
+	const documentUrls = new Set< string >( Object.keys( JSON.parse( readFileSync( manifestPath, 'utf8' ) ).entries ) );
+	const offered = new Set< string >();
+	const { TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
+	const lateLimits = { ...TEMPLATE_GROUPING_LIMITS, ...await templateGroupingLimits( { timeBudgetMs: input.timeBudgetMs, wholeInventory: false } ) };
+	const lateDeadline = Date.now() + lateLimits.timeBudgetMs;
+	const maxRounds = 3;
+	let remainingRoutes = lateLimits.maxRoutes === 'all' ? 1000 : lateLimits.maxRoutes;
+	const perRoundBytes = Math.floor( lateLimits.maxTotalBytes / maxRounds );
+	// The final scan only explains links from the last derived wave; it
+	// cannot start another grouping or derivation round.
+	for ( let round = 0; round <= maxRounds; round++ ) {
+	const derivedBefore = derivedUrls.length;
 	// The crawl can discover routes absent from initial grouping. Fingerprint
 	// only uncaptured, ungrouped routes, using the same bounded HTTP pass and
 	// governors. A failed advisory pass must not prevent ordinary derivation.
 	try {
 		const { extendTemplateGroups } = await import( './template-groups.js' );
 		const grouped = new Set( input.report.groups.flatMap( group => group.members ) );
-		const candidates = [ ...new Set( input.frontierUrls ) ].filter( url => ! isCaptured( url ) && ! grouped.has( url ) );
-		if ( candidates.length && input.report.groups.some( group => group.size >= 2 ) ) {
+		const targets = new Set( input.frontierUrls );
+		for ( const url of documentUrls ) {
+			const entry = capturedEntry( url );
+			if ( ! entry?.html ) continue;
+			for ( const path of [ entry.html, entry.mobileHtml ].filter( ( path ): path is string => Boolean( path ) ) ) {
+				const file = resolve( input.outputDir, path );
+				if ( ! pathWithin( input.outputDir, file ) || ! existsSync( file ) ) continue;
+				const document = path === entry.html ? entry.documents?.desktop : entry.documents?.mobile;
+				const html = resolveDocumentReferences( readFileSync( file, 'utf8' ), document?.url ?? url, document?.baseUrl );
+				for ( const anchor of sameOriginPageAnchors( html, url ) ) {
+					if ( routeInScope( anchor, input.routeScope ) && ! stateChangingAction( anchor ) && ! isNonDocumentUrl( anchor ) ) targets.add( scopedRouteKey( anchor, input.routeScope ) );
+				}
+			}
+		}
+		const candidates = [ ...targets ].filter( url => ! isCaptured( url ) && ! grouped.has( url ) && ! offered.has( url ) ).slice( 0, remainingRoutes );
+		for ( const url of targets ) {
+			if ( ! isCaptured( url ) && ! offered.has( url ) ) diagnostics.push( { code: 'linked_page_budget_exhausted', url, reason: 'post-capture linked route exceeds the browser capture budget' } );
+		}
+		for ( const url of candidates ) offered.add( url );
+		remainingRoutes -= candidates.length;
+		if ( round < maxRounds && candidates.length && Date.now() < lateDeadline && input.report.groups.some( group => group.size >= 2 ) ) {
 			await extendTemplateGroups( input.report, {
 				sourceUrl: input.sourceUrl, urls: candidates, routeScope: input.routeScope,
 				styleNormalization: input.styleNormalization, governors: input.governors,
 				// Never use the whole-inventory override for extra frontier work:
 				// retain the default route/byte caps and the capture-budget fraction.
-				limits: await templateGroupingLimits( { timeBudgetMs: input.timeBudgetMs, wholeInventory: false } ),
+				limits: { ...lateLimits, maxRoutes: candidates.length, maxTotalBytes: perRoundBytes, timeBudgetMs: Math.max( 1, lateDeadline - Date.now() ) },
 			} );
 		}
 	} catch ( error ) {
 		process.stderr.write( `[template-groups] frontier grouping unavailable: ${ error instanceof Error ? error.message : String( error ) }\n` );
 	}
+	if ( round === maxRounds ) break;
 	try {
 		for ( const group of input.report.groups ) {
 			if ( group.size < 2 ) continue;
@@ -986,32 +1022,34 @@ async function deriveTemplateClusterMembers( input: {
 			if ( ! repEntry?.html || repEntry.redirectedTo ) continue;
 			const repHtmlPath = resolve( input.outputDir, repEntry.html );
 			if ( ! pathWithin( input.outputDir, repHtmlPath ) || ! existsSync( repHtmlPath ) ) continue;
-			const record: import('./template-clusters.js').TemplateClusterRecord = {
-				id: group.id, key: group.key, representative: group.representative,
-				derived: [], escalated: [], unavailable: [],
-			};
-			clusters.push( record );
+			let record = clusters.find( cluster => cluster.id === group.id );
+			if ( record?.verification && ! record.verification.equal ) continue;
+			if ( ! record ) {
+				record = { id: group.id, key: group.key, representative: group.representative, derived: [], escalated: [], unavailable: [] };
+				clusters.push( record );
+			}
 			const startedAt = Date.now();
 			try {
 				const repFetch = await safeFetch( group.representative, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } );
 				const repServerHtml = repFetch.body.toString( 'utf8' );
 				const repProcessedHtml = readFileSync( repHtmlPath, 'utf8' );
 				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl );
-				let derivedInCluster = 0;
+				let derivedInCluster = record.derived.length;
 				let clusterFailed = false;
 
 				// Verification first (#784 §4.2): one member derived, then compared
 				// with its real capture, offline, on the six acceptance checks. A
 				// mismatch (or a missing verification capture) fails the cluster: no
 				// member of it is ever derived (§3.5).
+				const attempted = new Set( [ ...record.escalated, ...record.unavailable ].map( member => member.url ) );
 				const members = group.members
-					.filter( url => ! isCaptured( url ) )
+					.filter( url => ! isCaptured( url ) && ! attempted.has( url ) )
 					.sort( ( a, b ) => a.localeCompare( b ) );
 				// A captured member is the stronger verification: its real capture
 				// exists on disk, so the derived-vs-real comparison is actually
 				// scored. Preferred verification members are already in the budget.
 				const capturedMembers = group.members
-					.filter( url => url !== group.representative && isCaptured( url ) )
+					.filter( url => url !== group.representative && isCaptured( url ) && ! derivedUrls.includes( url ) )
 					.sort( ( a, b ) => a.localeCompare( b ) );
 				const verificationUrl = capturedMembers[ 0 ] ?? members[ 0 ];
 				const verificationCaptured = verificationUrl !== undefined &&
@@ -1096,6 +1134,7 @@ async function deriveTemplateClusterMembers( input: {
 					if ( derivation.unobservedSlots > 0 ) diagnostics.push( { code: TEMPLATE_SLOT_RUNTIME_UNOBSERVED, url, reason: `${ derivation.unobservedSlots } slot(s) hold data-* swapped media whose rendered URL capture never observed`, unit: 'block', severity: 'warning' } );
 					record.derived.push( { url, slots: derivation.stats.slots, subtreeSlots: derivation.stats.subtreeSlots } );
 					derivedUrls.push( url );
+					documentUrls.add( url );
 					derivedInCluster++;
 				}
 				await store.flush();
@@ -1108,6 +1147,9 @@ async function deriveTemplateClusterMembers( input: {
 		}
 	} finally {
 		await queue.flush().catch( () => {} );
+	}
+
+	if ( derivedUrls.length === derivedBefore ) break;
 	}
 
 	const receipt: import('./template-clusters.js').TemplateClustersReceipt = {
