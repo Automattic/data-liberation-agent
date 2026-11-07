@@ -1003,6 +1003,10 @@ async function deriveTemplateClusterMembers( input: {
 				const repFetch = await safeFetch( group.representative, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } );
 				const repServerHtml = repFetch.body.toString( 'utf8' );
 				const repProcessedHtml = readFileSync( repHtmlPath, 'utf8' );
+				// A dual-device representative has a phone document too; export merges
+				// the two, so each member is derived from both.
+				const repMobilePath = repEntry.mobileHtml ? resolve( input.outputDir, repEntry.mobileHtml ) : undefined;
+				const repProcessedMobileHtml = repMobilePath && pathWithin( input.outputDir, repMobilePath ) && existsSync( repMobilePath ) ? readFileSync( repMobilePath, 'utf8' ) : undefined;
 				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl );
 				let derivedInCluster = 0;
 				let clusterFailed = false;
@@ -1063,7 +1067,12 @@ async function deriveTemplateClusterMembers( input: {
 						unavailableCount++;
 						continue;
 					}
-					const derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: response.body.toString( 'utf8' ), baseUrl: group.representative } );
+					const memberServerHtml = response.body.toString( 'utf8' );
+					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative } );
+					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
+						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative } )
+						: undefined;
+					const derivation = mobileDerivation && ! mobileDerivation.ok ? mobileDerivation : desktopDerivation;
 					if ( ! derivation.ok ) {
 						// A gate failure is an escalation, not a loss: the member keeps
 						// its budget-omission row, with the gate named for the next run.
@@ -1079,14 +1088,24 @@ async function deriveTemplateClusterMembers( input: {
 					const memberFile = resolve( input.outputDir, memberPath );
 					mkdirSync( dirname( memberFile ), { recursive: true } );
 					writeFileSync( memberFile, derivation.html );
+					let memberMobilePath: string | undefined;
+					if ( mobileDerivation?.ok ) {
+						await store.captureDomDependencies( mobileDerivation.html, url );
+						memberMobilePath = `screenshots/derived/${ slugify( url ) }.mobile.html`;
+						writeFileSync( resolve( input.outputDir, memberMobilePath ), mobileDerivation.html );
+					}
 					const slug = await queue.claimSlug( slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
 					const repProfile = repEntry.profiles?.desktop;
+					const repMobileProfile = memberMobilePath ? repEntry.profiles?.mobile : undefined;
 					await queue.updateEntry( url, {
 						slug,
 						html: memberPath,
+						...( memberMobilePath ? { mobileHtml: memberMobilePath } : {} ),
 						capturedAt: capturedAtNow,
-						...( repProfile ? { profiles: { desktop: { ...repProfile } } } : {} ),
+						...( repProfile ? { profiles: { desktop: { ...repProfile, html: memberPath }, ...( repMobileProfile ? { mobile: { ...repMobileProfile, html: memberMobilePath } } : {} ) } } : {} ),
+						...( memberMobilePath && repEntry.deviceMode ? { deviceMode: repEntry.deviceMode } : {} ),
+						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
 					} as import('./screenshot/manifest-queue.js').ManifestEntry );
 					diagnostics.push( {
