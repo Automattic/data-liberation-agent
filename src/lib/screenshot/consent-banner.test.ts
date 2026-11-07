@@ -71,7 +71,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const fixture = readFileSync(new URL('./fixtures/consent-panel.html', import.meta.url), 'utf8');
-    await page.setContent(fixture);
+    await page.setContent(fixture.replace('</style>', '#cs-banner{color:#333}#cs-banner .cs-panel{background:rgb(3,26,78);color:#f8f8f8}</style>'));
     const dismissed = await dismissOverlays(page);
     const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
     expect(banner?.text).toBe('We collect personal information as specified in the privacy policy and use cookies as specified in the cookie policy. You can change your choice in the preferences panel.');
@@ -79,7 +79,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
     expect(banner?.presentation?.span).toBe('inset');
     expect(banner?.presentation?.edge_offset).toBe('16px');
     expect(banner?.presentation?.padding).toBe('24px');
-    expect(banner?.colors?.background).toBe('rgb(255, 255, 255)');
+    expect(banner?.colors?.background).toBe('rgb(3, 26, 78)');
+    expect(banner?.colors?.text).toBe('rgb(248, 248, 248)');
     expect(banner?.accept_label).toBe('Accept');
     expect(banner?.reject_label).toBe('Reject');
   } finally {

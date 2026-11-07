@@ -1511,7 +1511,7 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
         }],
         ...(Object.keys(buttonPresentation).length ? { button: buttonPresentation } : {}),
       },
-      colors: { background: style.backgroundColor, text: style.color, button_background: button.backgroundColor, button_text: button.color },
+      colors: { background: style.backgroundColor, text: typography.color, button_background: button.backgroundColor, button_text: button.color },
       source_selector: selector,
     };
   }, { idx: target.idx, selector: target.selector, viewportWidth: page.viewportSize()?.width });
