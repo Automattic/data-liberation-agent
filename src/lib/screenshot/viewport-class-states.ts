@@ -125,7 +125,9 @@ export function aliasRules( sheets: readonly string[], aliases: ReadonlyArray< {
 	return copies;
 }
 
-export async function captureViewportClassStates( page: Page, options: { widths?: readonly number[]; settleMs?: number; breakpoints?: Set< number > } = {} ): Promise< ViewportClassStatesResult > {
+export type ViewportClassMemo = Map< string, ReadonlyArray< { width: number; present: boolean } > >;
+
+export async function captureViewportClassStates( page: Page, options: { widths?: readonly number[]; settleMs?: number; breakpoints?: Set< number >; memo?: ViewportClassMemo } = {} ): Promise< ViewportClassStatesResult > {
 	const original = page.viewportSize();
 	const none = { aliased: 0, rules: 0, sampledWidths: [] };
 	if ( ! original ) return none;
@@ -181,24 +183,51 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		memo.set( original.width, {} );
 		const ladder = [ ...new Set( [ ...( options.widths ?? COARSE_SWEEP_WIDTHS ), original.width ] ) ].sort( ( a, b ) => a - b );
 		const toggles = new Map< string, Toggle >();
+		const presence = new Map< string, Array< { width: number; present: boolean } > >();
+		const signatures = await page.evaluate( key => {
+			const elements = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!.elements;
+			return elements.map( element => {
+				const parts: string[] = [];
+				for ( let node: Element | null = element; node; node = node.parentElement ) {
+					const position = node.parentElement ? [ ...node.parentElement.children ].filter( sibling => sibling.tagName === node.tagName ).indexOf( node ) : 0;
+					parts.push( `${ node.tagName }${ node.id ? `#${ node.id }` : '' }${ [ ...node.classList ].sort().map( name => `.${ name }` ).join( '' ) }:${ position }` );
+					if ( node !== element && node.id ) break;
+				}
+				return parts.join( '<' );
+			} );
+		}, STATE_KEY );
 		// The extremes reveal a viewport-driven runtime; only then is the ladder swept.
 		const extremes = [ ladder[ 0 ]!, ladder[ ladder.length - 1 ]! ];
 		for ( const width of extremes ) if ( Object.keys( await probe( width ) ).length ) break;
 		if ( extremes.every( width => ! memo.has( width ) || Object.keys( memo.get( width )! ).length === 0 ) ) return { ...none, sampledWidths };
-		for ( const width of ladder ) {
-			for ( const [ index, change ] of Object.entries( await probe( width ) ) ) {
-				for ( const token of change.added ) toggles.set( `${ index }|${ token }`, { index: Number( index ), token, base: false } );
-				for ( const token of change.removed ) toggles.set( `${ index }|${ token }`, { index: Number( index ), token, base: true } );
+		const extremesDiff = await Promise.all( extremes.map( probe ) );
+		const candidates = new Map<string, Toggle>();
+		for ( const diff of extremesDiff ) for ( const [ indexText, change ] of Object.entries( diff ) ) {
+			for ( const token of change.added ) candidates.set( `${ indexText }|${ token }`, { index: Number( indexText ), token, base: false } );
+			for ( const token of change.removed ) candidates.set( `${ indexText }|${ token }`, { index: Number( indexText ), token, base: true } );
+		}
+		const reused = new Set<string>();
+		for ( const [ key, toggle ] of candidates ) {
+			const memoKey = `${ signatures[toggle.index] }|${ toggle.token }`;
+			const saved = options.memo?.get( memoKey );
+			if ( saved ) { toggles.set( key, toggle ); presence.set( key, [ ...saved ] ); reused.add( memoKey ); }
+		}
+		if ( reused.size !== candidates.size ) {
+			for ( const width of ladder ) {
+				for ( const [ index, change ] of Object.entries( await probe( width ) ) ) {
+					for ( const token of change.added ) toggles.set( `${ index }|${ token }`, { index: Number( index ), token, base: false } );
+					for ( const token of change.removed ) toggles.set( `${ index }|${ token }`, { index: Number( index ), token, base: true } );
+				}
 			}
 		}
 		if ( toggles.size === 0 ) return { ...none, sampledWidths };
 
 		// Locate each flip between adjacent ladder widths: the first width
 		// that shows the wider side's state.
-		const presence = new Map< string, Array< { width: number; present: boolean } > >();
-		for ( const [ key, toggle ] of toggles ) presence.set( key, ladder.map( width => ( { width, present: present( memo.get( width )!, toggle ) } ) ) );
+		for ( const [ key, toggle ] of toggles ) if ( ! presence.has( key ) ) presence.set( key, ladder.map( width => ( { width, present: present( memo.get( width )!, toggle ) } ) ) );
 		for ( const [ key, toggle ] of toggles ) {
 			const series = presence.get( key )!;
+			if ( reused.has( `${ signatures[toggle.index] }|${ toggle.token }` ) ) continue;
 			for ( let i = 1; i < ladder.length; i++ ) {
 				let low = ladder[ i - 1 ]!;
 				let high = ladder[ i ]!;
@@ -229,7 +258,9 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		for ( const [ key, toggle ] of toggles ) {
 			const change = restored[ toggle.index ];
 			if ( change?.added.includes( toggle.token ) || change?.removed.includes( toggle.token ) ) continue;
-			const media = presenceMedia( presence.get( key )! );
+			const series = presence.get( key )!;
+			if ( ! reused.has( `${ signatures[toggle.index] }|${ toggle.token }` ) ) options.memo?.set( `${ signatures[toggle.index] }|${ toggle.token }`, series );
+			const media = presenceMedia( series );
 			if ( media === '' || media === 'all' ) continue;
 			const alias = `${ VIEWPORT_CLASS_PREFIX }${ createHash( 'sha256' ).update( `${ toggle.token }\n${ media }` ).digest( 'hex' ).slice( 0, 12 ) }`;
 			aliases.push( { ...toggle, alias, media } );

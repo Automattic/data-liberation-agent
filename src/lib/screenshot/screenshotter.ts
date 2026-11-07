@@ -41,7 +41,7 @@ import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dia
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
-import { captureViewportClassStates } from './viewport-class-states.js';
+import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
 import { RootClassEvidence, rootClassContracts, sampleRootClassLadder, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
 import {
 	captureTriggeredDialogs,
@@ -209,6 +209,7 @@ interface CapturePerViewportArgs {
 	fluidMemo?: FluidSeriesMemo;
 	/** Class-state breakpoints located on earlier routes of this capture. */
 	classBreakpoints?: Set< number >;
+	classMemo?: ViewportClassMemo;
 	fluidWidths?: number[];
 	collectResponsiveImages?: (
 		page: import('playwright').Page,
@@ -1269,6 +1270,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
 			settleMs: Math.max( args.settleMs, 800 ),
 			...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
+			...( args.classMemo ? { memo: args.classMemo } : {} ),
 		} ).catch( () => undefined ) : undefined;
 		try {
 			await args.beforeFluid?.( page, { url, viewport: viewport.id, serverHtml } ).catch( () => {
@@ -2517,6 +2519,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const rawConcurrency = opts.concurrency ?? 6;
 	const fluidMemo: FluidSeriesMemo = new Map();
 	const classBreakpoints = new Set< number >();
+	const classMemo: ViewportClassMemo = new Map();
 	const concurrency = Math.max( 1, Math.floor( Math.min( 10, rawConcurrency ) ) || 1 );
 	// Node reports the process group's memory constraint, including Chromium's
 	// children. RSS of this Node process alone misses the dominant capture owner.
@@ -3086,7 +3089,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.collectResponsiveImages
 								? { collectResponsiveImages: opts.collectResponsiveImages }
 								: {} ),
-							...( opts.learnFluid ? { learnFluid: true, fluidMemo, classBreakpoints } : {} ),
+							...( opts.learnFluid ? { learnFluid: true, fluidMemo, classBreakpoints, classMemo } : {} ),
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
