@@ -145,7 +145,11 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device );
 			const sourceContext = page.context();
 			const browser = sourceContext.browser();
-			const identity = profile?.context ? replayBrowserIdentity( profile.context ) : undefined;
+			// Capture resolves the preset before applying explicit context overrides.
+			// References must use that same identity: mobile viewport metadata changes
+			// clientWidth/clientHeight, which key the observed entrance startup poses.
+			const preset = profile?.device ? ( await import( 'playwright' ) ).devices[ profile.device ] : undefined;
+			const identity = preset || profile?.context ? replayBrowserIdentity( { ...preset, ...profile?.context } ) : undefined;
 			let supportsSiblingPages = false;
 			// Playwright exposes convenience ownership by rejecting newPage(). A
 			// preset-screen cell needs a separate context, so it cannot use this page.
