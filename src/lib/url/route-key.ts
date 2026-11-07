@@ -23,9 +23,15 @@ export function documentRequestUrl( url: string ): string {
 	return parsed.href;
 }
 
-/** Discovery identity: slash variants share a route; origin and document queries do not. */
+/** Discovery identity: path encoding and slash variants share a route; origin and document queries do not. */
 export function normalizedUrl( url: string ): string {
 	const parsed = new URL( documentRequestUrl( url ) );
-	parsed.pathname = parsed.pathname.replace( /\/$/, '' ) || '/';
+	// Decode only RFC 3986 pchar literals (unreserved, sub-delims, ':' and '@').
+	// Separators and '%' stay escaped, so this cannot change path structure or
+	// recursively decode an escaped escape. Canonicalize all remaining hex.
+	parsed.pathname = parsed.pathname.replace( /%[\da-f]{2}/gi, escape => {
+		const character = String.fromCharCode( parseInt( escape.slice( 1 ), 16 ) );
+		return /^[A-Za-z0-9._~!$&'()*+,;=:@-]$/.test( character ) ? character : escape.toUpperCase();
+	} ).replace( /\/$/, '' ) || '/';
 	return parsed.href;
 }
