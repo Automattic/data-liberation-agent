@@ -567,20 +567,18 @@ export class CapturedResourceStore {
 						storageState: await page.context().storageState(),
 					} );
 				}
-				try {
-					const probe = context.pages()[ 0 ] ?? await context.newPage();
-					await probe.setViewportSize( { width, height: original.height } );
-					if ( ! this.pageCaptures.has( probe ) ) this.observe( probe );
-					await probe.setContent( `<base href="${ fixture.base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ fixture.html }` );
-					for ( const image of await probe.locator( 'img' ).all() ) {
-						await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
-						await image.evaluate( image => Promise.race( [
-							( image as HTMLImageElement ).decode().catch( () => undefined ),
-							new Promise<void>( resolve => setTimeout( resolve, 2000 ) ),
-						] ) );
-					}
-					await this.settle( probe );
-				} finally { /* Reuse the probe context for the next width. */ }
+				const probe = context.pages()[ 0 ] ?? await context.newPage();
+				await probe.setViewportSize( { width, height: original.height } );
+				if ( ! this.pageCaptures.has( probe ) ) this.observe( probe );
+				await probe.setContent( `<base href="${ fixture.base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ fixture.html }` );
+				for ( const image of await probe.locator( 'img' ).all() ) {
+					await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
+					await image.evaluate( image => Promise.race( [
+						( image as HTMLImageElement ).decode().catch( () => undefined ),
+						new Promise<void>( resolve => setTimeout( resolve, 2000 ) ),
+					] ) );
+				}
+				await this.settle( probe );
 			}
 		} finally {
 			await context?.close();

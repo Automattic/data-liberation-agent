@@ -1658,6 +1658,38 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
+		it( 'reuses selected srcset rendition probes across routes with identical fixtures', async () => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
+			dirs.push( outputDir );
+			const server = createServer( ( _req, res ) => {
+				res.setHeader( 'content-type', 'text/html' );
+				res.end( '<!doctype html><base href="/"><meta name="viewport" content="width=device-width"><img style="width:400px" src="/small.png" srcset="/small.png 400w, /large.png 1200w" sizes="100vw">' );
+			} );
+			await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
+			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+			const browser = await chromium.launch();
+			try {
+				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
+				const page = await browser.newPage();
+				const newContext = vi.spyOn( browser, 'newContext' );
+				for ( const route of [ '/', '/second' ] ) {
+					await page.goto( `${ origin }${ route }` );
+					await store.captureSelectedSrcsets( page );
+				}
+				expect( newContext ).toHaveBeenCalledTimes( 1 );
+				const contexts = newContext.mock.results.map( result => result.value );
+				expect( contexts ).toHaveLength( 1 );
+				await store.settle( page );
+				await store.flush();
+				const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+				expect( Object.keys( manifest.resources ).filter( url => /\/(?:small|large)\.png$/.test( url ) ).sort() )
+					.toEqual( [ `${ origin }/large.png`, `${ origin }/small.png` ].sort() );
+			} finally {
+				await browser.close();
+				await new Promise( done => server.close( done ) );
+			}
+		}, 30_000 );
+
 		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-browser-' ) );
 			dirs.push( outputDir );
