@@ -85,7 +85,7 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 	const assetReferences: import('./image-assets.js').ImageAssetReference[] = [];
 	const seenReferences = new Set< string >();
 	for ( const decision of plan.families ) {
-		const { family, candidates, eligible, admitted } = decision;
+		const { family, candidates, admitted } = decision;
 		if ( decision.outcome === 'limit-excluded' ) {
 			if ( candidates.every( candidate => ! candidate.imageAsset?.kind || candidate.imageAsset.kind === 'image' ) ) for ( const reference of retainedReferences.get( family ) ?? [] )
 				mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
@@ -111,11 +111,11 @@ export function materializePortableMedia( input: PortableMediaMaterializationInp
 				if ( ! candidate.imageAsset?.kind || candidate.imageAsset.kind === 'image' ) for ( const reference of candidate.references ) {
 					mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 				}
+				unresolvedMedia.push( {
+					url: candidate.sourceUrl,
+					error: isImage ? 'blanked because the aggregate portable media limit was reached' : 'not localized because the aggregate portable media limit was reached',
+				} );
 			}
-			unresolvedMedia.push( {
-				url: eligible[ 0 ].sourceUrl,
-				error: isImage ? 'blanked because the aggregate portable media limit was reached' : 'not localized because the aggregate portable media limit was reached',
-			} );
 			if ( ! isImage ) retainedExternalMediaCount++;
 			continue;
 		}
