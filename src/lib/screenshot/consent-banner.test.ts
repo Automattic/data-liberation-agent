@@ -63,6 +63,35 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads block-flow consent cards as spa
   }
 });
 
+// Multi-level consent dialogs (Cookiebot shape): a display-font heading over
+// body copy, a screen-reader legend, category toggles, a logo link and several
+// opt-in buttons. The message is the heading and body, set in the body's type;
+// "Accept all" is the accept control and the logo is not a policy link.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as its message and accept-all control', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.setContent(`<style>#CookieDialog{position:fixed;top:200px;left:220px;width:1000px;z-index:1000;background:#fff;font:15px Arial,sans-serif;border-radius:16px}
+      h2{font:23px Georgia,serif;margin:0}.body{font-size:14px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}</style>
+      <main><h1>Page title</h1><p>${'Ordinary page copy. '.repeat(60)}</p></main>
+      <div id="CookieDialog" role="dialog"><a href="https://vendor.example/about-consent" aria-label="Vendor - opens in a new window"><svg width="80" height="20"></svg></a>
+      <h2>This website uses cookies</h2><span class="body">We use cookies to personalise content and ads and to analyse our traffic.</span>
+      <fieldset><span class="sr">Consent Selection</span><label><input type="checkbox" checked> Necessary</label><label><input type="checkbox"> Marketing</label></fieldset>
+      <button>Decline</button><button>Allow selection</button><button>Accept all</button></div>`);
+    const dismissed = await dismissOverlays(page);
+    const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+    expect(banner?.text).toBe('This website uses cookies We use cookies to personalise content and ads and to analyse our traffic.');
+    expect(banner?.presentation?.font_size).toBe('14px');
+    expect(banner?.presentation?.font_family).toBe('Arial, sans-serif');
+    expect(banner?.accept_label).toBe('Accept all');
+    expect(banner?.reject_label).toBe('Decline');
+    expect(banner?.policy_link).toBeUndefined();
+  } finally {
+    await browser.close();
+  }
+});
+
 // One Chromium session (~1 second): a transparent full-viewport wrapper must not
 // obscure the painted panel, and inline links must remain part of the prose.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transparent wrapper and preserves inline link labels', async () => {
