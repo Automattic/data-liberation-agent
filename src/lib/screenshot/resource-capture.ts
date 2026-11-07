@@ -483,6 +483,7 @@ export class CapturedResourceStore {
 			timeoutMs: number
 		) => Promise< SafeFetchResult > = ( url, maxBytes, timeoutMs ) =>
 			safeFetch( url, {
+				category: 'subresource',
 				maxBytes,
 				timeoutMs,
 				headers: resourceRequestHeaders( url ),

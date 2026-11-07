@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { collectAssets } from './image-assets.js';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { MediaStubStore } from './resume-state/index.js';
-import { SOURCE_REQUEST_GOVERNOR_DEFAULTS, type SourceRequestGovernors } from './source-request-governor.js';
+import { SOURCE_REQUEST_GOVERNOR_DEFAULTS } from './source-request-governor.js';
 
 /**
  * Capture-wide asset byte acquisition (#1049).
@@ -34,7 +34,6 @@ export class AssetAcquisitionQueue {
 
 	constructor(
 		private readonly outputDir: string,
-		private readonly governors: SourceRequestGovernors,
 		private readonly deadline?: number,
 		private readonly resolve?: Parameters< typeof collectAssets >[ 1 ],
 		private readonly concurrency = 2,
@@ -79,24 +78,11 @@ export class AssetAcquisitionQueue {
 	}
 
 	private async fetch( source: string ): Promise< void > {
-		let governor;
-		try {
-			governor = this.governors.forOrigin( source );
-		} catch {
-			return;
-		}
-		const { response } = await governor.run( async () => {
-			// Fetches queued behind the governor do not start after the deadline.
-			if ( this.deadline !== undefined && Date.now() >= this.deadline ) return { status: 0, headers: new Headers(), result: undefined };
-			const startedAt = Date.now();
-			const result = await downloadMedia( source, this.mediaDir, this.names, undefined, { preserveOriginal: true } );
-			this.attempts++;
-			this.attemptMs += Date.now() - startedAt;
-			const status = Number( /^HTTP (\d{3})$/.exec( result.error ?? '' )?.[ 1 ] ?? 200 );
-			return { status, headers: new Headers(), result };
-		} );
-		const result = response.result;
-		if ( ! result ) return;
+		if ( this.deadline !== undefined && Date.now() >= this.deadline ) return;
+		const startedAt = Date.now();
+		const result = await downloadMedia( source, this.mediaDir, this.names, undefined, { preserveOriginal: true, deadline: this.deadline } );
+		this.attempts++;
+		this.attemptMs += Date.now() - startedAt;
 		if ( ! result.localPath ) {
 			this.failed++;
 			return;

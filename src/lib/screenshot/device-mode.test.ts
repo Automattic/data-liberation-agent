@@ -511,9 +511,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( run.entries[ `${ origin }/mixed/runtime` ]!.deviceMode!.mode ).toBe( 'reflow-only' );
 		for ( const route of [ 'promo', 'runtime' ] ) {
 			const url = `${ origin }/mixed/${ route }`;
-			// Request pair plus rendered pair; a dual decision retries both pairs,
-			// then probes the phone identity just above its 600px boundary.
-			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( route === 'promo' ? 11 : 5 );
+			// The request pair hands its bytes to rendered checks and capture.
+			// Phone UA remains a separate request; resizing needs no new document.
+			expect( documentLoads.get( `/mixed/${ route }` ) ).toBe( 2 );
 			expect( run.entries[ url ]!.profiles!.desktop!.phases!.some( phase => phase.phase === 'device-check' ) ).toBe( true );
 			const line = stderr.split( '\n' ).find( line => line.startsWith( '[timing] route-phases ' ) && line.includes( url ) )!;
 			expect( JSON.parse( line.slice( '[timing] route-phases '.length ) )[ 'device-check' ] ).toBeGreaterThan( 0 );

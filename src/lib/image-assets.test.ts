@@ -9,7 +9,6 @@ import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { captureAssets, collectAssets as collectImageAssets, imageContentType, resolvedImageOriginal } from './image-assets.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
-import { SourceRequestGovernors } from './source-request-governor.js';
 import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
 import { downloadCaptureSectionMedia } from './capture.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -118,7 +117,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    mkdirSync(join(root, 'html'), { recursive: true });
    writeFileSync(join(root, 'html/index.html'), Array.from({ length: 8 }, (_, i) => `<img src="/${i}.svg">`).join(''));
    await runWithTrustedOrigins([url], async () => {
-    const queue = new AssetAcquisitionQueue(root, new SourceRequestGovernors(), Date.now() + 60_000, undefined, undefined, Date.now() + closesIn);
+    const queue = new AssetAcquisitionQueue(root, Date.now() + 60_000, undefined, undefined, Date.now() + closesIn);
     queue.enqueueRoute(url, ['html/index.html']);
     await queue.drain();
    });
@@ -143,7 +142,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    writeFileSync(join(root, 'html/index.html'), html);
    await runWithTrustedOrigins([url], async () => {
     // Routes finish inside the budget; the asset stage starts after it.
-    const queue = new AssetAcquisitionQueue(root, new SourceRequestGovernors(), Date.now() + 60_000);
+    const queue = new AssetAcquisitionQueue(root, Date.now() + 60_000);
     queue.enqueueRoute(url, ['html/index.html', 'html/index.html']);
     await queue.drain();
     const [record] = await captureAssets(root, [{ url, html }], Date.now() - 1000);

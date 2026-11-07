@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
+import { sourceRequestContext } from '../source-request-governor.js';
+import { downloadMedia } from '../media-fetch/media.js';
+import { runWithTrustedOrigins } from '../media-fetch/safe-fetch.js';
 import { SourceRequestGovernors } from '../source-request-governor.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
@@ -101,3 +104,39 @@ it.skipIf(skipBrowser)('captures all routes through a resetting origin and leave
     }
   }
 }, 90_000);
+
+// Roughly 10 seconds: one small capture, with the existing local server pattern.
+it.skipIf(skipBrowser)('accounts for a reflow capture and reuses document and original requests', async () => {
+  let requests = 0;
+  const server = createServer((req, res) => {
+    requests++;
+    res.setHeader('content-type', req.url === '/original.bmp' ? 'image/bmp' : 'text/html');
+    res.end(req.url === '/original.bmp' ? image : '<!doctype html><title>Fixture</title><h1>Reflow fixture</h1><p>Same document at every width.</p>');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'request-counts-'));
+  const governors = new SourceRequestGovernors();
+  try {
+    await sourceRequestContext.run(governors, () => runWithTrustedOrigins([origin], async () => {
+      const result = await captureScreenshots({
+        urls: [`${origin}/`, `${origin}/second`], outputDir, governors,
+        force: true, settleMs: 0, learnFluid: false, deviceMode: 'auto', concurrency: 1,
+      });
+      expect(result).toMatchObject({ captured: 2, failed: 0 });
+      const names = new Map<string, number>();
+      const results = await Promise.all([1, 2].map(() => downloadMedia(`${origin}/original.bmp`, join(outputDir, 'media'), names, undefined, { preserveOriginal: true })));
+      expect(results[0].localPath).toBeTruthy();
+      expect(results[1].localPath).toBeTruthy();
+    }));
+    const stats = governors.forOrigin(origin).stats();
+    process.stderr.write(`fixture counts ${JSON.stringify({requests, stats})}\n`);
+    expect(stats.requests).toBe(requests);
+    expect(stats.requestCounts).toEqual({ document: 1, 'device-check': 4, 'asset-original': 1, subresource: 0, 'refusal-probe': 0, retry: 0 });
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true });
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+}, 60_000);

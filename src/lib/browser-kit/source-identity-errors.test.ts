@@ -17,7 +17,7 @@ it('aborts only governed fetch transport refusals, falling back for other handle
     const response = { status: () => 200, headers: () => ({}), dispose: vi.fn() };
     const route = {
       request: () => ({
-        url: () => 'https://source.test/', frame: () => { throw new Error('no popup frame'); },
+        url: () => 'https://source.test/', resourceType: () => 'document', frame: () => { throw new Error('no popup frame'); },
         allHeaders: async () => { if (kind === 'headers') throw new Error('ECONNRESET'); return {}; },
       }),
       fetch: vi.fn(async () => {

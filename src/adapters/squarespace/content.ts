@@ -1,3 +1,4 @@
+import { sourceFetch as fetch } from '../../lib/media-fetch/capture-requests.js';
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 import type { SqsJsonResponse } from './types.js';

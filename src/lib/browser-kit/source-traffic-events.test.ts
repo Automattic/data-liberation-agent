@@ -2,18 +2,19 @@ import { EventEmitter } from 'node:events';
 import type { BrowserContext, Page, Request, Route } from 'playwright';
 import { expect, it, vi } from 'vitest';
 import { SourceRequestGovernors } from '../source-request-governor.js';
-import { continueSourceRoute, governSourceContext, sourceLoadInterruptions } from './source-traffic.js';
+import { categorizeSourceContext, continueSourceRoute, governSourceContext, sourceLoadInterruptions } from './source-traffic.js';
 
 it('observes native outcomes, admits only recovery traffic and releases failures', async () => {
   const context = new EventEmitter() as EventEmitter & BrowserContext;
   const governors = new SourceRequestGovernors({ concurrency: 2, recoveryStep: 1, fallbackRetryAfterMs: 0 });
   const governor = governors.forOrigin('https://source.test');
   governSourceContext(context, governors, 'https://source.test');
+  categorizeSourceContext(context, 'device-check');
   const acquire = vi.spyOn(governor, 'acquire');
   const release = vi.spyOn(governor, 'release');
   const page = {} as Page;
   const routeFor = (url = 'https://source.test/image') => {
-    const request = { url: () => url, isNavigationRequest: () => false, method: () => 'GET', frame: () => ({ page: () => page, url: () => 'https://source.test/page' }), failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) } as Request;
+    const request = { url: () => url, isNavigationRequest: () => false, resourceType: () => 'image', method: () => 'GET', frame: () => ({ page: () => page, url: () => 'https://source.test/page' }), failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) } as Request;
     const route = { request: () => request, continue: vi.fn().mockResolvedValue(undefined), fetch: vi.fn() };
     return { request, route: route as unknown as Route, native: route };
   };
@@ -52,4 +53,5 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   expect(governor.throttleEvents).toBe(3);
   expect(sourceLoadInterruptions(page)).toBe(3);
   expect(acquire).toHaveBeenCalledTimes(2);
+  expect(governor.stats().requestCounts).toMatchObject({ subresource: 4, 'asset-original': 0, 'device-check': 0 });
 });

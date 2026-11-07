@@ -6,6 +6,7 @@ import type { InventoryUrl } from '../shared.js';
 import type { DefaultInventory } from './types.js';
 
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
+import { sourceFetch } from '../../lib/media-fetch/capture-requests.js';
 import { decodeHtml } from '../../lib/decode-html.js';
 
 /**
@@ -19,7 +20,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
 
   let homepageHtml = '';
   try {
-    const resp = await fetch(normalized, {
+    const resp = await sourceFetch(normalized, {
       signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': SOURCE_USER_AGENT },
     });

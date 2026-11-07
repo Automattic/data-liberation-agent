@@ -1,3 +1,4 @@
+import { sourceFetch as fetch } from '../../lib/media-fetch/capture-requests.js';
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import * as cheerio from 'cheerio';
 import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/sitemap.js';

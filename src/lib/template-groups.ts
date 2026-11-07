@@ -361,6 +361,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 
 	function request( url: string ) {
 		return dependencies.fetch( url, {
+			governors: null,
 			timeoutMs: limits.requestTimeoutMs, maxBytes: limits.maxDocumentBytes, signal: deadline.signal,
 			...( input.routeScope ? { authorizeUrl: ( target: string ) => {
 				if ( ! routeInScope( target, input.routeScope ) ) throw new Error( 'Template grouping request is outside the adapter route scope' ); // failure-class: operational

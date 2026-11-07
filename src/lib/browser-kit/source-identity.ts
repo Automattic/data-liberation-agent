@@ -124,7 +124,9 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
 export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}, traffic?: { governors?: SourceRequestGovernors; sourceUrl: string }): Promise<BrowserContext> {
   const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
   try {
-    if (traffic?.governors) governSourceContext(context, traffic.governors, traffic.sourceUrl);
+    const governors = traffic?.governors;
+    const sourceUrl = traffic?.sourceUrl ?? options.baseURL;
+    if (governors && sourceUrl) governSourceContext(context, governors, sourceUrl);
     await installProbeIntrinsics(context);
     await installSourceIdentity(context, options);
     return context;
