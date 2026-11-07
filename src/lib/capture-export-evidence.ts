@@ -54,7 +54,7 @@ export interface CaptureEvidenceInput {
 		discoveryDiagnostics?: ReadonlyArray< RouteDiagnostic >;
 	};
 	capture: {
-		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' | 'dismissed' > > >;
+		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' | 'dismissed' | 'scriptedLinks' > > >;
 		absentRoutes: ReadonlySet< string >;
 		interactivity: ReadonlyArray< SourceInteractivityPage >;
 		http?: { acquisition: unknown; diagnostics: ReadonlyArray< { code: string; url: string; reason: string } > };
@@ -713,6 +713,20 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		verification: 'source-observed; portable motion parity requires browser verification',
 	} : undefined;
 
+	// Scripted same-origin links (#1465): what each route profile offered and
+	// how many destinations capture observed for export to lower to anchors.
+	const scriptedLinkPages = Object.entries( capture.entries ).flatMap( ( [ url, entry ] ) => {
+		const profiles = Object.entries( entry.scriptedLinks ?? {} ).filter( ( [ , row ] ) => row.candidates > 0 );
+		return profiles.length ? [ { url, profiles: Object.fromEntries( profiles.map( ( [ id, row ] ) => [ id, {
+			candidates: row.candidates, resolved: row.resolved, unresolved: row.unresolved, ...( row.reasons ? { reasons: row.reasons } : {} ),
+		} ] ) ) } ] : [];
+	} );
+	const scriptedLinkTotal = ( key: 'candidates' | 'resolved' | 'unresolved' ) => scriptedLinkPages.reduce( ( sum, page ) => sum + Object.values( page.profiles ).reduce( ( total, row ) => total + row[ key ], 0 ), 0 );
+	const scriptedLinks = scriptedLinkPages.length ? {
+		candidates: scriptedLinkTotal( 'candidates' ), resolved: scriptedLinkTotal( 'resolved' ), unresolved: scriptedLinkTotal( 'unresolved' ),
+		pages: scriptedLinkPages,
+	} : undefined;
+
 	writeFileSync(
 		receiptPath,
 		`${ JSON.stringify(
@@ -741,6 +755,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				scrollStates: scrollStatesSummary,
 				layoutGeometry: geometryReport,
 				...( nativeViewTimelines ? { nativeViewTimelines } : {} ),
+				...( scriptedLinks ? { scriptedLinks } : {} ),
 				sourceProfile,
 				excludedRoutes,
 				sourceOutcomes: Object.values( capture.entries ).filter( entry => entry.externalRedirect ).flatMap( entry => entry.sourceOutcomes ?? [] ),

@@ -98,6 +98,7 @@ import {
 } from './export-publication.js';
 
 import { extractSharedChrome } from './shared-chrome.js';
+import { lowerScriptedLinks } from './screenshot/scripted-links.js';
 
 /** Strip correspondence used only during capture, before HTML is encoded as replay state. */
 function withoutCaptureBookkeeping( html: string ): string {
@@ -108,6 +109,7 @@ interface CaptureManifestEntry {
 	documents?: import('./screenshot/manifest-queue.js').ManifestEntry['documents'];
 	profiles?: import('./screenshot/manifest-queue.js').ManifestEntry['profiles'];
 	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
+	scriptedLinks?: import('./screenshot/manifest-queue.js').ManifestEntry['scriptedLinks'];
 	blockLosses?: import('./screenshot/manifest-queue.js').ManifestEntry['blockLosses'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	accessGate?: AccessGateEvidence;
@@ -1514,6 +1516,8 @@ function buildExportCapture(
 			rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
 			// A builder's own logo is not the site's icon; owner-uploaded icons stay.
 			rawDesktopHtml = withoutPlatformDefaultIcons(rawDesktopHtml, entry.documents?.desktop?.url ?? url);
+			// Each profile's scripted links take the destinations observed in that profile.
+			rawDesktopHtml = lowerScriptedLinks(rawDesktopHtml, entry.scriptedLinks?.desktop);
 			const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 			// A client-routed SPA answers every route with HTTP 200 and renders its
 			// own not-found screen in JavaScript, so the HTTP-status check above
@@ -1547,13 +1551,14 @@ function buildExportCapture(
 			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
 			let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
 			if (rawMobileHtml !== undefined) rawMobileHtml = withoutPlatformDefaultIcons(resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl), entry.documents?.mobile?.url ?? url);
+			if (rawMobileHtml !== undefined) rawMobileHtml = lowerScriptedLinks(rawMobileHtml, entry.scriptedLinks?.mobile);
 			const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
 			for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
 				if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
 				const path = resolve( outputDir, profile.html );
 				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new IntegrityError( `Device document is missing or outside capture: ${ key }` );
 				const documentUrl = entry.documents?.[ key ];
-				sourceDocuments[ key ] = withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl ), documentUrl?.url ?? url );
+				sourceDocuments[ key ] = lowerScriptedLinks( withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl ), documentUrl?.url ?? url ), entry.scriptedLinks?.[ key ] );
 			}
 			const selection = options.resolveDocumentSelection?.( sourceDocuments );
 			if ( selection?.kind === 'width' ) {

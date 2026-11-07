@@ -48,6 +48,8 @@ export interface ManifestEntry {
   interactions?: InteractionStatesReport;
   /** Scroll-position-driven class/style toggles (e.g. a shrinking sticky header). */
   scrollStates?: ScrollStatesReport;
+  /** Scripted same-origin link destinations observed per capture profile; export lowers them to anchors. */
+  scriptedLinks?: Record<string, import('./scripted-links.js').ScriptedLinkEvidence>;
   /** Public-API native motion evidence, keyed by source capture profile identity. */
   nativeViewTimelines?: Record<string, { path: string; preserved: number; losses: Array<{ target: string; reason: string }>; status?: 'observed' | 'unproven'; failures?: string[] }>;
   /**
