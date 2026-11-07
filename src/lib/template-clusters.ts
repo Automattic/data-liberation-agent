@@ -434,9 +434,13 @@ export function deriveMemberDocument( input: {
 		}
 	}
 	// Head slots: title, description, canonical and Open Graph mirror the member.
+	// Only the processed head is paired: body copies are body slots, already
+	// transplanted above. The member's title is the first `<title>` anywhere,
+	// as `document.title` reads it, even one a malformed template leaves in the
+	// body.
 	for ( const selector of HEAD_SLOT_SELECTORS ) {
-		const memberNodes = member( selector ).toArray() as Element[];
-		const repNodes = repProcessed( selector ).toArray() as Element[];
+		const memberNodes = ( selector === 'title' ? member( 'title' ).first() : member( `head ${ selector }` ) ).toArray() as Element[];
+		const repNodes = repProcessed( `head ${ selector }` ).toArray() as Element[];
 		for ( let index = 0; index < repNodes.length; index++ ) {
 			const repNode = repNodes[ index ]!;
 			const memberNode = memberNodes[ index ];
