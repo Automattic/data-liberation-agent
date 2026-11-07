@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { metadataImageReferences } from './identity-resources.js';
+import { mapMetadataImages, metadataImageReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
 import { isSrcsetShaped, rewriteMediaReferences, rewriteSrcset, srcsetCandidates, srcsetReferences, stripImageSetCandidates } from './srcset.js';
@@ -117,14 +117,37 @@ function rewriteAroundMetadataImages(
 	const $ = cheerio.load( html, { sourceCodeLocationInfo: true } );
 	let result = '';
 	let offset = 0;
-	$( 'meta[property],meta[name]' ).each( ( _, element ) => {
+	$( 'meta[property],meta[name],script,img' ).each( ( _, element ) => {
 		const node = $( element );
+		const location = element.sourceCodeLocation;
+		if ( ! location ) return;
+		if ( element.tagName === 'script' ) {
+			if ( ! /^application\/ld\+json(?:\s*;|\s*$)/i.test( node.attr( 'type' ) ?? '' ) ) return;
+			try {
+				const data: unknown = JSON.parse( node.text() );
+				mapMetadataImages( data, mapUrl );
+				node.text( JSON.stringify( data ).replace( /</g, '\\u003c' ) );
+			} catch { return; }
+		} else if ( element.tagName === 'img' ) {
+			let fallback: string | undefined;
+			for ( const attribute of [ 'data-src', 'data-lazy-src', 'data-original', 'data-image', 'data-image-src', 'data-srcset' ] ) {
+				const value = node.attr( attribute );
+				if ( ! value ) continue;
+				const mapped = attribute === 'data-srcset' ? rewriteSrcset( value, mapUrl ) : mapUrl( value );
+				node.attr( attribute, mapped );
+				const candidate = attribute === 'data-srcset' ? srcsetCandidates( mapped )[ 0 ]?.url : mapped;
+				if ( candidate?.startsWith( '/' ) && candidate !== value ) fallback ??= candidate;
+			}
+			const src = node.attr( 'src' ) ?? '';
+			const onePixel = node.attr( 'width' ) === '1' && node.attr( 'height' ) === '1';
+			if ( fallback && ( ! src || /^data:/i.test( src ) || onePixel || /(?:^|[/_-])(?:1x1|spacer|transparent|blank)\.(?:gif|png)(?:[?#]|$)/i.test( src ) ) ) node.attr( 'src', fallback );
+		} else {
 		const field = ( node.attr( 'property' ) ?? node.attr( 'name' ) ?? '' ).toLowerCase();
 		if ( ! [ 'og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src' ].includes( field ) ) return;
-		const location = element.sourceCodeLocation;
 		const value = node.attr( 'content' );
 		if ( ! location || ! value ) return;
 		node.attr( 'content', mapUrl( value ) );
+		}
 		result += rewriteOther( html.slice( offset, location.startOffset ) ) + $.html( element );
 		offset = location.endOffset;
 	} );

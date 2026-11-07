@@ -2,11 +2,10 @@ import * as cheerio from 'cheerio';
 
 /** Visit declared JSON-LD images and site logos; unrelated JSON strings stay intact. */
 export function mapMetadataImages( data: unknown, map: ( url: string ) => string ): void {
-	let visited = 0;
 	const image = ( value: unknown, depth = 0 ): unknown => {
-		if ( depth > 8 ) return value;
+		if ( depth > 32 ) return value;
 		if ( typeof value === 'string' ) return map( value );
-		if ( Array.isArray( value ) ) return value.map( ( item, index ) => index < 64 ? image( item, depth + 1 ) : item );
+		if ( Array.isArray( value ) ) return value.map( item => image( item, depth + 1 ) );
 		if ( value && typeof value === 'object' ) {
 			const record = value as Record< string, unknown >;
 			for ( const key of [ 'url', 'contentUrl' ] ) {
@@ -16,7 +15,7 @@ export function mapMetadataImages( data: unknown, map: ( url: string ) => string
 		return value;
 	};
 	const walk = ( value: unknown, depth: number ): void => {
-		if ( depth > 8 || visited++ >= 512 ) return;
+		if ( depth > 32 ) return;
 		if ( Array.isArray( value ) ) { for ( const child of value ) walk( child, depth + 1 ); return; }
 		if ( ! value || typeof value !== 'object' ) return;
 		const node = value as Record< string, unknown >;
@@ -37,16 +36,16 @@ export function metadataImageReferences( html: string ): string[] {
 		const field = ( node.attr( 'property' ) ?? node.attr( 'name' ) ?? '' ).toLowerCase();
 		if ( [ 'og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src' ].includes( field ) ) {
 			const url = node.attr( 'content' );
-			if ( url && urls.size < 64 ) urls.add( url );
+			if ( url ) urls.add( url );
 		}
 	} );
 	let bytes = 0;
-	$( 'script[type="application/ld+json"]' ).slice( 0, 64 ).each( ( _, element ) => {
+	$( 'script' ).filter( ( _, element ) => /^application\/ld\+json(?:\s*;|\s*$)/i.test( $( element ).attr( 'type' ) ?? '' ) ).slice( 0, 64 ).each( ( _, element ) => {
 		const text = $( element ).text();
 		bytes += Buffer.byteLength( text );
 		if ( bytes > 256 * 1024 ) return;
 		try {
-			mapMetadataImages( JSON.parse( text ), url => { if ( urls.size < 64 ) urls.add( url ); return url; } );
+			mapMetadataImages( JSON.parse( text ), url => { urls.add( url ); return url; } );
 		} catch { /* Invalid optional metadata is not a render dependency. */ }
 	} );
 	return [ ...urls ];
