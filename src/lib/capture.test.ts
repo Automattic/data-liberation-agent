@@ -35,6 +35,10 @@ vi.mock( './screenshot/screenshotter.js', () => ( {
 	captureScreenshots: captureScreenshotsMock,
 } ) );
 
+vi.mock( './entry-navigation.js', () => ( {
+	renderedEntryNavigation: vi.fn( async () => [] as string[] ),
+} ) );
+
 vi.mock( './site-preview.js', () => ( {
 	captureSitePreview: vi.fn( async () => ( { path: 'website/site-preview.png', width: 1200, height: 900, origin: 'portable_render' } ) ),
 } ) );
@@ -63,6 +67,7 @@ vi.mock( './media-fetch/media.js', async ( importOriginal ) => ( {
 
 import { existsSync } from 'node:fs';
 import { safeFetch } from './media-fetch/safe-fetch.js';
+import { renderedEntryNavigation } from './entry-navigation.js';
 import { spreadSample } from './route-budget.js';
 import { RouteTimeBudget } from './capture-time-budget.js';
 import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_CAPTURE_TIME_BUDGET_MS, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture, templateGroupingLimits } from './capture.js';
@@ -633,6 +638,40 @@ describe( 'captureWebsite route budget', () => {
 		expect( first[ 0 ] ).toBe( sourceUrl );
 		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 1 }, storeAdapter() );
 		expect( capturedUrls() ).toEqual( [ sourceUrl ] );
+	} );
+
+	it.each( [ 'client-rendered', 'aria' ] )( 'keeps three %s navigation destinations ahead of 270 product routes under a budget of 20', async ( landmarks ) => {
+		const navigation = [ 'sell', 'contact-us', 'consignment' ].map( path => `${ sourceUrl }${ path }/` );
+		const products = store.slice( 0, 270 );
+		const inventory = [ ...products, ...navigation ];
+		const header = 'div role="banner"';
+		const footer = 'div role="contentinfo"';
+		const close = ( tag: string ) => tag.split( ' ' )[ 0 ];
+		const html = `<${ header }><a href="/sell">Sell</a><a href="/contact-us/">Contact</a></${ close( header ) }>` +
+			`<${ footer }><a href="/consignment/">Consignment</a><a href="/sell/">Sell</a></${ close( footer ) }>` +
+			'<main><a href="/product/item-1/">Featured product</a></main>';
+		const adapter = {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: inventory.map( url => ( { url, type: 'page' } ) ) } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		};
+		let first: string[] | undefined;
+		for ( let run = 0; run < 2; run++ ) {
+			vi.mocked( safeFetch ).mockResolvedValueOnce( { finalUrl: sourceUrl, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( landmarks === 'client-rendered' ? '<html><body><div id="app"></div><script src="/app.js"></script></body></html>' : html ) } );
+			vi.mocked( renderedEntryNavigation ).mockClear();
+			vi.mocked( renderedEntryNavigation ).mockResolvedValueOnce( navigation );
+			const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 20 }, adapter );
+			expect( renderedEntryNavigation ).toHaveBeenCalledTimes( landmarks === 'client-rendered' ? 1 : 0 );
+			vi.mocked( renderedEntryNavigation ).mockReset().mockResolvedValue( [] );
+			const selected = capturedUrls();
+			expect( selected ).toHaveLength( 20 );
+			expect( selected.slice( 0, 4 ) ).toEqual( [ sourceUrl, ...navigation ] );
+			expect( result.summary.routesOmitted ).toBe( 254 );
+			if ( first ) expect( selected ).toEqual( first );
+			first = selected;
+		}
 	} );
 
 	it( "captures the whole inventory with routeLimit 'all'", async () => {

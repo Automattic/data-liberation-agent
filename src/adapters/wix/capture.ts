@@ -130,6 +130,30 @@ export const WIX_ANCHOR_SCROLL_MAX_MILLISECONDS = 3_000;
 /** 2.5× the largest documented delayed navigation (600ms in anchor-capture.test): a landing that follows a trusted click moves within this beat of the click (#839). */
 const WIX_ANCHOR_NO_MOVE_MILLISECONDS = 1_500;
 
+/** In-page scroll observation; exported for deterministic timer tests. */
+export async function waitForWixAnchorScroll( { initialScroll, maxWait, noMoveMs }: {
+	initialScroll: number;
+	maxWait: number;
+	noMoveMs: number;
+} ): Promise< boolean > {
+	let previous = scrollY;
+	const startHeight = document.documentElement.scrollHeight;
+	let moved = false;
+	let stableFrames = 0;
+	// Measured time keeps throttled timers from stretching the bound.
+	const waitStarted = performance.now();
+	while ( performance.now() - waitStarted < maxWait && ( ! moved || stableFrames < 4 ) ) {
+		await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
+		if ( Math.abs( scrollY - initialScroll ) >= 1 ) moved = true;
+		if ( Math.abs( scrollY - previous ) < 1 ) stableFrames++;
+		else stableFrames = 0;
+		previous = scrollY;
+		// A stable document whose landing never starts need not pay the full bound.
+		if ( ! moved && performance.now() - waitStarted >= noMoveMs && document.documentElement.scrollHeight === startHeight ) break;
+	}
+	return moved;
+}
+
 /**
  * In-page: visit the whole scroll-reactive layout so Wix's runtime wires
  * section navigation and mounts late widgets. Only worth running when runtime
@@ -824,7 +848,11 @@ export const capture: LiberationHooks = {
 			if ( trigger.menu ) await closeOpenedMenu( page );
 			// Keep the full first-probe budget for runtimes that start scrolling late.
 			// Only a fixed/sticky trigger can retry from a displaced start.
-			const resolveLanding = ( initialScroll: number, noMoveMs = WIX_ANCHOR_NO_MOVE_MILLISECONDS ) => page.evaluate( async ( { fragment, maxWait, noMoveMs, initialScroll } ) => {
+			const resolveLanding = async ( initialScroll: number, noMoveMs = WIX_ANCHOR_NO_MOVE_MILLISECONDS ) => {
+				const moved = await page.evaluate( waitForWixAnchorScroll, {
+					initialScroll, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs,
+				} );
+				return page.evaluate( ( { fragment, initialScroll, moved } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-blocks-engine-capture-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ].filter( ( link ) => {
@@ -837,27 +865,6 @@ export const capture: LiberationHooks = {
 				const markUnresolved = ( reason: string ) => {
 					for ( const link of links ) link.dataset.blocksEngineCaptureAnchorUnresolved ??= reason;
 				};
-				let previous = scrollY;
-				const startHeight = document.documentElement.scrollHeight;
-				let moved = false;
-				let stableFrames = 0;
-				// Bounds are measured time, not iterations: a throttled timer would
-				// otherwise stretch every bound by its own lateness.
-				const waitStarted = performance.now();
-				while ( performance.now() - waitStarted < maxWait && ( ! moved || stableFrames < 4 ) ) {
-					await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
-					if ( Math.abs( scrollY - initialScroll ) >= 1 ) moved = true;
-					if ( Math.abs( scrollY - previous ) < 1 ) stableFrames++;
-					else stableFrames = 0;
-					previous = scrollY;
-					// Stability keeps the full bound: a runtime that scrolls at all
-					// moves within this beat of the click, so once the document has
-					// held scroll and height past the beat without moving, the
-					// click's landing is not coming, and continuing to the full bound
-					// only spends the wait (#839: every drawer link that never
-					// scrolled paid the whole bound on the mobile profile).
-					if ( ! moved && performance.now() - waitStarted >= noMoveMs && document.documentElement.scrollHeight === startHeight ) break;
-				}
 				if ( ! moved ) {
 					markUnresolved( 'runtime scroll did not move before timeout' );
 					return 'no-movement' as const;
@@ -915,7 +922,8 @@ export const capture: LiberationHooks = {
 					delete link.dataset.blocksEngineCaptureAnchorUnresolved;
 				}
 				return true;
-			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, noMoveMs, initialScroll } );
+			}, { fragment, initialScroll, moved } );
+			};
 			if ( await resolveLanding( initialScroll ) === 'no-movement' && await link.evaluate( ( element ) => {
 				for ( let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement ) {
 					const position = getComputedStyle( ancestor ).position;

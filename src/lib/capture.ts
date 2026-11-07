@@ -523,6 +523,12 @@ async function runCaptureWebsite(
 				.filter( url => url !== '' )
 		: [];
 	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
+	// Explicit count budgets select before capture observes the entry DOM. Only
+	// pay for an early render when server chrome cannot supply that priority.
+	if ( routeLimit !== undefined && prunedInventoryUrls.length > routeLimit && navigationTargets.size === 0 && options.acquisition !== 'http' ) {
+		const { renderedEntryNavigation } = await import( './entry-navigation.js' );
+		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors ) ) navigationTargets.add( normalizedUrl( href ) );
+	}
 	const entryNavigationRoutes = prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) );
 	// Navigation chrome is site-wide contract: rank its inventory destinations
 	// first, preserving discovery order within that tier, before template coverage

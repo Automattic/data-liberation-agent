@@ -52,10 +52,11 @@ export function spreadSample( routes: string[], limit: number ): string[] {
 /**
  * How the route budget picks routes when it truncates the inventory.
  *
- * - `discovery-order` (default): the entrypoint plus an even spread over the
- *   discovered inventory (`spreadSample`).
- * - `template-coverage`: the entrypoint, then one representative per template
- *   group (`template-groups.ts`), then the even spread over what is left.
+ * - Both modes keep the entrypoint, then its shared-navigation destinations.
+ * - `discovery-order` (default): fill remaining slots with an even spread over
+ *   the discovered inventory (`spreadSample`).
+ * - `template-coverage`: next keep one representative per template group
+ *   (`template-groups.ts`), then the even spread over what is left.
  */
 export const ROUTE_SELECTIONS = [ 'discovery-order', 'template-coverage' ] as const;
 export type RouteSelection = typeof ROUTE_SELECTIONS[ number ];
@@ -83,7 +84,7 @@ export function dedupeRouteInventory( urls: readonly string[] ): string[] {
  * entrypoint plus an even spread of the remainder is kept, so the same
  * inventory always yields the same selection. `limit` counts the entrypoint.
  *
- * `preferred` routes (template representatives, highest priority first) are
+ * `preferred` routes (navigation destinations, then template representatives) are
  * kept right after the entrypoint, as far as the budget allows; the remaining
  * slots are the even spread over the routes not yet kept. Without `preferred`
  * the selection is exactly the even spread.
