@@ -36,7 +36,7 @@ export class LinkedFrontier {
 	readonly diagnostics: FrontierDiagnostic[] = [];
 	readonly limits: Required<LinkedPageLimits>;
 	private readonly deadline: number;
-	private readonly routeIdentities = new Set<string>();
+	private readonly routeIdentities = new Map<string, string>();
 	private readonly capturePageLimit?: number;
 
 	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope,
@@ -56,7 +56,7 @@ export class LinkedFrontier {
 		this.deadline = now + this.limits.timeoutMs;
 	}
 
-	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked'): boolean {
+	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked', redirectFrom?: string): boolean {
 		if (!routeInScope(url, this.routeScope)) return false;
 		url = scopedRouteKey(url, this.routeScope);
 		// A link to a route whose server-HTML canonical is another inventory route
@@ -77,7 +77,11 @@ export class LinkedFrontier {
 			this.omit(url, 'non_document_url', 'URL identifies a non-document resource');
 			return false;
 		}
-		if ((ownership !== 'alias' && this.routeIdentities.has(normalizedUrl(url))) || this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
+		const owner = this.routeIdentities.get(normalizedUrl(url));
+		// Only a redirect replacing its own identity (for example /a -> /a/)
+		// may bypass identity membership. Another admitted route owns its target.
+		const replacesSelf = ownership === 'alias' && redirectFrom !== undefined && owner === scopedRouteKey(redirectFrom, this.routeScope);
+		if ((owner !== undefined && !replacesSelf) || this.depths.has(url) || (ownership === 'linked' && this.required.has(url))) return false;
 		this.required.add(url);
 		// The caller's route budget bounds every new route: adapter inventory and
 		// linked discovery alike. A proven redirect continues a route already
@@ -103,7 +107,7 @@ export class LinkedFrontier {
 			const row = this.diagnostics[i]!;
 			if (row.url === url && (row.code === 'linked_page_budget_exhausted' || row.code === ROUTE_OMITTED_BY_BUDGET)) this.diagnostics.splice(i, 1);
 		}
-		this.routeIdentities.add(normalizedUrl(url));
+		this.routeIdentities.set(normalizedUrl(url), url);
 		this.depths.set(url, depth);
 		return true;
 	}

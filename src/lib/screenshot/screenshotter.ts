@@ -2817,15 +2817,20 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let completed = 0;
 	// A redirect alias's target joins the queue unless its route is already in
 	// it, so each route is captured once however many URLs redirect to it.
-	const queuedRoutes = new Set( urls.map( documentRequestUrl ) );
-	const enqueue = (target: string, depth: number, ownership: 'linked' | 'alias' = 'linked'): void => {
+	const queuedRoutes = new Map( urls.map( url => [ normalizedUrl( scopedRouteKey( url, opts.routeScope ) ), url ] ) );
+	const enqueue = (target: string, depth: number, ownership: 'linked' | 'alias' = 'linked', redirectFrom?: string): string | undefined => {
 		if (!routeInScope(target, opts.routeScope)) return;
 		const key = scopedRouteKey(target, opts.routeScope);
-		if (queuedRoutes.has(key)) return;
-		if (frontier && !frontier.admit(key, depth, Date.now(), ownership)) return;
-		queuedRoutes.add(key);
+		const identity = normalizedUrl(key);
+		const existing = queuedRoutes.get(identity);
+		// A slash redirect must replace its own request address, but must not
+		// replace a different route that already owns the destination identity.
+		if (existing !== undefined && (existing !== redirectFrom || documentRequestUrl(existing) === key)) return existing;
+		if (frontier && !frontier.admit(key, depth, Date.now(), ownership, redirectFrom)) return;
 		if (frontier) target = key;
+		queuedRoutes.set(identity, target);
 		urls.push(target);
+		return target;
 	};
 	// Routes, not failure records: failures.json keeps one record per
 	// viewport × stage × attempt, the summary counts each failed URL once.
@@ -3248,10 +3253,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( entry.redirectedTo && !urlFailures.length ) {
 			const target = entry.redirectedTo;
-			enqueue(target, frontier?.depths.get(url) ?? 0, 'alias');
+			const targetRoute = enqueue(target, frontier?.depths.get(url) ?? 0, 'alias', url);
 			// The alias holds no document of its own: whatever evidence was owed to
 			// it (a reference sample slot) belongs to the route that captures it.
-			const targetRoute = urls.find( queued => documentRequestUrl( queued ) === documentRequestUrl( target ) );
 			if ( targetRoute ) {
 				if ( referenceRoutes?.has( url ) ) referenceRoutes.add( targetRoute );
 				opts.onRouteAlias?.( url, targetRoute );
