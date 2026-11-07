@@ -170,7 +170,8 @@ function reuseSweptSeries(
 		if ( ! stored || ! series || stored.size !== properties.get( id ) ) return null;
 		for ( const sample of probed ) {
 			const match = series.find( candidate => candidate.viewport === sample.viewport );
-			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) || match.transformOrigin !== sample.transformOrigin ) return null;
+			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) ||
+				( !( match.value === 1000 && sample.value === 1000 ) && match.transformOrigin !== sample.transformOrigin ) ) return null;
 		}
 		reused.set( key, series.map( sample => ( { ...sample } ) ) );
 	}
@@ -408,6 +409,7 @@ async function learnFluidGeometry(
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
+	const redundantMinHeight = new Map< string, boolean >();
 	const clips = new Map<string, { template: string; count: number; valid: boolean }>();
 	const nonRelative = new Set( options.learnRelativeOffsets ? await baseline.evaluate( ( state, attribute ) =>
 		state.elements().filter( element => state.readGeometry( element ).position !== 'relative' )
@@ -492,12 +494,22 @@ async function learnFluidGeometry(
 					}
 					const transformOrigin = getComputedStyle( element ).transformOrigin;
 					const rect = element.getBoundingClientRect();
-					return { id: element.getAttribute( attribute )!, values, declared, containers, relative, transformOrigin,
+					const minHeight = element.style.getPropertyValue( 'min-height' );
+					let redundantMinHeight = false;
+					if ( /^\s*-?\d+(?:\.\d+)?px\s*$/.test( minHeight ) ) {
+						const priority = element.style.getPropertyPriority( 'min-height' );
+						element.style.removeProperty( 'min-height' );
+						redundantMinHeight = Math.abs( rect.height - element.getBoundingClientRect().height ) <= 2;
+						element.style.setProperty( 'min-height', minHeight, priority );
+					}
+					return { id: element.getAttribute( attribute )!, values, declared, containers, relative, transformOrigin, redundantMinHeight,
 						clip: element.style.clipPath, clipWidth: rect.width, clipHeight: rect.height };
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties }
 		);
 		for ( const entry of measured ) {
+			if ( ! redundantMinHeight.has( entry.id ) ) redundantMinHeight.set( entry.id, entry.redundantMinHeight );
+			else if ( ! entry.redundantMinHeight ) redundantMinHeight.set( entry.id, false );
 			if ( ! entry.relative ) nonRelative.add( entry.id );
 			const shape = parseClipPath( entry.clip );
 			if ( shape || clips.has( entry.id ) || /^(polygon|inset|rect)\(/.test( entry.clip ) ) {
@@ -543,6 +555,7 @@ async function learnFluidGeometry(
 		// varied, every learned rule would be `constant` — the frozen copy
 		// already carries it — so the rest of the sweep is skipped.
 		for ( const width of PROBE_WIDTHS ) await sample( width );
+		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 		const sheets = await runtimeSheetsObserved( page );
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
@@ -908,6 +921,9 @@ async function learnFluidGeometry(
 	// A final resize may write geometry onto roles that never qualified for
 	// learning. Restore those roles without replacing the sampled role state.
 	await baseline.evaluate( state => state.restore( true ) );
+	await baseline.evaluate( ( state, ids ) => {
+		for ( const id of ids ) state.element( id )?.style.removeProperty( 'min-height' );
+	}, [ ...redundantMinHeight ].filter( ( [ , redundant ] ) => redundant ).map( ( [ id ] ) => id ) );
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
 	// transform; otherwise the learned translation would discard its new components.
