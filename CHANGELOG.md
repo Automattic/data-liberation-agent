@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.164] - 2026-11-07
+
+### Changed
+- regenerate plugin bundles
+- Capture consent banner title, resting edge geometry and stretched controls
+- Template clusters: fingerprint the whole inventory
+- Template clusters: pair head slots within the head
+- Read multi-level consent dialogs as their message and accept-all control
+
+### Fixed
+- canonicalize percent-encoded discovery route identity
+
 ## [0.33.163] - 2026-11-07
 
 ### Changed
