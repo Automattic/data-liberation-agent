@@ -20,6 +20,9 @@ const BASE = 'http://localtest.me';
 const head = '<title>Fixture</title><style>body{margin:0;font:14px system-ui}</style>';
 const sharedStyle = '<style>article{padding:10px}.entry-content{max-width:40em}</style>';
 const chromeBefore = '<header class="site-header"><nav class="menu"><a href="/">Home</a></nav></header>';
+// Phones are served a menu toggle, so routes are captured as two device
+// documents; a derived member needs its own phone document to keep it.
+const phoneMenu = ( html: string ): string => html.replace( '</nav>', '<a class="menu-toggle" href="#">Menu</a></nav>' );
 const chromeAfter = '<footer class="site-footer"><p>(c) Fixture</p></footer>';
 const paragraphs = [ 'First shared paragraph.', 'Second shared paragraph.' ];
 const pageLocalStyle = '<style>.two-col{column-count:2}</style>';
@@ -63,7 +66,8 @@ beforeAll( async () => {
 		if ( request.url === '/robots.txt' ) { response.end( '' ); return; }
 		if ( ! document ) { response.statusCode = 404; response.end( 'not found' ); return; }
 		response.setHeader( 'Content-Type', 'text/html' );
-		response.end( document.replaceAll( 'PORT', String( port ) ) );
+		const served = /Mobile|iPhone|Android/.test( request.headers[ 'user-agent' ] ?? '' ) ? phoneMenu( document ) : document;
+		response.end( served.replaceAll( 'PORT', String( port ) ) );
 	} );
 	await new Promise< void >( resolve => server.listen( 0, resolve ) );
 	port = ( server.address() as { port: number } ).port;
@@ -209,9 +213,14 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 			// images, skeleton, head styles, fluid rules.
 			for ( const memberUrl of derived ) {
 				const slug = new URL( memberUrl ).pathname.split( '/' ).filter( Boolean ).join( '-' );
-				const entry = ( JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) as string ) as { entries: Record<string, { html?: string }> } )
+				const entry = ( JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) as string ) as { entries: Record<string, { html?: string; mobileHtml?: string }> } )
 					.entries[ memberUrl ];
 				expect( entry?.html, `manifest entry for ${ memberUrl }` ).toBeTruthy();
+				// The member is derived from the representative's phone document too.
+				expect( entry?.mobileHtml, `phone document for ${ memberUrl }` ).toBeTruthy();
+				const derivedPhone = cheerio.load( readFileSync( join( outputDir, entry.mobileHtml! ), 'utf8' ) );
+				expect( derivedPhone( 'nav .menu-toggle' ).text() ).toBe( 'Menu' );
+				expect( derivedPhone( '.post-title' ).text() ).toBe( extraHeading( slug ) );
 				const derivedHtml = readFileSync( join( outputDir, entry.html! ), 'utf8' );
 				const derivedText = bodyText( derivedHtml );
 				expect( derivedText ).toContain( extraHeading( slug ) );
@@ -234,7 +243,9 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 				expect( hrefs.length ).toBeGreaterThanOrEqual( 2 );
 				const exportedStylesText = hrefs.map( href => readFileSync( join( outputDir, 'website', href ), 'utf8' ) ).join( '\n' );
 				const derivedStylesText = [ ...derivedHtml.matchAll( /<style[^>]*>([\s\S]*?)<\/style>/g ) ].map( match => match[ 1 ]! ).join( '\n' );
-				expect( normalizedWhitespace( exportedStylesText ) ).toBe( normalizedWhitespace( derivedStylesText ) );
+				// Exported as a two-document route: merging adds device-visibility rules.
+				expect( normalizedWhitespace( exportedStylesText ) ).toContain( normalizedWhitespace( derivedStylesText ) );
+				expect( exportedStylesText ).toContain( 'data-blocks-engine-capture-mobile-only' );
 				expect( normalizedWhitespace( exportedStylesText ) ).not.toContain( 'column-count' );
 			}
 			// If the `pageStyles` divergence were removed from the grouping
