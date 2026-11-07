@@ -1,4 +1,9 @@
+import { createServer } from 'node:http';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
+import { captureScreenshots } from './screenshotter.js';
+import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
@@ -48,3 +53,56 @@ it( 'serves script-toggled class state at the widths the source applied it', asy
 		await browser.close();
 	}
 }, 60_000 );
+
+// One real capture/export (~20s): both sweeps run against a resize-driven runtime.
+it( 'keeps learned transforms through the viewport class sweep', async () => {
+	const parent = join( process.cwd(), '.tmp-test' );
+	mkdirSync( parent, { recursive: true } );
+	const outputDir = mkdtempSync( join( parent, 'viewport-class-fluid-' ) );
+	let portable: string | undefined;
+	const fixture = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+	<style>body{margin:0}#frame{width:100px;height:100px}.open{background:red}</style></head>
+	<body><main><div id="frame">Moving frame</div></main><script>
+	const fit=()=>{
+		const frame=document.querySelector('#frame');
+		frame.style.transform='translate('+((innerWidth>=1200?innerWidth*.9-96:innerWidth*.96-186))+'px, 0px)';
+		frame.className=innerWidth>=1281?'open':'';
+		// The class sweep bisects this boundary (the fluid ladder does not).
+		// Like a runtime's lazy reveal, the ancestor state remains once reached.
+		if(innerWidth===1281)document.querySelector('main').classList.add('revealed');
+	};addEventListener('resize',fit);fit();
+	</script></body></html>`;
+	const server = createServer( ( request, response ) => {
+		response.setHeader( 'Content-Type', 'text/html' );
+		response.end( request.url === '/copy/' ? portable : fixture );
+	} );
+	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const sourceUrl = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
+	const browser = await chromium.launch();
+	try {
+		const capture = await captureScreenshots( {
+			urls: [ sourceUrl ], outputDir, concurrency: 1, settleMs: 0,
+			deviceMode: 'auto', learnFluid: true,
+		} );
+		expect( capture.failed ).toBe( 0 );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		portable = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const sourcePage = await browser.newPage();
+		const copy = await browser.newPage();
+		await sourcePage.goto( sourceUrl );
+		await copy.goto( `${ sourceUrl }copy/` );
+		for ( const width of [ 1440, 1024, 768 ] ) {
+			await sourcePage.setViewportSize( { width, height: 900 } );
+			await copy.setViewportSize( { width, height: 900 } );
+			await expect.poll( () => sourcePage.locator( '#frame' ).evaluate( element => element.getBoundingClientRect().left ) ).toBeCloseTo( width >= 1200 ? width * .9 - 96 : width * .96 - 186, 1 );
+			const expected = await sourcePage.locator( '#frame' ).boundingBox();
+			const actual = await copy.locator( '#frame' ).boundingBox();
+			expect( Math.abs( actual!.x - expected!.x ), `frame left at ${ width }px` ).toBeLessThanOrEqual( 1 );
+			expect( await copy.locator( '#frame' ).evaluate( element => getComputedStyle( element ).backgroundColor ) ).toBe( width >= 1281 ? 'rgb(255, 0, 0)' : 'rgba(0, 0, 0, 0)' );
+		}
+	} finally {
+		await browser.close();
+		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 90_000 );
