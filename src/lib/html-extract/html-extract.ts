@@ -29,7 +29,7 @@ export function extractNavigationLandmarkLinks(html: string, baseUrl: string): N
   const $ = cheerio.load(html);
   const links: NavLink[] = [];
   const seen = new Set<string>();
-  $('header a[href], nav a[href], footer a[href], [role="navigation"] a[href]').each((_, el) => {
+  $('header a[href], nav a[href], footer a[href], [role~="banner"] a[href], [role~="navigation"] a[href], [role~="contentinfo"] a[href]').each((_, el) => {
     const rawHref = $(el).attr('href') || '';
     if (!rawHref || rawHref === '#') return;
     let url: URL;

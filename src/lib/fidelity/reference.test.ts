@@ -148,8 +148,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			response.setHeader( 'content-type', 'text/javascript' );
 			response.end( "throw new Error('cross-origin script failure')" );
 		} );
-		await new Promise<void>( resolve => script.listen( 0, '127.0.0.2', resolve ) );
-		const scriptUrl = `http://127.0.0.2:${ ( script.address() as { port: number } ).port }/x.js`;
+		// Use the portable loopback address; localhost in the frame below is
+		// still a different site, without requiring a 127.0.0.2 OS alias.
+		await new Promise<void>( resolve => script.listen( 0, '127.0.0.1', resolve ) );
+		const scriptUrl = `http://127.0.0.1:${ ( script.address() as { port: number } ).port }/x.js`;
 		const frame = createServer( ( _request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( mode === 'cross-origin classic script' ? `<script src="${ scriptUrl }"></script>`
