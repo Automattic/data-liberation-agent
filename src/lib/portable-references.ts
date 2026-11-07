@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { metadataImageReferences } from './identity-resources.js';
+import { mapMetadataImages, metadataImageReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
 import { isSrcsetShaped, rewriteMediaReferences, rewriteSrcset, srcsetCandidates, srcsetReferences, stripImageSetCandidates } from './srcset.js';
@@ -100,11 +100,11 @@ export function localizeMetadataImageReferences(
 		try { localPaths.set( key( new URL( source, documentUrl ) ), path ); }
 		catch { /* Not a URL identity. */ }
 	}
-	return rewriteAroundMetadataImages( html, rewriteOther, value => {
+	return rewriteAroundMetadataImages( html, rewriteOther, ( value, preserveUnmapped ) => {
 		try {
 			const absolute = new URL( value, documentUrl );
 			const path = localPaths.get( key( new URL( absolute.href ) ) );
-			return path?.startsWith( 'website/' ) ? `/${ path.slice( 'website/'.length ) }` : absolute.href;
+			return path?.startsWith( 'website/' ) ? `/${ path.slice( 'website/'.length ) }` : preserveUnmapped ? value : absolute.href;
 		} catch { return value; } // Invalid authored metadata is not a resource.
 	} );
 }
@@ -112,20 +112,47 @@ export function localizeMetadataImageReferences(
 function rewriteAroundMetadataImages(
 	html: string,
 	rewriteOther: ( html: string ) => string,
-	mapUrl: ( url: string ) => string = url => url
+	mapUrl: ( url: string, preserveUnmapped?: boolean ) => string = url => url
 ): string {
 	const $ = cheerio.load( html, { sourceCodeLocationInfo: true } );
 	let result = '';
 	let offset = 0;
-	$( 'meta[property],meta[name]' ).each( ( _, element ) => {
+	$( 'meta[property],meta[name],script,img' ).each( ( _, element ) => {
 		const node = $( element );
+		const location = element.sourceCodeLocation;
+		if ( ! location ) return;
+		if ( element.tagName === 'script' ) {
+			if ( ! /^application\/ld\+json(?:\s*;|\s*$)/i.test( node.attr( 'type' ) ?? '' ) ) return;
+			try {
+				const data: unknown = JSON.parse( node.text() );
+				mapMetadataImages( data, mapUrl );
+				node.text( JSON.stringify( data ).replace( /<\//g, '<\\/' ) );
+			} catch { return; }
+		} else if ( element.tagName === 'img' ) {
+			let fallback: string | undefined;
+			for ( const attribute of [ 'data-src', 'data-lazy-src', 'data-original', 'data-image', 'data-image-src', 'data-srcset' ] ) {
+				const value = node.attr( attribute );
+				if ( ! value ) continue;
+				const mapped = attribute === 'data-srcset' ? rewriteSrcset( value, url => mapUrl( url, true ) ) : mapUrl( value, true );
+				node.attr( attribute, mapped );
+				const candidate = attribute === 'data-srcset' ? srcsetCandidates( mapped )[ 0 ]?.url : mapped;
+				if ( candidate?.startsWith( '/' ) && candidate !== value ) fallback ??= candidate;
+			}
+			const src = node.attr( 'src' ) ?? '';
+			const onePixel = node.attr( 'width' ) === '1' && node.attr( 'height' ) === '1';
+			if ( fallback && ( ! src || /^data:/i.test( src ) || onePixel || /(?:^|[/_-])(?:1x1|spacer|transparent|blank)\.(?:gif|png)(?:[?#]|$)/i.test( src ) ) ) node.attr( 'src', fallback );
+		} else {
 		const field = ( node.attr( 'property' ) ?? node.attr( 'name' ) ?? '' ).toLowerCase();
 		if ( ! [ 'og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src' ].includes( field ) ) return;
-		const location = element.sourceCodeLocation;
 		const value = node.attr( 'content' );
 		if ( ! location || ! value ) return;
 		node.attr( 'content', mapUrl( value ) );
-		result += rewriteOther( html.slice( offset, location.startOffset ) ) + $.html( element );
+		}
+		// Lazy attributes augment the ordinary image rewrite; only metadata is
+		// protected from visual-media replacements and dangling-image stubs.
+		const serialized = $.html( element );
+		result += rewriteOther( html.slice( offset, location.startOffset ) ) +
+			( element.tagName === 'img' ? rewriteOther( serialized ) : serialized );
 		offset = location.endOffset;
 	} );
 	return result + rewriteOther( html.slice( offset ) );
