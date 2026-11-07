@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
-import { templateFingerprint, TEMPLATE_FINGERPRINT_VERSION } from './template-groups.js';
+import { elementDescriptor, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION } from './template-groups.js';
 
 /**
  * Template-clustered capture, phase 1 (#784).
@@ -65,7 +65,7 @@ const SKIPPED_ELEMENTS = new Set( [ 'script', 'style', 'noscript', 'template', '
 const INLINE_ELEMENTS = new Set( [ 'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'img', 'ins', 'kbd', 'label', 'mark', 'picture', 'q', 's', 'samp', 'small', 'source', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'u', 'var', 'wbr' ] );
 
 /** Attributes whose difference is authored content, per §3.1. */
-const SLOT_ATTRIBUTES = [ 'href', 'src', 'datetime', 'alt', 'id' ] as const;
+const SLOT_ATTRIBUTES = [ 'href', 'src', 'datetime', 'alt', 'id', 'class' ] as const;
 
 /** Head slots: `<title>`, description, canonical and Open Graph. */
 const HEAD_SLOT_SELECTORS = [
@@ -90,9 +90,6 @@ function resolveUrl( value: string, baseUrl: string ): string {
 }
 
 const normalizedWhitespace = ( value: string ): string => value.replace( /\s+/g, ' ' ).trim();
-
-const elementDescriptor = ( element: Element ): string =>
-	`${ element.name }${ ( element.attribs.class ?? '' ).split( /\s+/ ).filter( Boolean ).map( token => `.${ token }` ).join( '' ) }${ element.attribs.role ? `[role=${ element.attribs.role }]` : '' }`;
 
 /**
  * Slot-eligible element children, in order, skipping head noise. Capture
@@ -314,6 +311,18 @@ function applySlot( $: cheerio.CheerioAPI, node: Element, slot: Slot ): boolean 
 	}
 	if ( slot.kind === 'attribute' ) {
 		for ( const { attribute, value } of slot.replacement as Array< { attribute: string; value: string } > ) {
+			if ( attribute === 'class' ) {
+				// Swap only the tokens that differ between the two server documents;
+				// classes capture or the runtime added to the processed node stay.
+				const tokens = ( classes: string | undefined ) => ( classes ?? '' ).split( /\s+/ ).filter( Boolean );
+				const repTokens = new Set( tokens( slot.repNode.attribs.class ) );
+				const memberTokens = tokens( value );
+				const kept = tokens( node.attribs.class ).filter( token => ! repTokens.has( token ) || memberTokens.includes( token ) );
+				const merged = [ ...kept, ...memberTokens.filter( token => ! kept.includes( token ) ) ];
+				if ( merged.length ) node.attribs.class = merged.join( ' ' );
+				else delete node.attribs.class;
+				continue;
+			}
 			if ( value === '' ) delete node.attribs[ attribute ];
 			else node.attribs[ attribute ] = value;
 		}
