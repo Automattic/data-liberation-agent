@@ -125,6 +125,8 @@ const WIX_SLIDE_LIMIT = 6;
 const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
 /** Bound on yielding to a slideshow transition before confirming a slide change. */
 const WIX_SLIDE_TRANSITION_MILLISECONDS = 1_500;
+/** Bound on a slideshow control becoming actionable: a control the viewport never lays out costs this, not Playwright's 30 s default. */
+const WIX_SLIDE_CONTROL_MILLISECONDS = 3_000;
 const WIX_SLIDESHOW_REVEAL_WAIT_MILLISECONDS = 2_000;
 export const WIX_ANCHOR_SCROLL_MAX_MILLISECONDS = 3_000;
 /** 2.5× the largest documented delayed navigation (600ms in anchor-capture.test): a landing that follows a trusted click moves within this beat of the click (#839). */
@@ -237,10 +239,12 @@ export function preserveWixSlideshowSlides(
 	}
 }
 
+type WixSlide = { id: string; html: string; key: string };
+
 function snapshotWixSlide(
 	page: Page,
 	slideshowIndex: number
-): Promise< { html: string; key: string } | null > {
+): Promise< WixSlide | null > {
 	return page.evaluate( ( index ) => {
 		const slideshow = document.querySelectorAll< HTMLElement >( '.wixui-slideshow' )[ index ];
 		const slide = slideshow?.querySelector< HTMLElement >( '[data-testid="slidesWrapper"] > *' );
@@ -251,28 +255,26 @@ function snapshotWixSlide(
 		const drawings = [ ...slide.querySelectorAll( 'svg' ) ].map( ( node ) => node.innerHTML );
 		const text = slide.textContent?.replace( /\s+/g, ' ' ).trim() ?? '';
 		return {
+			id: slide.id,
 			html: slide.outerHTML,
-			key: `${ text }\n${ media.join( '\n' ) }\n${ drawings.join( '\n' ) }`,
+			key: `${ slide.id }\n${ text }\n${ media.join( '\n' ) }\n${ drawings.join( '\n' ) }`,
 		};
 	}, slideshowIndex );
 }
 
-function slideshowExpectedStateCount( page: Page, slideshowIndex: number ): Promise< number | null > {
+/** Each navigation dot's destination, in order: Wix dots link to their slide's component, `./#<slide id>`. */
+function slideshowDotDestinations( page: Page, slideshowIndex: number ): Promise< string[] | null > {
 	return page.evaluate( ( index ) => {
 		const slideshow = document.querySelectorAll< HTMLElement >( '.wixui-slideshow' )[ index ];
-		const controls = slideshow?.querySelectorAll( 'nav[aria-label] a[href]' ) ?? [];
-		const destinations = new Set(
-			[ ...controls ]
-				.map( ( control ) => control.getAttribute( 'href' ) ?? '' )
-				.filter( Boolean )
-		);
-		return destinations.size || null;
+		return [ ...( slideshow?.querySelectorAll( 'nav[aria-label] a[href]' ) ?? [] ) ].map( ( control ) => control.getAttribute( 'href' ) ?? '' );
 	}, slideshowIndex );
 }
 
 /**
  * In-page predicate: true once the mounted slide's identity key differs from
- * the previous one. Wix swaps the slide element at the START of its
+ * the previous one. The key leads with the slide's own component id: template
+ * slides can share text and carry no `<img>`, differing only in background
+ * layers, and must still read as distinct states. Wix swaps the slide element at the START of its
  * transition, so after the key changes, yield to the slideshow's remaining
  * movement (bounded, and never held by an ambient infinite animation) before
  * confirming: a control clicked mid-transition is queued by the runtime and
@@ -289,7 +291,7 @@ function wixSlideKeyChanged( {
 	);
 	const drawings = [ ...slide.querySelectorAll( 'svg' ) ].map( ( node ) => node.innerHTML );
 	const text = slide.textContent?.replace( /\s+/g, ' ' ).trim() ?? '';
-	if ( `${ text }\n${ media.join( '\n' ) }\n${ drawings.join( '\n' ) }` === previousKey ) return false;
+	if ( `${ slide.id }\n${ text }\n${ media.join( '\n' ) }\n${ drawings.join( '\n' ) }` === previousKey ) return false;
 	const movement = slideshow && typeof slideshow.getAnimations === 'function'
 		? slideshow.getAnimations( { subtree: true } ).filter( ( animation ) => {
 				try {
@@ -316,7 +318,7 @@ export async function waitForWixSlideChange(
 	page: Page,
 	slideshowIndex: number,
 	previousKey: string
-): Promise< { html: string; key: string } | null > {
+): Promise< WixSlide | null > {
 	const changed = await page
 		.waitForFunction(
 			wixSlideKeyChanged,
@@ -338,28 +340,34 @@ export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
 
 		const initial = await snapshotWixSlide( page, slideshowIndex );
 		if ( ! initial ) continue;
-		const expected = await slideshowExpectedStateCount( page, slideshowIndex );
+		const destinations = await slideshowDotDestinations( page, slideshowIndex ) ?? [];
+		const expected = new Set( destinations.filter( Boolean ) ).size || null;
 		const slides = [ initial ];
 		const seen = new Set( [ initial.key ] );
 		let failure = '';
-		const controls: Locator[] = [ next ];
+		const controls: Array< { control: Locator; slide?: string } > = [ { control: next } ];
 		const previous = slideshow.locator( 'button[data-testid="prevButton"]' );
-		if ( await previous.count() === 1 ) controls.push( previous );
+		if ( await previous.count() === 1 ) controls.push( { control: previous } );
 		const dots = slideshow.locator( 'nav[aria-label] a[href]' );
 		for ( let index = 0; index < Math.min( await dots.count(), WIX_SLIDE_LIMIT - 1 ); index++ ) {
-			controls.push( dots.nth( index ) );
+			controls.push( { control: dots.nth( index ), slide: destinations[ index ]?.split( '#' )[ 1 ] } );
 		}
-		for ( const control of controls ) {
+		// Each wait is for a change away from the slide mounted now; a dot to
+		// that slide changes nothing and would only spend the settle bound.
+		let current = initial;
+		for ( const { control, slide } of controls ) {
+			if ( slide && slide === current.id ) continue;
 			try {
-				await control.click();
+				await control.click( { timeout: WIX_SLIDE_CONTROL_MILLISECONDS } );
 			} catch ( error ) {
 				failure ||= `slideshow control could not be activated: ${ error instanceof Error ? error.message : String( error ) }`;
 				continue;
 			}
-			const snapshot = await waitForWixSlideChange( page, slideshowIndex, slides.at( -1 )!.key );
+			const snapshot = await waitForWixSlideChange( page, slideshowIndex, current.key );
 			if ( ! snapshot ) {
 				continue;
 			}
+			current = snapshot;
 			if ( seen.has( snapshot.key ) ) continue;
 			seen.add( snapshot.key );
 			slides.push( snapshot );
