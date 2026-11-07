@@ -1499,7 +1499,9 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const button = getComputedStyle(accept);
     // Pixel-snapped viewport geometry of the resting panel.
     const viewport = document.documentElement.clientWidth || innerWidth;
-    const settled = bounds.bottom > 0 && bounds.top < innerHeight;
+    // A panel resting wholly in view is measured; a partly hidden one keeps
+    // its computed inset, since a pending transform still displaces it.
+    const settled = bounds.top >= -1 && bounds.bottom <= innerHeight + 1;
     const position = bounds.top <= innerHeight * .1 ? 'top' as const : bounds.bottom >= innerHeight * .9 ? 'bottom' as const : 'center' as const;
     const typography = getComputedStyle(prose ?? root);
     const cssValues = (values: Record<string, string>) => Object.fromEntries(
@@ -1514,6 +1516,9 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       ...(button.borderStyle !== 'none' && button.borderWidth.split(/\s+/).some(width => parseFloat(width) > 0)
         ? { border_width: button.borderWidth, border_style: button.borderStyle, border_color: button.borderColor } : {}),
       font_size: button.fontSize, font_family: button.fontFamily, line_height: button.lineHeight,
+      font_weight: button.fontWeight, letter_spacing: button.letterSpacing,
+      ...(parseFloat(button.minHeight) > 0 ? { min_height: pixels(parseFloat(button.minHeight)) } : {}),
+      ...(/[1-9]/.test(button.margin) ? { margin: roundedPadding(button.margin) } : {}),
     });
     // Use the common content container when controls are nested in a wrapper.
     let content = accept.parentElement ?? root;
@@ -1533,6 +1538,10 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const endGap = viewport - bounds.right;
     const inline = Math.abs(startGap - endGap) <= 2 ? 'center' as const : startGap < endGap ? 'start' as const : 'end' as const;
     const titleStyle = title && heading ? getComputedStyle(heading) : undefined;
+    // Only a fixed surface's computed inset is a viewport offset; measure others.
+    const edgeOffset = position === 'center' ? {} : { edge_offset: pixels(position === 'bottom'
+      ? (settled || style.position !== 'fixed' || style.bottom === 'auto' ? innerHeight - bounds.bottom : parseFloat(style.bottom))
+      : (settled || style.position !== 'fixed' || style.top === 'auto' ? bounds.top : parseFloat(style.top))) };
     const proseBounds = prose?.getBoundingClientRect();
     const proseStacked = !!proseBounds && controlBounds.top >= proseBounds.bottom - 2;
     const direction = contentStyle.flexDirection === 'column' || proseStacked ? 'column' as const : 'row' as const;
@@ -1545,15 +1554,15 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       presentation: {
         span: full ? 'full' as const : 'inset' as const,
         gap: rowGap === columnGap ? rowGap : `${rowGap} ${columnGap}`,
-        // Only a fixed surface's computed inset is a viewport offset; measure others.
-        ...(position === 'center' ? {} : { edge_offset: pixels(position === 'bottom'
-          ? (settled || style.position !== 'fixed' || style.bottom === 'auto' ? innerHeight - bounds.bottom : parseFloat(style.bottom))
-          : (settled || style.position !== 'fixed' || style.top === 'auto' ? bounds.top : parseFloat(style.top))) }),
+        ...edgeOffset,
         ...cssValues({ padding: roundedPadding(style.padding), font_family: typography.fontFamily, font_size: typography.fontSize, line_height: typography.lineHeight, text_margin: typography.margin }),
-        ...(titleStyle ? { title: cssValues({ font_size: titleStyle.fontSize, line_height: titleStyle.lineHeight, font_weight: titleStyle.fontWeight, margin: roundedPadding(titleStyle.margin) }) } : {}),
+        ...(style.boxShadow !== 'none' ? { box_shadow: style.boxShadow } : {}),
+        ...(titleStyle ? { title: cssValues({ font_size: titleStyle.fontSize, line_height: titleStyle.lineHeight, font_weight: titleStyle.fontWeight, margin: roundedPadding(titleStyle.margin), padding: roundedPadding(titleStyle.padding) }) } : {}),
         layout: [{ min_width: viewportWidth, max_width: viewportWidth, direction,
           ...cssValues({ align_items: contentStyle.alignItems, text_margin: typography.margin }),
           ...(buttonAlign ? { button_align: buttonAlign } : {}),
+          ...edgeOffset,
+          ...(/[1-9]/.test(style.borderRadius) ? { border_radius: roundedPadding(style.borderRadius) } : {}),
           ...(full ? { span: 'full' as const } : { span: 'inset' as const, inline, width: Math.round(bounds.width),
             ...(inline === 'center' ? {} : { inline_offset: Math.max(0, Math.round(inline === 'start' ? startGap : endGap)) }) }),
         }],

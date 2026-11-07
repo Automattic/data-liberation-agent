@@ -1,6 +1,6 @@
 import type { ConsentBannerLayout } from './consent-banner.js';
 
-const GEOMETRY = ['width', 'inline_offset'] as const;
+const GEOMETRY = ['width', 'inline_offset', 'edge_offset'] as const;
 
 /**
  * Observations describe the same layout when everything but their viewport
@@ -8,7 +8,7 @@ const GEOMETRY = ['width', 'inline_offset'] as const;
  * constant: a fluid panel measures differently at every width.
  */
 export function sameConsentLayout(a: ConsentBannerLayout, b: ConsentBannerLayout): boolean {
-  const shape = ({ min_width: _min, max_width: _max, width: _width, inline_offset: _offset, ...rest }: ConsentBannerLayout) =>
+  const shape = ({ min_width: _min, max_width: _max, width: _width, inline_offset: _offset, edge_offset: _edge, ...rest }: ConsentBannerLayout) =>
     JSON.stringify(Object.keys(rest).sort().map(key => [key, rest[key as keyof typeof rest]]));
   return shape(a) === shape(b);
 }

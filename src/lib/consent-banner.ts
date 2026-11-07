@@ -12,6 +12,9 @@ export interface ConsentBannerLayout {
   /** Inset panel border-box width and distance from its inline edge, in CSS pixels. */
   width?: number;
   inline_offset?: number;
+  /** Distance from the anchored viewport edge at these widths. */
+  edge_offset?: string;
+  border_radius?: string;
 }
 
 /** Portable consent intent; field names are shared with static-site-importer. */
@@ -34,9 +37,11 @@ export interface ConsentBanner {
     font_size?: string;
     line_height?: string;
     text_margin?: string;
-    title?: { font_size?: string; line_height?: string; font_weight?: string; margin?: string };
+    /** Computed `box-shadow` of the painted panel. */
+    box_shadow?: string;
+    title?: { font_size?: string; line_height?: string; font_weight?: string; margin?: string; padding?: string };
     layout?: ConsentBannerLayout[];
-    button?: { border_radius?: string; border_width?: string; border_style?: string; border_color?: string; padding?: string; font_size?: string; font_family?: string; line_height?: string };
+    button?: { border_radius?: string; border_width?: string; border_style?: string; border_color?: string; padding?: string; font_size?: string; font_family?: string; line_height?: string; font_weight?: string; letter_spacing?: string; min_height?: string; margin?: string };
   };
   source_selector?: string;
 }
