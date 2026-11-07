@@ -385,9 +385,9 @@ describe( 'collectWixSlideshowSlides', () => {
 } );
 
 describe( 'waitForWixSlideChange', () => {
-	// The slide key is <text>\n<media>\n<drawings>; with no media or drawings
-	// the trailing separators remain.
-	const keyOf = ( text: string ) => `${ text }\n\n`;
+	// The slide key is <slide id>\n<text>\n<media>\n<drawings>; with no id,
+	// media or drawings the separators remain.
+	const keyOf = ( text: string ) => `\n${ text }\n\n`;
 
 	it( 'waits on the observed slide key and reports the change through one wait', async () => {
 		const dom = new JSDOM( `<!doctype html><html><head></head><body>
@@ -566,6 +566,44 @@ describe( 'Wix telemetry declaration', () => {
 } );
 
 afterEach( () => vi.unstubAllGlobals() );
+
+describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix slideshow capture in a browser', () => {
+	it( 'captures template slides that differ only by component and bounds a control the viewport never lays out', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			// Wix template slides share their placeholder text and carry no <img>;
+			// each is its own component, swapped in by the arrows and dots. The
+			// previous arrow is hidden, as at phone widths.
+			const slide = ( id: string, color: string ) => `<div id="${ id }" style="height:200px;background:${ color }"><h2>Slide Title</h2><p>This is a Paragraph.</p></div>`;
+			await page.setContent( `<!doctype html><html><body>
+				<div class="wixui-slideshow"><div data-testid="slidesWrapper">${ slide( 'comp-a', 'red' ) }</div>
+				<button data-testid="prevButton" style="display:none">Previous</button><button data-testid="nextButton">Next</button>
+				<nav aria-label="Slides"><a href="./#comp-a">1</a><a href="./#comp-b">2</a><a href="./#comp-c">3</a></nav></div>
+				<script>
+					const slides = { 'comp-a': 'red', 'comp-b': 'green', 'comp-c': 'blue' };
+					const ids = Object.keys( slides );
+					const show = ( id ) => { document.querySelector( '[data-testid="slidesWrapper"]' ).innerHTML = ${ JSON.stringify( slide( '__ID__', '__COLOR__' ) ) }.replace( '__ID__', id ).replace( '__COLOR__', slides[ id ] ); };
+					const current = () => document.querySelector( '[data-testid="slidesWrapper"] > *' ).id;
+					document.querySelector( '[data-testid="nextButton"]' ).onclick = () => show( ids[ ( ids.indexOf( current() ) + 1 ) % ids.length ] );
+					for ( const dot of document.querySelectorAll( 'nav a' ) ) dot.onclick = ( event ) => { event.preventDefault(); show( dot.getAttribute( 'href' ).slice( 3 ) ); };
+				</script>
+			</body></html>` );
+
+			const started = Date.now();
+			await collectWixSlideshowSlides( page );
+			const elapsed = Date.now() - started;
+
+			expect( await page.getAttribute( '.wixui-slideshow', 'data-blocks-engine-capture-captured-slideshow' ) ).toBe( 'true' );
+			expect( await page.locator( '[data-blocks-engine-capture-captured-slide]' ).evaluateAll(
+				( slides ) => slides.map( ( slide ) => slide.id )
+			) ).toEqual( [ 'comp-a', 'comp-b', 'comp-c' ] );
+			// Three observed changes and one bounded unactionable control, not a
+			// ten-second settle bound per control or a thirty-second click wait.
+			expect( elapsed ).toBeLessThan( 8_000 );
+		} finally { await browser.close(); }
+	}, 60_000 );
+} );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'scroll-reactive Wix header', () => {
 	it( 'freezes the load-time header class after capture-time scrolling', async () => {
