@@ -87,6 +87,46 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
   }
 });
 
+// One Chromium session (~1 second), through the real readConsentBanner path.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently of their language and anchor fragments', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    // A real document URL matters: on about:blank, fragment anchors do not
+    // resolve to HTTP(S), so the original misclassification would go unnoticed.
+    await page.route('https://example.com/page', route => route.fulfill({ body: '<main>Page title</main>', contentType: 'text/html' }));
+    await page.goto('https://example.com/page');
+    const policy = { label: 'Privacy', href: 'https://example.com/privacy' };
+    for (const fixture of [
+      {
+        controls: `<a href="https://www.dgti.uerj.br/politica-de-privacidade/" id="CONSTANT_OPEN_URL" target="_blank" class="medium cli-plugin-button cli-plugin-main-link">Política de Privacidade</a>
+          <a id="wt-cli-accept-all-btn" tabindex="0" role="button" data-cli_action="accept_all" class="wt-cli-element medium cli-plugin-button wt-cli-accept-all-btn cookie_action_close_header cli_action_button">Aceitar Cookies</a>`,
+        accept: 'Aceitar Cookies',
+        policy: { label: 'Política de Privacidade', href: 'https://www.dgti.uerj.br/politica-de-privacidade/' },
+      },
+      ...['#', '#accept', 'https://example.com/page#accept', 'javascript:void(0)', 'https://example.com/accept'].map(href => ({
+        controls: `<a href="${href}">Got it</a><a href="https://example.com/privacy">Privacy</a>`,
+        accept: 'Got it', policy,
+      })),
+    ]) {
+      await page.setContent(`<style>
+        #cookie-law-info-bar { position:fixed;bottom:0;left:0;width:100%;padding:20px;background:white }
+      </style><main><h1>Page title</h1></main>
+      <div id="cookie-law-info-bar"><span><div class="cli-bar-container cli-style-v2">
+        <div class="cli-bar-message">Usamos cookies … Ao clicar em “Aceitar Cookies” …</div>
+        <div class="cli-bar-btn_container">${fixture.controls}</div>
+      </div></span></div>`);
+      const dismissed = await dismissOverlays(page);
+      const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+      expect(banner?.accept_label).toBe(fixture.accept);
+      expect(banner?.policy_link).toEqual(fixture.policy);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 // One Chromium session (~1 second) covers border omission, gaps and margin-only bisection.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async () => {
   const { chromium } = await import('playwright');
