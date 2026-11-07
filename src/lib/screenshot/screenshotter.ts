@@ -50,7 +50,7 @@ import {
 } from './interaction-capture.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
-import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
+import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
 import { createPhaseBudget } from './phase-budget.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
@@ -1209,6 +1209,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// are observed after the baseline, with the other interaction probes.
 	const scriptedLinkSignatures = plan.captureHtml || plan.captureMobileHtml ? await stampScriptedLinkCandidates( page, evaluateTimeoutMs ) : [];
 	await markInitialDocument( page );
+	// Probes above resized the page; serialize source sheets as loaded at this width.
+	await restoreLoadTimeSheets( page ).catch( () => 0 );
 	const initialDocument = await capturePageHtml( page, args.diagnostics );
 	// The serialized head is the initial one, so it is named by the title the
 	// browser reported for it, before exploration could retitle the page.
