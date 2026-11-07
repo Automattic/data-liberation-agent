@@ -466,6 +466,7 @@ export class CapturedResourceStore {
 	private replayDir?: string;
 	private replayBytes = 0;
 	private capturedBytes = 0;
+	private readonly resolvedSrcsetFixtures = new Set< string >();
 
 	constructor(
 		outputDir: string,
@@ -527,6 +528,7 @@ export class CapturedResourceStore {
 		const browser = page.context().browser();
 		if ( ! original || ! browser ) return;
 		const scroll = await page.evaluate( () => ( { x: scrollX, y: scrollY } ) );
+		let context: Awaited< ReturnType< typeof browser.newContext > > | undefined;
 		try {
 			for ( const width of [ 390, 768, 1440 ] ) {
 				await page.setViewportSize( { width, height: original.height } );
@@ -556,13 +558,19 @@ export class CapturedResourceStore {
 					return { base: document.baseURI, html: html.join( '' ) };
 				} );
 				if ( ! fixture.html ) break;
-				const context = await browser.newContext( {
-					viewport: { width, height: original.height }, deviceScaleFactor: 1,
-					storageState: await page.context().storageState(),
-				} );
+				const fixtureKey = JSON.stringify( [ width, fixture.base, fixture.html ] );
+				if ( this.resolvedSrcsetFixtures.has( fixtureKey ) ) continue;
+				this.resolvedSrcsetFixtures.add( fixtureKey );
+				if ( ! context ) {
+					context = await browser.newContext( {
+						viewport: { width, height: original.height }, deviceScaleFactor: 1,
+						storageState: await page.context().storageState(),
+					} );
+				}
 				try {
-					const probe = await context.newPage();
-					this.observe( probe );
+					const probe = context.pages()[ 0 ] ?? await context.newPage();
+					await probe.setViewportSize( { width, height: original.height } );
+					if ( ! this.pageCaptures.has( probe ) ) this.observe( probe );
 					await probe.setContent( `<base href="${ fixture.base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ fixture.html }` );
 					for ( const image of await probe.locator( 'img' ).all() ) {
 						await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
@@ -572,9 +580,10 @@ export class CapturedResourceStore {
 						] ) );
 					}
 					await this.settle( probe );
-				} finally { await context.close(); }
+				} finally { /* Reuse the probe context for the next width. */ }
 			}
 		} finally {
+			await context?.close();
 			await page.setViewportSize( original );
 			await page.evaluate( position => window.scrollTo( { left: position.x, top: position.y, behavior: 'instant' } ), scroll );
 		}
