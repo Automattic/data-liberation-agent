@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.158] - 2026-11-07
+
+### Changed
+- regenerate plugin bundles
+- Attribute source runtime errors to their frame through CDP execution contexts
+- Capture cleanup: remove invisible few-pixel tracking images
+- Derive template members when only volatile classes differ
+- Settle each width before classifying a resting panel
+- cook candidate
+
+### Fixed
+- Fix language-neutral consent control classification
+
 ## [0.33.157] - 2026-11-06
 
 ### Changed
