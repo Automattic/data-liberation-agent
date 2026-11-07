@@ -1,6 +1,6 @@
 import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { createHash } from 'crypto';
-import { captureRequests } from './capture-requests.js';
+import { sourceRequestContext } from '../source-request-governor.js';
 import { basename, extname, join, resolve } from 'path';
 import { pipeline } from 'stream/promises';
 import {
@@ -304,8 +304,8 @@ async function fetchMediaResponse(rawUrl: string, preserveOriginal = false, dead
       redirect: 'manual',
       headers: { 'User-Agent': SOURCE_USER_AGENT, accept: preserveOriginal ? '*/*' : BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
     });
-    const governor = captureRequests.getStore()?.governors.forOrigin(currentUrl);
-    const res = governor ? (await governor.run(request, { category: 'asset-original' })).response : await request();
+    const governor = sourceRequestContext.getStore()?.forOrigin(currentUrl);
+    const res = governor ? (await governor.run(request, { category: preserveOriginal ? 'asset-original' : 'subresource' })).response : await request();
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       try { await res.body?.cancel(); } catch { /* ignore */ }
@@ -336,7 +336,7 @@ export async function downloadMedia(
   seenHashes?: Map<string, string>,
   opts?: DownloadMediaOpts,
 ): Promise<DownloadResult> {
-  const cache = captureRequests.getStore()?.originals;
+  const cache = sourceRequestContext.getStore()?.originals;
   if (!cache || !opts?.preserveOriginal) return downloadMediaOnce(url, outputDir, seenNames, seenHashes, opts);
   const key = JSON.stringify([url, outputDir]);
   let pending = cache.get(key);

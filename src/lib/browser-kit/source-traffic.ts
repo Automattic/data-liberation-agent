@@ -105,7 +105,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
     try { await governor.acquire(abort.signal, true); }
     finally { context.off('close', close); }
   }
-  nativeRequests.set(request, { governor, acquired, category: traffic.get(context)?.category ?? (request.resourceType() === 'document' ? 'document' : 'asset-original'), routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
+  nativeRequests.set(request, { governor, acquired, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
   catch (error) {
     if (nativeRequests.delete(request) && acquired) governor.release();
@@ -162,5 +162,5 @@ export async function fetchSourceRoute(route: Route, options: NonNullable<Parame
   const state = traffic.get(context);
   const url = options.url ?? route.request().url();
   if (!state || new URL(url).origin !== state.origin) return route.fetch(options);
-  return governedResponse(context, url, () => route.fetch({ ...options, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), state.category ?? (route.request().resourceType() === 'document' ? 'document' : 'asset-original'));
+  return governedResponse(context, url, () => route.fetch({ ...options, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), route.request().resourceType() === 'document' ? state.category ?? 'document' : 'subresource');
 }

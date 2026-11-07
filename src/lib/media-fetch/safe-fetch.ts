@@ -25,8 +25,7 @@
 // environment variable. Redirects re-run the same check per hop, so a trusted
 // origin that redirects to another internal host is still blocked.
 //
-import { captureRequests } from './capture-requests.js';
-import { governedAcquisition, type SourceRequestCategory } from '../source-request-governor.js';
+import { sourceRequestContext, type SourceRequestGovernors, type SourceRequestCategory } from '../source-request-governor.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 
@@ -229,6 +228,8 @@ export function assertPublicHttpUrl(rawUrl: string): URL {
 }
 
 export interface SafeFetchOpts {
+  /** null when the caller already owns admission and accounting. */
+  governors?: SourceRequestGovernors | null;
   category?: SourceRequestCategory;
   /** Optional caller-owned admission check, before the initial request and every redirect hop. */
   authorizeUrl?: ( url: string ) => void;
@@ -298,7 +299,7 @@ export async function safeFetch(rawUrl: string, opts: SafeFetchOpts = {}): Promi
         redirect: 'manual',
         headers,
       });
-      const governor = !governedAcquisition.getStore() && captureRequests.getStore()?.governors.forOrigin(currentUrl);
+      const governor = (opts.governors === null ? undefined : opts.governors ?? sourceRequestContext.getStore())?.forOrigin(currentUrl);
       res = governor ? (await governor.run(request, { category: opts.category ?? 'document', signal: requestSignal })).response : await request();
     } catch (error) {
       throw withNetworkCause(error);

@@ -69,7 +69,7 @@ it('shares escalating confirmation and rejects queued admission only after the e
   await admission;
   expect(probe).toHaveBeenCalledTimes(4);
   expect(governor.blockedClient?.evidence.requestsBeforeFirstRefusal).toBe(1);
-  expect(governor.blockedClient?.evidence.requestCounts).toEqual({ document: 5, 'device-check': 0, 'asset-original': 0, 'refusal-probe': 4, retry: 0 });
+  expect(governor.blockedClient?.evidence.requestCounts).toEqual({ document: 5, 'device-check': 0, 'asset-original': 0, subresource: 0, 'refusal-probe': 4, retry: 0 });
   expect(Object.values(governor.stats().requestCounts).reduce((a, b) => a + b, 0)).toBe(governor.stats().requests);
  } finally { probe.mockRestore(); vi.useRealTimers(); }
 });

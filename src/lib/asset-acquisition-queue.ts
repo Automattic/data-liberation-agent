@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { collectAssets } from './image-assets.js';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { MediaStubStore } from './resume-state/index.js';
-import { SOURCE_REQUEST_GOVERNOR_DEFAULTS, type SourceRequestGovernors } from './source-request-governor.js';
+import { SOURCE_REQUEST_GOVERNOR_DEFAULTS } from './source-request-governor.js';
 
 /**
  * Capture-wide asset byte acquisition (#1049).
@@ -34,7 +34,6 @@ export class AssetAcquisitionQueue {
 
 	constructor(
 		private readonly outputDir: string,
-		_governors: SourceRequestGovernors,
 		private readonly deadline?: number,
 		private readonly resolve?: Parameters< typeof collectAssets >[ 1 ],
 		private readonly concurrency = 2,

@@ -23,8 +23,7 @@ import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetRea
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
-import { captureRequests } from './media-fetch/capture-requests.js';
-import { SourceRequestGovernors } from './source-request-governor.js';
+import { sourceRequestContext, SourceRequestGovernors } from './source-request-governor.js';
 import { completeSourceTlsChain } from './tls-aia.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
@@ -397,15 +396,16 @@ export async function captureWebsite(
 	// capture context. Malformed entries reject here, before any work starts.
 	normalizeTrustedOrigins( options.trustedOrigins );
 	const governors = new SourceRequestGovernors();
-	return captureRequests.run({ governors, originals: new Map() }, async () => {
-		try { return await runWithTrustedOrigins( options.trustedOrigins, () => runCaptureWebsite( options, dependencies ) ); }
+	return sourceRequestContext.run(governors, async () => {
+		try { return await runWithTrustedOrigins( options.trustedOrigins, () => runCaptureWebsite( options, dependencies, governors ) ); }
 		finally { process.stderr.write(`[source-requests] ${JSON.stringify(governors.stats())}\n`); }
 	});
 }
 
 async function runCaptureWebsite(
 	options: CaptureOptions,
-	dependencies: CaptureDependencies
+	dependencies: CaptureDependencies,
+	sourceGovernors: SourceRequestGovernors
 ): Promise< CaptureResult > {
 	if ( options.acquisition !== undefined && ! [ 'browser', 'http' ].includes( options.acquisition ) ) throw new Error( 'Unknown capture acquisition mode' );
 	if ( options.acquisition === 'http' ) ( await import( './capture-http.js' ) ).validateHttpCaptureOptions( options );
@@ -434,7 +434,6 @@ async function runCaptureWebsite(
 	const timeBudgetMs = options.timeBudgetMs ?? ( options.acquisition !== 'http' && options.routeLimit === undefined ? DEFAULT_CAPTURE_TIME_BUDGET_MS : undefined );
 	const timeBudget = timeBudgetMs === undefined ? undefined : { ...captureTimeBudgetWindow( startedAt, timeBudgetMs, options.routeReserveMs ), projectAdmission: options.routeLimit === undefined, checkpoint: options.checkpoint };
 	// One governor per source origin for every HTTP pass of this capture (#907).
-	const sourceGovernors = captureRequests.getStore()!.governors;
 	let phase = '';
 	let phaseStartedAt = startedAt;
 	const progress = ( event: CaptureProgress ): void => {
@@ -451,8 +450,8 @@ async function runCaptureWebsite(
 		onProgress?.( timedEvent );
 	};
 
-	const response = await safeFetch( options.url, { timeoutMs: 10_000 } ).catch( async error => {
-		if ( await completeSourceTlsChain( options.url, error ) ) return safeFetch( options.url, { timeoutMs: 10_000 } );
+	const response = await safeFetch( options.url, { timeoutMs: 10_000, governors: sourceGovernors } ).catch( async error => {
+		if ( await completeSourceTlsChain( options.url, error ) ) return safeFetch( options.url, { timeoutMs: 10_000, governors: sourceGovernors } );
 		throw error; // failure-class: operational
 	} );
 	const sourceUrl = response.finalUrl;
@@ -560,7 +559,7 @@ async function runCaptureWebsite(
 		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
 		referenceSample,
 	} );
-	const assetQueue = new AssetAcquisitionQueue( outputDir, sourceGovernors, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
+	const assetQueue = new AssetAcquisitionQueue( outputDir, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
 	const screenshotResult = await captureScreenshots( {
 		governors: sourceGovernors,
 		urls,

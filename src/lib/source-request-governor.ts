@@ -23,8 +23,9 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-/** Avoid accounting a safeFetch inside an already governed acquisition twice. */
-export const governedAcquisition = new AsyncLocalStorage<boolean>();
+/** Discovery adapters include URL-only helpers without capture options. Keep their
+ * capture ownership here; parameterized browser/acquisition paths pass it explicitly. */
+export const sourceRequestContext = new AsyncLocalStorage<SourceRequestGovernors>();
 
 export const SOURCE_REQUEST_GOVERNOR_DEFAULTS = {
 	/** Requests in flight per origin, as in rendered inspection (#746). */
@@ -60,7 +61,7 @@ export function parseRetryAfter( header: string | null | undefined, options: { f
 /** Earlier success, three consecutive refusals, and at least two route paths are required. */
 export const SOURCE_REFUSAL_DEFAULTS = { consecutive: 3, probeAtMs: [2000, 8000, 20000, 60000], probeTimeoutMs: 3000 } as const;
 
-export type SourceRequestCategory = 'document' | 'device-check' | 'asset-original' | 'refusal-probe' | 'retry';
+export type SourceRequestCategory = 'document' | 'device-check' | 'asset-original' | 'subresource' | 'refusal-probe' | 'retry';
 export type SourceRequestCounts = Record<SourceRequestCategory, number>;
 
 export class SourceBlockedClientError extends Error {
@@ -219,7 +220,7 @@ export class SourceRequestGovernor {
 	private browserThrottled = false;
 	private pausedUntil = 0;
 	private requests = 0;
-	private readonly requestCounts: SourceRequestCounts = { document: 0, 'device-check': 0, 'asset-original': 0, 'refusal-probe': 0, retry: 0 };
+	private readonly requestCounts: SourceRequestCounts = { document: 0, 'device-check': 0, 'asset-original': 0, subresource: 0, 'refusal-probe': 0, retry: 0 };
 
 	private recordRequest(category: SourceRequestCategory): void {
 		this.requests++;
@@ -271,7 +272,7 @@ export class SourceRequestGovernor {
 			let response: T;
 			try {
 				this.recordRequest(attempt > 1 ? 'retry' : options.category ?? 'document');
-				response = await governedAcquisition.run(true, () => task( attempt ));
+				response = await task( attempt );
 			} catch (error) {
 				if (!isSourceTransportThrottle(error)) throw error; // failure-class: operational
 				this.observeRefusal(error, options.routeUrl, refusalAdmission);
@@ -392,6 +393,8 @@ export class SourceRequestGovernor {
  * origin fixes its options.
  */
 export class SourceRequestGovernors {
+	/** Capture-local file reuse, including concurrent originals; no byte cache. */
+	readonly originals = new Map<string, Promise<import('./media-fetch/media.js').DownloadResult>>();
 	private readonly byOrigin = new Map< string, SourceRequestGovernor >();
 
 	constructor( private readonly defaults: SourceRequestGovernorOptions = {} ) {}

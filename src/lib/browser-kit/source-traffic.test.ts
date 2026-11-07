@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
-import { captureRequests } from '../media-fetch/capture-requests.js';
+import { sourceRequestContext } from '../source-request-governor.js';
 import { downloadMedia } from '../media-fetch/media.js';
 import { runWithTrustedOrigins } from '../media-fetch/safe-fetch.js';
 import { SourceRequestGovernors } from '../source-request-governor.js';
@@ -119,7 +119,7 @@ it.skipIf(skipBrowser)('accounts for a reflow capture and reuses document and or
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'request-counts-'));
   const governors = new SourceRequestGovernors();
   try {
-    await captureRequests.run({ governors, originals: new Map() }, () => runWithTrustedOrigins([origin], async () => {
+    await sourceRequestContext.run(governors, () => runWithTrustedOrigins([origin], async () => {
       const result = await captureScreenshots({
         urls: [`${origin}/`, `${origin}/second`], outputDir, governors,
         force: true, settleMs: 0, learnFluid: false, deviceMode: 'auto', concurrency: 1,
@@ -133,7 +133,7 @@ it.skipIf(skipBrowser)('accounts for a reflow capture and reuses document and or
     const stats = governors.forOrigin(origin).stats();
     process.stderr.write(`fixture counts ${JSON.stringify({requests, stats})}\n`);
     expect(stats.requests).toBe(requests);
-    expect(stats.requestCounts).toEqual({ document: 1, 'device-check': 4, 'asset-original': 1, 'refusal-probe': 0, retry: 0 });
+    expect(stats.requestCounts).toEqual({ document: 1, 'device-check': 4, 'asset-original': 1, subresource: 0, 'refusal-probe': 0, retry: 0 });
   } finally {
     rmSync(outputDir, { recursive: true, force: true });
     server.closeAllConnections();

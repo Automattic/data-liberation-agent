@@ -85,6 +85,7 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 					response = ( await governor.run( () => {
 						document.attempts++;
 						return dependencies.fetch( url, {
+							governors: null,
 							...(options.routeScope ? { authorizeUrl: (target: string) => { if (!routeInScope(target, options.routeScope)) throw new Error('HTTP document is outside its adapter route scope'); } } : {}),
 							headersForOrigin: requestOrigin => requestOrigin === origin ? variant.headers : undefined,
 							timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? SOURCE_DOCUMENT_MAX_BYTES,
