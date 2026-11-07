@@ -120,7 +120,35 @@ it('captures clean artifacts and compares intentional removals while rejecting d
   expect(JSON.parse(readFileSync(join(directory, 'compare', 'cleanup-evidence.json'), 'utf8')).completed).toBe(false);
 }, 90_000);
 
-it('drops script-injected tracking images from processed and exported HTML with cleanup evidence', async () => {
+it('keeps hidden data and blob placeholders while removing a hidden network tracking image', async () => {
+  const image = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.route('https://images.example/pixel.gif', route => route.fulfill({
+      contentType: 'image/gif', body: Buffer.from(image.split(',')[1], 'base64'),
+    }));
+    await page.setContent(`<img id="data-placeholder" src="${image}" width="1" height="1" hidden>
+      <img id="blob-placeholder" width="1" height="1" hidden>
+      <img id="network-beacon" src="https://images.example/pixel.gif" width="1" height="1" hidden>`);
+    await page.evaluate(async (source) => {
+      const blob = await (await fetch(source)).blob();
+      const image = document.querySelector<HTMLImageElement>('#blob-placeholder')!;
+      image.src = URL.createObjectURL(blob);
+      await image.decode();
+    }, image);
+    expect(await page.locator('img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth === 1))).toBe(true);
+    const report = await applySourceCleanup(page, cleanupPolicy());
+    expect(await page.locator('#data-placeholder,#blob-placeholder').count()).toBe(2);
+    expect(await page.locator('#network-beacon').count()).toBe(0);
+    expect(report.records.filter(record => record.rule === 'tracking-image').map(record => record.selector))
+      .toEqual(['#network-beacon']);
+    expect(report.failures).toEqual([]);
+    expect(report.residual).toBe(0);
+  } finally { await browser.close(); }
+});
+
+it('keeps script-injected inert image placeholders in processed and exported HTML without cleanup removals', async () => {
   const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
   const photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAIAAADRv8uKAAAAKUlEQVR4nO3NoQ0AAAwCMP5/ensBh2lS31wysVnFYrFYLBaLxWKxWFx5Pp2rjeB5c/4AAAAASUVORK5CYII=';
   const statsPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAYAAAAFCAIAAADpOgqxAAAAEklEQVR4nGP4z8CAhtD5lAgBAKn7HeOzBEccAAAAAElFTkSuQmCC';
@@ -153,15 +181,12 @@ it('drops script-injected tracking images from processed and exported HTML with 
     expect(document).toContain('id="labelled-image"');
     expect(document).toContain('id="hidden-slide"');
     expect(document).toContain('id="lazy-placeholder"');
-    expect(document).not.toContain('id="runtime-beacon"');
-    expect(document).not.toContain('id="hidden-beacon"');
+    expect(document).toContain('id="runtime-beacon"');
+    expect(document).toContain('id="hidden-beacon"');
   }
   const ledger = JSON.parse(readFileSync(join(directory, 'cleanup-evidence.json'), 'utf8'));
   const records = ledger.pages[0].reports.flatMap((report: { records: unknown[] }) => report.records);
-  for (const selector of ['#runtime-beacon', '#hidden-beacon']) {
-    expect(records).toContainEqual(expect.objectContaining({ rule: 'tracking-image', selector,
-      action: 'remove', evidence: 'Loaded image of at most 8×8 px, rendered at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source' }));
-  }
+  expect(records).toEqual([]);
 }, 60_000);
 
 it('captures detected host residue as attribution cleanup but keeps the same frame without detection', async () => {
