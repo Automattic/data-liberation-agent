@@ -102,6 +102,8 @@ export interface LayoutObservation {
 	docWidth: number;
 	/** documentElement.scrollHeight. Absent in older frozen evidence. */
 	docHeight?: number;
+	/** True when the document rendered in quirks mode (no doctype). */
+	quirks?: boolean;
 	/** True when the document is wider than the viewport. */
 	overflow: boolean;
 	/** Hosts the page requested that are not the local copy. */

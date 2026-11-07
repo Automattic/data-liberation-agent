@@ -52,11 +52,12 @@ describe( 'checkLayoutGeometry', () => {
 		[ 'a background painted as a cover img', { backgrounds: [], images: [ image( 'hero.jpg', 0, 50, 1600, 585 ) ] }, undefined ],
 		[ 'a shorter background', { backgrounds: [], images: [ image( 'hero.jpg', 0, 50, 1600, 360 ) ] }, 'background geometry differs for 1' ],
 		[ 'older evidence without geometry', { docHeight: undefined, backgrounds: undefined, typography: [ text() ] }, undefined ],
+		[ 'a quirks-mode source beside a standards copy', { docHeight: 1160, quirks: false }, undefined ],
 	] as Array< [ string, Partial< LayoutObservation >, string | undefined ] > )( '%s', ( _label, copy, failure ) => {
-		const source = observation( { docHeight: 1385, backgrounds: [ hero ], typography: [ text( { top: 337, left: 417 } ) ] } );
+		const source = observation( { docHeight: 1385, quirks: copy.quirks === false, backgrounds: [ hero ], typography: [ text( { top: 337, left: 417 } ) ] } );
 		const result = checkLayoutGeometry( source, observation( { docHeight: 1385, backgrounds: [ hero ], typography: [ text( { top: 338, left: 420 } ) ], ...copy } ) );
 		if ( failure ) expect( result.failures?.join( ' ' ) ).toContain( failure );
-		else expect( result ).toEqual( {} );
+		else expect( result.failures ).toBeUndefined();
 	} );
 } );
 

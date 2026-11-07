@@ -992,6 +992,7 @@ export async function observePage(
 					.map( element => `${ element.id || 'anonymous target' }: ${ element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) }` ),
 				docWidth: document.documentElement.scrollWidth,
 				docHeight: document.documentElement.scrollHeight,
+				quirks: document.compatMode === 'BackCompat',
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
 				hashTargets,
 				internalPaths,
@@ -1040,6 +1041,7 @@ export async function observePage(
 			entranceUnrevealed: measured.entranceUnrevealed,
 			docWidth: measured.docWidth,
 			docHeight: measured.docHeight,
+			quirks: measured.quirks,
 			overflow: measured.overflow,
 			externalHosts: [ ...new Set( requests.filter( request => ! ( request.image && emojiUrls.has( request.url ) ) )
 				.map( request => externalRequestHost( request.url, localOrigin ) ).filter( ( host ): host is string => host !== null ) ) ].sort(),

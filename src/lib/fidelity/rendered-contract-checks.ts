@@ -41,11 +41,16 @@ export function checkImageGeometry(
  * text runs that moved, and CSS background boxes the copy paints at another
  * size. A source background is matched by box against any painted image box
  * in the copy, background or `<img>`, because a copy may render it either way.
+ *
+ * Capture serializes every copy in standards mode and records a quirks-mode
+ * source for the transform to honor, so a quirks source and a standards copy
+ * lay out flow by different rules; their geometry is noted, not compared.
  */
 export function checkLayoutGeometry(
 	source: LayoutObservation,
 	candidate: LayoutObservation
 ): FidelityCheckResult {
+	if ( source.quirks && ! candidate.quirks ) return { notes: [ 'layout geometry not compared: source renders in quirks mode, copy in standards mode' ] };
 	const failures: string[] = [];
 	if ( source.docHeight !== undefined && candidate.docHeight !== undefined &&
 		Math.abs( source.docHeight - candidate.docHeight ) > IMAGE_POSITION_TOLERANCE_PX ) {
