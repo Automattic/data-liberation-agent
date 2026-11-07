@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.165] - 2026-11-07
+
+### Changed
+- regenerate plugin bundles
+- Carry phone-probe selectors onto the desktop document's nodes
+- Preserve learned fluid geometry across viewport class capture
+- Lower scripted same-origin links (role=link without href) to portable anchors
+
 ## [0.33.164] - 2026-11-07
 
 ### Changed
