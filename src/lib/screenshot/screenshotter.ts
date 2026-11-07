@@ -1259,8 +1259,16 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 
 	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
+		args.phases?.enter( 'fluid' );
+		// Sweep classes before learning: resize-driven ancestor state changes can
+		// suspend fluid authority and remove segment markers. Learn from the
+		// settled post-sweep state, with no class-probe resizes left to undo it.
+		const classes = isDesktop ? await captureViewportClassStates( page, {
+			...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
+			settleMs: Math.max( args.settleMs, 800 ),
+			...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
+		} ).catch( () => undefined ) : undefined;
 		try {
-			args.phases?.enter( 'fluid' );
 			await args.beforeFluid?.( page, { url, viewport: viewport.id, serverHtml } ).catch( () => {
 				/* best-effort — the sweep learns whatever the hook left in place */
 			} );
@@ -1286,16 +1294,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				diagnostic: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
 			};
 		}
-		// Script-toggled class state follows the viewport like inline geometry
-		// does. The desktop document serves every width above the phone switch.
-		if ( isDesktop ) {
-			const classes = await captureViewportClassStates( page, {
-				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
-				settleMs: Math.max( args.settleMs, 800 ),
-				...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
-			} ).catch( () => undefined );
-			if ( classes && classes.aliased > 0 && entry.fluid ) entry.fluid.byKind[ 'viewport-class' ] = classes.aliased;
-		}
+		if ( classes && classes.aliased > 0 && entry.fluid ) entry.fluid.byKind[ 'viewport-class' ] = classes.aliased;
 	}
 	if ( args.rendererCrashed() ) return;
 	if ( plan.captureHtml || plan.captureMobileHtml ) {
