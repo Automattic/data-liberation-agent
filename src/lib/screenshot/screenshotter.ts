@@ -34,7 +34,7 @@ import { portStaticShadowContent } from './shadow-content.js';
 import { normalizeCaptureState, normalizeGeneratedIds } from './capture-state.js';
 import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
 import { captureCollections } from './collection-capture.js';
-import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline } from './component-states.js';
+import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline, type CapturedComponent } from './component-states.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { withDocumentTitle } from './document-title.js';
 import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
@@ -1728,13 +1728,31 @@ function hasPromotableInteractionEvidence( previous: InteractionStatesReport | u
 		( latest.routeNavigation?.length ?? 0 ) > 0 || latest.initialDialogs?.some( state => state.status === 'captured' ) === true;
 }
 
-function mergeInteractionReports(
+/**
+ * Merges one profile's interaction evidence into the route's report.
+ *
+ * `keepPrevious` is for a phone pass over a different (dual) document. Its
+ * selectors and trigger ids name nodes in the phone document: platform
+ * runtimes number ids per document, so a phone `#1` can be the menu toggle
+ * where the desktop `#1` is a dropdown. A selector alone therefore does not
+ * identify a control across the two passes; the observed control label does
+ * too. Evidence for another control is kept beside the desktop evidence (the
+ * export resolves a colliding id by that label), and evidence for the same
+ * control never replaces what the earlier pass recorded.
+ */
+export function mergeInteractionReports(
 	previous: InteractionStatesReport | undefined,
-	latest: InteractionStatesReport
+	latest: InteractionStatesReport,
+	{ keepPrevious = false }: { keepPrevious?: boolean } = {}
 ): InteractionStatesReport {
 	if ( ! previous ) return latest;
+	const mergeCapturedEvidence = < T extends { status: string } >( prior: T[], next: T[], identity: ( state: T ) => string, limit?: number ): T[] =>
+		mergeCapturedEvidenceInto( prior, next, identity, limit, keepPrevious );
+	const control = ( label: string | undefined ) => keepPrevious ? `:${ ( label ?? '' ).replace( /\s+/g, ' ' ).trim().toLowerCase() }` : '';
 	const identity = ( state: CapturedDialogInteraction ) =>
-		`${ state.kind ?? 'dialog' }:${ state.trigger.id ?? state.trigger.selector }${state.gallery ? ':' + state.gallery.inline.viewport.width : ''}`;
+		`${ state.kind ?? 'dialog' }:${ state.trigger.id ?? state.trigger.selector }${state.gallery ? ':' + state.gallery.inline.viewport.width : ''}${ control( state.trigger.label ) }`;
+	const componentKey = ( component: CapturedComponent ) =>
+		`${ component.selector }${ control( component.states.find( state => state.evidence )?.evidence?.trigger.label ) }`;
 	const ofKind =
 		( kind: NonNullable< CapturedDialogInteraction[ 'kind' ] > | 'dialog' ) =>
 		( state: CapturedDialogInteraction ) =>
@@ -1779,35 +1797,39 @@ function mergeInteractionReports(
 		latest.initialDialogs ?? [],
 		( state ) => state.dialog.id ?? state.dialog.selector
 	);
+	const byIdentity = < T, >( prior: T[], next: T[], key: ( item: T ) => string ): T[] =>
+		keepPrevious ? [ ...prior, ...next.filter( item => ! prior.some( known => key( known ) === key( item ) ) ) ] : [ ...prior, ...next ];
 	return {
-		...latest,
+		...( keepPrevious ? previous : latest ),
 		...( previous.coverage === 'partial' || latest.coverage === 'partial' ? { coverage: 'partial' as const } : {} ),
-		components: [ ...new Map( [ ...( previous.components ?? [] ), ...( latest.components ?? [] ) ].map( component => {
+		components: [ ...new Map( byIdentity( previous.components ?? [], latest.components ?? [], componentKey ).map( component => {
 			const prior = previous.components?.find(node => node.selector === component.selector);
-			if (!component.slideshow || !prior?.slideshow || prior === component) return [component.selector, component] as const;
-			return [component.selector, { ...component, slideshow: { ...component.slideshow,
+			if (!component.slideshow || !prior?.slideshow || prior === component) return [componentKey( component ), component] as const;
+			return [componentKey( component ), { ...component, slideshow: { ...component.slideshow,
 				views: [...prior.slideshow.views, ...component.slideshow.views].filter((view, index, all) => all.findIndex(other => other.width === view.width) === index),
 				navigation: [...prior.slideshow.navigation, ...component.slideshow.navigation].filter((mode, index, all) => all.findIndex(other => other.mode === mode.mode) === index),
 			} }] as const;
 		} ) ).values() ],
 		states,
-		routeNavigation: [ ...new Map( [ ...( previous.routeNavigation ?? [] ), ...( latest.routeNavigation ?? [] ) ]
+		routeNavigation: [ ...new Map( byIdentity( previous.routeNavigation ?? [], latest.routeNavigation ?? [], route => route.selector )
 			.map( route => [ route.selector, route ] ) ).values() ],
 		...( initialDialogs.length > 0 ? { initialDialogs } : {} ),
 	};
 }
 
-function mergeCapturedEvidence< T extends { status: string } >(
+function mergeCapturedEvidenceInto< T extends { status: string } >(
 	previous: T[],
 	latest: T[],
 	identity: ( state: T ) => string,
-	limit = MAX_CAPTURED_DIALOGS
+	limit = MAX_CAPTURED_DIALOGS,
+	keepPrevious = false
 ): T[] {
 	const merged = new Map< string, T >();
 	for ( const state of previous ) merged.set( identity( state ), state );
 	for ( const state of latest ) {
 		const key = identity( state );
 		const existing = merged.get( key );
+		if ( keepPrevious && existing ) continue;
 		if ( state.status === 'captured' || existing?.status !== 'captured' ) merged.set( key, state );
 	}
 	const states = Array.from( merged.values() );
@@ -2958,7 +2980,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			if ( ! additional ) {
 				const latest = profileEntry.interactions;
 				const accepted = latest && hasPromotableInteractionEvidence( previousInteractions, latest );
-				entry.interactions = accepted ? mergeInteractionReports( previousInteractions, latest ) : previousInteractions;
+				// A dual route's phone pass explored a different document.
+				const keepPrevious = viewport.id === 'mobile' && routeDevice?.mode === 'dual';
+				entry.interactions = accepted ? mergeInteractionReports( previousInteractions, latest, { keepPrevious } ) : previousInteractions;
 			}
 			if ( ! additional && ! entry.scrollStates?.toggles.length && profileEntry.scrollStates ) entry.scrollStates = profileEntry.scrollStates;
 			if ( profileEntry.cleanup ) entry.cleanup = { policy: profileEntry.cleanup.policy, reports: [ ...( previousCleanup?.reports ?? [] ), ...profileEntry.cleanup.reports ] };

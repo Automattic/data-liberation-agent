@@ -224,6 +224,7 @@ render();addEventListener('resize',render);
 function page( fixture: string, userAgent: string, path: string ): string {
 	if ( fixture === 'builder' ) return builderPage( path );
 	if ( fixture === 'counter' ) return counterPage();
+	if ( fixture === 'counter-dual' ) return counterPage( userAgent.includes( 'iPhone' ) ? '<p>Get the app</p>' : '' );
 	if ( fixture === 'switch' ) return SWITCH_FIXTURE;
 	if ( fixture === 'layouts' ) return LAYOUTS_FIXTURE;
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
@@ -274,7 +275,7 @@ document.querySelector('.close').addEventListener('click',()=>{drawer.style.tran
  * width: at desktop width More is `#1` and the phone menu button `#2`; at
  * phone width the menu button is `#1`. The document is otherwise identical.
  */
-function counterPage(): string {
+function counterPage( phoneHtml = '' ): string {
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Counter</title><style>
 body{margin:0;font:16px Arial}nav{display:flex;justify-content:space-between;height:60px}.links a{margin-right:12px}
 .burger{display:none;width:44px;height:44px}.panel{position:fixed;inset:60px 0 0 0;background:#fff}[hidden]{display:none}
@@ -284,7 +285,7 @@ body{margin:0;font:16px Arial}nav{display:flex;justify-content:space-between;hei
 <button class="burger" type="button" aria-label="Menu" aria-haspopup="menu" data-counted>=</button></nav>
 <div id="more-list" class="panel" role="menu" aria-label="More pages" hidden><a href="/counter/">Extra</a></div>
 <div id="drawer" class="panel" role="menu" aria-label="Site menu" hidden><a href="/counter/">Home</a><a href="/counter/">About</a></div>
-<main><h1>Welcome</h1></main>
+<main><h1>Welcome</h1>${ phoneHtml }</main>
 <script>let next=1;for(const control of document.querySelectorAll('[data-counted]'))if(innerWidth>600||!control.matches('.more'))control.id=String(next++);
 const toggle=(button,panel)=>button.addEventListener('click',()=>{const d=document.getElementById(panel);d.hidden=!d.hidden});
 toggle(document.querySelector('.more'),'more-list');toggle(document.querySelector('.burger'),'drawer');</script></body></html>`;
@@ -534,6 +535,35 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
 			await phone.keyboard.press( 'Escape' );
 			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( false );
+			const desktop = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await desktop.goto( site.url );
+			await desktop.getByRole( 'button', { name: 'More' } ).click();
+			await expect.poll( () => desktop.getByRole( 'menu', { name: 'More pages' } ).getByText( 'Extra' ).isVisible() ).toBe( true );
+		} finally {
+			await browser.close();
+			await site.close();
+		}
+	}, 120_000 );
+
+	it( 'keeps the desktop More menu when a dual route\'s phone document numbers another control with its id', async () => {
+		const run = await capture( 'counter-dual' );
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'dual', serverHtml: 'different' } );
+		const home = run.entries[ `${ origin }/counter-dual/` ]!;
+		expect( Object.keys( home.profiles ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
+		// The phone document's `#1` is its menu button; the desktop `#1` is More.
+		const evidence = home.interactions!;
+		expect( evidence.states.find( state => state.trigger.id === '1' ) ).toMatchObject( { trigger: { label: 'More' }, dialog: { id: 'more-list' } } );
+		const numbered = ( evidence.components ?? [] ).filter( component => component.selector === '#\\31 ' );
+		expect( numbered[ 0 ]!.states.map( state => state.evidence?.dialog?.id ) ).toEqual( [ undefined, 'more-list' ] );
+		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/counter-dual/`, platform: 'neutral', summary: {}, failures: [], deviceMode: 'dual' } );
+		const site = await startStaticServer( join( run.outputDir, 'website' ) );
+		const browser = await chromium.launch();
+		try {
+			// The phone pass's menu evidence is kept beside it, not dropped.
+			const phone = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await phone.goto( site.url );
+			await phone.getByRole( 'button', { name: 'Menu' } ).click();
+			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
 			const desktop = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			await desktop.goto( site.url );
 			await desktop.getByRole( 'button', { name: 'More' } ).click();
