@@ -528,7 +528,7 @@ async function runCaptureWebsite(
 	// first, preserving discovery order within that tier, before template coverage
 	// and the general inventory spread.
 	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ], timeBudget?.projectAdmission && ! options.checkpoint );
-	const templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
+	let templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
 		...excludedActions.values(),
@@ -647,8 +647,14 @@ async function runCaptureWebsite(
 				report: templateGrouping.report,
 				routeScope,
 				timeBudgetMs: options.timeBudgetMs,
+				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
+				governors: sourceGovernors,
+				styleNormalization: adapter.templateStyleNormalization,
 			} )
 		: undefined;
+	if ( templateGrouping?.report?.frontier ) {
+		templateGroups = await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit );
+	}
 	if ( derivedTemplateClusters ) {
 		process.stderr.write(
 			`[template-clusters] ${ derivedTemplateClusters.summary.derived } derived, ${ derivedTemplateClusters.summary.escalated } escalated, ${ derivedTemplateClusters.summary.unavailable } unavailable, ${ Date.now() - mediaStartedAt }ms\n`
@@ -928,6 +934,9 @@ async function deriveTemplateClusterMembers( input: {
 	report: import('./template-groups.js').TemplateGroupsReport;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	timeBudgetMs?: number;
+	frontierUrls: string[];
+	governors: SourceRequestGovernors;
+	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
 } ): Promise< TemplateClusterDerivation > {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
@@ -951,6 +960,25 @@ async function deriveTemplateClusterMembers( input: {
 	// entry with HTML proves that capture produced a document.
 	const capturedEntry = ( url: string ) => queue.getEntry( documentRequestUrl( url ) ) ?? queue.getEntry( url );
 	const isCaptured = ( url: string ) => Boolean( capturedEntry( url )?.html );
+	// The crawl can discover routes absent from initial grouping. Fingerprint
+	// only uncaptured, ungrouped routes, using the same bounded HTTP pass and
+	// governors. A failed advisory pass must not prevent ordinary derivation.
+	try {
+		const { extendTemplateGroups } = await import( './template-groups.js' );
+		const grouped = new Set( input.report.groups.flatMap( group => group.members ) );
+		const candidates = [ ...new Set( input.frontierUrls ) ].filter( url => ! isCaptured( url ) && ! grouped.has( url ) );
+		if ( candidates.length && input.report.groups.some( group => group.size >= 2 ) ) {
+			await extendTemplateGroups( input.report, {
+				sourceUrl: input.sourceUrl, urls: candidates, routeScope: input.routeScope,
+				styleNormalization: input.styleNormalization, governors: input.governors,
+				// Never use the whole-inventory override for extra frontier work:
+				// retain the default route/byte caps and the capture-budget fraction.
+				limits: await templateGroupingLimits( { timeBudgetMs: input.timeBudgetMs, wholeInventory: false } ),
+			} );
+		}
+	} catch ( error ) {
+		process.stderr.write( `[template-groups] frontier grouping unavailable: ${ error instanceof Error ? error.message : String( error ) }\n` );
+	}
 	try {
 		for ( const group of input.report.groups ) {
 			if ( group.size < 2 ) continue;

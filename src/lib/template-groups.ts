@@ -262,6 +262,8 @@ export interface TemplateGroup {
 	size: number;
 	/** Every member, in inventory order. */
 	members: string[];
+	/** Members discovered by the capture frontier and fingerprinted after capture. */
+	frontierMembers?: string[];
 }
 
 export interface TemplateGroupsSelection {
@@ -298,6 +300,8 @@ export interface TemplateGroupsReport {
 	unfingerprinted: Array< { url: string; reason: UnfingerprintedReason; httpStatus?: number } >;
 	/** Set by capture once the route budget has selected. */
 	selection?: TemplateGroupsSelection;
+	/** Bounded late pass, including unmatched fingerprints and fetch failures. */
+	frontier?: TemplateGroupsReport;
 }
 
 export interface TemplateGroupingInput {
@@ -429,6 +433,37 @@ function groupTemplates( sourceUrl: string, urls: string[], outcomes: RouteOutco
 		groups,
 		unfingerprinted,
 	};
+}
+
+/**
+ * Extend only existing multi-member groups. The late pass retains its own
+ * coverage/limits evidence; main coverage adds only the newly joined members.
+ * Capture contains any stage-level failure, as it does initial grouping.
+ */
+export async function extendTemplateGroups( report: TemplateGroupsReport, input: TemplateGroupingInput ): Promise< void > {
+	const frontier = await buildTemplateGroups( input );
+	const byKey = new Map( report.groups.filter( group => group.size >= 2 ).map( group => [ group.key, group ] ) );
+	const grouped = new Set( report.groups.flatMap( group => group.members ) );
+	let joined = 0;
+	for ( const lateGroup of frontier.groups ) {
+		const group = byKey.get( lateGroup.key );
+		if ( ! group ) continue;
+		for ( const url of lateGroup.members ) {
+			if ( grouped.has( url ) ) continue;
+			grouped.add( url );
+			group.members.push( url );
+			( group.frontierMembers ??= [] ).push( url );
+			group.size++;
+			joined++;
+		}
+	}
+	report.frontier = frontier;
+	// Previously unfingerprinted inventory routes may also have joined.
+	const resolved = report.unfingerprinted.filter( row => grouped.has( row.url ) );
+	report.unfingerprinted = report.unfingerprinted.filter( row => ! grouped.has( row.url ) );
+	report.coverage.routes += joined - resolved.length;
+	report.coverage.fingerprinted += joined;
+	report.coverage.unfingerprinted -= resolved.length;
 }
 
 /**
