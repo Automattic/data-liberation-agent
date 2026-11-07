@@ -17,6 +17,14 @@ describe('discovery route identity', () => {
     expect(dedupeRouteInventory(urls)).toEqual(urls);
   });
 
+  it.each([
+    ['/a%3a.html', '/a:.html'],
+    ['/%41%7a%30%2d%2e%5f%7e%21%24%26%27%28%29%2a%2b%2c%3b%3d%3a%40', '/Az0-._~!$&\'()*+,;=:@'],
+    ['/a%2fb%3fc%23d%25%20%5b%5d%c3%a9', '/a%2Fb%3Fc%23d%25%20%5B%5D%C3%A9'],
+  ])('canonicalizes path encoding %s to %s', (path, canonical) => {
+    expect(normalizedUrl(`https://site.test${path}`)).toBe(`https://site.test${canonical}`);
+  });
+
   it('does not change the actual network request address', () => {
     expect(documentRequestUrl('https://site.test/about/?lang=en#team')).toBe('https://site.test/about/?lang=en');
   });
