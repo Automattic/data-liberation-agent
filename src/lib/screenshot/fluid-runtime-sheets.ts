@@ -16,8 +16,12 @@ import { interpolateSamples, learnFluidModel, learnSegmentedFluidModel, segmente
 
 /** Marks the learned sibling of a runtime-owned stylesheet. It is source-owned CSS, scoped per document. */
 export const RUNTIME_SHEET_RULES_ATTRIBUTE = 'data-blocks-engine-capture-fluid-sheet-rules';
+/** Marks a runtime sheet's pruned text; the attribute holds the capture-width text it replaces. */
+export const RUNTIME_SHEET_PRUNED_ATTRIBUTE = 'data-blocks-engine-capture-fluid-sheet-pruned';
 /** Offsets a runtime plausibly derives from viewport width; sizes stay with inline learning. */
 const OFFSET_PROPERTIES = [ 'left', 'right', 'top', 'bottom', 'inset-inline-start', 'inset-inline-end', 'inset-block-start', 'inset-block-end' ];
+/** Values a runtime writes to fit content to the authored design, not to place it. */
+const FITTED_PROPERTIES = [ 'font-size' ];
 const STATE_KEY = '__dlaFluidRuntimeSheets';
 const TOLERANCE_PX = 2;
 
@@ -158,10 +162,12 @@ export async function runtimeSheetSeries( page: Page, widths: readonly number[] 
  * the widths an adaptive sweep skipped inside straight intervals; they are
  * interpolated before fitting (see interpolateSamples).
  */
-export async function applyRuntimeSheetRules( page: Page, widths: readonly number[], ladder: readonly number[] = widths ): Promise< { applied: number; unmodelled: number } > {
+export async function applyRuntimeSheetRules( page: Page, widths: readonly number[], ladder: readonly number[] = widths ): Promise< { applied: number; unmodelled: number; pruned: number } > {
 	const byOwner = new Map< number, RuntimeSheetRule[] >();
 	let unmodelled = 0;
-	for ( const { owner, selector, property, samples: observed } of sheetSeries( await recordedSheets( page, true ), widths ) ) {
+	const recorded = await recordedSheets( page, true );
+	const pruned = await pruneFittedDeclarations( page, recorded.map( sheet => sheet.owner ) );
+	for ( const { owner, selector, property, samples: observed } of sheetSeries( recorded, widths ) ) {
 		// Every width must observe exactly one pixel declaration; anything
 		// else is not one relationship the copy can reproduce.
 		if ( observed.length !== widths.length ) continue;
@@ -174,7 +180,7 @@ export async function applyRuntimeSheetRules( page: Page, widths: readonly numbe
 		rules.push( { selector, property, css: segmentedCss( selector, property, segments ) } );
 		byOwner.set( owner, rules );
 	}
-	if ( byOwner.size === 0 ) return { applied: 0, unmodelled };
+	if ( byOwner.size === 0 ) return { applied: 0, unmodelled, pruned };
 
 	const rejected = await page.evaluate( ( { owners, attribute, tolerance } ) => {
 		const styles = [ ...document.querySelectorAll( 'style' ) ];
@@ -204,5 +210,59 @@ export async function applyRuntimeSheetRules( page: Page, widths: readonly numbe
 		return rejectedCount;
 	}, { owners: [ ...byOwner ], attribute: RUNTIME_SHEET_RULES_ATTRIBUTE, tolerance: TOLERANCE_PX } );
 	const total = [ ...byOwner.values() ].reduce( ( sum, rules ) => sum + rules.length, 0 );
-	return { applied: total - rejected, unmodelled: unmodelled + rejected };
+	return { applied: total - rejected, unmodelled: unmodelled + rejected, pruned };
+}
+
+/**
+ * Drop fitted declarations the authored cascade already reproduces.
+ *
+ * A runtime fitting text to its container (a tagline sized to the largest class
+ * size that fits) writes the authored size for the current width into its own
+ * sheet, often `!important`. Frozen, that declaration overrides the source's own
+ * responsive rules at every other width. When removing it leaves every target's
+ * computed value unchanged at the capture width, it carries nothing the copy
+ * needs; a declaration that differs (text actually shrunk to fit) stays frozen.
+ *
+ * The live page is left as the runtime drew it. Each pruned sheet is recorded
+ * as a marker the initial-document projection uses to replace that sheet's
+ * capture-width text.
+ */
+async function pruneFittedDeclarations( page: Page, owners: readonly number[] ): Promise< number > {
+	if ( ! owners.length ) return 0;
+	return page.evaluate( ( { owners, properties, attribute } ) => {
+		const styles = [ ...document.querySelectorAll( 'style' ) ];
+		let count = 0;
+		for ( const owner of owners ) {
+			const style = styles[ owner ];
+			if ( ! ( style instanceof HTMLStyleElement ) || ! style.isConnected || ! style.sheet ) continue;
+			const pruned: string[] = [];
+			let removed = 0;
+			for ( const rule of style.sheet.cssRules ) {
+				if ( ! ( rule instanceof CSSStyleRule ) ) { pruned.push( rule.cssText ); continue; }
+				const copy = rule.style.cssText;
+				for ( const property of properties ) {
+					const value = rule.style.getPropertyValue( property );
+					if ( ! value ) continue;
+					let targets: Element[];
+					try { targets = [ ...document.querySelectorAll( rule.selectorText ) ]; } catch { continue; }
+					if ( ! targets.length ) continue;
+					const priority = rule.style.getPropertyPriority( property );
+					const before = targets.map( target => getComputedStyle( target ).getPropertyValue( property ) );
+					rule.style.removeProperty( property );
+					if ( targets.every( ( target, index ) => getComputedStyle( target ).getPropertyValue( property ) === before[ index ] ) ) removed++;
+					else rule.style.setProperty( property, value, priority );
+				}
+				pruned.push( rule.cssText );
+				rule.style.cssText = copy;
+			}
+			if ( ! removed ) continue;
+			count += removed;
+			const marker = document.createElement( 'style' );
+			marker.setAttribute( attribute, style.textContent ?? '' );
+			marker.media = 'not all';
+			marker.textContent = pruned.join( '\n' );
+			document.head.appendChild( marker );
+		}
+		return count;
+	}, { owners, properties: FITTED_PROPERTIES, attribute: RUNTIME_SHEET_PRUNED_ATTRIBUTE } );
 }

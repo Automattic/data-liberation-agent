@@ -3,6 +3,7 @@ import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import type { Page } from 'playwright';
 import { isStackingArtifact } from './document-integrity.js';
+import { RUNTIME_SHEET_PRUNED_ATTRIBUTE } from './fluid-runtime-sheets.js';
 import { WIDTH_CLASSES_ATTRIBUTE } from './viewport-class-states.js';
 
 const NODE = 'data-blocks-engine-capture-initial-node';
@@ -78,5 +79,12 @@ export function projectInitialDocument(initial: string, learned: string): string
 		target.removeAttr(NODE);
 	});
 	for (const node of later('style[data-blocks-engine-capture-fluid-rules],style[data-blocks-engine-capture-fluid-sheet-rules]').toArray()) $('head').append(later(node).toString());
+	// A runtime sheet whose fitted declarations the authored cascade reproduces
+	// serializes without them; its capture-width text identifies it.
+	for (const node of later(`style[${RUNTIME_SHEET_PRUNED_ATTRIBUTE}]`).toArray()) {
+		const from = later(node).attr(RUNTIME_SHEET_PRUNED_ATTRIBUTE);
+		const to = later(node).text();
+		$('style').filter((_index, style) => $(style).text() === from).text(to);
+	}
 	return $.html();
 }
