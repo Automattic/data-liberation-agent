@@ -635,6 +635,36 @@ describe( 'captureWebsite route budget', () => {
 		expect( capturedUrls() ).toEqual( [ sourceUrl ] );
 	} );
 
+	it.each( [ 'semantic', 'aria' ] )( 'keeps three %s navigation destinations ahead of 270 product routes under a budget of 20', async ( landmarks ) => {
+		const navigation = [ 'sell', 'contact-us', 'consignment' ].map( path => `${ sourceUrl }${ path }/` );
+		const products = store.slice( 0, 270 );
+		const inventory = [ ...products, ...navigation ];
+		const header = landmarks === 'semantic' ? 'header' : 'div role="banner"';
+		const footer = landmarks === 'semantic' ? 'footer' : 'div role="contentinfo"';
+		const close = ( tag: string ) => tag.split( ' ' )[ 0 ];
+		const html = `<${ header }><a href="/sell">Sell</a><a href="/contact-us/">Contact</a></${ close( header ) }>` +
+			`<${ footer }><a href="/consignment/">Consignment</a><a href="/sell/">Sell</a></${ close( footer ) }>` +
+			'<main><a href="/product/item-1/">Featured product</a></main>';
+		const adapter = {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: inventory.map( url => ( { url, type: 'page' } ) ) } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		};
+		let first: string[] | undefined;
+		for ( let run = 0; run < 2; run++ ) {
+			vi.mocked( safeFetch ).mockResolvedValueOnce( { finalUrl: sourceUrl, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( html ) } );
+			const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 20 }, adapter );
+			const selected = capturedUrls();
+			expect( selected ).toHaveLength( 20 );
+			expect( selected.slice( 0, 4 ) ).toEqual( [ sourceUrl, ...navigation ] );
+			expect( result.summary.routesOmitted ).toBe( 254 );
+			if ( first ) expect( selected ).toEqual( first );
+			first = selected;
+		}
+	} );
+
 	it( "captures the whole inventory with routeLimit 'all'", async () => {
 		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 'all' }, storeAdapter() );
 		const call = captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[]; limit?: number };
