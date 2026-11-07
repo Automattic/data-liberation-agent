@@ -7,12 +7,23 @@ import { describe, expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { getPlaywright } from './browser-kit/index.js';
-import { captureAssets, collectAssets as collectImageAssets, imageContentType, resourceContentType, resolvedImageOriginal } from './image-assets.js';
+import { captureAssets, collectAssets as collectImageAssets, imageContentType, resourceContentType, resolvedImageOriginal, svgDeclaredSize } from './image-assets.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
 import { downloadCaptureSectionMedia } from './capture.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
+
+it.each([
+ ['commented viewBox before sizeless root', '<?xml version="1.0" encoding="utf-8"?><!-- <svg viewBox="0 0 100 100"> --><svg xmlns="http://www.w3.org/2000/svg"><line x2="100%" y2="100%" /></svg>', undefined],
+ ['commented size before sized root', '<!-- <svg width="10" height="10"> --><svg width="40" height="20"/>', { width: 40, height: 20 }],
+ ['plain sized root', '<svg width="40" height="20"/>', { width: 40, height: 20 }],
+ ['CDATA', '<![CDATA[<svg width="10" height="10">]]><svg width="40" height="20"/>', { width: 40, height: 20 }],
+ ['processing instruction', '<?example <svg width="10" height="10"> ?><svg width="40" height="20"/>', { width: 40, height: 20 }],
+ ['DOCTYPE internal subset', '<!DOCTYPE svg [<!ENTITY example "<svg width=\'10\' height=\'10\'>">]><svg width="40" height="20"/>', { width: 40, height: 20 }],
+])('reads the real SVG root size: %s', (_name, xml, expected) => {
+ expect(svgDeclaredSize(Buffer.from(xml as string))).toEqual(expected);
+});
 
 it.each([
  ['citation text', Buffer.from('Smith, J. (2024). A useful citation. Journal of Examples, 12(3), 45–67.'), '/citation.txt', 'text/plain'],

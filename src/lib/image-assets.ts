@@ -281,7 +281,9 @@ const SVG_LENGTH = /^\s*(\d+(?:\.\d+)?|\.\d+)(?:px)?\s*$/i;
  * property of the file and disagrees with consumers that read the document.
  */
 export function svgDeclaredSize( bytes: Buffer ): { width: number; height: number } | undefined {
-	const root = /<svg\b([^>]*)>/i.exec( bytes.toString( 'utf8' ) )?.[ 1 ];
+	// The root is the first <svg> outside comments, CDATA, processing instructions and the DOCTYPE.
+	const markup = bytes.toString( 'utf8' ).replace( /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE(?:[^[>]|\[[\s\S]*?\])*>/gi, '' );
+	const root = /<svg\b([^>]*)>/i.exec( markup )?.[ 1 ];
 	if ( root === undefined ) return undefined;
 	const attr = ( name: string ) => new RegExp( `(?:^|\\s)${ name }\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i' ).exec( root )?.slice( 1 ).find( value => value !== undefined );
 	const length = ( value?: string ) => {
