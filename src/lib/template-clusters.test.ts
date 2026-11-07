@@ -74,6 +74,25 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( derivation.html ).toContain( '<h1 class="post-title">post-2</h1>' );
 	} );
 
+	it( 'transplants responsive image attributes and detects stale srcsets (#1475)', () => {
+		const page = ( name: string, width: number, height: number ) => serverDocument( 'Post', `<div width="${ width }" height="${ height }"><picture><source srcset="/img/${ name }.webp 1x" sizes="${ width }px" width="${ width }" height="${ height }"><img src="/img/${ name }.jpg" srcset="/img/${ name }.jpg ${ width }w" sizes="${ width }px" width="${ width }" height="${ height }"></picture></div>` );
+		const repServerHtml = page( 'representative', 1672, 941 );
+		const memberServerHtml = page( 'member', 1536, 1024 );
+		const result = deriveMemberDocument( { repServerHtml, repProcessedHtml: repServerHtml, memberServerHtml, baseUrl: BASE } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect.soft( result.html ).toContain( 'srcset="/img/member.jpg 1536w"' );
+		expect.soft( result.html ).toContain( 'sizes="1536px" width="1536" height="1024"' );
+		expect.soft( result.html ).toContain( '<source srcset="/img/member.webp 1x" sizes="1536px" width="1536" height="1024">' );
+		// Dimensions on unrelated elements are not content slots.
+		expect( result.html ).toContain( '<div width="1672" height="941">' );
+		const compareImages = ( derivedHtml: string, realHtml = memberServerHtml ) => compareDerivedWithCapture( { derivedHtml, realHtml, baseUrl: BASE } ).checks.images;
+		expect.soft( compareImages( memberServerHtml.replace( 'srcset="/img/member.jpg 1536w"', 'srcset="/img/representative.jpg 1672w"' ) ) ).toBe( false );
+		expect.soft( compareImages( memberServerHtml.replace( 'member.webp', 'representative.webp' ) ) ).toBe( false );
+		expect( compareImages( result.html ) ).toBe( true );
+		expect( compareImages( memberServerHtml, memberServerHtml.replaceAll( '/img/', `${ BASE }/img/` ) ) ).toBe( true );
+	} );
+
 	it( 'derives member text and body classes when only volatile post IDs differ (#1455)', () => {
 		const page = ( id: number, text: string ) => `<html><head><title>Post</title></head><body class="postid-${ id }"><article><p>${ text }</p></article><script>window.siteReady = true;</script></body></html>`;
 		const repServerHtml = page( 750, 'Representative article' );

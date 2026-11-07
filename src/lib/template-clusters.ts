@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
+import { srcsetCandidates } from './srcset.js';
 import { elementDescriptor, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION } from './template-groups.js';
 
 /**
@@ -65,7 +66,7 @@ const SKIPPED_ELEMENTS = new Set( [ 'script', 'style', 'noscript', 'template', '
 const INLINE_ELEMENTS = new Set( [ 'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'img', 'ins', 'kbd', 'label', 'mark', 'picture', 'q', 's', 'samp', 'small', 'source', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'u', 'var', 'wbr' ] );
 
 /** Attributes whose difference is authored content, per §3.1. */
-const SLOT_ATTRIBUTES = [ 'href', 'src', 'datetime', 'alt', 'id', 'class' ] as const;
+const SLOT_ATTRIBUTES = [ 'href', 'src', 'srcset', 'sizes', 'datetime', 'alt', 'id', 'class' ] as const;
 
 /** Head slots: `<title>`, description, canonical and Open Graph. */
 const HEAD_SLOT_SELECTORS = [
@@ -238,7 +239,9 @@ function findServerSlots( repElement: Element, memberElement: Element, slots: Sl
 	}
 	let attributeBytes = 0;
 	const attributeDiffs: Array< { attribute: string; value: string } > = [];
-	for ( const attribute of SLOT_ATTRIBUTES ) {
+	const isImage = repElement.name === 'img' || ( repElement.name === 'source' && ( repElement.parent as Element | null )?.name === 'picture' );
+	const attributes = isImage ? [ ...SLOT_ATTRIBUTES, 'width', 'height' ] : SLOT_ATTRIBUTES;
+	for ( const attribute of attributes ) {
 		const repValue = repElement.attribs[ attribute ] ?? '';
 		const memberValue = memberElement.attribs[ attribute ] ?? '';
 		if ( repValue !== memberValue ) {
@@ -491,6 +494,14 @@ export function compareDerivedWithCapture( input: {
 			.map( element => resolveUrl( ( element as Element ).attribs[ attribute ] ?? '', input.baseUrl ) )
 			.filter( value => value !== '' )
 			.sort();
+	const images = ( $: cheerio.CheerioAPI ): string => JSON.stringify(
+		$( 'img, picture > source[srcset]' ).toArray().map( element => {
+			const node = element as Element;
+			return [ node.name, resolveUrl( node.attribs.src ?? '', input.baseUrl ),
+				srcsetCandidates( node.attribs.srcset ?? '' ).map( candidate =>
+					[ resolveUrl( candidate.url, input.baseUrl ), candidate.size, candidate.density ] ) ];
+		} ).map( image => JSON.stringify( image ) ).sort(),
+	);
 	const styles = ( $: cheerio.CheerioAPI ): string[] =>
 		[ ...$( 'style' ).toArray().map( element => normalizedWhitespace( $( element ).text() ) ),
 			...collect( $, 'link[rel~="stylesheet"]', 'href' ) ].filter( value => value !== '' ).sort();
@@ -508,7 +519,7 @@ export function compareDerivedWithCapture( input: {
 	const checks = {
 		text: documentText( derived ) === documentText( real ),
 		links: collect( derived, 'a[href]', 'href' ).join( '\n' ) === collect( real, 'a[href]', 'href' ).join( '\n' ),
-		images: collect( derived, 'img', 'src' ).join( '\n' ) === collect( real, 'img', 'src' ).join( '\n' ),
+		images: images( derived ) === images( real ),
 		skeleton: skeleton( derived ) === skeleton( real ),
 		headStyles: styles( derived ).join( '\n' ) === styles( real ).join( '\n' ),
 		fluidRules: fluidSheets( derived ).join( '\n' ) === fluidSheets( real ).join( '\n' ),
