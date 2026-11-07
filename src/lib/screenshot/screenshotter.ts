@@ -3424,8 +3424,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				urlsSinceRestart += segEnd - segStart;
 				segStart = segEnd;
 			}
-			// Past the time budget no new work is discovered either.
-			if ( routeBudget?.closed() ) break;
+			// Even after the budget closes, offer this wave's links to the
+			// frontier so rejected targets receive budget diagnostics.
 			// Expand a breadth-first wave from actual rendered artifacts. The normal
 			// navigation/capture contract proves local documents and external boundaries;
 			// successful HTML is never reduced to a classification-only probe.

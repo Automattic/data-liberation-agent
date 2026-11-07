@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync }
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { LinkedFrontier } from './screenshot/linked-frontier.js';
 import { RouteTimeBudget } from './capture-time-budget.js';
+import { OMITTED_ROUTE_REASON, ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
 import { captureWebsite } from './capture.js';
 import { buildTemplateGroups } from './template-groups.js';
 import { compareDerivedWithCapture } from './template-clusters.js';
@@ -172,6 +174,64 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 			rendered.set( '/', originalHome );
 			rendered.set( '/post-1/', originalPost );
 			rendered.delete( '/frontier/' );
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 240_000 );
+
+	it( 'derives links from derived documents and diagnoses the final captured wave (#1498)', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'template-clusters-links-' ) );
+		const url = `${ BASE }:${ port }/`;
+		const origin = new URL( url ).origin;
+		const originals = new Map( rendered );
+		// Links live in a transplantable content slot, not shared chrome.
+		rendered.set( '/post-1/', member( 'one' ).replace( paragraphs[ 0 ], '<a href="/late-link/">Late link</a> <a href="/budget-only/">Budget only</a> <a href="/post-1">Captured without slash</a>' ) );
+		// A distinct template cannot be derived, and stays budget-omitted.
+		rendered.set( '/budget-only/', member( 'budget-only', { style: '<style>.unique-budget-template{color:red}</style>' } ) );
+		rendered.set( '/post-4/', member( 'four' ).replace( paragraphs[ 0 ], '<a href="/derived-link/">Derived link</a>' ) );
+		for ( const path of [ '/late-link/', '/derived-link/' ] ) rendered.set( path, member( path ) );
+		const admits = RouteTimeBudget.prototype.admits;
+		const finish = RouteTimeBudget.prototype.finish;
+		let closed = false;
+		const admissionSpy = vi.spyOn( RouteTimeBudget.prototype, 'admits' ).mockImplementation( function ( this: RouteTimeBudget, candidate, concurrency ) {
+			return candidate !== `${ origin }/post-4/` && admits.call( this, candidate, concurrency );
+		} );
+		const finishSpy = vi.spyOn( RouteTimeBudget.prototype, 'finish' ).mockImplementation( function ( this: RouteTimeBudget, candidate, overrun ) {
+			finish.call( this, candidate, overrun );
+			if ( candidate === `${ origin }/post-1/` ) closed = true;
+		} );
+		const closedSpy = vi.spyOn( RouteTimeBudget.prototype, 'closed' ).mockImplementation( () => closed );
+		const admit = LinkedFrontier.prototype.admit;
+		const frontierSpy = vi.spyOn( LinkedFrontier.prototype, 'admit' ).mockImplementation( function ( this: LinkedFrontier, target, depth, now, ownership ) {
+			return admit.call( this, target, depth, closed && ownership === 'linked' ? Number.MAX_SAFE_INTEGER : now, ownership );
+		} );
+		try {
+			const captured = await captureWebsite( { url, outputDir, captureImages: true, templateClusters: true, timeBudgetMs: 600_000 }, {
+				findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: sitemapPaths.map( path => ( { url: `${ origin }${ path }`, type: 'page' } ) ) } ) } ),
+			} );
+			const coverage = JSON.parse( readFileSync( join( outputDir, 'linked-page-coverage.json' ), 'utf8' ) );
+			expect( coverage.requiredUrls ).toContain( `${ origin }/late-link/` );
+			expect( coverage.diagnostics ).toContainEqual( expect.objectContaining( { url: `${ origin }/late-link/`, code: 'linked_page_budget_exhausted' } ) );
+			const receipt = JSON.parse( readFileSync( join( outputDir, 'template-clusters.json' ), 'utf8' ) );
+			const derived = receipt.clusters.flatMap( ( cluster: { derived: Array<{ url: string }> } ) => cluster.derived.map( member => member.url ) );
+			for ( const path of [ 'late-link', 'derived-link' ] ) {
+				expect( derived ).toContain( `${ origin }/${ path }/` );
+				expect( existsSync( join( outputDir, 'website', path, 'index.html' ) ) ).toBe( true );
+			}
+			const report = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+			expect( report.unresolvedAnchors ).toContainEqual( expect.objectContaining( { url: `${ origin }/budget-only/`, reason: OMITTED_ROUTE_REASON } ) );
+			expect( report.unresolvedAnchors.filter( ( row: { reason: string; target?: string } ) => row.reason === 'target route was not captured' ) ).toEqual( [] );
+			const diagnostics = captured.discoveryDiagnostics ?? [];
+			const pairs = diagnostics.map( row => `${ row.code } ${ row.url }` );
+			expect( new Set( pairs ).size ).toBe( pairs.length );
+			expect( diagnostics.filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ) ).toEqual( [ expect.objectContaining( { url: `${ origin }/budget-only/` } ) ] );
+			expect( diagnostics.some( row => row.url === `${ origin }/post-1` && ( row.code === ROUTE_OMITTED_BY_BUDGET || row.code === 'linked_page_budget_exhausted' ) ) ).toBe( false );
+			expect( captured.summary.routesOmitted ).toBe( 1 );
+			const exported = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ).discoveryDiagnostics as Array<{ code: string; url: string }>;
+			expect( exported.filter( row => row.url === `${ origin }/budget-only/` && /budget/.test( row.code ) ) ).toHaveLength( 1 );
+		} finally {
+			admissionSpy.mockRestore(); finishSpy.mockRestore(); closedSpy.mockRestore(); frontierSpy.mockRestore();
+			rendered = originals;
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	}, 240_000 );
