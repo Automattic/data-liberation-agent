@@ -154,6 +154,21 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 	} );
 } );
 
+describe( 'head slots pair head elements only (#784)', () => {
+	it( 'keeps body titles a malformed template emits after </html>, and titles the head from the first one', () => {
+		// Blogger templates can write `<title>` elements after `</html>`. The
+		// server document then has no head title, while capture keeps one in
+		// the head (`document.title`) plus the body copies.
+		const server = ( title: string ) => `<html><head></head><body><h1>${ title }</h1></body></html>\n<title>${ title } - Blog</title><title>Blog</title>`;
+		const processed = ( title: string ) => `<html><head><title>${ title } - Blog</title></head><body><h1>${ title }</h1><title>${ title } - Blog</title><title>Blog</title></body></html>`;
+		const result = deriveMemberDocument( { repServerHtml: server( 'One' ), repProcessedHtml: processed( 'One' ), memberServerHtml: server( 'Two' ), baseUrl: BASE } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: processed( 'Two' ), baseUrl: BASE } ).checks.text ).toBe( true );
+		expect( result.html ).toContain( '<head><title>Two - Blog</title></head>' );
+	} );
+} );
+
 describe( 'transplant keeps inline structure (#784)', () => {
 	const page = ( title: string, extra = '' ) =>
 		`<html><head><title>${ title }</title></head><body><main><h1>${ title }</h1><p>${ title } by <a href="/author">Ann</a>${ extra }</p></main></body></html>`;
