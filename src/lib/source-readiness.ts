@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { CDPSession, Frame, Page } from 'playwright';
 
 /** Ignore only Chromium's unhandled media play/pause or reload lifecycle rejection. */
 export function isMediaPlaybackLifecycleAbort( error: { name?: string; message?: string } ): boolean {
@@ -7,20 +7,6 @@ export function isMediaPlaybackLifecycleAbort( error: { name?: string; message?:
 
 export const SOURCE_SUBFRAME_RUNTIME_ERROR = 'source_subframe_runtime_error';
 
-interface FrameErrorReport { main: boolean; origin: string; message: string }
-
-const BINDING = '__dlaSourceFrameError';
-// Every frame forwards its own uncaught errors and rejections, so the binding
-// names the reporting frame. A string keeps the script free of transpiler helpers.
-const FORWARD_FRAME_ERRORS = `(() => {
-	const report = globalThis[${ JSON.stringify( BINDING ) }];
-	if ( typeof report !== 'function' ) return;
-	const text = value => value && typeof value === 'object' && typeof value.message === 'string' ? value.message : String( value );
-	addEventListener( 'error', event => { report( text( event.error ) ); } );
-	addEventListener( 'unhandledrejection', event => { report( text( event.reason ) ); } );
-})();`;
-const frameReports = new WeakMap< Page, Promise< FrameErrorReport[] > >();
-
 function frameOrigin( url: string ): string {
 	try {
 		const origin = new URL( url ).origin;
@@ -28,49 +14,71 @@ function frameOrigin( url: string ): string {
 	} catch { return url; }
 }
 
-/** Installs frame attribution once per page; a page that cannot take it leaves every error unattributed. */
-function reportFrameErrors( page: Page ): Promise< FrameErrorReport[] > {
-	let reports = frameReports.get( page );
-	if ( ! reports ) {
-		const list: FrameErrorReport[] = [];
-		reports = Promise.resolve()
-			.then( async () => {
-				await page.exposeBinding( BINDING, ( { frame }, message: unknown ) => {
-					if ( list.length < 1_000 ) list.push( { main: frame === page.mainFrame(), origin: frameOrigin( frame.url() ), message: String( message ) } );
-				} );
-				await page.addInitScript( FORWARD_FRAME_ERRORS );
-			} )
-			.catch( () => {} )
-			.then( () => list );
-		frameReports.set( page, reports );
-	}
-	return reports;
-}
-
 /**
- * Collects the source document's uncaught errors and rejections. Playwright's
- * `pageerror` fires for every frame without naming it, so each error is matched
- * to the frame that reported it: only errors a subframe reported become
- * diagnostics; main-frame and unattributable errors block readiness.
+ * Runtime exceptions carry an execution context even when a classic cross-origin
+ * script's in-page error event is muted. Each OOPIF needs its own Runtime session;
+ * same-process frames are already covered by the main session.
  */
 export async function watchSourceRuntimeErrors( page: Page, limit = 100 ) {
-	const reports = await reportFrameErrors( page );
-	const start = reports.length;
-	const errors: string[] = [];
-	const onError = ( error: Error ) => { if ( errors.length < limit && ! isMediaPlaybackLifecycleAbort( error ) ) errors.push( error.message ); };
-	page.on( 'pageerror', onError );
+	const errors: { main: boolean; origin: string; message: string }[] = [];
+	const sessions = new Set< CDPSession >();
+	const attaching = new Set< Frame >();
+	let disposed = false;
+	const attach = async ( frame: Frame ) => {
+		if ( disposed || attaching.has( frame ) ) return;
+		attaching.add( frame );
+		let session: CDPSession | undefined;
+		try {
+			session = await page.context().newCDPSession( frame );
+			if ( disposed ) { await session.detach(); return; }
+			sessions.add( session );
+			session.on( 'close', () => { sessions.delete( session! ); attaching.delete( frame ); } );
+			const { frameTree } = await session.send( 'Page.getFrameTree' );
+			const rootId = frameTree.frame.id;
+			const contexts = new Map< number, { frameId: string; origin: string } >();
+			session.on( 'Runtime.executionContextCreated', ( { context } ) => {
+				if ( context.auxData?.frameId ) contexts.set( context.id, { frameId: String( context.auxData.frameId ), origin: context.origin } );
+			} );
+			session.on( 'Runtime.executionContextDestroyed', ( { executionContextId } ) => { contexts.delete( executionContextId ); } );
+			session.on( 'Runtime.executionContextsCleared', () => contexts.clear() );
+			session.on( 'Runtime.exceptionThrown', ( { exceptionDetails: details } ) => {
+				if ( disposed || errors.length >= limit ) return;
+				const context = contexts.get( details.executionContextId ?? -1 );
+				const exception = details.exception;
+				const properties = exception?.preview?.properties;
+				const name = properties?.find( property => property.name === 'name' )?.value ?? exception?.className;
+				const description = exception?.description ?? exception?.value?.toString() ?? details.text;
+				// Drop the Error name and stack, as Playwright's pageerror.message does.
+				const message = description.replace( /\n\s+at [\s\S]*$/, '' ).replace( /^(?:Uncaught (?:\(in promise\) )?)?(?:\w*Error: )?/, '' );
+				if ( isMediaPlaybackLifecycleAbort( { name, message } ) ) return;
+				const main = ! context || ( frame === page.mainFrame() && context.frameId === rootId );
+				errors.push( { main, origin: context?.origin || frameOrigin( frame.url() ), message } );
+			} );
+			await session.send( 'Runtime.enable' );
+		} catch {
+			// Same-process child frames have no separate CDP target. The page's
+			// Runtime session covers them; detached frames need no more observation.
+			if ( session ) { sessions.delete( session ); await session.detach().catch( () => {} ); }
+			attaching.delete( frame );
+		}
+	};
+	const onFrame = ( frame: Frame ) => { void attach( frame ); };
+	page.on( 'frameattached', onFrame );
+	page.on( 'framenavigated', onFrame );
+	await attach( page.mainFrame() );
+	await Promise.all( page.frames().filter( frame => frame !== page.mainFrame() ).map( attach ) );
 	return {
 		settle(): { reasons: string[]; diagnostics: string[] } {
-			const subframe = reports.slice( start ).filter( report => ! report.main );
-			const reasons: string[] = [];
-			const diagnostics: string[] = [];
-			for ( const message of errors ) {
-				const index = subframe.findIndex( report => report.message === message );
-				if ( index < 0 ) reasons.push( `source runtime error: ${ message }` );
-				else diagnostics.push( `subframe runtime error (${ subframe.splice( index, 1 )[ 0 ]!.origin }): ${ message }` );
-			}
-			return { reasons: [ ...new Set( reasons ) ], diagnostics: [ ...new Set( diagnostics ) ] };
+			return {
+				reasons: [ ...new Set( errors.filter( error => error.main ).map( error => `source runtime error: ${ error.message }` ) ) ],
+				diagnostics: [ ...new Set( errors.filter( error => ! error.main ).map( error => `subframe runtime error (${ error.origin }): ${ error.message }` ) ) ],
+			};
 		},
-		dispose: () => { page.off( 'pageerror', onError ); },
+		dispose: () => {
+			disposed = true;
+			page.off( 'frameattached', onFrame );
+			page.off( 'framenavigated', onFrame );
+			for ( const session of sessions ) void session.detach().catch( () => {} );
+		},
 	};
 }

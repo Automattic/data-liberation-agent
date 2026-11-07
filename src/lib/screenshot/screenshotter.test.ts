@@ -69,7 +69,13 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   return {
     route: vi.fn().mockResolvedValue(undefined),
     unroute: vi.fn().mockResolvedValue(undefined),
-    exposeBinding: vi.fn().mockResolvedValue(undefined),
+    mainFrame: vi.fn().mockReturnValue({}),
+    frames: vi.fn().mockReturnValue([]),
+    context: vi.fn().mockReturnValue({ newCDPSession: vi.fn().mockResolvedValue({
+      on: vi.fn(),
+      send: vi.fn().mockResolvedValue({ frameTree: { frame: { id: 'main' } } }),
+      detach: vi.fn().mockResolvedValue(undefined),
+    }) }),
     once: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
