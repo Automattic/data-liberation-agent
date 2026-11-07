@@ -223,6 +223,7 @@ render();addEventListener('resize',render);
 
 function page( fixture: string, userAgent: string, path: string ): string {
 	if ( fixture === 'builder' ) return builderPage( path );
+	if ( fixture === 'counter' ) return counterPage();
 	if ( fixture === 'switch' ) return SWITCH_FIXTURE;
 	if ( fixture === 'layouts' ) return LAYOUTS_FIXTURE;
 	const phoneHtml = fixture === 'by-agent' && userAgent.includes( 'iPhone' ) ? '<p class="phone-only">Download our app</p>' : '';
@@ -265,6 +266,28 @@ body{margin:0;font:16px Arial}.navbar{display:flex;justify-content:space-between
 <script>const drawer=document.querySelector('.drawer');
 document.querySelector('.trigger').addEventListener('click',()=>{drawer.style.transform='translate3d(0,0,0)'});
 document.querySelector('.close').addEventListener('click',()=>{drawer.style.transform='translate3d(101%,0,0)'});</script></body></html>`;
+}
+
+/**
+ * A navbar whose runtime numbers its rendered controls in render order, as
+ * some site builders do: at desktop width the desktop-only More dropdown is
+ * `#1` and the hidden phone menu button has no ID; at phone width, where More
+ * is not rendered, the menu button is `#1`. The document is otherwise identical.
+ */
+function counterPage(): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Counter</title><style>
+body{margin:0;font:16px Arial}nav{display:flex;justify-content:space-between;height:60px}.links a{margin-right:12px}
+.burger{display:none;width:44px;height:44px}.panel{position:fixed;inset:60px 0 0 0;background:#fff}[hidden]{display:none}
+@media (max-width:600px){.links,.more{display:none}.burger{display:block}}
+</style></head><body><nav><a href="/counter/">Brand</a><div class="links"><a href="/counter/">Home</a></div>
+<button class="more" type="button" aria-haspopup="menu" data-counted>More</button>
+<button class="burger" type="button" aria-label="Menu" aria-haspopup="menu" data-counted>=</button></nav>
+<div id="more-list" class="panel" role="menu" aria-label="More pages" hidden><a href="/counter/">Extra</a></div>
+<div id="drawer" class="panel" role="menu" aria-label="Site menu" hidden><a href="/counter/">Home</a><a href="/counter/">About</a></div>
+<main><h1>Welcome</h1></main>
+<script>let next=1;for(const control of document.querySelectorAll('[data-counted]'))if(getComputedStyle(control).display!=='none')control.id=String(next++);
+const toggle=(button,panel)=>button.addEventListener('click',()=>{const d=document.getElementById(panel);d.hidden=!d.hidden});
+toggle(document.querySelector('.more'),'more-list');toggle(document.querySelector('.burger'),'drawer');</script></body></html>`;
 }
 
 /**
@@ -485,6 +508,35 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				await phone.getByRole( 'dialog' ).getByText( 'Close', { exact: true } ).click();
 				await expect.poll( () => phone.getByRole( 'dialog' ).getByText( 'About' ).isVisible() ).toBe( false );
 			}
+		} finally {
+			await browser.close();
+			await site.close();
+		}
+	}, 120_000 );
+
+	it( 'records the phone-only menu under the desktop document\'s identity when a runtime numbers controls per rendering', async () => {
+		const run = await capture( 'counter' );
+		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', phoneProbe: { status: 'captured', triggers: 1, captured: 1 } } );
+		const home = run.entries[ `${ origin }/counter/` ]!;
+		const state = ( label: string ) => home.interactions?.states.find( item => item.trigger.label === label );
+		// The phone rendering numbered the menu button `1`, the desktop document's More.
+		expect( state( 'Menu' ) ).toMatchObject( { status: 'captured', trigger: { selector: 'body > nav:nth-of-type(1) > button:nth-of-type(2)' }, dialog: { id: 'drawer' } } );
+		expect( state( 'Menu' )!.trigger.id ).toBeUndefined();
+		expect( state( 'More' ) ).toMatchObject( { status: 'captured', trigger: { id: '1' }, dialog: { id: 'more-list' } } );
+		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/counter/`, platform: 'neutral', summary: {}, failures: [], deviceMode: 'reflow-only' } );
+		const site = await startStaticServer( join( run.outputDir, 'website' ) );
+		const browser = await chromium.launch();
+		try {
+			const phone = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await phone.goto( site.url );
+			await phone.getByRole( 'button', { name: 'Menu' } ).click();
+			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
+			await phone.keyboard.press( 'Escape' );
+			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( false );
+			const desktop = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await desktop.goto( site.url );
+			await desktop.getByRole( 'button', { name: 'More' } ).click();
+			await expect.poll( () => desktop.getByRole( 'menu', { name: 'More pages' } ).getByText( 'Extra' ).isVisible() ).toBe( true );
 		} finally {
 			await browser.close();
 			await site.close();
