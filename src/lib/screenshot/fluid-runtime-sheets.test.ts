@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { RUNTIME_SHEET_RULES_ATTRIBUTE } from './fluid-runtime-sheets.js';
+import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
+import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 
 // A canvas with a 980px floor whose runtime regenerates an id-keyed stylesheet
 // on resize: items keep their canvas offsets until the viewport exceeds the
@@ -61,6 +63,41 @@ describe( 'runtime-written stylesheet offsets', () => {
 			}
 		} finally { await page.close(); await reference.close(); await copy.close(); }
 	}, 40_000 );
+
+	// A tagline fitter writes a size for the current width into its own sheet as
+	// an !important id rule; no element carries inline geometry. Where it writes
+	// the authored class step, the frozen rule would pin 62px at every width and
+	// is dropped; where it shrank the text to fit, the fitted size is kept.
+	it.each( [
+		[ 'drops a fitted size the authored cascade reproduces', 'innerWidth>=1536?64:innerWidth>=1280?62:40', 1, [ [ 390, '40px' ], [ 1440, '62px' ], [ 1600, '64px' ] ] ],
+		[ 'keeps a fitted size that shrank the text', 'innerWidth>=1536?34:30', undefined, [ [ 390, '30px' ], [ 1440, '30px' ], [ 1600, '30px' ] ] ],
+	] as const )( '%s', async ( _label, fitted, pruned, expected ) => {
+		const source = `<style>body{margin:0}#t{font-size:40px}@media (min-width:1280px){#t{font-size:62px}}@media (min-width:1536px){#t{font-size:64px}}</style>
+			<h1 id="t">Estrategia</h1>
+			<script>
+			const sheet=document.createElement('style');document.head.appendChild(sheet);
+			const update=()=>{ sheet.textContent='#t { font-size: '+(${ fitted })+'px !important; }'; };
+			addEventListener('resize',update);update();
+			</script>`;
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		try {
+			// Capture installs the runtime-write tracker before any source script.
+			await page.addInitScript( observeRuntimeStyleWrites );
+			await page.goto( 'about:blank' );
+			await page.setContent( source );
+			// Serialization projects learning onto the document captured before the sweep.
+			await markInitialDocument( page );
+			const initial = await page.content();
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+			expect( result.byKind[ 'runtime-fitted' ] ).toBe( pruned );
+			await copy.setContent( projectInitialDocument( initial, await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ) );
+			for ( const [ width, size ] of expected ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				expect( await copy.locator( '#t' ).evaluate( node => getComputedStyle( node ).fontSize ), `at ${ width }` ).toBe( size );
+			}
+		} finally { await page.close(); await copy.close(); }
+	}, 60_000 );
 
 	it( 'refines an adaptive sweep where only a runtime sheet changes and learns the full ladder\'s rules', async () => {
 		// Inline geometry is one line at every width; only the sheet switches,

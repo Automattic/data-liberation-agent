@@ -375,7 +375,7 @@ async function learnFluidGeometry(
 		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
-	if ( tagged === 0 || await inlineGeometryIsConstant( page, baseline, widths, original, settleMs ) ) {
+	if ( tagged === 0 ? ! await sourceSheetsVary( page, widths, original, settleMs ) : await inlineGeometryIsConstant( page, baseline, widths, original, settleMs ) ) {
 		await baseline.evaluate( ( state, attribute ) => {
 			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
@@ -1058,6 +1058,7 @@ async function learnFluidGeometry(
 	// learned rules are validated against exactly that geometry.
 	const runtimeSheets = await applyRuntimeSheetRules( page, sampledWidths, adaptive ? widths : sampledWidths );
 	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
+	if ( runtimeSheets.pruned > 0 ) byKind[ 'runtime-fitted' ] = runtimeSheets.pruned;
 
 	if ( reverted > 0 ) {
 		byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - reverted );
@@ -1438,9 +1439,14 @@ async function inlineGeometryIsConstant(
 	const probeSettle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
 	if ( minima === null && ! before!.reactive ) return true;
 	let unchangedMinima = minima !== null;
+	// A runtime-rewritten sheet is learned by the sweep even when the inline
+	// geometry is constant, so the same probe reads the sheets too.
+	const sheets = await sourceSheetText( page );
+	let sheetsVaried = false;
 	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
 		await settleDocument( page, 'fluid-probe', probeSettle );
+		sheetsVaried ||= await sourceSheetText( page ) !== sheets;
 		if ( minima !== null ) {
 			const current = await baseline.evaluate( state => state.elements().map( element => state.readGeometry( element ).literal ) );
 			unchangedMinima &&= JSON.stringify( current ) === JSON.stringify( minima );
@@ -1449,11 +1455,43 @@ async function inlineGeometryIsConstant(
 	if ( original ) await page.setViewportSize( original );
 	await settleDocument( page, 'fluid-probe', probeSettle );
 	const after = await observe();
-	const constant = minima !== null ? unchangedMinima : after !== null && ! after.written && after.count === before!.count;
+	const constant = ! sheetsVaried && ( minima !== null ? unchangedMinima : after !== null && ! after.written && after.count === before!.count );
 	// A constant document is captured at this viewport without sampling, so it
 	// owes the capture width what a sampled return does.
 	if ( constant ) await replayReplacedEntrances( page, baseline );
 	return constant;
+}
+
+/** Source stylesheet text; a runtime that rewrites a sheet per width changes it. */
+const sourceSheetText = ( page: Page ) => page.evaluate( () => JSON.stringify( [ ...document.querySelectorAll( 'style' ) ]
+	.filter( style => ! style.getAttributeNames().some( name => name.startsWith( 'data-blocks-engine-capture-' ) ) )
+	.map( style => style.textContent ?? '' ) ) );
+
+/**
+ * Whether a runtime rewrites a source `<style>` at the width extremes on a page
+ * with no inline geometry to learn. Such a sheet is learned on its own evidence;
+ * a page whose script never listens to the viewport pays no resize.
+ */
+async function sourceSheetsVary(
+	page: Page,
+	widths: readonly number[],
+	original: { width: number; height: number } | null,
+	settleMs: number
+): Promise< boolean > {
+	const reactive = await page.evaluate( key => ( window as unknown as Record< symbol, { viewportReactive(): boolean } | undefined > )[ Symbol.for( key ) ]?.viewportReactive() ?? false, RUNTIME_STYLE_WRITES_KEY );
+	if ( ! reactive ) return false;
+	const baseline = await sourceSheetText( page );
+	const { settleDocument } = await import( './page-helpers.js' );
+	const probeSettle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
+	let varied = false;
+	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
+		await page.setViewportSize( { width, height: original?.height ?? 900 } );
+		await settleDocument( page, 'fluid-probe', probeSettle );
+		if ( await sourceSheetText( page ) !== baseline ) { varied = true; break; }
+	}
+	if ( original ) await page.setViewportSize( original );
+	await settleDocument( page, 'fluid-probe', probeSettle );
+	return varied;
 }
 
 /**
