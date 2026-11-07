@@ -2,7 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { RouteTimeBudget } from './capture-time-budget.js';
 import { captureWebsite } from './capture.js';
 import { buildTemplateGroups } from './template-groups.js';
 import { compareDerivedWithCapture } from './template-clusters.js';
@@ -83,6 +84,46 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		expect( nineKey ).toBeTruthy();
 		expect( postKey ).not.toBe( nineKey );
 	} );
+
+	it( 'derives an admitted member omitted by the time budget and replaces its omission', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'template-clusters-budget-' ) );
+		const url = `${ BASE }:${ port }/`;
+		const memberUrl = `${ new URL( url ).origin }/post-4/`;
+		const admits = RouteTimeBudget.prototype.admits;
+		const diagnostics = RouteTimeBudget.prototype.diagnostics;
+		let omittedUrls: string[] = [];
+		// Force the admission boundary without sleeping or racing a wall clock.
+		// All URLs remain in the admitted inventory; the real budget diagnostics
+		// record whichever routes the pool never starts.
+		const admissionSpy = vi.spyOn( RouteTimeBudget.prototype, 'admits' ).mockImplementation( function ( this: RouteTimeBudget, candidate, concurrency ) {
+			return candidate !== memberUrl && admits.call( this, candidate, concurrency );
+		} );
+		const diagnosticsSpy = vi.spyOn( RouteTimeBudget.prototype, 'diagnostics' ).mockImplementation( function ( this: RouteTimeBudget, urls ) {
+			expect( urls ).toContain( memberUrl );
+			const entries = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ).entries;
+			expect( entries[ memberUrl ]?.html ).toBeUndefined();
+			const rows = diagnostics.call( this, urls );
+			omittedUrls = rows.filter( row => row.code === 'route_omitted_by_budget' ).map( row => row.url );
+			expect( omittedUrls ).toContain( memberUrl );
+			return rows;
+		} );
+		try {
+			const captured = await captureWebsite( { url, outputDir, captureImages: true, templateClusters: true, timeBudgetMs: 600_000 }, {
+				findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: sitemapPaths.map( path => ( { url: `${ new URL( url ).origin }${ path }`, type: 'page' } ) ) } ) } ),
+			} );
+			expect( captured.summary.routesDerived ).toBeGreaterThanOrEqual( 1 );
+			const receipt = JSON.parse( readFileSync( join( outputDir, 'template-clusters.json' ), 'utf8' ) ) as { clusters: Array<{ derived: Array<{ url: string }> }> };
+			const derived = receipt.clusters.flatMap( cluster => cluster.derived.map( member => member.url ) );
+			expect( derived ).toContain( memberUrl );
+			expect( existsSync( join( outputDir, 'website', 'post-4', 'index.html' ) ) ).toBe( true );
+			expect( captured.summary.routesOmitted ).toBe( omittedUrls.filter( omitted => ! derived.includes( omitted ) ).length );
+		} finally {
+			admissionSpy.mockRestore();
+			diagnosticsSpy.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 240_000 );
 
 	it( 'derives the shared-template members and they equal their real captures', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
