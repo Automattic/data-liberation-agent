@@ -103,6 +103,7 @@ import type { GeometryCapture } from './layout-geometry-proof.js';
 import { inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
 import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
+import { probeScriptedLinks, SCRIPTED_LINK_BUDGET_MS, stampScriptedLinkCandidates } from './scripted-links.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -1204,6 +1205,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	const snapshot = await snapshotComponents( page ).catch( () => undefined );
 	const componentBaseline: ComponentBaseline = snapshot && Array.isArray( snapshot.components ) ? snapshot : { components: [], controls: [] };
 	await markGalleryRoots( page ).catch( () => undefined );
+	// Scripted links are numbered in the serialized document; their destinations
+	// are observed after the baseline, with the other interaction probes.
+	const scriptedLinkSignatures = plan.captureHtml || plan.captureMobileHtml ? await stampScriptedLinkCandidates( page, evaluateTimeoutMs ) : [];
 	await markInitialDocument( page );
 	const initialDocument = await capturePageHtml( page, args.diagnostics );
 	// The serialized head is the initial one, so it is named by the title the
@@ -1701,6 +1705,15 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		} catch {
 			/* best-effort: baseline capture remains valid when scroll-state probing fails */
 		}
+	}
+	// Last: following a client-routed link re-renders the document, which no
+	// later probe should observe. Self-bounded below the phase budget.
+	if ( scriptedLinkSignatures.length && ! budget.expired() && ! args.rendererCrashed() ) {
+		args.phases?.enter( 'scripted-links' );
+		const startedAt = Date.now();
+		const evidence = await withReadOnlyProbes( page, () => probeScriptedLinks( page, scriptedLinkSignatures, Math.min( SCRIPTED_LINK_BUDGET_MS, args.routeRemainingMs() / 4 ) ) );
+		( entry.scriptedLinks ??= {} )[ viewport.id ] = evidence;
+		process.stderr.write( `[timing] scripted-links ${ JSON.stringify( { url, profile: viewport.id, durationMs: Date.now() - startedAt, candidates: evidence.candidates, resolved: evidence.resolved } ) }\n` );
 	}
 	}
 }
@@ -2909,6 +2922,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const previousCleanup = entry.cleanup;
 			const previousDocuments = entry.documents;
 			const previousNativeViewTimelines = entry.nativeViewTimelines;
+			const previousScriptedLinks = entry.scriptedLinks;
 			const previousBlockLosses = entry.blockLosses ?? [];
 			const previousRedirect = entry.redirectedTo;
 			const previousOutcomes = entry.sourceOutcomes ?? [];
@@ -2932,6 +2946,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const blockLosses = [ ...previousBlockLosses, ...( profileEntry.blockLosses ?? [] ) ];
 			entry.blockLosses = blockLosses.length ? blockLosses : undefined;
 			if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
+			// Each profile's document is lowered with its own observations.
+			entry.scriptedLinks = previousScriptedLinks || profileEntry.scriptedLinks ? { ...previousScriptedLinks, ...profileEntry.scriptedLinks } : undefined;
 			if ( ! additional ) {
 				const latest = profileEntry.interactions;
 				const accepted = latest && hasPromotableInteractionEvidence( previousInteractions, latest );

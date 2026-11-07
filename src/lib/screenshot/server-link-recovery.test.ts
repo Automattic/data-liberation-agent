@@ -17,7 +17,7 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 	try {
 		const result = await captureScreenshots( {
 			urls: [ `${ origin }/` ], primaryUrl: `${ origin }/`, outputDir,
-			limit: 2, linkedPages: {}, routeDeadlineMs: 5_000, concurrency: 1,
+			limit: 2, linkedPages: {}, routeDeadlineMs: 12_000, concurrency: 1,
 			settleMs: 0, learnFluid: false, sharedChrome: false,
 			viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
 			beforeSerialize: async ( page, context ) => {
@@ -31,4 +31,4 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 		await new Promise<void>( resolve => server.close( () => resolve() ) );
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
-}, 15_000 );
+}, 40_000 );
