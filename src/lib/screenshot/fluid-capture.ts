@@ -8,7 +8,7 @@
 // copy keep reflowing after that runtime is stripped.
 //
 import { parseClipPath, learnClipPath } from './fluid-clip-path.js';
-import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
+import { RUNTIME_STYLE_WRITES_KEY, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { VIEWPORT_WORK_KEY, observeViewportWork, type ViewportWork } from './viewport-work.js';
 import {
 	breakpointsFrom,
@@ -327,6 +327,9 @@ async function learnFluidGeometry(
 	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
+	// Resizes before learning (class sweeps, the probes below) can leave a
+	// history-dependent runtime's sheets off their load-time capture-width text.
+	await restoreLoadTimeSheets( page );
 	const properties = options.learnRelativeOffsets ? [ ...LEARNABLE_PROPERTIES, 'left' ] : [ ...LEARNABLE_PROPERTIES ];
 
 	const tagged = await baseline.evaluate(
@@ -381,6 +384,7 @@ async function learnFluidGeometry(
 		}, ID_ATTRIBUTE );
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] };
 	}
+	await restoreLoadTimeSheets( page );
 	await bindRuntimeSheets( page );
 	// The element path up to its nearest identified ancestor, with sibling
 	// position; a signature two tagged elements share cannot key a reuse.
@@ -1055,7 +1059,9 @@ async function learnFluidGeometry(
 		width: original?.width,
 	} );
 	// The runtime has rewritten its own sheets for the capture width by now;
-	// learned rules are validated against exactly that geometry.
+	// learned rules are validated against exactly that geometry, as it stood
+	// at load.
+	await restoreLoadTimeSheets( page );
 	const runtimeSheets = await applyRuntimeSheetRules( page, sampledWidths, adaptive ? widths : sampledWidths );
 	if ( runtimeSheets.applied > 0 ) byKind[ 'runtime-sheet' ] = runtimeSheets.applied;
 	if ( runtimeSheets.pruned > 0 ) byKind[ 'runtime-fitted' ] = runtimeSheets.pruned;

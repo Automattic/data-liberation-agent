@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { RUNTIME_SHEET_RULES_ATTRIBUTE } from './fluid-runtime-sheets.js';
-import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
+import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 
 // A canvas with a 980px floor whose runtime regenerates an id-keyed stylesheet
@@ -67,26 +67,45 @@ describe( 'runtime-written stylesheet offsets', () => {
 	// A tagline fitter writes a size for the current width into its own sheet as
 	// an !important id rule; no element carries inline geometry. Where it writes
 	// the authored class step, the frozen rule would pin 62px at every width and
-	// is dropped; where it shrank the text to fit, the fitted size is kept.
+	// is dropped; where it shrank the text to fit, the fitted size is kept. A
+	// fitter that only shrinks is judged by its sheets at load, not by what
+	// capture's earlier probe resizes left behind (including a sheet it first
+	// created at a probe width).
+	const authored = 'innerWidth>=1536?64:innerWidth>=1280?62:40';
+	const eager = ( size: string ) => `const sheet=document.head.appendChild(document.createElement('style'));
+		const update=()=>{ sheet.textContent='#t { font-size: '+(${ size })+'px !important; }'; };
+		addEventListener('resize',update);update();`;
+	const shrinking = ( atLoad: boolean ) => `let sheet, last=1e9;
+		const update=()=>{ sheet??=document.head.appendChild(document.createElement('style')); last=Math.min(last,${ authored }); sheet.textContent='#t { font-size: '+last+'px !important; }'; };
+		addEventListener('resize',update);${ atLoad ? 'update();' : '' }`;
+	const scaled = [ [ 390, '40px' ], [ 1440, '62px' ], [ 1600, '64px' ] ] as const;
 	it.each( [
-		[ 'drops a fitted size the authored cascade reproduces', 'innerWidth>=1536?64:innerWidth>=1280?62:40', 1, [ [ 390, '40px' ], [ 1440, '62px' ], [ 1600, '64px' ] ] ],
-		[ 'keeps a fitted size that shrank the text', 'innerWidth>=1536?34:30', undefined, [ [ 390, '30px' ], [ 1440, '30px' ], [ 1600, '30px' ] ] ],
-	] as const )( '%s', async ( _label, fitted, pruned, expected ) => {
+		[ 'drops a fitted size the authored cascade reproduces', eager( authored ), false, 1, scaled ],
+		[ 'drops a shrink-only fitted size after probe resizes', shrinking( true ), true, 1, scaled ],
+		[ 'empties a shrink-only sheet first created at a probe width', shrinking( false ), true, undefined, scaled ],
+		[ 'keeps a fitted size that shrank the text', eager( 'innerWidth>=1536?34:30' ), false, undefined, [ [ 390, '30px' ], [ 1440, '30px' ], [ 1600, '30px' ] ] ],
+	] as const )( '%s', async ( _label, fitter, probed, pruned, expected ) => {
 		const source = `<style>body{margin:0}#t{font-size:40px}@media (min-width:1280px){#t{font-size:62px}}@media (min-width:1536px){#t{font-size:64px}}</style>
 			<h1 id="t">Estrategia</h1>
-			<script>
-			const sheet=document.createElement('style');document.head.appendChild(sheet);
-			const update=()=>{ sheet.textContent='#t { font-size: '+(${ fitted })+'px !important; }'; };
-			addEventListener('resize',update);update();
-			</script>`;
+			<script>${ fitter }</script>`;
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		const copy = await browser.newPage();
 		try {
-			// Capture installs the runtime-write tracker before any source script.
+			// Capture installs the runtime-write tracker before any source script
+			// and navigates; setContent's document.open() would drop its listeners.
 			await page.addInitScript( observeRuntimeStyleWrites );
-			await page.goto( 'about:blank' );
-			await page.setContent( source );
+			await page.route( 'http://fixture.test/', route => route.fulfill( { contentType: 'text/html', body: source } ) );
+			await page.goto( 'http://fixture.test/' );
+			if ( probed ) {
+				// Capture probes visit a phone width before the document is serialized.
+				for ( const width of [ 390, 1440 ] ) {
+					await page.setViewportSize( { width, height: 900 } );
+					await page.evaluate( () => new Promise( requestAnimationFrame ) );
+				}
+				expect( await page.locator( '#t' ).evaluate( node => getComputedStyle( node ).fontSize ) ).toBe( '40px' );
+			}
 			// Serialization projects learning onto the document captured before the sweep.
+			await restoreLoadTimeSheets( page );
 			await markInitialDocument( page );
 			const initial = await page.content();
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
