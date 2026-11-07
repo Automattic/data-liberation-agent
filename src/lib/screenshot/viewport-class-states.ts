@@ -198,9 +198,9 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		}, STATE_KEY );
 		// The extremes reveal a viewport-driven runtime; only then is the ladder swept.
 		const extremes = [ ladder[ 0 ]!, ladder[ ladder.length - 1 ]! ];
-		for ( const width of extremes ) if ( Object.keys( await probe( width ) ).length ) break;
-		if ( extremes.every( width => ! memo.has( width ) || Object.keys( memo.get( width )! ).length === 0 ) ) return { ...none, sampledWidths };
-		const extremesDiff = await Promise.all( extremes.map( probe ) );
+		const extremesDiff: Array<Record<number, { added: string[]; removed: string[] }>> = [];
+		for ( const width of extremes ) extremesDiff.push( await probe( width ) );
+		if ( extremesDiff.every( diff => Object.keys( diff ).length === 0 ) ) return { ...none, sampledWidths };
 		const candidates = new Map<string, Toggle>();
 		for ( const diff of extremesDiff ) for ( const [ indexText, change ] of Object.entries( diff ) ) {
 			for ( const token of change.added ) candidates.set( `${ indexText }|${ token }`, { index: Number( indexText ), token, base: false } );
@@ -210,7 +210,13 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		for ( const [ key, toggle ] of candidates ) {
 			const memoKey = `${ signatures[toggle.index] }|${ toggle.token }`;
 			const saved = options.memo?.get( memoKey );
-			if ( saved ) { toggles.set( key, toggle ); presence.set( key, [ ...saved ] ); reused.add( memoKey ); }
+			if ( saved ) {
+				const agrees = extremes.every( ( width, i ) => {
+					const observation = saved.find( sample => sample.width === width );
+					return observation !== undefined && observation.present === present( extremesDiff[i]!, toggle );
+				} );
+				if ( agrees ) { toggles.set( key, toggle ); presence.set( key, [ ...saved ] ); reused.add( memoKey ); }
+			}
 		}
 		if ( reused.size !== candidates.size ) {
 			for ( const width of ladder ) {

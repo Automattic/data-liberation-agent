@@ -7,7 +7,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { captureViewportClassStates } from './viewport-class-states.js';
+import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
 // with it (the Google Sites pattern); narrower widths show the closed icon.
@@ -106,3 +106,28 @@ it( 'keeps learned transforms through the viewport class sweep', async () => {
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 90_000 );
+
+it.each( [
+	{ name: 'matching breakpoint', secondBreakpoint: 768, reuses: true },
+	{ name: 'different breakpoint', secondBreakpoint: 2000, reuses: false },
+] )( 'verifies shared header memo for $name', async ( { secondBreakpoint, reuses } ) => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.addInitScript( observeRuntimeStyleWrites );
+		const memo: ViewportClassMemo = new Map();
+		const makeRoute = ( breakpoint: number ) => `<!doctype html><html><head><style>.header{color:black}.header.is-mobile{color:red}</style></head><body><header class="header">Shared</header><script>const sync=()=>document.querySelector('.header').classList.toggle('is-mobile',innerWidth<${breakpoint});addEventListener('resize',sync);sync()</script></body></html>`;
+		const results = [];
+		for ( const breakpoint of [ 768, secondBreakpoint ] ) {
+			await page.setContent( makeRoute( breakpoint ) );
+			results.push( await captureViewportClassStates( page, { settleMs: 0, memo } ) );
+		}
+		expect( results[ 1 ]!.sampledWidths ).toEqual( reuses ? [ 390, 1920 ] : expect.arrayContaining( [ 390, 1920 ] ) );
+		if ( ! reuses ) expect( results[ 1 ]!.sampledWidths.length ).toBeGreaterThan( 2 );
+		const mediaRules = await page.locator( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).last().textContent();
+		if ( reuses ) expect( mediaRules ).toContain( '(max-width:767px)' );
+		else expect( mediaRules ).toContain( '(max-width:1999px)' );
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
