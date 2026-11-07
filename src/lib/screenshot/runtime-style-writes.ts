@@ -120,8 +120,8 @@ export function observeRuntimeStyleWrites(): void {
  * that rewrites its sheet on resize may not return to its load-time text at
  * the capture width (a fitter that only shrinks stays at the narrowest size it
  * visited), or may have created a sheet for a probe width that a visitor at
- * this width never gets. Applies only at the load width; returns how many
- * sheets were restored.
+ * this width never gets. Applies only at the load width and to source sheets;
+ * returns how many were restored.
  */
 export async function restoreLoadTimeSheets( page: Page ): Promise< number > {
 	return page.evaluate( key => {
@@ -130,6 +130,8 @@ export async function restoreLoadTimeSheets( page: Page ): Promise< number > {
 		let restored = 0;
 		for ( const [ style, text ] of record.sheets ) {
 			if ( ! style.isConnected || style.textContent === text ) continue;
+			// Capture's own sheets (constructed-sheet copies, learned rules) are not source state.
+			if ( style.getAttributeNames().some( name => name.startsWith( 'data-blocks-engine-capture-' ) ) ) continue;
 			style.textContent = text;
 			restored++;
 		}
