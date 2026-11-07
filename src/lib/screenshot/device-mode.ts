@@ -278,6 +278,79 @@ export async function visibleControlPaths( page: Page ): Promise< string[] > {
 	} );
 }
 
+/** A selector re-expressed for another page, with the node's ID when both renderings agree on it. */
+export interface CarriedSelector { selector: string; id?: string }
+
+/**
+ * Re-express selectors recorded on one page for a structurally identical page.
+ * Runtime ID counters number elements in render order, so one control can
+ * carry a different ID in each rendering: an ID selector recorded at phone
+ * width can name another control, or nothing, at desktop width. Only an ID
+ * both renderings give the node is an identity; any other is per-rendering.
+ * A selector that names the node at the same position on both pages is kept;
+ * any other becomes the node's agreed ID or, failing that, its position.
+ * Selectors that name nothing on `from`, or nothing at the same position on
+ * `to`, are not carried.
+ */
+export async function carrySelectors( from: Page, to: Page, selectors: readonly string[] ): Promise< Map< string, CarriedSelector > > {
+	const unique = [ ...new Set( selectors ) ];
+	if ( ! unique.length ) return new Map();
+	const observed = await from.evaluate( ( selectors ) => selectors.map( selector => {
+		let element: Element | null = null;
+		try { element = document.querySelector( selector ); } catch { return null; }
+		if ( ! element || ! document.body.contains( element ) || element === document.body ) return null;
+		const parts: string[] = [];
+		for ( let node: Element = element; node !== document.body; node = node.parentElement! ) {
+			const index = Array.from( node.parentElement!.children ).filter( sibling => sibling.tagName === node.tagName ).indexOf( node ) + 1;
+			parts.unshift( `${ node.tagName.toLowerCase() }:nth-of-type(${ index })` );
+		}
+		return { position: `body > ${ parts.join( ' > ' ) }`, id: element.id };
+	} ), unique );
+	const carried = await to.evaluate( ( pairs ) => pairs.map( ( [ selector, seen ] ) => {
+		if ( ! seen ) return null;
+		const target = document.querySelector( seen.position );
+		if ( ! target ) return null;
+		let named: Element | null = null;
+		try { named = document.querySelector( selector ); } catch { /* An unparseable selector names nothing. */ }
+		const id = target.id && target.id === seen.id && document.querySelectorAll( `#${ CSS.escape( target.id ) }` ).length === 1 ? target.id : undefined;
+		const next = named === target ? selector : id ? `#${ CSS.escape( id ) }` : seen.position;
+		if ( next === selector && ( id ?? '' ) === seen.id ) return null;
+		return { selector: next, ...( id ? { id } : {} ) };
+	} ), unique.map( ( selector, index ) => [ selector, observed[ index ] ] as [ string, { position: string; id: string } | null ] ) );
+	return new Map( unique.flatMap( ( selector, index ) => carried[ index ] ? [ [ selector, carried[ index ]! ] as const ] : [] ) );
+}
+
+/** Every string recorded under a key named `…selector`, anywhere in `value`. */
+export function recordedSelectors( value: unknown ): string[] {
+	if ( Array.isArray( value ) ) return value.flatMap( recordedSelectors );
+	if ( ! value || typeof value !== 'object' ) return [];
+	return Object.entries( value as Record< string, unknown > ).flatMap( ( [ key, child ] ) =>
+		typeof child === 'string' ? ( /selector$/i.test( key ) ? [ child ] : [] ) : recordedSelectors( child ) );
+}
+
+/**
+ * Apply `carrySelectors` to recorded evidence. A node record whose `selector`
+ * is carried keeps its `id` only when both renderings agree on it.
+ */
+export function withCarriedSelectors< T >( value: T, carried: ReadonlyMap< string, CarriedSelector > ): T {
+	if ( ! carried.size ) return value;
+	const walk = ( node: unknown ): unknown => {
+		if ( Array.isArray( node ) ) return node.map( walk );
+		if ( ! node || typeof node !== 'object' ) return node;
+		const record = node as Record< string, unknown >;
+		const next: Record< string, unknown > = {};
+		for ( const [ key, child ] of Object.entries( record ) ) {
+			const moved = typeof child === 'string' && /selector$/i.test( key ) ? carried.get( child ) : undefined;
+			next[ key ] = moved ? moved.selector : walk( child );
+		}
+		const own = typeof record.selector === 'string' ? carried.get( record.selector ) : undefined;
+		if ( own?.id ) next.id = own.id;
+		else if ( own ) delete next.id;
+		return next;
+	};
+	return walk( value ) as T;
+}
+
 /** A short scroll through the document so viewport-triggered content renders before structure is read. */
 export async function shortScroll( page: Page ): Promise< void > {
 	await page.evaluate( async () => {
