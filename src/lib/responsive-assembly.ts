@@ -1632,14 +1632,9 @@ function markResponsiveCounterparts(
 	};
 }
 
-/**
- * A captured dialog wired into the phone document (for example the opened phone
- * menu) is added after responsive assembly namespaced that document's anchors,
- * so its section links still name the desktop targets, which are hidden at
- * phone width. Point each same-page fragment link inside the phone document at
- * the phone copy of the section the desktop target resolved to. The link's own
- * resolved URL parts identify a same-page fragment, so the runtime constructs
- * no URLs an importer would have to prove.
+/** Authored fragments stay route-independent. Both device targets declare the
+ * fragment in markup so consumers can select the visible copy; the portable
+ * runtime applies that same contract on navigation and same-page clicks.
  */
 const RESPONSIVE_FRAGMENT_RUNTIME = `(function(){
 function resolve(){var fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}
@@ -1719,13 +1714,17 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		aliases.add( name );
 		changed = true;
 	} );
+	const desktopIds = new Set( $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).toArray().map( element => $( element ).attr( 'id' )! ) );
+	let responsiveFragments = false;
 	const variantTarget = ( { document, suffix }: typeof variants[ number ], fragment: string ): boolean => {
 		const variantId = `${ fragment }${ suffix }`;
+		const ownId = ( id: string ) => renamed.get( id )?.find( candidate => candidate.endsWith( suffix ) ) ?? id;
 		if ( document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === variantId ).length === 0 ) {
 			// Ordinary authored fragments have no adapter marker. Their variant
 			// target still carries the original id and collides with the desktop
 			// copy; preserve its associations when assigning the variant identity.
 			const authored = document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === fragment );
+			if ( authored.length === 1 && ! desktopIds.has( fragment ) ) return false;
 			if ( authored.length === 1 ) {
 				authored.attr( 'id', variantId );
 				renamed.set( fragment, [ ...( renamed.get( fragment ) ?? [] ), variantId ] );
@@ -1733,39 +1732,41 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 			}
 			const sourceId = sourceIds.get( fragment );
 			const counterpart = authored.length === 1 ? authored : sourceId
-				? document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === sourceId )
+				? document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === ownId( sourceId ) )
 				: $();
 			if ( counterpart.length !== 1 ) return false;
 			if ( authored.length !== 1 ) counterpart.before(
 				`<span id="${ escapeHtmlAttr( variantId ) }" data-blocks-engine-capture-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
 			);
 		}
+		const desktopTarget = $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
+		const ownTarget = document.find( '[id]' ).filter( ( _i, element ) => $( element ).attr( 'id' ) === variantId );
+		if ( ownTarget.length === 1 ) {
+			if ( desktopTarget.length === 1 ) desktopTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
+			ownTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
+			responsiveFragments = true;
+			changed = true;
+		}
 		return true;
 	};
-	let responsiveAliases = false;
-	for ( const fragment of aliases ) {
-		const desktopTarget = $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
-		for ( const variant of variants ) {
-			const variantTargetNode = variant.document.find( '[id]' ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
-			if ( desktopTarget.length !== 1 || variantTargetNode.length !== 1 || ! variantTarget( variant, fragment ) ) continue;
-			desktopTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
-			variantTargetNode.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
-			responsiveAliases = true;
-		}
-	}
 	for ( const variant of variants ) {
+		// Register captured section targets independently of local links: another
+		// route may be the only place linking here. Other authored ids become
+		// fragment targets only when a local link names them (below).
+		for ( const element of variant.document.find( '[data-blocks-engine-capture-anchor-target]' ).not( 'svg,svg *' ).toArray() ) {
+			const fragment = $( element ).attr( 'data-blocks-engine-capture-anchor-target' )!;
+			if ( fragment ) variantTarget( variant, fragment );
+		}
+		for ( const fragment of aliases ) variantTarget( variant, fragment );
 		variant.document.find( 'a[href]' ).each( ( _index, element ) => {
-			const link = $( element );
-			const href = link.attr( 'href' ) ?? '';
+			const href = $( element ).attr( 'href' ) ?? '';
 			const hash = href.indexOf( '#' );
 			if ( hash < 0 ) return;
 			const path = href.slice( 0, hash );
 			if ( path !== '' && path.split( '?' )[ 0 ] !== documentPath ) return;
 			let fragment: string;
 			try { fragment = decodeURIComponent( href.slice( hash + 1 ) ); } catch { return; }
-			if ( ! fragment || fragment.endsWith( variant.suffix ) || ! variantTarget( variant, fragment ) ) return;
-			link.attr( 'href', `${ path }#${ encodeURIComponent( fragment ) }${ variant.suffix }` );
-			changed = true;
+			if ( fragment && ! fragment.endsWith( variant.suffix ) ) variantTarget( variant, fragment );
 		} );
 	}
 	if ( renamed.size > 0 || aliases.size > 0 ) {
@@ -1795,7 +1796,7 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 			identities.namedAliases ||= aliases.size > 0;
 		}
 	}
-	if ( responsiveAliases ) $( 'body' ).append( `<script data-blocks-engine-capture-responsive-fragments>${ RESPONSIVE_FRAGMENT_RUNTIME }</script>` );
+	if ( responsiveFragments ) $( 'body' ).append( `<script data-blocks-engine-capture-responsive-fragments>${ RESPONSIVE_FRAGMENT_RUNTIME }</script>` );
 	return changed ? $.html() : html;
 }
 
@@ -1901,7 +1902,7 @@ function assembleResponsiveHtml(
 	( { desktopBody, mobileBody } = markResponsiveCounterparts( desktopBody, mobileBody ) );
 
 	// Both documents ship in one file from here on, so their anchor targets would
-	// collide on a shared id. Namespace the mobile copy and repoint its own links.
+	// collide on a shared id. Namespace the mobile targets, not authored links.
 	const desktop = cheerio.load( `<body>${ desktopBody }</body>` );
 	const desktopTargets = new Map< string, string >();
 	desktop( '[data-blocks-engine-capture-anchor-target][data-blocks-engine-capture-anchor-source-id]' ).each( ( _index, element ) => {
@@ -2076,17 +2077,7 @@ function namespaceVariantDocument(
 	variant( '[data-blocks-engine-capture-anchor-target]' ).each( ( _index, element ) => {
 		const node = variant( element );
 		const fragment = node.attr( 'data-blocks-engine-capture-anchor-target' );
-		if ( fragment ) node.attr( 'id', `${ fragment }${ suffix }` );
-	} );
-	variant( 'a[data-blocks-engine-capture-anchor-fragment][href]' ).each( ( _index, element ) => {
-		const node = variant( element );
-		const fragment = node.attr( 'data-blocks-engine-capture-anchor-fragment' );
-		const href = node.attr( 'href' );
-		if ( fragment && href )
-			node.attr(
-				'href',
-				`${ href.replace( /#.*$/, '' ) }#${ encodeURIComponent( fragment ) }${ suffix }`
-			);
+		if ( fragment && desktop( '[id]' ).toArray().some( target => desktop( target ).attr( 'id' ) === fragment ) ) node.attr( 'id', `${ fragment }${ suffix }` );
 	} );
 	// Only SVG resources are private identities; authored HTML ids remain a contract.
 	const svgIds = new Set<string>();

@@ -209,7 +209,10 @@ export function routeComponents(report: InteractionStatesReport): CapturedCompon
 	for (const evidence of report.states) {
 		if (!evidence.kind || evidence.kind === 'dialog') continue;
 		const selector = evidence.gallery?.inline.selector ?? evidence.set?.selector ?? evidence.choiceGroup?.group.selector ?? evidence.trigger.selector;
-		let component = result.find(node => node.selector === selector);
+		// Each viewport's gallery frames are independent replay evidence.
+		let component = result.find(node => node.selector === selector && (!evidence.gallery || !node.states.some(state =>
+			state.evidence?.gallery && state.evidence.gallery.inline.viewport.width !== evidence.gallery!.inline.viewport.width
+		)));
 		if (!component) {
 			const kind = evidence.kind === 'gallery' ? 'carousel' : evidence.kind === 'disclosure' ? 'disclosure' : evidence.kind === 'selectable-set' && evidence.trigger.role === 'tab' ? 'tabs' : evidence.kind === 'typed-search' ? 'filter' : evidence.kind === 'choice-group' ? 'choice-group' : 'unsupported';
 			const initial = evidence.gallery ? `slide-${evidence.gallery.inline.initial}` : 'initial';

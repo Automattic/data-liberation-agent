@@ -478,7 +478,7 @@ export async function markGalleryRoots(page: Page): Promise<string[]> {
 		(globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown }).__name ??= (fn) => fn;
 	});
 	await page.evaluate(installDirection, DIRECTION);
-	return page.evaluate(({ key, marksKey }) => {
+	return page.evaluate(({ key, marksKey, width }) => {
 		const direction = (globalThis as unknown as Record<string, Direction>)[key]!;
 		const global = globalThis as unknown as Record<string, RootMarks>;
 		const marks = global[marksKey] ??= new WeakMap();
@@ -502,6 +502,8 @@ export async function markGalleryRoots(page: Page): Promise<string[]> {
 					while (document.getElementById(`data-blocks-engine-capture-gallery-${index}`)) index++;
 					scope.id = `data-blocks-engine-capture-gallery-${index}`;
 				}
+				// This marker must travel with the serialized device document, before probing.
+				scope.setAttribute('data-blocks-engine-capture-gallery-capture-width', String(width));
 				const selector = '#' + CSS.escape(scope.id);
 				if (!roots.includes(selector)) roots.push(selector);
 				break;
@@ -509,7 +511,7 @@ export async function markGalleryRoots(page: Page): Promise<string[]> {
 			if (roots.length >= 2) break;
 		}
 		return roots;
-	}, { key: DIRECTION, marksKey: ROOT_MARKS });
+	}, { key: DIRECTION, marksKey: ROOT_MARKS, width: page.viewportSize()?.width ?? 0 });
 }
 
 export async function captureGalleries(page: Page, excludedRoots: string[] = []): Promise<CapturedDialogInteraction[]> {
@@ -527,7 +529,6 @@ export async function captureGalleries(page: Page, excludedRoots: string[] = [])
 		let state: CapturedDialogInteraction | undefined;
 		try {
 			await page.locator(root).scrollIntoViewIfNeeded();
-			await page.locator(root).evaluate((element, width) => element.setAttribute('data-blocks-engine-capture-gallery-capture-width', String(width)), page.viewportSize()?.width ?? 0);
 			let inline: CapturedGallery | null;
 			try {
 				inline = await collect(page, await describe(page, root));

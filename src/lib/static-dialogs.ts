@@ -262,7 +262,7 @@ export function wireCapturedDialogs(
 			const trigger = $( element );
 			if (state.gallery) {
 				const width = trigger.closest('[data-blocks-engine-capture-gallery-capture-width]').attr('data-blocks-engine-capture-gallery-capture-width');
-				if (width && Number(width) !== state.gallery.inline.viewport.width) return;
+				if (width && Number(width) !== state.gallery.inline.viewport?.width) return;
 				const existing = trigger.attr('aria-controls');
 				if (trigger.attr('data-blocks-engine-capture-dialog-trigger') && existing) {
 					const surface = gallerySurface($, trigger), panel = $('#' + cssEscape(existing));
