@@ -466,7 +466,7 @@ export class CapturedResourceStore {
 	private replayDir?: string;
 	private replayBytes = 0;
 	private capturedBytes = 0;
-	private readonly resolvedSrcsetFixtures = new Set< string >();
+	private readonly resolvedSrcsetImages = new Set< string >();
 
 	constructor(
 		outputDir: string,
@@ -533,33 +533,41 @@ export class CapturedResourceStore {
 				await page.setViewportSize( { width, height: original.height } );
 				const fixture = await page.evaluate( async () => {
 					await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
-					const images = Array.from( document.querySelectorAll<HTMLImageElement>( 'img[srcset],picture img' ) );
+					// Only an image with a candidate list has a rendition to select.
+					const images = Array.from( document.querySelectorAll<HTMLImageElement>( 'img[srcset],picture img' ) ).filter( image =>
+						image.hasAttribute( 'srcset' ) || ( image.parentElement?.tagName === 'PICTURE' && image.parentElement.querySelector( 'source[srcset]' ) ) );
 					const html: string[] = [];
+					// Capture and source bookkeeping attributes never affect selection,
+					// and per-route values would hide an image already resolved.
+					const clean = < T extends Element >( element: T ) => {
+						for ( const attribute of Array.from( element.attributes ) ) {
+							if ( attribute.name.startsWith( 'on' ) || attribute.name.startsWith( 'data-' ) ) element.removeAttribute( attribute.name );
+						}
+						return element;
+					};
 					for ( const image of images ) {
 						// Lazy galleries may only lay out their small slots when visible.
 						// Measure in the source layout, not an offscreen placeholder or
 						// the detached probe's default intrinsic image dimensions.
 						image.scrollIntoView( { block: 'center', behavior: 'instant' } );
 						await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
-						const copy = image.cloneNode( false ) as HTMLImageElement;
-						for ( const attribute of Array.from( copy.attributes ) ) {
-							if ( attribute.name.startsWith( 'on' ) ) copy.removeAttribute( attribute.name );
-						}
+						const copy = clean( image.cloneNode( false ) as HTMLImageElement );
 						copy.removeAttribute( 'style' );
 						copy.style.cssText = `display:block;width:${ image.getBoundingClientRect().width }px;height:auto`;
 						const picture = document.createElement( 'picture' );
 						if ( image.parentElement?.tagName === 'PICTURE' ) {
-							for ( const source of image.parentElement.querySelectorAll( 'source' ) ) picture.append( source.cloneNode( true ) );
+							for ( const source of image.parentElement.querySelectorAll( 'source' ) ) picture.append( clean( source.cloneNode( true ) as Element ) );
 						}
 						picture.append( copy );
 						html.push( picture.outerHTML );
 					}
-					return { base: document.baseURI, html: html.join( '' ) };
+					return { base: document.baseURI, html };
 				} );
-				if ( ! fixture.html ) break;
-				const fixtureKey = JSON.stringify( [ width, fixture.base, fixture.html ] );
-				if ( this.resolvedSrcsetFixtures.has( fixtureKey ) ) continue;
-				this.resolvedSrcsetFixtures.add( fixtureKey );
+				if ( ! fixture.html.length ) break;
+				// Shared chrome repeats on every route and profile: probe each image once per width.
+				const pending = fixture.html.filter( html => ! this.resolvedSrcsetImages.has( JSON.stringify( [ width, fixture.base, html ] ) ) );
+				if ( ! pending.length ) continue;
+				for ( const html of pending ) this.resolvedSrcsetImages.add( JSON.stringify( [ width, fixture.base, html ] ) );
 				// A fresh context per width: a shared memory cache would serve the
 				// next width's renditions without the network responses capture records.
 				const context = await browser.newContext( {
@@ -569,7 +577,7 @@ export class CapturedResourceStore {
 				try {
 					const probe = await context.newPage();
 					this.observe( probe );
-					await probe.setContent( `<base href="${ fixture.base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ fixture.html }` );
+					await probe.setContent( `<base href="${ fixture.base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ pending.join( '' ) }` );
 					for ( const image of await probe.locator( 'img' ).all() ) {
 						await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
 						await image.evaluate( image => Promise.race( [

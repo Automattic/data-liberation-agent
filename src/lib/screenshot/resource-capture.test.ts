@@ -1658,7 +1658,7 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
-		it( 'probes identical srcset fixtures once per capture and keeps every rendition', async () => {
+		it( 'probes each srcset image once per capture and keeps every rendition', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );
 			const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64' );
@@ -1668,8 +1668,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					res.setHeader( 'cache-control', 'max-age=3600' );
 					return res.end( png );
 				}
+				// Route two repeats the image under other capture attributes, beside an image with no choice.
+				const second = req.url === '/second';
 				res.setHeader( 'content-type', 'text/html' );
-				res.end( '<!doctype html><base href="/"><meta name="viewport" content="width=device-width"><img style="width:400px" src="/small.png" srcset="/small.png 400w, /large.png 1200w" sizes="100vw">' );
+				res.end( `<!doctype html><base href="/"><meta name="viewport" content="width=device-width"><img style="width:400px" src="/small.png" srcset="/small.png 400w, /large.png 1200w" sizes="100vw" data-node="${ second ? 2 : 1 }">${ second ? '<picture><img src="/plain.png"></picture>' : '' }` );
 			} );
 			await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
@@ -1685,7 +1687,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					await store.captureSelectedSrcsets( page );
 					probes.push( newContext.mock.calls.length - before );
 				}
-				// The second route repeats the first route's fixtures and opens no probe.
+				// The second route has no unseen image with a choice and opens no probe.
 				expect( probes[ 0 ] ).toBeGreaterThan( 0 );
 				expect( probes[ 1 ] ).toBe( 0 );
 				await store.settle( page );
