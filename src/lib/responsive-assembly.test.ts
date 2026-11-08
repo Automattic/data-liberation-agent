@@ -919,7 +919,8 @@ describe( 'middle width ranges (#1379)', () => {
 		const $ = cheerio.load( result.html );
 		expect( $( 'body > div' ).toArray().map( node => $( node ).attr( 'class' ) ) ).toEqual( [ DESKTOP_DOCUMENT_CLASS, MIDDLE_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] );
 		expect( $( `.${ MIDDLE_DOCUMENT_CLASS } article` ).attr( 'id' ) ).toBe( 'about--data-blocks-engine-capture-middle' );
-		expect( $( `.${ MIDDLE_DOCUMENT_CLASS } a` ).attr( 'href' ) ).toBe( '#about--data-blocks-engine-capture-middle' );
+		// Authored links stay route-independent (#1569); the visible copy is resolved at navigation.
+		expect( $( `.${ MIDDLE_DOCUMENT_CLASS } a` ).attr( 'href' ) ).toBe( '#about' );
 		expect( $( `.${ MOBILE_DOCUMENT_CLASS } p` ).attr( 'id' ) ).toBe( 'about--data-blocks-engine-capture-mobile' );
 		expect( result.html ).toContain( `@media(min-width:800px) and (max-width:1279px){.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ MIDDLE_DOCUMENT_CLASS }{display:contents!important}}` );
 		expect( result.html ).toMatch( /<style media="\(min-width:800px\) and \(max-width:1279px\)">[^<]*:where\(\.data-blocks-engine-capture-middle-document\) \.grid\{display:grid\}/ );
