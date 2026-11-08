@@ -272,20 +272,28 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// Network failures and never-loading images still time out as unready. Polls
 						// through page.evaluate so the probe realm protects it from source
 						// globals; waitForFunction would run against the page's own realm.
-						const imagesSettled = () => referencePage!.evaluate( ( { key, broken } ) => {
+						// An <img> with no src or srcset has no resource to settle; it renders
+						// its alt box. Lazy loaders may still assign one, so it gets the whole
+						// deadline, but alone it does not make the source unready.
+						const unsettledImages = () => referencePage!.evaluate( ( { key, broken } ) => {
 							const unreachable = ( window as unknown as Record<symbol, ( image: HTMLImageElement ) => boolean> )[ Symbol.for( key ) ];
-							return [ ...document.images ].every( image => {
+							return [ ...document.images ].filter( image => {
 								const rect = image.getBoundingClientRect();
-								return rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && ( image.naturalWidth > 0 || broken.some( item => item.url === ( image.currentSrc || image.src ) ) ) );
-							} );
+								return ! ( rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && ( image.naturalWidth > 0 || broken.some( item => item.url === ( image.currentSrc || image.src ) ) ) ) );
+							} ).map( image => ( { url: image.currentSrc || image.getAttribute( 'src' )?.trim() || image.getAttribute( 'srcset' )?.trim() || '', alt: image.alt } ) );
 						}, { key: reachabilityKey, broken: [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) } );
 						const mediaDeadline = Date.now() + MEDIA_READY_TIMEOUT_MS;
-						let mediaReady = await imagesSettled();
-						while ( ! mediaReady && Date.now() < mediaDeadline ) {
+						let unsettled = await unsettledImages();
+						while ( unsettled.length && Date.now() < mediaDeadline ) {
 							await referencePage.waitForTimeout( 250 );
-							mediaReady = await imagesSettled();
+							unsettled = await unsettledImages();
 						}
-						if ( ! mediaReady ) entry.readiness.reasons.push( 'source images pending or failed' );
+						const pending = unsettled.filter( image => image.url );
+						const mediaReady = ! pending.length;
+						if ( ! mediaReady ) {
+							entry.readiness.reasons.push( 'source images pending or failed' );
+							entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...pending.slice( 0, 10 ).map( image => `source image pending or failed: ${ image.url }` ) ];
+						}
 						entry.readiness.mediaReady = mediaReady;
 						const sourceBrokenImages = await referencePage.evaluate( broken => broken.filter( item => [ ...document.images ].some( image => image.complete && image.naturalWidth === 0 && ( image.currentSrc || image.src ) === item.url ) ), [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) );
 						if ( sourceBrokenImages.length ) entry.readiness.sourceBrokenImages = sourceBrokenImages;

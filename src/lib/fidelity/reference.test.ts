@@ -48,7 +48,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 45_000 );
-	it( 'ignores unreachable lazy marquee images but rejects a visible broken image', async () => {
+	it( 'ignores unreachable lazy marquee images and src-less tiles but rejects and names a visible broken image', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-clipped-images-' ) );
 		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
@@ -56,7 +56,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			<style>.track{overflow:hidden;width:100%}.row{display:flex;width:max-content}.row img{width:500px;height:500px;flex:none}</style>
 			<main><h1>Marquee</h1><div class="track"><div class="row">
 			${ Array.from( { length: 14 }, ( _, i ) => `<img src="/image-${ i }.png" ${ i >= 4 ? 'loading="lazy"' : '' } alt="">` ).join( '' ) }
-			</div></div><img src="/outside.png" loading="lazy" style="position:absolute;left:-10000px;top:0;width:500px;height:500px" alt=""></main>`;
+			</div></div><img alt="Category without an image" style="display:block;width:230px;height:153px">
+			<img src="/outside.png" loading="lazy" style="position:absolute;left:-10000px;top:0;width:500px;height:500px" alt=""></main>`;
 		const source = createServer( ( request, response ) => {
 			response.setHeader( 'content-type', request.url?.endsWith( '.png' ) ? 'image/png' : 'text/html' );
 			response.end( request.url?.endsWith( '.png' ) ? image : html );
@@ -82,6 +83,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const broken = await collect( true );
 			expect( broken.readiness.mediaReady ).toBe( false );
 			expect( broken.readiness.reasons ).toContain( 'source images pending or failed' );
+			expect( broken.readiness.diagnostics ).toContain( 'source image pending or failed: data:image/png,broken' );
 		} finally {
 			await page.close(); source.closeAllConnections();
 			await new Promise<void>( resolve => source.close( () => resolve() ) );
