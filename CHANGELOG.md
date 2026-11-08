@@ -15,6 +15,12 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.177] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- Sweep source cleanup in the serializing task and match the minimized Wix assistant
+
 ## [0.33.176] - 2026-11-08
 
 ### Changed
