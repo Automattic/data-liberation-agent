@@ -49,7 +49,15 @@ import {
 export const DESKTOP_DOCUMENT_CLASS = 'data-blocks-engine-capture-desktop-document';
 export const MOBILE_DOCUMENT_CLASS = 'data-blocks-engine-capture-mobile-document';
 
-const RESPONSIVE_DOCUMENT_CSS = `html,body{margin:0;padding:0}.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
+const RESPONSIVE_DOCUMENT_CSS = `.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
+
+/**
+ * Device scoping moves each document's own `body` rules off the real body
+ * (desktop rules behind a min-width query, mobile rules onto its wrapper), so a
+ * zero box replaces the user-agent body margin. It leads the head so any author
+ * rule that still targets html/body keeps winning the cascade (#1554).
+ */
+const RESPONSIVE_DOCUMENT_RESET_CSS = '<style>html,body{margin:0;padding:0}</style>';
 
 const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-blocks-engine-capture-responsive-counterpart-';
 const RESPONSIVE_COUNTERPART_TAGS = 'p,h1,h2,h3,h4,h5,h6,a,button';
@@ -105,6 +113,12 @@ function hasHeadClose( html: string ): boolean {
 function insertBeforeHeadClose( html: string, markup: string ): string {
 	const close = documentElementTags( html, 'head' ).close;
 	return close ? html.slice( 0, close.start ) + markup + html.slice( close.start ) : html;
+}
+
+/** Insert markup right after the real `<head>` open tag. Unchanged without one. */
+function insertAfterHeadOpen( html: string, markup: string ): string {
+	const open = documentElementTags( html, 'head' ).open;
+	return open ? html.slice( 0, open.end ) + markup + html.slice( open.end ) : html;
 }
 
 /** Give a document without `</head>` an empty head before its real body. */
@@ -1932,7 +1946,10 @@ function assembleResponsiveHtml(
 	return {
 		html: replaceDocumentElement(
 			insertBeforeHeadClose(
-				withMobileViewport( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) ),
+				insertAfterHeadOpen(
+					withMobileViewport( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) ),
+					RESPONSIVE_DOCUMENT_RESET_CSS
+				),
 				`${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style>`
 			),
 			'body',
