@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.169] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- Keep desktop interaction evidence when a dual route's phone pass reuses its ids
+- Identify Wix slides by component and bound slideshow control waits
+- Template clusters: derive link targets from derived and late-captured pages
+- Template clusters: derive members from the phone document too
+- Prioritize client-rendered entry navigation under explicit route limits
+- cook candidate
+- Serialize runtime sheets as loaded at the capture width
+
 ## [0.33.168] - 2026-11-07
 
 ### Changed
