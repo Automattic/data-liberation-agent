@@ -562,7 +562,8 @@ export class CapturedResourceStore {
 					const clean = < T extends Element >( element: T ) => {
 						for ( const attribute of Array.from( element.attributes ) ) {
 							if ( attribute.name.startsWith( 'on' ) || attribute.name.startsWith( 'data-' ) ) element.removeAttribute( attribute.name );
-							else if ( attribute.name === 'src' ) attribute.value = new URL( attribute.value, document.baseURI ).href;
+							// An empty src requests nothing; resolving it would name the page.
+							else if ( attribute.name === 'src' && attribute.value.trim() ) attribute.value = new URL( attribute.value, document.baseURI ).href;
 							else if ( attribute.name === 'srcset' ) attribute.value = resolveSrcset( attribute.value );
 						}
 						return element;
