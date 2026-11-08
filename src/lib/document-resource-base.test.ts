@@ -27,3 +27,12 @@ it( 'uses the first authored base for captures without browser metadata, includi
 	expect( $( 'img' ).attr( 'src' ) ).toBe( 'https://example.com/assets/photo.svg' );
 	expect( $( 'a' ).attr( 'href' ) ).toBe( 'https://example.com/assets/#photos' );
 } );
+
+it( 'keeps SVG fragment references in this document when a base names another URL', () => {
+	const $ = cheerio.load( resolveDocumentReferences(
+		'<base href="https://example.com/"><svg><symbol id="icon"></symbol></svg><svg><use xlink:href="#icon"></use><use href="#icon"></use></svg><a href="#icon">Icon</a>',
+		'https://example.com/about/'
+	) );
+	expect( $( 'use' ).map( ( _, use ) => $( use ).attr( 'xlink:href' ) ?? $( use ).attr( 'href' ) ).get() ).toEqual( [ '#icon', '#icon' ] );
+	expect( $( 'a' ).attr( 'href' ) ).toBe( 'https://example.com/#icon' );
+} );

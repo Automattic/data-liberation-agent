@@ -46,7 +46,11 @@ export function resolveDocumentReferences( html: string, documentUrl: string, br
 		const node = $( element );
 		for ( const attribute of [ 'href', 'src', 'poster', 'xlink:href' ] ) {
 			const reference = node.attr( attribute );
-			if ( reference !== undefined && element.name !== 'base' ) node.attr( attribute, resolve( reference ) );
+			if ( reference === undefined || element.name === 'base' ) continue;
+			// SVG fragment-only references (<use href="#icon">) always name this
+			// document, whatever <base> says (SVG 2 same-document URL references).
+			if ( reference.startsWith( '#' ) && node.closest( 'svg' ).length ) continue;
+			node.attr( attribute, resolve( reference ) );
 		}
 		const srcset = node.attr( 'srcset' );
 		if ( srcset ) {
