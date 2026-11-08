@@ -103,7 +103,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
 import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 import { probeScriptedLinks, SCRIPTED_LINK_BUDGET_MS, stampScriptedLinkCandidates } from './scripted-links.js';
@@ -1343,7 +1343,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				/* best-effort — the sweep learns whatever the hook left in place */
 			} );
 			const learned = await learnAndApplyFluidGeometry( page, {
-				document: isDesktop ? 'desktop' : 'mobile',
+				// The middle layout's learned rules name its own geometry ids, never the phone document's.
+				document: isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile',
 				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
 				settleMs: Math.max( args.settleMs, 800 ),
 				...( args.fluidMemo ? { memo: args.fluidMemo } : {} ),
@@ -2274,7 +2275,7 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 		const observed = await probeSwitchWidth( args, serverHtml, switchCandidates ).catch( () => undefined );
 		if ( observed !== undefined ) {
 			result.switchWidth = observed.switchWidth;
-			if ( observed.uncapturedLayout ) result.uncapturedLayout = observed.uncapturedLayout;
+			if ( observed.middleLayout ) result.middleLayout = observed.middleLayout;
 		}
 	}
 	result.checkMs = Date.now() - started;
@@ -2983,6 +2984,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const routeProfiles: Viewport[] = routeViewports.map( profile => ( { ...publicCaptureProfile( profile ),
 			referenceWidths: profile.referenceWidths ?? opts.referenceWidths ?? ( profile.id === 'mobile' ? [ 390 ] : profile.id === 'desktop' ? [ 768, 1440 ] : [ profile.width ] ),
 		} ) );
+		// A dual route whose source renders a bounded third layout between its
+		// phone and desktop documents captures that layout too: one desktop-identity
+		// viewport inside the range, assembled as the middle document (#1379).
+		const middleWidth = routeDevice?.mode === 'dual' ? middleLayoutSampleWidth( routeDevice.middleLayout ) : undefined;
+		if ( middleWidth !== undefined && desktopProfile && routeProfiles.some( profile => profile.id === 'mobile' ) ) {
+			routeProfiles.push( { ...publicCaptureProfile( desktopProfile ), id: MIDDLE_PROFILE_ID, width: middleWidth, referenceWidths: [ middleWidth ] } );
+		}
 		let additionalDeclared = false;
 		const declareAdditional = ( html: string ): void => {
 			if ( additionalDeclared ) return;

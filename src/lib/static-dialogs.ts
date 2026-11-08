@@ -307,7 +307,7 @@ export function wireCapturedDialogs(
 			// tag names or source depth. Replay already applies token deltas.
 			for ( const delta of state.dialog?.rootClassState ?? [] ) {
 				const parents = trigger.parents().toArray();
-				const scope = trigger.closest( '.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document' ).get( 0 );
+				const scope = trigger.closest( '.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document,.data-blocks-engine-capture-middle-document' ).get( 0 );
 				const candidates = parents.filter( node => node === scope || node.tagName === delta.root );
 				const owner = candidates.find( node => {
 					const tokens = classTokens( $( node ).attr( 'class' ) ?? null );
@@ -586,7 +586,7 @@ function nextDialogId( $: cheerio.CheerioAPI ): string {
 }
 
 function gallerySurface($: cheerio.CheerioAPI, trigger: cheerio.Cheerio<AnyNode>) {
-	const document = trigger.closest('.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document,[class*="site-document-variant-"]');
+	const document = trigger.closest('.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document,.data-blocks-engine-capture-middle-document,[class*="site-document-variant-"]');
 	return document.length ? document : $('body');
 }
 
@@ -792,8 +792,8 @@ function selectByCapturedSelector(
 		if ( inserted.length === 1 ) return inserted;
 		// Source body-relative paths must start at each responsive document,
 		// not at the assembled outer body whose children are now wrappers.
-		const scoped = selector.replace( /^body(?=\s*>)/, ':is(.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document)' );
-		const documents = $( '.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document' );
+		const scoped = selector.replace( /^body(?=\s*>)/, ':is(.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document,.data-blocks-engine-capture-middle-document)' );
+		const documents = $( '.data-blocks-engine-capture-desktop-document,.data-blocks-engine-capture-mobile-document,.data-blocks-engine-capture-middle-document' );
 		let matches = scoped !== selector && documents.length ? $( scoped ) : $( selector );
 		// Cleanup can remove preceding source siblings. Relax positional indexes
 		// only when the unchanged ancestry identifies one node per document.

@@ -145,7 +145,7 @@ A run produces, under `~/data-liberation/<host>/`:
 | `capture-receipt.json` | Source URL, the route table mapping each page to the URL it came from, assets. `reports` lists the capture-root-relative JSON sidecars an importer should receive beside `website/` (only files this capture wrote, including the receipt itself); forward that list rather than hardcoding names. See [docs/export-publication.md](docs/export-publication.md) |
 | `asset-evidence.json` | Bounded v1 source-asset evidence. Each source URL records retained-route references, retrieval separately from portable inclusion, and its canonical `portableAssetId` when bytes were deduplicated; consumers group source records by that ID. It retains the first 10,000 reachable source URLs in captured-route traversal and emits them lexically; `assetCount` is exact unless `assetCountExact` is false, when it is a lower bound and `assetsTruncated` identifies omitted detail. `totalReferenceCount` remains exact, while per-asset `referencesTruncated` identifies omitted locations. The receipt links this sidecar as `assetEvidence.path`. |
 | `diagnostics.json` | Everything the source withheld or the capture could not resolve |
-| `source-profile.json` | Measured behaviour: one document or per-device, declarative or runtime-written geometry, switch width |
+| `source-profile.json` | Measured behaviour: one document or per-device, declarative or runtime-written geometry, switch width (a source whose width breakpoints select a third layout also ships that middle document; see `docs/document-selection.md`) |
 
 ### Shared site chrome
 

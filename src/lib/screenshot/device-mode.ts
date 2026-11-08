@@ -449,10 +449,33 @@ export interface RouteDeviceDecision {
 	/**
 	 * Dual route only: the source renders a third layout, neither the phone nor
 	 * the desktop document, from `minWidth` up to `maxWidth` (inclusive; absent
-	 * when no probed boundary reached the desktop document). Capture keeps two
-	 * documents, so the copy serves the desktop document across this range.
+	 * when no probed boundary reached the desktop document). A bounded range is
+	 * captured as the `middle` profile at one width inside it, and the copy
+	 * selects that document across the range; an unbounded one stays a
+	 * `responsive_layout_uncaptured` finding.
 	 */
-	uncapturedLayout?: { minWidth: number; maxWidth?: number };
+	middleLayout?: MiddleLayout;
+}
+
+/** A width-selected source layout between the phone and desktop documents (inclusive bounds). */
+export interface MiddleLayout { minWidth: number; maxWidth?: number }
+
+/** Capture profile id of the middle layout's document. */
+export const MIDDLE_PROFILE_ID = 'middle';
+
+/** Common tablet widths, preferred in order as the middle range's sample. */
+const MIDDLE_SAMPLE_WIDTHS = [ 1024, 768 ];
+
+/**
+ * The one viewport width sampled inside a bounded middle range: a common tablet
+ * width when the range contains one (so the frozen evidence lands on a width
+ * readers and checks actually use), else the range's midpoint. Neither of the
+ * source's own boundaries is ever the capture width.
+ */
+export function middleLayoutSampleWidth( layout: MiddleLayout | undefined ): number | undefined {
+	if ( ! layout || layout.maxWidth === undefined || layout.maxWidth < layout.minWidth ) return undefined;
+	const inside = ( width: number ): boolean => width > layout.minWidth && width < layout.maxWidth!;
+	return MIDDLE_SAMPLE_WIDTHS.find( inside ) ?? Math.floor( ( layout.minWidth + layout.maxWidth ) / 2 );
 }
 
 /** Each probe loads the phone identity once more; stop after the nearest few boundaries. */
@@ -463,7 +486,7 @@ export type SwitchProbeRendering = 'phone' | 'desktop' | 'other';
 
 export interface ObservedSwitch {
 	switchWidth: number;
-	uncapturedLayout?: { minWidth: number; maxWidth?: number };
+	middleLayout?: MiddleLayout;
 }
 
 /**
@@ -474,7 +497,7 @@ export interface ObservedSwitch {
  * the source's own boundary, never a point between the two sampled widths.
  * When that rendering is not the desktop document either, the source has a
  * middle layout; later boundaries are probed for where the desktop document
- * starts, and the range is reported as uncaptured. A boundary is never chosen
+ * starts, and that range is the middle layout. A boundary is never chosen
  * merely for being the widest; rendering the phone document everywhere
  * observes nothing.
  */
@@ -492,9 +515,9 @@ export async function observeSwitchWidth(
 		if ( rendered === 'phone' ) continue;
 		if ( rendered === 'desktop' ) return { switchWidth: width };
 		for ( const wider of widths.slice( index + 1 ) ) {
-			if ( await classify( wider + 1 ) === 'desktop' ) return { switchWidth: width, uncapturedLayout: { minWidth: width + 1, maxWidth: wider } };
+			if ( await classify( wider + 1 ) === 'desktop' ) return { switchWidth: width, middleLayout: { minWidth: width + 1, maxWidth: wider } };
 		}
-		return { switchWidth: width, uncapturedLayout: { minWidth: width + 1 } };
+		return { switchWidth: width, middleLayout: { minWidth: width + 1 } };
 	}
 	return undefined;
 }

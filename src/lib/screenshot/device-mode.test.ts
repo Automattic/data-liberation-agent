@@ -7,6 +7,8 @@ import { captureScreenshots, comparisonFailedAlike } from './screenshotter.js';
 import { SOURCE_NAVIGATION_LIMITS, SourceNavigationError } from '../source-navigation.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
+import { createReferenceCollector } from '../fidelity/reference.js';
+import { checkFidelity } from '../fidelity/check.js';
 import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
@@ -35,10 +37,10 @@ describe( 'device-mode evidence', () => {
 		probed.length = 0;
 		// A middle layout keeps the source's first boundary and reports its range.
 		expect( await observeSwitchWidth( [ 799, 1279 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ], [ 1280, 'desktop' ] ] ) ) )
-			.toEqual( { switchWidth: 799, uncapturedLayout: { minWidth: 800, maxWidth: 1279 } } );
+			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800, maxWidth: 1279 } } );
 		expect( probed ).toEqual( [ 800, 1280 ] );
 		expect( await observeSwitchWidth( [ 799 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ] ] ) ) )
-			.toEqual( { switchWidth: 799, uncapturedLayout: { minWidth: 800 } } );
+			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800 } } );
 		// An identity that renders the phone document at every width observes no switch.
 		expect( await observeSwitchWidth( [ 767, 1279 ], { phone: 402, desktop: 1440 }, async () => 'phone' ) ).toBeUndefined();
 	} );
@@ -381,20 +383,35 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		}
 	}, 120_000 );
 
-	it( 'switches at the source\'s own min-width boundary and reports a middle layout it does not capture', async () => {
-		const run = await capture( 'layouts' );
-		const entry = run.entries[ `${ origin }/layouts/` ]!;
-		expect( entry.deviceMode ).toMatchObject( { mode: 'dual', switchWidth: 799, uncapturedLayout: { minWidth: 800, maxWidth: 1279 } } );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/layouts/`, platform: 'neutral', summary: {}, failures: [] } ), 'utf8' ) );
-		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
-			code: 'responsive_layout_uncaptured', url: `${ origin }/layouts/`, unit: 'profile', metrics: { minWidth: 800, maxWidth: 1279 },
-		} ) );
-		const html = readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' );
+	// #1379: three structurally different layouts selected at min-width 1/800/1280.
+	// Expected wall time: ~20s (one capture with frozen references, one compare).
+	it( 'captures a middle width-range layout and selects every layout at the source\'s own boundaries', async () => {
+		mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'device-mode-layouts-' ) );
+		directories.push( outputDir );
+		const url = `${ origin }/layouts/`;
+		const collector = createReferenceCollector( outputDir, url, [ url ] );
+		await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir, concurrency: 1, settleMs: 50, learnFluid: false, force: true, deviceMode: 'auto',
+			observeSource: collector.observe, declareSourceProfile: collector.declare } );
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as { entries: Record< string, ManifestEntry > };
+		const entry = manifest.entries[ url ]!;
+		expect( entry.deviceMode ).toMatchObject( { mode: 'dual', switchWidth: 799, middleLayout: { minWidth: 800, maxWidth: 1279 } } );
+		// One viewport inside the middle range, at a common tablet width.
+		expect( entry.profiles?.middle?.viewport.width ).toBe( 1024 );
+		const receiptPath = exportWebsiteCapture( { outputDir, sourceUrl: url, platform: 'neutral', summary: {}, failures: [] } );
+		collector.finalize( receiptPath );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ?? [] ).not.toContainEqual( expect.objectContaining( { code: 'responsive_layout_uncaptured' } ) );
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 3, outcome: 'dual-structural',
+			widthRanges: [ { document: 'mobile', maxWidth: 799 }, { document: 'middle', minWidth: 800, maxWidth: 1279 }, { document: 'desktop', minWidth: 1280 } ],
+		} );
+		expect( receipt.document_scope_classes ).toContain( 'data-blocks-engine-capture-middle-document' );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const browser = await chromium.launch();
 		try {
 			const tab = await browser.newPage();
-			// 1024 is the uncaptured middle range: the copy serves the desktop document there.
-			for ( const [ width, layout ] of [ [ 390, 'phone' ], [ 768, 'phone' ], [ 799, 'phone' ], [ 800, 'desktop' ], [ 1024, 'desktop' ], [ 1440, 'desktop' ] ] as const ) {
+			for ( const [ width, layout ] of [ [ 390, 'phone' ], [ 768, 'phone' ], [ 799, 'phone' ], [ 800, 'middle' ], [ 1024, 'middle' ], [ 1279, 'middle' ], [ 1280, 'desktop' ], [ 1440, 'desktop' ] ] as const ) {
 				await tab.setViewportSize( { width, height: 900 } );
 				await tab.setContent( html );
 				const visible = await tab.evaluate( () => [ ...document.querySelectorAll( '[data-layout]' ) ].filter( node => node.getClientRects().length > 0 ).map( node => node.getAttribute( 'data-layout' ) ) );
@@ -403,7 +420,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		} finally {
 			await browser.close();
 		}
-	}, 120_000 );
+		// The gate: the copy against frozen source evidence at every width.
+		const report = await checkFidelity( { directory: outputDir, widths: [ 390, 768, 1024, 1440 ], settleMs: 50 } );
+		expect( report.scores.map( score => ( { viewport: score.viewport, pass: score.pass } ) ).sort( ( a, b ) => a.viewport - b.viewport ) )
+			.toEqual( [ 390, 768, 1024, 1440 ].map( viewport => ( { viewport, pass: true } ) ) );
+		expect( report.pass ).toBe( true );
+	}, 180_000 );
 
 	it( 'confirms a transient entrypoint HTML difference before committing the site to dual', async () => {
 		const run = await capture( 'transient' );
