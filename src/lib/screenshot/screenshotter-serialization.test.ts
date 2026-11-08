@@ -15,6 +15,59 @@ describe('capturePageHtml stylesheet serialization', () => {
     await browser.close();
   });
 
+  // One browser pass, two serializations; expected wall time is a few seconds.
+  it('keeps unchanged font sheets intact and settles runtime measurements after CSSOM rewrites', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('https://fonts.example.test/fixture.woff2', route => route.fulfill({
+        path: 'test/fixtures/resource-assets/roboto-latin-400-normal.woff2',
+        contentType: 'font/woff2',
+      }));
+      await page.setContent(`<!doctype html><style id="font-sheet">
+        /* Authored formatting must survive an unchanged CSSOM. */
+        @font-face { font-family: Fixture; src: url(https://fonts.example.test/fixture.woff2); }
+        #label { font: 40px Fixture, monospace; display: inline-block; white-space: nowrap; }
+      </style><span id="label">Measured navigation</span><script>
+        const label = document.querySelector('#label');
+        const measure = () => {
+          const range = document.createRange();
+          range.selectNodeContents(label);
+          label.style.width = range.getBoundingClientRect().width + 'px';
+        };
+        document.fonts.addEventListener('loading', measure);
+        document.fonts.addEventListener('loadingdone', () => setTimeout(measure, 100));
+        document.fonts.ready.then(measure);
+        const sheet = document.querySelector('#font-sheet');
+        new MutationObserver(records => {
+          sheet.dataset.writes = String(Number(sheet.dataset.writes || 0) + records.length);
+        }).observe(sheet, { childList: true, characterData: true, subtree: true });
+      </script>`);
+      await page.evaluate(() => document.fonts.ready);
+      await page.waitForTimeout(200);
+      const webfontWidth = await page.locator('#label').evaluate(element => (element as HTMLElement).style.width);
+      const authored = await page.locator('#font-sheet').textContent();
+      const unchanged = load(await capturePageHtml(page));
+      expect.soft(unchanged('#label').css('width')).toBe(webfontWidth);
+      expect.soft(await page.locator('#font-sheet').getAttribute('data-writes')).toBeNull();
+      expect.soft(unchanged('#font-sheet').text()).toBe(authored);
+
+      await page.evaluate(() => {
+        (document.querySelector('#font-sheet') as HTMLStyleElement).sheet!.insertRule('#label { color: rgb(1, 2, 3); }');
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync('#label { background-color: rgb(4, 5, 6); }');
+        document.adoptedStyleSheets = [sheet];
+        // Model a runtime that updates geometry on a later task after font readiness.
+        document.fonts.addEventListener('loadingdone', () => {
+          document.querySelector<HTMLElement>('#label')!.style.width = '1px';
+        });
+      });
+      const mutated = load(await capturePageHtml(page));
+      expect(mutated('#font-sheet').text()).toContain('color: rgb(1, 2, 3)');
+      expect(mutated('[data-blocks-engine-capture-constructed-stylesheet]').text()).toContain('background-color: rgb(4, 5, 6)');
+      expect(mutated('#label').css('width')).toBe(webfontWidth);
+    } finally { await page.close(); }
+  });
+
   it('omits runtime styles with no matching selectors and records byte and rule evidence', async () => {
     const page = await browser.newPage();
     try {

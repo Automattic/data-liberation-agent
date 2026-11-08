@@ -67,7 +67,7 @@ import { availableRuntimeMemory } from './runtime-memory.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument, observePageTraffic } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument, observePageTraffic, waitForFonts } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -377,8 +377,9 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 	// it correctly; only the declaration *text* is unrecoverable through the CSSOM.
 	// Repair against the <style> owner's own pre-mutation textContent (read below,
 	// before it is overwritten) — see css-shorthand-repair.ts.
-	await page.evaluate(
+	const stylesRewritten = await page.evaluate(
 		( { factorySrc, serverHtml } ) => {
+			let rewritten = false;
 			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
 			const authoredStyles = new Set<string>();
 			if ( serverHtml ) {
@@ -422,17 +423,32 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 					// Keep the source text; constructed sheets still use the active rules
 					// below because they have no serializable owner node.
 					if ( owner.hasAttribute( 'data-href' ) ) continue;
-					owner.textContent = repairShorthandVarCollapse( cssText, owner.textContent ?? '' );
+					const sourceText = owner.textContent ?? '';
+					// Compare parsed rules, not formatting. Re-parsing the live owner even
+					// with equivalent text resets its FontFaces and runtime measurements.
+					const sourceSheet = new CSSStyleSheet();
+					sourceSheet.replaceSync( sourceText );
+					const sourceRules = Array.from( sourceSheet.cssRules ).map( rule => rule.cssText ).join( '\n' );
+					if ( sourceRules === cssText ) continue;
+					owner.textContent = repairShorthandVarCollapse( cssText, sourceText );
+					rewritten = true;
 					continue;
 				}
 				const style = document.createElement( 'style' );
 				style.setAttribute( 'data-blocks-engine-capture-constructed-stylesheet', '' );
 				style.textContent = cssText;
 				document.head.appendChild( style );
+				rewritten = true;
 			}
+			return rewritten;
 		},
 		{ factorySrc: CSS_SHORTHAND_REPAIR_FACTORY_SOURCE.factorySrc, serverHtml: serverHtml ?? '' }
 	);
+	if ( stylesRewritten ) {
+		await waitForFonts( page );
+		// Font events can schedule runtime geometry writes after fonts.ready.
+		await settleDocument( page, 'stable', { quietMs: 500, timeoutMs: 5_000 } );
+	}
 	try {
 		// Serialize in the renderer's current task. page.content() round-trips through
 		// DevTools and can race framework hydration, pairing a newer class namespace
