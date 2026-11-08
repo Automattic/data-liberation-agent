@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.178] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- Responsive assembly: keep authored fragment links route-independent; resolve the visible device copy via responsive-fragment
+
+### Fixed
+- key srcset fixtures by resolved references, not the route URL
+
 ## [0.33.177] - 2026-11-08
 
 ### Changed
