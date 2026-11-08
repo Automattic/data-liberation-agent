@@ -43,6 +43,7 @@ import {
 	DESKTOP_DOCUMENT_CLASS,
 	MOBILE_DOCUMENT_CLASS,
 	projectResponsiveIdentityCss,
+	projectResponsiveSvgCss,
 	projectResponsiveBodyClassCss,
 	projectCollapsedBodyClassCss,
 	responsiveMovedBodyClasses,
@@ -2073,7 +2074,7 @@ function buildExportCapture(
 		portableRouteLinks.has( documentRequestUrl( route.url ) ) &&
 		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
 	);
-	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false };
+	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false, svgIds: new Set<string>() };
 	// An image captured as a page resource, not as a media stub, still names one
 	// picture at several sizes. Let the largest captured size stand for the
 	// picture wherever only the picture, not a size, is named.
@@ -2203,7 +2204,7 @@ function buildExportCapture(
 	selfContainWebsite( websiteDir );
 	// Author identity selectors can live in linked/imported stylesheets, not
 	// only inline <style>. Project the localized copies with the same primitive.
-	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases || responsiveBodyClassProjections.size || collapsedBodyClassProjections.size ) {
+	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases || responsiveIdentities.svgIds.size || responsiveBodyClassProjections.size || collapsedBodyClassProjections.size ) {
 		const projectStylesheets = ( directory: string ): void => {
 			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
 				const path = join( directory, entry.name );
@@ -2212,7 +2213,7 @@ function buildExportCapture(
 					const original = readFileSync( path, 'utf8' );
 					const projected = projectStylesheet(
 						() => {
-							let css = projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases );
+							let css = projectResponsiveIdentityCss( projectResponsiveSvgCss( original, responsiveIdentities.svgIds ), responsiveIdentities.ids, responsiveIdentities.namedAliases );
 							for ( const moved of responsiveBodyClassProjections.values() ) css = projectResponsiveBodyClassCss( css, moved, true );
 							for ( const { moved, aliases, width } of collapsedBodyClassProjections.values() ) css = projectCollapsedBodyClassCss( css, moved, aliases, width );
 							return css;
