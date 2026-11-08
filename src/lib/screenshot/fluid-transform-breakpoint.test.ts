@@ -8,7 +8,8 @@ import { exportWebsiteCapture } from '../capture-export.js';
 
 // Real capture/export (~15s per case), including initial-document projection
 // and computed-style serialization. Use the production adaptive sweep.
-it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions' ] )( 'exports %s with a scaled box equal to its parent', async scenario => {
+// The positioned case also verifies absolute dimensions against source samples.
+it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions', 'positioned dimensions' ] )( 'exports %s across viewport breakpoints', async scenario => {
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'fluid-scale-breakpoint-' ) );
@@ -19,15 +20,23 @@ it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions' ] )( 'e
 		const fit = () => {
 			const viewport = innerWidth;
 			const constant = ${ scenario === 'constant dimensions' };
-			const width = constant ? 256 : viewport > 800 ? 1800 : 860;
-			const scale = constant ? .7038 + viewport * .00006174 : viewport / width;
-			const height = constant ? 264.646 : viewport > 800 ? 256 : viewport >= 768 ? 356 : 300 + viewport * viewport / 10000;
+			const positioned = ${ scenario === 'positioned dimensions' };
+			// Measured Canva frame: nonlinear phone sizing, a layout switch,
+			// then proportional desktop sizing capped at the reference width.
+			const points = [[320,249.732],[360,258.989],[390,265.036],[414,269.411],[600,293.848],[768,307.425],[900,315.05],[1024,320.653],[1200,291.094],[1280,310.501],[1366,331.362],[1920,331.362]];
+			const upper = points.findIndex(point => point[0] >= viewport);
+			const low = points[Math.max(0, upper - 1)], high = points[upper < 0 ? points.length - 1 : upper];
+			const measuredWidth = low[0] === high[0] ? low[1] : low[1] + (high[1] - low[1]) * (viewport - low[0]) / (high[0] - low[0]);
+			const width = positioned ? measuredWidth : constant ? 256 : viewport > 800 ? 1800 : 860;
+			const scale = positioned ? 1 : constant ? .7038 + viewport * .00006174 : viewport / width;
+			const height = positioned ? width * 395.178 / 331.362 : constant ? 264.646 : viewport > 800 ? 256 : viewport >= 768 ? 356 : 300 + viewport * viewport / 10000;
 			const container = document.querySelector('#container');
 			const frame = document.querySelector('#frame');
-			container.style.width = width * scale + 'px';
+			container.style.width = (positioned ? viewport : width * scale) + 'px';
+			if ( positioned ) { frame.style.position = 'absolute'; frame.style.transform = 'translate(20px, 30px)'; }
 			container.style.height = height * scale + 'px';
 			frame.style.width = width + 'px'; frame.style.height = height + 'px';
-			frame.style.transform = 'scale(' + scale + ')';
+			if ( ! positioned ) frame.style.transform = 'scale(' + scale + ')';
 		}; addEventListener('resize', fit); fit();
 		</script></body></html>`;
 	const fixture = scenario !== 'identity scale' ? dimensionsFixture : `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><style>#container { width:559.172px } @media (max-width:1300px) { #container { width:40.93vw } } @media (max-width:1100px) { #container { width:calc(451.43px + 8.76vw) } }</style><body>
@@ -65,6 +74,11 @@ it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions' ] )( 'e
 				const container = document.querySelector( '#container' )!.getBoundingClientRect();
 				return { left: frame.left, containerLeft: container.left, width: frame.width, containerWidth: container.width, height: frame.height, containerHeight: container.height };
 			} );
+			if ( scenario === 'positioned dimensions' ) {
+				const expected = { 768: 307.425, 1024: 320.653, 1200: 291.094, 1440: 331.362 }[ width ]!;
+				expect( Math.abs( geometry.width - expected ), `positioned width at ${ width }px` ).toBeLessThanOrEqual( 1 );
+				continue;
+			}
 			expect( geometry.left, `frame left at ${ width }px` ).toBeCloseTo( geometry.containerLeft, 0 );
 			expect( Math.abs( geometry.width - geometry.containerWidth ), `frame width at ${ width }px` ).toBeLessThanOrEqual( 1 );
 			if ( scenario !== 'identity scale' ) expect( Math.abs( geometry.height - geometry.containerHeight ), `frame height at ${ width }px` ).toBeLessThanOrEqual( 1 );
