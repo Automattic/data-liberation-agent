@@ -208,6 +208,17 @@ function recordStyleHoistDiagnostic(
 }
 
 
+function stylesheetElements( $: cheerio.CheerioAPI ) {
+	return $( 'style' ).filter( ( _index, element ) => {
+		// Template contents have a fragment root, so follow parents rather than
+		// relying on an element-only ancestor traversal.
+		for ( let ancestor = element.parent; ancestor; ancestor = ancestor.parent ) {
+			if ( 'tagName' in ancestor && [ 'template', 'script', 'noscript' ].includes( ancestor.tagName ) ) return false;
+		}
+		return true;
+	} );
+}
+
 /** Localize shared inline styles and rewrite only private staged page documents. */
 export function materializeSharedStylesheets( input: SharedStylesheetInput ): SharedStylesheetResult {
 	const { entries: retainedEntries, websiteDir, sourceUrl, mediaReplacements, resourceReplacements, rejectedReplacementKeys } = input;
@@ -215,11 +226,15 @@ export function materializeSharedStylesheets( input: SharedStylesheetInput ): Sh
 	const inlineStyles = new Map< string, Array< { entry: SharedStylesheetEntry; css: string; media: string } > >();
 	const styleHoistDiagnostics = createStyleHoistDiagnosticCollector();
 	for ( const entry of retainedEntries ) {
-		const html = readFileSync( entry.htmlPath, 'utf8' );
+		const $ = cheerio.load( readFileSync( entry.htmlPath, 'utf8' ) );
 		let styleIndex = 0;
-		for ( const match of html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ) {
-			const reason = styleHoistReason( entry, styleIndex++, match[ 1 ], match[ 2 ] );
-			const style = portableInlineStyle( match[ 1 ], match[ 2 ] );
+		for ( const element of stylesheetElements( $ ).toArray() ) {
+			const attributes = Object.entries( element.attribs )
+				.map( ( [ name, value ] ) => ` ${ name }="${ escapeHtmlAttr( value ?? '' ) }"` )
+				.join( '' );
+			const css = $( element ).html() ?? '';
+			const reason = styleHoistReason( entry, styleIndex++, attributes, css );
+			const style = portableInlineStyle( attributes, css );
 			if ( reason || !style ) {
 				recordStyleHoistDiagnostic( styleHoistDiagnostics, {
 					sourceUrl: entry.url,
@@ -230,7 +245,7 @@ export function materializeSharedStylesheets( input: SharedStylesheetInput ): Sh
 			const occurrences = inlineStyles.get( style.key ) ?? [];
 			occurrences.push( {
 				entry,
-				css: match[ 2 ],
+				css,
 				media: style.media,
 			} );
 			inlineStyles.set( style.key, occurrences );
@@ -266,7 +281,7 @@ export function materializeSharedStylesheets( input: SharedStylesheetInput ): Sh
 	if ( sharedStyles.size > 0 ) {
 		for ( const entry of retainedEntries ) {
 			const $ = cheerio.load( readFileSync( entry.htmlPath, 'utf8' ) );
-			$( 'style' ).each( ( _index, element ) => {
+			stylesheetElements( $ ).each( ( _index, element ) => {
 				const attributes = 'attribs' in element ? element.attribs : {};
 				const style = portableInlineStyle(
 					Object.entries( attributes )
