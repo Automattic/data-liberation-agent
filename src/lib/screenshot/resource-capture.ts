@@ -533,9 +533,7 @@ export class CapturedResourceStore {
 				await page.setViewportSize( { width, height: original.height } );
 				const fixture = await page.evaluate( async () => {
 					await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
-					// Only an image with a candidate list has a rendition to select.
-					const images = Array.from( document.querySelectorAll<HTMLImageElement>( 'img[srcset],picture img' ) ).filter( image =>
-						image.hasAttribute( 'srcset' ) || ( image.parentElement?.tagName === 'PICTURE' && image.parentElement.querySelector( 'source[srcset]' ) ) );
+					const images = Array.from( document.querySelectorAll<HTMLImageElement>( 'img[srcset],picture img' ) );
 					const html: string[] = [];
 					// Capture and source bookkeeping attributes never affect selection,
 					// and per-route values would hide an image already resolved.
