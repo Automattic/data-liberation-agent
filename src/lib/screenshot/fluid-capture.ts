@@ -75,7 +75,7 @@ export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'lef
 
 export interface FluidSweepOptions {
 	/** Distinguishes rule identities when responsive documents share a stylesheet. */
-	document?: 'desktop' | 'mobile';
+	document?: 'desktop' | 'mobile' | 'middle';
 	/**
 	 * Widths to observe, sampled exactly as given. Omitted: the coarse widths,
 	 * refined within DEFAULT_SWEEP_WIDTHS where the observations need it.

@@ -100,6 +100,7 @@ import {
 
 import { extractSharedChrome } from './shared-chrome.js';
 import { lowerScriptedLinks } from './screenshot/scripted-links.js';
+import { MIDDLE_PROFILE_ID, type MiddleLayout } from './screenshot/device-mode.js';
 
 /** Strip correspondence used only during capture, before HTML is encoded as replay state. */
 function withoutCaptureBookkeeping( html: string ): string {
@@ -1434,7 +1435,7 @@ function buildExportCapture(
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
 	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
 	const redirectAliases: Array< { url: string; target: string } > = [];
-	const responsiveBodyClassProjections = new Map<string, ReadonlyMap<string, string>>();
+	const responsiveBodyClassProjections = new Map<string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] }>();
 	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
 		// One route's non-integrity failure drops that route, not the capture. Integrity
@@ -1579,8 +1580,16 @@ function buildExportCapture(
 					? Math.round( entry.fluid.canvasFloor )
 					: phoneResponsiveSwitchWidth( entry, siteSwitchWidth );
 			if ( detectedFloor ) switchWidths.push( detectedFloor );
-			const middle = entry.deviceMode?.switchWidth === detectedFloor ? entry.deviceMode?.uncapturedLayout : undefined;
-			if ( middle ) routeCaptureDiagnostics.push( {
+			// A source that selects a third layout by width (#1379): a bounded range
+			// with its captured document ships as the middle document; otherwise
+			// the copy serves the desktop document there and says so.
+			const middle = entry.deviceMode?.switchWidth === detectedFloor
+				? entry.deviceMode?.middleLayout ?? ( entry.deviceMode as { uncapturedLayout?: MiddleLayout } | undefined )?.uncapturedLayout
+				: undefined;
+			const rawMiddleHtml = middle?.maxWidth !== undefined && selection?.kind !== 'device' && rawMobileHtml !== undefined
+				? sourceDocuments[ MIDDLE_PROFILE_ID ]
+				: undefined;
+			if ( middle && rawMiddleHtml === undefined ) routeCaptureDiagnostics.push( {
 				code: 'responsive_layout_uncaptured', url, unit: 'profile', severity: 'warning',
 				reason: `source renders a third layout, neither the phone nor the desktop document, from ${ middle.minWidth }px${ middle.maxWidth === undefined ? '' : ` to ${ middle.maxWidth }px` }; the copy serves the desktop document there`,
 				metrics: { minWidth: middle.minWidth, ...( middle.maxWidth === undefined ? {} : { maxWidth: middle.maxWidth } ) },
@@ -1627,13 +1636,25 @@ function buildExportCapture(
 				portableDesktopHtml: desktopHtml,
 				portableMobileHtml: mobileHtml,
 				switchWidth: detectedFloor,
+				...( rawMiddleHtml === undefined || middle?.maxWidth === undefined ? {} : {
+					portableMiddleHtml: [ { html: portableDocument( rawMiddleHtml ), minWidth: middle.minWidth, maxWidth: middle.maxWidth } ],
+				} ),
 				onUnparseableStylesheet,
 			} );
 			if ( assembly.hasMobileDocument && ! deviceAssembly ) {
 				const $ = cheerio.load( assembly.html );
 				const classes = ( scope: string ) => ( $( `.${ scope }` ).first().attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== scope );
-				const moved = responsiveMovedBodyClasses( classes( DESKTOP_DOCUMENT_CLASS ), classes( MOBILE_DOCUMENT_CLASS ) );
-				if ( moved.size ) responsiveBodyClassProjections.set( JSON.stringify( [ ...moved ] ), moved );
+				// Middle width-range documents (#1379) are further wrappers whose
+				// tokens move the same way; linked styles must reach every wrapper.
+				const middleClasses = $( '[data-blocks-engine-capture-document-scope]' ).toArray()
+					.flatMap( node => ( $( node ).attr( 'class' ) ?? '' ).split( /\s+/ ) )
+					.filter( token => /^data-blocks-engine-capture-middle(?:-\d+)?-document$/.test( token ) );
+				const documentClasses = middleClasses.length ? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, ...middleClasses ] : undefined;
+				const tokenSets = ( documentClasses ?? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] ).map( scope => ( { scope, tokens: classes( scope ) } ) );
+				const moved = documentClasses
+					? new Map( tokenSets.flatMap( ( { scope, tokens } ) => tokens.filter( token => ! tokenSets.every( other => other.tokens.includes( token ) ) ).map( token => [ token, scope ] as const ) ).reverse() )
+					: responsiveMovedBodyClasses( classes( DESKTOP_DOCUMENT_CLASS ), classes( MOBILE_DOCUMENT_CLASS ) );
+				if ( moved.size ) responsiveBodyClassProjections.set( JSON.stringify( [ [ ...moved ], documentClasses ] ), { moved, documentClasses } );
 			}
 			if ( !assembly.hasMobileDocument && assembly.evidence?.outcome === 'collapsed-identity-subset' && rawMobileHtml ) {
 				const classes = ( html: string ) => ( cheerio.load( html )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
@@ -2079,7 +2100,7 @@ function buildExportCapture(
 		portableRouteLinks.has( documentRequestUrl( route.url ) ) &&
 		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
 	);
-	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false, svgIds: new Set<string>() };
+	const responsiveIdentities = { ids: new Map<string, string | string[]>(), namedAliases: false, svgIds: new Set<string>() };
 	// An image captured as a page resource, not as a media stub, still names one
 	// picture at several sizes. Let the largest captured size stand for the
 	// picture wherever only the picture, not a size, is named.
@@ -2219,7 +2240,7 @@ function buildExportCapture(
 					const projected = projectStylesheet(
 						() => {
 							let css = projectResponsiveIdentityCss( projectResponsiveSvgCss( original, responsiveIdentities.svgIds ), responsiveIdentities.ids, responsiveIdentities.namedAliases );
-							for ( const moved of responsiveBodyClassProjections.values() ) css = projectResponsiveBodyClassCss( css, moved, true );
+							for ( const { moved, documentClasses } of responsiveBodyClassProjections.values() ) css = projectResponsiveBodyClassCss( css, moved, true, documentClasses );
 							for ( const { moved, aliases, width } of collapsedBodyClassProjections.values() ) css = projectCollapsedBodyClassCss( css, moved, aliases, width );
 							return css;
 						},

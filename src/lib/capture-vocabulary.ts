@@ -49,8 +49,12 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		'source-media': 'a', 'compat-mode': 'a',
 		'device-only': 'a', 'device-hide': 'a', 'device-inline': 'a', 'reconcile-node': 'a', 'source-selector': 'a',
 		'desktop-document': 'c', 'mobile-document': 'c', 'desktop-only': 'c', 'mobile-only': 'c',
+		/** Wrapper of a source's middle width-range layout, between the phone and desktop documents (#1379). */
+		'middle-document': 'c',
 		/** Id suffix of the mobile copy (`<id>--data-blocks-engine-capture-mobile`). */
 		mobile: 'i',
+		/** Id suffix of the middle copy (`<id>--data-blocks-engine-capture-middle`). */
+		middle: 'i',
 	},
 	responsive: {
 		'root-class-contracts': 'a',

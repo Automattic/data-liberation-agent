@@ -145,6 +145,16 @@ export function compareStructure( desktop: readonly string[], phone: readonly st
 }
 
 /**
+ * Drop empty elements directly under `<body>` from a path list. They are mount
+ * points a runtime appends for one identity or width (a portal, a toast host)
+ * with nothing rendered in them, so the switch probe does not let one decide
+ * which document the phone identity is rendering.
+ */
+export function withoutEmptyBodyMounts( paths: readonly string[] ): string[] {
+	return paths.filter( path => ! /^html>body\[\d+\]>[^>]+\[\]$/.test( path ) );
+}
+
+/**
  * Drop the subtrees rooted at `roots` from a document-order path list and
  * renumber the remaining paths, so an excluded element does not shift the
  * position of its later same-tag siblings.
@@ -184,7 +194,17 @@ export function withoutSubtrees( paths: readonly string[], roots: readonly strin
  * elements of a structurally identical phone page).
  */
 export async function renderedElementPaths( page: Page, mark?: { attribute: string; paths: readonly string[] } ): Promise< string[] > {
-	const { paths, overlays } = await page.evaluate( ( { mark, dialogSelector, vendorSource } ) => {
+	return ( await renderedElementStructure( page, mark ) ).paths;
+}
+
+/**
+ * `renderedElementPaths` plus the sorted, distinct class tokens of the same kept
+ * elements below `<body>` (`<body>`'s own classes are `renderedBodyClasses`).
+ * Two width-selected frames can share one tag tree and differ only in classes,
+ * so the switch probe compares both.
+ */
+export async function renderedElementStructure( page: Page, mark?: { attribute: string; paths: readonly string[] } ): Promise< { paths: string[]; classTokens: string[] } > {
+	const { paths, classes, overlays } = await page.evaluate( ( { mark, dialogSelector, vendorSource } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
 		// Invisible frames and pixels appended to <body> are tracking and messaging
 		// channels that third-party scripts inject on their own schedule, not page
@@ -204,6 +224,7 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 		const contentless = new Set( [ 'AREA', 'AUDIO', 'BASE', 'BR', 'CANVAS', 'COL', 'EMBED', 'HR', 'IFRAME', 'IMG', 'INPUT', 'LINK', 'META', 'OBJECT', 'SELECT', 'SOURCE', 'TEXTAREA', 'TRACK', 'VIDEO', 'WBR' ] );
 		const emptyContainer = ( element: Element ) => ! element.hasChildNodes() && element.namespaceURI === 'http://www.w3.org/1999/xhtml' && ! contentless.has( element.tagName );
 		const paths: string[] = [];
+		const classes: string[][] = [];
 		const walk = ( element: Element, prefix: string ) => {
 			const seen = new Map< string, number >();
 			for ( const child of Array.from( element.children ) ) {
@@ -214,6 +235,7 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 				if ( ! empty ) seen.set( tag, position );
 				const path = empty ? `${ prefix }>${ tag }[]` : `${ prefix }>${ tag }[${ position }]`;
 				paths.push( path );
+				classes.push( child.parentElement && document.body?.contains( child.parentElement ) ? Array.from( child.classList ) : [] );
 				if ( marked?.has( path ) ) child.setAttribute( mark!.attribute, '' );
 				// An empty container has no subtree, and its path is shared by its empty siblings.
 				if ( ! empty && ( child.matches( dialogSelector ) || vendor.test( `${ child.id } ${ className( child ) }` ) ) ) {
@@ -223,10 +245,14 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 			}
 		};
 		paths.push( 'html' );
+		classes.push( [] );
 		walk( document.documentElement, 'html' );
-		return { paths, overlays };
+		return { paths, classes, overlays };
 	}, { mark, dialogSelector: CONSENT_OVERLAY_DIALOG_SELECTOR, vendorSource: CONSENT_VENDOR_RE.source } );
-	return withoutSubtrees( paths, overlays.filter( overlay => isConsentOverlayRoot( overlay.element ) ).map( overlay => overlay.path ) );
+	const roots = overlays.filter( overlay => isConsentOverlayRoot( overlay.element ) ).map( overlay => overlay.path );
+	const excluded = ( path: string ) => roots.some( root => path === root || path.startsWith( `${ root }>` ) );
+	const classTokens = [ ...new Set( paths.flatMap( ( path, index ) => excluded( path ) ? [] : classes[ index ] ?? [] ) ) ].sort();
+	return { paths: withoutSubtrees( paths, roots ), classTokens };
 }
 
 /** Class tokens on `<body>` that one identity rendered and the other did not. */
@@ -449,10 +475,33 @@ export interface RouteDeviceDecision {
 	/**
 	 * Dual route only: the source renders a third layout, neither the phone nor
 	 * the desktop document, from `minWidth` up to `maxWidth` (inclusive; absent
-	 * when no probed boundary reached the desktop document). Capture keeps two
-	 * documents, so the copy serves the desktop document across this range.
+	 * when no later probed boundary changed the rendering). A bounded range is
+	 * captured as the `middle` profile at one width inside it, and the copy
+	 * selects that document across the range; an unbounded one stays a
+	 * `responsive_layout_uncaptured` finding.
 	 */
-	uncapturedLayout?: { minWidth: number; maxWidth?: number };
+	middleLayout?: MiddleLayout;
+}
+
+/** A width-selected source layout between the phone and desktop documents (inclusive bounds). */
+export interface MiddleLayout { minWidth: number; maxWidth?: number }
+
+/** Capture profile id of the middle layout's document. */
+export const MIDDLE_PROFILE_ID = 'middle';
+
+/** Common tablet widths, preferred in order as the middle range's sample. */
+const MIDDLE_SAMPLE_WIDTHS = [ 1024, 768 ];
+
+/**
+ * The one viewport width sampled inside a bounded middle range: a common tablet
+ * width when the range contains one (so the frozen evidence lands on a width
+ * readers and checks actually use), else the range's midpoint. Neither of the
+ * source's own boundaries is ever the capture width.
+ */
+export function middleLayoutSampleWidth( layout: MiddleLayout | undefined ): number | undefined {
+	if ( ! layout || layout.maxWidth === undefined || layout.maxWidth < layout.minWidth ) return undefined;
+	const inside = ( width: number ): boolean => width > layout.minWidth && width < layout.maxWidth!;
+	return MIDDLE_SAMPLE_WIDTHS.find( inside ) ?? Math.floor( ( layout.minWidth + layout.maxWidth ) / 2 );
 }
 
 /** Each probe loads the phone identity once more; stop after the nearest few boundaries. */
@@ -461,9 +510,50 @@ const SWITCH_PROBE_LIMIT = 4;
 /** What the phone identity rendered just above one boundary. */
 export type SwitchProbeRendering = 'phone' | 'desktop' | 'other';
 
+/** One probe: its classification against both capture-width documents, plus the rendering itself. */
+export interface SwitchProbe< R > {
+	rendered: SwitchProbeRendering;
+	rendering: R;
+}
+
 export interface ObservedSwitch {
 	switchWidth: number;
-	uncapturedLayout?: { minWidth: number; maxWidth?: number };
+	middleLayout?: MiddleLayout;
+}
+
+/** What one identity rendered at one width, as the switch probe compares it. */
+export interface SwitchRendering {
+	paths: string[];
+	bodyClasses: string[];
+	/** Class tokens of the rendered elements below `<body>` (`renderedElementStructure`). */
+	classTokens: string[];
+}
+
+/**
+ * The switch probe's rendering identity, against both capture-width
+ * renderings. Two renderings match when the route check would call them the
+ * same document (structure without empty body mounts, body classes) and they
+ * render the same class tokens below `<body>`: width-selected frames can share
+ * one tag tree and differ only in classes. A token that only one identity
+ * renders at its capture width can be that identity's runtime marker rather
+ * than its layout, so it never decides a match; a token neither capture-width
+ * rendering has (a middle frame's own classes) always does.
+ */
+export function switchProbeIdentity(
+	references: { desktop: SwitchRendering; phone: SwitchRendering },
+	serverHtml: 'identical' | 'identical-after-normalization',
+): { classify: ( probe: SwitchRendering ) => SwitchProbeRendering; same: ( a: SwitchRendering, b: SwitchRendering ) => boolean } {
+	const desktopTokens = new Set( references.desktop.classTokens );
+	const phoneTokens = new Set( references.phone.classTokens );
+	const ignored = new Set( [ ...desktopTokens, ...phoneTokens ].filter( token => desktopTokens.has( token ) !== phoneTokens.has( token ) ) );
+	const decisive = ( tokens: readonly string[] ) => new Set( tokens.filter( token => ! ignored.has( token ) ) );
+	const sameTokens = ( a: readonly string[], b: readonly string[] ) => {
+		const left = decisive( a ), right = decisive( b );
+		return left.size === right.size && [ ...left ].every( token => right.has( token ) );
+	};
+	const same = ( a: SwitchRendering, b: SwitchRendering ) => sameTokens( a.classTokens, b.classTokens ) &&
+		decideRouteMode( { serverHtml, structure: compareStructure( withoutEmptyBodyMounts( a.paths ), withoutEmptyBodyMounts( b.paths ) ), bodyClasses: compareBodyClasses( a.bodyClasses, b.bodyClasses ) } ).mode === 'reflow-only';
+	return { classify: probe => same( references.desktop, probe ) ? 'desktop' : same( references.phone, probe ) ? 'phone' : 'other', same };
 }
 
 /**
@@ -473,28 +563,33 @@ export interface ObservedSwitch {
  * boundary above which it no longer renders the phone document is the switch:
  * the source's own boundary, never a point between the two sampled widths.
  * When that rendering is not the desktop document either, the source has a
- * middle layout; later boundaries are probed for where the desktop document
- * starts, and the range is reported as uncaptured. A boundary is never chosen
- * merely for being the widest; rendering the phone document everywhere
- * observes nothing.
+ * middle layout. It ends at the first later boundary above which the phone
+ * identity stops rendering that middle rendering (`sameRendering`), whether or
+ * not what follows matches the desktop identity exactly: a runtime can render
+ * the desktop frame for the phone identity with its own injected styles or
+ * body classes. The range stays unbounded only when no later boundary changes
+ * the rendering. A boundary is never chosen merely for being the widest;
+ * rendering the phone document everywhere observes nothing.
  */
-export async function observeSwitchWidth(
+export async function observeSwitchWidth< R >(
 	candidates: readonly number[],
 	range: { phone: number; desktop: number },
-	classify: ( width: number ) => Promise< SwitchProbeRendering >,
+	probe: ( width: number ) => Promise< SwitchProbe< R > >,
+	sameRendering: ( a: R, b: R ) => boolean,
 ): Promise< ObservedSwitch | undefined > {
 	const widths = [ ...new Set( candidates ) ]
 		.filter( width => Number.isInteger( width ) && width >= range.phone && width < range.desktop )
 		.sort( ( a, b ) => a - b )
 		.slice( 0, SWITCH_PROBE_LIMIT );
 	for ( const [ index, width ] of widths.entries() ) {
-		const rendered = await classify( width + 1 );
-		if ( rendered === 'phone' ) continue;
-		if ( rendered === 'desktop' ) return { switchWidth: width };
+		const middle = await probe( width + 1 );
+		if ( middle.rendered === 'phone' ) continue;
+		if ( middle.rendered === 'desktop' ) return { switchWidth: width };
 		for ( const wider of widths.slice( index + 1 ) ) {
-			if ( await classify( wider + 1 ) === 'desktop' ) return { switchWidth: width, uncapturedLayout: { minWidth: width + 1, maxWidth: wider } };
+			const next = await probe( wider + 1 );
+			if ( next.rendered === 'desktop' || ! sameRendering( middle.rendering, next.rendering ) ) return { switchWidth: width, middleLayout: { minWidth: width + 1, maxWidth: wider } };
 		}
-		return { switchWidth: width, uncapturedLayout: { minWidth: width + 1 } };
+		return { switchWidth: width, middleLayout: { minWidth: width + 1 } };
 	}
 	return undefined;
 }

@@ -110,6 +110,42 @@ or unrelated stylesheet boundary cannot override this declaration. Undeclared
 legacy captures retain their existing assembly and do not gain a claim of measured
 device selection.
 
+### Middle width ranges
+
+Width selection is not limited to two documents. When a dual route's phone
+identity, probed just above each stylesheet width boundary, renders a layout that
+is neither the phone nor the desktop document, the source declares a third,
+middle layout (#1379). The range ends at the first later boundary above which the
+phone identity's rendering stops matching that middle rendering. A probe's
+rendering is its body structure, body classes and the class tokens of every
+element below `<body>`: width-selected frames can share one tag tree and differ
+only in classes. A token that only one identity renders at its capture width
+never decides a match (it can be that identity's runtime marker); a token
+neither capture-width rendering has always does. It need not match the desktop identity exactly: a
+runtime can render the desktop frame for the phone identity with its own injected
+styles or body classes. Probe classification ignores empty elements directly
+under `<body>`: they are runtime mount points that one identity or width gains
+without rendering anything. Capture
+samples one desktop-identity viewport inside that range — a common tablet width
+(1024, then 768) when the range contains one, otherwise its midpoint — as the
+`middle` capture profile. The export assembles the documents as ordered width
+ranges, each selected at the source's own boundaries:
+
+| Width | Document wrapper |
+|---|---|
+| ≤ `switchWidth` | `data-blocks-engine-capture-mobile-document` |
+| `switchWidth + 1` … middle `maxWidth` | `data-blocks-engine-capture-middle-document` |
+| > middle `maxWidth` | `data-blocks-engine-capture-desktop-document` |
+
+The outermost ranges keep the desktop and mobile classes, so two-layout output is
+unchanged. The middle document's anchor targets take the
+`--data-blocks-engine-capture-middle` id suffix and its styles apply only inside
+its range. The route's `responsiveVariants` records `variants: 3` and the
+`widthRanges`; its frozen reference cell is the sampled middle width. A middle
+range with no upper bound (no later probed boundary changed the middle rendering), or
+without a captured middle document, keeps the two-document assembly and reports
+`responsive_layout_uncaptured`.
+
 ## Classic Wix coverage
 
 The Wix hook activates only for a captured `wixDesktopViewport` and a classic

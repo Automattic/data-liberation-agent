@@ -749,6 +749,10 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				// generic consumer can recognize them as a document-scope boundary
 				// without hardcoding this tool's naming convention.
 				document_scope_classes: [ ...new Set( [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS,
+					// Middle width-range documents (#1379), in width order.
+					...routes.flatMap( route => route.responsiveVariants?.widthRanges ?? [] )
+						.filter( range => range.document !== 'desktop' && range.document !== 'mobile' )
+						.map( range => `data-blocks-engine-capture-${ range.document }-document` ),
 					...deviceSelections.flatMap( row => row.documents.filter( key => ! row.missing.includes( key ) ).map( key => `data-blocks-engine-capture-${ key }-document` ) ),
 				] ) ],
 				routes,

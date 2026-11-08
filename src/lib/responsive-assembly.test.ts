@@ -10,12 +10,14 @@ import {
 	assembleResponsiveCapture,
 	DESKTOP_DOCUMENT_CLASS,
 	documentsDiffer,
+	MIDDLE_DOCUMENT_CLASS,
 	MOBILE_DOCUMENT_CLASS,
 	projectResponsiveIdentityCss,
 	type ResponsiveAssembly,
 	routePhoneDocumentFragments,
 } from './responsive-assembly.js';
 import { scopeCss } from './replicate/css-scope.js';
+import { middleLayoutSampleWidth } from './screenshot/device-mode.js';
 
 const dirs: string[] = [];
 
@@ -897,5 +899,36 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 		// emitted one document. Metadata now matches that emitted tree.
 		expect( exported.receipt.routes[ 0 ].responsiveVariants?.outcome ).not.toBe( 'dual-structural' );
 		expect( exported.profile.documentsPerRoute ).not.toBe( 2 );
+	} );
+} );
+
+describe( 'middle width ranges (#1379)', () => {
+	const doc = ( body: string, css = '' ) => `<!DOCTYPE html><html><head><style>body{margin:0}${ css }</style></head><body>${ body }</body></html>`;
+	it( 'ships a middle document selected only inside its own width range, with its own anchor identities', () => {
+		const desktop = doc( '<nav><a href="#about" data-blocks-engine-capture-anchor-fragment="about">About</a></nav><div class="cols"><section id="about" data-blocks-engine-capture-anchor-target="about">Desktop</section></div>' );
+		const mobile = doc( '<section class="stack"><p id="about" data-blocks-engine-capture-anchor-target="about">Phone</p></section>' );
+		const middle = doc( '<nav><a href="#about" data-blocks-engine-capture-anchor-fragment="about">About</a></nav><div class="grid"><article id="about" data-blocks-engine-capture-anchor-target="about">Middle</article></div>', '.grid{display:grid}' );
+		const result = assembleResponsiveCapture( {
+			rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile, switchWidth: 799,
+			portableMiddleHtml: [ { html: middle, minWidth: 800, maxWidth: 1279 } ],
+		} );
+		expect( result.hasMobileDocument ).toBe( true );
+		expect( result.evidence ).toMatchObject( { variants: 3, outcome: 'dual-structural', widthRanges: [
+			{ document: 'mobile', maxWidth: 799 }, { document: 'middle', minWidth: 800, maxWidth: 1279 }, { document: 'desktop', minWidth: 1280 },
+		] } );
+		const $ = cheerio.load( result.html );
+		expect( $( 'body > div' ).toArray().map( node => $( node ).attr( 'class' ) ) ).toEqual( [ DESKTOP_DOCUMENT_CLASS, MIDDLE_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] );
+		expect( $( `.${ MIDDLE_DOCUMENT_CLASS } article` ).attr( 'id' ) ).toBe( 'about--data-blocks-engine-capture-middle' );
+		// Authored links stay route-independent (#1569); the visible copy is resolved at navigation.
+		expect( $( `.${ MIDDLE_DOCUMENT_CLASS } a` ).attr( 'href' ) ).toBe( '#about' );
+		expect( $( `.${ MOBILE_DOCUMENT_CLASS } p` ).attr( 'id' ) ).toBe( 'about--data-blocks-engine-capture-mobile' );
+		expect( result.html ).toContain( `@media(min-width:800px) and (max-width:1279px){.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ MIDDLE_DOCUMENT_CLASS }{display:contents!important}}` );
+		expect( result.html ).toMatch( /<style media="\(min-width:800px\) and \(max-width:1279px\)">[^<]*:where\(\.data-blocks-engine-capture-middle-document\) \.grid\{display:grid\}/ );
+	} );
+
+	it( 'samples a common tablet width inside the range, else its midpoint', () => {
+		expect( middleLayoutSampleWidth( { minWidth: 800, maxWidth: 1279 } ) ).toBe( 1024 );
+		expect( middleLayoutSampleWidth( { minWidth: 1100, maxWidth: 1199 } ) ).toBe( 1149 );
+		expect( middleLayoutSampleWidth( { minWidth: 800 } ) ).toBeUndefined();
 	} );
 } );

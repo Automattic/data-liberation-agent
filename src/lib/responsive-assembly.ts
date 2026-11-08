@@ -48,6 +48,32 @@ import {
  */
 export const DESKTOP_DOCUMENT_CLASS = 'data-blocks-engine-capture-desktop-document';
 export const MOBILE_DOCUMENT_CLASS = 'data-blocks-engine-capture-mobile-document';
+/**
+ * Class token of a middle width range's document (#1379): a source whose width
+ * breakpoints select a third layout between the phone and desktop documents
+ * ships it as a further wrapper. The outermost ranges keep the desktop and
+ * mobile classes; further middle ranges are `<key>-document` with key
+ * `middle-<n>`, ordered by width. Each middle copy of an anchor target takes
+ * the `--data-blocks-engine-capture-<key>` id suffix.
+ */
+export const MIDDLE_DOCUMENT_CLASS = 'data-blocks-engine-capture-middle-document';
+
+/** A middle width range's document, between the phone and desktop documents (inclusive bounds). */
+export interface ResponsiveWidthDocument {
+	html: string;
+	minWidth: number;
+	maxWidth: number;
+}
+
+/** The key, class and id suffix of the middle range at `index` (ordered by width). */
+function middleVariant( index: number ): { key: string; className: string } {
+	const key = index === 0 ? 'middle' : `middle-${ index + 1 }`;
+	return { key, className: `data-blocks-engine-capture-${ key }-document` };
+}
+
+function middleMedia( range: { minWidth: number; maxWidth: number } ): string {
+	return `(min-width:${ range.minWidth }px) and (max-width:${ range.maxWidth }px)`;
+}
 
 const RESPONSIVE_DOCUMENT_CSS = `.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
 
@@ -192,6 +218,12 @@ export interface ResponsiveVariantEvidence {
 	divergedComponents?: number;
 	/** Shared elements whose per-viewport inline styles were projected into width-scoped rules. Present only when an equivalent collapse found differing inline styles. */
 	projectedInlineStyles?: number;
+	/**
+	 * The width range each shipped document is selected in (inclusive bounds),
+	 * phone first. Present only when the source selects more than two layouts by
+	 * width and a middle document shipped (#1379).
+	 */
+	widthRanges?: Array< { document: string; minWidth?: number; maxWidth?: number } >;
 }
 
 /** Which pair an analysis describes. Source chooses inputs; emitted is what the receipt records. */
@@ -1081,7 +1113,7 @@ function equivalentInlineProjection(
 }
 
 /** Move only body compounds whose class tokens were relocated to document wrappers. */
-export function projectResponsiveBodyClassCss( source: string, moved: ReadonlyMap<string, string>, preserveBody = false ): string {
+export function projectResponsiveBodyClassCss( source: string, moved: ReadonlyMap<string, string>, preserveBody = false, documentClasses: readonly string[] = [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] ): string {
 	if ( moved.size === 0 || ! /body/i.test( source ) ) return source;
 	const css = parseCss( source );
 	css.walkRules( rule => {
@@ -1117,9 +1149,11 @@ export function projectResponsiveBodyClassCss( source: string, moved: ReadonlyMa
 			}
 			// A negative condition must test both documents, not the wrapper that
 			// owns the excluded class. Keep the original compound's conditions.
-			const replacement = wrapper
+			// With more than two documents a token can live on several wrappers;
+			// the compound keeps the token, so any wrapper carrying it matches.
+			const replacement = wrapper && documentClasses.length <= 2
 				? selectorParser.className( { value: wrapper } )
-				: selectorParser().astSync( `:is(.${ DESKTOP_DOCUMENT_CLASS },.${ MOBILE_DOCUMENT_CLASS })` ).first.first!;
+				: selectorParser().astSync( `:is(${ documentClasses.map( name => `.${ name }` ).join( ',' ) })` ).first.first!;
 			replacement.spaces = tag.spaces;
 			tag.replaceWith( replacement );
 		} );
@@ -1361,11 +1395,17 @@ function responsiveHtml(
 	switchWidth: number,
 	resolved: ResolvedResponsivePair,
 	bindingGate?: string,
-	onUnparseable?: UnparseableStylesheetSink
+	onUnparseable?: UnparseableStylesheetSink,
+	middles: readonly ResponsiveWidthDocument[] = []
 ): { html: string; evidence: ResponsiveVariantEvidence } {
-	const assembled = assembleResponsiveHtml( desktopHtml, mobileHtml, switchWidth, resolved, bindingGate, onUnparseable );
+	const assembled = assembleResponsiveHtml( desktopHtml, mobileHtml, switchWidth, resolved, bindingGate, onUnparseable, middles );
+	let html = withMobileLinkedStyles( assembled.html, mobileHtml, switchWidth );
+	// A missing body ships the desktop document alone, without middle documents.
+	if ( assembled.evidence.outcome === 'dual-structural' ) {
+		for ( const middle of middles ) html = withVariantLinkedStyles( html, middle.html, middleMedia( middle ) );
+	}
 	return {
-		html: withScrollDrivenAnimations( withMobileLinkedStyles( assembled.html, mobileHtml, switchWidth ) ),
+		html: withScrollDrivenAnimations( html ),
 		evidence: assembled.evidence,
 	};
 }
@@ -1405,6 +1445,13 @@ export interface ResponsiveAssemblyInput {
 	/** Mobile after the same portable normalization. */
 	portableMobileHtml?: string;
 	switchWidth?: number;
+	/**
+	 * Portable documents of the source's middle width ranges (#1379), ordered,
+	 * contiguous from `switchWidth + 1`, after the same portable normalization.
+	 * Present only on a route whose source selects a third layout by width; the
+	 * route then always ships every document.
+	 */
+	portableMiddleHtml?: readonly ResponsiveWidthDocument[];
 	/** Told when a mobile stylesheet could not be parsed and was left out of the assembly. */
 	onUnparseableStylesheet?: UnparseableStylesheetSink;
 }
@@ -1450,6 +1497,7 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 		};
 	}
 	const portableMobileHtml = input.portableMobileHtml ?? input.rawMobileHtml;
+	const middles = input.portableMiddleHtml ?? [];
 	const source = resolveResponsivePair( input.rawDesktopHtml, input.rawMobileHtml, switchWidth, 'source' );
 	if ( source.gate ) {
 		const assembled = responsiveHtml(
@@ -1458,11 +1506,12 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 			switchWidth,
 			source,
 			source.gate,
-			input.onUnparseableStylesheet
+			input.onUnparseableStylesheet,
+			middles
 		);
 		return emittedAssembly( assembled, 'applied' );
 	}
-	if ( source.dual ) {
+	if ( source.dual || middles.length ) {
 		const emitted = resolveResponsivePair(
 			input.portableDesktopHtml,
 			portableMobileHtml,
@@ -1470,7 +1519,7 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 			'emitted'
 		);
 		return emittedAssembly(
-			responsiveHtml( input.portableDesktopHtml, portableMobileHtml, switchWidth, emitted, undefined, input.onUnparseableStylesheet ),
+			responsiveHtml( input.portableDesktopHtml, portableMobileHtml, switchWidth, emitted, undefined, input.onUnparseableStylesheet, middles ),
 			'applied'
 		);
 	}
@@ -1487,12 +1536,17 @@ function emittedAssembly(
 	return {
 		html: assembled.html,
 		evidence: assembled.evidence,
-		hasMobileDocument: assembled.evidence.outcome === 'dual-structural' && assembled.evidence.variants === 2,
+		hasMobileDocument: assembled.evidence.outcome === 'dual-structural' && assembled.evidence.variants >= 2,
 		portableNormalization,
 	};
 }
 
 function withMobileLinkedStyles( html: string, mobileHtml: string, switchWidth: number ): string {
+	return withVariantLinkedStyles( html, mobileHtml, `(max-width:${ switchWidth }px)` );
+}
+
+/** Linked stylesheets only a non-default document loads, imported under that document's width media. */
+function withVariantLinkedStyles( html: string, mobileHtml: string, media: string ): string {
 	const mobileHead = documentElement( mobileHtml, 'head' )?.content;
 	if ( ! mobileHead || ! /<link\b/i.test( mobileHead ) ) return html;
 	return replaceDocumentElement( html, 'head', ( { open, content: head, close } ) => {
@@ -1515,7 +1569,7 @@ function withMobileLinkedStyles( html: string, mobileHtml: string, switchWidth: 
 			const href = JSON.stringify( link.attr( 'href' ) ).replace( /</g, '\\3c ' );
 			const style = $( '<style>' )
 				.attr( 'media', link.attr( 'media' ) ?? 'all' )
-				.text( `@import url(${ href }) (max-width:${ switchWidth }px);` );
+				.text( `@import url(${ href }) ${ media };` );
 			const following = mobileStyles.slice( index + 1 )
 				.map( node => existing.get( key( mobile( node ) ) ) ).find( Boolean );
 			const preceding = mobileStyles.slice( 0, index ).reverse()
@@ -1609,7 +1663,7 @@ export function projectResponsiveSvgCss( css: string, ids: ReadonlySet<string> )
 		ids.has( id ) ? `var(--capture-svg-${ Buffer.from( id ).toString( 'hex' ) }, ${ match })` : match );
 }
 
-export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
+export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string, string | readonly string[]>, namedAliases: boolean ): string {
 	// Do not parse unrelated source CSS just because another stylesheet owns
 	// a responsive anchor. Browsers may accept useful rules around a malformed
 	// declaration; identity-free styles need no rewriting or recovery here.
@@ -1622,23 +1676,32 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 	css.walkRules( rule => {
 		const selectors = parseSelectorList( rule.selector );
 		if ( ! selectors ) return;
-		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
-		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value ) { const alias = id.clone(); alias.value = value; replacements.push( { node: id, alias } ); } } );
-		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-blocks-engine-capture-anchor-alias'; replacements.push( { node: attribute, alias } ); } } );
-		for ( const { node, alias } of replacements ) node.replaceWith( selectorParser.pseudo( { value: ':is', nodes: [
-			selectorParser.selector( { value: '', nodes: [ node.clone() ] } ), selectorParser.selector( { value: '', nodes: [ alias ] } ),
+		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; aliases: Array<selectorParser.Identifier | selectorParser.Attribute> }> = [];
+		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value?.length ) replacements.push( { node: id, aliases: [ value ].flat().map( name => { const alias = id.clone(); alias.value = name; return alias; } ) } ); } );
+		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-blocks-engine-capture-anchor-alias'; replacements.push( { node: attribute, aliases: [ alias ] } ); } } );
+		for ( const { node, aliases } of replacements ) node.replaceWith( selectorParser.pseudo( { value: ':is', nodes: [
+			selectorParser.selector( { value: '', nodes: [ node.clone() ] } ), ...aliases.map( alias => selectorParser.selector( { value: '', nodes: [ alias ] } ) ),
 		] } ) );
 		rule.selector = selectors.toString();
 	} );
 	return css.toString();
 }
 
-export function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string,string>; namedAliases: boolean; svgIds?: Set<string> }, onUnparseable?: UnparseableStylesheetSink ): string {
+export function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string, string | string[]>; namedAliases: boolean; svgIds?: Set<string> }, onUnparseable?: UnparseableStylesheetSink ): string {
 	// Named aliases need reconciliation even when the responsive source
 	// collapsed to a single document. Preserve the cheap path for other pages.
 	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) && ! /<a\b[^>]*\bname\s*=/i.test( html ) ) return html;
 	const $ = cheerio.load( html );
-	const mobile = $( `.${ MOBILE_DOCUMENT_CLASS }` ).first();
+	// Every non-default document: the phone one, then middle width ranges.
+	const variants: Array< { document: cheerio.Cheerio< Element >; suffix: string } > = [
+		{ document: $( `.${ MOBILE_DOCUMENT_CLASS }` ).first() as cheerio.Cheerio< Element >, suffix: '--data-blocks-engine-capture-mobile' },
+	];
+	for ( let index = 0; ; index++ ) {
+		const { key, className } = middleVariant( index );
+		const document = $( `.${ className }` ).first() as cheerio.Cheerio< Element >;
+		if ( ! document.length ) break;
+		variants.push( { document, suffix: `--data-blocks-engine-capture-${ key }` } );
+	}
 	$( '[data-blocks-engine-capture-svg-source-id]' ).each( ( _index, element ) => {
 		identities?.svgIds?.add( $( element ).attr( 'data-blocks-engine-capture-svg-source-id' )! );
 	} );
@@ -1649,7 +1712,7 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		if ( fragment && sourceId ) sourceIds.set( fragment, sourceId );
 	} );
 	let changed = false;
-	const renamed = new Map< string, string >();
+	const renamed = new Map< string, string[] >();
 	const aliases = new Set< string >();
 	// A legacy named anchor inside its identically named id target is an alias,
 	// not another destination. Keep its styling token without duplicating the
@@ -1664,72 +1727,85 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 	} );
 	const desktopIds = new Set( $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).toArray().map( element => $( element ).attr( 'id' )! ) );
 	let responsiveFragments = false;
-	const phoneTarget = ( fragment: string ): boolean => {
-		const phoneId = `${ fragment }--data-blocks-engine-capture-mobile`;
-		if ( mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === phoneId ).length === 0 ) {
-			// Ordinary authored fragments have no adapter marker. Their mobile
+	const variantTarget = ( { document, suffix }: typeof variants[ number ], fragment: string ): boolean => {
+		const variantId = `${ fragment }${ suffix }`;
+		const ownId = ( id: string ) => renamed.get( id )?.find( candidate => candidate.endsWith( suffix ) ) ?? id;
+		if ( document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === variantId ).length === 0 ) {
+			// Ordinary authored fragments have no adapter marker. Their variant
 			// target still carries the original id and collides with the desktop
-			// copy; preserve its associations when assigning the phone identity.
-			const authored = mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === fragment );
+			// copy; preserve its associations when assigning the variant identity.
+			const authored = document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === fragment );
 			if ( authored.length === 1 && ! desktopIds.has( fragment ) ) return false;
 			if ( authored.length === 1 ) {
-				authored.attr( 'id', phoneId );
-				renamed.set( fragment, phoneId );
+				authored.attr( 'id', variantId );
+				renamed.set( fragment, [ ...( renamed.get( fragment ) ?? [] ), variantId ] );
 				changed = true;
 			}
 			const sourceId = sourceIds.get( fragment );
 			const counterpart = authored.length === 1 ? authored : sourceId
-				? mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === ( renamed.get( sourceId ) ?? sourceId ) )
+				? document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === ownId( sourceId ) )
 				: $();
 			if ( counterpart.length !== 1 ) return false;
 			if ( authored.length !== 1 ) counterpart.before(
-				`<span id="${ escapeHtmlAttr( phoneId ) }" data-blocks-engine-capture-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
+				`<span id="${ escapeHtmlAttr( variantId ) }" data-blocks-engine-capture-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
 			);
 		}
 		const desktopTarget = $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
-		const mobileTarget = mobile.find( '[id]' ).filter( ( _i, element ) => $( element ).attr( 'id' ) === phoneId );
-		if ( mobileTarget.length === 1 ) {
+		const ownTarget = document.find( '[id]' ).filter( ( _i, element ) => $( element ).attr( 'id' ) === variantId );
+		if ( ownTarget.length === 1 ) {
 			if ( desktopTarget.length === 1 ) desktopTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
-			mobileTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
+			ownTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
 			responsiveFragments = true;
 			changed = true;
 		}
 		return true;
 	};
-	// Register captured section targets independently of local links: another
-	// route may be the only place linking here. Other authored ids become
-	// fragment targets only when a local link names them (below).
-	for ( const element of mobile.find( '[data-blocks-engine-capture-anchor-target]' ).not( 'svg,svg *' ).toArray() ) {
-		const fragment = $( element ).attr( 'data-blocks-engine-capture-anchor-target' )!;
-		if ( fragment ) phoneTarget( fragment );
-	}
-	for ( const fragment of aliases ) phoneTarget( fragment );
-	mobile.find( 'a[href]' ).each( ( _index, element ) => {
-		const link = $( element );
-		const href = link.attr( 'href' ) ?? '';
-		const hash = href.indexOf( '#' );
-		if ( hash < 0 ) return;
-		const path = href.slice( 0, hash );
-		if ( path !== '' && path.split( '?' )[ 0 ] !== documentPath ) return;
-		let fragment: string;
-		try { fragment = decodeURIComponent( href.slice( hash + 1 ) ); } catch { return; }
-		if ( fragment && ! fragment.endsWith( '--data-blocks-engine-capture-mobile' ) ) phoneTarget( fragment );
-	} );
-	if ( renamed.size > 0 || aliases.size > 0 ) {
-		mobile.find( '*' ).each( ( _index, element ) => {
-			const node = $( element );
-			for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
-				const value = node.attr( attribute );
-				if ( value !== undefined ) node.attr( attribute, value.split( /\s+/ ).map( token => renamed.get( token ) ?? token ).join( ' ' ) );
-			}
+	for ( const variant of variants ) {
+		// Register captured section targets independently of local links: another
+		// route may be the only place linking here. Other authored ids become
+		// fragment targets only when a local link names them (below).
+		for ( const element of variant.document.find( '[data-blocks-engine-capture-anchor-target]' ).not( 'svg,svg *' ).toArray() ) {
+			const fragment = $( element ).attr( 'data-blocks-engine-capture-anchor-target' )!;
+			if ( fragment ) variantTarget( variant, fragment );
+		}
+		for ( const fragment of aliases ) variantTarget( variant, fragment );
+		variant.document.find( 'a[href]' ).each( ( _index, element ) => {
+			const href = $( element ).attr( 'href' ) ?? '';
+			const hash = href.indexOf( '#' );
+			if ( hash < 0 ) return;
+			const path = href.slice( 0, hash );
+			if ( path !== '' && path.split( '?' )[ 0 ] !== documentPath ) return;
+			let fragment: string;
+			try { fragment = decodeURIComponent( href.slice( hash + 1 ) ); } catch { return; }
+			if ( fragment && ! fragment.endsWith( variant.suffix ) ) variantTarget( variant, fragment );
 		} );
+	}
+	if ( renamed.size > 0 || aliases.size > 0 ) {
+		for ( const variant of variants ) {
+			const own = new Map( [ ...renamed ].flatMap( ( [ fragment, ids ] ) => ids.filter( id => id.endsWith( variant.suffix ) ).map( id => [ fragment, id ] as const ) ) );
+			if ( ! own.size ) continue;
+			variant.document.find( '*' ).each( ( _index, element ) => {
+				const node = $( element );
+				for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
+					const value = node.attr( attribute );
+					if ( value !== undefined ) node.attr( attribute, value.split( /\s+/ ).map( token => own.get( token ) ?? token ).join( ' ' ) );
+				}
+			} );
+		}
 		$( 'style' ).each( ( _index, element ) => {
 			const node = $( element );
 			const source = node.html() ?? '';
 			const projected = projectStylesheet( () => projectResponsiveIdentityCss( source, renamed, aliases.size > 0 ), onUnparseable );
 			if ( projected !== undefined ) node.html( projected );
 		} );
-		if ( identities ) { for ( const [ key, value ] of renamed ) identities.ids.set( key, value ); identities.namedAliases ||= aliases.size > 0; }
+		if ( identities ) {
+			for ( const [ key, value ] of renamed ) {
+				const known = identities.ids.get( key );
+				const merged = [ ...new Set( [ ...( known === undefined ? [] : [ known ].flat() ), ...value ] ) ];
+				identities.ids.set( key, merged.length === 1 ? merged[ 0 ] : merged );
+			}
+			identities.namedAliases ||= aliases.size > 0;
+		}
 	}
 	if ( responsiveFragments ) $( 'body' ).append( `<script data-blocks-engine-capture-responsive-fragments>${ RESPONSIVE_FRAGMENT_RUNTIME }</script>` );
 	return changed ? $.html() : html;
@@ -1741,7 +1817,9 @@ function assembleResponsiveHtml(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH,
 	resolved: ResolvedResponsivePair,
 	bindingGate?: string,
-	onUnparseable?: UnparseableStylesheetSink
+	onUnparseable?: UnparseableStylesheetSink,
+	/** Middle width ranges, ordered and contiguous from `switchWidth + 1`. Ship as further dual documents. */
+	middles: readonly ResponsiveWidthDocument[] = []
 ): { html: string; evidence: ResponsiveVariantEvidence } {
 	const desktopBodyMatch = documentElement( desktopHtml, 'body' );
 	let desktopBody = desktopBodyMatch?.content;
@@ -1762,7 +1840,8 @@ function assembleResponsiveHtml(
 			? html.replace( /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i, mobileViewport )
 			: insertBeforeHeadClose( html, mobileViewport );
 	};
-	if ( gatedByMobileClass === undefined && ! resolved.dual && ! resolved.merge ) {
+	// A middle width range is a third structural layout: never collapse.
+	if ( ! middles.length && gatedByMobileClass === undefined && ! resolved.dual && ! resolved.merge ) {
 		// Equivalent trees can still carry different inline presentation: the
 		// signature compares structure, never style attributes. Project those
 		// differences the way an identity-subset collapse does, so one editable
@@ -1799,7 +1878,7 @@ function assembleResponsiveHtml(
 			evidence,
 		};
 	}
-	const identitySubset = gatedByMobileClass ? undefined : resolved.merge;
+	const identitySubset = gatedByMobileClass || middles.length ? undefined : resolved.merge;
 	if ( identitySubset ) {
 		// One body carries both renderings: mobile-only elements join the desktop
 		// tree under their mapped parents and width-scoped visibility hides each
@@ -1843,65 +1922,27 @@ function assembleResponsiveHtml(
 		const sourceId = target.attr( 'data-blocks-engine-capture-anchor-source-id' );
 		if ( fragment && sourceId ) desktopTargets.set( fragment, sourceId );
 	} );
-	const mobile = cheerio.load( `<body>${ mobileBody }</body>` );
-	mobile( 'a[data-blocks-engine-capture-anchor-fragment]' ).each( ( _index, element ) => {
-		const fragment = mobile( element ).attr( 'data-blocks-engine-capture-anchor-fragment' );
-		const sourceId = fragment ? desktopTargets.get( fragment ) : undefined;
-		if ( ! fragment || mobile( `[data-blocks-engine-capture-anchor-target="${ fragment }"]` ).length > 0 ) return;
-		if ( sourceId ) {
-			const counterpart = mobile( '[id]' )
-				.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === sourceId )
-				.first();
-			if ( counterpart.length === 1 ) {
-				counterpart.attr( 'data-blocks-engine-capture-anchor-target', fragment );
-				return;
-			}
-		}
-		const localTarget = mobile( '[id]' )
-			.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === fragment )
-			.first();
-		if ( localTarget.length === 1 ) localTarget.attr( 'data-blocks-engine-capture-anchor-target', fragment );
+	const occupied = new Set( desktop( '[id]' ).toArray().map( node => ( node as Element ).attribs.id ) );
+	const phone = namespaceVariantDocument( desktop, desktopTargets, mobileBody, mobileHtml, 'mobile', occupied );
+	mobileBody = phone.body;
+	mobileHtml = phone.html;
+	// Middle width ranges (#1379) ship as further wrappers, each namespaced the
+	// same way under its own id suffix.
+	const middleDocuments = middles.flatMap( ( middle, index ) => {
+		const match = documentElement( middle.html, 'body' );
+		if ( match === undefined ) return [];
+		const variant = middleVariant( index );
+		const namespaced = namespaceVariantDocument( desktop, desktopTargets, match.content, middle.html, variant.key, occupied );
+		return [ { ...middle, ...variant, attributes: match.attributes, body: namespaced.body, html: namespaced.html, variables: namespaced.variables } ];
 	} );
-	mobile( '[data-blocks-engine-capture-anchor-target]' ).each( ( _index, element ) => {
-		const node = mobile( element );
-		const fragment = node.attr( 'data-blocks-engine-capture-anchor-target' );
-		if ( fragment && desktop( '[id]' ).toArray().some( target => desktop( target ).attr( 'id' ) === fragment ) ) node.attr( 'id', `${ fragment }--data-blocks-engine-capture-mobile` );
-	} );
-	// Only SVG resources are private identities; authored HTML ids remain a contract.
-	const svgIds = new Set<string>();
-	const occupied = new Set( [ ...desktop( '[id]' ).toArray(), ...mobile( '[id]' ).toArray() ].map( node => ( node as Element ).attribs.id ) );
-	const desktopIds = new Set( desktop( '[id]' ).toArray().map( node => desktop( node ).attr( 'id' ) ) );
-	const variables: string[] = [];
-	mobile( 'svg [id]' ).filter( ( _index, element ) => [ 'clippath', 'mask', 'filter', 'lineargradient', 'radialgradient', 'pattern', 'marker', 'symbol' ].includes( element.name.toLowerCase() ) ).each( ( _index, element ) => {
-		const node = mobile( element );
-		const id = node.attr( 'id' )!;
-		if ( ! desktopIds.has( id ) ) return;
-		let phoneId = `${ id }--data-blocks-engine-capture-mobile`;
-		for ( let suffix = 2; occupied.has( phoneId ); suffix++ ) phoneId = `${ id }--data-blocks-engine-capture-mobile-${ suffix }`;
-		occupied.add( phoneId );
-		svgIds.add( id );
-		node.attr( 'id', phoneId ).attr( 'data-blocks-engine-capture-svg-source-id', id );
-		variables.push( `--capture-svg-${ Buffer.from( id ).toString( 'hex' ) }:url("#${ phoneId }")` );
-		mobile( 'svg *' ).each( ( _i, reference ) => {
-			for ( const attribute of [ 'href', 'xlink:href' ] ) {
-				if ( mobile( reference ).attr( attribute ) === `#${ id }` ) mobile( reference ).attr( attribute, `#${ phoneId }` );
-			}
-		} );
-	} );
-	mobile( '*' ).each( ( _index, element ) => {
-		const node = mobile( element );
-		for ( const attribute of [ 'style', 'clip-path', 'mask', 'filter', 'fill', 'stroke', 'marker', 'marker-start', 'marker-mid', 'marker-end' ] ) {
-			const value = node.attr( attribute );
-			if ( value ) node.attr( attribute, projectResponsiveSvgCss( value, svgIds ) );
-		}
-	} );
-	mobileHtml = mobileHtml.replace( /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, ( _, open, css, close ) => `${ open }${ projectResponsiveSvgCss( css, svgIds ) }${ close }` );
-	mobileBody = mobile( 'body' ).html() ?? mobileBody;
+	const documentClasses = middleDocuments.length ? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, ...middleDocuments.map( middle => middle.className ) ] : undefined;
+	// The desktop document starts above the widest middle range.
+	const desktopMedia = `(min-width:${ ( middleDocuments.at( -1 )?.maxWidth ?? switchWidth ) + 1 }px)`;
 
-	const wrapperAttributes = ( baseClass: string, bodyAttributes: string ): string => {
+	const wrapperAttributes = ( baseClass: string, bodyAttributes: string, variables: readonly string[] = [] ): string => {
 		const body = cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' );
 		const className = [ baseClass, body.attr( 'class' ) ].filter( Boolean ).join( ' ' );
-		const style = [ body.attr( 'style' ), baseClass === MOBILE_DOCUMENT_CLASS ? variables.join( ';' ) : '' ].filter( Boolean ).join( ';' );
+		const style = [ body.attr( 'style' ), variables.join( ';' ) ].filter( Boolean ).join( ';' );
 		return `class="${ escapeHtmlAttr( className ) }"${
 			style ? ` style="${ escapeHtmlAttr( style ) }"` : ''
 		}`;
@@ -1911,20 +1952,45 @@ function assembleResponsiveHtml(
 			.split( /\s+/ )
 			.filter( Boolean );
 	const movedBodyClasses = responsiveMovedBodyClasses( bodyClasses( desktopBodyMatch?.attributes ?? '' ), bodyClasses( mobileBodyMatch?.attributes ?? '' ) );
+	// With middle documents, a body token every document shares stays on the
+	// real body; any other token moves to the wrapper of the document whose
+	// stylesheet names it (another owner's wrapper otherwise).
+	const documentBodies = [
+		{ className: DESKTOP_DOCUMENT_CLASS, classes: bodyClasses( desktopBodyMatch?.attributes ?? '' ) },
+		{ className: MOBILE_DOCUMENT_CLASS, classes: bodyClasses( mobileBodyMatch?.attributes ?? '' ) },
+		...middleDocuments.map( middle => ( { className: middle.className, classes: bodyClasses( middle.attributes ) } ) ),
+	];
+	const movedFor = ( className: string ): Map< string, string > => {
+		if ( ! middleDocuments.length ) return movedBodyClasses;
+		const moved = new Map< string, string >();
+		const own = documentBodies.find( body => body.className === className );
+		for ( const body of [ ...( own ? [ own ] : [] ), ...documentBodies ] ) {
+			for ( const token of body.classes ) {
+				if ( moved.has( token ) || documentBodies.every( other => other.classes.includes( token ) ) ) continue;
+				moved.set( token, body.className );
+			}
+		}
+		return moved;
+	};
 	// Use the same stylesheet projection before either shared/scoped branch.
 	// This includes styles inside the captured body content as well as head styles.
-	const rewrite = ( html: string ) => scopedStyles( html, undefined, new Set(), movedBodyClasses, onUnparseable );
+	const rewrite = ( html: string, className = DESKTOP_DOCUMENT_CLASS ) => scopedStyles( html, undefined, new Set(), movedFor( className ), onUnparseable, documentClasses );
 	desktopHtml = rewrite( desktopHtml );
-	mobileHtml = rewrite( mobileHtml );
-	const shared = gatedByMobileClass ? new Set< string >() : sharedStyleContents( desktopHtml, mobileHtml );
+	mobileHtml = rewrite( mobileHtml, MOBILE_DOCUMENT_CLASS );
+	for ( const middle of middleDocuments ) middle.html = rewrite( middle.html, middle.className );
+	const shared = gatedByMobileClass
+		? new Set< string >()
+		: middleDocuments.length
+			// A stylesheet every document carries applies at every width.
+			? new Set( styleBlocks( mobileHtml ).filter( block => styleBlocks( desktopHtml ).includes( block ) && middleDocuments.every( middle => styleBlocks( middle.html ).includes( block ) ) ) )
+			: sharedStyleContents( desktopHtml, mobileHtml );
 	// The desktop body is replaced below: scope its retained styles just like
 	// the head. Phone styles (including learned rules) have one owner in
 	// responsiveMobileStyles, so none remain in the phone body.
-	desktopBody = scopedStyles( rewrite( desktopBody ), `(min-width:${ switchWidth + 1 }px)`, shared );
+	desktopBody = scopedStyles( rewrite( desktopBody ), desktopMedia, shared );
 	mobileBody = mobileBody.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' );
-	const mobileBodyClasses = new Set( bodyClasses( mobileBodyMatch?.attributes ?? '' ) );
-	const sharedBodyClasses = [ ...new Set( bodyClasses( desktopBodyMatch?.attributes ?? '' ) ) ].filter(
-		( className ) => mobileBodyClasses.has( className )
+	const sharedBodyClasses = [ ...new Set( documentBodies[ 0 ].classes ) ].filter(
+		( className ) => documentBodies.slice( 1 ).every( body => body.classes.includes( className ) )
 	);
 	const outerBody = `<body${
 		sharedBodyClasses.length > 0
@@ -1934,32 +2000,128 @@ function assembleResponsiveHtml(
 	const responsiveBody = `<div ${ wrapperAttributes(
 		DESKTOP_DOCUMENT_CLASS,
 		desktopBodyMatch?.attributes ?? ''
-	) } data-blocks-engine-capture-document-scope>${ desktopBody }</div><div ${ wrapperAttributes(
+	) } data-blocks-engine-capture-document-scope>${ desktopBody }</div>${ middleDocuments.map( middle => `<div ${ wrapperAttributes(
+		middle.className,
+		middle.attributes,
+		middle.variables
+	) } data-blocks-engine-capture-document-scope>${ middle.body.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ) }</div>` ).join( '' ) }<div ${ wrapperAttributes(
 		MOBILE_DOCUMENT_CLASS,
-		mobileBodyMatch?.attributes ?? ''
+		mobileBodyMatch?.attributes ?? '',
+		phone.variables
 	) } data-blocks-engine-capture-document-scope>${ mobileBody }</div>`;
-	const evidence = dualStructuralEvidence( gatedByMobileClass );
+	const evidence = middleDocuments.length
+		? widthRangeEvidence( gatedByMobileClass, switchWidth, middleDocuments )
+		: dualStructuralEvidence( gatedByMobileClass );
 	const mobileStyles = responsiveMobileStyles(
 		mobileHtml,
 		`.${ MOBILE_DOCUMENT_CLASS }`,
 		switchWidth,
 		shared,
 		undefined,
-		onUnparseable
+		onUnparseable,
+		undefined,
+		documentClasses ? { documentClasses } : undefined
 	);
+	const middleStyles = middleDocuments.map( middle => responsiveMobileStyles(
+		middle.html,
+		`.${ middle.className }`,
+		switchWidth,
+		shared,
+		undefined,
+		onUnparseable,
+		undefined,
+		{ media: middleMedia( middle ), documentClasses }
+	) ).join( '' );
+	const middleSwitch = middleDocuments.map( middle =>
+		`.${ middle.className }{display:none!important}@media${ middleMedia( middle ) }{.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ middle.className }{display:contents!important}}`
+	).join( '' );
 	return {
 		html: replaceDocumentElement(
 			insertBeforeHeadClose(
 				insertAfterHeadOpen(
-					withMobileViewport( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) ),
+					withMobileViewport( scopedStyles( desktopHtml, desktopMedia, shared ) ),
 					RESPONSIVE_DOCUMENT_RESET_CSS
 				),
-				`${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style>`
+				`${ middleStyles }${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ middleSwitch }${ documentSwitchCss( switchWidth ) }</style>`
 			),
 			'body',
 			( { close } ) => `${ outerBody }${ responsiveBody }${ close }`
 		),
 		evidence,
+	};
+}
+
+/**
+ * Namespace one non-default document against the desktop copy: its anchor
+ * targets and colliding SVG resource ids take the variant's id suffix, its own
+ * links follow them, and its stylesheets reach renamed SVG resources through
+ * per-wrapper custom properties.
+ */
+function namespaceVariantDocument(
+	desktop: cheerio.CheerioAPI,
+	desktopTargets: ReadonlyMap< string, string >,
+	body: string,
+	html: string,
+	key: string,
+	occupied: Set< string >
+): { body: string; html: string; variables: string[] } {
+	const suffix = `--data-blocks-engine-capture-${ key }`;
+	const variant = cheerio.load( `<body>${ body }</body>` );
+	variant( 'a[data-blocks-engine-capture-anchor-fragment]' ).each( ( _index, element ) => {
+		const fragment = variant( element ).attr( 'data-blocks-engine-capture-anchor-fragment' );
+		const sourceId = fragment ? desktopTargets.get( fragment ) : undefined;
+		if ( ! fragment || variant( `[data-blocks-engine-capture-anchor-target="${ fragment }"]` ).length > 0 ) return;
+		if ( sourceId ) {
+			const counterpart = variant( '[id]' )
+				.filter( ( _i, candidate ) => variant( candidate ).attr( 'id' ) === sourceId )
+				.first();
+			if ( counterpart.length === 1 ) {
+				counterpart.attr( 'data-blocks-engine-capture-anchor-target', fragment );
+				return;
+			}
+		}
+		const localTarget = variant( '[id]' )
+			.filter( ( _i, candidate ) => variant( candidate ).attr( 'id' ) === fragment )
+			.first();
+		if ( localTarget.length === 1 ) localTarget.attr( 'data-blocks-engine-capture-anchor-target', fragment );
+	} );
+	variant( '[data-blocks-engine-capture-anchor-target]' ).each( ( _index, element ) => {
+		const node = variant( element );
+		const fragment = node.attr( 'data-blocks-engine-capture-anchor-target' );
+		if ( fragment && desktop( '[id]' ).toArray().some( target => desktop( target ).attr( 'id' ) === fragment ) ) node.attr( 'id', `${ fragment }${ suffix }` );
+	} );
+	// Only SVG resources are private identities; authored HTML ids remain a contract.
+	const svgIds = new Set<string>();
+	for ( const node of variant( '[id]' ).toArray() ) occupied.add( ( node as Element ).attribs.id );
+	const desktopIds = new Set( desktop( '[id]' ).toArray().map( node => desktop( node ).attr( 'id' ) ) );
+	const variables: string[] = [];
+	variant( 'svg [id]' ).filter( ( _index, element ) => [ 'clippath', 'mask', 'filter', 'lineargradient', 'radialgradient', 'pattern', 'marker', 'symbol' ].includes( element.name.toLowerCase() ) ).each( ( _index, element ) => {
+		const node = variant( element );
+		const id = node.attr( 'id' )!;
+		if ( ! desktopIds.has( id ) ) return;
+		let variantId = `${ id }${ suffix }`;
+		for ( let counter = 2; occupied.has( variantId ); counter++ ) variantId = `${ id }${ suffix }-${ counter }`;
+		occupied.add( variantId );
+		svgIds.add( id );
+		node.attr( 'id', variantId ).attr( 'data-blocks-engine-capture-svg-source-id', id );
+		variables.push( `--capture-svg-${ Buffer.from( id ).toString( 'hex' ) }:url("#${ variantId }")` );
+		variant( 'svg *' ).each( ( _i, reference ) => {
+			for ( const attribute of [ 'href', 'xlink:href' ] ) {
+				if ( variant( reference ).attr( attribute ) === `#${ id }` ) variant( reference ).attr( attribute, `#${ variantId }` );
+			}
+		} );
+	} );
+	variant( '*' ).each( ( _index, element ) => {
+		const node = variant( element );
+		for ( const attribute of [ 'style', 'clip-path', 'mask', 'filter', 'fill', 'stroke', 'marker', 'marker-start', 'marker-mid', 'marker-end' ] ) {
+			const value = node.attr( attribute );
+			if ( value ) node.attr( attribute, projectResponsiveSvgCss( value, svgIds ) );
+		}
+	} );
+	return {
+		body: variant( 'body' ).html() ?? body,
+		html: html.replace( /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, ( _, open, css, close ) => `${ open }${ projectResponsiveSvgCss( css, svgIds ) }${ close }` ),
+		variables,
 	};
 }
 
@@ -2018,6 +2180,23 @@ function dualStructuralEvidence( gatedClass: string | undefined ): ResponsiveVar
 				outcome: 'dual-structural',
 				reason: 'mobile document differs structurally from desktop; both variants shipped',
 			};
+}
+
+function widthRangeEvidence(
+	gatedClass: string | undefined,
+	switchWidth: number,
+	middles: ReadonlyArray< { key: string; minWidth: number; maxWidth: number } >
+): ResponsiveVariantEvidence {
+	return {
+		variants: 2 + middles.length,
+		outcome: 'dual-structural',
+		reason: `the source selects ${ 2 + middles.length } layouts by width${ gatedClass ? ` and a phone-only body class gates desktop CSS (body:not(.${ gatedClass }))` : '' }; every layout shipped and is selected at the source's own boundaries`,
+		widthRanges: [
+			{ document: 'mobile', maxWidth: switchWidth },
+			...middles.map( middle => ( { document: middle.key, minWidth: middle.minWidth, maxWidth: middle.maxWidth } ) ),
+			{ document: 'desktop', minWidth: ( middles.at( -1 )?.maxWidth ?? switchWidth ) + 1 },
+		],
+	};
 }
 
 function missingBodyEvidence(): ResponsiveVariantEvidence {
@@ -2210,8 +2389,12 @@ function responsiveMobileStyles(
 	skip: ReadonlySet< string > = new Set(),
 	classAliases: ReadonlyMap<string, string> = new Map(),
 	onUnparseable?: UnparseableStylesheetSink,
-	retainedClassTokens: ReadonlySet<string> = new Set()
+	retainedClassTokens: ReadonlySet<string> = new Set(),
+	/** A middle range's own media, and every emitted document class. Default: the phone side of the switch. */
+	range: { media?: string; documentClasses?: readonly string[] } = {}
 ): string {
+	const media = range.media ?? `(max-width:${ switchWidth }px)`;
+	const documentClasses = range.documentClasses ?? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ];
 	const mobileBodyAttributes = bodyAttributes( mobileHtml );
 	const rootClasses = (
 		cheerio.load( `<body${ mobileBodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
@@ -2251,8 +2434,8 @@ function responsiveMobileStyles(
 					: undefined;
 				const style = selected ?? aliasResponsiveClasses( delta ?? original, classAliases, retainedClassTokens );
 				if ( ! style.trim() ) return '';
-				const projected = scope ? projectStylesheet( () => scopeCss( style, { scope, rootClasses: [ ...rootClasses, DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] } ), onUnparseable ) : style;
-				return projected === undefined ? '' : `<style media="(max-width:${ switchWidth }px)">${ projected }</style>`;
+				const projected = scope ? projectStylesheet( () => scopeCss( style, { scope, rootClasses: [ ...rootClasses, ...documentClasses ] } ), onUnparseable ) : style;
+				return projected === undefined ? '' : `<style media="${ media }">${ projected }</style>`;
 			}
 		)
 		.join( '' );
@@ -2263,14 +2446,15 @@ function scopedStyles(
 	media: string | undefined,
 	skip: ReadonlySet< string > = new Set(),
 	movedBodyClasses: ReadonlyMap<string, string> = new Map(),
-	onUnparseable?: UnparseableStylesheetSink
+	onUnparseable?: UnparseableStylesheetSink,
+	documentClasses?: readonly string[]
 ): string {
 	return html.replace(
 		/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi,
 		( match, attributes: string, css: string ) => {
 			if ( movedBodyClasses.size ) {
 				// An unparseable stylesheet is reported and kept as authored.
-				const projected = projectStylesheet( () => projectResponsiveBodyClassCss( css, movedBodyClasses ), onUnparseable );
+				const projected = projectStylesheet( () => projectResponsiveBodyClassCss( css, movedBodyClasses, false, documentClasses ), onUnparseable );
 				if ( projected !== undefined ) {
 					css = projected;
 					match = `<style${ attributes }>${ css }</style>`;

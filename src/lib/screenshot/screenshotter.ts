@@ -103,7 +103,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision } from './device-mode.js';
+import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, renderedElementStructure, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth, switchProbeIdentity, type SwitchRendering } from './device-mode.js';
 import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 import { probeScriptedLinks, SCRIPTED_LINK_BUDGET_MS, stampScriptedLinkCandidates } from './scripted-links.js';
@@ -1343,7 +1343,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				/* best-effort — the sweep learns whatever the hook left in place */
 			} );
 			const learned = await learnAndApplyFluidGeometry( page, {
-				document: isDesktop ? 'desktop' : 'mobile',
+				// The middle layout's learned rules name its own geometry ids, never the phone document's.
+				document: isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile',
 				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
 				settleMs: Math.max( args.settleMs, 800 ),
 				...( args.fluidMemo ? { memo: args.fluidMemo } : {} ),
@@ -2194,7 +2195,8 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 		try { return response.ok() ? await response.text() : undefined; }
 		finally { await response.dispose(); }
 	};
-	const result = { page, html, target, fetchServerHtml, paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+	const structure = await withEvaluateTimeout( renderedElementStructure( page ), 10_000 );
+	const result = { page, html, target, fetchServerHtml, paths: structure.paths, classTokens: structure.classTokens, bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
 	if ( timings ) timings.settle = Math.max( timings.settle, Date.now() - settledAt );
 	return result;
 }
@@ -2274,7 +2276,7 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 		const observed = await probeSwitchWidth( args, serverHtml, switchCandidates ).catch( () => undefined );
 		if ( observed !== undefined ) {
 			result.switchWidth = observed.switchWidth;
-			if ( observed.uncapturedLayout ) result.uncapturedLayout = observed.uncapturedLayout;
+			if ( observed.middleLayout ) result.middleLayout = observed.middleLayout;
 		}
 	}
 	result.checkMs = Date.now() - started;
@@ -2282,11 +2284,9 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 	return result;
 }
 
-/** What one identity rendered at its capture width, for the switch probe. */
-interface IdentityRendering { paths: string[]; bodyClasses: string[] }
 
 /** Stylesheet switch boundaries plus both capture-width renderings they are classified against. */
-interface SwitchCandidates { widths: number[]; desktop: IdentityRendering; phone: IdentityRendering }
+interface SwitchCandidates { widths: number[]; desktop: SwitchRendering; phone: SwitchRendering }
 
 async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCandidates?: ( candidates: SwitchCandidates ) => void ): Promise< RouteDeviceDecision > {
 	const startedAt = Date.now();
@@ -2295,8 +2295,8 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 	try {
 		const compared = await compareIdentities( args, 'check', contexts, checkTimings );
 		let { structure, bodyClasses } = compared;
-		let desktopRendered: IdentityRendering = { paths: compared.desktop.paths, bodyClasses: compared.desktop.bodyClasses };
-		let phoneRendered: IdentityRendering = { paths: compared.phone.paths, bodyClasses: compared.phone.bodyClasses };
+		let desktopRendered: SwitchRendering = { paths: compared.desktop.paths, bodyClasses: compared.desktop.bodyClasses, classTokens: compared.desktop.classTokens };
+		let phoneRendered: SwitchRendering = { paths: compared.phone.paths, bodyClasses: compared.phone.bodyClasses, classTokens: compared.phone.classTokens };
 		const differs = () => structure.differingPaths > 0 || bodyClasses.desktopOnly.length > 0 || bodyClasses.phoneOnly.length > 0;
 		let rechecked = false;
 		// Two loads race third-party scripts (an embed swapping its placeholder
@@ -2325,7 +2325,8 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 			const reread = async ( page: Page ) => {
 				await new Promise( resolve => setTimeout( resolve, CHECK_RECHECK_MS ) );
 				await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
-				return { paths: await withEvaluateTimeout( renderedElementPaths( page ), 10_000 ), bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+				const structure = await withEvaluateTimeout( renderedElementStructure( page ), 10_000 );
+				return { paths: structure.paths, classTokens: structure.classTokens, bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
 			};
 			const [ desktop, phone ] = await Promise.all( [ reread( compared.desktop.page ), reread( compared.phone.page ) ] );
 			structure = compareStructure( desktop.paths, phone.paths );
@@ -2358,26 +2359,27 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 
 /**
  * Load the phone identity at each candidate width, the way the route check
- * does, and classify what it renders against both capture-width renderings:
+ * does, and classify what it renders against both capture-width renderings
+ * by structure, body classes and element class tokens (`switchProbeIdentity`):
  * the first boundary above which it stops rendering the phone document is the
- * switch (see `observeSwitchWidth`).
+ * switch, and a middle rendering ends where the probe stops matching it (see
+ * `observeSwitchWidth`).
  */
 async function probeSwitchWidth( args: DeviceComparisonArgs, serverHtml: 'identical' | 'identical-after-normalization', candidates: SwitchCandidates ): Promise< ObservedSwitch | undefined > {
 	const phone = args.phone.viewport, wide = args.desktop.viewport?.width;
 	if ( ! phone || ! wide ) return undefined;
-	const matches = ( rendering: IdentityRendering, probe: IdentityRendering ) =>
-		decideRouteMode( { serverHtml, structure: compareStructure( rendering.paths, probe.paths ), bodyClasses: compareBodyClasses( rendering.bodyClasses, probe.bodyClasses ) } ).mode === 'reflow-only';
+	const identity = switchProbeIdentity( candidates, serverHtml );
 	return observeSwitchWidth( candidates.widths, { phone: phone.width, desktop: wide }, async width => {
 		const contexts: BrowserContext[] = [];
 		try {
 			// Probe loads must not replace the capture-width identity headers.
-			const probe = await loadForComparison( { ...args, identityHeaders: undefined }, { ...args.phone, viewport: { ...phone, width } }, 'mobile', 'check', contexts );
-			if ( matches( candidates.desktop, probe ) ) return 'desktop';
-			return matches( candidates.phone, probe ) ? 'phone' : 'other';
+			const loaded = await loadForComparison( { ...args, identityHeaders: undefined }, { ...args.phone, viewport: { ...phone, width } }, 'mobile', 'check', contexts );
+			const rendering: SwitchRendering = { paths: loaded.paths, bodyClasses: loaded.bodyClasses, classTokens: loaded.classTokens };
+			return { rendered: identity.classify( rendering ), rendering };
 		} finally {
 			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
 		}
-	} );
+	}, identity.same );
 }
 
 /**
@@ -2983,6 +2985,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const routeProfiles: Viewport[] = routeViewports.map( profile => ( { ...publicCaptureProfile( profile ),
 			referenceWidths: profile.referenceWidths ?? opts.referenceWidths ?? ( profile.id === 'mobile' ? [ 390 ] : profile.id === 'desktop' ? [ 768, 1440 ] : [ profile.width ] ),
 		} ) );
+		// A dual route whose source renders a bounded third layout between its
+		// phone and desktop documents captures that layout too: one desktop-identity
+		// viewport inside the range, assembled as the middle document (#1379).
+		const middleWidth = routeDevice?.mode === 'dual' ? middleLayoutSampleWidth( routeDevice.middleLayout ) : undefined;
+		if ( middleWidth !== undefined && desktopProfile && routeProfiles.some( profile => profile.id === 'mobile' ) ) {
+			routeProfiles.push( { ...publicCaptureProfile( desktopProfile ), id: MIDDLE_PROFILE_ID, width: middleWidth, referenceWidths: [ middleWidth ] } );
+		}
 		let additionalDeclared = false;
 		const declareAdditional = ( html: string ): void => {
 			if ( additionalDeclared ) return;
