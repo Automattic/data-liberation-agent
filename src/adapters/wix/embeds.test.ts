@@ -197,13 +197,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			const page = await browser.newPage();
 			await page.setContent(`<style>#pinnedBottomLeft,#pinnedBottomRight{position:fixed;bottom:0}iframe{width:180px;height:60px}</style>
 			<div id="pinnedBottomRight"><div id="comp-chat-pinned-layer"><iframe title="Wix Chat" src="${APP_WIDGET}"></iframe></div><div id="comp-top-pinned-layer"><a href="#">Back to top</a></div></div>
-			<div id="pinnedBottomLeft"><div id="comp-ai-pinned-layer"><div data-hook="AiAssistantWidgetContainer" role="dialog"><textarea></textarea></div></div></div>
+			<div id="pinnedBottomLeft"><div id="comp-ai-pinned-layer"><div data-hook="AiAssistantWidgetContainer" role="dialog"><textarea></textarea></div></div><div id="comp-ai-min-pinned-layer"><div data-hook="minimizedChat"><button data-hook="minimizedChatButton" aria-label="Chat with AI"></button></div></div></div>
 			<div><iframe title="PDF File Viewer" src="${APP_WIDGET}"></iframe></div>`);
 			const policy = cleanupPolicy( wixAdapter.liberation?.cleanupRules );
 			await portWixRuntimeEmbeds(page);
 			await applySourceCleanup(page, policy);
 			const report = await readSourceCleanup(page, policy);
-			expect(await page.locator('#comp-chat-pinned-layer,#comp-ai-pinned-layer').count()).toBe(0);
+			expect(await page.locator('#comp-chat-pinned-layer,#comp-ai-pinned-layer,#comp-ai-min-pinned-layer').count()).toBe(0);
 			expect(report.records.map(record => record.rule)).toEqual(expect.arrayContaining(['wix-chat-launcher','wix-ai-assistant']));
 			expect(await page.locator('[data-blocks-engine-capture-unported-embed="wix"]').count()).toBe(1);
 			expect(await page.locator('#comp-top-pinned-layer a').count()).toBe(1);

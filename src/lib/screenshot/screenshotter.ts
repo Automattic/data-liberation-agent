@@ -461,7 +461,12 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// taking it out moves its parent or next sibling. Otherwise it is an empty
 		// runtime hook; leave it out of the document, then restore it so later
 		// probes still see the live page.
+		//
+		// The installed source cleanup sweeps first, in this same task: the
+		// settle and media waits above give the source time to mount a widget
+		// after the last sweep, and no source script runs between these two.
 		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource } ) => {
+			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
