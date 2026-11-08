@@ -113,6 +113,26 @@ async function expectStylesheetParity( desktop: string, mobile: string, assemble
 	} finally { await browser.close(); }
 }
 
+it( 'preserves author html and body box styles in dual assembly (#1554)', async () => {
+	const styles = 'html{margin:3px}body{max-width:1200px;margin:0 auto;padding:1.5rem 1rem 4rem}';
+	const desktop = page( '<main>Desktop</main>', `<style>${ styles }</style>` );
+	const mobile = page( '<main>Phone</main><aside>Phone-only</aside>', `<style>${ styles }</style>` );
+	const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+	expect( assembled.evidence?.outcome ).toBe( 'dual-structural' );
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		await tab.setContent( assembled.html );
+		for ( const width of [ 390, 768, 1440 ] ) {
+			await tab.setViewportSize( { width, height: 900 } );
+			expect( await tab.locator( 'body' ).evaluate( node => {
+				const css = getComputedStyle( node );
+				return [ css.paddingTop, css.paddingRight, css.paddingBottom, css.maxWidth ];
+			} ) ).toEqual( [ '24px', '16px', '64px', '1200px' ] );
+		}
+	} finally { await browser.close(); }
+} );
+
 it( 'keeps body styles single-owned and width-local in dual assembly (#1312)', async () => {
 	const desktop = page( '<style>.frame{width:1440px}</style><div class="frame"><p>Desktop</p><nav>a</nav></div>' );
 	const mobile = page( '<style>.frame{width:402px}</style><div class="frame"><p>Phone</p><button>menu</button></div>' );
