@@ -53,6 +53,34 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChrom
 	}
 }, 90_000);
 
+// One browser page, no probing or navigation; expected wall time under a second.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('wires phone gallery frames only into the document marked at the phone capture width', async () => {
+	const page = await sharedBrowser.newPage();
+	const documents: string[] = [];
+	for (const width of [1440, 402]) {
+		await page.setViewportSize({ width, height: 900 });
+		await page.setContent(`<section id="gallery"><div class="stage"><img src="original-${width}.png"><img src="other.png"></div><button aria-label="Previous image">Previous</button><button aria-label="Next image">Next</button></section>`);
+		expect(await markGalleryRoots(page)).toEqual(['#gallery']);
+		documents.push(`<div data-device="${width}">${await page.locator('body').innerHTML()}</div>`);
+	}
+	const states: import('./interaction-capture.js').CapturedDialogInteraction[] = [{
+		kind: 'gallery', status: 'no-dialog',
+		trigger: { selector: '#gallery', tag: 'section', ariaHaspopup: '', dataBindings: {} },
+		gallery: { inline: {
+			selector: '#gallery', stage: '.stage', next: '[aria-label="Next image"]', previous: '[aria-label="Previous image"]',
+			viewport: { width: 402, height: 900 }, order: ['phone-0', 'phone-1'], initial: 0,
+			frames: [0, 1].map(index => ({ key: `phone-${index}`, html: `<div><img src="phone-${index}.png"></div>`, text: [] })),
+			coverage: 'complete', restoration: 'verified', autoplay: 'unmeasured',
+		} },
+	}];
+	await page.setContent(wireCapturedGalleries(documents.join(''), states));
+	expect(await page.locator('[data-device="1440"] .stage').innerHTML()).toBe('<img src="original-1440.png"><img src="other.png">');
+	expect(await page.locator('[data-device="1440"] [data-blocks-engine-capture-gallery]').count()).toBe(0);
+	expect(await page.locator('[data-device="402"] [data-blocks-engine-capture-gallery-frame]').count()).toBe(2);
+	expect(await page.locator('[data-device="402"] .stage img').first().getAttribute('src')).toBe('phone-0.png');
+	await page.close();
+});
+
 let sharedBrowser: import('playwright').Browser;
 const chromium = {
 	executablePath: () => playwrightChromium.executablePath(),
