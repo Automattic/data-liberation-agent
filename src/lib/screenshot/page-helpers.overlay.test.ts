@@ -293,6 +293,21 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
     }
   });
 
+  it('preserves pointer-inert decorative fixed layers instead of dismissing them', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>
+      body { margin: 0; overflow: hidden; }
+      #wall, #shade { position: fixed; inset: 0; pointer-events: none; }
+      #wall { opacity: .3; background: repeating-linear-gradient(45deg, #f0f 0 20px, #0ff 20px 40px); }
+      #shade { background: radial-gradient(ellipse, transparent 30%, rgba(0,0,0,.85)); }
+    </style></head><body><div id="wall"></div><div id="shade"></div><main>content</main></body></html>`);
+    try {
+      expect(await dismissOverlays(page)).toEqual([]);
+      expect(await page.locator('#wall').evaluate((el) => getComputedStyle(el).display)).not.toBe('none');
+      expect(await page.locator('#shade').evaluate((el) => getComputedStyle(el).display)).not.toBe('none');
+    } finally { await page.close(); }
+  });
+
   it('preserves a full-viewport application canvas on a scroll-locked page', async () => {
     const page = await browser.newPage();
     await page.setContent(`<!doctype html><html><head><style>
