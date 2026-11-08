@@ -587,6 +587,10 @@ export function inlineCodeShape( code: string ): string {
 	const key = `(?:${ string }|[\\w$]+)`;
 	const data = new RegExp( String.raw`\{ ?(?:${ key } ?: ?${ value } ?(?:, ?${ key } ?: ?${ value } ?)*,? ?)?\}|\[ ?(?:${ value } ?(?:, ?${ value } ?)*,? ?)?\]`, 'g' );
 	for ( let previous = ''; previous !== out; ) { previous = out; out = out.replace( data, 'D' ); }
+	// A literal assigned whole to a global is embedded context too (Wix's
+	// `window.firstPageId = "c1dmp"`), as the same value inside an object is.
+	// Navigation is behaviour, so `location` keeps its target.
+	out = out.replace( new RegExp( String.raw`(\bwindow\.(?!location\b)[\w$]+ ?= ?)${ value }(?= ?(?:$|[;,}]|[\w$]))`, 'g' ), '$1D' );
 	return out.trim();
 }
 

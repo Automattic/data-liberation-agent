@@ -21,5 +21,7 @@ it( 'ignores per-route embedded data and self references, but not code or code s
 	// Strings in code are behaviour (selectors), so they are kept.
 	expect( inlineCodeShape( 'document.querySelector(".second")' ) ).not.toBe( inlineCodeShape( "document.querySelector('.ghost-menu')" ) );
 	expect( inlineCodeShape( 'f({a:y}, [1, "x"]); X = {"k": "v", n: [true, null]}' ) ).toBe( 'f({a:y}, D); X = D' );
+	expect( inlineCodeShape( 'window.firstPageId = "c1dmp"\nif (a) go("x"); window.n = 3; window.s = "a" + b; window.location = "/x"' ) )
+		.toBe( 'window.firstPageId = D if (a) go("x"); window.n = D; window.s = "a" + b; window.location = "/x"' );
 	expect( inlineCodeShape( "var s = 'it\\'s'; // don't\n/* 'x' */ g(0x1f, 1.5e3)" ) ).toBe( 'var s = "it\\\\\'s"; g(0, 0)' );
 } );
