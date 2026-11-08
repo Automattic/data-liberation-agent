@@ -15,6 +15,31 @@ describe('capturePageHtml stylesheet serialization', () => {
     await browser.close();
   });
 
+  it('omits runtime styles with no matching selectors and records byte and rule evidence', async () => {
+    const page = await browser.newPage();
+    try {
+      const server = '<!doctype html><html><head></head><body><main><p>Body</p></main></body></html>';
+      await page.setContent(server);
+      await page.evaluate(() => {
+        const prefix = `W_${Date.now()}_`;
+        const style = document.createElement('style');
+        style.textContent = `span.${prefix}grid{width:100%}span.${prefix}grid .${prefix}hd{height:55px}`;
+        document.head.append(style);
+      });
+      const diagnostics: Array<{code:string;reason:string}> = [];
+      const html = await capturePageHtml(page, diagnostics, server);
+      expect(html).not.toContain('W_');
+      expect(diagnostics).toContainEqual(expect.objectContaining({code:'runtime_stylesheet_omitted', reason:expect.stringMatching(/bytes, 2 rules/)}));
+      await page.setContent(server.replace('<main>', '<main><span class="W_placeholder_grid">'));
+      await page.evaluate(() => {
+        const style = document.createElement('style');
+        style.textContent = 'span.W_placeholder_grid{width:100%}';
+        document.head.append(style);
+      });
+      expect(await capturePageHtml(page, [], server)).toContain('W_placeholder_grid');
+    } finally { await page.close(); }
+  });
+
   it('preserves adjacent runtime text-node shaping through HTML and frozen serialization without mutating the source', async () => {
     const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
