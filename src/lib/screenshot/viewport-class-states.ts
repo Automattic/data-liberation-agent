@@ -211,10 +211,18 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 			const memoKey = `${ signatures[toggle.index] }|${ toggle.token }`;
 			const saved = options.memo?.get( memoKey );
 			if ( saved ) {
-				const agrees = extremes.every( ( width, i ) => {
-					const observation = saved.find( sample => sample.width === width );
-					return observation !== undefined && observation.present === present( extremesDiff[i]!, toggle );
-				} );
+				// Prove the stored series at this route's extremes and at each
+				// exact flip (the width either side of it): agreement at the extremes
+				// alone cannot see a breakpoint that moved inside the range.
+				const ordered = [ ...new Map( saved.map( sample => [ sample.width, sample ] ) ).values() ].sort( ( a, b ) => a.width - b.width );
+				const checks = extremes.map( ( width, i ) => ( { width, diff: extremesDiff[ i ]!, expected: saved.find( sample => sample.width === width )?.present } ) );
+				let agrees = checks.every( check => check.expected === present( check.diff, toggle ) );
+				for ( let i = 1; agrees && i < ordered.length; i++ ) {
+					if ( ordered[ i - 1 ]!.present === ordered[ i ]!.present ) continue;
+					const flip = ordered[ i ]!.width;
+					agrees = present( await probe( flip ), toggle ) === ordered[ i ]!.present &&
+						present( await probe( flip - 1 ), toggle ) === ordered[ i - 1 ]!.present;
+				}
 				if ( agrees ) { toggles.set( key, toggle ); presence.set( key, [ ...saved ] ); reused.add( memoKey ); }
 			}
 		}

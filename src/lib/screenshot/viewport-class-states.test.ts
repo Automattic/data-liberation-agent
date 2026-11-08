@@ -109,7 +109,8 @@ it( 'keeps learned transforms through the viewport class sweep', async () => {
 
 it.each( [
 	{ name: 'matching breakpoint', secondBreakpoint: 768, reuses: true },
-	{ name: 'different breakpoint', secondBreakpoint: 2000, reuses: false },
+	{ name: 'different breakpoint outside range', secondBreakpoint: 2000, reuses: false },
+	{ name: 'different breakpoint inside range', secondBreakpoint: 1000, reuses: false },
 ] )( 'verifies shared header memo for $name', async ( { secondBreakpoint, reuses } ) => {
 	const browser = await chromium.launch();
 	try {
@@ -122,11 +123,15 @@ it.each( [
 			await page.setContent( makeRoute( breakpoint ) );
 			results.push( await captureViewportClassStates( page, { settleMs: 0, memo } ) );
 		}
-		expect( results[ 1 ]!.sampledWidths ).toEqual( reuses ? [ 390, 1920 ] : expect.arrayContaining( [ 390, 1920 ] ) );
-		if ( ! reuses ) expect( results[ 1 ]!.sampledWidths.length ).toBeGreaterThan( 2 );
+		// A reused toggle is proven at the extremes and either side of its flip, with no ladder or bisection.
+		if ( reuses ) expect( [ ...results[ 1 ]!.sampledWidths ].sort( ( a, b ) => a - b ) ).toEqual( [ 390, 767, 768, 1920 ] );
+		else {
+			expect( results[ 1 ]!.sampledWidths ).toEqual( expect.arrayContaining( [ 390, 1920 ] ) );
+			expect( results[ 1 ]!.sampledWidths.length ).toBeGreaterThan( 2 );
+		}
 		const mediaRules = await page.locator( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).last().textContent();
 		if ( reuses ) expect( mediaRules ).toContain( '(max-width:767px)' );
-		else expect( mediaRules ).toContain( '(max-width:1999px)' );
+		else expect( mediaRules ).toContain( secondBreakpoint === 1000 ? '(max-width:999px)' : '(max-width:1999px)' );
 	} finally {
 		await browser.close();
 	}
