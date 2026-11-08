@@ -46,6 +46,24 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
   ]);
 });
 
+// A consent platform (Usercentrics) renders its banner in the shadow tree of
+// an empty host placed after the page content: nothing is parked off-screen.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without waiting for an entrance', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.setContent(`<main style="min-height:1200px"><h1>Page title</h1></main><aside id="cmp"></aside><script>document.querySelector('#cmp').attachShadow({ mode: 'open' }).innerHTML = '<div style="position:fixed;left:0;right:0;bottom:0;padding:24px;background:#fff"><p>This site uses cookies to analyse traffic.</p><button onclick="this.getRootNode().host.remove()">Accept All</button></div>'</script>`);
+    const started = Date.now();
+    const dismissed = await dismissOverlays(page);
+    expect(dismissed.map(item => [item.kind, item.selector])).toEqual([['consent', 'aside#cmp']]);
+    // The settle loop's budget is 1.5 s; reading this banner needs none of it.
+    expect(Date.now() - started).toBeLessThan(1_000);
+  } finally {
+    await browser.close();
+  }
+});
+
 // Regression for builder card banners (GoDaddy): a heading title above block-flow
 // prose, a stretched control, and a card that slides in by transform to rest at
 // one edge on desktop but spans the viewport on mobile.
