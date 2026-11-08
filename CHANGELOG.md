@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.173] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- Give the phone document its own SVG resource IDs
+- Keep SVG fragment references local when a base names another URL
+- Keep fitted regimes for a positioned frame's varying dimensions
+- resolve phone-menu anchors across menu re-render and close non-dialog menus
+- Coalesce identical device stylesheets when the captured DOM proves reordering preserves the cascade
+
+### Fixed
+- Do not hold source readiness on src-less images and name pending ones
+
 ## [0.33.172] - 2026-11-08
 
 ### Changed
