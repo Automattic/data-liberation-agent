@@ -84,4 +84,15 @@ describe( 'canonicalizeWixFormControlIds', () => {
 	it( 'runs after instance canonicalization in the captured-HTML hook', () => {
 		expect( canonicalizeWixCapturedHtml( page( 'comp-aaaa1111', consent( 9 ) ) ) ).toBe( canonicalizeWixCapturedHtml( page( 'comp-bbbb2222', consent( 12 ) ) ) );
 	} );
+
+	it( 'names markup captured from a page, such as an opened dialog, as the page names it', () => {
+		const document = page( 'comp-aaaa1111', consent( 9 ) );
+		const canonical = canonicalizeWixCapturedHtml( document );
+		// The open menu holds one of the instance's components and the consent control.
+		const dialog = '<nav id="comp-aaaa1111_r_comp-logo" class="comp-aaaa1111_r_comp-nav"><label for="checkbox-9">Subscribe</label></nav>';
+		const out = canonicalizeWixCapturedHtml( dialog, document );
+		const instance = /id="(comp-dla[0-9a-f]{8})_r_comp-logo"/.exec( canonical )?.[ 1 ];
+		const checkbox = /id="(checkbox-dla[0-9a-f]{8})"/.exec( canonical )?.[ 1 ];
+		expect( out ).toBe( `<nav id="${ instance }_r_comp-logo" class="${ instance }_r_comp-nav"><label for="${ checkbox }">Subscribe</label></nav>` );
+	} );
 } );
