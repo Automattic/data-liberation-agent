@@ -173,7 +173,12 @@ async function replay( page: Page, click: { trigger: string; target: string }, r
 	}, click.trigger, { timeout: 10_000 } ).catch( () => undefined );
 	await page.locator( click.trigger ).first().click( { force: true, timeout: 5000 } );
 	const changed = await page.waitForFunction(
-		( { selector, previous } ) => document.querySelector( selector )?.textContent?.trim() !== previous,
+		( { selector, previous } ) => {
+			// The pending phase can finish before this polling command reaches the
+			// browser. The in-page observer still records it under runner load.
+			const trace = ( window as typeof window & { __dlaMotion?: { changes: Record< string, string[] > } } ).__dlaMotion;
+			return ( trace?.changes[ selector ] ?? [] ).some( value => value !== previous );
+		},
 		{ selector: click.target, previous: before }, { timeout: 3000 }
 	).then( () => true, () => false );
 	const restored = changed && await page.waitForFunction(

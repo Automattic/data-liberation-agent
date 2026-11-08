@@ -54,11 +54,19 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without 
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<main style="min-height:1200px"><h1>Page title</h1></main><aside id="usercentrics-cmp-ui"></aside><script>document.querySelector('aside').attachShadow({ mode: 'open' }).innerHTML = '<div style="position:fixed;left:0;right:0;bottom:0;height:240px;padding:24px;background:#fff"><p>This site uses cookies to analyse traffic.</p><button onclick="this.getRootNode().host.remove()">Accept All</button></div>'</script>`);
-    const started = Date.now();
+    // Count entrance-loop checks in the browser instead of timing protocol
+    // round trips, which also include unrelated worker/Chromium scheduling.
+    await page.evaluate(() => {
+      const host = document.querySelector('aside')!;
+      const bounds = host.getBoundingClientRect.bind(host);
+      const state = window as typeof window & { entranceChecks: number };
+      state.entranceChecks = 0;
+      host.getBoundingClientRect = () => { state.entranceChecks++; return bounds(); };
+    });
     const dismissed = await dismissOverlays(page);
     expect(dismissed.map(item => [item.kind, item.selector])).toEqual([['consent', 'aside#usercentrics-cmp-ui']]);
-    // The settle loop's budget is 1.5 s; reading this banner needs none of it.
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // A zero-area host must not enter the requestAnimationFrame settle loop.
+    expect(await page.evaluate(() => (window as typeof window & { entranceChecks: number }).entranceChecks)).toBe(1);
   } finally {
     await browser.close();
   }

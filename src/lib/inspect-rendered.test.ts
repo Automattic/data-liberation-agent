@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { inspectSource } from './inspect.js';
 import { sourceComplexity, type RenderedInspection } from './inspect-rendered.js';
 import { registerHost, unregisterHost } from '../platform/host.js';
@@ -336,9 +336,17 @@ it('closes timed-out browser samples and keeps missing evidence unknown', async 
     res.setHeader('content-type', req.url === '/sitemap.xml' ? 'application/xml' : 'text/html');
     res.end(req.url === '/sitemap.xml' ? '<urlset/>' : '<main>Visible</main><script src="/slow.js"></script>');
   });
-  const result = await inspectSource(url, { overallTimeoutMs: 3000, requestTimeoutMs: 1000 });
-  expect(result.complexity.band).toBe('unknown');
-  expect(result.rendered.succeeded).toBe(0);
-  expect(result.issues).toContainEqual(expect.objectContaining({ code: 'rendered-sample-failed' }));
-  expect(result.timing.durationMs).toBeLessThan(4500);
+  const { chromium } = await import('playwright');
+  const launch = vi.spyOn(chromium, 'launch');
+  try {
+    const result = await inspectSource(url, { overallTimeoutMs: 3000, requestTimeoutMs: 1000 });
+    expect(result.complexity.band).toBe('unknown');
+    expect(result.rendered.succeeded).toBe(0);
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'rendered-sample-failed' }));
+    // Assert cleanup directly, not a wall-clock bound that includes browser
+    // startup and scheduling delays from other test workers.
+    expect(launch).toHaveBeenCalledOnce();
+    const browser = await launch.mock.results[0].value;
+    expect(browser.isConnected()).toBe(false);
+  } finally { launch.mockRestore(); }
 }, 10_000);
