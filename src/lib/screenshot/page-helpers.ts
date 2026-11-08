@@ -1067,12 +1067,17 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
       }) || null;
     };
 
+    const pointerInert = (el: Element): boolean => {
+      if (getComputedStyle(el).pointerEvents !== 'none') return false;
+      return Array.from(el.querySelectorAll('*')).every((child) =>
+        getComputedStyle(child).pointerEvents === 'none');
+    };
     const hasBackdrop = (el: Element): boolean => {
       const sibs = el.parentElement ? Array.from(el.parentElement.children) : [];
       return sibs.some((s) => {
         if (s === el) return false;
         const cs = getComputedStyle(s);
-        if (cs.position !== 'fixed') return false;
+        if (cs.position !== 'fixed' || pointerInert(s)) return false;
         const r = s.getBoundingClientRect();
         const cover = (r.width * r.height) / vpArea;
         const op = parseFloat(cs.opacity || '1');
@@ -1099,7 +1104,7 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
     let idx = 0;
     for (const el of Array.from(document.querySelectorAll('*'))) {
       const cs = getComputedStyle(el);
-      if ((cs.position !== 'fixed' && cs.position !== 'sticky') || !visible(cs)) continue;
+      if ((cs.position !== 'fixed' && cs.position !== 'sticky') || !visible(cs) || pointerInert(el)) continue;
       const r = el.getBoundingClientRect();
       if (r.width < vw * 0.1 && r.height < vh * 0.1) continue; // drop trackers/badges
       el.setAttribute('data-lib-overlay', String(idx));
