@@ -158,7 +158,9 @@ export function isAttachmentSitemapUrl(url: string): boolean {
  * than it selected and therefore an uncertain complexity band for a source that
  * measured cleanly. An attachment viewer permalink is a document shell around
  * one media file, so it is excluded by its query parameter rather than by
- * extension.
+ * extension. `/cdn-cgi/` is the path Cloudflare reserves for its own endpoints
+ * on every site it serves, such as the email-protection link it writes into
+ * server HTML, so nothing under it is one of the source's pages.
  */
 export function isNonDocumentUrl(url: string): boolean {
   if (isAttachmentViewerUrl(url)) return true;
@@ -168,6 +170,7 @@ export function isNonDocumentUrl(url: string): boolean {
   } catch {
     path = url.toLowerCase().split(/[?#]/)[0];
   }
+  if (path.startsWith('/cdn-cgi/')) return true;
   const extension = path.slice(path.lastIndexOf('.') + 1);
   return path.includes('.') && extension !== path && NON_DOCUMENT_EXTENSIONS.has(extension);
 }
