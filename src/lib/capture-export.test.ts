@@ -652,7 +652,7 @@ describe( 'exportWebsiteCapture', () => {
 		const panelLinks = $( '.data-blocks-engine-capture-mobile-document [data-blocks-engine-capture-dialog-panel] a' );
 		expect( panelLinks ).toHaveLength( 2 );
 		expect( $( '#services--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
-		expect( panelLinks.eq( 0 ).attr( 'href' ) ).toBe( '/index.html#services--data-blocks-engine-capture-mobile' );
+		expect( panelLinks.eq( 0 ).attr( 'href' ) ).toBe( '/index.html#services' );
 		// A fragment with no phone target is left as the route rebased it.
 		expect( panelLinks.eq( 1 ).attr( 'href' ) ).toBe( '/index.html#unknown' );
 		expect( $( '.data-blocks-engine-capture-desktop-document a' ).first().attr( 'href' ) ).toBe( '/index.html#services' );
@@ -768,11 +768,12 @@ describe( 'exportWebsiteCapture', () => {
 			'/index.html#features'
 		);
 		expect( $( '.data-blocks-engine-capture-mobile-document a' ).first().attr( 'href' ) ).toBe(
-			'/index.html#features--data-blocks-engine-capture-mobile'
+			'/index.html#features'
 		);
-		expect( $( '#testimonial--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
+		expect( $( '#testimonial' ) ).toHaveLength( 1 );
+		expect( $( '[data-blocks-engine-capture-responsive-fragment="features"]' ) ).toHaveLength( 2 );
 		expect( $( '.data-blocks-engine-capture-mobile-document a' ).eq( 1 ).attr( 'href' ) ).toBe(
-			'/index.html#testimonial--data-blocks-engine-capture-mobile'
+			'/index.html#testimonial'
 		);
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors

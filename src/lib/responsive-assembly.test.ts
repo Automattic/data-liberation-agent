@@ -313,6 +313,34 @@ describe( 'assembleResponsiveCapture', () => {
 	] )( 'keeps distinct navigation identities: %s vs %s', ( desktopHref, mobileHref ) => {
 		expect( documentsDiffer( page( `<a href="${ desktopHref }">Link</a>` ), page( `<a href="${ mobileHref }">Link</a>` ) ) ).toBe( true );
 	} );
+	it( 'shares phone chrome across routes and resolves authored fragments to the visible device copy', async () => {
+		const header = '<header id="phone-menu"><nav><a href="/index.html#section">Section</a><a data-blocks-engine-capture-anchor-fragment="section" href="/index.html#section">Captured section</a></nav></header>';
+		const assemble = ( ownsTarget: boolean ) => {
+			const target = ownsTarget ? '<section id="section">Destination</section>' : '<p>Other route</p>';
+			const css = '<style>body:not(.phone){color:black}main{padding-top:1200px;padding-bottom:1200px}</style>';
+			const desktop = page( `${ header }<main>${ target }</main>`, css );
+			const mobile = page( `${ header }<main>${ target }</main>`, css, ' class="phone"' );
+			return routePhoneDocumentFragments( assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } ).html, ownsTarget ? '/index.html' : '/other.html' );
+		};
+		const home = assemble( true ), other = assemble( false );
+		const $home = cheerio.load( home ), $other = cheerio.load( other );
+		expect( $home.html( $home( `.${ MOBILE_DOCUMENT_CLASS } header` ) ) ).toBe( $other.html( $other( `.${ MOBILE_DOCUMENT_CLASS } header` ) ) );
+		expect( $home( `.${ MOBILE_DOCUMENT_CLASS } header a` ).map( ( _, link ) => $home( link ).attr( 'href' ) ).get() ).toEqual( [ '/index.html#section', '/index.html#section' ] );
+		expect( $home( '[data-blocks-engine-capture-responsive-fragment="section"]' ) ).toHaveLength( 2 );
+		const browser = await chromium.launch();
+		try {
+			const copy = await browser.newPage();
+			await copy.route( 'https://copy.test/**', route => route.fulfill( { contentType: 'text/html', body: new URL( route.request().url() ).pathname === '/other.html' ? other : home } ) );
+			for ( const width of [ 390, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 800 } );
+				await copy.goto( 'https://copy.test/other.html' );
+				await copy.locator( 'header:visible a' ).first().click();
+				const target = copy.locator( '[data-blocks-engine-capture-responsive-fragment="section"]:visible' );
+				await expect.poll( async () => Math.abs( ( await target.boundingBox() )!.y ) ).toBeLessThan( 2 );
+			}
+		} finally { await browser.close(); }
+	} );
+
 	it.each( [
 		{ name: 'padding shorthand', important: 'padding:6px!important', desktop: 'padding-top:40px', mobile: 'padding-top:80px', padding: '6px', display: 'block' },
 		{ name: 'all reset', important: 'all:initial!important', desktop: 'display:block;width:220px;padding:40px', mobile: 'display:block;width:160px;padding:80px', padding: '0px', display: 'inline' },
