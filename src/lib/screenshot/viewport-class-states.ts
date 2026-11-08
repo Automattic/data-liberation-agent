@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { Page } from 'playwright';
-import { COARSE_SWEEP_WIDTHS, PROBE_QUIET_MS, SEGMENT_STYLE_ATTRIBUTE } from './fluid-capture.js';
+import { COARSE_SWEEP_WIDTHS, SEGMENT_STYLE_ATTRIBUTE } from './fluid-capture.js';
 import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
+import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 
 /**
  * Script-written class state that follows the viewport.
@@ -138,8 +139,27 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 	}, RUNTIME_STYLE_WRITES_KEY );
 	if ( ! reactive ) return none;
 
-	const { settleDocument } = await import( './page-helpers.js' );
-	const settle = { quietMs: PROBE_QUIET_MS, timeoutMs: ( options.settleMs ?? 1200 ) + 3500 };
+	await page.evaluate( observeViewportWork );
+	// Wait for the state we sample, not unrelated style writes, carousels or
+	// lazy images elsewhere in the document. Pending resize debounces still
+	// hold the probe open; two identical class reads prove its resting state.
+	const resize = async ( size: { width: number; height: number } ) => {
+		await page.evaluate( key => ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( key ) ]!.arm(), VIEWPORT_WORK_KEY );
+		await page.setViewportSize( size );
+		await page.evaluate( async ( { key, workKey, timeoutMs } ) => {
+			const work = ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( workKey ) ]!;
+			await work.release();
+			const state = ( window as unknown as Record< symbol, { diff(): unknown } > )[ Symbol.for( key ) ]!;
+			const deadline = Date.now() + timeoutMs;
+			let previous = JSON.stringify( state.diff() );
+			do {
+				await work.sleep( 50 );
+				const current = JSON.stringify( state.diff() );
+				if ( current === previous && work.pending() === 0 ) return;
+				previous = current;
+			} while ( Date.now() < deadline );
+		}, { key: STATE_KEY, workKey: VIEWPORT_WORK_KEY, timeoutMs: ( options.settleMs ?? 1200 ) + 3500 } );
+	};
 	await page.evaluate( key => {
 		const elements = [ ...document.body.querySelectorAll( '*' ) ].filter( element => ! [ 'SCRIPT', 'STYLE', 'TEMPLATE' ].includes( element.tagName ) );
 		const tokens = ( element: Element ) => ( element.getAttribute( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
@@ -168,8 +188,7 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		const known = memo.get( width );
 		if ( known ) return known;
 		sampledWidths.push( width );
-		await page.setViewportSize( { width, height: original.height } );
-		await settleDocument( page, 'viewport-class-probe', settle );
+		await resize( { width, height: original.height } );
 		const diff = await page.evaluate( key => ( window as unknown as Record< symbol, { diff(): Record< number, { added: string[]; removed: string[] } > } > )[ Symbol.for( key ) ]!.diff(), STATE_KEY );
 		memo.set( width, diff );
 		return diff;
@@ -265,8 +284,7 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 
 		// Restore the serialized width and keep only tokens the source restores
 		// with it: a token that stays changed follows time, not the viewport.
-		await page.setViewportSize( original );
-		await settleDocument( page, 'viewport-class-probe', settle );
+		await resize( original );
 		const restored = await page.evaluate( key => ( window as unknown as Record< symbol, { diff(): Record< number, { added: string[]; removed: string[] } > } > )[ Symbol.for( key ) ]!.diff(), STATE_KEY );
 		const aliases: Array< { index: number; token: string; base: boolean; alias: string; media: string } > = [];
 		for ( const [ key, toggle ] of toggles ) {
@@ -304,8 +322,7 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		return { aliased: aliases.length, rules, sampledWidths };
 	} finally {
 		if ( page.viewportSize()?.width !== original.width ) {
-			await page.setViewportSize( original );
-			await settleDocument( page, 'viewport-class-probe', settle );
+			await resize( original );
 		}
 		await page.evaluate( key => delete ( window as unknown as Record< symbol, unknown > )[ Symbol.for( key ) ], STATE_KEY );
 	}

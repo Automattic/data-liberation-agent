@@ -8,7 +8,8 @@ export const CHOICE_GROUP_KIND = 'choice-group' as const;
 export const SELECTABLE_SET_LIMITS = {
 	maxSets: 3,
 	maxMembers: 24,
-	maxDriveMs: 30_000,
+	// Leave room under the enclosing 30s phase cap for restoration and projection.
+	maxDriveMs: 15_000,
 	maxHtmlBytes: 512 * 1024,
 	settleMs: 500,
 	quietMs: 150,
@@ -87,6 +88,7 @@ export async function captureSelectableSetStates(
 	page: Page,
 	options: SelectableSetCaptureOptions = {}
 ): Promise< CapturedDialogInteraction[] > {
+	const started = Date.now();
 	const maxSets = options.maxSets ?? SELECTABLE_SET_LIMITS.maxSets;
 	const maxMembers = options.maxMembers ?? SELECTABLE_SET_LIMITS.maxMembers;
 	const maxDriveMs = options.maxDriveMs ?? SELECTABLE_SET_LIMITS.maxDriveMs;
@@ -421,7 +423,7 @@ export async function captureSelectableSetStates(
 							// it holds the window open up to the shared change-observation bound.
 							const busy = elapsed < limits.busyMs && document.querySelector( '[aria-busy="true"]' ) !== null;
 							const quiet = lastMutation > 0 && now - lastMutation >= limits.quietMs;
-							if ( ! busy && ( quiet || elapsed >= limits.settleMs ) ) {
+							if ( now >= deadline || ! busy && ( quiet || elapsed >= limits.settleMs ) ) {
 								observer.disconnect();
 								resolve();
 								return;
@@ -435,6 +437,7 @@ export async function captureSelectableSetStates(
 				const activate = async (
 					element: Element
 				): Promise< { ok: true; external: boolean } | { ok: false; error: string; navigated?: boolean } > => {
+					if ( Date.now() >= deadline ) return { ok: false, error: 'time budget spent' };
 					// A member that opens another window (a share or print button) acts
 					// outside this document. The trap also keeps the probe from opening it.
 					let external = false;
@@ -529,11 +532,11 @@ export async function captureSelectableSetStates(
 						const top = Math.max( 0, rect.top + window.scrollY - window.innerHeight * 0.25 );
 						const bottom = rect.bottom + window.scrollY;
 						const step = Math.max( 120, window.innerHeight * 0.5 );
-						for ( let y = top; y < bottom + step; y += step ) {
+						for ( let y = top; y < bottom + step && Date.now() < deadline; y += step ) {
 							window.scrollTo( { left: startX, top: y, behavior: 'instant' } );
 							await wait( 90 );
 						}
-						const animationDeadline = Date.now() + 2_500;
+						const animationDeadline = Math.min( deadline, Date.now() + 2_500 );
 						while ( Date.now() < animationDeadline ) {
 							const running = region.getAnimations( { subtree: true } ).some( ( animation ) =>
 								animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity );
@@ -1148,7 +1151,7 @@ export async function captureSelectableSetStates(
 	// Rebuilt category subtrees need their own observed answers. Matching a
 	// duplicate question label to an answer from another state is ambiguous.
 	// Re-drive only confirmed states containing unassociated disclosure controls.
-	const deadline = Date.now() + maxDriveMs;
+	const deadline = started + maxDriveMs;
 	const restores = new Set<string>();
 	try {
 		for (const record of raw) {

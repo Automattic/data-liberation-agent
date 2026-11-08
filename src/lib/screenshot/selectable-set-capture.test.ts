@@ -1454,11 +1454,44 @@ describe( 'captureSelectableSetStates', () => {
 		30_000
 	);
 
+	it.skipIf( skipBrowser )( 'returns bounded partial evidence for product-like choice-only groups', async () => {
+		const page = await browser.newPage();
+		try {
+			await page.setContent( `<!doctype html><body>${ Array.from( { length: 9 }, ( _, group ) =>
+				`<div role="group" aria-label="Product choices ${ group }">${ Array.from( { length: 8 }, ( _, index ) => `<button aria-pressed="${ index === 0 }">Choice ${ index }</button>` ).join( '' ) }</div>` ).join( '' ) }
+				<script>document.querySelectorAll('button').forEach(button=>button.onclick=()=>{button.parentElement.querySelectorAll('button').forEach(peer=>peer.setAttribute('aria-pressed',String(peer===button)))})</script>` );
+			const started = performance.now();
+			const states = await captureSelectableSetStates( page );
+			expect( performance.now() - started ).toBeLessThan( 17_000 );
+			expect( states.length ).toBeGreaterThan( 0 );
+			expect( states.some( state => state.status === 'captured' ) ).toBe( true );
+		} finally {
+			await page.close();
+		}
+	}, 30_000 );
+
+	it.skipIf( skipBrowser )( 'bounds entrance scrolling in a tall product detail region', async () => {
+		const page = await browser.newPage();
+		try {
+			await page.setContent( pickerOf( 3, 0 ) );
+			await page.evaluate( () => {
+				document.querySelector<HTMLElement>( '#panel' )!.style.height = '100000px';
+				( window as typeof window & { __dlaEntrances: { stamp(): void } } ).__dlaEntrances = { stamp() {} };
+			} );
+			const started = performance.now();
+			const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 1_500 } );
+			expect( performance.now() - started ).toBeLessThan( 3_000 );
+			expect( states.some( state => state.status === 'captured' ) ).toBe( true );
+		} finally {
+			await page.close();
+		}
+	}, 30_000 );
+
 	it( 'exposes explicit drive caps', () => {
 		expect( SELECTABLE_SET_LIMITS ).toEqual( {
 			maxSets: 3,
 			maxMembers: 24,
-			maxDriveMs: 30_000,
+			maxDriveMs: 15_000,
 			maxHtmlBytes: 512 * 1024,
 			settleMs: 500,
 			quietMs: 150,
