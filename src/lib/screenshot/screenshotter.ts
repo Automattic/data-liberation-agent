@@ -27,6 +27,8 @@ import {
 	isStackingArtifact,
 	matchClientErrorShell,
 	navigationDocumentUrl,
+	PHONE_REDIRECT_DESKTOP_ONLY,
+	profileRedirectMerge,
 	serverRedirectTarget,
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -2935,11 +2937,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const existing = manifest.getEntry( url );
 		if ( reuseOnly && ! existing ) return;
 		const slug = existing ? existing.slug : await manifest.claimSlug( base );
+		// A document beside an alias is an ambiguous earlier outcome (a run whose
+		// profiles disagreed, or a route that began redirecting): recapture it.
+		const ambiguousDocument = Boolean( existing?.html && existing.redirectedTo );
 		const plan = planArtifacts( {
 			slug,
 			outputDir: opts.outputDir,
 			// Interrupted captures can leave files without the manifest needed to export them.
-			force: force || ! existing?.html || JSON.stringify(existing.cleanup?.policy) !== JSON.stringify(opts.cleanupPolicy ?? cleanupPolicy()),
+			force: force || ambiguousDocument || ! existing?.html || JSON.stringify(existing.cleanup?.policy) !== JSON.stringify(opts.cleanupPolicy ?? cleanupPolicy()),
 			captureImages: opts.captureImages,
 		} );
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;
@@ -2985,11 +2990,18 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 		};
 		if ( ! force && existing?.html && existsSync( join( opts.outputDir, existing.html ) ) ) declareAdditional( readFileSync( join( opts.outputDir, existing.html ), 'utf8' ) );
-		const profilePlan = ( profile: Viewport ): ArtifactPlan => profile.id === 'desktop' ? effectivePlan.desktop : profile.id === 'mobile' ? effectivePlan.mobile : planDocumentArtifacts( {
+		// A resumed run that reuses the desktop document instead of loading it.
+		const reusedDesktop = ! force && ! effectivePlan.desktop.needsLoad && Boolean( existing?.html ) && ! existing?.redirectedTo;
+		// A prior run found the phone identity sent to a separate mobile site;
+		// while that desktop document stands, the phone identity is not reloaded.
+		const reusedPhoneSentTo = reusedDesktop ? existing?.phoneSentTo : undefined;
+		const mobilePlan = reusedPhoneSentTo ? { ...effectivePlan.mobile, needsLoad: false } : effectivePlan.mobile;
+		const profilePlan = ( profile: Viewport ): ArtifactPlan => profile.id === 'desktop' ? effectivePlan.desktop : profile.id === 'mobile' ? mobilePlan : planDocumentArtifacts( {
 			outputDir: opts.outputDir, slug, id: profile.id, captureImages: opts.captureImages,
 			force: force || ! existing?.profiles?.[ profile.id ]?.html || JSON.stringify( existing.profiles?.[ profile.id ]?.recipe ) !== JSON.stringify( profile ),
 		} );
 		for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
+		if ( reusedPhoneSentTo ) opts.withdrawSourceProfile?.( url, 'mobile' );
 
 		if ( routeProfiles.every( profile => ! profilePlan( profile ).needsLoad ) ) {
 			// Abandoned-at-deadline routes record nothing a later export could trip on.
@@ -3008,7 +3020,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined, deviceMode: routeDevice,
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined, phoneSentTo: reusedPhoneSentTo, externalRedirect: undefined, sourceOutcomes: undefined, blockLosses: undefined, deviceMode: routeDevice,
 			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
 		const mergeProfile = ( viewport: Viewport, profileEntry: ManifestEntry, additional: boolean ): boolean => {
@@ -3018,13 +3030,33 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const previousNativeViewTimelines = entry.nativeViewTimelines;
 			const previousScriptedLinks = entry.scriptedLinks;
 			const previousBlockLosses = entry.blockLosses ?? [];
-			const previousRedirect = entry.redirectedTo;
 			const previousOutcomes = entry.sourceOutcomes ?? [];
-			const previousLocal = Boolean( entry.html || entry.mobileHtml );
-			const profileLocal = Boolean( profileEntry.html || profileEntry.mobileHtml );
-			const aliasDisagreement = profileEntry.redirectedTo
-				? Boolean( ( previousRedirect && previousRedirect !== profileEntry.redirectedTo ) || previousLocal || previousOutcomes.length )
-				: Boolean( previousRedirect && ( profileLocal || profileEntry.sourceOutcomes?.length ) );
+			const redirectMerge = profileRedirectMerge( viewport.id, {
+				redirectedTo: profileEntry.redirectedTo,
+				local: Boolean( profileEntry.html || profileEntry.mobileHtml ),
+				external: Boolean( profileEntry.sourceOutcomes?.length ),
+			}, {
+				redirectedTo: entry.redirectedTo,
+				local: Boolean( entry.html || entry.mobileHtml ),
+				// A resumed run reuses the desktop document without merging a pass.
+				desktopLocal: Boolean( entry.html ) || ( reusedDesktop && ! entry.redirectedTo ),
+				external: Boolean( previousOutcomes.length ),
+			} );
+			const aliasDisagreement = redirectMerge === 'disagree';
+			if ( redirectMerge === 'phone-only' ) {
+				// The route keeps its desktop document; the phone identity's
+				// destination is a separate mobile site, not this route's alias.
+				// No phone profile, document or reference cell remains, so nothing
+				// downstream mistakes the route for one with a phone document.
+				entry.phoneSentTo = profileEntry.redirectedTo;
+				sendLog( server, `[${ PHONE_REDIRECT_DESKTOP_ONLY }] ${ url } (${ viewport.id }): the phone identity is sent to ${ entry.phoneSentTo } while desktop renders this route; captured at desktop only` );
+				// Written as undefined so the manifest merge drops an earlier run's phone artifacts.
+				entry.mobileHtml = undefined; entry.mobile = undefined; entry.mobileScrolled = undefined; entry.fluidMobile = undefined;
+				if ( entry.profiles ) delete entry.profiles.mobile;
+				if ( entry.documents ) delete entry.documents.mobile;
+				opts.withdrawSourceProfile?.( url, viewport.id );
+				return false;
+			}
 			const profileRecord = profileEntry.profiles?.[ viewport.id ];
 			const { profiles: _profiles, ...passEntry } = profileEntry;
 			if ( viewport.id === 'desktop' ) Object.assign( entry, passEntry );

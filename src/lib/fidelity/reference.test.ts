@@ -940,3 +940,20 @@ it( 'uses unique normal/zoom roles before falling back to document order', () =>
 	expect( matchRenderedImages( [ normal, zoom ], candidate ).map( pair => pair.candidate.role ) ).toEqual( [ normal.role, zoom.role ] );
 	expect( matchRenderedImages( [ { ...normal, role: undefined }, { ...zoom, role: undefined } ], candidate ).map( pair => pair.candidate ) ).toEqual( candidate );
 } );
+
+it( 'withdraws the phone reference cells of a route whose phone identity was sent to a separate mobile site', () => {
+	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+	const directory = mkdtempSync( join( parent, 'reference-withdraw-' ) );
+	try {
+		const collector = createReferenceCollector( directory, 'https://example.test/', [ 'https://example.test/' ] );
+		collector.declare( 'https://example.test/', { id: 'desktop', width: 1440, height: 900 } );
+		collector.declare( 'https://example.test/', { id: 'mobile', width: 390, height: 844 } );
+		collector.withdraw( 'https://example.test/', 'mobile' );
+		const receipt = join( directory, 'capture-receipt.json' );
+		writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+		const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+		expect( manifest.scope.cells?.map( cell => `${ cell.profile }@${ cell.viewport }` ) ).toEqual( [ 'desktop@768', 'desktop@1440' ] );
+	} finally {
+		rmSync( directory, { recursive: true, force: true } );
+	}
+} );

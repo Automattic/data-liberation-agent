@@ -155,6 +155,11 @@ export interface ScreenshotOpts {
 	 */
 	onRouteAlias?: ( url: string, target: string ) => void;
 	/**
+	 * A route's `profile` rendered no document of the route (see
+	 * `ManifestEntry.phoneSentTo`): its declared reference cells are withdrawn.
+	 */
+	withdrawSourceProfile?: ( url: string, profile: string ) => void;
+	/**
 	 * Capture time budget window (see `capture-time-budget.ts`). The entrypoint
 	 * starts first; no other route starts after `admitUntil`; routes still
 	 * running at `abandonAt` are abandoned. Uncaptured routes are reported as

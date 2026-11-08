@@ -627,6 +627,7 @@ async function runCaptureWebsite(
 		// leave most routes without fresh reference pages.
 		...( reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
 		onRouteAlias: reference.alias,
+		withdrawSourceProfile: reference.withdraw,
 		...( adapter.liberation?.canonicalizeHtml
 			? { canonicalizeHtml: adapter.liberation.canonicalizeHtml.bind( adapter.liberation ) }
 			: {} ),

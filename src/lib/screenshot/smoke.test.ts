@@ -192,6 +192,8 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       '/missing-html': tallHtml('NOT CAPTURED'),
       // A client-routed control navigating the page away after load.
       '/spa': tallHtml('SPA').replace('</body>', '<script>addEventListener("load",()=>history.pushState({},"","/new"))</script></body>'),
+      '/phone-site': tallHtml('DESKTOP ROUTE'),
+      '/m/': tallHtml('SEPARATE MOBILE SITE'),
     };
     const redirects: Record<string, [number, string]> = {
       '/old': [301, '/new'],
@@ -202,7 +204,12 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     const server: HttpServer = createServer((req, res) => {
       const path = (req.url || '/').split('?')[0];
       const redirect = redirects[path];
-      if (req.url === '/?missing=1') {
+      if (path === '/phone-site' && /iPhone|Mobile/.test(req.headers['user-agent'] ?? '')) {
+        // A site that sends every phone visitor to a separate mobile site
+        // (`302 /m/`) and desktop to the route's own document.
+        res.writeHead(302, { Location: '/m/' });
+        res.end();
+      } else if (req.url === '/?missing=1') {
         res.writeHead(404);
         res.end();
       } else if (redirect) {
@@ -221,7 +228,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     const outputDir = mkdtempSync(join(TMP_ROOT, 'redirect-out-'));
     try {
       await captureScreenshots({
-        urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa'].map((path) => `${origin}${path}`),
+        urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa', '/phone-site'].map((path) => `${origin}${path}`),
         outputDir,
         concurrency: 2,
       });
@@ -246,6 +253,41 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       expect(manifest.entries[`${origin}/?missing=1`]).toMatchObject({ sourceAbsentStatus: 404 });
       expect(manifest.entries[`${origin}/missing-html`]).toBeUndefined();
       expect(JSON.stringify(manifest)).not.toContain('secret=');
+      // A phone-only redirect to a separate mobile site keeps the route's
+      // desktop document instead of failing it as disagreeing aliases.
+      const phoneOnly = (entries: Record<string, any>, runFailures: Array<{ url: string }>) => {
+        const phoneSite = entries[`${origin}/phone-site`];
+        expect(phoneSite.html).toBe('html/phone-site.html');
+        expect(phoneSite.phoneSentTo).toBe(`${origin}/m/`);
+        expect(phoneSite.redirectedTo).toBeUndefined();
+        expect(phoneSite.mobileHtml).toBeUndefined();
+        // No phone profile record: nothing downstream reads it as a phone document.
+        expect(phoneSite.profiles?.mobile).toBeUndefined();
+        expect(entries[`${origin}/m/`]).toBeUndefined();
+        expect(runFailures.filter((f) => f.url === `${origin}/phone-site`)).toEqual([]);
+      };
+      phoneOnly(manifest.entries, failures);
+      // Reruns reuse the desktop document. One whose manifest predates the
+      // marker reloads only the phone identity; one that has it reloads neither.
+      const manifestPath = join(outputDir, 'screenshots', 'manifest.json');
+      // A manifest from a build that failed the route instead (document plus
+      // the phone's alias, no marker) reloads both identities.
+      for (const shape of ['failed-build', 'unmarked', 'marked'] as const) {
+        const before = JSON.parse(readFileSync(manifestPath, 'utf8'));
+        const prior = before.entries[`${origin}/phone-site`];
+        if (shape !== 'marked') delete prior.phoneSentTo;
+        if (shape === 'failed-build') prior.redirectedTo = `${origin}/m/`;
+        writeFileSync(manifestPath, JSON.stringify(before));
+        await captureScreenshots({
+          urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa', '/phone-site'].map((path) => `${origin}${path}`),
+          outputDir,
+          concurrency: 2,
+        });
+        phoneOnly(
+          JSON.parse(readFileSync(manifestPath, 'utf8')).entries,
+          JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8')),
+        );
+      }
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
       rmSync(outputDir, { recursive: true, force: true });

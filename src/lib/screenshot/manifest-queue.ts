@@ -85,6 +85,13 @@ export interface ManifestEntry {
    * alias of that route and has no artifacts of its own.
    */
   redirectedTo?: string;
+  /**
+   * The phone identity was sent to this same-site route (a separate mobile
+   * site) while desktop rendered this URL's own document. The route keeps its
+   * desktop document and has no phone profile, phone document or phone
+   * reference cells; a resumed capture does not reload the phone identity.
+   */
+  phoneSentTo?: string;
   /** Proven off-origin initial-document redirect. Destination path/query are not stored. */
   externalRedirect?: boolean;
   sourceOutcomes?: import('../source-navigation.js').ExternalBoundary[];

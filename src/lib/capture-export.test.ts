@@ -7983,6 +7983,23 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
 	} );
 
+	it( 'ships the desktop document alone when the phone identity was sent to a separate mobile site', () => {
+		// A stale phone document from an earlier run is at the conventional path.
+		const { outputDir, options } = fixture( { home: { desktop: page( 'Desktop route' ), mobile: page( 'Stale phone document' ) } } );
+		const manifestPath = join( outputDir, 'screenshots/manifest.json' );
+		const manifest = JSON.parse( readFileSync( manifestPath, 'utf8' ) );
+		manifest.entries[ 'https://example.test/' ].phoneSentTo = 'https://example.test/m/';
+		writeFileSync( manifestPath, JSON.stringify( manifest ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
+			code: 'phone_redirect_desktop_only', url: 'https://example.test/', unit: 'profile', severity: 'warning',
+		} ) );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 1, routesFailed: 0 } );
+		const html = readFileSync( join( outputDir, 'website/index.html' ), 'utf8' );
+		expect( html ).toContain( 'Desktop route' );
+		expect( html ).not.toContain( 'Stale phone document' );
+	} );
+
 	it( 'exports a dual-document page whose stylesheet has a browser-dropped invalid selector list', () => {
 		const invalid = '.form input:not:[type="submit"],.form textarea{color:red}';
 		const { outputDir, options } = fixture( { home: {

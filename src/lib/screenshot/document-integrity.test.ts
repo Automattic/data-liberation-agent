@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countBodyTags, documentElementTags, isRouteDrift, isStackingArtifact, serverRedirectTarget } from './document-integrity.js';
+import { countBodyTags, documentElementTags, isRouteDrift, isStackingArtifact, profileRedirectMerge, serverRedirectTarget } from './document-integrity.js';
 
 describe('document-integrity', () => {
   it('counts a clean single-document page as one body', () => {
@@ -127,5 +127,32 @@ describe('isRouteDrift', () => {
     expect(serverRedirectTarget('https://example.com/old', 'http://example.com:8080/new')).toBeUndefined();
     expect(serverRedirectTarget('https://example.com/old', 'http://user:secret@example.com/new')).toBeUndefined();
     expect(serverRedirectTarget('https://example.com/old', 'ftp://example.com/new')).toBeUndefined();
+  });
+  describe('profileRedirectMerge', () => {
+    // A site that sends every phone visitor to a separate mobile site:
+    // desktop gets 200 at every route, every phone request `302 Location: /m/`.
+    const desktopRendered = { local: true, desktopLocal: true, external: false };
+    const phoneToM = { redirectedTo: 'https://example.com/m/', local: false, external: false };
+
+    it('keeps the desktop document when only the phone identity is sent to a separate mobile site', () => {
+      expect(profileRedirectMerge('mobile', phoneToM, desktopRendered)).toBe('phone-only');
+    });
+
+    it('still refuses profiles that reach different documents', () => {
+      // Desktop aliases one route, phone another.
+      expect(profileRedirectMerge('mobile', phoneToM, { redirectedTo: 'https://example.com/home/', local: false, desktopLocal: false, external: false })).toBe('disagree');
+      // Desktop redirected; a phone rendering the route is not its alias.
+      expect(profileRedirectMerge('mobile', { local: true, external: false }, { redirectedTo: 'https://example.com/home/', local: false, desktopLocal: false, external: false })).toBe('disagree');
+      // Desktop observed an off-site boundary.
+      expect(profileRedirectMerge('mobile', phoneToM, { local: false, desktopLocal: false, external: true })).toBe('disagree');
+      // An additional profile redirecting while desktop rendered is not a phone site.
+      expect(profileRedirectMerge('tablet', phoneToM, desktopRendered)).toBe('disagree');
+    });
+
+    it('agrees when every profile renders the route or aliases the same target', () => {
+      expect(profileRedirectMerge('mobile', { local: true, external: false }, desktopRendered)).toBe('agree');
+      expect(profileRedirectMerge('mobile', phoneToM, { redirectedTo: phoneToM.redirectedTo, local: false, desktopLocal: false, external: false })).toBe('agree');
+      expect(profileRedirectMerge('desktop', phoneToM, { local: false, desktopLocal: false, external: false })).toBe('agree');
+    });
   });
 });
