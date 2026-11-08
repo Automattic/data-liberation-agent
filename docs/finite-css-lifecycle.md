@@ -50,3 +50,25 @@ page. Same-name ordinal positions cannot identify an effect: completion/removal
 of an earlier sibling otherwise falsely reports a still-paused sibling as
 scroll-responsive. Public animation-name multiplicity remains the cross-document
 coverage check; lifecycle signatures and losses provide independent action proof.
+
+## Script entrances
+
+Entrances a script drives itself — inline styles written each frame (rAF
+springs) or WAAPI animations it plays — have no owner in the copy, which never
+runs that script. They ship at the rest pose the source reaches instead of being
+replayed (#1466). The same observer notes inline motion writes and WAAPI motion
+starts. Before the initial document and again before the screenshot and
+serialization, capture settles that motion (`settleScriptMotion` in
+`screenshot/capture-state.ts`). If the source showed scroll-triggered motion and
+the viewport changed since the last settle, it scrolls the document once. Root-class
+probes and width sweeps resize the page, and a runtime that remounts on resize
+replays its entrances. Capture then returns to the top and waits, within a fixed
+budget, until inline writes stop and finite script animations end. A finished
+script animation that holds its end pose by fill is committed to inline style.
+CSS animations are only moved to their end on the clock; nothing is written for
+them.
+
+A scroll-scrubbed style (#1158) that ever moves while scrolling and resizing have
+both stopped is time-driven, so its in-view pose is never stamped over its rest
+pose. A return to an earlier pose counts as scroll evidence only when a scroll
+caused it, never when a resize remount did.

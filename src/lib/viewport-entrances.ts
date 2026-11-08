@@ -15,6 +15,18 @@ interface EntranceState {
 	startupContexts?: Array<{ width: number; height: number; started: boolean }>;
 }
 
+/** What the entrance observer saw of script-written motion. */
+export interface ScriptMotion {
+	/** performance.now() of the last inline motion write, WAAPI motion start or viewport entry. */
+	at: number;
+	/** Milliseconds since then. */
+	quietMs: number;
+	/** Some motion started right after a scroll: the source has scroll-triggered entrances. */
+	scrollTriggered: boolean;
+	/** Viewport resizes since load; a runtime may remount and replay its entrances on each. */
+	resizes: number;
+}
+
 /** Install before hydration. Observe the source's own viewport trigger rather than guessing selectors. */
 export function observeViewportEntrances(): void {
 	const named = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
@@ -25,6 +37,7 @@ export function observeViewportEntrances(): void {
 		startup: Array<{ id: string; started: boolean }>;
 		losses: Array<{ id: string; reason: string }>;
 		startupContexts?: Record<string, EntranceState['startupContexts']>;
+		motion: ScriptMotion;
 	} };
 	if ( scope.__dlaEntrances || ! window.IntersectionObserver ) return;
 	const native = window.IntersectionObserver;
@@ -48,22 +61,59 @@ export function observeViewportEntrances(): void {
 	// Scroll-scrubbed inline styles (#1158): a style written in the frame after a
 	// scroll, which later returns to a value it held before, is a function of scroll
 	// position. Its settled pose is the last one written while its centre was in view.
-	const scrubbed = new Map<Element, { seen: Set<string>; reverted: boolean; settled?: string }>();
+	// A style that keeps moving after one scroll or resize — written in three
+	// separate batches since the last one, or once both have stopped — is
+	// time-driven motion such as an entrance spring (#1466). It reaches its own
+	// rest pose, so it is no scrub and keeps that pose.
+	const scrubbed = new Map<Element, { seen: Set<string>; reverted: boolean; settled?: string; timeDriven: boolean; input: number; batch: number; batches: number }>();
 	let scrolledAt = -Infinity;
-	addEventListener( 'scroll', () => { scrolledAt = performance.now(); }, true );
+	let resizedAt = -Infinity;
+	let inputs = 0, batches = 0;
+	addEventListener( 'scroll', () => { scrolledAt = performance.now(); inputs++; }, true );
+	// Script motion (#1466): inline motion properties a runtime writes frame by
+	// frame (rAF springs) or keyframes it plays through WAAPI. The copy never runs
+	// that script, so capture lets this motion come to rest before reading it.
+	const motion = { at: -Infinity, scrollTriggered: false, resizes: 0 };
+	addEventListener( 'resize', () => { resizedAt = performance.now(); motion.resizes++; inputs++; } );
+	const noteMotion = () => {
+		motion.at = performance.now();
+		if ( motion.at - scrolledAt <= 150 ) motion.scrollTriggered = true;
+	};
+	const motionValue = ( style: string, name: string ) => new RegExp( `(?:^|;)\\s*${ name }\\s*:([^;]*)` ).exec( style )?.[ 1 ].trim() ?? '';
+	const movesInline = ( before: string, after: string ) => [ 'opacity', 'transform', 'translate', 'scale', 'rotate' ]
+		.some( name => motionValue( before, name ) !== motionValue( after, name ) );
+	const animate = Element.prototype.animate;
+	Element.prototype.animate = function( this: Element, ...args: Parameters< Element['animate'] > ): Animation {
+		try {
+			if ( /"(?:opacity|transform|translate|scale|rotate)"/.test( JSON.stringify( args[ 0 ] ) ?? '' ) ) noteMotion();
+		} catch { /* Observing never changes the source operation. */ }
+		return animate.apply( this, args );
+	};
 	new MutationObserver( mutations => {
+		const batch = ++batches;
 		for ( const mutation of mutations ) {
 			const element = mutation.target;
 			if ( ! ( element instanceof HTMLElement ) ) continue;
+			if ( movesInline( mutation.oldValue ?? '', element.getAttribute( 'style' ) ?? '' ) ) noteMotion();
 			let record = scrubbed.get( element );
 			if ( ! record ) {
 				if ( performance.now() - scrolledAt > 100 ) continue;
-				record = { seen: new Set( [ mutation.oldValue ?? '' ] ), reverted: false };
+				record = { seen: new Set( [ mutation.oldValue ?? '' ] ), reverted: false, timeDriven: false, input: inputs, batch: 0, batches: 0 };
 				scrubbed.set( element, record );
 			}
 			const value = element.getAttribute( 'style' ) ?? '';
-			if ( value !== ( mutation.oldValue ?? '' ) && record.seen.has( value ) ) record.reverted = true;
+			// A return to an earlier pose is scroll evidence only when a scroll caused
+			// it. A runtime that remounts on resize resets its entrance to the start
+			// pose; that reset is not a function of scroll position (#1466).
+			const now = performance.now();
+			if ( value !== ( mutation.oldValue ?? '' ) && record.seen.has( value ) && now - scrolledAt <= 100 && now - resizedAt > 300 ) record.reverted = true;
 			record.seen.add( value );
+			if ( now - scrolledAt > 100 && now - resizedAt > 300 ) record.timeDriven = true;
+			if ( record.batch !== batch ) {
+				if ( record.input !== inputs ) { record.input = inputs; record.batches = 0; }
+				record.batch = batch;
+				if ( ++record.batches >= 3 ) record.timeDriven = true;
+			}
 			const box = element.getBoundingClientRect();
 			const centre = ( box.top + box.bottom ) / 2;
 			if ( box.height && centre >= 0 && centre <= innerHeight ) record.settled = value;
@@ -93,6 +143,9 @@ export function observeViewportEntrances(): void {
 						if ( entry.isIntersecting && entry.intersectionRatio >= this.thresholds[ 0 ] ) target.qualified = true;
 					}
 				}
+				// An entrance the callback starts may wait out a delay before its first
+				// write; settling counts its quiet period from here.
+				if ( entries.some( entry => entry.isIntersecting ) ) motion.at = performance.now();
 				callback( entries, observer );
 			}, options );
 		}
@@ -197,6 +250,7 @@ export function observeViewportEntrances(): void {
 		}
 	} );
 	scope.__dlaEntrances = {
+		get motion() { return { at: motion.at, quietMs: performance.now() - motion.at, scrollTriggered: motion.scrollTriggered, resizes: motion.resizes }; },
 		get transitions() { return Array.from( transitions.values() ).flatMap( observed => Array.from( observed.values() ) ).sort(); },
 		get startup() { return Array.from( targets ).filter( ([ element, target ]) => element.isConnected && element.id && target.cssCandidate &&
 			Array.from( document.querySelectorAll( '[id]' ) ).filter( node => node.id === element.id ).length === 1 )
@@ -207,7 +261,7 @@ export function observeViewportEntrances(): void {
 			// Only content below the fold at serialization: what is in view at the top
 			// pose (headers, hero) is already what a visitor sees first.
 			for ( const [ element, record ] of scrubbed ) {
-				if ( ! element.isConnected || ! record.reverted || record.settled === undefined || element.getBoundingClientRect().top < innerHeight ) continue;
+				if ( ! element.isConnected || ! record.reverted || record.timeDriven || record.settled === undefined || element.getBoundingClientRect().top < innerHeight ) continue;
 				if ( element.getAttribute( 'style' ) !== record.settled ) element.setAttribute( 'style', record.settled );
 			}
 			for ( const [ element, target ] of targets ) {

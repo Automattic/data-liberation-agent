@@ -379,10 +379,23 @@ export async function captureFiniteBootstrap(
 	await dismissOverlays( page );
 	const triggers = group.map( state => state.trigger.selector );
 	const observed: Exchange[] = [];
-	const onResponse = async ( response: import('playwright').Response ) => {
+	// Each handler reads its body asynchronously; classification must wait for
+	// every handler started during the drive, or a loaded renderer leaves
+	// `observed` incomplete when it is read.
+	const pendingResponses = new Set<Promise<void>>();
+	const onResponse = ( response: import('playwright').Response ) => {
+		// A response that cannot be read is not evidence; never an unhandled rejection.
+		const handled: Promise<void> = recordResponse( response ).catch( () => undefined ).finally( () => { pendingResponses.delete( handled ); } );
+		pendingResponses.add( handled );
+	};
+	const drainResponses = async () => {
+		while ( pendingResponses.size ) await Promise.allSettled( [ ...pendingResponses ] );
+	};
+	const recordResponse = async ( response: import('playwright').Response ) => {
 		const request = response.request();
 		if ( ! [ 'fetch', 'xhr' ].includes( request.resourceType() ) ) return;
 		const postData = request.postData() ?? '';
+		const responsePhase = phase;
 		const body = await response.text().catch( () => '' );
 		const classified = classifyCollectionResponse( body );
 		observed.push( {
@@ -390,7 +403,7 @@ export async function captureFiniteBootstrap(
 			contentType: response.headers()[ 'content-type' ] ?? '',
 			body: Buffer.byteLength( body ) > MAX_BODY_BYTES ? '' : body,
 			truncated: Buffer.byteLength( body ) > MAX_BODY_BYTES,
-			phase,
+			phase: responsePhase,
 			carriesQuery: requestCarriesQuery( request.url(), postData, BOOTSTRAP_PROBE ),
 			collectionShaped: isCollectionShaped( body ),
 			...classified,
@@ -421,9 +434,11 @@ export async function captureFiniteBootstrap(
 		await drive( () => activateControl( triggers[ initialCategory ]! ) );
 	} catch ( error ) {
 		page.off( 'response', onResponse );
+		await drainResponses();
 		return unsupported( field, targetSelector, initialCategory, group, String( error ) );
 	}
 	page.off( 'response', onResponse );
+	await drainResponses();
 	const searchExchanges = observed.filter( item => item.carriesQuery || item.completeness !== 'undeclared' || item.collectionShaped );
 	if ( searchExchanges.some( item => item.carriesQuery ) ) return unsupported( field, targetSelector, initialCategory, group, 'Query-dependent data request; finite bootstrap is not server search', 'query-dependent' );
 	const searchFinite = observed.filter( item => item.phase === 'search' && ! item.carriesQuery && item.completeness === 'declared-finite' && item.declaredCount !== null && ! item.truncated );
