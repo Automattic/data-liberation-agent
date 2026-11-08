@@ -719,7 +719,7 @@ export const capture: LiberationHooks = {
 	additionalProfiles: wixAdditionalProfiles,
 	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
-  canonicalizeHtml: ( html ) => canonicalizeWixCapturedHtml( preserveWixCollections( html ) ),
+  canonicalizeHtml: ( html, document ) => canonicalizeWixCapturedHtml( preserveWixCollections( html ), document ),
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
     // layout reads them from the sticky header, the page root and the pinned

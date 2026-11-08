@@ -236,7 +236,7 @@ interface CapturePerViewportArgs {
 	) => Promise< void >;
 	observeSource?: ScreenshotOpts['observeSource'];
 	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
-	canonicalizeHtml?: ( html: string ) => string;
+	canonicalizeHtml?: ( html: string, document?: string ) => string;
 	probeExclusions?: ScreenshotOpts['probeExclusions'];
 	/** The entrypoint's one-time chrome probe for this profile; see chrome-reuse.ts. */
 	sharedChrome?: SharedChromeProbe;
@@ -890,8 +890,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// HTML artifact alike, so page HTML and the captured dialogs that refer to it
 	// keep naming the same elements.
 	const canonicalize = ( html: string ): string => ( args.canonicalizeHtml ? args.canonicalizeHtml( html ) : html );
-	const canonicalizeInteractions = < T, >( report: T ): T =>
-		args.canonicalizeHtml ? canonicalizeInteractionReport( report, args.canonicalizeHtml ) : report;
+	// Dialog markup holds only part of the page, so it is named after the raw
+	// document it was captured from and keeps meeting the page CSS.
+	let rawDocument: string | undefined;
+	const canonicalizeInteractions = < T, >( report: T ): T => {
+		const canonicalizeHtml = args.canonicalizeHtml;
+		return canonicalizeHtml ? canonicalizeInteractionReport( report, html => canonicalizeHtml( html, rawDocument ) ) : report;
+	};
 
 	resourceStore.observe( page );
 	const sourceCrashes: string[] = [];
@@ -1424,7 +1429,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			return resource ? { css: readFileSync( resource.path, 'utf8' ), url: absolute } : undefined;
 		} );
 		const captured = typeof initialTitle === 'string' ? withDocumentTitle( projected, initialTitle ) : projected;
-		const html = canonicalize( frozen ? sanitizeFrozenHtml( captured ) : captured );
+		rawDocument = frozen ? sanitizeFrozenHtml( captured ) : captured;
+		const html = canonicalize( rawDocument );
 		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
 		await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
 		return { html, documentUrl };
@@ -2442,10 +2448,9 @@ async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision
 		// identity's own, untouched page.
 		let sharedChrome: Map< string, SharedChromeProbe > | undefined;
 		if ( args.sharedChrome ) {
-			const chromeOptions = { ...( args.canonicalizeHtml ? { canonicalizeHtml: args.canonicalizeHtml } : {} ) };
 			const [ desktopChrome, phoneChrome ] = await Promise.all( [
-				boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( desktop.page, url, { ...chromeOptions, ...( phoneInteractions ? { additionalStates: phoneInteractions.states } : {} ) } ) ),
-				decided.mode === 'dual' ? boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( phone.page, url, chromeOptions ) ) : undefined,
+				boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( desktop.page, url, phoneInteractions ? { additionalStates: phoneInteractions.states } : {} ) ),
+				decided.mode === 'dual' ? boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( phone.page, url, {} ) ) : undefined,
 			] );
 			sharedChrome = new Map( [ [ 'desktop', desktopChrome ], ...( phoneChrome ? [ [ 'mobile', phoneChrome ] as const ] : [] ) ] );
 		}
@@ -2467,11 +2472,13 @@ const SHARED_CHROME_PROBE_MS = 120_000;
  * its chrome root so routes can rebase and verify it (see chrome-reuse.ts).
  * `additionalStates` were recorded by another probe of a structurally
  * identical page (the reflow-only phone-only probe) and are anchored here too.
+ * States stay as the entrypoint named them: a route translates them into its
+ * own names, and they are canonicalized with that route's document.
  */
 async function probeChromeOnPage(
 	page: Page,
 	url: string,
-	options: { canonicalizeHtml?: ( html: string ) => string; additionalStates?: CapturedDialogInteraction[] }
+	options: { additionalStates?: CapturedDialogInteraction[] }
 ): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
 	// Read the resting landmark identity before any exploration.
 	await restoreTopScrollState( page );
@@ -2491,14 +2498,7 @@ async function probeChromeOnPage(
 	const builderRoots = await builderChromeRoots( page, options.additionalStates ?? [] );
 	if ( builderRoots.length ) landmarks = await readChromeLandmarks( page, false, builderRoots );
 	const anchored = await anchorChromeStates( page, landmarks, [ ...states, ...( options.additionalStates ?? [] ) ] );
-	const canonicalize = options.canonicalizeHtml;
-	return {
-		status: 'captured',
-		evidence: {
-			url, landmarks, unanchored: anchored.unanchored,
-			states: canonicalize ? anchored.states.map( item => ( { ...item, state: canonicalizeInteractionReport( item.state, canonicalize ) } ) ) : anchored.states,
-		},
-	};
+	return { status: 'captured', evidence: { url, landmarks, unanchored: anchored.unanchored, states: anchored.states } };
 }
 
 async function boundSharedChromeProbe( startedAt: number, probe: () => Promise< Omit< SharedChromeProbe, 'durationMs' > > ): Promise< SharedChromeProbe > {
@@ -2517,12 +2517,12 @@ async function boundSharedChromeProbe( startedAt: number, probe: () => Promise< 
 }
 
 /** Load the entrypoint in one capture profile, as the device-mode probe does, and probe its shared chrome. */
-async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile'; canonicalizeHtml?: ( html: string ) => string } ): Promise< SharedChromeProbe > {
+async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile' } ): Promise< SharedChromeProbe > {
 	const contexts: BrowserContext[] = [];
 	try {
 		return await boundSharedChromeProbe( Date.now(), async () => {
 			const { page, target } = await loadForComparison( { ...args, desktop: args.options, phone: args.options }, args.options, args.viewport, 'probe', contexts );
-			return probeChromeOnPage( page, target, args.canonicalizeHtml ? { canonicalizeHtml: args.canonicalizeHtml } : {} );
+			return probeChromeOnPage( page, target, {} );
 		} );
 	} finally {
 		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
@@ -2885,7 +2885,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, initScript: opts.initScript,
 				telemetryRequest: opts.telemetryRequest,
-				...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 			} ) );
 		} ) );
 		for ( const [ profile, result ] of sharedChromeResults ) {

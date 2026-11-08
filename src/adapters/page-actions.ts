@@ -78,9 +78,10 @@ export interface LiberationHooks {
    * the platform runtime keeps working for later probes. Use it for
    * platform-owned identifiers that vary per route but carry no meaning in a
    * static copy. Must be deterministic and keep markup and in-document CSS
-   * paired.
+   * paired. Markup captured from a page (an opened dialog) comes with that
+   * page's raw `document`, and must take the names the document gets.
    */
-  canonicalizeHtml?(html: string): string;
+  canonicalizeHtml?(html: string, document?: string): string;
   /**
    * Selectors that identify this platform's client-error shell: the document
    * its client runtime swaps in when the app crashes (for Next.js App Router,

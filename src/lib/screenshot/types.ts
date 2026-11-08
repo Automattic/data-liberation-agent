@@ -125,7 +125,7 @@ export interface ScreenshotOpts {
 	/** Adapter-declared telemetry: pending requests it recognizes never hold a readiness wait. */
 	telemetryRequest?: import('./page-helpers.js').TelemetryRequest;
 	/** Adapter rewrite applied to every serialized HTML artifact before it is stored. */
-	canonicalizeHtml?: ( html: string ) => string;
+	canonicalizeHtml?: ( html: string, document?: string ) => string;
 	/** Adapter-declared platform-runtime regions interaction probing never drives. */
 	probeExclusions?: readonly import('./probe-exclusions.js').ProbeExclusion[];
 	/** Adapter hook run immediately before fluid learning. Best-effort. */
