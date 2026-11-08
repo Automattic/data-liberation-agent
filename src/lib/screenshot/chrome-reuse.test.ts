@@ -58,42 +58,44 @@ describe( 'shared chrome selectors', () => {
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies under renamed ids', () => {
-	it( 'matches a copy whose ids are renamed and replays its states under the route\'s ids', async () => {
+	it( 'matches a copy that renders alike under renamed ids and replays its states under the route\'s names', async () => {
 		const browser = await chromium.launch();
 		try {
 			const view = await browser.newPage();
-			// A builder's per-page copy of one header: every id carries the instance id.
-			const fixture = ( id: string, { color = 'red', text = 'Search', portal = true } = {} ) => `<style>#${ id }_panel{color:${ color }}</style>
-<header id="${ id }"><button id="${ id }_open" aria-controls="${ id }_panel">${ text }</button><div id="${ id }_panel">Panel</div></header>
+			// A builder's per-page copy of one header: ids and some classes carry the
+			// instance id, and the current-route link is styled apart.
+			const fixture = ( id: string, { color = 'red', text = 'Search', current = 'a', portal = true } = {} ) => `<style>#${ id }_panel{color:${ color }}.${ id }-box{padding:2px}[aria-current]{color:green}</style>
+<header id="${ id }"><a href="/a"${ current === 'a' ? ' aria-current="page"' : '' }>A</a><a href="/b"${ current === 'b' ? ' aria-current="page"' : '' }>B</a>
+<button id="${ id }_open" aria-controls="${ id }_panel">${ text }</button><div id="${ id }_panel" class="panel ${ id }-box">Panel</div></header>
 ${ portal ? '<div id="site-panel">Portal</div>' : '' }`;
 			const state = ( id: string ): CapturedDialogInteraction => ( {
 				status: 'captured',
 				trigger: { selector: `#${ id }_open`, tag: 'button', ariaHaspopup: '', dataBindings: {} },
-				dialog: { selector: `#${ id }_panel`, tag: 'div', ariaModal: false, html: `<div id="${ id }_panel" aria-labelledby="${ id }_open">Panel</div>`, htmlBytes: 1, htmlTruncated: false, css: `#${ id }_panel{color:red}#${ id }_panelx{}` },
+				dialog: { selector: `#${ id }_panel`, tag: 'div', ariaModal: false, html: `<div id="${ id }_panel" class="panel ${ id }-box" aria-labelledby="${ id }_open">Panel</div>`, htmlBytes: 1, htmlTruncated: false, css: `#${ id }_panel.${ id }-box{color:red}#${ id }_panelx{}` },
 			} );
 			await view.setContent( fixture( 'top-a1' ) );
 			const landmarks = await readChromeLandmarks( view );
 			const portal: CapturedDialogInteraction = { status: 'no-dialog', trigger: { selector: '#top-a1_open', tag: 'button', ariaHaspopup: '', dataBindings: {} }, dialog: { selector: '#site-panel', tag: 'div', ariaModal: false, html: '', htmlBytes: 0, htmlTruncated: false } };
 			const evidence = { url: 'https://fixture/', landmarks, ...await anchorChromeStates( view, landmarks, [ state( 'top-a1' ), portal ] ) };
 
-			await view.setContent( fixture( 'top-b2', { portal: false } ) );
+			await view.setContent( fixture( 'top-b2', { current: 'b', portal: false } ) );
 			const reuse = await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } );
 			// The copy is reused, translated whole-token; a selector naming a node
 			// the route lacks (the body-level portal) still sends its state in place.
 			expect( reuse.decision ).toMatchObject( { landmarks: { matched: 1 }, reusedStates: 1, rejectedStates: 1 } );
 			expect( reuse.states[ 0 ] ).toMatchObject( {
 				trigger: { selector: '#top-b2_open' },
-				dialog: { selector: '#top-b2_panel', html: '<div id="top-b2_panel" aria-labelledby="top-b2_open">Panel</div>', css: '#top-b2_panel{color:red}#top-a1_panelx{}' },
+				dialog: { selector: '#top-b2_panel', html: '<div id="top-b2_panel" class="panel top-b2-box" aria-labelledby="top-b2_open">Panel</div>', css: '#top-b2_panel.top-b2-box{color:red}#top-a1_panelx{}' },
 			} );
 
-			// A different id-keyed style, other text, or a reference whose target is gone is other chrome.
+			// Other styling, other text, or a reference whose target is gone is other chrome.
 			for ( const variant of [ { color: 'blue' }, { text: 'Find' } ] ) {
 				await view.setContent( fixture( 'top-b2', variant ) );
-				expect( ( await readChromeLandmarks( view ) )[ 0 ]!.signature, JSON.stringify( variant ) ).not.toBe( landmarks[ 0 ]!.signature );
+				expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).decision, JSON.stringify( variant ) ).toMatchObject( { chromeReused: false } );
 			}
 			await view.setContent( fixture( 'top-b2' ) );
 			await view.locator( 'header div' ).evaluate( node => node.removeAttribute( 'id' ) );
-			expect( ( await readChromeLandmarks( view ) )[ 0 ]!.signature ).not.toBe( landmarks[ 0 ]!.signature );
+			expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).decision ).toMatchObject( { chromeReused: false } );
 		} finally {
 			await browser.close();
 		}
