@@ -59,8 +59,9 @@ function makePage() {
 		evaluate: vi.fn().mockImplementation( async ( fn: unknown ) => {
 			const source = String( fn );
 			if ( source.includes( 'ViewTimeline' ) ) return [];
-			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
+			// The serializer sweeps source cleanup in its own task, so match it first.
 			if ( source.includes( 'DOCTYPE' ) ) return { html: '<html><body>Tianna Wolfson</body></html>', findings: [] };
+			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
 			if ( source.includes( 'scrollHeight' ) ) return 3000;
 			if ( source.includes( 'scrollTo' ) ) return undefined;

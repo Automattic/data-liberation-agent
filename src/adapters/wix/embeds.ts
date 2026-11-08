@@ -27,7 +27,9 @@ export const WIX_PORTED_MAP_ATTRIBUTE = 'data-blocks-engine-capture-ported-embed
 export const WIX_UNPORTED_EMBED_ATTRIBUTE = 'data-blocks-engine-capture-unported-embed';
 
 /** Wix mounts its site-wide chat widgets in viewport-pinned layers; source cleanup removes them. */
-export const WIX_AI_ASSISTANT_LAYER = '#pinnedBottomLeft > [id$="-pinned-layer"]:has([data-hook="AiAssistantWidgetContainer"])';
+// The assistant opens itself a few seconds after load and can be minimized to
+// a launcher; either state is the same provider service.
+export const WIX_AI_ASSISTANT_LAYER = '#pinnedBottomLeft > [id$="-pinned-layer"]:has([data-hook="AiAssistantWidgetContainer"], [data-hook="minimizedChat"])';
 export const WIX_CHAT_LAUNCHER_LAYER = '#pinnedBottomRight > [id$="-pinned-layer"]:has(iframe[title*="chat" i])';
 const WIX_PINNED_CHAT_SELECTOR = `${ WIX_AI_ASSISTANT_LAYER }, ${ WIX_CHAT_LAUNCHER_LAYER }`;
 

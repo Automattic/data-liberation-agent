@@ -71,12 +71,13 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 		evaluate: vi.fn().mockImplementation( async ( callback: unknown ) => {
 			const source = String( callback );
 			if ( source.includes( 'ViewTimeline' ) ) return [];
-			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: mobile ? 402 : 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
+			// The serializer sweeps source cleanup in its own task, so match it first.
 			if ( source.includes( 'DOCTYPE' ) ) {
 				return { html: mobile
 					? '<html><head><style>.hero{background:url("mobile-only.jpg")}</style></head><body>mobile</body></html>'
 					: '<html><body>desktop</body></html>', findings: [] };
 			}
+			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: mobile ? 402 : 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
 			if ( source.includes( 'document.baseURI' ) ) return { url: 'https://example.com/', baseUrl: 'https://example.com/' };
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
 			if ( source.includes( 'scrollHeight' ) ) return 0;
