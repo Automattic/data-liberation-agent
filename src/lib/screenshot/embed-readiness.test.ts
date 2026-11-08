@@ -9,11 +9,16 @@ import { waitForHiddenEmbeds } from './embed-readiness.js';
 
 const skipBrowser = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 
-it( 'does not start a timer or observer without pending embeds', async () => {
-	const querySelectorAll = vi.fn().mockReturnValue( [] );
+// A zero-size hidden frame (reCAPTCHA's `aframe`) has nothing to reveal into.
+it.each( [
+	[ 'no frames', [] ],
+	[ 'a zero-size hidden frame', [ { width: '0px', height: '0px' } ] ],
+] )( 'does not start a timer or observer with %s', async ( _label, styles ) => {
+	const querySelectorAll = vi.fn().mockReturnValue( styles );
 	const timer = vi.spyOn( globalThis, 'setTimeout' );
 	const observer = vi.fn();
 	vi.stubGlobal( 'document', { querySelectorAll } );
+	vi.stubGlobal( 'getComputedStyle', ( frame: { width: string; height: string } ) => ( { display: 'none', visibility: 'visible', ...frame } ) );
 	vi.stubGlobal( 'MutationObserver', observer );
 	try {
 		await waitForHiddenEmbeds();
@@ -33,7 +38,7 @@ it.each( [ 'reveal', 'remove', 'timeout' ] )( 'cleans up the bounded wait on %s'
 	let notify!: () => void;
 	const disconnect = vi.fn();
 	vi.stubGlobal( 'document', { querySelectorAll: () => [ frame ], documentElement: {} } );
-	vi.stubGlobal( 'getComputedStyle', () => ( { display, visibility: 'visible' } ) );
+	vi.stubGlobal( 'getComputedStyle', () => ( { display, visibility: 'visible', width: '352px', height: '150px' } ) );
 	vi.stubGlobal( 'MutationObserver', class {
 		constructor( callback: () => void ) { notify = callback; }
 		observe() {}
