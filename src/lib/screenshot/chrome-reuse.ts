@@ -11,7 +11,12 @@ import type { CapturedDialogInteraction } from './interaction-capture.js';
  * A chrome root is an outermost landmark. Two roots are the same chrome when
  * their signatures match: relative element paths, a few identity attributes
  * and the normalized text. Route-current state (classes, `aria-current`) is
- * not part of it. A root may sit at a different place in each template, so a
+ * not part of it. Ids, and classes built from an id, count by position, not by
+ * value: builders give each page its own copy of the header under renamed ids.
+ * Two roots must also render alike: each element's computed style (custom
+ * properties aside, as they paint only through other properties) matches,
+ * outside the current-route item (`aria-current`) on either page. A reused
+ * state is translated to the route's ids and classes. A root may sit at a different place in each template, so a
  * reused state's selectors are rebased from the entrypoint root's prefix to the
  * route root's, and the state is kept only when every rebased selector names
  * the corresponding node on the route. Anything else is probed in place.
@@ -47,6 +52,21 @@ export interface ChromeLandmark {
 	label: string;
 	/** A builder chrome root's tag-and-class selector: a probed control named it, not a landmark element. */
 	identity?: string;
+	/** The root's ids and id references, in order of first appearance: the signature names them by position. */
+	ids: string[];
+	/** Classes built from one of those ids, in order of first appearance. */
+	classes: string[];
+	/** A hash of each element's computed style, in document order. */
+	styles: string[];
+	/** Positions in `styles` inside the current-route item. */
+	current: number[];
+}
+
+/** Same chrome: equal signatures, rendered alike outside either page's current-route item. */
+export function sameChrome( a: ChromeLandmark, b: ChromeLandmark ): boolean {
+	if ( a.signature !== b.signature || a.styles.length !== b.styles.length ) return false;
+	const current = new Set( [ ...a.current, ...b.current ] );
+	return a.styles.every( ( style, index ) => current.has( index ) || style === b.styles[ index ] );
 }
 
 /** Where a recorded selector resolves, relative to the page's chrome roots. */
@@ -138,6 +158,39 @@ export function rebaseChromeState< T >( state: T, from: readonly string[], to: r
 	return walk( state, '' ) as T;
 }
 
+/** A name usable verbatim in CSS: translation never meets an escaped form. */
+const PLAIN_NAME = /^-?[A-Za-z_][\w-]*$/;
+
+/**
+ * Rename ids and classes in every string of a state, as whole tokens: ids after
+ * `#` (selectors, CSS, fragment links) and in `id`, `for` and `aria-*` values of
+ * captured markup; classes after `.` and in `class` values. One pass each, so a
+ * pair of swapped names cannot translate twice.
+ */
+export function translateChromeNames< T >( state: T, names: { ids: ReadonlyMap< string, string >; classes: ReadonlyMap< string, string > } ): T {
+	const rule = ( map: ReadonlyMap< string, string >, prefix: string, attributes: string ) => {
+		const pairs = [ ...map ].filter( ( [ from, to ] ) => from !== to && PLAIN_NAME.test( from ) && PLAIN_NAME.test( to ) );
+		if ( ! pairs.length ) return ( text: string ) => text;
+		const renamed = new Map( pairs );
+		const alternation = pairs.map( ( [ from ] ) => from ).sort( ( a, b ) => b.length - a.length ).map( name => name.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' );
+		const selector = new RegExp( `\\${ prefix }(${ alternation })(?![\\w-])`, 'g' );
+		const token = new RegExp( `(?<![\\w-])(${ alternation })(?![\\w-])`, 'g' );
+		const attribute = new RegExp( `(\\s(?:${ attributes })=)(["'])(.*?)\\2`, 'g' );
+		return ( text: string ) => text
+			.replace( attribute, ( _, name: string, quote: string, value: string ) => `${ name }${ quote }${ value.replace( token, found => renamed.get( found )! ) }${ quote }` )
+			.replace( selector, ( _, found: string ) => `${ prefix }${ renamed.get( found )! }` );
+	};
+	const ids = rule( names.ids, '#', 'id|for|aria-[\\w-]+' );
+	const classes = rule( names.classes, '.', 'class' );
+	const walk = ( value: unknown ): unknown => {
+		if ( typeof value === 'string' ) return classes( ids( value ) );
+		if ( Array.isArray( value ) ) return value.map( walk );
+		if ( value && typeof value === 'object' ) return Object.fromEntries( Object.entries( value as Record< string, unknown > ).map( ( [ key, child ] ) => [ key, walk( child ) ] ) );
+		return value;
+	};
+	return walk( state ) as T;
+}
+
 /**
  * The page's outermost chrome landmarks, in document order. With `mark`, each
  * root also gets `CHROME_ROOT_ATTRIBUTE` (cleared by `clearChromeMarks`).
@@ -167,37 +220,75 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			for ( const element of found ) if ( ! found.some( other => other !== element && other.contains( element ) ) && ! identities.has( element ) ) identities.set( element, identity );
 		}
 		const roots = [ ...landmarks, ...identities.keys() ];
-		return roots.map( root => {
-			const lines: string[] = [];
-			// UUIDs used only as runtime node identities are load-volatile. Keep
-			// referenced IDs: those participate in the landmark's semantics. This
-			// affects only the signature, never the DOM or recorded selectors.
-			const referencedIds = new Set< string >();
-			for ( const element of [ root, ...Array.from( root.querySelectorAll( '*' ) ).filter( kept ) ] ) {
-				for ( const attribute of Array.from( element.attributes ) ) {
-					if ( attribute.name.startsWith( 'aria-' ) || attribute.name === 'for' ) {
-						for ( const token of attribute.value.split( /\s+/ ) ) referencedIds.add( token );
-					} else if ( attribute.name === 'href' && attribute.value.startsWith( '#' ) ) {
-						const fragment = attribute.value.slice( 1 );
-						referencedIds.add( fragment );
-						try { referencedIds.add( decodeURIComponent( fragment ) ); } catch { /* Keep malformed fragments verbatim. */ }
-					}
-				}
+		const escape = ( name: string ) => name.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+		const hash = ( text: string ) => {
+			let a = 0xdeadbeef, b = 0x41c6ce57;
+			for ( let index = 0; index < text.length; index++ ) {
+				const code = text.charCodeAt( index );
+				a = Math.imul( a ^ code, 2654435761 );
+				b = Math.imul( b ^ code, 1597334677 );
 			}
-			const describe = ( element: Element ) => attributes.map( name => {
-				const value = element.getAttribute( name ) ?? '';
-				return name === 'id' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test( value ) && ! referencedIds.has( value ) ? '' : value;
-			} ).join( '|' );
+			a = Math.imul( a ^ ( a >>> 16 ), 2246822507 ) ^ Math.imul( b ^ ( b >>> 13 ), 3266489909 );
+			b = Math.imul( b ^ ( b >>> 16 ), 2246822507 ) ^ Math.imul( a ^ ( a >>> 13 ), 3266489909 );
+			return ( b >>> 0 ).toString( 16 ) + ( a >>> 0 ).toString( 16 );
+		};
+		const page = location.href.split( '#' )[ 0 ]!;
+		return roots.map( root => {
+			const elements: Element[] = [];
 			const text: string[] = [];
-			const walk = ( element: Element, prefix: string ) => {
-				let position = 0;
+			const collect = ( element: Element ) => {
+				elements.push( element );
 				for ( const child of Array.from( element.childNodes ) ) {
 					if ( child.nodeType === Node.TEXT_NODE ) {
 						const value = ( child.textContent ?? '' ).replace( /\s+/g, ' ' ).trim();
 						if ( value ) text.push( value );
-						continue;
-					}
-					if ( ! ( child instanceof Element ) || ! kept( child ) ) continue;
+					} else if ( child instanceof Element && kept( child ) ) collect( child );
+				}
+			};
+			collect( root );
+			// An id is named by its first appearance, so a copy of the same chrome
+			// under renamed (or runtime-generated) ids has the same signature.
+			const ids: string[] = [];
+			const fragment = ( value: string ) => {
+				try { return decodeURIComponent( value ); } catch { return value; }
+			};
+			const label = ( id: string ) => {
+				if ( ! ids.includes( id ) ) ids.push( id );
+				return `#${ ids.indexOf( id ) }`;
+			};
+			for ( const element of elements ) {
+				if ( element.id ) label( element.id );
+				for ( const token of ( element.getAttribute( 'aria-controls' ) ?? '' ).split( /\s+/ ) ) if ( token ) label( token );
+				const href = element.getAttribute( 'href' ) ?? '';
+				if ( href.length > 1 && href.startsWith( '#' ) ) label( fragment( href.slice( 1 ) ) );
+			}
+			const alternation = [ ...ids ].sort( ( a, b ) => b.length - a.length ).map( escape ).join( '|' );
+			const inClass = ids.length ? new RegExp( `(?<=^|[-_])(${ alternation })(?=[-_]|$)`, 'g' ) : null;
+			const inStyle = ids.length ? new RegExp( `#(${ alternation })(?![\\w-])`, 'g' ) : null;
+			const classes: string[] = [];
+			const describe = ( element: Element ) => {
+				const values = attributes.map( name => {
+					const value = element.getAttribute( name ) ?? '';
+					if ( ! value ) return '';
+					if ( name === 'id' ) return label( value );
+					if ( name === 'aria-controls' ) return value.split( /\s+/ ).map( label ).join( ' ' );
+					if ( name === 'href' && value.length > 1 && value.startsWith( '#' ) ) return `href:${ label( fragment( value.slice( 1 ) ) ) }`;
+					return value;
+				} );
+				// Other classes are presentation; one built from an id is that id's copy.
+				for ( const name of inClass ? Array.from( element.classList ) : [] ) {
+					const relabelled = name.replace( inClass!, label );
+					if ( relabelled === name ) continue;
+					if ( ! classes.includes( name ) ) classes.push( name );
+					values.push( `.${ relabelled }` );
+				}
+				return values.join( '|' );
+			};
+			const lines: string[] = [];
+			const walk = ( element: Element, prefix: string ) => {
+				let position = 0;
+				for ( const child of Array.from( element.children ) ) {
+					if ( ! kept( child ) ) continue;
 					const path = `${ prefix }/${ position++ }`;
 					lines.push( `${ path } ${ child.tagName.toLowerCase() } ${ describe( child ) }` );
 					walk( child, path );
@@ -205,8 +296,31 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			};
 			lines.push( `${ root.tagName.toLowerCase() } ${ describe( root ) }` );
 			walk( root, '' );
+			// Computed style, relabelled like the markup. A fragment URL resolves
+			// against this route, so it is compared as the bare fragment.
+			const styleOf = ( element: Element ) => {
+				const parts: string[] = [];
+				for ( const pseudo of [ null, '::before', '::after' ] ) {
+					const style = getComputedStyle( element, pseudo );
+					if ( pseudo && [ 'none', 'normal' ].includes( style.content ) ) continue;
+					parts.push( pseudo ?? '' );
+					for ( let index = 0; index < style.length; index++ ) {
+						const name = style[ index ]!;
+						if ( ! name.startsWith( '--' ) ) parts.push( `${ name }:${ style.getPropertyValue( name ) }` );
+					}
+				}
+				const value = parts.join( ';' ).split( `url("${ page }#` ).join( 'url("#' );
+				return hash( inStyle ? value.replace( inStyle, ( _, id: string ) => label( id ) ) : value );
+			};
+			const currentItems = Array.from( root.querySelectorAll( '[aria-current]:not([aria-current="false"])' ) );
+			if ( root.matches( '[aria-current]:not([aria-current="false"])' ) ) currentItems.push( root );
+			const current = elements.flatMap( ( element, index ) => currentItems.some( item => item.contains( element ) ) ? [ index ] : [] );
 			if ( mark ) root.setAttribute( rootAttribute, '' );
 			return {
+				ids,
+				classes,
+				styles: elements.map( styleOf ),
+				current,
 				raw: `${ lines.join( '\n' ) }\n${ text.join( ' ' ) }`,
 				prefixes: [ chain( root, compact, false ), chain( root, positional, false ), chain( root, positional, true ) ],
 				label: `${ root.tagName.toLowerCase() }${ root.getAttribute( 'role' ) ? `[role=${ root.getAttribute( 'role' ) }]` : '' }${ root.classList[ 0 ] ? `.${ root.classList[ 0 ] }` : '' }`,
@@ -214,10 +328,14 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			};
 		} );
 	}, { selector: CHROME_LANDMARK_SELECTOR, attributes: SIGNATURE_ATTRIBUTES, rootAttribute: CHROME_ROOT_ATTRIBUTE, mark, builderRoots: [ ...builderRoots ] } );
-	return raw.map( ( { raw: signature, prefixes, label, identity } ) => ( {
+	return raw.map( ( { raw: signature, prefixes, label, identity, ids, classes, styles, current } ) => ( {
 		signature: createHash( 'sha256' ).update( signature ).digest( 'hex' ).slice( 0, 32 ),
 		prefixes: prefixes as ChromeLandmark['prefixes'],
 		label,
+		ids,
+		classes,
+		styles,
+		current,
 		...( identity ? { identity } : {} ),
 	} ) );
 }
@@ -350,7 +468,7 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 	const matched = new Map< number, number >();
 	const used = new Set< number >();
 	evidence.landmarks.forEach( ( landmark, index ) => {
-		const found = landmarks.findIndex( ( candidate, position ) => ! used.has( position ) && candidate.signature === landmark.signature );
+		const found = landmarks.findIndex( ( candidate, position ) => ! used.has( position ) && sameChrome( candidate, landmark ) );
 		if ( found < 0 ) return;
 		used.add( found );
 		matched.set( index, found );
@@ -363,10 +481,17 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		matched.has( item.root ) && item.anchors.every( anchor => typeof anchor !== 'object' || 'outside' in anchor || matched.has( anchor.root ) )
 	).map( item => {
 		const root = matched.get( item.root )!;
-		const state = rebaseChromeState( item.state, evidence.landmarks[ item.root ]!.prefixes, landmarks[ root ]!.prefixes );
+		// Equal signatures name the same ids and id classes in the same positions.
+		const from = evidence.landmarks[ item.root ]!, to = landmarks[ root ]!;
+		const names = {
+			ids: new Map( from.ids.map( ( id, index ) => [ id, to.ids[ index ]! ] ) ),
+			classes: new Map( from.classes.map( ( name, index ) => [ name, to.classes[ index ]! ] ) ),
+		};
+		const translated = translateChromeNames( { state: item.state, prefixes: from.prefixes }, names );
+		const state = rebaseChromeState( translated.state, translated.prefixes, landmarks[ root ]!.prefixes );
 		const expected: ChromeAnchor[] = item.anchors.map( anchor => {
 			if ( typeof anchor !== 'object' ) return anchor;
-			if ( 'outside' in anchor ) return anchor;
+			if ( 'outside' in anchor ) return 'id' in anchor.outside ? { outside: { id: translateChromeNames( `#${ anchor.outside.id }`, names ).slice( 1 ) } } : anchor;
 			return { root: matched.get( anchor.root )!, path: anchor.path };
 		} );
 		return { state, expected };
