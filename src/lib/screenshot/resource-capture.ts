@@ -466,6 +466,7 @@ export class CapturedResourceStore {
 	private replayDir?: string;
 	private replayBytes = 0;
 	private capturedBytes = 0;
+	private readonly resolvedSrcsetFixtures = new Set< string >();
 
 	constructor(
 		outputDir: string,
@@ -556,6 +557,11 @@ export class CapturedResourceStore {
 					return { base: document.baseURI, html: html.join( '' ) };
 				} );
 				if ( ! fixture.html ) break;
+				const fixtureKey = JSON.stringify( [ width, fixture.base, fixture.html ] );
+				if ( this.resolvedSrcsetFixtures.has( fixtureKey ) ) continue;
+				this.resolvedSrcsetFixtures.add( fixtureKey );
+				// A fresh context per width: a shared memory cache would serve the
+				// next width's renditions without the network responses capture records.
 				const context = await browser.newContext( {
 					viewport: { width, height: original.height }, deviceScaleFactor: 1,
 					storageState: await page.context().storageState(),
