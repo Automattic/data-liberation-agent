@@ -7,7 +7,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { captureViewportClassStates } from './viewport-class-states.js';
+import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
 // with it (the Google Sites pattern); narrower widths show the closed icon.
@@ -106,3 +106,32 @@ it( 'keeps learned transforms through the viewport class sweep', async () => {
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 90_000 );
+
+// Two routes share a header whose script toggles a class at a width breakpoint.
+it.each( [
+	{ name: 'reuses a breakpoint proven either side of its flip', second: 768, sampled: [ 390, 767, 768, 1920 ], media: '(max-width:767px)' },
+	{ name: 'sweeps when the breakpoint moved inside the range', second: 1000, sampled: null, media: '(max-width:999px)' },
+] )( 'shared header class memo $name', async ( { second, sampled, media } ) => {
+	const browser = await chromium.launch();
+	try {
+		const memo: ViewportClassMemo = new Map();
+		const route = ( breakpoint: number ) => `<!doctype html><html><head><style>.header{color:black}.header.is-mobile{color:red}</style></head><body><header class="header">Shared</header><script>const sync=()=>document.querySelector('.header').classList.toggle('is-mobile',innerWidth<${ breakpoint });addEventListener('resize',sync);sync()</script></body></html>`;
+		let result: Awaited< ReturnType< typeof captureViewportClassStates > > | undefined;
+		let css = '';
+		for ( const breakpoint of [ 768, second ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.addInitScript( observeRuntimeStyleWrites );
+			await page.setContent( route( breakpoint ) );
+			await markInitialDocument( page );
+			result = await captureViewportClassStates( page, { settleMs: 0, memo } );
+			css = await page.evaluate( () => [ ...document.querySelectorAll( 'style' ) ].map( style => style.textContent ).join( '\n' ) );
+			await page.close();
+		}
+		if ( sampled ) expect( [ ...result!.sampledWidths ].sort( ( a, b ) => a - b ) ).toEqual( sampled );
+		else expect( result!.sampledWidths.length ).toBeGreaterThan( 4 );
+		expect( result!.aliased ).toBe( 1 );
+		expect( css ).toContain( media );
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
