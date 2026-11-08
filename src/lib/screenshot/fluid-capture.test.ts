@@ -28,6 +28,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
 			if ( expectedSweep ) expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
 			else expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+			// Later capture phases resize again, and the source rewrites its minimum each time.
+			await page.setViewportSize( { width: 1024, height: 900 } );
+			await page.setViewportSize( { width: 1920, height: 900 } );
 			const style = await page.locator( '.wrap' ).getAttribute( 'style' ) ?? '';
 			// Learned rules live in the fluid sheet, so a redundant minimum shows
 			// as neither an inline declaration nor a learned element.

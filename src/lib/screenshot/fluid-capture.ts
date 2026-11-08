@@ -927,9 +927,6 @@ async function learnFluidGeometry(
 	// A final resize may write geometry onto roles that never qualified for
 	// learning. Restore those roles without replacing the sampled role state.
 	await baseline.evaluate( state => state.restore( true ) );
-	await baseline.evaluate( ( state, ids ) => {
-		for ( const id of ids ) state.element( id )?.style.removeProperty( 'min-height' );
-	}, [ ...redundantMinHeight ].filter( ( [ , redundant ] ) => redundant ).map( ( [ id ] ) => id ) );
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
 	// transform; otherwise the learned translation would discard its new components.
@@ -1076,7 +1073,12 @@ async function learnFluidGeometry(
 		);
 	}
 	await baseline.evaluate( ( state, { entries, segmentAttribute, width } ) => state.activate( entries, segmentAttribute, width ), {
-		entries: learned.map( entry => ( { id: entry.id, property: entry.property, css: entry.css, segmented: entry.segmentedCss !== null } ) ),
+		// A redundant minimum is held removed like a segmented declaration with
+		// no rule: the source rewrites it on every resize, including the last one.
+		entries: [
+			...learned.map( entry => ( { id: entry.id, property: entry.property, css: entry.css, segmented: entry.segmentedCss !== null } ) ),
+			...[ ...redundantMinHeight ].filter( ( [ , redundant ] ) => redundant ).map( ( [ id ] ) => ( { id, property: 'min-height', css: '', segmented: true } ) ),
+		],
 		segmentAttribute: SEGMENT_ATTRIBUTE,
 		width: original?.width,
 	} );
