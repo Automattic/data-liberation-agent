@@ -29,9 +29,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			if ( expectedSweep ) expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
 			else expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
 			const style = await page.locator( '.wrap' ).getAttribute( 'style' ) ?? '';
-			if ( redundant ) expect( style ).not.toMatch( /min-height/i );
-			else expect( style ).toMatch( /min-height/i );
-			if ( ! redundant ) expect( style ).toMatch( /min-height:\s*(?:clamp|calc)/i );
+			// Learned rules live in the fluid sheet, so a redundant minimum shows
+			// as neither an inline declaration nor a learned element.
+			if ( redundant ) {
+				expect( style ).not.toMatch( /min-height/i );
+				expect( result.applied ).toBe( extra ? 1 : 0 );
+			} else expect( result.applied ).toBeGreaterThan( 0 );
 		} finally { await page.close(); }
 	}, 20_000 );
 
