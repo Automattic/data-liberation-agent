@@ -420,12 +420,36 @@ export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
 }
 
 /**
- * Open a collapsed menu through its visible "Menu" button with trusted input,
+ * Open a collapsed menu through its visible disclosure with trusted input,
  * and wait until one of its links renders. Returns whether it opened.
  */
-async function openCollapsedMenu( page: Page ): Promise< boolean > {
-	for ( const candidate of await page.locator( 'button[aria-label]' ).filter( { visible: true } ).all() ) {
-		if ( ! /^\s*menu\s*$/i.test( ( await candidate.getAttribute( 'aria-label' ) ) ?? '' ) ) continue;
+async function openCollapsedMenu( page: Page, linkIndex: number ): Promise< boolean > {
+	const buttonIndex = await page.evaluate( ( linkIndex ) => {
+		const link = document.querySelectorAll( 'a[data-blocks-engine-capture-anchor-fragment]' )[ linkIndex ];
+		const navigation = link?.closest( 'nav,[role="navigation"],[data-hook="menu-root"]' );
+		if ( ! navigation ) return -1;
+		const buttons = [ ...document.querySelectorAll< HTMLButtonElement >( 'button' ) ];
+		const visible = buttons.filter( ( button ) => {
+			const rect = button.getBoundingClientRect();
+			const style = getComputedStyle( button );
+			return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.opacity !== '0';
+		} );
+		const disclosure = visible.find( ( button ) => {
+			if ( button.getAttribute( 'aria-expanded' ) !== 'false' ) return false;
+			const controls = ( button.getAttribute( 'aria-controls' ) ?? '' ).split( /\s+/ )
+				.map( ( id ) => document.getElementById( id ) ).filter( ( target ) => target !== null );
+			const popup = button.getAttribute( 'aria-haspopup' );
+			return ( ( popup !== null && popup !== 'false' ) || controls.length > 0 ) && (
+				navigation.contains( button ) || controls.some( ( target ) => target.contains( link ) )
+			);
+		} );
+		// Older menus declare neither expanded state nor a controlled region.
+		const legacy = visible.find( ( button ) => /^\s*menu\s*$/i.test( button.getAttribute( 'aria-label' ) ?? '' ) );
+		const button = disclosure ?? legacy;
+		return button ? buttons.indexOf( button ) : -1;
+	}, linkIndex );
+	if ( buttonIndex >= 0 ) {
+		const candidate = page.locator( 'button' ).nth( buttonIndex );
 		try {
 			await candidate.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
 			await page.waitForFunction(
@@ -790,10 +814,7 @@ export const capture: LiberationHooks = {
 					// A link inside a collapsed menu becomes clickable once the
 					// visitor opens that menu; anything else has no trigger.
 					const menuLink = links.find( ( link ) => link.closest( 'nav,[role="navigation"],[data-hook="menu-root"]' ) );
-					const menuButton = [ ...document.querySelectorAll< HTMLElement >( 'button[aria-label]' ) ].find(
-						( button ) => /^\s*menu\s*$/i.test( button.getAttribute( 'aria-label' ) ?? '' ) && button.getClientRects().length > 0
-					);
-					if ( ! menuLink || ! menuButton ) {
+					if ( ! menuLink ) {
 						markUnresolved( 'no rendered fragment trigger' );
 						return null;
 					}
@@ -816,7 +837,7 @@ export const capture: LiberationHooks = {
 			// menu opens, exactly as a visitor sees them: tap the menu button and
 			// follow the same destination from the opened menu, which renders its
 			// own copy of the link.
-			if ( trigger.menu && ( await openCollapsedMenu( page ) ) ) {
+			if ( trigger.menu && ( await openCollapsedMenu( page, trigger.index ) ) ) {
 				link = page.locator( `a[href$="#${ encodeURIComponent( fragment ) }"]` ).filter( { visible: true } ).first();
 			} else if ( trigger.menu ) {
 				await page.evaluate( ( fragment ) => {

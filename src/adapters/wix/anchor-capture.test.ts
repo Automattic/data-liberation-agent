@@ -238,6 +238,50 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 		}
 	}, 60_000 );
 
+	it.each( [ 'popup', 'controls', 'label', 'none', 'unrelated' ] )( 'resolves collapsed phone navigation with a %s opener', async ( kind ) => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 768 } } );
+			const button = kind === 'none' ? '' : `<button ${ kind === 'label' ? 'aria-label="Menu"' : `aria-expanded="false" ${ kind === 'controls' ? 'aria-controls="site-nav"' : 'aria-haspopup="true"' }` }>Open</button>`;
+			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
+				contentType: 'text/html',
+				body: `<style>body{margin:0}nav,button{position:fixed;top:0;z-index:5}#links{display:none;margin-top:40px}section{height:1000px}</style>
+					${ kind === 'controls' || kind === 'unrelated' ? button : '' }
+					<nav id="site-nav" aria-label="Site">${ kind === 'controls' || kind === 'unrelated' ? '' : button }
+					<div id="links"><a href="#team">Team</a><a href="#contact">Contact</a></div></nav>
+					<section>Top</section><section id="team-source">Team</section><section id="contact-source">Contact</section><section>End</section>
+					<script>
+						document.querySelector('button')?.addEventListener('click', () => {
+							document.getElementById('links').style.display = 'block';
+							document.querySelector('button').setAttribute('aria-expanded', 'true');
+						});
+						document.querySelectorAll('a').forEach((link, index) => link.addEventListener('click', event => {
+							event.preventDefault();
+							if (!event.isTrusted) return;
+							document.getElementById('links').style.display = 'none';
+							document.querySelector('button')?.setAttribute('aria-expanded', 'false');
+							window.scrollTo({top:1000 * (index + 1),behavior:'instant'});
+						}));
+					</script>`,
+			} ) );
+			await page.goto( 'https://anchor.test/' );
+			await capture.prepare!( page, { url: page.url(), viewport: 'mobile' } );
+			for ( const fragment of [ 'team', 'contact' ] ) {
+				const link = page.locator( `a[href$="#${ fragment }"]` );
+				if ( kind === 'none' || kind === 'unrelated' ) {
+					expect( await link.getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBe( 'no rendered fragment trigger' );
+					expect( await page.locator( `#${ fragment }` ).count() ).toBe( 0 );
+				} else {
+					expect( await link.getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
+					expect( await link.getAttribute( 'href' ) ).toBe( `/#${ fragment }` );
+					expect( await page.locator( `#${ fragment }-source > #${ fragment }[data-blocks-engine-capture-anchor-target="${ fragment }"]` ).count() ).toBe( 1 );
+				}
+			}
+		} finally {
+			await browser.close();
+		}
+	}, 30_000 );
+
 	it( 'closes an opened menu when it contains no rendered fragment trigger', async () => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
