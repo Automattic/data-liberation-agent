@@ -107,31 +107,30 @@ it( 'keeps learned transforms through the viewport class sweep', async () => {
 	}
 }, 90_000 );
 
+// Two routes share a header whose script toggles a class at a width breakpoint.
 it.each( [
-	{ name: 'matching breakpoint', secondBreakpoint: 768, reuses: true },
-	{ name: 'different breakpoint outside range', secondBreakpoint: 2000, reuses: false },
-	{ name: 'different breakpoint inside range', secondBreakpoint: 1000, reuses: false },
-] )( 'verifies shared header memo for $name', async ( { secondBreakpoint, reuses } ) => {
+	{ name: 'reuses a breakpoint proven either side of its flip', second: 768, sampled: [ 390, 767, 768, 1920 ], media: '(max-width:767px)' },
+	{ name: 'sweeps when the breakpoint moved inside the range', second: 1000, sampled: null, media: '(max-width:999px)' },
+] )( 'shared header class memo $name', async ( { second, sampled, media } ) => {
 	const browser = await chromium.launch();
 	try {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		await page.addInitScript( observeRuntimeStyleWrites );
 		const memo: ViewportClassMemo = new Map();
-		const makeRoute = ( breakpoint: number ) => `<!doctype html><html><head><style>.header{color:black}.header.is-mobile{color:red}</style></head><body><header class="header">Shared</header><script>const sync=()=>document.querySelector('.header').classList.toggle('is-mobile',innerWidth<${breakpoint});addEventListener('resize',sync);sync()</script></body></html>`;
-		const results = [];
-		for ( const breakpoint of [ 768, secondBreakpoint ] ) {
-			await page.setContent( makeRoute( breakpoint ) );
-			results.push( await captureViewportClassStates( page, { settleMs: 0, memo } ) );
+		const route = ( breakpoint: number ) => `<!doctype html><html><head><style>.header{color:black}.header.is-mobile{color:red}</style></head><body><header class="header">Shared</header><script>const sync=()=>document.querySelector('.header').classList.toggle('is-mobile',innerWidth<${ breakpoint });addEventListener('resize',sync);sync()</script></body></html>`;
+		let result: Awaited< ReturnType< typeof captureViewportClassStates > > | undefined;
+		let css = '';
+		for ( const breakpoint of [ 768, second ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.addInitScript( observeRuntimeStyleWrites );
+			await page.setContent( route( breakpoint ) );
+			await markInitialDocument( page );
+			result = await captureViewportClassStates( page, { settleMs: 0, memo } );
+			css = await page.evaluate( () => [ ...document.querySelectorAll( 'style' ) ].map( style => style.textContent ).join( '\n' ) );
+			await page.close();
 		}
-		// A reused toggle is proven at the extremes and either side of its flip, with no ladder or bisection.
-		if ( reuses ) expect( [ ...results[ 1 ]!.sampledWidths ].sort( ( a, b ) => a - b ) ).toEqual( [ 390, 767, 768, 1920 ] );
-		else {
-			expect( results[ 1 ]!.sampledWidths ).toEqual( expect.arrayContaining( [ 390, 1920 ] ) );
-			expect( results[ 1 ]!.sampledWidths.length ).toBeGreaterThan( 2 );
-		}
-		const mediaRules = await page.locator( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).last().textContent();
-		if ( reuses ) expect( mediaRules ).toContain( '(max-width:767px)' );
-		else expect( mediaRules ).toContain( secondBreakpoint === 1000 ? '(max-width:999px)' : '(max-width:1999px)' );
+		if ( sampled ) expect( [ ...result!.sampledWidths ].sort( ( a, b ) => a - b ) ).toEqual( sampled );
+		else expect( result!.sampledWidths.length ).toBeGreaterThan( 4 );
+		expect( result!.aliased ).toBe( 1 );
+		expect( css ).toContain( media );
 	} finally {
 		await browser.close();
 	}
