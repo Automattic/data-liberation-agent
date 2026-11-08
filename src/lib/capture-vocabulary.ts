@@ -55,7 +55,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 	responsive: {
 		'root-class-contracts': 'a',
 		'responsive-source': 'a', 'responsive-fragment': 'a', 'responsive-fragments': 'a', 'embedded-responsive': 'a', 'embedded-document': 'a',
-		'anchor-fragment': 'a', 'anchor-target': 'a', 'anchor-source-id': 'a', 'anchor-alias': 'a', 'anchor-unresolved': 'a', 'anchor-opener': 'a', 'anchor-menu': 'a',
+		'anchor-fragment': 'a', 'anchor-target': 'a', 'anchor-source-id': 'a', 'svg-source-id': 'a', 'anchor-alias': 'a', 'anchor-unresolved': 'a', 'anchor-opener': 'a', 'anchor-menu': 'a',
 		'scripted-link': 'a', 'scripted-link-style': 'a',
 		'fluid-id': 'a', 'fluid-segment': 'a', 'fluid-rules': 'a', 'fluid-sheet-rules': 'a', 'fluid-sheet-pruned': 'a', 'fluid-ignore-padding': 'a', 'fluid-release': 'a', 'fluid-specificity': 'i', 'viewport-height': 'a', 'width-classes': 'a',
 		'geometry-id': 'a', 'visual-iframe-src': 'a', 'visual-iframe-width': 'a', 'visual-iframe-height': 'a',

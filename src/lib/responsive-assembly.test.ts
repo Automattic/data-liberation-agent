@@ -690,6 +690,47 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 		expect( profile.documentsPerRoute ).toBe( dual ? 2 : 1 );
 	}
 
+	it( 'resolves inline and linked phone clips outside the hidden desktop document', async () => {
+		const head = '<link rel="stylesheet" href="https://example.com/layout.css"><style>body:not(.phone){color:black}</style>';
+		const content = '<svg width="0" height="0"><defs><clipPath id="c"><rect width="20" height="40"/></clipPath></defs></svg>' +
+			'<div id="inline" class="tile" style="clip-path:url(#c)"></div><div id="linked" class="tile linked"></div>' +
+			'<svg width="40" height="40"><rect id="presentation" width="40" height="40" fill="red" clip-path="url(#c)"/></svg>';
+		const exported = exportPair(
+			page( `<main>${ content }</main>`, head ),
+			page( `<section>${ content }</section>`, head, ' class="phone"' ),
+			'.tile{width:40px;height:40px;background:red}.linked{clip-path:url(#c)}'
+		);
+		expect( wrappers( exported.html ) ).toEqual( { desktop: 1, mobile: 1 } );
+		const browser = await chromium.launch();
+		try {
+			const copy = await browser.newPage( { viewport: { width: 390, height: 800 } } );
+			await copy.route( 'https://copy.test/**', route => {
+				const path = new URL( route.request().url() ).pathname;
+				return route.fulfill( { contentType: path.endsWith( '.css' ) ? 'text/css' : 'text/html', body: readFileSync( join( dirs[ dirs.length - 1 ], 'website', path === '/' ? 'index.html' : path.slice( 1 ) ) ) } );
+			} );
+			await copy.goto( 'https://copy.test/' );
+			for ( const id of [ 'inline', 'linked', 'presentation' ] ) {
+				const result = await copy.locator( `.${ MOBILE_DOCUMENT_CLASS } [id="${ id }"]` ).evaluate( node => {
+					const clip = getComputedStyle( node ).clipPath;
+					const targetId = clip.match( /#([^"')]+)/ )?.[ 1 ];
+					const target = targetId ? document.getElementById( targetId ) : null;
+					let visibleDefinition = target !== null;
+					for ( let ancestor = target; ancestor; ancestor = ancestor.parentElement ) {
+						if ( getComputedStyle( ancestor ).display === 'none' ) visibleDefinition = false;
+					}
+					const box = node.getBoundingClientRect();
+					return { visibleDefinition, inside: document.elementFromPoint( box.x + 10, box.y + 10 ) === node, outside: document.elementFromPoint( box.x + 30, box.y + 10 ) === node };
+				} );
+				expect( result ).toEqual( { visibleDefinition: true, inside: true, outside: false } );
+			}
+			await copy.setViewportSize( { width: 1440, height: 900 } );
+			expect( await copy.locator( `.${ DESKTOP_DOCUMENT_CLASS } clipPath` ).getAttribute( 'id' ) ).toBe( 'c' );
+			expect( await copy.locator( `.${ DESKTOP_DOCUMENT_CLASS } #linked` ).evaluate( node => getComputedStyle( node ).clipPath ) ).toMatch( /#c["']?\)/ );
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it( 'keeps phone navigation visible when body negates a relocated device class', async () => {
 		const css = '.toggle{display:flex} body:not(.phone-nav) .toggle{display:none}' +
 			'body.page:not(.phone-nav,.unused) .listed{display:none}' +

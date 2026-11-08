@@ -1583,6 +1583,12 @@ document.addEventListener('click',function(event){var link=event.target.closest&
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',schedule);else schedule();
 })();`;
 
+/** Inherited per-document URLs also cover shared, linked and imported CSS. */
+export function projectResponsiveSvgCss( css: string, ids: ReadonlySet<string> ): string {
+	return css.replace( /url\(\s*(['"]?)#([^\s'"()]+)\1\s*\)/gi, ( match, _quote, id: string ) =>
+		ids.has( id ) ? `var(--capture-svg-${ Buffer.from( id ).toString( 'hex' ) }, ${ match })` : match );
+}
+
 export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
 	// Do not parse unrelated source CSS just because another stylesheet owns
 	// a responsive anchor. Browsers may accept useful rules around a malformed
@@ -1607,12 +1613,15 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 	return css.toString();
 }
 
-export function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string,string>; namedAliases: boolean }, onUnparseable?: UnparseableStylesheetSink ): string {
+export function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string,string>; namedAliases: boolean; svgIds?: Set<string> }, onUnparseable?: UnparseableStylesheetSink ): string {
 	// Named aliases need reconciliation even when the responsive source
 	// collapsed to a single document. Preserve the cheap path for other pages.
 	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) && ! /<a\b[^>]*\bname\s*=/i.test( html ) ) return html;
 	const $ = cheerio.load( html );
 	const mobile = $( `.${ MOBILE_DOCUMENT_CLASS }` ).first();
+	$( '[data-blocks-engine-capture-svg-source-id]' ).each( ( _index, element ) => {
+		identities?.svgIds?.add( $( element ).attr( 'data-blocks-engine-capture-svg-source-id' )! );
+	} );
 	const sourceIds = new Map< string, string >();
 	$( `.${ DESKTOP_DOCUMENT_CLASS } [data-blocks-engine-capture-anchor-target][data-blocks-engine-capture-anchor-source-id]` ).each( ( _index, element ) => {
 		const fragment = $( element ).attr( 'data-blocks-engine-capture-anchor-target' );
@@ -1840,12 +1849,41 @@ function assembleResponsiveHtml(
 				`${ href.replace( /#.*$/, '' ) }#${ encodeURIComponent( fragment ) }--data-blocks-engine-capture-mobile`
 			);
 	} );
+	// Only SVG resources are private identities; authored HTML ids remain a contract.
+	const svgIds = new Set<string>();
+	const occupied = new Set( [ ...desktop( '[id]' ).toArray(), ...mobile( '[id]' ).toArray() ].map( node => ( node as Element ).attribs.id ) );
+	const desktopIds = new Set( desktop( '[id]' ).toArray().map( node => desktop( node ).attr( 'id' ) ) );
+	const variables: string[] = [];
+	mobile( 'svg [id]' ).filter( ( _index, element ) => [ 'clippath', 'mask', 'filter', 'lineargradient', 'radialgradient', 'pattern', 'marker', 'symbol' ].includes( element.name.toLowerCase() ) ).each( ( _index, element ) => {
+		const node = mobile( element );
+		const id = node.attr( 'id' )!;
+		if ( ! desktopIds.has( id ) ) return;
+		let phoneId = `${ id }--data-blocks-engine-capture-mobile`;
+		for ( let suffix = 2; occupied.has( phoneId ); suffix++ ) phoneId = `${ id }--data-blocks-engine-capture-mobile-${ suffix }`;
+		occupied.add( phoneId );
+		svgIds.add( id );
+		node.attr( 'id', phoneId ).attr( 'data-blocks-engine-capture-svg-source-id', id );
+		variables.push( `--capture-svg-${ Buffer.from( id ).toString( 'hex' ) }:url("#${ phoneId }")` );
+		mobile( 'svg *' ).each( ( _i, reference ) => {
+			for ( const attribute of [ 'href', 'xlink:href' ] ) {
+				if ( mobile( reference ).attr( attribute ) === `#${ id }` ) mobile( reference ).attr( attribute, `#${ phoneId }` );
+			}
+		} );
+	} );
+	mobile( '*' ).each( ( _index, element ) => {
+		const node = mobile( element );
+		for ( const attribute of [ 'style', 'clip-path', 'mask', 'filter', 'fill', 'stroke', 'marker', 'marker-start', 'marker-mid', 'marker-end' ] ) {
+			const value = node.attr( attribute );
+			if ( value ) node.attr( attribute, projectResponsiveSvgCss( value, svgIds ) );
+		}
+	} );
+	mobileHtml = mobileHtml.replace( /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, ( _, open, css, close ) => `${ open }${ projectResponsiveSvgCss( css, svgIds ) }${ close }` );
 	mobileBody = mobile( 'body' ).html() ?? mobileBody;
 
 	const wrapperAttributes = ( baseClass: string, bodyAttributes: string ): string => {
 		const body = cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' );
 		const className = [ baseClass, body.attr( 'class' ) ].filter( Boolean ).join( ' ' );
-		const style = body.attr( 'style' );
+		const style = [ body.attr( 'style' ), baseClass === MOBILE_DOCUMENT_CLASS ? variables.join( ';' ) : '' ].filter( Boolean ).join( ';' );
 		return `class="${ escapeHtmlAttr( className ) }"${
 			style ? ` style="${ escapeHtmlAttr( style ) }"` : ''
 		}`;
