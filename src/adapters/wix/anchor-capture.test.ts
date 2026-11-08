@@ -238,7 +238,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 		}
 	}, 60_000 );
 
-	it.each( [ 'popup', 'controls', 'label', 'none', 'unrelated' ] )( 'resolves collapsed phone navigation with a %s opener', async ( kind ) => {
+	it.each( [ 'popup', 'controls', 'label', 'none', 'unrelated', 'rerender', 'expanded' ] )( 'resolves collapsed phone navigation with a %s opener', async ( kind ) => {
 		const browser = await chromium.launch( { headless: true } );
 		try {
 			const page = await browser.newPage( { viewport: { width: 390, height: 768 } } );
@@ -248,26 +248,35 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				body: `<style>body{margin:0}nav,button{position:fixed;top:0;z-index:5}#links{display:none;margin-top:40px}section{height:1000px}</style>
 					${ kind === 'controls' || kind === 'unrelated' ? button : '' }
 					<nav id="site-nav" aria-label="Site">${ kind === 'controls' || kind === 'unrelated' ? '' : button }
-					<div id="links"><a href="#team">Team</a><a href="#contact">Contact</a></div></nav>
+					<div id="links" ${ kind === 'expanded' ? 'style="display:block"' : '' }><a href="https://anchor.test/" data-anchor="team">Team</a><a href="https://anchor.test/" data-anchor="contact">Contact</a></div></nav>
 					<section>Top</section><section id="team-source">Team</section><section id="contact-source">Contact</section><section>End</section>
 					<script>
+						const persistent = ${ kind === 'rerender' || kind === 'expanded' };
+						if (${ kind === 'expanded' }) document.querySelector('button').setAttribute('aria-expanded', 'true');
 						document.querySelector('button')?.addEventListener('click', () => {
-							document.getElementById('links').style.display = 'block';
-							document.querySelector('button').setAttribute('aria-expanded', 'true');
+							const opening = document.querySelector('button').getAttribute('aria-expanded') !== 'true';
+							const links = document.getElementById('links');
+							if (persistent && opening) links.innerHTML = '<a href="https://anchor.test/" data-anchor="team">Team</a><a href="https://anchor.test/" data-anchor="contact">Contact</a>';
+							links.style.display = opening ? 'block' : 'none';
+							document.querySelector('button').setAttribute('aria-expanded', String(opening));
 						});
-						document.querySelectorAll('a').forEach((link, index) => link.addEventListener('click', event => {
+						document.querySelector('nav').addEventListener('click', event => {
+							const link = event.target.closest('a');
+							if (!link) return;
 							event.preventDefault();
 							if (!event.isTrusted) return;
-							document.getElementById('links').style.display = 'none';
-							document.querySelector('button')?.setAttribute('aria-expanded', 'false');
-							window.scrollTo({top:1000 * (index + 1),behavior:'instant'});
-						}));
+							if (!persistent) {
+								document.getElementById('links').style.display = 'none';
+								document.querySelector('button')?.setAttribute('aria-expanded', 'false');
+							}
+							window.scrollTo({top:link.dataset.anchor === 'team' ? 1000 : 2000,behavior:'instant'});
+						});
 					</script>`,
 			} ) );
 			await page.goto( 'https://anchor.test/' );
 			await capture.prepare!( page, { url: page.url(), viewport: 'mobile' } );
 			for ( const fragment of [ 'team', 'contact' ] ) {
-				const link = page.locator( `a[href$="#${ fragment }"]` );
+				const link = page.locator( `a[data-anchor="${ fragment }"]` );
 				if ( kind === 'none' || kind === 'unrelated' ) {
 					expect( await link.getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBe( 'no rendered fragment trigger' );
 					expect( await page.locator( `#${ fragment }` ).count() ).toBe( 0 );
@@ -276,6 +285,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 					expect( await link.getAttribute( 'href' ) ).toBe( `/#${ fragment }` );
 					expect( await page.locator( `#${ fragment }-source > #${ fragment }[data-blocks-engine-capture-anchor-target="${ fragment }"]` ).count() ).toBe( 1 );
 				}
+			}
+			if ( kind !== 'none' && kind !== 'unrelated' ) {
+				expect( await page.locator( 'button' ).getAttribute( 'aria-expanded' ) ).toBe( 'false' );
 			}
 		} finally {
 			await browser.close();

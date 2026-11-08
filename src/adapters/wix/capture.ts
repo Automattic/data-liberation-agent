@@ -216,6 +216,10 @@ function collectWixAnchorFragments( chromeSelector: string ): { fragments: strin
 			link.href = `${ target.pathname }#${ encodeURIComponent( fragment ) }`;
 			continue;
 		}
+		// A menu can replace links after an earlier fragment was resolved.
+		if ( document.getElementById( fragment )?.getAttribute( 'data-blocks-engine-capture-anchor-target' ) === fragment ) {
+			link.href = `${ target.pathname }#${ encodeURIComponent( fragment ) }`;
+		}
 		fragments.add( fragment );
 	}
 	const needsRuntimeResolution = [ ...fragments ].some( ( fragment ) =>
@@ -435,7 +439,7 @@ async function openCollapsedMenu( page: Page, linkIndex: number ): Promise< bool
 			return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.opacity !== '0';
 		} );
 		const disclosure = visible.find( ( button ) => {
-			if ( button.getAttribute( 'aria-expanded' ) !== 'false' ) return false;
+			if ( ! [ 'false', 'true' ].includes( button.getAttribute( 'aria-expanded' ) ?? '' ) ) return false;
 			const controls = ( button.getAttribute( 'aria-controls' ) ?? '' ).split( /\s+/ )
 				.map( ( id ) => document.getElementById( id ) ).filter( ( target ) => target !== null );
 			const popup = button.getAttribute( 'aria-haspopup' );
@@ -446,15 +450,27 @@ async function openCollapsedMenu( page: Page, linkIndex: number ): Promise< bool
 		// Older menus declare neither expanded state nor a controlled region.
 		const legacy = visible.find( ( button ) => /^\s*menu\s*$/i.test( button.getAttribute( 'aria-label' ) ?? '' ) );
 		const button = disclosure ?? legacy;
-		return button ? buttons.indexOf( button ) : -1;
+		if ( ! button ) return -1;
+		button.setAttribute( 'data-blocks-engine-capture-anchor-opener', '' );
+		const controls = ( button.getAttribute( 'aria-controls' ) ?? '' ).split( /\s+/ )
+			.map( ( id ) => document.getElementById( id ) );
+		const region = controls.find( ( target ) => target?.contains( link ) ) ?? navigation;
+		region.setAttribute( 'data-blocks-engine-capture-anchor-menu', '' );
+		return buttons.indexOf( button );
 	}, linkIndex );
 	if ( buttonIndex >= 0 ) {
 		const candidate = page.locator( 'button' ).nth( buttonIndex );
 		try {
-			await candidate.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			if ( await candidate.getAttribute( 'aria-expanded' ) !== 'true' ) {
+				await candidate.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			}
 			await page.waitForFunction(
-				() => [ ...document.querySelectorAll< HTMLElement >( 'a[data-blocks-engine-capture-anchor-fragment]' ) ].some(
-					( link ) => link.getBoundingClientRect().width > 0 && link.getBoundingClientRect().height > 0
+				() => [ ...document.querySelectorAll< HTMLElement >( '[data-blocks-engine-capture-anchor-menu] a' ) ].some(
+					( link ) => {
+						const rect = link.getBoundingClientRect();
+						const style = getComputedStyle( link );
+						return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.opacity !== '0';
+					}
 				),
 				undefined,
 				{ timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS }
@@ -501,6 +517,24 @@ export function restoreInteractionAttributes(): void {
 
 /** Close a menu opened for anchor observation, so the capture records the closed page. */
 async function closeOpenedMenu( page: Page ): Promise< void > {
+	const opener = page.locator( '[data-blocks-engine-capture-anchor-opener]' );
+	if ( await opener.count() && await opener.getAttribute( 'aria-expanded' ) === 'true' ) {
+		await opener.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } ).catch( () => undefined );
+		if ( await opener.getAttribute( 'aria-expanded' ).catch( () => null ) === 'true' ) {
+			await page.keyboard.press( 'Escape' );
+		}
+		await page.waitForFunction(
+			() => document.querySelector( '[data-blocks-engine-capture-anchor-opener]' )?.getAttribute( 'aria-expanded' ) !== 'true',
+			undefined,
+			{ timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS }
+		).catch( () => undefined );
+	}
+	await page.evaluate( () => {
+		for ( const element of document.querySelectorAll( '[data-blocks-engine-capture-anchor-opener],[data-blocks-engine-capture-anchor-menu]' ) ) {
+			element.removeAttribute( 'data-blocks-engine-capture-anchor-opener' );
+			element.removeAttribute( 'data-blocks-engine-capture-anchor-menu' );
+		}
+	} );
 	const opened = () =>
 		page.evaluate( () =>
 			[ ...document.querySelectorAll< HTMLElement >( '[role="dialog"]' ) ].some(
@@ -759,6 +793,8 @@ export const capture: LiberationHooks = {
 			root.style.scrollBehavior = scrollBehavior;
 		}, originalScroll );
 		for ( const [ index, fragment ] of fragments.entries() ) {
+			// Opening a runtime menu may have replaced every previously marked link.
+			await page.evaluate( collectWixAnchorFragments, WIX_CAPTURE_CHROME_SELECTOR );
 			// Each observation starts from where the page was: the previous
 			// runtime scroll can leave its trigger somewhere unclickable (a header
 			// that hides once the page has scrolled).
@@ -823,9 +859,14 @@ export const capture: LiberationHooks = {
 						menu: true,
 					};
 				}
+				const navigation = trigger.closest( 'nav,[role="navigation"],[data-hook="menu-root"]' );
+				const expanded = navigation && [ ...document.querySelectorAll( 'button[aria-expanded="true"]' ) ].some( ( button ) =>
+					navigation.contains( button ) || ( button.getAttribute( 'aria-controls' ) ?? '' ).split( /\s+/ )
+						.some( ( id ) => document.getElementById( id )?.contains( trigger ) )
+				);
 				return {
 					index: [ ...document.querySelectorAll( 'a[data-blocks-engine-capture-anchor-fragment]' ) ].indexOf( trigger ),
-					menu: false,
+					menu: !! expanded,
 				};
 			}, { fragment, index } );
 			if ( ! trigger ) continue;
@@ -838,7 +879,10 @@ export const capture: LiberationHooks = {
 			// follow the same destination from the opened menu, which renders its
 			// own copy of the link.
 			if ( trigger.menu && ( await openCollapsedMenu( page, trigger.index ) ) ) {
-				link = page.locator( `a[href$="#${ encodeURIComponent( fragment ) }"]` ).filter( { visible: true } ).first();
+				// Re-read intent from fresh nodes: Wix may use a page href plus data-anchor.
+				await page.evaluate( collectWixAnchorFragments, WIX_CAPTURE_CHROME_SELECTOR );
+				const escaped = await page.evaluate( ( fragment ) => CSS.escape( fragment ), fragment );
+				link = page.locator( `[data-blocks-engine-capture-anchor-menu] a[data-blocks-engine-capture-anchor-fragment="${ escaped }"]` ).filter( { visible: true } ).first();
 			} else if ( trigger.menu ) {
 				await page.evaluate( ( fragment ) => {
 					for ( const anchor of document.querySelectorAll< HTMLAnchorElement >(
