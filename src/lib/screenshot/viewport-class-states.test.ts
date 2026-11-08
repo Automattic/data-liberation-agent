@@ -8,6 +8,7 @@ import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
+import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
 // with it (the Google Sites pattern); narrower widths show the closed icon.
@@ -106,6 +107,38 @@ it( 'keeps learned transforms through the viewport class sweep', async () => {
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 90_000 );
+
+// A class-only resize probe should not pay a document-wide quiet window at
+// every bisection width. Keep a delayed resize handler and unrelated mutations
+// alive so the timing bound cannot be met by sampling before source work runs.
+it( 'bounds class probing before fluid learning without losing delayed geometry', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.addInitScript( observeRuntimeStyleWrites );
+		await page.setContent( `<!doctype html><style>.open{color:red}#frame{height:20px}</style>
+			<div id="noise"></div><div id="frame">Frame</div><script>
+			const sync=()=>{const frame=document.querySelector('#frame');frame.className=innerWidth>=1281?'open':'';frame.style.width=innerWidth*.5+'px'};
+			let timer;addEventListener('resize',()=>{clearTimeout(timer);timer=setTimeout(sync,80)});sync();
+			setInterval(()=>document.querySelector('#noise').textContent=String(Date.now()),40);
+			</script>` );
+		const started = performance.now();
+		const classes = await captureViewportClassStates( page, { settleMs: 0 } );
+		expect( classes.aliased ).toBe( 1 );
+		expect( performance.now() - started ).toBeLessThan( 4_000 );
+		const fluid = await learnAndApplyFluidGeometry( page, { settleMs: 0 } );
+		expect( fluid.applied ).toBeGreaterThan( 0 );
+		const html = ( await page.content() ).replace( /<script\b[\s\S]*?<\/script>/gi, '' );
+		const copy = await browser.newPage();
+		await copy.setContent( html );
+		for ( const width of [ 1440, 1024, 768 ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			expect( ( await copy.locator( '#frame' ).boundingBox() )!.width ).toBeCloseTo( width * .5, 0 );
+		}
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
 
 // Two routes share a header whose script toggles a class at a width breakpoint.
 it.each( [
