@@ -1668,10 +1668,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					res.setHeader( 'cache-control', 'max-age=3600' );
 					return res.end( png );
 				}
-				// Route two repeats the image under other capture attributes.
+				// Route two repeats both images under other capture attributes. The
+				// picture without a candidate list swaps its placeholder only once revealed.
 				const second = req.url === '/second';
 				res.setHeader( 'content-type', 'text/html' );
-				res.end( `<!doctype html><base href="/"><meta name="viewport" content="width=device-width"><img style="width:400px" src="/small.png" srcset="/small.png 400w, /large.png 1200w" sizes="100vw" data-node="${ second ? 2 : 1 }">` );
+				res.end( `<!doctype html><base href="/"><meta name="viewport" content="width=device-width"><img style="width:400px" src="/small.png" srcset="/small.png 400w, /large.png 1200w" sizes="100vw" data-node="${ second ? 2 : 1 }"><div style="height:3000px"></div><picture><img style="width:200px" src="/blur.png" data-node="${ second ? 4 : 3 }"></picture><script>new IntersectionObserver( entries => { for ( const entry of entries ) if ( entry.isIntersecting ) entry.target.src = '/full.png'; } ).observe( document.querySelector( 'picture img' ) );</script>` );
 			} );
 			await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
@@ -1693,8 +1694,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await store.settle( page );
 				await store.flush();
 				const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
-				expect( Object.keys( manifest.resources ).filter( url => /\/(?:small|large)\.png$/.test( url ) ).sort() )
-					.toEqual( [ `${ origin }/large.png`, `${ origin }/small.png` ].sort() );
+				expect( Object.keys( manifest.resources ).filter( url => /\/(?:small|large|full)\.png$/.test( url ) ).sort() )
+					.toEqual( [ `${ origin }/full.png`, `${ origin }/large.png`, `${ origin }/small.png` ].sort() );
 			} finally {
 				await browser.close();
 				await new Promise( done => server.close( done ) );
