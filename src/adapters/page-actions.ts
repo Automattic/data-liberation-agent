@@ -34,6 +34,13 @@ export interface LiberationHooks {
   probeExclusions?: readonly import('../lib/screenshot/probe-exclusions.js').ProbeExclusion[];
   /** CSS selectors removed from the DOM before portable artifacts are produced. */
   removeSelectors?: string[];
+  /** Acquire a platform-declared virtual route under its requested URL.
+   * Return undefined for ordinary server routes. The returned HTML must retain
+   * the source asset base; capture still applies normal navigation safeguards. */
+  loadDocument?(page: Page, url: string, timeoutMs: number): Promise<{
+    html: string;
+    headers: Record<string, string>;
+  } | undefined>;
   /** Register document-start instrumentation before navigation/capture scrolling. */
   initScript?(page: Page): Promise<void>;
   /** Imperative escape hatch (wait-for-app, conditional removal). Runs AFTER

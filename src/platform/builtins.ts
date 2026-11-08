@@ -15,6 +15,7 @@ import { registerHost } from './host.js';
 import { netlifyHost } from '../hosts/netlify.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { atombioAdapter } from '../adapters/atombio/index.js';
+import { carrdAdapter } from '../adapters/carrd/index.js';
 import { bloggerAdapter } from '../adapters/blogger/index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
@@ -48,6 +49,7 @@ const builtins: Platform[] = [
 	nextjsAdapter,
 	atombioAdapter,
 	bloggerAdapter,
+	carrdAdapter,
 	emdashAdapter,
 	framerAdapter,
 	gammaAdapter,

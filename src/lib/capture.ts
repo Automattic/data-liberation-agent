@@ -555,6 +555,16 @@ async function runCaptureWebsite(
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
 	const { createReferenceCollector } = await import( './fidelity/reference.js' );
 	const telemetryRequest = adapter.liberation?.telemetryRequest?.bind( adapter.liberation );
+	const initializePage = adapter.liberation?.loadDocument || adapter.liberation?.initScript ? async (page: import('playwright').Page): Promise<void> => {
+		if (adapter.liberation?.loadDocument) {
+			const { installSourceDocumentLoader } = await import('./source-navigation.js');
+			installSourceDocumentLoader(page, async (url, timeout) => {
+				const document = await adapter.liberation!.loadDocument!(page, url, timeout);
+				return document && { url, status: 200, headers: document.headers, body: Buffer.from(document.html) };
+			});
+		}
+		await adapter.liberation?.initScript?.(page);
+	} : undefined;
 	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
 		routeScope,
 		publicUrlsOnly: true,
@@ -562,6 +572,7 @@ async function runCaptureWebsite(
 		telemetryRequest,
 		removeSelectors: adapter.liberation?.removeSelectors,
 		prepareCapture: adapter.liberation?.prepare,
+		initializePage,
 		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
 		referenceSample,
 	} );
@@ -586,7 +597,7 @@ async function runCaptureWebsite(
 		learnFluid: options.learnFluid !== false,
 		force: options.resume !== true,
 		removeSelectors: adapter.liberation?.removeSelectors,
-		initScript: adapter.liberation?.initScript,
+		initScript: initializePage,
 		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
 		probeExclusions: adapter.liberation?.probeExclusions,
 		cleanupPolicy: (await import('./source-cleanup.js')).cleanupPolicy(adapter.liberation?.cleanupRules),

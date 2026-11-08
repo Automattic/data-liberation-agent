@@ -2027,6 +2027,7 @@ interface DeviceComparisonArgs {
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
 	prepareCapture?: ScreenshotOpts['prepareCapture'];
+	initScript?: ScreenshotOpts['initScript'];
 	telemetryRequest?: ScreenshotOpts['telemetryRequest'];
 	probeDiagnostic?: ( diagnostic: ProfileDiagnostic ) => void;
 	deviceEvidence?: RouteDeviceEvidence;
@@ -2063,6 +2064,7 @@ async function loadForComparison( args: DeviceComparisonArgs, options: BrowserCo
 	categorizeSourceContext(context, 'device-check');
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
+	await args.initScript?.(page);
 	// The comparison and shared-chrome probes wait on the same render-affecting
 	// quiet as capture; watch the page's traffic from before its navigation.
 	observePageTraffic( page, args.telemetryRequest );
@@ -2777,7 +2779,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			desktop: profileContextOptions( desktopProfile, sessionContext ),
 			phone: profileContextOptions( phoneProfile, sessionContext ),
 			governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
-			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+			cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, initScript: opts.initScript,
 			telemetryRequest: opts.telemetryRequest,
 		};
 		const probed = await probeDeviceMode( {
@@ -2818,7 +2820,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
 				governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
-				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture,
+				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, initScript: opts.initScript,
 				telemetryRequest: opts.telemetryRequest,
 				...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 			} ) );

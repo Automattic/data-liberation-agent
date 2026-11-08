@@ -54,6 +54,11 @@ resolver; generic platforms leave such URLs unchanged. See [image assets](image-
 
 ```ts
 interface LiberationHooks {
+  /** Source-declared virtual route acquisition. Undefined keeps ordinary HTTP
+   * acquisition. Preserve the source asset base in the returned HTML. */
+  loadDocument?(page: Page, url: string, timeoutMs: number): Promise<{
+    html: string; headers: Record<string, string>;
+  } | undefined>;
   /** CSS selectors removed before portable artifacts are produced. */
   removeSelectors?: string[];
   /** Imperative page prep (wait-for-app, conditional removal). Best-effort. */

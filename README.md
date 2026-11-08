@@ -92,6 +92,7 @@ Naming an unknown target lists the registered ones.
 | Platform | Status |
 |---|---|
 | Blogger | Browser capture + feed accounting; opt-in orchestrated HTTP review capture |
+| Carrd | Section routes with shared chrome and portable navigation |
 | EmDash CMS | Ready |
 | Gamma | Generic discovery + card section anchors and video embeds |
 | Ghost | Ready |
