@@ -9,7 +9,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { createReferenceCollector } from '../fidelity/reference.js';
 import { checkFidelity } from '../fidelity/check.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, withoutEmptyBodyMounts, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, switchProbeIdentity, type SwitchRendering, withoutEmptyBodyMounts, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -69,6 +69,31 @@ describe( 'device-mode evidence', () => {
 		// No later boundary changes it: the range stays unbounded.
 		expect( await observeSwitchWidth( [ 799, 999 ], { phone: 375, desktop: 1440 }, probe, same ) )
 			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800 } } );
+	} );
+
+	// #1379: a frame-per-breakpoint source whose 800 and 1280 frames share one tag tree.
+	it( 'classifies a probe with the desktop tag tree but different classes as a middle layout', async () => {
+		const tree = [ 'html', 'html>body[1]', 'html>body[1]>div[1]', 'html>body[1]>div[1]>section[1]', 'html>body[1]>div[1]>section[1]>p[1]' ];
+		const frame = ( classTokens: string[], paths = tree ): SwitchRendering => ( { paths, bodyClasses: [], classTokens } );
+		const desktop = frame( [ 'frame', 'w-1280', 'title-xl' ] );
+		const phone = frame( [ 'frame', 'w-375', 'title-s' ], tree.slice( 0, 4 ) );
+		// The phone identity's runtime marks every element it renders `touch`.
+		const probes: Record< number, SwitchRendering > = {
+			800: frame( [ 'frame', 'w-800', 'title-m', 'touch' ] ),
+			1280: frame( [ 'frame', 'w-1280', 'title-xl', 'touch' ] ),
+		};
+		const identity = switchProbeIdentity( { desktop, phone: frame( [ ...phone.classTokens, 'touch' ], phone.paths ) }, 'identical' );
+		expect( identity.classify( probes[ 800 ]! ) ).toBe( 'other' );
+		expect( identity.classify( probes[ 1280 ]! ) ).toBe( 'desktop' );
+		const probe = async ( width: number ) => {
+			const rendering = probes[ width ]!;
+			return { rendered: identity.classify( rendering ), rendering };
+		};
+		expect( await observeSwitchWidth( [ 799, 1279 ], { phone: 390, desktop: 1440 }, probe, identity.same ) )
+			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800, maxWidth: 1279 } } );
+		// Tag paths alone call the 800 frame the desktop document.
+		const tagsOnly = switchProbeIdentity( { desktop: frame( [] ), phone: frame( [], phone.paths ) }, 'identical' );
+		expect( tagsOnly.classify( frame( [] ) ) ).toBe( 'desktop' );
 	} );
 
 	it( 'leaves only empty body-level mounts out of the switch probe comparison', () => {

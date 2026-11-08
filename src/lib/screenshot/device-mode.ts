@@ -194,7 +194,17 @@ export function withoutSubtrees( paths: readonly string[], roots: readonly strin
  * elements of a structurally identical phone page).
  */
 export async function renderedElementPaths( page: Page, mark?: { attribute: string; paths: readonly string[] } ): Promise< string[] > {
-	const { paths, overlays } = await page.evaluate( ( { mark, dialogSelector, vendorSource } ) => {
+	return ( await renderedElementStructure( page, mark ) ).paths;
+}
+
+/**
+ * `renderedElementPaths` plus the sorted, distinct class tokens of the same kept
+ * elements below `<body>` (`<body>`'s own classes are `renderedBodyClasses`).
+ * Two width-selected frames can share one tag tree and differ only in classes,
+ * so the switch probe compares both.
+ */
+export async function renderedElementStructure( page: Page, mark?: { attribute: string; paths: readonly string[] } ): Promise< { paths: string[]; classTokens: string[] } > {
+	const { paths, classes, overlays } = await page.evaluate( ( { mark, dialogSelector, vendorSource } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
 		// Invisible frames and pixels appended to <body> are tracking and messaging
 		// channels that third-party scripts inject on their own schedule, not page
@@ -214,6 +224,7 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 		const contentless = new Set( [ 'AREA', 'AUDIO', 'BASE', 'BR', 'CANVAS', 'COL', 'EMBED', 'HR', 'IFRAME', 'IMG', 'INPUT', 'LINK', 'META', 'OBJECT', 'SELECT', 'SOURCE', 'TEXTAREA', 'TRACK', 'VIDEO', 'WBR' ] );
 		const emptyContainer = ( element: Element ) => ! element.hasChildNodes() && element.namespaceURI === 'http://www.w3.org/1999/xhtml' && ! contentless.has( element.tagName );
 		const paths: string[] = [];
+		const classes: string[][] = [];
 		const walk = ( element: Element, prefix: string ) => {
 			const seen = new Map< string, number >();
 			for ( const child of Array.from( element.children ) ) {
@@ -224,6 +235,7 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 				if ( ! empty ) seen.set( tag, position );
 				const path = empty ? `${ prefix }>${ tag }[]` : `${ prefix }>${ tag }[${ position }]`;
 				paths.push( path );
+				classes.push( child.parentElement && document.body?.contains( child.parentElement ) ? Array.from( child.classList ) : [] );
 				if ( marked?.has( path ) ) child.setAttribute( mark!.attribute, '' );
 				// An empty container has no subtree, and its path is shared by its empty siblings.
 				if ( ! empty && ( child.matches( dialogSelector ) || vendor.test( `${ child.id } ${ className( child ) }` ) ) ) {
@@ -233,10 +245,14 @@ export async function renderedElementPaths( page: Page, mark?: { attribute: stri
 			}
 		};
 		paths.push( 'html' );
+		classes.push( [] );
 		walk( document.documentElement, 'html' );
-		return { paths, overlays };
+		return { paths, classes, overlays };
 	}, { mark, dialogSelector: CONSENT_OVERLAY_DIALOG_SELECTOR, vendorSource: CONSENT_VENDOR_RE.source } );
-	return withoutSubtrees( paths, overlays.filter( overlay => isConsentOverlayRoot( overlay.element ) ).map( overlay => overlay.path ) );
+	const roots = overlays.filter( overlay => isConsentOverlayRoot( overlay.element ) ).map( overlay => overlay.path );
+	const excluded = ( path: string ) => roots.some( root => path === root || path.startsWith( `${ root }>` ) );
+	const classTokens = [ ...new Set( paths.flatMap( ( path, index ) => excluded( path ) ? [] : classes[ index ] ?? [] ) ) ].sort();
+	return { paths: withoutSubtrees( paths, roots ), classTokens };
 }
 
 /** Class tokens on `<body>` that one identity rendered and the other did not. */
@@ -503,6 +519,41 @@ export interface SwitchProbe< R > {
 export interface ObservedSwitch {
 	switchWidth: number;
 	middleLayout?: MiddleLayout;
+}
+
+/** What one identity rendered at one width, as the switch probe compares it. */
+export interface SwitchRendering {
+	paths: string[];
+	bodyClasses: string[];
+	/** Class tokens of the rendered elements below `<body>` (`renderedElementStructure`). */
+	classTokens: string[];
+}
+
+/**
+ * The switch probe's rendering identity, against both capture-width
+ * renderings. Two renderings match when the route check would call them the
+ * same document (structure without empty body mounts, body classes) and they
+ * render the same class tokens below `<body>`: width-selected frames can share
+ * one tag tree and differ only in classes. A token that only one identity
+ * renders at its capture width can be that identity's runtime marker rather
+ * than its layout, so it never decides a match; a token neither capture-width
+ * rendering has (a middle frame's own classes) always does.
+ */
+export function switchProbeIdentity(
+	references: { desktop: SwitchRendering; phone: SwitchRendering },
+	serverHtml: 'identical' | 'identical-after-normalization',
+): { classify: ( probe: SwitchRendering ) => SwitchProbeRendering; same: ( a: SwitchRendering, b: SwitchRendering ) => boolean } {
+	const desktopTokens = new Set( references.desktop.classTokens );
+	const phoneTokens = new Set( references.phone.classTokens );
+	const ignored = new Set( [ ...desktopTokens, ...phoneTokens ].filter( token => desktopTokens.has( token ) !== phoneTokens.has( token ) ) );
+	const decisive = ( tokens: readonly string[] ) => new Set( tokens.filter( token => ! ignored.has( token ) ) );
+	const sameTokens = ( a: readonly string[], b: readonly string[] ) => {
+		const left = decisive( a ), right = decisive( b );
+		return left.size === right.size && [ ...left ].every( token => right.has( token ) );
+	};
+	const same = ( a: SwitchRendering, b: SwitchRendering ) => sameTokens( a.classTokens, b.classTokens ) &&
+		decideRouteMode( { serverHtml, structure: compareStructure( withoutEmptyBodyMounts( a.paths ), withoutEmptyBodyMounts( b.paths ) ), bodyClasses: compareBodyClasses( a.bodyClasses, b.bodyClasses ) } ).mode === 'reflow-only';
+	return { classify: probe => same( references.desktop, probe ) ? 'desktop' : same( references.phone, probe ) ? 'phone' : 'other', same };
 }
 
 /**
