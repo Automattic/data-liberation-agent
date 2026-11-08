@@ -604,11 +604,7 @@ export class CapturedResourceStore {
 			await page.setViewportSize( original );
 			await page.evaluate( position => window.scrollTo( { left: position.x, top: position.y, behavior: 'instant' } ), scroll );
 		}
-		if ( ! probes.length ) {
-			if ( measureError ) throw measureError;
-			return;
-		}
-		const storageState = await page.context().storageState();
+		const storageState = probes.length ? await page.context().storageState() : undefined;
 		const settled = await Promise.allSettled( probes.map( async ( { width, base, pending } ) => {
 			// A fresh context per width: a shared memory cache would serve the
 			// next width's renditions without the network responses capture records.
@@ -627,9 +623,9 @@ export class CapturedResourceStore {
 				await this.settle( probe );
 			} finally { await context.close(); }
 		} ) );
-		const failed = settled.find( result => result.status === 'rejected' );
-		if ( measureError ) throw measureError;
-		if ( failed ) throw failed.reason;
+		const failed = measureError ?? settled.find( ( result ): result is PromiseRejectedResult => result.status === 'rejected' )?.reason;
+		// failure-class: operational
+		if ( failed ) throw failed;
 	}
 
 	async settle( page: Page ): Promise< void > {
