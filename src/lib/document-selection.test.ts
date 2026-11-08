@@ -125,6 +125,26 @@ it( 'emits shared CSS and root CSS once with a multi-device zero-specificity gat
 	for ( const rule of [ '.d{}', '.t{}', '.m{}' ] ) expect( styles.text().split( rule ) ).toHaveLength( 2 );
 } );
 
+it.each( [
+	{ name: 'disjoint attribute and id targets', crossing: '@media(min-width:1px){[data-zone="other"]{color:blue}}@supports(display:grid){#other{margin:2px}}', shared: true },
+	{ name: 'equal-specificity overlapping targets', crossing: '@media(min-width:1px){[data-zone="target"]{color:blue}}', shared: false },
+	{ name: 'state selector that can only reach another element', crossing: '#other:hover{color:blue}', shared: true },
+	{ name: 'state selector that could reach the target', crossing: ':hover{color:blue}', shared: false },
+] )( 'commutes mixed font and ordinary sheets only with DOM proof: $name', ( { crossing, shared } ) => {
+	const mixed = '@font-face{font-family:"Neutral";src:url(neutral.woff2)}[data-zone="target"]{color:red}#target{margin:1px}';
+	const tail = '[data-zone="target"]{color:green}';
+	const document = ( sheets: string[] ) => `<html><head><meta name="viewport" content="width=device-width">${ sheets.map( css => `<style>${ css }</style>` ).join( '' ) }</head><body><div id="target" data-zone="target"></div><div id="other" data-zone="other"></div></body></html>`;
+	const $ = cheerio.load( assembleDeviceDocuments( {
+		desktop: document( [ mixed, crossing ] ), mobile: document( [ crossing, mixed, tail ] ),
+	}, selection ).html );
+	const styles = $( '[data-blocks-engine-capture-device-style]' );
+	const fonts = styles.filter( ( _, node ) => $( node ).text().includes( '@font-face' ) );
+	expect( fonts.toArray().map( node => $( node ).attr( 'data-blocks-engine-capture-device-style' ) ) ).toEqual( shared ? [ 'desktop mobile' ] : [ 'desktop', 'mobile' ] );
+	const mobile = styles.toArray().filter( node => $( node ).attr( 'data-blocks-engine-capture-device-style' )!.split( ' ' ).includes( 'mobile' ) );
+	expect( $( mobile.at( -1 )! ).text() ).toContain( 'color:green' );
+	if ( ! shared ) expect( mobile.map( node => $( node ).text().includes( '@font-face' ) ) ).toEqual( [ false, true, false ] );
+} );
+
 it( 'preserves each device cascade across reversed, repeated, linked and interleaved sheets', () => {
 	const sequences = { desktop: [ 'a', 'b', 'a', 'link', 'c' ], mobile: [ 'b', 'a', 'c', 'link', 'c' ], tablet: [ 'c', 'a', 'b', 'link', 'a' ] };
 	const documents = Object.fromEntries( Object.entries( sequences ).map( ( [ key, sheets ] ) => [ key,

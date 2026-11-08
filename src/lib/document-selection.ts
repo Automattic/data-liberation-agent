@@ -5,6 +5,7 @@ import selectorParser from 'postcss-selector-parser';
 import { parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { reconcileDeviceDocuments, deviceIslandCss, type DeviceReconciliationEvidence } from './device-reconciliation.js';
 import { IntegrityError } from './failure-class.js';
+import { stylesheetCommutation } from './stylesheet-commutation.js';
 
 /** Platform-owned, ordered request-identity rules. No viewport/capability inference. */
 export interface DeviceDocumentSelection {
@@ -97,6 +98,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	const viewports: DeviceAssembly['viewports'] = {};
 	const roots: DeviceAssembly['roots'] = {};
 	const sentinelScope = '[data-blocks-engine-capture-device-document="projection-sentinel"]';
+	const commute = stylesheetCommutation();
 	const sheets: Array<{ identity?: string; keys: string[]; copy: ReturnType<typeof $>; css?: string; rootClasses: string[]; rootProjection?: string }> = [];
 	for ( const key of selection.documents ) {
 		if ( documents[ key ] === undefined ) continue;
@@ -134,12 +136,17 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 			if ( css !== undefined && projection === undefined ) continue;
 			const identity = projection === undefined ? undefined : JSON.stringify( [ projection.scoped + projection.roots, media ] );
 			const after = previous ? sheets.indexOf( previous ) + 1 : 0;
-			// Never coalesce two occurrences from the same document, or move a
-			// sheet before that document's preceding sheet (including links).
-			const existing = identity === undefined ? undefined : sheets.slice( after ).find( sheet => sheet.identity === identity && ! sheet.keys.includes( key ) );
+			// Prefer forward reuse. Backward reuse swaps this sheet across every
+			// intervening entry and needs cascade proof in this captured DOM.
+			const eligible = ( sheet: ( typeof sheets )[number] ) => sheet.identity === identity && ! sheet.keys.includes( key );
+			const existing = identity === undefined ? undefined : sheets.slice( after ).find( eligible ) ??
+				sheets.slice( 0, after ).find( ( sheet, index ) => eligible( sheet ) &&
+					sheets.slice( index + 1, after ).every( crossed => commute( css, crossed.css, source ) ) );
 			if ( existing ) {
 				existing.keys.push( key );
-				previous = existing;
+				// A backwards reuse must not pull subsequent sheets behind an
+				// already established predecessor of this document.
+				if ( sheets.indexOf( existing ) >= after ) previous = existing;
 				continue;
 			}
 			const copy = css === undefined ? $( source.html( node ) ) : $( '<style>' );
