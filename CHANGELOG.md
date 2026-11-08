@@ -15,6 +15,12 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.172] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- Bound viewport class probing and selectable drives within the route budget
+
 ## [0.33.171] - 2026-11-08
 
 ### Changed
