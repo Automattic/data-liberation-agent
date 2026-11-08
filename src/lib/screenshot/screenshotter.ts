@@ -30,6 +30,7 @@ import {
 	serverRedirectTarget,
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { waitForHiddenEmbeds } from './embed-readiness.js';
 import { portStaticShadowContent } from './shadow-content.js';
 import { normalizeCaptureState, normalizeGeneratedIds, settleScriptMotion, SCRIPT_MOTION_BUDGET_MS } from './capture-state.js';
 import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
@@ -1064,6 +1065,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.phases?.enter( 'settle' );
 		if ( args.recoverIncompleteDocument ) await page.waitForTimeout( Math.max( settleMs, 3_000 ) );
 		await waitForStable( page );
+		// The shorter phone pass must not freeze a load-delayed iframe reveal.
+		// No hidden frames means no timer or observer; permanent hides are bounded.
+		if ( isMobile ) await withEvaluateTimeout( page.evaluate( waitForHiddenEmbeds, 5_000 ), evaluateTimeoutMs ).catch( () => undefined );
 		// A provider login withholding the whole route (a members-only page) was
 		// removed by the policy, leaving nothing of the page. Capture it as a
 		// placeholder inside the site's public shell instead (see access-gate.ts).
