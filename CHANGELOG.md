@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.180] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- Wire captured gallery frames only into the device document of their capture width
+- skip zero-size hidden frames in the phone pass reveal wait
+
 ## [0.33.179] - 2026-11-08
 
 ### Changed
