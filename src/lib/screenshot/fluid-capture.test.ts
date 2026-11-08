@@ -23,7 +23,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
 		try {
 			await page.setContent( `<style>.wrap{width:90%}</style><div class="wrap">${ 'reflowing content '.repeat(100) }</div>${ extra }
-				<script>const fit=()=>{const el=document.querySelector('.wrap');el.style.minHeight='';el.style.minHeight=(el.offsetHeight${ redundant ? '' : '+200' })+'px'};addEventListener('resize',fit);addEventListener('load',fit);fit();</script>` );
+				<div class="pin"></div>
+				<script>const fit=()=>{const el=document.querySelector('.wrap');el.style.minHeight='';el.style.minHeight=(el.offsetHeight${ redundant ? '' : '+200' })+'px'};addEventListener('resize',fit);addEventListener('load',fit);fit();document.querySelector('.pin').setAttribute('style','visibility:hidden;width:0;height:0;min-height:5px;position:absolute');</script>` );
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
 			if ( expectedSweep ) expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
 			else expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );

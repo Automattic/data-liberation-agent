@@ -496,11 +496,14 @@ async function learnFluidGeometry(
 					const rect = element.getBoundingClientRect();
 					const minHeight = element.style.getPropertyValue( 'min-height' );
 					let redundantMinHeight = false;
-					if ( /^\s*-?\d+(?:\.\d+)?px\s*$/.test( minHeight ) ) {
-						const priority = element.style.getPropertyPriority( 'min-height' );
+					// A zero minimum never holds a box open. Restore the literal
+					// attribute: CSSOM reserializes every declaration (`width:0`
+					// becomes `width: 0px`), which later samples would read as new geometry.
+					if ( /^\s*\d*\.?\d+px\s*$/.test( minHeight ) && parseFloat( minHeight ) > 0 ) {
+						const literal = element.getAttribute( 'style' )!;
 						element.style.removeProperty( 'min-height' );
 						redundantMinHeight = Math.abs( rect.height - element.getBoundingClientRect().height ) <= 2;
-						element.style.setProperty( 'min-height', minHeight, priority );
+						element.setAttribute( 'style', literal );
 					}
 					return { id: element.getAttribute( attribute )!, values, declared, containers, relative, transformOrigin, redundantMinHeight,
 						clip: element.style.clipPath, clipWidth: rect.width, clipHeight: rect.height };
