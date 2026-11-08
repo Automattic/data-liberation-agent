@@ -293,7 +293,7 @@ function navBackoffMs( attempt: number, retryAfter?: string ): number {
 	return Math.min( 1000 * 2 ** ( attempt - 1 ), cap );
 }
 
-export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[] ): Promise< string > {
+export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string ): Promise< string > {
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',
@@ -377,8 +377,30 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 	// Repair against the <style> owner's own pre-mutation textContent (read below,
 	// before it is overwritten) — see css-shorthand-repair.ts.
 	await page.evaluate(
-		( { factorySrc } ) => {
+		( { factorySrc, serverHtml } ) => {
 			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
+			const authoredStyles = new Set<string>();
+			if ( serverHtml ) {
+				const baseline = new DOMParser().parseFromString( serverHtml, 'text/html' );
+				for ( const style of baseline.querySelectorAll( 'style' ) ) authoredStyles.add( style.textContent ?? '' );
+			}
+			for ( const style of serverHtml ? Array.from( document.querySelectorAll( 'style' ) ) : [] ) {
+				if ( authoredStyles.has( style.textContent ?? '' ) ) continue;
+				let rules: CSSRuleList;
+				try { rules = style.sheet?.cssRules ?? ([] as unknown as CSSRuleList); } catch { continue; }
+				const selectors: string[] = [];
+				const collect = ( list: CSSRuleList ) => { for ( const rule of Array.from( list ) ) {
+					if ( rule instanceof CSSStyleRule ) selectors.push( rule.selectorText );
+					else if ( 'cssRules' in rule ) collect( ( rule as CSSGroupingRule ).cssRules );
+				} };
+				collect( rules );
+				if ( selectors.length && ! selectors.some( selector => { try { return document.querySelector( selector ) !== null; } catch { return true; } } ) ) {
+					const bytes = new TextEncoder().encode( style.textContent ?? '' ).length;
+					style.remove();
+					( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ??= [];
+					( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles!.push( { bytes, rules: selectors.length } );
+				}
+			}
 			const repairShorthandVarCollapse = new Function( 'return (' + factorySrc + ')' )()();
 			const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
 			for ( const sheet of sheets ) {
@@ -408,7 +430,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				document.head.appendChild( style );
 			}
 		},
-		{ factorySrc: CSS_SHORTHAND_REPAIR_FACTORY_SOURCE.factorySrc }
+		{ factorySrc: CSS_SHORTHAND_REPAIR_FACTORY_SOURCE.factorySrc, serverHtml: serverHtml ?? '' }
 	);
 	try {
 		// Serialize in the renderer's current task. page.content() round-trips through
@@ -581,7 +603,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// source laid out lines and tables under different rules, so record the
 				// mode the source rendered in for the transform to honor.
 				if ( document.compatMode === 'BackCompat' ) snapshot.setAttribute( 'data-blocks-engine-capture-compat-mode', 'BackCompat' );
-				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings };
+				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();
 				for ( const boundary of textBoundaries ) boundary.remove();
@@ -597,6 +619,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			}
 		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString() } );
 		diagnostics?.push( ...result.findings );
+		for ( const omitted of result.omittedStyles ?? [] ) diagnostics?.push( { code: 'runtime_stylesheet_omitted', reason: `Omitted unmatched runtime stylesheet (${ omitted.bytes } bytes, ${ omitted.rules } rules)` } );
 		return wireNativeControlState( result.html );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
@@ -1221,7 +1244,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	await markInitialDocument( page );
 	// Probes above resized the page; serialize source sheets as loaded at this width.
 	await restoreLoadTimeSheets( page ).catch( () => 0 );
-	const initialDocument = await capturePageHtml( page, args.diagnostics );
+	const initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml );
 	// The serialized head is the initial one, so it is named by the title the
 	// browser reported for it, before exploration could retitle the page.
 	const initialTitle = await page.evaluate( () => document.title ).catch( () => undefined );
