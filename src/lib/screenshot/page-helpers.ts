@@ -1402,10 +1402,13 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     const root = document.querySelector<HTMLElement>(`[data-lib-overlay="${idx}"]`);
     if (!root) return;
     // Read the resting panel, not a frame of its slide-in. A panel parked
-    // off-screen may still be waiting for its entrance to start.
+    // off-screen may still be waiting for its entrance to start. A root with
+    // no area (a shadow host whose banner renders in its shadow tree) is not
+    // a parked panel.
     const settleBy = performance.now() + 1500;
     const offscreen = () => {
       const box = root.getBoundingClientRect();
+      if (!box.width || !box.height) return false;
       return box.bottom <= 0 || box.top >= innerHeight || box.right <= 0 || box.left >= innerWidth;
     };
     while (offscreen() && !root.getAnimations({ subtree: true }).length && performance.now() < settleBy) {
