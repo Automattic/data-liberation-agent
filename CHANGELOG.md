@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.170] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- cook candidate
+- Capture Carrd section routes as separate pages (fixes #1512)
+- reuse srcset probe context and resolved fixtures across routes
+- memoize viewport class toggles across routes
+- skip learning content-derived min-height
+- Settle script-driven entrance motion before serialization
+
 ## [0.33.169] - 2026-11-08
 
 ### Changed
