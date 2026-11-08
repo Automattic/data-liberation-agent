@@ -74,6 +74,24 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( derivation.html ).toContain( '<h1 class="post-title">post-2</h1>' );
 	} );
 
+	it( 'pairs head metadata by identity wherever the parser leaves it (Blogger)', () => {
+		// Blogger heads carry markup that closes <head> early, so the HTML parser
+		// leaves title and social metadata in <body>, in both captures.
+		const blogger = ( slug: string, extra = '' ): string => `<!doctype html>
+<html><head><script>/* widgets */</script><div hidden></div><title>${ slug }</title>
+<meta property="og:title" content="${ slug }"><meta property="og:url" content="${ BASE }/2023/02/${ slug }.html">
+<meta name="og:description" content="Review of ${ slug }"><meta name="twitter:title" content="${ slug }">${ extra }</head>
+<body>${ entry( [ 'First paragraph.', 'Second paragraph.' ], slug ) }</body></html>`;
+		const representativeHtml = blogger( 'kavango', '<meta property="og:image" content="/img/kavango.jpg">' );
+		const derivation = deriveMemberDocument( { repServerHtml: representativeHtml, repProcessedHtml: representativeHtml, memberServerHtml: blogger( 'mini-rogue', '<meta name="twitter:image" content="/img/mini-rogue.jpg">' ), baseUrl: BASE } );
+		expect( derivation.ok ).toBe( true );
+		if ( ! derivation.ok ) return;
+		expect( derivation.html ).not.toContain( 'kavango' );
+		for ( const expected of [ '<title>mini-rogue</title>', `content="${ BASE }/2023/02/mini-rogue.html"`, 'content="Review of mini-rogue"', '<meta name="twitter:title" content="mini-rogue">', '<meta name="twitter:image" content="/img/mini-rogue.jpg">' ] ) {
+			expect( derivation.html ).toContain( expected );
+		}
+	} );
+
 	it( 'transplants responsive image attributes and detects stale srcsets (#1475)', () => {
 		const page = ( name: string, width: number, height: number ) => serverDocument( 'Post', `<div width="${ width }" height="${ height }"><picture><source srcset="/img/${ name }.webp 1x" sizes="${ width }px" width="${ width }" height="${ height }"><img src="/img/${ name }.jpg" srcset="/img/${ name }.jpg ${ width }w" sizes="${ width }px" width="${ width }" height="${ height }"></picture></div>` );
 		const repServerHtml = page( 'representative', 1672, 941 );

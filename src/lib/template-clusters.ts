@@ -68,13 +68,11 @@ const INLINE_ELEMENTS = new Set( [ 'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite',
 /** Attributes whose difference is authored content, per §3.1. */
 const SLOT_ATTRIBUTES = [ 'href', 'src', 'srcset', 'sizes', 'datetime', 'alt', 'id', 'class' ] as const;
 
-/** Head slots: `<title>`, description, canonical and Open Graph. */
-const HEAD_SLOT_SELECTORS = [
-	'title',
-	'meta[name=description i]',
-	'link[rel=canonical i]',
-	'meta[property^="og:" i]',
-] as const;
+/**
+ * Head slots: `<title>`, description, canonical, and the Open Graph, Twitter
+ * and article metadata, under either `property` or `name`.
+ */
+const HEAD_SLOT_META = /^(?:description|(?:og|twitter|article):.+)$/i;
 
 /** Resolve an asset reference the way a browser would, for capture comparisons. */
 function resolveUrl( value: string, baseUrl: string ): string {
@@ -336,12 +334,29 @@ function applySlot( $: cheerio.CheerioAPI, node: Element, slot: Slot ): boolean 
 	return true;
 }
 
-/** Whether a head slot element name belongs to the transplant scope. */
-const isHeadSlot = ( element: Element ): boolean =>
-	element.name === 'title' ||
-	( element.name === 'meta' && ( element.attribs.name ?? '' ).toLowerCase() === 'description' ) ||
-	( element.name === 'link' && ( element.attribs.rel ?? '' ).split( /\s+/ ).some( value => value.toLowerCase() === 'canonical' ) ) ||
-	( element.name === 'meta' && /^og:/i.test( element.attribs.property ?? '' ) );
+/** The identity a head-slot element is paired by, or null outside the transplant scope. */
+const headSlotKey = ( element: Element ): string | null => {
+	if ( element.name === 'link' ) {
+		return ( element.attribs.rel ?? '' ).split( /\s+/ ).some( value => value.toLowerCase() === 'canonical' ) ? 'link:canonical' : null;
+	}
+	if ( element.name !== 'meta' ) return null;
+	const key = ( element.attribs.property ?? element.attribs.name ?? '' ).toLowerCase();
+	return HEAD_SLOT_META.test( key ) ? `meta:${ key }` : null;
+};
+
+/**
+ * Document-wide head slots by identity. A parser closes `<head>` early on
+ * markup some templates (Blogger) put there, leaving these elements in the
+ * body, so they are found wherever `document.title` would find them.
+ */
+function headSlots( $: cheerio.CheerioAPI ): Map< string, Element[] > {
+	const slots = new Map< string, Element[] >();
+	for ( const element of $( 'meta, link[rel]' ).toArray() as Element[] ) {
+		const key = headSlotKey( element );
+		if ( key ) slots.set( key, [ ...( slots.get( key ) ?? [] ), element ] );
+	}
+	return slots;
+}
 
 /**
  * Derive one member's processed document from the representative's.
@@ -433,20 +448,27 @@ export function deriveMemberDocument( input: {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has a different text layout in the representative's captured document` } };
 		}
 	}
-	// Head slots: title, description, canonical and Open Graph mirror the member.
-	// Only the processed head is paired: body copies are body slots, already
-	// transplanted above. The member's title is the first `<title>` anywhere,
-	// as `document.title` reads it, even one a malformed template leaves in the
-	// body.
-	for ( const selector of HEAD_SLOT_SELECTORS ) {
-		const memberNodes = ( selector === 'title' ? member( 'title' ).first() : member( `head ${ selector }` ) ).toArray() as Element[];
-		const repNodes = repProcessed( `head ${ selector }` ).toArray() as Element[];
-		for ( let index = 0; index < repNodes.length; index++ ) {
-			const repNode = repNodes[ index ]!;
+	// Head slots mirror the member. The member's title is the first `<title>`
+	// anywhere, as `document.title` reads it, even one a malformed template
+	// leaves in the body. Metadata pairs by identity: a slot only the
+	// representative declares describes the representative and is dropped; one
+	// only the member declares joins the head.
+	const memberTitle = member( 'title' ).first().toArray()[ 0 ] as Element | undefined;
+	const repTitle = repProcessed( 'head title' ).toArray()[ 0 ] as Element | undefined;
+	if ( memberTitle && repTitle ) replaceProcessedNode( repTitle, memberTitle );
+	const memberSlots = headSlots( member );
+	const repSlots = headSlots( repProcessed );
+	for ( const [ key, repNodes ] of repSlots ) {
+		const memberNodes = memberSlots.get( key ) ?? [];
+		repNodes.forEach( ( repNode, index ) => {
 			const memberNode = memberNodes[ index ];
-			if ( memberNode && isHeadSlot( memberNode as Element ) ) {
-				replaceProcessedNode( repNode as Element, memberNode as Element );
-			}
+			if ( memberNode ) replaceProcessedNode( repNode, memberNode );
+			else repProcessed( repNode ).remove();
+		} );
+	}
+	for ( const [ key, memberNodes ] of memberSlots ) {
+		for ( const memberNode of memberNodes.slice( repSlots.get( key )?.length ?? 0 ) ) {
+			repProcessed( 'head' ).append( repProcessed( member.html( memberNode ) ) );
 		}
 	}
 	return { ok: true, html: repProcessed.html(), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
