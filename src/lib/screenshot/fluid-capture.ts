@@ -170,7 +170,8 @@ function reuseSweptSeries(
 		if ( ! stored || ! series || stored.size !== properties.get( id ) ) return null;
 		for ( const sample of probed ) {
 			const match = series.find( candidate => candidate.viewport === sample.viewport );
-			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) || match.transformOrigin !== sample.transformOrigin ) return null;
+			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) ||
+				( !( match.value === 1000 && sample.value === 1000 ) && match.transformOrigin !== sample.transformOrigin ) ) return null;
 		}
 		reused.set( key, series.map( sample => ( { ...sample } ) ) );
 	}
@@ -408,6 +409,7 @@ async function learnFluidGeometry(
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
+	const redundantMinHeight = new Map< string, boolean >();
 	const clips = new Map<string, { template: string; count: number; valid: boolean }>();
 	const nonRelative = new Set( options.learnRelativeOffsets ? await baseline.evaluate( ( state, attribute ) =>
 		state.elements().filter( element => state.readGeometry( element ).position !== 'relative' )
@@ -492,12 +494,25 @@ async function learnFluidGeometry(
 					}
 					const transformOrigin = getComputedStyle( element ).transformOrigin;
 					const rect = element.getBoundingClientRect();
-					return { id: element.getAttribute( attribute )!, values, declared, containers, relative, transformOrigin,
+					const minHeight = element.style.getPropertyValue( 'min-height' );
+					let redundantMinHeight = false;
+					// A zero minimum never holds a box open. Restore the literal
+					// attribute: CSSOM reserializes every declaration (`width:0`
+					// becomes `width: 0px`), which later samples would read as new geometry.
+					if ( /^\s*\d*\.?\d+px\s*$/.test( minHeight ) && parseFloat( minHeight ) > 0 ) {
+						const literal = element.getAttribute( 'style' )!;
+						element.style.removeProperty( 'min-height' );
+						redundantMinHeight = Math.abs( rect.height - element.getBoundingClientRect().height ) <= 2;
+						element.setAttribute( 'style', literal );
+					}
+					return { id: element.getAttribute( attribute )!, values, declared, containers, relative, transformOrigin, redundantMinHeight,
 						clip: element.style.clipPath, clipWidth: rect.width, clipHeight: rect.height };
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties }
 		);
 		for ( const entry of measured ) {
+			if ( ! redundantMinHeight.has( entry.id ) ) redundantMinHeight.set( entry.id, entry.redundantMinHeight );
+			else if ( ! entry.redundantMinHeight ) redundantMinHeight.set( entry.id, false );
 			if ( ! entry.relative ) nonRelative.add( entry.id );
 			const shape = parseClipPath( entry.clip );
 			if ( shape || clips.has( entry.id ) || /^(polygon|inset|rect)\(/.test( entry.clip ) ) {
@@ -543,6 +558,7 @@ async function learnFluidGeometry(
 		// varied, every learned rule would be `constant` — the frozen copy
 		// already carries it — so the rest of the sweep is skipped.
 		for ( const width of PROBE_WIDTHS ) await sample( width );
+		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 		const sheets = await runtimeSheetsObserved( page );
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
@@ -581,6 +597,9 @@ async function learnFluidGeometry(
 			if ( reused ) observations.set( key, reused.get( key )! );
 			else if ( ! moving.has( key.slice( 0, key.indexOf( ':' ) ) ) ) observations.set( key, interpolateSamples( samples, sampledWidths, widths ) );
 		}
+		// A redundant minimum can be sampled again by another element's sweep;
+		// discard it after the sweep too, so its partial series cannot be fitted.
+		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 		// A sweep past the probes is what later routes may reuse.
 		if ( memo && ! reused && sampledWidths.length > PROBE_WIDTHS.length && moving.size === 0 ) {
 			const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
@@ -1054,7 +1073,12 @@ async function learnFluidGeometry(
 		);
 	}
 	await baseline.evaluate( ( state, { entries, segmentAttribute, width } ) => state.activate( entries, segmentAttribute, width ), {
-		entries: learned.map( entry => ( { id: entry.id, property: entry.property, css: entry.css, segmented: entry.segmentedCss !== null } ) ),
+		// A redundant minimum is held removed like a segmented declaration with
+		// no rule: the source rewrites it on every resize, including the last one.
+		entries: [
+			...learned.map( entry => ( { id: entry.id, property: entry.property, css: entry.css, segmented: entry.segmentedCss !== null } ) ),
+			...[ ...redundantMinHeight ].filter( ( [ , redundant ] ) => redundant ).map( ( [ id ] ) => ( { id, property: 'min-height', css: '', segmented: true } ) ),
+		],
 		segmentAttribute: SEGMENT_ATTRIBUTE,
 		width: original?.width,
 	} );

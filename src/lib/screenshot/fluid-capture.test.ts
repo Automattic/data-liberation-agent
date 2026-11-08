@@ -15,6 +15,32 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
+	it.each( [
+		{ name: 'redundant minimum without another sweep trigger', extra: '', expectedSweep: false, redundant: true },
+		{ name: 'redundant minimum during another element sweep', extra: '<div id="vary"></div><script>const resize=()=>document.querySelector(\'#vary\').style.width=innerWidth/2+\'px\';addEventListener(\'resize\',resize);resize();</script>', expectedSweep: true, redundant: true },
+		{ name: 'minimum taller than content', extra: '', expectedSweep: true, redundant: false },
+	] )( 'handles $name', async ( { extra, expectedSweep, redundant } ) => {
+		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
+		try {
+			await page.setContent( `<style>.wrap{width:90%}</style><div class="wrap">${ 'reflowing content '.repeat(100) }</div>${ extra }
+				<div class="pin"></div>
+				<script>const fit=()=>{const el=document.querySelector('.wrap');el.style.minHeight='';el.style.minHeight=(el.offsetHeight${ redundant ? '' : '+200' })+'px'};addEventListener('resize',fit);addEventListener('load',fit);fit();document.querySelector('.pin').setAttribute('style','visibility:hidden;width:0;height:0;min-height:5px;position:absolute');</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			if ( expectedSweep ) expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
+			else expect( result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+			// Later capture phases resize again, and the source rewrites its minimum each time.
+			await page.setViewportSize( { width: 1024, height: 900 } );
+			await page.setViewportSize( { width: 1920, height: 900 } );
+			const style = await page.locator( '.wrap' ).getAttribute( 'style' ) ?? '';
+			// Learned rules live in the fluid sheet, so a redundant minimum shows
+			// as neither an inline declaration nor a learned element.
+			if ( redundant ) {
+				expect( style ).not.toMatch( /min-height/i );
+				expect( result.applied ).toBe( extra ? 1 : 0 );
+			} else expect( result.applied ).toBeGreaterThan( 0 );
+		} finally { await page.close(); }
+	}, 20_000 );
+
 	// One sweep (~6s): refitting replaces, rather than edits, the fitted span.
 	it( 'exports learned geometry after resize-driven and post-learning fitted node replacement', async () => {
 		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
