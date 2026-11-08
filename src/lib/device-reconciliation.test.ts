@@ -25,6 +25,16 @@ const documentWithEntrance = ( evidence: unknown ) => {
 describe( 'device component reconciliation', () => {
 	const document = ( content: string ) => `<!doctype html><html><head><link rel="stylesheet" href="/layout.css"></head><body><main id="content"><p id="intro">Shared content</p>${ content }</main></body></html>`;
 
+	it.each( [
+		[ 'text-align:right', 'text-align: right', false ],
+		[ 'text-align: right', 'text-align: left', true ],
+	] )( 'records device inline style only when declarations differ (%s / %s)', ( desktopStyle, tabletStyle, recorded ) => {
+		const list = ( style: string ) => `<ul id="menu" style="${ style }"><li id="item">Item</li></ul>`;
+		const result = reconcileDeviceDocuments( { desktop: document( list( desktopStyle ) ), tablet: document( list( tabletStyle ) ) }, selection );
+		expect( result.reconciled.has( 'tablet' ) ).toBe( true );
+		expect( cheerio.load( result.body )( '#menu' ).attr( 'data-blocks-engine-capture-device-inline' ) !== undefined ).toBe( recorded );
+	} );
+
 	it( 'collapses differing data scripts with a linked stylesheet, keeping the default copy', () => {
 		const script = ( device: string ) => `<script id="model" type="application/json">{"device":"${ device }"}</script>`;
 		const result = reconcileDeviceDocuments( { desktop: document( script( 'desktop' ) ), tablet: document( script( 'tablet' ) ) }, selection );

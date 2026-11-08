@@ -345,6 +345,17 @@ function discoverIdentityAttributes( desktop: cheerio.CheerioAPI, mobile: cheeri
  * it. Platform
  * neutral: adapters whose ids are unstable simply fall back.
  */
+/** Inline styles are equal when their declarations are, regardless of serialization whitespace. */
+function sameInlineStyle( a: string | undefined, b: string | undefined ): boolean {
+	if ( a === b ) return true;
+	if ( a === undefined || b === undefined ) return false;
+	const normalized = ( style: string ) => inlineDeclarations( style ).map( ( declaration ) => {
+		const colon = declaration.indexOf( ':' );
+		return colon < 0 ? declaration : `${ declaration.slice( 0, colon ).trim().toLowerCase() }:${ declaration.slice( colon + 1 ).trim() }`;
+	} ).join( ';' );
+	return normalized( a ) === normalized( b );
+}
+
 export function identitySubsetMerge(
 	desktopHtml: string,
 	mobileHtml: string,
@@ -665,7 +676,7 @@ export function identitySubsetMerge(
 				return;
 			}
 			// Keep native inline priority instead of promoting declarations to !important.
-			if ( d.attr( 'style' ) !== m.attr( 'style' ) ) {
+			if ( ! sameInlineStyle( d.attr( 'style' ), m.attr( 'style' ) ) ) {
 				d.attr( 'data-blocks-engine-capture-device-inline', JSON.stringify( { [ deviceKey ]: m.attr( 'style' ) ?? '' } ) );
 				const original = m.attr( 'style' );
 				deviceInlineRestores.push( () => { if ( original === undefined ) m.removeAttr( 'style' ); else m.attr( 'style', original ); } );
