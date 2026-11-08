@@ -23,6 +23,7 @@ import { watchSourceRuntimeErrors } from '../source-readiness.js';
 const MEDIA_READY_TIMEOUT_MS = 10_000;
 
 export interface ReferenceCollectorOptions {
+	initializePage?: (page: Page) => Promise<void>;
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	publicUrlsOnly?: boolean;
 	cleanupPolicy?: CleanupPolicy;
@@ -235,11 +236,12 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							referencePage!.off( 'response', imageResponse );
 							referencePage!.off( 'requestfinished', imageFinished );
 						};
+						await options.initializePage?.(referencePage);
 						runtimeErrors = await watchSourceRuntimeErrors( referencePage );
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
 						if ( url !== 'about:blank' ) {
-							const navigation = options.routeScope ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
+							const navigation = options.routeScope || options.initializePage ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
 							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
 							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );

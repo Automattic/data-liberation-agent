@@ -78,7 +78,20 @@ function safeTarget(url: string, publicUrlsOnly: boolean): URL {
 	return target;
 }
 
+/** Adapter-owned virtual documents, installed through the page's init hook.
+ * The loader must preserve the requested route identity and return undefined
+ * for documents it does not own. Ordinary acquisition remains unchanged. */
+const documentLoaders = new WeakMap<Page, (url: string, timeout: number) => Promise<RenderedResponse | undefined>>();
+export function installSourceDocumentLoader(page: Page, loader: (url: string, timeout: number) => Promise<RenderedResponse | undefined>): void {
+	documentLoaders.set(page, loader);
+}
+
 async function readSourceResponse(route: Route, url: string, timeout: number, reuse = true): Promise<{response: DocumentResponse; rendered: RenderedResponse}> {
+	const supplied = await documentLoaders.get(route.request().frame().page())?.(url, timeout);
+	if (supplied) {
+		if (supplied.body.length > SOURCE_DOCUMENT_MAX_BYTES) throw new SourceNavigationError(`Source document exceeds document byte budget (${supplied.body.length} decoded bytes; limit ${SOURCE_DOCUMENT_MAX_BYTES})`); // failure-class: operational
+		return { rendered: supplied, response: { ...supplied, body: supplied.body.toString('utf8') } };
+	}
 	const cached = reuse && await takeSourceDocument(route.request().frame().page().context(), url, await route.request().allHeaders());
 	if (cached) return { rendered: cached, response: { ...cached, body: cached.body.toString('utf8') } };
 	const acquired = await fetchSourceRoute(route, {url, maxRedirects: 0, maxRetries: 0, timeout}, 1);
