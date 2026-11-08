@@ -4,7 +4,7 @@ import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import { findAdapter } from '../index.js';
 import { applyCaptureRemovals } from '../../lib/screenshot/apply-removals.js';
-import { googleSitesAdapter, canonicalizeGoogleSitesHtml } from './index.js';
+import { googleSitesAdapter, canonicalizeGoogleSitesHtml, authoredEmbedDocument } from './index.js';
 import { detection } from './detection.js';
 
 const fixture = readFileSync(new URL('./fixture.html', import.meta.url), 'utf8');
@@ -34,6 +34,15 @@ describe('Google Sites adapter', () => {
     }
     expect(detection.urlPatterns![0].test('https://sites.google.com/view/garden')).toBe(true);
     expect(detection.urlPatterns![0].test('https://sites.google.com.evil.test/')).toBe(false);
+  });
+
+  it('uses authored full-page embed HTML but leaves ordinary pages unchanged', () => {
+    const embedded = authoredEmbedDocument(fixture, 'https://garden.example/full-page-embed');
+    expect(embedded).toContain('<base href="https://garden.example/full-page-embed">');
+    const $embedded = load(embedded!);
+    expect($embedded('h1').text()).toBe('Fixture heading');
+    expect($embedded('p').text()).toBe('Fixture paragraph.');
+    expect(authoredEmbedDocument('<html><body><p>Ordinary</p></body></html>', 'https://garden.example/')).toBeUndefined();
   });
 
   it('removes only viewer chrome and frozen runtime attributes', () => {

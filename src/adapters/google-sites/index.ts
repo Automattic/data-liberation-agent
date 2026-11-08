@@ -2,6 +2,18 @@ import { load } from 'cheerio';
 import type { PlatformAdapter } from '../../types.js';
 import { discoverDefault } from '../default/discover.js';
 import { detection } from './detection.js';
+import { getSourceResponse } from '../../lib/browser-kit/source-traffic.js';
+
+export function authoredEmbedDocument(source: string, url: string): string | undefined {
+  const $source = load(source, { xml: false }, false);
+  const authored = $source('[data-is-interactive-full-page-embed="true"]').first().attr('data-code');
+  if (!authored) return undefined;
+  const $document = load(authored, { xml: false });
+  const href = url.replace(/[&\"<>]/g, (char) => ({ '&': '&amp;', '\"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]!));
+  if ($document('head').length) $document('head').prepend(`<base href="${href}">`);
+  else $document('html').prepend(`<head><base href="${href}"></head>`);
+  return $document.html();
+}
 
 /** Closure identifiers are needed while Google's runtime drives capture probes.
  * Strip only from frozen artifacts, including serialized interaction panels. */
@@ -20,6 +32,17 @@ export const googleSitesAdapter: PlatformAdapter = {
   detection,
   discover: discoverDefault,
   liberation: {
+    async loadDocument(page, url, timeout) {
+      const response = await getSourceResponse(page.context(), url, { timeout, maxRedirects: 0 });
+      try {
+        if (!response.ok()) return undefined;
+        const source = await response.text();
+        const html = authoredEmbedDocument(source, url);
+        // Google's viewer headers carry a nonce-only script CSP written for its own
+        // runtime; the authored document loads its own scripts, so serve it as plain HTML.
+        return html ? { html, headers: { 'content-type': 'text/html; charset=utf-8' } } : undefined;
+      } finally { await response.dispose(); }
+    },
     // Platform identities, not text matches: owner links to Google Sites and
     // authored buttons/sections must survive, including translated content.
     removeSelectors: [
