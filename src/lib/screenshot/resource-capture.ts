@@ -528,6 +528,11 @@ export class CapturedResourceStore {
 		const browser = page.context().browser();
 		if ( ! original || ! browser ) return;
 		const scroll = await page.evaluate( () => ( { x: scrollX, y: scrollY } ) );
+		// Measuring resizes the live page, so widths are read in turn; each
+		// width's probe runs in its own context, so the probes run together.
+		const probes: { width: number; base: string; pending: string[] }[] = [];
+		// Widths measured before a failure are already marked resolved; probe them.
+		let measureError: unknown;
 		try {
 			for ( const width of [ 390, 768, 1440 ] ) {
 				await page.setViewportSize( { width, height: original.height } );
@@ -591,30 +596,36 @@ export class CapturedResourceStore {
 				const pending = fixture.html.filter( html => ! this.resolvedSrcsetImages.has( JSON.stringify( [ width, html ] ) ) );
 				if ( ! pending.length ) continue;
 				for ( const html of pending ) this.resolvedSrcsetImages.add( JSON.stringify( [ width, html ] ) );
-				// A fresh context per width: a shared memory cache would serve the
-				// next width's renditions without the network responses capture records.
-				const context = await browser.newContext( {
-					viewport: { width, height: original.height }, deviceScaleFactor: 1,
-					storageState: await page.context().storageState(),
-				} );
-				try {
-					const probe = await context.newPage();
-					this.observe( probe );
-					await probe.setContent( `<base href="${ fixture.base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ pending.join( '' ) }` );
-					for ( const image of await probe.locator( 'img' ).all() ) {
-						await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
-						await image.evaluate( image => Promise.race( [
-							( image as HTMLImageElement ).decode().catch( () => undefined ),
-							new Promise<void>( resolve => setTimeout( resolve, 2000 ) ),
-						] ) );
-					}
-					await this.settle( probe );
-				} finally { await context.close(); }
+				probes.push( { width, base: fixture.base, pending } );
 			}
+		} catch ( error ) {
+			measureError = error;
 		} finally {
 			await page.setViewportSize( original );
 			await page.evaluate( position => window.scrollTo( { left: position.x, top: position.y, behavior: 'instant' } ), scroll );
 		}
+		const storageState = probes.length ? await page.context().storageState() : undefined;
+		const settled = await Promise.allSettled( probes.map( async ( { width, base, pending } ) => {
+			// A fresh context per width: a shared memory cache would serve the
+			// next width's renditions without the network responses capture records.
+			const context = await browser.newContext( { viewport: { width, height: original.height }, deviceScaleFactor: 1, storageState } );
+			try {
+				const probe = await context.newPage();
+				this.observe( probe );
+				await probe.setContent( `<base href="${ base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ pending.join( '' ) }` );
+				for ( const image of await probe.locator( 'img' ).all() ) {
+					await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
+					await image.evaluate( image => Promise.race( [
+						( image as HTMLImageElement ).decode().catch( () => undefined ),
+						new Promise<void>( resolve => setTimeout( resolve, 2000 ) ),
+					] ) );
+				}
+				await this.settle( probe );
+			} finally { await context.close(); }
+		} ) );
+		const failed = measureError ?? settled.find( ( result ): result is PromiseRejectedResult => result.status === 'rejected' )?.reason;
+		// failure-class: operational
+		if ( failed ) throw failed;
 	}
 
 	async settle( page: Page ): Promise< void > {
