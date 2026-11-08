@@ -31,7 +31,7 @@ import {
 } from './document-integrity.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { portStaticShadowContent } from './shadow-content.js';
-import { normalizeCaptureState, normalizeGeneratedIds } from './capture-state.js';
+import { normalizeCaptureState, normalizeGeneratedIds, settleScriptMotion, SCRIPT_MOTION_BUDGET_MS } from './capture-state.js';
 import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
 import { captureCollections } from './collection-capture.js';
 import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline } from './component-states.js';
@@ -1150,6 +1150,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		return;
 	}
 
+	// Best-effort: a page that does not answer keeps whatever pose it reached.
+	const settleScriptEntrances = async () => {
+		const outcome = await withEvaluateTimeout( settleScriptMotion( page ), SCRIPT_MOTION_BUDGET_MS + evaluateTimeoutMs ).catch( () => undefined );
+		if ( outcome?.swept ) process.stderr.write( `[timing] script-motion ${ JSON.stringify( { url, viewport: viewport.id, ...outcome } ) }\n` );
+	};
+
 	// --- html (desktop only) --------------------------------------------------
 	if ( plan.captureGeometry ) {
 		let capture: GeometryCapture;
@@ -1197,6 +1203,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
+	// The root-class ladder resized the page; a runtime that remounts on resize
+	// replayed its script entrances. Read the initial document at rest.
+	await settleScriptEntrances();
 	// Initial component states are immutable evidence, read before exploration.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
@@ -1305,6 +1314,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// source's emoji script had swapped in Twemoji images.
 	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 	args.phases?.enter( 'before-serialize' );
+	if ( args.rendererCrashed() ) return;
+	// Width sweeps resize the page too. The screenshot and every serialization
+	// below read the entrances' rest pose, never a replay still in flight.
+	await settleScriptEntrances();
 	if ( args.rendererCrashed() ) return;
 
 	// Capture only after every operation that can change the live DOM, then

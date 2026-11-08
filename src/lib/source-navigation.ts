@@ -262,6 +262,11 @@ export async function navigateSourceDocument(page: Page, requestedUrl: string, o
 	}
 }
 
+/** `goto` rejections caused by another main-frame navigation taking over. */
+const INTERRUPTED_NAVIGATION = /interrupted by another navigation|net::ERR_ABORTED|frame was detached/i;
+/** Longest wait for the guard to receive the navigation that interrupted `goto`. */
+const INTERRUPTED_NAVIGATION_GRACE_MS = 1_000;
+
 async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; loadWaitMs?: number}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
@@ -370,6 +375,18 @@ async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, o
 		// A `goto` timeout can precede the guard's own bounded outcome; report
 		// the guard's failure (policy or acquisition timeout) once it settles.
 		await settled();
+		// A source navigation that interrupts `goto` can reject it before the
+		// guard has even received that navigation's request (the two arrive as
+		// separate browser events). Give the guard a short, bounded moment to
+		// classify it, so an external destination is reported as such rather
+		// than as a transient abort.
+		if (!failure && error instanceof Error && INTERRUPTED_NAVIGATION.test(error.message)) {
+			const graceEnd = Date.now() + Math.max(0, Math.min(INTERRUPTED_NAVIGATION_GRACE_MS, deadline - Date.now()));
+			while (!failure && Date.now() < graceEnd) {
+				await new Promise(resolve => setTimeout(resolve, 25));
+				await settled();
+			}
+		}
 		throw failure ?? error;
 	} finally {
 		await settled();

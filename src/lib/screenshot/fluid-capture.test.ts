@@ -374,7 +374,10 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
 			await copy.setContent( await page.content() );
 			for ( const width of [ 390, 601, 768, 769, 1024, 1440 ] ) {
-				await reference.setViewportSize( { width, height: 900 } ); await reference.waitForTimeout( 30 );
+				await reference.setViewportSize( { width, height: 900 } );
+				// Resize dispatch is asynchronous; a fixed sleep can sample the previous
+				// width's offsets under load instead of the runtime's settled ones.
+				await reference.waitForFunction( () => parseFloat( document.querySelector<HTMLElement>( '.active' )!.style.left ) === -2 * innerWidth * ( innerWidth <= 768 ? 1 : 0.5 ) );
 				await copy.setViewportSize( { width, height: 900 } );
 				expect( await copy.locator( '.active' ).getAttribute( 'data-phase' ) ).toBe( '2' );
 				const actual = ( await copy.locator( '.active' ).boundingBox() )!;
