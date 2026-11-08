@@ -1685,13 +1685,14 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		}
 		return true;
 	};
-	// Register targets independently of local links: another route may be the
-	// only place linking here. Include already-namespaced adapter targets too.
-	for ( const element of mobile.find( '[id]' ).not( 'svg,svg *' ).toArray() ) {
-		const id = $( element ).attr( 'id' )!;
-		const fragment = id.replace( /--data-blocks-engine-capture-mobile$/, '' );
-		if ( $( element ).attr( 'data-blocks-engine-capture-anchor-target' ) || desktopIds.has( fragment ) ) phoneTarget( fragment );
+	// Register captured section targets independently of local links: another
+	// route may be the only place linking here. Other authored ids become
+	// fragment targets only when a local link names them (below).
+	for ( const element of mobile.find( '[data-blocks-engine-capture-anchor-target]' ).not( 'svg,svg *' ).toArray() ) {
+		const fragment = $( element ).attr( 'data-blocks-engine-capture-anchor-target' )!;
+		if ( fragment ) phoneTarget( fragment );
 	}
+	for ( const fragment of aliases ) phoneTarget( fragment );
 	mobile.find( 'a[href]' ).each( ( _index, element ) => {
 		const link = $( element );
 		const href = link.attr( 'href' ) ?? '';

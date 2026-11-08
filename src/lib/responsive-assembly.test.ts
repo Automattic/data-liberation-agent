@@ -758,7 +758,7 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 			} );
 			await copy.goto( 'https://copy.test/' );
 			for ( const id of [ 'inline', 'linked', 'presentation' ] ) {
-				const result = await copy.locator( `.${ MOBILE_DOCUMENT_CLASS } [data-blocks-engine-capture-responsive-fragment="${ id }"], .${ MOBILE_DOCUMENT_CLASS } svg [id="${ id }"]` ).evaluate( node => {
+				const result = await copy.locator( `.${ MOBILE_DOCUMENT_CLASS } [id="${ id }"]` ).evaluate( node => {
 					const clip = getComputedStyle( node ).clipPath;
 					const targetId = clip.match( /#([^"')]+)/ )?.[ 1 ];
 					const target = targetId ? document.getElementById( targetId ) : null;
