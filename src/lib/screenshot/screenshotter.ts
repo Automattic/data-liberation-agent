@@ -103,7 +103,7 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
+import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth, withoutEmptyBodyMounts } from './device-mode.js';
 import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 import { probeScriptedLinks, SCRIPTED_LINK_BUDGET_MS, stampScriptedLinkCandidates } from './scripted-links.js';
@@ -2361,24 +2361,26 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
  * Load the phone identity at each candidate width, the way the route check
  * does, and classify what it renders against both capture-width renderings:
  * the first boundary above which it stops rendering the phone document is the
- * switch (see `observeSwitchWidth`).
+ * switch, and a middle rendering ends where the probe stops matching it (see
+ * `observeSwitchWidth`).
  */
 async function probeSwitchWidth( args: DeviceComparisonArgs, serverHtml: 'identical' | 'identical-after-normalization', candidates: SwitchCandidates ): Promise< ObservedSwitch | undefined > {
 	const phone = args.phone.viewport, wide = args.desktop.viewport?.width;
 	if ( ! phone || ! wide ) return undefined;
 	const matches = ( rendering: IdentityRendering, probe: IdentityRendering ) =>
-		decideRouteMode( { serverHtml, structure: compareStructure( rendering.paths, probe.paths ), bodyClasses: compareBodyClasses( rendering.bodyClasses, probe.bodyClasses ) } ).mode === 'reflow-only';
+		decideRouteMode( { serverHtml, structure: compareStructure( withoutEmptyBodyMounts( rendering.paths ), withoutEmptyBodyMounts( probe.paths ) ), bodyClasses: compareBodyClasses( rendering.bodyClasses, probe.bodyClasses ) } ).mode === 'reflow-only';
 	return observeSwitchWidth( candidates.widths, { phone: phone.width, desktop: wide }, async width => {
 		const contexts: BrowserContext[] = [];
 		try {
 			// Probe loads must not replace the capture-width identity headers.
-			const probe = await loadForComparison( { ...args, identityHeaders: undefined }, { ...args.phone, viewport: { ...phone, width } }, 'mobile', 'check', contexts );
-			if ( matches( candidates.desktop, probe ) ) return 'desktop';
-			return matches( candidates.phone, probe ) ? 'phone' : 'other';
+			const loaded = await loadForComparison( { ...args, identityHeaders: undefined }, { ...args.phone, viewport: { ...phone, width } }, 'mobile', 'check', contexts );
+			const rendering: IdentityRendering = { paths: loaded.paths, bodyClasses: loaded.bodyClasses };
+			const rendered = matches( candidates.desktop, rendering ) ? 'desktop' : matches( candidates.phone, rendering ) ? 'phone' : 'other';
+			return { rendered, rendering };
 		} finally {
 			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
 		}
-	} );
+	}, matches );
 }
 
 /**

@@ -9,7 +9,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { createReferenceCollector } from '../fidelity/reference.js';
 import { checkFidelity } from '../fidelity/check.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, withoutEmptyBodyMounts, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -24,25 +24,60 @@ describe( 'device-mode evidence', () => {
 
 	it( 'switches at the first boundary where the phone identity stops rendering the phone document', async () => {
 		const probed: number[] = [];
-		const renders = ( layouts: Array< [ number, 'phone' | 'desktop' | 'other' ] > ) => async ( width: number ) => {
+		type Layout = [ number, 'phone' | 'desktop' | 'other', string? ];
+		// Each layout renders a named document; by default the name is its classification.
+		const renders = ( layouts: Layout[] ) => async ( width: number ) => {
 			probed.push( width );
-			return [ ...layouts ].reverse().find( ( [ from ] ) => width >= from )?.[ 1 ] ?? 'phone';
+			const [ , rendered, rendering = rendered ] = [ ...layouts ].reverse().find( ( [ from ] ) => width >= from ) ?? [ 0, 'phone' ];
+			return { rendered, rendering };
 		};
-		expect( await observeSwitchWidth( [ 1279, 767 ], { phone: 402, desktop: 1440 }, renders( [ [ 768, 'desktop' ] ] ) ) ).toEqual( { switchWidth: 767 } );
+		const same = ( a: string, b: string ) => a === b;
+		expect( await observeSwitchWidth( [ 1279, 767 ], { phone: 402, desktop: 1440 }, renders( [ [ 768, 'desktop' ] ] ), same ) ).toEqual( { switchWidth: 767 } );
 		expect( probed ).toEqual( [ 768 ] );
 		probed.length = 0;
 		// A boundary the phone document still renders above is not the switch.
-		expect( await observeSwitchWidth( [ 320, 767, 1279, 1440 ], { phone: 402, desktop: 1440 }, renders( [ [ 1280, 'desktop' ] ] ) ) ).toEqual( { switchWidth: 1279 } );
+		expect( await observeSwitchWidth( [ 320, 767, 1279, 1440 ], { phone: 402, desktop: 1440 }, renders( [ [ 1280, 'desktop' ] ] ), same ) ).toEqual( { switchWidth: 1279 } );
 		expect( probed ).toEqual( [ 768, 1280 ] );
 		probed.length = 0;
 		// A middle layout keeps the source's first boundary and reports its range.
-		expect( await observeSwitchWidth( [ 799, 1279 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ], [ 1280, 'desktop' ] ] ) ) )
+		expect( await observeSwitchWidth( [ 799, 1279 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ], [ 1280, 'desktop' ] ] ), same ) )
 			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800, maxWidth: 1279 } } );
 		expect( probed ).toEqual( [ 800, 1280 ] );
-		expect( await observeSwitchWidth( [ 799 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ] ] ) ) )
+		expect( await observeSwitchWidth( [ 799 ], { phone: 390, desktop: 1440 }, renders( [ [ 800, 'other' ] ] ), same ) )
 			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800 } } );
 		// An identity that renders the phone document at every width observes no switch.
-		expect( await observeSwitchWidth( [ 767, 1279 ], { phone: 402, desktop: 1440 }, async () => 'phone' ) ).toBeUndefined();
+		expect( await observeSwitchWidth( [ 767, 1279 ], { phone: 402, desktop: 1440 }, async () => ( { rendered: 'phone' as const, rendering: 'phone' } ), same ) ).toBeUndefined();
+	} );
+
+	it( 'ends a middle layout where the rendering changes, even when the wider one is not the desktop identity', async () => {
+		const probed: number[] = [];
+		const layouts: Array< [ number, 'phone' | 'desktop' | 'other', string ] > = [ [ 0, 'phone', 'phone' ], [ 800, 'other', 'tablet frame' ], [ 1280, 'other', 'desktop frame, phone runtime styles' ] ];
+		const probe = async ( width: number ) => {
+			probed.push( width );
+			const [ , rendered, rendering ] = [ ...layouts ].reverse().find( ( [ from ] ) => width >= from )!;
+			return { rendered, rendering };
+		};
+		const same = ( a: string, b: string ) => a === b;
+		expect( await observeSwitchWidth( [ 799, 1279 ], { phone: 375, desktop: 1440 }, probe, same ) )
+			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800, maxWidth: 1279 } } );
+		expect( probed ).toEqual( [ 800, 1280 ] );
+		// A later boundary that keeps the middle rendering does not end it.
+		probed.length = 0;
+		expect( await observeSwitchWidth( [ 799, 999, 1279 ], { phone: 375, desktop: 1440 }, probe, same ) )
+			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800, maxWidth: 1279 } } );
+		expect( probed ).toEqual( [ 800, 1000, 1280 ] );
+		// No later boundary changes it: the range stays unbounded.
+		expect( await observeSwitchWidth( [ 799, 999 ], { phone: 375, desktop: 1440 }, probe, same ) )
+			.toEqual( { switchWidth: 799, middleLayout: { minWidth: 800 } } );
+	} );
+
+	it( 'leaves only empty body-level mounts out of the switch probe comparison', () => {
+		const desktop = [ 'html>body[1]', 'html>body[1]>div[1]', 'html>body[1]>div[1]>div[]', 'html>body[1]>div[]' ];
+		const phone = [ 'html>body[1]', 'html>body[1]>div[1]', 'html>body[1]>div[1]>div[]' ];
+		expect( compareStructure( desktop, phone ).differingPaths ).toBe( 1 );
+		// A nested empty container is still structure; a body-level empty mount is not.
+		expect( withoutEmptyBodyMounts( desktop ) ).toEqual( phone );
+		expect( compareStructure( withoutEmptyBodyMounts( desktop ), withoutEmptyBodyMounts( phone ) ).differingPaths ).toBe( 0 );
 	} );
 
 	it( 'ignores per-request tokens and timestamps, and nothing else', () => {

@@ -145,6 +145,16 @@ export function compareStructure( desktop: readonly string[], phone: readonly st
 }
 
 /**
+ * Drop empty elements directly under `<body>` from a path list. They are mount
+ * points a runtime appends for one identity or width (a portal, a toast host)
+ * with nothing rendered in them, so the switch probe does not let one decide
+ * which document the phone identity is rendering.
+ */
+export function withoutEmptyBodyMounts( paths: readonly string[] ): string[] {
+	return paths.filter( path => ! /^html>body\[\d+\]>[^>]+\[\]$/.test( path ) );
+}
+
+/**
  * Drop the subtrees rooted at `roots` from a document-order path list and
  * renumber the remaining paths, so an excluded element does not shift the
  * position of its later same-tag siblings.
@@ -449,7 +459,7 @@ export interface RouteDeviceDecision {
 	/**
 	 * Dual route only: the source renders a third layout, neither the phone nor
 	 * the desktop document, from `minWidth` up to `maxWidth` (inclusive; absent
-	 * when no probed boundary reached the desktop document). A bounded range is
+	 * when no later probed boundary changed the rendering). A bounded range is
 	 * captured as the `middle` profile at one width inside it, and the copy
 	 * selects that document across the range; an unbounded one stays a
 	 * `responsive_layout_uncaptured` finding.
@@ -484,6 +494,12 @@ const SWITCH_PROBE_LIMIT = 4;
 /** What the phone identity rendered just above one boundary. */
 export type SwitchProbeRendering = 'phone' | 'desktop' | 'other';
 
+/** One probe: its classification against both capture-width documents, plus the rendering itself. */
+export interface SwitchProbe< R > {
+	rendered: SwitchProbeRendering;
+	rendering: R;
+}
+
 export interface ObservedSwitch {
 	switchWidth: number;
 	middleLayout?: MiddleLayout;
@@ -496,26 +512,31 @@ export interface ObservedSwitch {
  * boundary above which it no longer renders the phone document is the switch:
  * the source's own boundary, never a point between the two sampled widths.
  * When that rendering is not the desktop document either, the source has a
- * middle layout; later boundaries are probed for where the desktop document
- * starts, and that range is the middle layout. A boundary is never chosen
- * merely for being the widest; rendering the phone document everywhere
- * observes nothing.
+ * middle layout. It ends at the first later boundary above which the phone
+ * identity stops rendering that middle rendering (`sameRendering`), whether or
+ * not what follows matches the desktop identity exactly: a runtime can render
+ * the desktop frame for the phone identity with its own injected styles or
+ * body classes. The range stays unbounded only when no later boundary changes
+ * the rendering. A boundary is never chosen merely for being the widest;
+ * rendering the phone document everywhere observes nothing.
  */
-export async function observeSwitchWidth(
+export async function observeSwitchWidth< R >(
 	candidates: readonly number[],
 	range: { phone: number; desktop: number },
-	classify: ( width: number ) => Promise< SwitchProbeRendering >,
+	probe: ( width: number ) => Promise< SwitchProbe< R > >,
+	sameRendering: ( a: R, b: R ) => boolean,
 ): Promise< ObservedSwitch | undefined > {
 	const widths = [ ...new Set( candidates ) ]
 		.filter( width => Number.isInteger( width ) && width >= range.phone && width < range.desktop )
 		.sort( ( a, b ) => a - b )
 		.slice( 0, SWITCH_PROBE_LIMIT );
 	for ( const [ index, width ] of widths.entries() ) {
-		const rendered = await classify( width + 1 );
-		if ( rendered === 'phone' ) continue;
-		if ( rendered === 'desktop' ) return { switchWidth: width };
+		const middle = await probe( width + 1 );
+		if ( middle.rendered === 'phone' ) continue;
+		if ( middle.rendered === 'desktop' ) return { switchWidth: width };
 		for ( const wider of widths.slice( index + 1 ) ) {
-			if ( await classify( wider + 1 ) === 'desktop' ) return { switchWidth: width, middleLayout: { minWidth: width + 1, maxWidth: wider } };
+			const next = await probe( wider + 1 );
+			if ( next.rendered === 'desktop' || ! sameRendering( middle.rendering, next.rendering ) ) return { switchWidth: width, middleLayout: { minWidth: width + 1, maxWidth: wider } };
 		}
 		return { switchWidth: width, middleLayout: { minWidth: width + 1 } };
 	}
