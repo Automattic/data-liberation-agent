@@ -15,6 +15,23 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.176] - 2026-11-08
+
+### Changed
+- regenerate plugin bundles
+- Keep the desktop document when only phones are redirected to a separate mobile site
+- Explain when a security service blocks the source homepage
+- Do not treat Cloudflare's /cdn-cgi/ path as a page
+- Google Sites: capture a full-page embed's authored document
+- cook candidate
+
+### Fixed
+- let author html/body styles win over the dual-assembly reset
+- skip pointer-inert fixed layers in overlay dismissal
+- name captured dialog markup after its page document
+- shape a literal assigned to a window global as data
+- read a shadow-hosted consent banner without the entrance wait
+
 ## [0.33.175] - 2026-11-08
 
 ### Changed
