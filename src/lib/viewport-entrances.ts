@@ -13,7 +13,12 @@ interface EntranceState {
 	/** Native CSS owns frames/time; the witness owns only play and terminal attributes. */
 	cssAnimations?: Array<{ name: string; timing: EffectTiming; frames: ComputedKeyframe[] }>;
 	startupContexts?: Array<{ width: number; height: number; started: boolean }>;
+	/** Device documents whose source plays the entrance; absent means every device. */
+	devices?: string[];
 }
+
+/** Device documents on each side of a merge; a state without `devices` belongs to its side's. */
+export interface EntranceDeviceScope { left: string[]; right: string[]; all: string[] }
 
 /** What the entrance observer saw of script-written motion. */
 export interface ScriptMotion {
@@ -332,7 +337,10 @@ function replayViewportEntrances(): void {
 				else element.setAttribute( name, value );
 			}
 		};
-		if ( reduced.matches || ! window.IntersectionObserver ) { apply( 'after' ); continue; }
+		// An entrance the source plays only on some devices settles on the others.
+		const selected = document.documentElement.getAttribute( 'data-blocks-engine-capture-selected-document' );
+		const offDevice = Array.isArray( state.devices ) && selected !== null && ! state.devices.includes( selected );
+		if ( reduced.matches || ! window.IntersectionObserver || offDevice ) { apply( 'after' ); continue; }
 		apply( 'before' );
 		const inline = ( element as HTMLElement ).style;
 		const transition = inline.getPropertyValue( 'transition' );
@@ -382,20 +390,32 @@ function replayViewportEntrances(): void {
 	}
 }
 
-/** Combine only equivalent lifecycles with nonconflicting observed canvas sizes. */
-export function mergeViewportEntranceStates( left: string | undefined, right: string | undefined ): string | undefined {
+/**
+ * Combine only equivalent lifecycles with nonconflicting observed canvas sizes.
+ * With a device scope, an entrance one side's devices never play keeps
+ * playing only on the devices that do, instead of conflicting.
+ */
+export function mergeViewportEntranceStates( left: string | undefined, right: string | undefined, scope?: EntranceDeviceScope ): string | undefined {
 	const a = parseViewportEntranceState( left ), b = parseViewportEntranceState( right );
+	const scoped = ( state: EntranceState, devices: string[] ) => {
+		const { devices: _devices, ...rest } = state;
+		return JSON.stringify( scope!.all.every( device => devices.includes( device ) ) ? rest : { ...rest, devices: scope!.all.filter( device => devices.includes( device ) ) } );
+	};
+	if ( scope && left === undefined && a === undefined && b ) return scoped( b, b.devices ?? scope.right );
+	if ( scope && right === undefined && b === undefined && a ) return scoped( a, a.devices ?? scope.left );
 	if ( ! a || ! b ) return undefined;
-	const { startupContexts: aContexts, ...aLifecycle } = a;
-	const { startupContexts: bContexts, ...bLifecycle } = b;
+	const { startupContexts: aContexts, devices: aDevices, ...aLifecycle } = a;
+	const { startupContexts: bContexts, devices: bDevices, ...bLifecycle } = b;
 	if ( ! isDeepStrictEqual( aLifecycle, bLifecycle ) ) return undefined;
+	if ( ! scope && ! isDeepStrictEqual( aDevices, bDevices ) ) return undefined;
 	const contexts: NonNullable<EntranceState['startupContexts']> = [];
 	for ( const context of [ ...( aContexts ?? [] ), ...( bContexts ?? [] ) ] ) {
 		const previous = contexts.find( pose => pose.width === context.width && pose.height === context.height );
 		if ( previous && previous.started !== context.started ) return undefined;
 		if ( ! previous ) contexts.push( context );
 	}
-	return JSON.stringify( { ...aLifecycle, ...( aContexts || bContexts ? { startupContexts: contexts } : {} ) } );
+	const merged = { ...aLifecycle, ...( aContexts || bContexts ? { startupContexts: contexts } : {} ) };
+	return scope ? scoped( merged, [ ...( aDevices ?? scope.left ), ...( bDevices ?? scope.right ) ] ) : JSON.stringify( { ...merged, ...( aDevices ? { devices: aDevices } : {} ) } );
 }
 
 function parseViewportEntranceState( raw: string | undefined ): EntranceState | undefined {
@@ -412,6 +432,7 @@ function validViewportEntranceState( state: EntranceState ): boolean {
 		typeof state.repeat !== 'boolean' || ! state.attributes || Object.keys( state.attributes ).length === 0 ||
 		( state.cssAnimations !== undefined && ( state.threshold.length !== 1 || ! Array.isArray( state.cssAnimations ) || ! state.cssAnimations.length || state.cssAnimations.length > 32 ||
 			state.cssAnimations.some( binding => ! binding || typeof binding.name !== 'string' || ! binding.name || ! binding.timing || ! Array.isArray( binding.frames ) ) ) ) ||
+		( state.devices !== undefined && ( ! Array.isArray( state.devices ) || ! state.devices.length || state.devices.some( device => typeof device !== 'string' || ! /^[a-z][a-z0-9_-]{0,63}$/.test( device ) ) ) ) ||
 		( state.startupContexts !== undefined && ( ! Array.isArray( state.startupContexts ) || state.startupContexts.some( pose => ! pose || ! Number.isFinite( pose.width ) || ! Number.isFinite( pose.height ) || typeof pose.started !== 'boolean' ) ) ) ||
 		Object.entries( state.attributes ).some( ( [ name, values ] ) =>
 			! /^(class|style|data-[a-z0-9_.:-]+)$/.test( name ) || name.startsWith( 'data-blocks-engine-capture-' ) ||

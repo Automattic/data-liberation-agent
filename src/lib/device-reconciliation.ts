@@ -91,7 +91,7 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 			return section !== undefined && section !== marker.section;
 		} );
 		for ( const [ , marker ] of relocated ) device( marker.node ).remove();
-		const pair = identitySubsetMerge( original, relocated.length ? device.html() : documents[ key ], undefined, key, failure => { reason = failure; } );
+		const pair = identitySubsetMerge( original, relocated.length ? device.html() : documents[ key ], undefined, key, failure => { reason = failure; }, selection.defaultDocument );
 		if ( ! pair ) {
 			devices[ key ] = { outcome: 'dual-structural', reason };
 			continue;
@@ -111,7 +111,8 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 			const target = merged( `[${ NODE }="${ id }"]` );
 			const left = target.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ), right = source.attr( VIEWPORT_ENTRANCE_ATTRIBUTE );
 			if ( left === undefined && right === undefined ) return;
-			const state = mergeViewportEntranceStates( left, right );
+			const scope = { left: [ selection.defaultDocument, ...reconciled ], right: [ selection.defaultDocument, key ], all: selection.documents };
+			const state = mergeViewportEntranceStates( left, right, scope );
 			if ( state === undefined ) incompatibleEntrance = true;
 			else entrances.set( id, state );
 		} );
