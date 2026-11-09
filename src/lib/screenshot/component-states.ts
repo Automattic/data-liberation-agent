@@ -12,6 +12,8 @@ export interface CapturedComponent {
 	collection?: import('./collection-capture.js').CollectionEvidence;
 	kind: 'collection' | 'tabs' | 'disclosure' | 'dialog' | 'listbox' | 'carousel' | 'menu' | 'filter' | 'choice-group' | 'unsupported';
 	initial: string;
+	/** Tabs without `aria-controls`: route region whose content each tab re-renders. */
+	panel?: string;
 	states: Array<{ id: string; html: string; evidence?: CapturedDialogInteraction }>;
 	transitions: Array<{ from: string; to: string; trigger: { selector: string; action: 'click' | 'keyboard' | 'swipe' } }>;
 	status: 'captured' | 'unsupported' | 'partial';
@@ -70,6 +72,43 @@ export async function snapshotComponents(page: Page): Promise<ComponentBaseline>
 	}, carousels);
 	return baseline;
 }
+
+/**
+ * Page-side: bind a tablist without `aria-controls` to the nearest region outside
+ * it (siblings, then up to two ancestor levels) whose markup activation changed.
+ * Without `before`, it returns those regions' markup for the next comparison.
+ */
+const siblingPanel = ({ selector, panel, before, initial, state, index }: { selector: string; panel?: string; before?: string[]; initial: string; state: string; index: number }) => {
+	const root = document.querySelector(selector);
+	const regions: Element[] = [];
+	for (let node = root, depth = 0; node?.parentElement && node !== document.body && depth < 3; node = node.parentElement, depth++) {
+		for (const sibling of Array.from(node.parentElement.children)) if (sibling !== node && !sibling.matches('script,style,template,link,meta,noscript') && regions.length < 48) regions.push(sibling);
+	}
+	if (!panel && !before) return { regions: regions.map(region => region.outerHTML) };
+	const changed = panel ? -1 : regions.findIndex((region, position) => before![position] !== undefined && region.outerHTML !== before![position]);
+	const region = panel ? document.querySelector(panel) : regions[changed];
+	if (!root || !region || region.contains(root)) return null;
+	const path = (element: Element): string => {
+		if (element.id && document.querySelectorAll('#' + CSS.escape(element.id)).length === 1) return '#' + CSS.escape(element.id);
+		const parts: string[] = [];
+		for (let node: Element | null = element; node && node !== document.body; node = node.parentElement) {
+			const siblings = Array.from(node.parentElement?.children ?? []).filter(sibling => sibling.tagName === node!.tagName);
+			parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(node) + 1})`);
+		}
+		return 'body > ' + parts.join(' > ');
+	};
+	// The initial panel keeps the region's id so route styling still applies.
+	const base = region.id || `capture-tabpanel-${index}`;
+	const asPanel = (element: Element, id: string) => {
+		const clone = element.cloneNode(true) as Element;
+		clone.setAttribute('role', 'tabpanel');
+		clone.id = id === initial && region.id ? region.id : `${base}-${id}`;
+		return clone.outerHTML.slice(0, 512 * 1024);
+	};
+	const previous = document.createElement('template');
+	if (!panel) previous.innerHTML = before![changed]!;
+	return { panel: panel ?? path(region), html: asPanel(region, state), ...(previous.content.firstElementChild ? { initialHtml: asPanel(previous.content.firstElementChild, initial) } : {}) };
+};
 
 /** Exploration owns only component states. It never returns replacement route HTML. */
 export async function exploreComponents(page: Page, baseline: ComponentBaseline, skip?: string, viewports: Array<{ id?: string; width: number; height: number }> = []): Promise<CapturedComponent[]> {
@@ -133,13 +172,16 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 			if (!control || Date.now() > deadline) { component.status = 'partial'; component.reason = 'component exploration limit'; break; }
 			if (component.kind === 'tabs' && control.state === current) continue;
 			try {
+				const probe = { selector: component.selector, panel: component.panel, initial: component.initial, state: control.state, index };
+				const regions = component.kind === 'tabs' && !component.panel && current === component.initial && !await page.locator(control.selector).getAttribute('aria-controls') ? await page.evaluate(siblingPanel, probe) : null;
+				const unbound = regions && 'regions' in regions ? regions.regions : undefined;
 				await page.locator(control.selector).click({ timeout: 1_000 });
 				await page.waitForTimeout(150);
 				if (component.kind === 'tabs') await page.waitForFunction(selector => {
 					const tab = document.querySelector(selector)?.querySelector('[role="tab"][aria-selected="true"]');
-					return document.getElementById(tab?.getAttribute('aria-controls') ?? '')?.getAttribute('role') === 'tabpanel';
+					return tab && !tab.hasAttribute('aria-controls') || document.getElementById(tab?.getAttribute('aria-controls') ?? '')?.getAttribute('role') === 'tabpanel';
 				}, component.selector, { timeout: 2_000 }).catch(() => undefined);
-				const observed = await page.evaluate(({ selector, kind, state }) => {
+				let observed = await page.evaluate(({ selector, kind, state }) => {
 					const root = document.querySelector(selector);
 					if (!root) return null;
 					if (kind === 'tabs') {
@@ -155,6 +197,14 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 					const active = slides.findIndex(slide => !slide.hasAttribute('hidden') && getComputedStyle(slide).display !== 'none');
 					return active >= 0 ? { id: `slide-${active}`, html: root.outerHTML.slice(0, 512 * 1024) } : null;
 				}, { selector: component.selector, kind: component.kind, state: control.state });
+				if (!observed && component.kind === 'tabs' && (component.panel || unbound)) {
+					const bound = await page.evaluate(siblingPanel, { ...probe, ...(unbound ? { before: unbound } : {}) });
+					if (bound && 'panel' in bound) {
+						if (bound.initialHtml) component.states[0] = { id: component.initial, html: bound.initialHtml };
+						component.panel = bound.panel;
+						observed = { id: control.state, html: bound.html };
+					}
+				}
 				if (!observed) { component.status = 'unsupported'; component.reason = 'activation did not reveal a classified state'; break; }
 				if (!component.states.some(state => state.id === observed.id)) component.states.push(observed);
 				component.transitions.push({ from: current, to: observed.id, trigger: { selector: control.selector, action: 'click' } });

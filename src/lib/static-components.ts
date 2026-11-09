@@ -57,6 +57,17 @@ export function wireCapturedComponents(html: string, components: CapturedCompone
 		const root = $(component.selector).first();
 		if (!root.length) continue;
 		const tabs = root.find('[role="tab"]');
+		// A bound sibling region becomes the initial panel; observed panels follow it.
+		let anchor = root;
+		if (component.panel) {
+			const region = $(component.panel).first();
+			const panels = component.states.map(state => ({ state, panel: cheerio.load(safeStateHtml(state.html))('[role="tabpanel"]').first() }));
+			const initial = panels.find(({ state }) => state.id === component.initial)?.panel;
+			if (!region.length || !initial?.attr('id') || region.is(root.parents())) continue;
+			for (const { state, panel } of panels) if (panel.attr('id')) tabs.eq(Number(state.id.slice(4))).attr('aria-controls', panel.attr('id')!);
+			region.replaceWith(initial.toString());
+			anchor = $('[id]').filter((_i, node) => $(node).attr('id') === initial.attr('id')).first();
+		}
 		for (const state of component.states) {
 			if (state.id === component.initial) continue;
 			const tab = tabs.eq(Number(state.id.slice(4)));
@@ -65,7 +76,8 @@ export function wireCapturedComponents(html: string, components: CapturedCompone
 			const panel = cheerio.load(safeStateHtml(state.html))('[role="tabpanel"]').first();
 			if (panel.attr('id') !== id) continue;
 			panel.attr('hidden', '');
-			root.after(panel.toString());
+			anchor.after(panel.toString());
+			if (component.panel) anchor = anchor.next();
 		}
 		root.attr('data-blocks-engine-capture-tabs', '');
 		wired = true;
