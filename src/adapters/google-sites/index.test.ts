@@ -42,6 +42,7 @@ describe('Google Sites adapter', () => {
     const $embedded = load(embedded!);
     expect($embedded('h1').text()).toBe('Fixture heading');
     expect($embedded('p').text()).toBe('Fixture paragraph.');
+    expect($embedded('title').text()).toBe('Community garden');
     expect(authoredEmbedDocument('<html><body><p>Ordinary</p></body></html>', 'https://garden.example/')).toBeUndefined();
   });
 
@@ -53,6 +54,7 @@ describe('Google Sites adapter', () => {
     expect(canonicalizeGoogleSitesHtml(html)).toBe(html);
     const panel = canonicalizeGoogleSitesHtml('<div jscontroller="Panel"><a jsaction="click:go" href="/about">About</a></div>');
     expect(panel).toBe('<div><a href="/about">About</a></div>');
+    expect(canonicalizeGoogleSitesHtml('<!DOCTYPE html><html><head></head><body><p jsname="x">x</p></body></html>')).toBe('<!DOCTYPE html><html><head></head><body><p>x</p></body></html>');
   });
 });
 

@@ -12,13 +12,20 @@ export function authoredEmbedDocument(source: string, url: string): string | und
   const href = url.replace(/[&\"<>]/g, (char) => ({ '&': '&amp;', '\"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]!));
   if ($document('head').length) $document('head').prepend(`<base href="${href}">`);
   else $document('html').prepend(`<head><base href="${href}"></head>`);
+  // The embed renders inside Google's viewer, so visitors see the viewer's title.
+  const title = $source('title').first().text().trim();
+  if (title) {
+    $document('title').remove();
+    $document('head').append($document('<title>').text(title));
+  }
   return $document.html();
 }
 
 /** Closure identifiers are needed while Google's runtime drives capture probes.
  * Strip only from frozen artifacts, including serialized interaction panels. */
 export function canonicalizeGoogleSitesHtml(html: string): string {
-  const $ = load(html, { xml: false }, false);
+  // Documents keep their doctype (standards mode); serialized panels stay fragments.
+  const $ = load(html, { xml: false }, /<(?:!doctype|html|head|body)\b/i.test(html));
   $('*').each((_index, element) => {
     for (const attribute of ['jscontroller', 'jsaction', 'jsname', 'jsmodel', 'jsshadow', 'jsslot', 'jsowner', 'data-idom-class']) {
       $(element).removeAttr(attribute);
