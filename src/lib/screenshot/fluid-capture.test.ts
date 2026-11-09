@@ -264,9 +264,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			await rest.evaluate( state => state.cleanup() ); await rest.dispose();
 			// The probe widths come first, then the rest of the coarse widths; each
 			// later round bisects the intervals some series leaves unexplained:
-			// the tablet-band switches and the font-size clamp past 1440. 767 and
-			// 1280 sit inside straight runs of every series and are skipped.
-			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 320, 360, 414, 900, 1536, 801, 1840, 783, 775, 791, 769, 799, 800 ];
+			// the tablet-band switches and the font-size clamp past 1440. Only
+			// 1280 sits inside straight runs of every series and is skipped.
+			const LADDER_ORDER = [ 390, 768, 1920, 600, 1024, 1440, 320, 360, 414, 767, 900, 1536, 801, 1200, 1840, 783, 775, 791, 769, 799, 800 ];
 			expect( widths ).toEqual( LADDER_ORDER );
 			expect( result.sampledWidths ).toEqual( [ ...LADDER_ORDER ].sort( ( a, b ) => a - b ) );
 			expect( measurements ).toHaveLength( LADDER_ORDER.length );
@@ -1370,6 +1370,13 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				sampled( width => Math.min( 512, width / 2 ) ),
 			], coarse ) ).toEqual( [] );
 		} );
+		it( 'does not let closely spaced samples explain a neighbouring step', () => {
+			const widths = [ 320, 360, 390, 414, 600, 767, 768, 900, 1024, 1200, 1280, 1366, 1440, 1536, 1840, 1920 ];
+			const values = [ 75.375, 80.1875, 83.7812, 86.6562, 109, 129.031, 129.156, 90.375, 95.3125, 102.375, 105.562, 109, 111.969, 115.812, 127.969, 131.156 ];
+			const inGap = ( width: number ) => width > 768 && width < 900;
+			expect( refinementWidths( [ widths.map( ( viewport, index ) => ( { viewport, value: values[ index ]! } ) ) ], widths ).some( inGap ) ).toBe( true );
+			expect( refinementWidths( [ sampled( width => width * 0.12 + 37.5, widths ) ], widths ).filter( inGap ) ).toEqual( [] );
+		} );
 		it( 'bisects an unexplained interval with the ladder width nearest its midpoint', () => {
 			// 768–1024 (midpoint 896) refines at 900; 1024–1440 (1232) at 1200; 1440–1920 (1680) at 1536.
 			expect( refinementWidths( [ sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 900 ] );
@@ -1408,7 +1415,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			} ).toEqual( {
 				proportional: 6, affine: 6, 'mobile switch': 8, 'tablet-only regime': 15, 'desktop switch': 7,
 				'capped in the tablet gap': 7, 'capped on the desktop': 7, 'floored and capped': 8,
-				'switch inside the tablet band': 10, 'no relationship': 14,
+				'switch inside the tablet band': 10, 'no relationship': 16,
 			} );
 		} );
 		it( 'explains a varying value\'s container too, never a perpetual mover', () => {
