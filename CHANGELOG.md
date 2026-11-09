@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.186] - 2026-11-09
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- reuse shared chrome across templates that restyle text-free wrappers or move its grid slot
+
 ## [0.33.185] - 2026-11-09
 
 ### Changed
