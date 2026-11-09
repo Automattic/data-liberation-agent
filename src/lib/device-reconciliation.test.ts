@@ -66,6 +66,17 @@ describe( 'device component reconciliation', () => {
 		expect( $( '[id^="card--"]' ) ).toHaveLength( 0 );
 	} );
 
+	it( 'keeps each device\'s anchor landing as its own copy of the fragment target', () => {
+		const marker = '<span id="story" data-blocks-engine-capture-anchor-target="story" data-blocks-engine-capture-anchor-source-id="SECTION" aria-hidden="true"></span>';
+		const sections = ( landing: string ) => [ 'first', 'second' ].map( id => `<section id="${ id }">${ id === landing ? marker.replace( 'SECTION', id ) : '' }<p id="${ id }-text">${ id }</p></section>` ).join( '' );
+		const result = reconcileDeviceDocuments( { desktop: document( sections( 'first' ) ), tablet: document( sections( 'second' ) ) }, selection );
+		expect( result.reconciled.has( 'tablet' ) ).toBe( true );
+		const $ = cheerio.load( result.body );
+		expect( $( '#first > #story' ).attr( 'data-blocks-engine-capture-device-hide' ) ).toBe( 'tablet' );
+		expect( $( '#second > #story--data-blocks-engine-capture-tablet' ).attr( 'data-blocks-engine-capture-device-only' ) ).toBe( 'tablet' );
+		expect( $( '[data-blocks-engine-capture-responsive-fragment="story"]' ) ).toHaveLength( 2 );
+	} );
+
 	it.each( [
 		[ 'an uncaptured', undefined, false ],
 		[ 'a class-only', '.left{float:left}', true ],

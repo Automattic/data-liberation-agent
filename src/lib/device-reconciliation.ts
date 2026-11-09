@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
@@ -17,9 +18,6 @@ export interface DeviceReconciliationEvidence {
 	devices: Record<string, { outcome: 'collapsed-identity-subset' | 'dual-structural'; reason?: string; matchedNodes?: number; desktopOnlyElements?: number; mobileOnlyElements?: number; projectedElements?: number; divergedComponents?: number }>;
 }
 
-/** Every pairing starts from the unmodified default, never from another
- * device's union. Absence in one pair must not erase another device's nodes.
- */
 /** Reads a linked stylesheet's captured text by its href; undefined when it was not captured. */
 export type LinkedStylesheetReader = ( href: string ) => string | undefined;
 
@@ -54,6 +52,26 @@ function linkedStylesheetsSelectRenamedIds( html: string, renamed: ReadonlySet<s
 	} );
 }
 
+const ANCHOR_MARKER = '[data-blocks-engine-capture-anchor-target][data-blocks-engine-capture-anchor-source-id]';
+export const RESPONSIVE_FRAGMENT = 'data-blocks-engine-capture-responsive-fragment';
+
+/**
+ * Anchor markers the capture inserted where a device's runtime scroll landed,
+ * keyed by fragment. They are capture evidence, not source components: each
+ * device can land a fragment in a different section.
+ */
+function anchorMarkers( $: cheerio.CheerioAPI ): Map<string, { node: Element; section: string }> {
+	const markers = new Map<string, { node: Element; section: string }>();
+	$( ANCHOR_MARKER ).each( ( _i, node ) => {
+		const fragment = $( node ).attr( 'data-blocks-engine-capture-anchor-target' )!;
+		if ( $( node ).attr( 'id' ) === fragment ) markers.set( fragment, { node, section: $( node ).attr( 'data-blocks-engine-capture-anchor-source-id' )! } );
+	} );
+	return markers;
+}
+
+/** Every pairing starts from the unmodified default, never from another
+ * device's union. Absence in one pair must not erase another device's nodes.
+ */
 export function reconcileDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, readLinkedStylesheet?: LinkedStylesheetReader ) {
 	const base = cheerio.load( documents[ selection.defaultDocument ] );
 	base( 'body *' ).each( ( index, node ) => { base( node ).attr( NODE, String( index ) ); } );
@@ -64,7 +82,16 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 	for ( const key of selection.documents ) {
 		if ( key === selection.defaultDocument || ! documents[ key ] ) continue;
 		let reason = 'Device body is unavailable';
-		const pair = identitySubsetMerge( original, documents[ key ], undefined, key, failure => { reason = failure; } );
+		// A marker the device landed in another section would read as a
+		// re-nested component. Pair without it and place it per device below.
+		const device = cheerio.load( documents[ key ] );
+		const defaultMarkers = anchorMarkers( base );
+		const relocated = [ ...anchorMarkers( device ) ].filter( ( [ fragment, marker ] ) => {
+			const section = defaultMarkers.get( fragment )?.section;
+			return section !== undefined && section !== marker.section;
+		} );
+		for ( const [ , marker ] of relocated ) device( marker.node ).remove();
+		const pair = identitySubsetMerge( original, relocated.length ? device.html() : documents[ key ], undefined, key, failure => { reason = failure; } );
 		if ( ! pair ) {
 			devices[ key ] = { outcome: 'dual-structural', reason };
 			continue;
@@ -91,6 +118,20 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 		if ( incompatibleEntrance ) {
 			devices[ key ] = { outcome: 'dual-structural', reason: 'Viewport entrance evidence conflicts with an already reconciled device' };
 			continue;
+		}
+		const landing = ( section: string ) => merged( `[${ NODE }]` ).filter( ( _i, node ) => merged( node ).attr( 'id' ) === section );
+		if ( relocated.some( ( [ , marker ] ) => landing( marker.section ).length !== 1 ) ) {
+			devices[ key ] = { outcome: 'dual-structural', reason: 'Device anchor landing section is not a shared component' };
+			continue;
+		}
+		// Each device keeps its own landing; the fragment resolver scrolls to
+		// whichever copy renders.
+		for ( const [ fragment, marker ] of relocated ) {
+			const defaultMarker = merged( `[${ NODE }]` ).filter( ( _i, node ) => merged( node ).attr( 'id' ) === fragment && merged( node ).is( ANCHOR_MARKER ) );
+			// The pair already hides it on this device: without the marker it was default-only.
+			defaultMarker.attr( RESPONSIVE_FRAGMENT, fragment );
+			const copy = device( marker.node ).clone().attr( 'id', `${ fragment }--data-blocks-engine-capture-${ key }` ).attr( ONLY, key ).attr( RESPONSIVE_FRAGMENT, fragment );
+			landing( marker.section ).prepend( device.html( copy ) );
 		}
 		reconciled.add( key );
 		devices[ key ] = { outcome: 'collapsed-identity-subset', matchedNodes: pair.matchedNodes, desktopOnlyElements: pair.desktopOnlyElements, mobileOnlyElements: pair.mobileOnlyElements, projectedElements: pair.projectedElements, divergedComponents: pair.divergedComponents };
