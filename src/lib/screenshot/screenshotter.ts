@@ -104,7 +104,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, renderedElementStructure, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth, switchProbeIdentity, type SwitchRendering } from './device-mode.js';
-import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
+import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, CHROME_REUSED_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 import { probeScriptedLinks, SCRIPTED_LINK_BUDGET_MS, stampScriptedLinkCandidates } from './scripted-links.js';
 
@@ -1690,7 +1690,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			return captured;
 		}, [] ).catch( () => [] );
 		const components = [ ...await probe( 'components', async () => {
-			const captured = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, excluded.skip, [
+			const captured = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, combineSkips( excluded.skip, chrome?.skip ), [
 				{ id: viewport.id, width: viewport.width, height: viewport.height },
 				...( args.consentViewports ?? [] ).filter( candidate => candidate.id !== viewport.id ).map( candidate => ( { id: candidate.id, width: candidate.width, height: candidate.height } ) ),
 			] ) );
@@ -1701,14 +1701,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}, [] ), ...collections ];
 		const galleryStates = await probe( 'galleries', () => withReadOnlyProbes( page, () => captureGalleries( page, components.filter( component => component.slideshow ).map( component => component.selector ) ) ), [] ).catch( () => [] );
 		const skip = combineSkips( combineSkips( chrome?.skip, excluded.skip ), componentBaseline.skip );
-		let interactions: InteractionStatesReport;
-		try {
-			interactions = await probe( 'dialogs', () => withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip } ) : captureTriggeredDialogs( page, url ) ), {
-				schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: url, viewport: { width: viewport.width, height: viewport.height }, capturedAt: new Date().toISOString(), states: [],
-			} );
-		} finally {
-			if ( chrome?.skip && ! budget.expired() ) await probe( 'shared-chrome', () => clearChromeMarks( page ), undefined );
-		}
+		// Keep chrome ownership marks through selectable and typed-search probes.
+		const interactions: InteractionStatesReport = await probe( 'dialogs', () => withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip, navigationSkip: combineSkips( excluded.skip, componentBaseline.skip ) ?? '' } ) : captureTriggeredDialogs( page, url ) ), {
+			schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: url, viewport: { width: viewport.width, height: viewport.height }, capturedAt: new Date().toISOString(), states: [],
+		} );
 		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
 		if ( isDesktop && args.reflowPhoneViewport && chrome?.unmatchedRoots?.length ) {
 			args.phases?.enter( 'shared-chrome' );
@@ -1724,7 +1720,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			args.phases?.enter( 'selectable' );
 			const collectionSkip = collections.flatMap( component => component.collection?.controls ?? [] ).join( ',' ) || undefined;
-			const selectableStates = await probe( 'selectable', () => withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( combineSkips( excluded.skip, componentBaseline.skip ), collectionSkip ) } ) ), [] );
+			const selectableStates = await probe( 'selectable', () => withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( combineSkips( combineSkips( excluded.skip, componentBaseline.skip ), collectionSkip ), chrome?.skip ) } ) ), [] );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
@@ -1737,7 +1733,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			try {
 				interactions.states.push( ...await probe( 'typed-search', async () => {
 					await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-					return withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { skip: combineSkips( excluded.skip, collectionSkip ) } ) );
+					return withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { skip: combineSkips( combineSkips( excluded.skip, collectionSkip ), chrome?.skip ) } ) );
 				}, [] ) );
 			} catch {
 				/* A failed input probe must not misreport a successful selectable drive. */
@@ -1755,6 +1751,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				error: ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 ),
 			} );
 		}
+		if ( chrome?.skip && ! budget.expired() ) await probe( 'shared-chrome', () => clearChromeMarks( page ), undefined );
 		if ( budget.expired() ) interactions.coverage = 'partial';
 		if (
 			( budget.expired() || interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
@@ -2044,7 +2041,7 @@ async function probePhoneOnlyChrome(
 	phone: { width: number; height: number }
 ): Promise< CapturedDialogInteraction[] > {
 	const marks = [ CHROME_ROOT_ATTRIBUTE, DESKTOP_CONTROL_ATTRIBUTE ];
-	const concealed = await page.evaluate( ( { roots, rootAttribute, desktopAttribute } ) => {
+	const concealed = await page.evaluate( ( { roots, rootAttribute, desktopAttribute, reusedAttribute } ) => {
 		const shown = ( element: Element ) => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
@@ -2058,12 +2055,14 @@ async function probePhoneOnlyChrome(
 			root.setAttribute( rootAttribute, '' );
 			for ( const element of [ root, ...Array.from( root.querySelectorAll( '*' ) ) ] ) {
 				if ( shown( element ) ) element.setAttribute( desktopAttribute, '' );
+				// A matching nested landmark is still owned by the entrypoint probe.
+				else if ( element.hasAttribute( reusedAttribute ) ) continue;
 				// A builder's menu control is a plain element with a pointer cursor.
 				else if ( element.matches( control ) || getComputedStyle( element ).cursor === 'pointer' ) hidden++;
 			}
 		}
 		return hidden;
-	}, { roots: [ ...roots ], rootAttribute: CHROME_ROOT_ATTRIBUTE, desktopAttribute: DESKTOP_CONTROL_ATTRIBUTE } );
+	}, { roots: [ ...roots ], rootAttribute: CHROME_ROOT_ATTRIBUTE, desktopAttribute: DESKTOP_CONTROL_ATTRIBUTE, reusedAttribute: CHROME_REUSED_ATTRIBUTE } );
 	const clear = () => page.evaluate( ( names ) => {
 		for ( const name of names ) for ( const element of Array.from( document.querySelectorAll( `[${ name }]` ) ) ) element.removeAttribute( name );
 	}, marks ).catch( () => undefined );
@@ -2077,7 +2076,7 @@ async function probePhoneOnlyChrome(
 		await page.setViewportSize( phone );
 		await settle();
 		await restoreTopScrollState( page );
-		const report = await captureTriggeredDialogs( page, url, { skip: `${ OUTSIDE_CHROME },[${ DESKTOP_CONTROL_ATTRIBUTE }]` } );
+		const report = await captureTriggeredDialogs( page, url, { skip: `${ OUTSIDE_CHROME },[${ DESKTOP_CONTROL_ATTRIBUTE }],[${ CHROME_REUSED_ATTRIBUTE }]` } );
 		const marker = new RegExp( `\\s(?:${ marks.join( '|' ) })(?:="")?`, 'g' );
 		return canonicalizeInteractionReport( report, html => html.replace( marker, '' ) ).states;
 	} finally {
@@ -2496,6 +2495,7 @@ async function probeChromeOnPage(
 		const release = await lockMainFrameNavigation( page );
 		try {
 			states = ( await withReadOnlyProbes( page, () => captureTriggeredDialogs( page, url, { skip: OUTSIDE_CHROME } ) ) ).states;
+			states.push( ...await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: OUTSIDE_CHROME } ) ) );
 		} finally {
 			await release();
 			await clearChromeMarks( page );

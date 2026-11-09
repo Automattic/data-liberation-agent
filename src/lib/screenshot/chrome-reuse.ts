@@ -10,7 +10,8 @@ import type { CapturedDialogInteraction } from './interaction-capture.js';
  * is probed once per capture, on the entrypoint, and its interaction evidence
  * is reused on every route whose chrome is the same subtree.
  *
- * A chrome root is an outermost landmark. Two roots are the same chrome when
+ * Chrome roots include nested landmarks, so a shared nav can match even when
+ * its enclosing header holds page-specific content. Two roots match when
  * their signatures match: relative element paths, a few identity attributes
  * and the normalized text. Route-current state (classes, `aria-current`) is
  * not part of it. Ids, and classes built from an id, count by position, not by
@@ -55,6 +56,8 @@ export interface ChromeLandmark {
 	label: string;
 	/** A builder chrome root's tag-and-class selector: a probed control named it, not a landmark element. */
 	identity?: string;
+	/** Index of the containing landmark, when this is a nested fallback. */
+	parent?: number;
 	/** The root's ids and id references, in order of first appearance: the signature names them by position. */
 	ids: string[];
 	/** Classes built from one of those ids, in order of first appearance. */
@@ -118,6 +121,10 @@ export interface SharedChromeRouteDecision {
 	landmarks?: { route: number; entrypoint: number; matched: number };
 	/** Entrypoint states replayed on this route; their triggers were not clicked here. */
 	reusedStates?: number;
+	/** All entrypoint outcomes reused, including negative probe results. */
+	reusedOutcomes?: number;
+	/** Nested landmarks reused when their enclosing landmark did not match. */
+	nestedMatches?: number;
 	/** Entrypoint states whose rebased selectors named other nodes here; probed in place. */
 	rejectedStates?: number;
 }
@@ -200,7 +207,7 @@ export function translateChromeNames< T >( state: T, names: { ids: ReadonlyMap< 
 }
 
 /**
- * The page's outermost chrome landmarks, in document order. With `mark`, each
+ * The page's chrome landmarks, including nested fallbacks, in document order. With `mark`, each
  * root also gets `CHROME_ROOT_ATTRIBUTE` (cleared by `clearChromeMarks`).
  */
 /** The page a link names, for comparing it with a route: no fragment, no trailing slash. */
@@ -311,7 +318,7 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			return `body > ${ parts.join( ' > ' ) }`;
 		};
 		const landmarks = Array.from( document.querySelectorAll( selector ) )
-			.filter( element => ! element.parentElement?.closest( selector ) && ! element.closest( 'script,style,noscript,template' ) && kept( element ) );
+			.filter( element => ! element.closest( 'script,style,noscript,template' ) && kept( element ) );
 		const identities = new Map< Element, string >();
 		for ( const identity of builderRoots ) {
 			const found = Array.from( document.querySelectorAll( identity ) ).filter( element => ! element.closest( selector ) && ! element.querySelector( selector ) );
@@ -432,10 +439,11 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 				prefixes: [ chain( root, compact, false ), chain( root, positional, false ), chain( root, positional, true ) ],
 				label: `${ root.tagName.toLowerCase() }${ root.getAttribute( 'role' ) ? `[role=${ root.getAttribute( 'role' ) }]` : '' }${ root.classList[ 0 ] ? `.${ root.classList[ 0 ] }` : '' }`,
 				identity: identities.get( root ),
+				parent: roots.indexOf( root.parentElement?.closest( selector )! ),
 			};
 		} );
 	}, { selector: CHROME_LANDMARK_SELECTOR, attributes: SIGNATURE_ATTRIBUTES, rootAttribute: CHROME_ROOT_ATTRIBUTE, mark, builderRoots: [ ...builderRoots ] } );
-	return raw.map( ( { raw: signature, prefixes, label, identity, ids, classes, styles, current } ) => ( {
+	return raw.map( ( { raw: signature, prefixes, label, identity, ids, classes, styles, current, parent } ) => ( {
 		signature: createHash( 'sha256' ).update( signature ).digest( 'hex' ).slice( 0, 32 ),
 		prefixes: prefixes as ChromeLandmark['prefixes'],
 		label,
@@ -444,6 +452,7 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 		styles,
 		current,
 		...( identity ? { identity } : {} ),
+		...( parent >= 0 ? { parent } : {} ),
 	} ) );
 }
 
@@ -499,7 +508,8 @@ async function anchorSelectors( page: Page, roots: readonly ChromeLandmark[], se
 			}
 			if ( ! element ) return 'absent';
 			if ( element === document.body || element === document.documentElement ) return 'document';
-			const root = elements.findIndex( candidate => candidate?.contains( element ) );
+			// Prefer the innermost landmark so nested fallback evidence has its own prefix.
+			const root = elements.reduce( ( found, candidate, index ) => candidate?.contains( element ) ? index : found, -1 );
 			if ( root < 0 ) return outside( element );
 			const path: number[] = [];
 			for ( let node: Element = element; node !== elements[ root ]; node = node.parentElement! ) {
@@ -580,7 +590,11 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		used.add( found );
 		matched.set( index, found );
 	} );
-	const unmatchedRoots = landmarks.filter( ( _, position ) => ! used.has( position ) ).map( root => root.prefixes[ 1 ] );
+	const unmatchedRoots = landmarks.filter( ( root, position ) => ! used.has( position ) && root.parent === undefined ).map( root => root.prefixes[ 1 ] );
+	const nestedMatches = [ ...used ].filter( position => {
+		const parent = landmarks[ position ]!.parent;
+		return parent !== undefined && ! used.has( parent );
+	} ).length;
 	if ( ! matched.size ) {
 		return { unmatchedRoots, decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ evidence.landmarks.map( item => item.label ).join( ', ' ) } there)`, landmarks: { ...counts, matched: 0 } }, states: [] };
 	}
@@ -609,20 +623,35 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 	const candidates = eligible.filter( ( candidate ): candidate is NonNullable< typeof candidate > => candidate !== undefined );
 	const resolved = await anchorSelectors( page, landmarks, candidates.map( candidate => selectorFields( candidate.state ).map( field => field.selector ) ) );
 	const reused = candidates.filter( ( candidate, index ) => JSON.stringify( resolved[ index ] ) === JSON.stringify( candidate.expected ) );
-	await page.evaluate( ( { selectors, attribute } ) => {
-		for ( const selector of selectors ) document.querySelector( selector )?.setAttribute( attribute, '' );
-	}, { selectors: reused.map( candidate => candidate.state.trigger.selector ), attribute: CHROME_REUSED_ATTRIBUTE } );
+	await page.evaluate( ( { roots, rejected, attribute } ) => {
+		for ( const selector of roots ) {
+			const root = document.querySelector( selector );
+			if ( ! root ) continue;
+			for ( const element of [ root, ...Array.from( root.querySelectorAll( '*' ) ) ] ) element.setAttribute( attribute, '' );
+		}
+		// Invalid replay evidence still gets a fresh probe, as before.
+		for ( const selector of rejected ) document.querySelector( selector )?.removeAttribute( attribute );
+	}, {
+		// Incomplete entrypoint evidence cannot authorize skipping unrecorded controls.
+		roots: evidence.unanchored || eligible.length !== reused.length ? reused.map( candidate => candidate.state.trigger.selector ) : [ ...used ].map( index => landmarks[ index ]!.prefixes[ 1 ] ),
+		rejected: candidates.filter( candidate => ! reused.includes( candidate ) ).map( candidate => candidate.state.trigger.selector ),
+		attribute: CHROME_REUSED_ATTRIBUTE,
+	} );
 	const rejected = eligible.length - reused.length;
+	const states = reused.filter( candidate => candidate.state.status === 'captured' || candidate.state.status === 'observed-incomplete' )
+		.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) );
 	return {
 		decision: {
 			chromeReused: true,
-			reason: `${ matched.size } of ${ landmarks.length } chrome landmarks match the entrypoint; ${ reused.length } entrypoint states reused${ rejected ? `, ${ rejected } probed in place because their selectors name other nodes here or their current-route marking cannot be moved` : '' }`,
+			reason: `${ matched.size } of ${ landmarks.length } chrome landmarks match the entrypoint; ${ states.length } entrypoint states reused; ${ nestedMatches } nested landmarks matched; ${ reused.length } outcomes reused${ rejected ? `, ${ rejected } probed in place because their selectors name other nodes here or their current-route marking cannot be moved` : '' }`,
 			landmarks: { ...counts, matched: matched.size },
-			reusedStates: reused.length,
+			reusedStates: states.length,
+			reusedOutcomes: reused.length,
+			nestedMatches,
 			...( rejected ? { rejectedStates: rejected } : {} ),
 		},
-		states: reused.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) ),
-		...( reused.length ? { skip: `[${ CHROME_REUSED_ATTRIBUTE }]` } : {} ),
+		states,
+		...( matched.size ? { skip: `[${ CHROME_REUSED_ATTRIBUTE }]` } : {} ),
 		...( unmatchedRoots.length ? { unmatchedRoots } : {} ),
 	};
 }

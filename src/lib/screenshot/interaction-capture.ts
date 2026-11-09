@@ -327,12 +327,12 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 export async function captureTriggeredDialogs(
 	page: Page,
 	sourceUrl: string,
-	options: { skip?: string } = {}
+	options: { skip?: string; navigationSkip?: string } = {}
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
 	// Route transitions and popup transitions share controls. Observe routes
 	// first, restore them, then exclude proven destinations from popup clicks.
-	const routeNavigation = await captureRouteNavigation( page, sourceUrl, options ).catch( () => [] );
+	const routeNavigation = await captureRouteNavigation( page, sourceUrl, { skip: options.navigationSkip ?? options.skip } ).catch( () => [] );
 	const skip = [ options.skip, ...routeNavigation.map( route => route.selector ) ].filter( Boolean ).join( ',' ) || undefined;
 	await rememberBaselinePanels( page );
 	const initialDialogs = await captureInitiallyVisibleDialogs( page );
