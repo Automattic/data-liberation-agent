@@ -1,4 +1,6 @@
 import * as cheerio from 'cheerio';
+import postcss from 'postcss';
+import selectorParser from 'postcss-selector-parser';
 import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 import { identitySubsetMerge } from './responsive-assembly.js';
 import type { DeviceDocumentSelection } from './document-selection.js';
@@ -18,7 +20,41 @@ export interface DeviceReconciliationEvidence {
 /** Every pairing starts from the unmodified default, never from another
  * device's union. Absence in one pair must not erase another device's nodes.
  */
-export function reconcileDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection ) {
+/** Reads a linked stylesheet's captured text by its href; undefined when it was not captured. */
+export type LinkedStylesheetReader = ( href: string ) => string | undefined;
+
+/**
+ * Whether linked stylesheets can address a device copy of a divergent
+ * component. Linked sheets stay references, so the ids the copy is renamed
+ * to cannot be added to their selectors. The copy keeps the source cascade
+ * only when every linked sheet was captured and none selects a renamed id.
+ */
+function linkedStylesheetsSelectRenamedIds( html: string, renamed: ReadonlySet<string>, read: LinkedStylesheetReader | undefined ): boolean {
+	const $ = cheerio.load( html );
+	return $( 'link[rel~="stylesheet"]' ).toArray().some( link => {
+		const css = read?.( $( link ).attr( 'href' ) ?? '' );
+		if ( css === undefined ) return true;
+		let selects = false;
+		try {
+			postcss.parse( css ).walk( node => {
+				if ( node.type === 'atrule' && node.name.toLowerCase() === 'import' ) selects = true;
+				if ( node.type !== 'rule' ) return;
+				selectorParser( selectors => {
+					selectors.walkIds( id => { if ( renamed.has( id.value ) ) selects = true; } );
+					// Only an exact id match is proven not to reach the renamed copy.
+					selectors.walkAttributes( attribute => {
+						if ( attribute.attribute.toLowerCase() === 'id' && ( attribute.operator !== '=' || renamed.has( attribute.value ?? '' ) ) ) selects = true;
+					} );
+				} ).processSync( node.selector );
+			} );
+		} catch {
+			return true;
+		}
+		return selects;
+	} );
+}
+
+export function reconcileDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, readLinkedStylesheet?: LinkedStylesheetReader ) {
 	const base = cheerio.load( documents[ selection.defaultDocument ] );
 	base( 'body *' ).each( ( index, node ) => { base( node ).attr( NODE, String( index ) ); } );
 	const original = base.html();
@@ -33,7 +69,9 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 			devices[ key ] = { outcome: 'dual-structural', reason };
 			continue;
 		}
-		if ( pair.divergedComponents && cheerio.load( documents[ key ] )( 'link[rel~="stylesheet"]' ).length ) {
+		const suffix = `--data-blocks-engine-capture-${ key }`;
+		const renamed = new Set( cheerio.load( `<body>${ pair.body }</body>` )( `[id$="${ suffix }"]` ).toArray().map( node => node.attribs.id.slice( 0, -suffix.length ) ) );
+		if ( pair.divergedComponents && [ documents[ selection.defaultDocument ], documents[ key ] ].some( html => linkedStylesheetsSelectRenamedIds( html, renamed, readLinkedStylesheet ) ) ) {
 			devices[ key ] = { outcome: 'dual-structural', reason: 'Divergent component ids require rewriting a linked stylesheet; native selector cascade retained as a separate document' };
 			continue;
 		}

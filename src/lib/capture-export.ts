@@ -1617,11 +1617,18 @@ function buildExportCapture(
 				rawMobileHtml === undefined
 					? undefined
 					: portableDocument( rawMobileHtml );
+			const readCapturedStylesheet = ( href: string ): string | undefined => {
+				let resource;
+				try { resource = resourceManifest.resources[ new URL( href, url ).href ]; } catch { return undefined; }
+				if ( ! resource?.contentType.startsWith( 'text/css' ) ) return undefined;
+				const path = resolve( outputDir, resource.path );
+				return pathWithin( outputDir, path ) && existsSync( path ) ? readFileSync( path, 'utf8' ) : undefined;
+			};
 			const onUnparseableStylesheet = ( reason: string ): void => {
 				routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url, reason, unit: 'stylesheet', severity: 'warning' } );
 			};
 			const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
-				Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection, onUnparseableStylesheet
+				Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection, onUnparseableStylesheet, readCapturedStylesheet
 			) : undefined;
 			if ( deviceAssembly ) {
 				deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
