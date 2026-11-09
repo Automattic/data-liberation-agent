@@ -57,6 +57,15 @@ describe( 'device component reconciliation', () => {
 		expect( $.html() ).not.toContain( 'class="tablet"' );
 	} );
 
+	it( 'collapses a component one device wraps in a device-only identified layer', () => {
+		const card = '<section id="card"><p id="card-text">Card</p></section>';
+		const result = reconcileDeviceDocuments( { desktop: document( `<div id="transition">${ card }</div>` ), tablet: document( card ) }, selection );
+		expect( result.evidence.devices.tablet ).toMatchObject( { outcome: 'collapsed-identity-subset', divergedComponents: 0 } );
+		const $ = cheerio.load( result.body );
+		expect( $( '#transition > #card' ) ).toHaveLength( 1 );
+		expect( $( '[id^="card--"]' ) ).toHaveLength( 0 );
+	} );
+
 	it.each( [
 		[ 'an uncaptured', undefined, false ],
 		[ 'a class-only', '.left{float:left}', true ],
