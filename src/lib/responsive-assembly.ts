@@ -669,10 +669,15 @@ export function identitySubsetMerge(
 	const deviceInlineRestores: Array<() => void> = [];
 	let incompatibleEntrance = false;
 	if ( deviceKey ) {
+		// A wrapper with an identity only one device renders (a desktop page
+		// transition layer) stays in the tree and keeps rendering around the
+		// shared components it wraps, so it is not a placement difference.
 		const placement = ( $: cheerio.CheerioAPI, node: Element ) => {
 			const steps: string[] = [];
 			for ( let parent = node.parent; parent && isElementNode( parent ) && parent.tagName !== 'body'; parent = parent.parent ) {
-				steps.unshift( identityOf( parent ) ?? `${ parent.tagName }.${ $( parent ).attr( 'class' ) ?? '' }` );
+				const parentId = identityOf( parent );
+				if ( parentId && ! shared( parentId ) ) continue;
+				steps.unshift( parentId ?? `${ parent.tagName }.${ $( parent ).attr( 'class' ) ?? '' }` );
 			}
 			return steps.join( '/' );
 		};
