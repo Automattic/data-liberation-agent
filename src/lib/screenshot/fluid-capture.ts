@@ -401,7 +401,10 @@ async function learnFluidGeometry(
 	const signatures = adaptive && options.memo ? await baseline.evaluate( ( state, attribute ) => {
 		const step = ( node: Element ) => {
 			const position = node.parentElement ? [ ...node.parentElement.children ].filter( sibling => sibling.tagName === node.tagName ).indexOf( node ) : 0;
-			return `${ node.tagName }${ node.id ? `#${ node.id }` : '' }${ [ ...node.classList ].sort().map( name => `.${ name }` ).join( '' ) }:${ position }`;
+			// Root classes commonly encode per-route runtime state. Keep classes
+			// on every other element; the geometry probes still validate reuse.
+			const classes = node === document.body || node === document.documentElement ? [] : [ ...node.classList ];
+			return `${ node.tagName }${ node.id ? `#${ node.id }` : '' }${ classes.sort().map( name => `.${ name }` ).join( '' ) }:${ position }`;
 		};
 		const byId: Record< string, string > = {};
 		for ( const element of state.elements() ) {
