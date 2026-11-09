@@ -397,7 +397,11 @@ function rewriteRouteLinksIn(
 		// A platform link can share the origin and even the portable pathname,
 		// yet belong to a different site. Preserve its authored destination.
 		if ( !routeInScope( resolved.href, portable?.routeScope ) ) {
-			if ( ! isOption ) link.attr( 'href', resolved.href );
+			// Preserve external authored URLs verbatim (URL#href would add a
+			// trailing slash to an origin-only address), while resolving relative
+			// links that fall outside an adapter's route scope as before.
+			if ( absolute || isOption ) return;
+			link.attr( 'href', resolved.href );
 			return;
 		}
 		const route = routes.get( scopedRouteKey( resolved.href, portable?.routeScope ) );

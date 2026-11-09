@@ -135,6 +135,28 @@ describe( 'exportWebsiteCapture', () => {
 		}
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( receipt!.routes.map( route => [ route.path, route.path.replace( /^website\//, '' ) ] ) ) ).pass ).toBe( true );
 	} );
+	it( 'preserves identical external href spelling across representative and derived template documents', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-derived-external-href-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const representative = 'https://example.test/posts/representative/';
+		const derived = 'https://example.test/posts/derived/';
+		for ( const [ index, url ] of [ representative, derived ].entries() ) {
+			writeFileSync( join( outputDir, `html/page-${ index }.html` ), '<aside><a href="https://example.org">Sidebar</a></aside>' );
+		}
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				[ representative ]: { html: 'html/page-0.html' },
+				[ derived ]: { html: 'html/page-1.html', derived: true },
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: representative, platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		const hrefs = receipt.routes.map( ( route: { path: string } ) => cheerio.load( readFileSync( join( outputDir, route.path ), 'utf8' ) )( 'a' ).attr( 'href' ) );
+		expect( hrefs ).toEqual( [ 'https://example.org', 'https://example.org' ] );
+	} );
+
 	it( 'keeps uncaptured query-only navigation pointing at the source when no base route was captured', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-query-only-home-' ) );
 		dirs.push( outputDir );
