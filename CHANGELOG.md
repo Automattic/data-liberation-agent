@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.188] - 2026-11-09
+
+### Changed
+- regenerate plugin bundles
+- Collapse re-parented device components when linked stylesheets cannot select the renamed copy
+- Capture desktop at native device pixel ratio
+
 ## [0.33.187] - 2026-11-09
 
 ### Changed
