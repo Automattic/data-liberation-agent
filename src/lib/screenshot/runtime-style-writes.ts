@@ -29,6 +29,8 @@ export interface RuntimeStyleWrites {
 	written( element: Element ): boolean;
 	/** Script registered something that can react to a viewport change. */
 	viewportReactive(): boolean;
+	/** Drain and begin/end style-mutation evidence for a height-only probe. */
+	heightProbe( active: boolean ): Element[];
 	/**
 	 * Source sheet text at load and the width it was written for; null before
 	 * the first resize. A sheet inserted at another width reads as empty.
@@ -41,6 +43,7 @@ export function observeRuntimeStyleWrites(): void {
 	if ( key in window ) return;
 	const styled = new WeakSet< Node >();
 	const inserted = new WeakSet< Node >();
+	let heightProbe: Set< Element > | null = null;
 	let reactive = false;
 	let ready = document.readyState !== 'loading';
 	// Registered before any page script, so it runs before their resize handlers.
@@ -55,7 +58,10 @@ export function observeRuntimeStyleWrites(): void {
 			if ( innerWidth !== loadWidth ) {
 				mutation.addedNodes.forEach( node => { if ( node instanceof HTMLStyleElement ) bornElsewhere.add( node ); } );
 			}
-			if ( mutation.type === 'attributes' ) styled.add( mutation.target );
+			if ( mutation.type === 'attributes' ) {
+				styled.add( mutation.target );
+				if ( mutation.target instanceof Element ) heightProbe?.add( mutation.target );
+			}
 			else if ( ready ) mutation.addedNodes.forEach( node => inserted.add( node ) );
 		}
 	};
@@ -104,6 +110,12 @@ export function observeRuntimeStyleWrites(): void {
 			// Handler properties read as null (or undefined where unsupported) until set.
 			return reactive || window.onresize != null || window.onorientationchange != null ||
 				window.visualViewport?.onresize != null;
+		},
+		heightProbe( active ) {
+			record( observer.takeRecords() );
+			const changed = [ ...heightProbe ?? [] ];
+			heightProbe = active ? new Set() : null;
+			return changed;
 		},
 		loadSheets() {
 			record( observer.takeRecords() );
