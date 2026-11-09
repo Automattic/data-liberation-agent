@@ -7,13 +7,8 @@ export interface CaptureLogSink {
 
 export interface Viewport extends CaptureProfile {}
 
-// Desktop stays at 1440×900 — the browser renders the real desktop layout
-// (responsive media queries kick in based on logical viewport, not output
-// pixels). To keep PNG file size small for the agent's vision context, we
-// pair this with `SCREENSHOT_DEVICE_SCALE_FACTOR` below: the browser
-// outputs the screenshot at fewer real pixels even though the rendered
-// layout is the full 1440×900. That's how to get "~2x fewer pixels"
-// without changing what the page actually looks like.
+// Desktop stays at 1440×900 with a native device pixel ratio. DPR is
+// observable by source runtimes and can change geometry, not just PNG size.
 export function defaultViewports(mobile: { width: number; height: number }): Viewport[] {
 	return [
 		{ id: 'desktop', width: 1440, height: 900 },
@@ -21,14 +16,9 @@ export function defaultViewports(mobile: { width: number; height: number }): Vie
 	];
 }
 
-/**
- * Default deviceScaleFactor for screenshot capture. 0.7 gives ~49% fewer
- * output pixels (0.7² ≈ 0.49) while the browser keeps rendering at the
- * full logical viewport — so the agent sees the real desktop layout in a
- * smaller PNG. Mobile is already small (402×681 = 274 kpx) so we don't
- * scale it.
- */
-export const SCREENSHOT_DEVICE_SCALE_FACTOR = 0.7;
+/** Native desktop DPR: fractional downscaling changes source runtime layout
+ * (e.g. Canva's frame sizing), even at an unchanged CSS viewport. */
+export const SCREENSHOT_DEVICE_SCALE_FACTOR = 1;
 
 export interface ScreenshotOpts {
 	governors?: import('../source-request-governor.js').SourceRequestGovernors;
