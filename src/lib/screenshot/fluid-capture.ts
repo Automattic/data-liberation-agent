@@ -207,18 +207,20 @@ export function refinementWidths( series: Iterable< readonly GeometrySample[] >,
 			const found = at.get( widths[ index ]! );
 			return found !== undefined && Number.isFinite( found ) ? found : null;
 		};
-		const straight = ( first: number ) => {
+		const straight = ( first: number, interval: number ) => {
 			if ( first < 0 || first + 2 >= widths.length ) return false;
 			const [ a, b, c ] = [ value( first ), value( first + 1 ), value( first + 2 ) ];
 			if ( a === null || b === null || c === null ) return false;
 			const [ wa, wb, wc ] = [ widths[ first ]!, widths[ first + 1 ]!, widths[ first + 2 ]! ];
-			return Math.abs( b - ( a + ( c - a ) * ( wb - wa ) / ( wc - wa ) ) ) <= COLLINEAR_TOLERANCE_PX;
+			const slopeChange = ( c - b ) / ( wc - wb ) - ( b - a ) / ( wb - wa );
+			// A short neighbouring span must not hide a step across the interval we explain.
+			return Math.abs( slopeChange * ( widths[ interval + 1 ]! - widths[ interval ]! ) ) <= COLLINEAR_TOLERANCE_PX;
 		};
 		let chosen: number | null = null;
 		for ( const { index } of intervals ) {
 			// Absent (or non-pixel) at both ends: nothing here for this series to learn.
 			if ( value( index ) === null && value( index + 1 ) === null ) continue;
-			if ( straight( index - 1 ) || straight( index ) ) continue;
+			if ( straight( index - 1, index ) || straight( index, index ) ) continue;
 			// One change leaves both intervals beside it without a straight window
 			// when one of them is the sweep's last. Refining the first can explain
 			// the second; if not, it is refined next round at the same width.

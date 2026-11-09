@@ -527,10 +527,10 @@ describe( 'responsive readiness contract', () => {
 		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
 		expect( adaptive.css ).toEqual( full.css );
 		expect( adaptive.geometry ).toEqual( full.geometry );
-		// One page sweeps for every shape's evidence at once, so only 769 is
-		// interpolated here; each shape's own cost is pinned without a browser in
+		// One page sweeps for every shape's evidence at once, so every ladder width
+		// is observed here; each shape's own cost is pinned without a browser in
 		// fluid-capture.test.ts.
-		expect( adaptive.result.sampledWidths ).toEqual( DEFAULT_SWEEP_WIDTHS.filter( width => width !== 769 ) );
+		expect( adaptive.result.sampledWidths ).toEqual( DEFAULT_SWEEP_WIDTHS );
 	}, 120_000 );
 
 	// A breakpoint-owned subtree is remounted whenever the viewport crosses its
