@@ -2780,7 +2780,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					return 'https://localhost';
 				}
 		  } )();
-	const resourceStore = new CapturedResourceStore( opts.outputDir, baseUrl );
+	const resourceStore = new CapturedResourceStore( opts.outputDir, baseUrl, undefined, opts.maxTotalBytes );
 	// One glyph colour per distinct glyph across the run, so a shared footer
 	// serializes the same evidence on every route (#924).
 	const glyphColors = new GlyphColorCache();
