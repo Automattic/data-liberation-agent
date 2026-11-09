@@ -393,7 +393,8 @@ export function identitySubsetMerge(
 	mobileHtml: string,
 	switchWidth: number = DEFAULT_SWITCH_WIDTH,
 	deviceKey?: string,
-	onUnreconciled?: ( reason: string ) => void
+	onUnreconciled?: ( reason: string ) => void,
+	defaultKey?: string
 ): ViewportTreeReconciliation | undefined {
 	const cannotMerge = ( reason: string ): undefined => { onUnreconciled?.( reason ); return undefined; };
 	const desktopBody = responsiveBodyContent( desktopHtml );
@@ -725,7 +726,8 @@ export function identitySubsetMerge(
 			return;
 		}
 		if ( deviceKey && ( d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ) !== undefined || m.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ) !== undefined ) ) {
-			const state = mergeViewportEntranceStates( d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ), m.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ) );
+			const scope = defaultKey ? { left: [ defaultKey ], right: [ deviceKey ], all: [ defaultKey, deviceKey ] } : undefined;
+			const state = mergeViewportEntranceStates( d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ), m.attr( VIEWPORT_ENTRANCE_ATTRIBUTE ), scope );
 			if ( state === undefined ) incompatibleEntrance = true;
 			else d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE, state );
 		}
