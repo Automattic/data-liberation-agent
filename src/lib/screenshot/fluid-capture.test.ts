@@ -832,6 +832,53 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( learned[ 2 ]![ 1 ] ).toBe( 'height: 20vw; 78px' );
 	}, 60_000 );
 
+	// Two local browser routes (~8s): one full sweep, then only the memo probes.
+	it( 'reuses shared header series despite root state classes and identity-scale origins', async () => {
+		const memo: FluidSeriesMemo = new Map();
+		const lookup = vi.spyOn( memo, 'get' );
+		const learned = [];
+		for ( const [ index, height ] of [ 200, 600 ].entries() ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			try {
+				await page.setContent( `
+					<!doctype html><html class="runtime-${ index }"><body class="cookiebot-theme ${ index ? 'has-action-bar' : 'show-all-popups' }">
+					<style>main { height: ${ height }px; }</style>
+					<div class="frame" style="width:100%;transform:scale(1)"><header style="font-size:10px">Shared header</header><main>Route content</main></div>
+					<script>
+						const update = () => {
+							const frame = document.querySelector('.frame');
+							frame.style.transform = innerWidth < 768 ? 'matrix(0.8,0,0,0.8,0,0)' : 'matrix(1,0,0,1,0,0)';
+							frame.style.transformOrigin = innerWidth < 768 ? '0 0' : '';
+							document.querySelector('header').style.fontSize = innerWidth * 0.02 + 'px';
+						};
+						addEventListener('resize', update); update();
+					</script></body></html>` );
+				const origin = await page.locator( '.frame' ).evaluate( node => getComputedStyle( node ).transformOrigin );
+				lookup.mockClear();
+				const result = await learnAndApplyFluidGeometry( page, { document: 'desktop', settleMs: 10, memo } );
+				if ( index === 1 ) {
+					expect( lookup ).toHaveBeenCalled();
+					expect( lookup.mock.results.every( call => call.value !== undefined ) ).toBe( true );
+				}
+				learned.push( {
+					origin, result,
+					rules: await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).allTextContents(),
+					header: await page.locator( 'header' ).getAttribute( 'style' ),
+				} );
+			} finally { await page.close(); }
+		}
+		const [ first, second ] = learned;
+		expect( second!.origin ).not.toBe( first!.origin );
+		expect( first!.result.sampledWidths.length ).toBeGreaterThan( 3 );
+		expect( second!.result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+		expect( second!.result.applied ).toBe( 3 );
+		expect( second!.result.applied ).toBe( first!.result.applied );
+		expect( second!.result.unmodelled ).toBe( 0 );
+		expect( second!.result.byKind ).toEqual( first!.result.byKind );
+		expect( second!.rules ).toEqual( first!.rules );
+		expect( second!.header ).toEqual( first!.header );
+	}, 60_000 );
+
 	it( 'learns the ceiling when the widest sample is capped', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
