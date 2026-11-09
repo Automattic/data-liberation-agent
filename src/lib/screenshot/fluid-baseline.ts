@@ -233,6 +233,22 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 				// wait for another mutation (or serialize its old pixels in the meantime).
 				enforce();
 			},
+			retain: ( entries: Array<{ element: HTMLElement; property: string; css: string }> ) => {
+				for ( const { element, property } of entries ) {
+					const role = roles.find( role => role.current === element || role.element === element );
+					if ( role ) role.authority = role.authority?.filter( entry => entry.property !== property );
+				}
+				const enforce = () => {
+					for ( const { element, property, css } of entries ) {
+						if ( element.style.getPropertyValue( property ) !== css || element.style.getPropertyPriority( property ) !== 'important' ) {
+							element.style.setProperty( property, css, 'important' );
+						}
+					}
+				};
+				enforce();
+				const observer = new MutationObserver( enforce );
+				for ( const { element } of entries ) observer.observe( element, { attributes: true, attributeFilter: [ 'style' ] } );
+			},
 			cleanup: () => {
 				marking = false;
 				for ( const role of roles ) role.element.removeAttribute( attribute );

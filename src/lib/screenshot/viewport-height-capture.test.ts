@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
+import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 
 describe( 'viewport-sized inline geometry', () => {
 	let browser: Browser;
@@ -57,6 +58,53 @@ describe( 'viewport-sized inline geometry', () => {
 			// The copy keeps following the viewport without the source runtime.
 			await copy.setViewportSize( { width: 390, height: 500 } );
 			expect( await copy.evaluate( () => document.querySelector( '#pinned' )!.getBoundingClientRect().height ) ).toBe( 500 );
+		} finally {
+			await page.close();
+			await copy.close();
+		}
+	}, 60_000 );
+
+	it( 'exports nested runtime height fractions and affine heights without pinning their follower', async () => {
+		const page = await browser.newPage( { viewport: { width: 390, height: 700 } } );
+		const copy = await browser.newPage();
+		try {
+			await page.evaluate( observeRuntimeStyleWrites );
+			await page.setContent( `<style>body{margin:0}h2{margin:0}</style>
+				<section><div class="_8jGYJw"><div class="onhyOQ">Hero</div></div></section>
+				<section id="affine"></section><h2>Following heading</h2>
+				<script>const refresh=()=>{
+					for(const el of document.querySelectorAll('._8jGYJw,.onhyOQ')) el.style.height=(0.352*innerHeight)+'px';
+					document.querySelector('#affine').style.height=(0.35*innerHeight+1)+'px';
+				};addEventListener('resize',refresh);refresh();</script>` );
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			await markInitialDocument( page );
+			const initial = await page.content();
+			await learnAndApplyFluidGeometry( page, { document: 'mobile', settleMs: 10 } );
+			// Subsequent capture resizes must not let the runtime replace the lift.
+			await page.setViewportSize( { width: 390, height: 900 } );
+			await page.waitForTimeout( 100 );
+			const html = projectInitialDocument( initial, await page.content() );
+			await copy.setContent( html );
+			for ( const selector of [ '._8jGYJw', '.onhyOQ' ] ) {
+				expect( await copy.locator( selector ).getAttribute( 'style' ) ).toMatch( /35\.2vh/ );
+			}
+			for ( const height of [ 700, 900, 1100 ] ) {
+				await page.setViewportSize( { width: 390, height } );
+				await copy.setViewportSize( { width: 390, height } );
+				await page.waitForTimeout( 100 );
+				const geometry = () => [ ...document.querySelectorAll( '._8jGYJw,.onhyOQ,#affine,h2' ) ].map( node => {
+					const rect = node.getBoundingClientRect();
+					return { height: rect.height, top: rect.top };
+				} );
+				const source = await page.evaluate( geometry );
+				const exported = await copy.evaluate( geometry );
+				expect( Math.abs( exported[0]!.height - 0.352 * height ) ).toBeLessThanOrEqual( 1 );
+				expect( Math.abs( exported[2]!.height - ( 0.35 * height + 1 ) ) ).toBeLessThanOrEqual( 1 );
+				for ( let i = 0; i < source.length; i++ ) {
+					expect( Math.abs( exported[i]!.height - source[i]!.height ) ).toBeLessThanOrEqual( 1 );
+					expect( Math.abs( exported[i]!.top - source[i]!.top ) ).toBeLessThanOrEqual( 1 );
+				}
+			}
 		} finally {
 			await page.close();
 			await copy.close();
