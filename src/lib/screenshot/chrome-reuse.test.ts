@@ -76,7 +76,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 			const view = await browser.newPage();
 			// A builder's per-page copy of one header: ids and some classes carry the
 			// instance id, and the current-route link is styled apart.
-			const fixture = ( id: string, { color = 'red', text = 'Search', current = 'a', portal = true } = {} ) => `<style>#${ id }_panel{color:${ color }}.${ id }-box{padding:2px}[aria-current]{color:green}</style>
+			const fixture = ( id: string, { color = 'red', text = 'Search', current = 'a', portal = true, template = '' } = {} ) => `<style>#${ id }_panel{color:${ color }}.${ id }-box{padding:2px}[aria-current]{color:green}header *{font-family:Arial}${ template }</style>
 <header id="${ id }"><a href="/a"${ current === 'a' ? ' aria-current="page"' : '' }>A</a><a href="/b"${ current === 'b' ? ' aria-current="page"' : '' }>B</a>
 <button id="${ id }_open" aria-controls="${ id }_panel">${ text }</button><div id="${ id }_panel" class="panel ${ id }-box">Panel</div></header>
 <div id="${ id }_r_menu" class="${ id }_r_menu">Menu</div>${ portal ? '<div id="site-panel">Portal</div>' : '' }`;
@@ -107,8 +107,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 				dialog: { selector: '#top-b2_r_menu', html: `<div id="top-b2_r_menu" class="top-b2_r_menu"><ul>${ items( 'b' ) }</ul></div>` },
 			} ] );
 
-			// Other styling, other text, or a reference whose target is gone is other chrome.
-			for ( const variant of [ { color: 'blue' }, { text: 'Find' } ] ) {
+			// Another template may place the header in its own grid slot and give
+			// text-free wrappers its own font stack: what they paint is unchanged.
+			await view.setContent( fixture( 'top-b2', { template: 'header{font-family:serif}' } ) );
+			expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).decision ).toMatchObject( { chromeReused: true } );
+			const inGrid = ( id: string, row: number ) => `<body style="display:grid">${ fixture( id, { template: `header{grid-row:${ row }}` } ) }</body>`;
+			await view.setContent( inGrid( 'top-a1', 1 ) );
+			const gridLandmarks = await readChromeLandmarks( view );
+			const gridEvidence = { url: 'https://fixture/', landmarks: gridLandmarks, ...await anchorChromeStates( view, gridLandmarks, [ state( 'top-a1' ) ] ) };
+			await view.setContent( inGrid( 'top-b2', 2 ) );
+			expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence: gridEvidence } ) ).decision ).toMatchObject( { chromeReused: true, reusedStates: 1 } );
+
+			// Other styling, other text, a font on text, or a reference whose target is gone is other chrome.
+			for ( const variant of [ { color: 'blue' }, { text: 'Find' }, { template: 'header a{font-family:serif}' } ] ) {
 				await view.setContent( fixture( 'top-b2', variant ) );
 				expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).decision, JSON.stringify( variant ) ).toMatchObject( { chromeReused: false } );
 			}
