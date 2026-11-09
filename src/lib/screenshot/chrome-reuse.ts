@@ -16,7 +16,8 @@ import type { CapturedDialogInteraction } from './interaction-capture.js';
  * not part of it. Ids, and classes built from an id, count by position, not by
  * value: builders give each page its own copy of the header under renamed ids.
  * Two roots must also render alike: each element's computed style (custom
- * properties aside, as they paint only through other properties) matches,
+ * properties aside, as they paint only through other properties; a font family
+ * on an element with no text of its own; the root's grid slot) matches,
  * outside the current-route item (`aria-current`) on either page. A reused
  * state is translated to the route's ids and classes. A root may sit at a different place in each template, so a
  * reused state's selectors are rebased from the entrypoint root's prefix to the
@@ -394,16 +395,25 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			lines.push( `${ root.tagName.toLowerCase() } ${ describe( root ) }` );
 			walk( root, '' );
 			// Computed style, relabelled like the markup. A fragment URL resolves
-			// against this route, so it is compared as the bare fragment.
+			// against this route, so it is compared as the bare fragment. A font
+			// family paints only text: an element without text of its own passes
+			// it on to descendants, which are compared themselves. The root's slot
+			// in the page grid is the template's, not the chrome's.
+			const rendersText = ( element: Element ) => /^(INPUT|TEXTAREA|SELECT|LI)$/.test( element.tagName )
+				|| Array.from( element.childNodes ).some( child => child.nodeType === Node.TEXT_NODE && ( child.textContent ?? '' ).trim() );
 			const styleOf = ( element: Element ) => {
 				const parts: string[] = [];
+				const ignored = new Set( [
+					...( element === root ? [ 'grid-row-start', 'grid-row-end', 'grid-column-start', 'grid-column-end' ] : [] ),
+					...( rendersText( element ) ? [] : [ 'font-family' ] ),
+				] );
 				for ( const pseudo of [ null, '::before', '::after' ] ) {
 					const style = getComputedStyle( element, pseudo );
 					if ( pseudo && [ 'none', 'normal' ].includes( style.content ) ) continue;
 					parts.push( pseudo ?? '' );
 					for ( let index = 0; index < style.length; index++ ) {
 						const name = style[ index ]!;
-						if ( ! name.startsWith( '--' ) ) parts.push( `${ name }:${ style.getPropertyValue( name ) }` );
+						if ( ! name.startsWith( '--' ) && ( pseudo || ! ignored.has( name ) ) ) parts.push( `${ name }:${ style.getPropertyValue( name ) }` );
 					}
 				}
 				const value = parts.join( ';' ).split( `url("${ page }#` ).join( 'url("#' );
