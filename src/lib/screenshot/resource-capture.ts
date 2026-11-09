@@ -466,6 +466,10 @@ export class CapturedResourceStore {
 	private replayDir?: string;
 	private replayBytes = 0;
 	private capturedBytes = 0;
+	private readonly totalByteLimit: number;
+	// The render-critical reserve is a slice of the run budget (an eighth, at
+	// most MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES); media spends the rest.
+	private readonly mediaByteLimit: number;
 	private readonly resolvedSrcsetImages = new Set< string >();
 
 	constructor(
@@ -492,8 +496,11 @@ export class CapturedResourceStore {
 					const cookie = await sourceSessionCookieHeader( origin );
 					return cookie ? { cookie } : undefined;
 				},
-			} )
+			} ),
+		totalByteLimit: number = MAX_CAPTURED_RESOURCE_TOTAL_BYTES
 	) {
+		this.totalByteLimit = totalByteLimit;
+		this.mediaByteLimit = totalByteLimit - Math.min( MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES, Math.floor( totalByteLimit / 8 ) );
 		this.origin = new URL( sourceUrl ).origin;
 		this.resourceDir = resolve( outputDir, 'resources' );
 		this.manifestPath = resolve( outputDir, 'resources', 'manifest.json' );
@@ -981,7 +988,7 @@ export class CapturedResourceStore {
 			const body = await responseBodyWithTimeout( response );
 			if (
 				body.length > MAX_CAPTURED_RESOURCE_BYTES ||
-				this.replayBytes + body.length > MAX_CAPTURED_RESOURCE_TOTAL_BYTES
+				this.replayBytes + body.length > this.totalByteLimit
 			)
 				return;
 			this.replayDir ??= mkdtempSync( join( tmpdir(), 'liberation-resource-replay-' ) );
@@ -1192,26 +1199,27 @@ export class CapturedResourceStore {
 	 *
 	 * Render-critical resources (stylesheets, fonts) may use the whole
 	 * aggregate; everything else is bounded by
-	 * {@link MAX_CAPTURED_MEDIA_TOTAL_BYTES}, so it can never spend the slice
+	 * the media limit (the run budget less the render-critical reserve), so it can never spend the slice
 	 * reserved for render-critical resources.
 	 */
 	private resourceByteCeiling( isVideoLike: boolean, renderCritical: boolean ): number {
 		const typeCeiling = isVideoLike ? MAX_CAPTURED_VIDEO_RESOURCE_BYTES : MAX_CAPTURED_RESOURCE_BYTES;
-		const budget = renderCritical ? MAX_CAPTURED_RESOURCE_TOTAL_BYTES : MAX_CAPTURED_MEDIA_TOTAL_BYTES;
+		const budget = renderCritical ? this.totalByteLimit : this.mediaByteLimit;
 		const remaining = Math.max( 0, budget - this.capturedBytes );
 		return Math.min( typeCeiling, remaining );
 	}
 
 	private reserveBytes( bytes: number, renderCritical: boolean ): void {
-		if ( this.capturedBytes + bytes > MAX_CAPTURED_RESOURCE_TOTAL_BYTES ) {
+		if ( this.capturedBytes + bytes > this.totalByteLimit ) {
+			// failure-class: operational
 			throw new Error(
-				`captured resource bytes exceed aggregate max ${ MAX_CAPTURED_RESOURCE_TOTAL_BYTES }`
+				`captured resource bytes exceed aggregate max ${ this.totalByteLimit }`
 			);
 		}
-		if ( ! renderCritical && this.capturedBytes + bytes > MAX_CAPTURED_MEDIA_TOTAL_BYTES ) {
+		if ( ! renderCritical && this.capturedBytes + bytes > this.mediaByteLimit ) {
 			// failure-class: representability:asset
 			throw new Error(
-				`captured media bytes exceed max ${ MAX_CAPTURED_MEDIA_TOTAL_BYTES } outside the render-critical reserve`
+				`captured media bytes exceed max ${ this.mediaByteLimit } outside the render-critical reserve`
 			);
 		}
 		this.capturedBytes += bytes;

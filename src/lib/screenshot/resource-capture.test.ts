@@ -117,6 +117,26 @@ describe( 'CapturedResourceStore', () => {
 		expect( diagnostics.resourceFailures ).toContainEqual( { url: imported, error: expect.stringContaining( 'mixed-content' ) } );
 	} );
 
+	it( 'spends the run byte budget it is given instead of the default aggregate', async () => {
+		const images = [ 'a', 'b', 'c' ].map( name => `https://source.example/${ name }.png` );
+		const html = `<style>${ images.map( ( url, index ) => `.i${ index }{background:url(${ url })}` ).join( '' ) }</style>`;
+		// 8000 bytes reserve 1000 for render-critical resources: two 3000-byte
+		// images fit the media slice, the third does not. The default keeps all.
+		for ( const [ limit, captured ] of [ [ 8000, 2 ], [ undefined, 3 ] ] as const ) {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-run-budget-' ) );
+			dirs.push( outputDir );
+			const fetchMedia = vi.fn( async ( url: string ) => ( {
+				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: Buffer.alloc( 3000, url ),
+			} ) );
+			const store = new CapturedResourceStore( outputDir, 'https://source.example/', fetchMedia, limit );
+			await store.captureDomDependencies( html, 'https://source.example/' );
+			await store.flush();
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+			expect( images.filter( url => manifest.resources[ url ] ) ).toHaveLength( captured );
+			expect( manifest.failures.filter( ( failure: { error: string } ) => failure.error.includes( 'exceed' ) ) ).toHaveLength( 3 - captured );
+		}
+	} );
+
 	it( 'blocks direct HTTP fonts and styles even with an HTTP document base', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-direct-' ) );
 		dirs.push( outputDir );

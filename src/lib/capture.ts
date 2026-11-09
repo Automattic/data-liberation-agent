@@ -579,6 +579,7 @@ async function runCaptureWebsite(
 	const assetQueue = new AssetAcquisitionQueue( outputDir, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
 	const screenshotResult = await captureScreenshots( {
 		governors: sourceGovernors,
+		maxTotalBytes: options.maxTotalBytes,
 		urls,
 		routeScope,
 		outputDir,

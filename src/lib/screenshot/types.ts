@@ -21,6 +21,7 @@ export function defaultViewports(mobile: { width: number; height: number }): Vie
 export const SCREENSHOT_DEVICE_SCALE_FACTOR = 1;
 
 export interface ScreenshotOpts {
+	maxTotalBytes?: number;
 	governors?: import('../source-request-governor.js').SourceRequestGovernors;
 	urls: string[];
 	outputDir: string;

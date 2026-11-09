@@ -281,7 +281,6 @@
 			"throw new Error( 'resource path escapes the capture directory' )": 2,
 			"throw new Error( `HTTP ${ fetched.status }` )": 1,
 			"throw new Error( `HTTP ${ status }` )": 1,
-			"throw new Error( `captured resource bytes exceed aggregate max ${ MAX_CAPTURED_RESOURCE_TOTAL_BYTES }` )": 1,
 			"throw new Error( `render dependency has unsupported content type ${ contentType || 'unknown' }` )": 1,
 			"throw new Error( `resource body ${ body.length } bytes exceeds max ${ byteCeiling }` )": 1,
 			"throw new Error( `resource body ${ declaredBytes } bytes exceeds max ${ byteCeiling }` )": 1
