@@ -1260,3 +1260,20 @@ describe( 'captureTriggeredDialogs', () => {
 		60_000
 	);
 } );
+
+it.skipIf( skipBrowserTests )( 'reports a load-more listing as unsupported without observing replay evidence for it', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	try {
+		await page.setContent( `<!doctype html><main><div role="list"><div role="listitem">One</div><div role="listitem" class="more" hidden>Two <a href="/two">Read more</a></div></div>
+		<button id="more">View more</button></main>
+		<script>window.resizes=0;addEventListener('resize',()=>window.resizes++);
+		document.getElementById('more').addEventListener('click',()=>{document.querySelector('.more').hidden=false;});</script>` );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		expect( report.states.find( item => item.trigger.id === 'more' ) ).toMatchObject( { status: 'unsupported', dialog: { role: 'listitem' } } );
+		// The resting-panel sweep resizes the viewport: evidence only a replayed surface uses.
+		expect( await page.evaluate( () => ( window as unknown as { resizes: number } ).resizes ) ).toBe( 0 );
+	} finally {
+		await page.close();
+	}
+} );
