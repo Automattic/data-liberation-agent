@@ -57,13 +57,21 @@ describe( 'device component reconciliation', () => {
 		expect( $.html() ).not.toContain( 'class="tablet"' );
 	} );
 
-	it( 'keeps re-parented rendered components separate when a stylesheet is linked', () => {
+	it.each( [
+		[ 'an uncaptured', undefined, false ],
+		[ 'a class-only', '.left{float:left}', true ],
+		[ 'an id-selecting', '.right #card{color:red}', false ],
+		[ 'an exact id attribute', '[id="card"]{color:red}', false ],
+		[ 'an id prefix attribute', '[id^="ca"]{color:red}', false ],
+		[ 'an importing', '@import "more.css";', false ],
+	] )( 're-parented components collapse with %s linked stylesheet only when it cannot select the renamed copy', ( _label, css, collapsed ) => {
 		const result = reconcileDeviceDocuments( {
 			desktop: document( '<div class="left"><section id="card">Card</section></div><div class="right"></div>' ),
 			tablet: document( '<div class="left"></div><div class="right"><section id="card">Card</section></div>' ),
-		}, selection );
-		expect( result.reconciled.has( 'tablet' ) ).toBe( false );
-		expect( result.evidence.devices.tablet ).toMatchObject( { outcome: 'dual-structural', reason: expect.stringContaining( 'linked stylesheet' ) } );
+		}, selection, href => href === '/layout.css' ? css : undefined );
+		expect( result.reconciled.has( 'tablet' ) ).toBe( collapsed );
+		if ( collapsed ) expect( cheerio.load( result.body )( '#card--data-blocks-engine-capture-tablet' ) ).toHaveLength( 1 );
+		else expect( result.evidence.devices.tablet ).toMatchObject( { outcome: 'dual-structural', reason: expect.stringContaining( 'linked stylesheet' ) } );
 	} );
 } );
 

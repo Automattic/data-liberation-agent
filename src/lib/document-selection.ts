@@ -3,7 +3,7 @@ import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import { parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
-import { reconcileDeviceDocuments, deviceIslandCss, type DeviceReconciliationEvidence } from './device-reconciliation.js';
+import { reconcileDeviceDocuments, deviceIslandCss, type DeviceReconciliationEvidence, type LinkedStylesheetReader } from './device-reconciliation.js';
 import { IntegrityError } from './failure-class.js';
 import { stylesheetCommutation } from './stylesheet-commutation.js';
 
@@ -84,11 +84,11 @@ function rootCss( css: string, bodyClasses: readonly string[] ): string {
 }
 
 /** Preserve each document's cascade and body flags, sharing only proven identities. */
-export function assembleDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, onUnparseable?: UnparseableStylesheetSink ): DeviceAssembly {
+export function assembleDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, onUnparseable?: UnparseableStylesheetSink, readLinkedStylesheet?: LinkedStylesheetReader ): DeviceAssembly {
 	validateDeviceSelection( selection );
 	const base = documents[ selection.defaultDocument ];
 	if ( ! base ) throw new Error( 'Default device document was not captured' );
-	const reconciliation = reconcileDeviceDocuments( documents, selection );
+	const reconciliation = reconcileDeviceDocuments( documents, selection, readLinkedStylesheet );
 	const wrapperKey = ( key: string ) => reconciliation.reconciled.has( key ) ? selection.defaultDocument : key;
 	const $ = cheerio.load( base );
 	$( 'style,link[rel~="stylesheet"],meta[name="viewport"],script:not([type="application/ld+json"])' ).remove();
