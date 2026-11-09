@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { load } from 'cheerio';
+import type { Element as DomElement } from 'domhandler';
 import type { Page } from 'playwright';
 import { normalizeCaptureState, normalizeGeneratedIds } from './capture-state.js';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
@@ -164,26 +166,31 @@ const PLAIN_NAME = /^-?[A-Za-z_][\w-]*$/;
 /**
  * Rename ids and classes in every string of a state, as whole tokens: ids after
  * `#` (selectors, CSS, fragment links) and in `id`, `for` and `aria-*` values of
- * captured markup; classes after `.` and in `class` values. One pass each, so a
- * pair of swapped names cannot translate twice.
+ * captured markup; classes after `.` and in `class` values. A name the maps do
+ * not hold but that is built from a renamed id (the id bounded by `-` or `_`,
+ * as a builder names a panel it portals out of the header) is renamed with it.
+ * One pass each, so a pair of swapped names cannot translate twice.
  */
 export function translateChromeNames< T >( state: T, names: { ids: ReadonlyMap< string, string >; classes: ReadonlyMap< string, string > } ): T {
+	const plain = ( map: ReadonlyMap< string, string > ) => new Map( [ ...map ].filter( ( [ from, to ] ) => from !== to && PLAIN_NAME.test( from ) && PLAIN_NAME.test( to ) ) );
+	const ids = plain( names.ids );
+	const alternation = [ ...ids.keys() ].sort( ( a, b ) => b.length - a.length ).map( name => name.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' );
+	const built = ids.size ? new RegExp( `(?<=^|[-_])(${ alternation })(?=[-_]|$)`, 'g' ) : null;
 	const rule = ( map: ReadonlyMap< string, string >, prefix: string, attributes: string ) => {
-		const pairs = [ ...map ].filter( ( [ from, to ] ) => from !== to && PLAIN_NAME.test( from ) && PLAIN_NAME.test( to ) );
-		if ( ! pairs.length ) return ( text: string ) => text;
-		const renamed = new Map( pairs );
-		const alternation = pairs.map( ( [ from ] ) => from ).sort( ( a, b ) => b.length - a.length ).map( name => name.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' );
-		const selector = new RegExp( `\\${ prefix }(${ alternation })(?![\\w-])`, 'g' );
-		const token = new RegExp( `(?<![\\w-])(${ alternation })(?![\\w-])`, 'g' );
+		const renamed = plain( map );
+		if ( ! renamed.size && ! built ) return ( text: string ) => text;
+		const rename = ( name: string ) => renamed.get( name ) ?? ( built && PLAIN_NAME.test( name ) ? name.replace( built, found => ids.get( found )! ) : name );
+		const selector = new RegExp( `\\${ prefix }(-?[A-Za-z_][\\w-]*)`, 'g' );
+		const token = /(?<![\w-])([\w-]+)(?![\w-])/g;
 		const attribute = new RegExp( `(\\s(?:${ attributes })=)(["'])(.*?)\\2`, 'g' );
 		return ( text: string ) => text
-			.replace( attribute, ( _, name: string, quote: string, value: string ) => `${ name }${ quote }${ value.replace( token, found => renamed.get( found )! ) }${ quote }` )
-			.replace( selector, ( _, found: string ) => `${ prefix }${ renamed.get( found )! }` );
+			.replace( attribute, ( _, name: string, quote: string, value: string ) => `${ name }${ quote }${ value.replace( token, rename ) }${ quote }` )
+			.replace( selector, ( _, found: string ) => `${ prefix }${ rename( found ) }` );
 	};
-	const ids = rule( names.ids, '#', 'id|for|aria-[\\w-]+' );
+	const id = rule( names.ids, '#', 'id|for|aria-[\\w-]+' );
 	const classes = rule( names.classes, '.', 'class' );
 	const walk = ( value: unknown ): unknown => {
-		if ( typeof value === 'string' ) return classes( ids( value ) );
+		if ( typeof value === 'string' ) return classes( id( value ) );
 		if ( Array.isArray( value ) ) return value.map( walk );
 		if ( value && typeof value === 'object' ) return Object.fromEntries( Object.entries( value as Record< string, unknown > ).map( ( [ key, child ] ) => [ key, walk( child ) ] ) );
 		return value;
@@ -195,6 +202,96 @@ export function translateChromeNames< T >( state: T, names: { ids: ReadonlyMap< 
  * The page's outermost chrome landmarks, in document order. With `mark`, each
  * root also gets `CHROME_ROOT_ATTRIBUTE` (cleared by `clearChromeMarks`).
  */
+/** The page a link names, for comparing it with a route: no fragment, no trailing slash. */
+function linkedPage( href: string, base: string ): string | undefined {
+	try {
+		const target = new URL( href, base );
+		if ( ! /^https?:$/.test( target.protocol ) ) return undefined;
+		return `${ target.origin }${ target.pathname.replace( /\/+$/, '' ) }${ target.search }`;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Move a reused state's current-route marking from the entrypoint to the route.
+ *
+ * Probed markup marks the link to the page it was probed on (`aria-current`)
+ * and often styles that link's item apart (a builder's `data-selected`, a
+ * class). The marking is learned from the markup itself: the attributes in
+ * which the current item's elements differ from their sibling items while the
+ * siblings agree with each other (so per-item values such as `href` or an id
+ * never count). The entrypoint's item takes the siblings' values and the item
+ * linking to the route takes the marking. Markup that marks no page is returned
+ * as is. When the marking cannot be learned (fewer than two like siblings, or
+ * the route's link sits in another structure), the result is `null` and the
+ * state must be probed on the route.
+ */
+export function retargetCurrentRoute( html: string, from: string, to: string ): string | null {
+	if ( ! html.includes( '<a' ) ) return html;
+	const $ = load( html, null, false );
+	const links = $( 'a[href]' ).toArray();
+	const page = ( link: DomElement ) => linkedPage( $( link ).attr( 'href' )!, from );
+	const isCurrent = ( link: DomElement ) => { const value = $( link ).attr( 'aria-current' ); return value !== undefined && value !== 'false'; };
+	const route = linkedPage( to, to );
+	const current = links.filter( isCurrent );
+	const targets = route ? links.filter( link => ! isCurrent( link ) && page( link ) === route ) : [];
+	if ( ! current.length || ( ! targets.length && current.every( link => page( link ) === route ) ) ) return html;
+	// A link's item: its outermost ancestor holding no other link.
+	const item = ( link: DomElement ): DomElement => {
+		let node = link;
+		while ( node.parent && node.parent.type === 'tag' && $( node.parent ).find( 'a[href]' ).length === 1 ) node = node.parent as DomElement;
+		return node;
+	};
+	const elements = ( root: DomElement ): DomElement[] => [ root, ...$( root ).find( '*' ).toArray() ];
+	const shape = ( root: DomElement ) => elements( root ).map( node => node.name ).join( ' ' );
+	for ( const link of current ) {
+		const own = item( link );
+		const siblings = links.filter( other => ! isCurrent( other ) ).map( item ).filter( root => root !== own && shape( root ) === shape( own ) );
+		if ( siblings.length < 2 ) return null;
+		const [ ownNodes, ...siblingNodes ] = [ own, ...siblings ].map( elements );
+		// Per element position: attribute → [marked value, unmarked value].
+		const marking = ownNodes!.map( ( node, index ) => {
+			const names = new Set( [ node, ...siblingNodes.map( nodes => nodes[ index ]! ) ].flatMap( each => Object.keys( each.attribs ) ) );
+			return [ ...names ].flatMap( name => {
+				const values = siblingNodes.map( nodes => nodes[ index ]!.attribs[ name ] );
+				const rest = values[ 0 ];
+				return values.every( value => value === rest ) && node.attribs[ name ] !== rest ? [ [ name, node.attribs[ name ], rest ] as const ] : [];
+			} );
+		} );
+		const apply = ( nodes: DomElement[], pick: 1 | 2 ) => nodes.forEach( ( node, index ) => {
+			for ( const change of marking[ index ]! ) {
+				const value = change[ pick ];
+				if ( value === undefined ) delete node.attribs[ change[ 0 ] ];
+				else node.attribs[ change[ 0 ] ] = value;
+			}
+		} );
+		const marked = targets.map( item );
+		if ( marked.some( root => shape( root ) !== shape( own ) ) ) return null;
+		apply( ownNodes!, 2 );
+		for ( const root of marked ) apply( elements( root ), 1 );
+	}
+	return $.html();
+}
+
+/** Every `html` string of a state, retargeted to the route; `null` when one cannot be. */
+function retargetState< T >( state: T, from: string, to: string ): T | null {
+	let failed = false;
+	const walk = ( value: unknown, key: string ): unknown => {
+		if ( typeof value === 'string' ) {
+			if ( key !== 'html' ) return value;
+			const html = retargetCurrentRoute( value, from, to );
+			if ( html === null ) failed = true;
+			return html ?? value;
+		}
+		if ( Array.isArray( value ) ) return value.map( item => walk( item, key ) );
+		if ( value && typeof value === 'object' ) return Object.fromEntries( Object.entries( value as Record< string, unknown > ).map( ( [ name, child ] ) => [ name, walk( child, name ) ] ) );
+		return value;
+	};
+	const result = walk( state, '' ) as T;
+	return failed ? null : result;
+}
+
 export async function readChromeLandmarks( page: Page, mark = false, builderRoots: readonly string[] = [] ): Promise< ChromeLandmark[] > {
 	await normalizeCaptureState( page );
 	await normalizeGeneratedIds( page );
@@ -477,7 +574,7 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 	if ( ! matched.size ) {
 		return { unmatchedRoots, decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ evidence.landmarks.map( item => item.label ).join( ', ' ) } there)`, landmarks: { ...counts, matched: 0 } }, states: [] };
 	}
-	const candidates = evidence.states.filter( item =>
+	const eligible = evidence.states.filter( item =>
 		matched.has( item.root ) && item.anchors.every( anchor => typeof anchor !== 'object' || 'outside' in anchor || matched.has( anchor.root ) )
 	).map( item => {
 		const root = matched.get( item.root )!;
@@ -488,24 +585,28 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 			classes: new Map( from.classes.map( ( name, index ) => [ name, to.classes[ index ]! ] ) ),
 		};
 		const translated = translateChromeNames( { state: item.state, prefixes: from.prefixes }, names );
-		const state = rebaseChromeState( translated.state, translated.prefixes, landmarks[ root ]!.prefixes );
+		const rebased = rebaseChromeState( translated.state, translated.prefixes, landmarks[ root ]!.prefixes );
+		// Markup that marks the entrypoint as the current page is moved to this
+		// route; markup whose marking cannot be moved is probed in place.
+		const state = retargetState( rebased, evidence.url, page.url() );
 		const expected: ChromeAnchor[] = item.anchors.map( anchor => {
 			if ( typeof anchor !== 'object' ) return anchor;
 			if ( 'outside' in anchor ) return 'id' in anchor.outside ? { outside: { id: translateChromeNames( `#${ anchor.outside.id }`, names ).slice( 1 ) } } : anchor;
 			return { root: matched.get( anchor.root )!, path: anchor.path };
 		} );
-		return { state, expected };
+		return state ? { state, expected } : undefined;
 	} );
+	const candidates = eligible.filter( ( candidate ): candidate is NonNullable< typeof candidate > => candidate !== undefined );
 	const resolved = await anchorSelectors( page, landmarks, candidates.map( candidate => selectorFields( candidate.state ).map( field => field.selector ) ) );
 	const reused = candidates.filter( ( candidate, index ) => JSON.stringify( resolved[ index ] ) === JSON.stringify( candidate.expected ) );
 	await page.evaluate( ( { selectors, attribute } ) => {
 		for ( const selector of selectors ) document.querySelector( selector )?.setAttribute( attribute, '' );
 	}, { selectors: reused.map( candidate => candidate.state.trigger.selector ), attribute: CHROME_REUSED_ATTRIBUTE } );
-	const rejected = candidates.length - reused.length;
+	const rejected = eligible.length - reused.length;
 	return {
 		decision: {
 			chromeReused: true,
-			reason: `${ matched.size } of ${ landmarks.length } chrome landmarks match the entrypoint; ${ reused.length } entrypoint states reused${ rejected ? `, ${ rejected } probed in place because their selectors name other nodes here` : '' }`,
+			reason: `${ matched.size } of ${ landmarks.length } chrome landmarks match the entrypoint; ${ reused.length } entrypoint states reused${ rejected ? `, ${ rejected } probed in place because their selectors name other nodes here or their current-route marking cannot be moved` : '' }`,
 			landmarks: { ...counts, matched: matched.size },
 			reusedStates: reused.length,
 			...( rejected ? { rejectedStates: rejected } : {} ),
