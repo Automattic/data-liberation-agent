@@ -5,6 +5,36 @@ import * as cheerio from 'cheerio';
 import { expect, it } from 'vitest';
 import { capturedStyleHoistContext, materializeSharedStylesheets } from './shared-stylesheets.js';
 
+it( 'hoists only real document styles, not embedded HTML or inert content', () => {
+	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+	const root = mkdtempSync( join( parent, 'shared-stylesheet-inert-' ) );
+	try {
+		const websiteDir = join( root, 'website' ); mkdirSync( websiteDir );
+		const css = '.tile { color: red; }';
+		const embeddedStyle = '<style>html, body { overflow: hidden; }</style>';
+		const dataCode = `<!DOCTYPE html><html><head>${ embeddedStyle }</head><body>x</body></html>`;
+		const template = `<style>${ css }</style>${ embeddedStyle }`;
+		const html = `<html><head><style>${ css }</style></head><body><div data-code="${ dataCode }"></div><!--${ embeddedStyle }--><script>${ embeddedStyle }</script><template>${ template }</template><noscript>${ embeddedStyle }</noscript></body></html>`;
+		const entries = [ 'a', 'b' ].map( name => {
+			const htmlPath = join( root, `${ name }.html` ); writeFileSync( htmlPath, html );
+			return { url: `https://example.test/${ name }/`, htmlPath, styleHoistContext: capturedStyleHoistContext( html ) };
+		} );
+		const result = materializeSharedStylesheets( { entries, websiteDir, sourceUrl: 'https://example.test/', mediaReplacements: new Map(), resourceReplacements: new Map(), rejectedReplacementKeys: new Set() } );
+		const contents = result.assets.map( asset => readFileSync( join( root, asset.path ), 'utf8' ) );
+		expect( contents.some( content => content.includes( 'overflow: hidden' ) ) ).toBe( false );
+		expect( contents ).toEqual( [ css ] );
+		for ( const entry of entries ) {
+			const rewritten = readFileSync( entry.htmlPath, 'utf8' );
+			const $ = cheerio.load( rewritten );
+			expect( rewritten ).toContain( `data-code="${ dataCode }"` );
+			expect( $( 'div' ).attr( 'data-code' ) ).toBe( dataCode );
+			expect( $( 'template' ).html() ).toBe( template );
+			expect( $( 'head style' ) ).toHaveLength( 0 );
+			expect( $( 'link[rel="stylesheet"]' ) ).toHaveLength( 1 );
+		}
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );
+
 it( 'localizes and deduplicates shared CSS while preserving media, source restrictions and cascade positions in private staged pages', () => {
 	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 	const root = mkdtempSync( join( parent, 'shared-stylesheet-stage-' ) );
