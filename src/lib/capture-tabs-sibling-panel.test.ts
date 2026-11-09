@@ -5,12 +5,13 @@ import { expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import type { CapturedComponent } from './screenshot/component-states.js';
 
-// #1617: tabs without aria-controls that re-render a sibling panel.
+// #1617: tabs without aria-controls that re-render a sibling panel. The
+// heading re-renders unchanged, as an app re-rendering its whole detail view does.
 const source = `<!doctype html><html><head><meta charset="utf-8"><title>Tabs with re-rendered sibling panel</title></head><body><main>
-<div class="tabs" role="tablist"><button role="tab" data-tab="a">Alpha</button><button role="tab" data-tab="b">Beta</button><button role="tab" data-tab="c">Gamma</button></div>
+<div id="heading"></div><div class="tabs" role="tablist"><button role="tab" data-tab="a">Alpha</button><button role="tab" data-tab="b">Beta</button><button role="tab" data-tab="c">Gamma</button></div>
 <div id="panel"></div></main>
 <script>const data={a:'Alpha panel text',b:'Beta panel text',c:'Gamma panel text'};let s='a';
-function render(){document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===s)));const p=document.getElementById('panel');p.replaceChildren();const h=document.createElement('p');h.textContent=data[s];p.append(h)}
+function render(){document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===s)));document.getElementById('heading').innerHTML='<h2>Project</h2>';const p=document.getElementById('panel');p.replaceChildren();const h=document.createElement('p');h.textContent=data[s];p.append(h)}
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{s=b.dataset.tab;render()}));render();</script></body></html>`;
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('binds tabs without aria-controls to the sibling panel their activation re-renders', async () => {

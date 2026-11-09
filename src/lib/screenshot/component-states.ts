@@ -84,8 +84,21 @@ const siblingPanel = ({ selector, panel, before, initial, state, index }: { sele
 	for (let node = root, depth = 0; node?.parentElement && node !== document.body && depth < 3; node = node.parentElement, depth++) {
 		for (const sibling of Array.from(node.parentElement.children)) if (sibling !== node && !sibling.matches('script,style,template,link,meta,noscript') && regions.length < 48) regions.push(sibling);
 	}
+	// Compare authored markup only: a re-render drops capture instrumentation
+	// from regions whose content it leaves unchanged.
+	const markup = (element: Element) => {
+		const clone = element.cloneNode(true) as Element;
+		for (const node of [clone, ...Array.from(clone.querySelectorAll('*'))]) {
+			for (const name of node.getAttributeNames()) if (name.startsWith('data-blocks-engine-capture-')) node.removeAttribute(name);
+		}
+		return clone.outerHTML;
+	};
 	if (!panel && !before) return { regions: regions.map(region => region.outerHTML) };
-	const changed = panel ? -1 : regions.findIndex((region, position) => before![position] !== undefined && region.outerHTML !== before![position]);
+	const changed = panel ? -1 : regions.findIndex((region, position) => {
+		const previous = document.createElement('template');
+		previous.innerHTML = before![position] ?? '';
+		return previous.content.firstElementChild !== null && markup(region) !== markup(previous.content.firstElementChild);
+	});
 	const region = panel ? document.querySelector(panel) : regions[changed];
 	if (!root || !region || region.contains(root)) return null;
 	const path = (element: Element): string => {
