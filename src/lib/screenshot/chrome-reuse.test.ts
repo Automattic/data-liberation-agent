@@ -223,7 +223,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 
 	it( 'probes the shared header once, on the entrypoint, and on no other route', () => {
 		expect( result.captured ).toBe( 3 );
-		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 2, states: 4, captured: 3, unanchored: 0 } );
+		expect( result.sharedChrome?.profiles.desktop ).toMatchObject( { status: 'captured', landmarks: 3, states: 4, captured: 3, unanchored: 0 } );
 		// One page instance clicked the shared header: the one-time probe of the entrypoint.
 		const shared = clicks.filter( click => click.control === 'header' && click.path !== '/landing' );
 		expect( shared.length ).toBeGreaterThan( 0 );
@@ -234,7 +234,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 		expect( clicksOn( 'about', 'header' ) ).toEqual( [] );
 		expect( clicksOn( 'about', 'info' ) ).toEqual( [] );
 		for ( const path of [ '', 'about' ] ) {
-			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: 2, entrypoint: 2, matched: 2 }, reusedStates: 4 } );
+			expect( entries[ url( path ) ]!.sharedChrome ).toMatchObject( { chromeReused: true, landmarks: { route: 3, entrypoint: 3, matched: 3 }, reusedStates: 3, reusedOutcomes: 4 } );
 			expect( entries[ url( path ) ]!.profiles!.desktop!.sharedChrome ).toEqual( entries[ url( path ) ]!.sharedChrome );
 		}
 	} );
@@ -245,7 +245,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 			[ 'captured', 'Products', url( '' ) ],
 			[ 'captured', 'Contact', url( '' ) ],
 			[ 'captured', 'Info', url( '' ) ],
-			[ 'no-dialog', 'Subscribe to our Newsletter', url( '' ) ],
 		] );
 		// Where the panel renders outside the landmark (the Info portal at body
 		// level), its state is still chrome evidence, addressed by the node's own id.
@@ -265,12 +264,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 		expect( footerClicks.length ).toBeGreaterThan( 0 );
 		expect( new Set( footerClicks.map( click => click.instance ) ).size ).toBe( 1 );
 		expect( clicksOn( 'about', 'footer' ) ).toEqual( [] );
-		expect( entries[ url( 'about' ) ]!.interactions!.states.find( state => state.trigger.label === 'Subscribe to our Newsletter' ) ).toMatchObject( { status: 'no-dialog', reusedFrom: url( '' ) } );
+		expect( entries[ url( 'about' ) ]!.interactions!.states.find( state => state.trigger.label === 'Subscribe to our Newsletter' ) ).toBeUndefined();
+		expect( entries[ url( 'about' ) ]!.sharedChrome!.reusedOutcomes ).toBe( 4 );
 	} );
 
 	it( 'probes a route whose header and footer link differ in place', () => {
 		const landing = entries[ url( 'landing' ) ]!;
-		expect( landing.sharedChrome ).toMatchObject( { chromeReused: false, landmarks: { route: 2, entrypoint: 2, matched: 0 } } );
+		expect( landing.sharedChrome ).toMatchObject( { chromeReused: false, landmarks: { route: 3, entrypoint: 3, matched: 0 } } );
 		expect( landing.sharedChrome!.reason ).toContain( 'no chrome landmark matches' );
 		expect( clicksOn( 'landing', 'header' ).length ).toBeGreaterThan( 0 );
 		expect( clicksOn( 'landing', 'footer' ).length ).toBeGreaterThan( 0 );
