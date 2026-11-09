@@ -3,8 +3,9 @@ import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import { parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
-import { reconcileDeviceDocuments, deviceIslandCss, type DeviceReconciliationEvidence, type LinkedStylesheetReader } from './device-reconciliation.js';
+import { reconcileDeviceDocuments, deviceIslandCss, RESPONSIVE_FRAGMENT, type DeviceReconciliationEvidence, type LinkedStylesheetReader } from './device-reconciliation.js';
 import { IntegrityError } from './failure-class.js';
+import { RESPONSIVE_FRAGMENT_RUNTIME } from './responsive-assembly.js';
 import { stylesheetCommutation } from './stylesheet-commutation.js';
 
 /** Platform-owned, ordered request-identity rules. No viewport/capability inference. */
@@ -205,6 +206,8 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	head.prepend( $( '<style data-blocks-engine-capture-device-visibility>' ).text( visibility + deviceIslandCss( Object.keys( viewports ), selection.defaultDocument ) ) );
 	const missing = selection.documents.filter( key => ! documents[ key ] );
 	if ( missing.length ) $( 'body' ).append( '<p data-blocks-engine-capture-device-unavailable role="status">This source device document was not captured.</p>' );
+	// Per-device anchor landings share one fragment; resolve to the rendered copy.
+	if ( $( `[${ RESPONSIVE_FRAGMENT }]` ).length ) $( 'body' ).append( `<script data-blocks-engine-capture-responsive-fragments>${ RESPONSIVE_FRAGMENT_RUNTIME }</script>` );
 	return { html: $.html(), selection, viewports, roots, missing, evidence: reconciliation.evidence };
 }
 

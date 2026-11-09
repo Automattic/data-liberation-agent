@@ -1652,7 +1652,7 @@ function markResponsiveCounterparts(
  * fragment in markup so consumers can select the visible copy; the portable
  * runtime applies that same contract on navigation and same-page clicks.
  */
-const RESPONSIVE_FRAGMENT_RUNTIME = `(function(){
+export const RESPONSIVE_FRAGMENT_RUNTIME = `(function(){
 function resolve(){var fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}
 var targets=Array.prototype.filter.call(document.querySelectorAll('[data-blocks-engine-capture-responsive-fragment]'),function(el){return el.getAttribute('data-blocks-engine-capture-responsive-fragment')===fragment&&el.getClientRects().length;});
 if(targets.length===1)targets[0].scrollIntoView();}
