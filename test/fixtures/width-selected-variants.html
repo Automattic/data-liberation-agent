@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Width selected layouts</title>
+<style>
+body{margin:0;font:16px sans-serif}header,main,footer{padding:16px}
+@media(max-width:809px){.hidden-phone{display:none!important}}
+@media(min-width:810px) and (max-width:1199px){.hidden-tablet{display:none!important}}
+@media(min-width:1200px){.hidden-desktop{display:none!important}}
+</style></head><body>
+<header><a href="#about">About</a><a href="#work">Work</a></header>
+<main><section id="about"><h1>About this project</h1>
+<div class="ssr-variant hidden-tablet hidden-desktop"><p>Phone layout</p></div>
+<div class="ssr-variant hidden-phone hidden-desktop"><article>Tablet layout</article></div>
+<div class="ssr-variant hidden-phone hidden-tablet"><aside>Desktop layout</aside></div>
+</section><section id="work"><h2>Selected work</h2><p>Common content</p></section>
+<form><label>Email<input name="email" type="email"></label><button>Send</button></form></main>
+<footer>Project information</footer>
+<script type="module" data-framer-bundle>
+const breakpoint=innerWidth<810?'phone':innerWidth<1200?'tablet':'desktop';
+document.querySelectorAll('.ssr-variant.hidden-'+breakpoint).forEach(node=>node.remove());
+</script>
+</body></html>
