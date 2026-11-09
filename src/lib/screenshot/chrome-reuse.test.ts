@@ -9,7 +9,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { CAPTURED_INTERACTIONS_SCHEMA, resolveInteractionComponents, type ComponentPage } from '../captured-interactions.js';
 import { routeComponents, type CapturedComponent } from './component-states.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
-import { anchorChromeStates, readChromeLandmarks, reuseSharedChrome, rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
+import { anchorChromeStates, readChromeLandmarks, retargetCurrentRoute, reuseSharedChrome, rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
@@ -58,6 +58,18 @@ describe( 'shared chrome selectors', () => {
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies under renamed ids', () => {
+	// A builder menu marks the current page's link and styles its item apart.
+	const items = ( current?: string, pages = [ 'a', 'b', 'c' ] ) => pages.map( path => `<li class="item${ path === current ? ' on' : '' }" data-selected="${ path === current }"><a href="/${ path }"${ path === current ? ' aria-current="page"' : '' }>${ path }</a></li>` ).join( '' );
+
+	it.each( [
+		[ 'unmarks the entrypoint on a route the menu does not list', items( 'a' ), 'z', items() ],
+		[ 'refuses a marking it cannot learn from one sibling', items( 'a', [ 'a', 'z' ] ), 'z', null ],
+		[ 'keeps a menu that marks no page', items(), 'b', items() ],
+		[ 'keeps the marking on the page it was probed on', items( 'a' ), 'a', items( 'a' ) ],
+	] )( '%s', ( _label, html, route, expected ) => {
+		expect( retargetCurrentRoute( html, 'https://fixture/a', `https://fixture/${ route }/` ) ).toBe( expected );
+	} );
+
 	it( 'matches a copy that renders alike under renamed ids and replays its states under the route\'s names', async () => {
 		const browser = await chromium.launch();
 		try {
@@ -67,7 +79,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 			const fixture = ( id: string, { color = 'red', text = 'Search', current = 'a', portal = true } = {} ) => `<style>#${ id }_panel{color:${ color }}.${ id }-box{padding:2px}[aria-current]{color:green}</style>
 <header id="${ id }"><a href="/a"${ current === 'a' ? ' aria-current="page"' : '' }>A</a><a href="/b"${ current === 'b' ? ' aria-current="page"' : '' }>B</a>
 <button id="${ id }_open" aria-controls="${ id }_panel">${ text }</button><div id="${ id }_panel" class="panel ${ id }-box">Panel</div></header>
-${ portal ? '<div id="site-panel">Portal</div>' : '' }`;
+<div id="${ id }_r_menu" class="${ id }_r_menu">Menu</div>${ portal ? '<div id="site-panel">Portal</div>' : '' }`;
 			const state = ( id: string ): CapturedDialogInteraction => ( {
 				status: 'captured',
 				trigger: { selector: `#${ id }_open`, tag: 'button', ariaHaspopup: '', dataBindings: {} },
@@ -76,17 +88,24 @@ ${ portal ? '<div id="site-panel">Portal</div>' : '' }`;
 			await view.setContent( fixture( 'top-a1' ) );
 			const landmarks = await readChromeLandmarks( view );
 			const portal: CapturedDialogInteraction = { status: 'no-dialog', trigger: { selector: '#top-a1_open', tag: 'button', ariaHaspopup: '', dataBindings: {} }, dialog: { selector: '#site-panel', tag: 'div', ariaModal: false, html: '', htmlBytes: 0, htmlTruncated: false } };
-			const evidence = { url: 'https://fixture/', landmarks, ...await anchorChromeStates( view, landmarks, [ state( 'top-a1' ), portal ] ) };
+			// A panel the builder portals out of the header, named after the header's id.
+			const menu: CapturedDialogInteraction = { status: 'captured', trigger: { selector: '#top-a1_open', tag: 'button', ariaHaspopup: '', dataBindings: {} }, dialog: { selector: '#top-a1_r_menu', tag: 'div', ariaModal: false, html: `<div id="top-a1_r_menu" class="top-a1_r_menu"><ul>${ items( 'a' ) }</ul></div>`, htmlBytes: 1, htmlTruncated: false } };
+			const evidence = { url: 'https://fixture/', landmarks, ...await anchorChromeStates( view, landmarks, [ state( 'top-a1' ), portal, menu ] ) };
 
-			await view.setContent( fixture( 'top-b2', { current: 'b', portal: false } ) );
+			await view.route( 'https://fixture/**', route => route.fulfill( { contentType: 'text/html', body: fixture( 'top-b2', { current: 'b', portal: false } ) } ) );
+			await view.goto( 'https://fixture/b' );
 			const reuse = await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } );
-			// The copy is reused, translated whole-token; a selector naming a node
-			// the route lacks (the body-level portal) still sends its state in place.
-			expect( reuse.decision ).toMatchObject( { landmarks: { matched: 1 }, reusedStates: 1, rejectedStates: 1 } );
-			expect( reuse.states[ 0 ] ).toMatchObject( {
+			// The copy is reused under the route's names, with names built from a
+			// renamed id and the menu marking this route as current; a selector
+			// naming a node the route lacks (the unrelated body-level portal) still
+			// sends its state in place.
+			expect( reuse.decision ).toMatchObject( { landmarks: { matched: 1 }, reusedStates: 2, rejectedStates: 1 } );
+			expect( reuse.states ).toMatchObject( [ {
 				trigger: { selector: '#top-b2_open' },
-				dialog: { selector: '#top-b2_panel', html: '<div id="top-b2_panel" class="panel top-b2-box" aria-labelledby="top-b2_open">Panel</div>', css: '#top-b2_panel.top-b2-box{color:red}#top-a1_panelx{}' },
-			} );
+				dialog: { selector: '#top-b2_panel', html: '<div id="top-b2_panel" class="panel top-b2-box" aria-labelledby="top-b2_open">Panel</div>', css: '#top-b2_panel.top-b2-box{color:red}#top-b2_panelx{}' },
+			}, {
+				dialog: { selector: '#top-b2_r_menu', html: `<div id="top-b2_r_menu" class="top-b2_r_menu"><ul>${ items( 'b' ) }</ul></div>` },
+			} ] );
 
 			// Other styling, other text, or a reference whose target is gone is other chrome.
 			for ( const variant of [ { color: 'blue' }, { text: 'Find' } ] ) {
