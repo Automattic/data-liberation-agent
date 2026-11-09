@@ -614,8 +614,30 @@ export async function captureTriggeredDialogs(
 			// resolved through the trigger's ownership relationship.
 			dialog = { ...snapshot, ...( dialog.role ? { role: dialog.role } : {} ) };
 			if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
-
+			const resolvedRole = dialog.role === 'navigation' ? 'menu' : dialog.role ?? ( [ 'dialog', 'listbox', 'menu' ].includes( trigger.ariaHaspopup ) ? trigger.ariaHaspopup : undefined );
+			const classified = dialog.tag === 'dialog' || [ 'dialog', 'listbox', 'menu' ].includes( resolvedRole ?? '' );
 			const bounded = boundHtml( dialog.html );
+			const surface = {
+				selector: baselineSelector ?? dialog.selector,
+				tag: dialog.tag,
+				...( dialog.id ? { id: dialog.id } : {} ),
+				...( resolvedRole ? { role: resolvedRole } : {} ),
+				ariaModal: dialog.ariaModal,
+				...( dialog.ariaLabel ? { ariaLabel: dialog.ariaLabel } : {} ),
+				...( dialog.presentation ? { presentation: dialog.presentation } : {} ),
+				html: bounded.html,
+				htmlBytes: bounded.bytes,
+				htmlTruncated: bounded.truncated,
+			};
+			// An unclassified surface is reported, never replayed: none of the
+			// replay evidence below is observed for it. It is still closed so
+			// later probes start from the resting page.
+			if ( ! classified ) {
+				states.push( { status: 'unsupported', error: 'Surface has no supported semantic role', trigger: triggerRecord( trigger ), dialog: surface } );
+				await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
+				if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
+				continue;
+			}
 			const addedCss = await rulesAddedSinceActivation( page );
 			// A modal can be shown by a class its runtime adds to an ancestor, such
 			// as an open-menu class on the body. Record that only when opening it
@@ -630,24 +652,12 @@ export async function captureTriggeredDialogs(
 			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			const restingInline = await observeInlineRestingPanel( page, trigger.probeSelector, dialog.selector );
-			const resolvedRole = dialog.role === 'navigation' ? 'menu' : dialog.role ?? ( [ 'dialog', 'listbox', 'menu' ].includes( trigger.ariaHaspopup ) ? trigger.ariaHaspopup : undefined );
-			const classified = dialog.tag === 'dialog' || [ 'dialog', 'listbox', 'menu' ].includes( resolvedRole ?? '' );
 			states.push( {
-				status: classified ? 'captured' : 'unsupported',
-				...( classified ? {} : { error: 'Surface has no supported semantic role' } ),
+				status: 'captured',
 				trigger: triggerRecord( trigger ),
 				dialog: {
-					selector: baselineSelector ?? dialog.selector,
-					tag: dialog.tag,
-					...( dialog.id ? { id: dialog.id } : {} ),
-					...( resolvedRole ? { role: resolvedRole } : {} ),
-					ariaModal: dialog.ariaModal,
+					...surface,
 					...( restingInline ? { restingInline: true } : {} ),
-					...( dialog.ariaLabel ? { ariaLabel: dialog.ariaLabel } : {} ),
-					...( dialog.presentation ? { presentation: dialog.presentation } : {} ),
-					html: bounded.html,
-					htmlBytes: bounded.bytes,
-					htmlTruncated: bounded.truncated,
 					...( addedCss ? { css: addedCss } : {} ),
 					...( closeControl ? { closeControl } : {} ),
 					...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
