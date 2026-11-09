@@ -94,7 +94,7 @@ describe( 'device entrance reconciliation', () => {
 		expect( JSON.parse( $( '#entrance' ).attr( ENTRANCE )! ).startupContexts ).toEqual( [ ...desktop.startupContexts, tablet.startupContexts[ 0 ] ] );
 	} );
 
-	for ( const difference of [ 'attributes', 'threshold', 'rootMargin', 'cssAnimations', 'repeat', 'conflicting-context', 'invalid', 'missing' ] ) it( `retains a separate device for ${ difference } evidence`, () => {
+	for ( const difference of [ 'attributes', 'threshold', 'rootMargin', 'cssAnimations', 'repeat', 'conflicting-context', 'invalid' ] ) it( `retains a separate device for ${ difference } evidence`, () => {
 		const desktop = state( 1440, 900 ), tablet = state( 980, 1148 );
 		if ( difference === 'attributes' ) tablet.attributes[ 'data-active' ].before = 'pending';
 		if ( difference === 'threshold' ) tablet.threshold = [ 0.5 ];
@@ -102,12 +102,27 @@ describe( 'device entrance reconciliation', () => {
 		if ( difference === 'cssAnimations' ) tablet.cssAnimations[ 0 ].name = 'other';
 		if ( difference === 'repeat' ) tablet.repeat = true;
 		if ( difference === 'conflicting-context' ) tablet.startupContexts = [ { width: 1440, height: 900, started: true } ];
-		const tabletHtml = difference === 'missing' ? '<body><main id="content"><section id="entrance" data-active="true">Entrance</section></main></body>' : documentWithEntrance( difference === 'invalid' ? null : tablet );
+		const tabletHtml = documentWithEntrance( difference === 'invalid' ? null : tablet );
 		const result = reconcileDeviceDocuments( { desktop: documentWithEntrance( desktop ), tablet: tabletHtml }, selection );
 		expect( result.reconciled.has( 'tablet' ) ).toBe( false );
 		expect( result.evidence.devices.tablet ).toMatchObject( { outcome: 'dual-structural', reason: expect.stringContaining( 'Viewport entrance evidence' ) } );
 		const $ = cheerio.load( result.body );
 		expect( JSON.parse( $( '#entrance' ).attr( ENTRANCE )! ) ).toEqual( desktop );
+	} );
+
+	it.each( [
+		[ 'desktop and tablet', [ 'desktop', 'tablet' ], [ 'desktop', 'tablet' ] ],
+		[ 'only the phone', [ 'phone' ], [ 'phone' ] ],
+		[ 'every device', [ 'desktop', 'tablet', 'phone' ], undefined ],
+	] )( 'collapses an entrance the source plays on %s, scoped to those devices', ( _label, playing, devices ) => {
+		const settled = '<body><main id="content"><section id="entrance" data-active="true">Entrance</section></main></body>';
+		const keys = [ 'desktop', 'tablet', 'phone' ];
+		const documents = Object.fromEntries( keys.map( key => [ key, playing.includes( key ) ? documentWithEntrance( state( 1440, 900 ) ) : settled ] ) );
+		const result = reconcileDeviceDocuments( documents, { ...selection, documents: keys } );
+		expect( [ ...result.reconciled ] ).toEqual( [ 'tablet', 'phone' ] );
+		const $ = cheerio.load( result.body );
+		expect( $( '[id^="entrance"]' ) ).toHaveLength( 1 );
+		expect( JSON.parse( $( '#entrance' ).attr( ENTRANCE )! ).devices ).toEqual( devices );
 	} );
 
 	it( 'does not let a later device overwrite an earlier device startup observation', () => {
