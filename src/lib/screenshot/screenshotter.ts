@@ -933,7 +933,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			) {
 				const replay = resourceStore.getReplayableResponse(
 					request.url(),
-					request.resourceType()
+					request.resourceType(),
+					requestHeaders
 				);
 				if ( replay ) {
 					await route.fulfill( {
