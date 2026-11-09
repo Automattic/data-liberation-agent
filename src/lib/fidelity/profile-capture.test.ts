@@ -36,6 +36,13 @@ async function captureFixture( failTablet = false, captureProfileArtifacts = fal
 const target=document.getElementById('motion-${ identity }');
 const animation=new Animation(new KeyframeEffect(target,[{opacity:'0.25'},{opacity:'1'}],{duration:'auto',fill:'both'}),new ViewTimeline({subject:target}));animation.play();
 function geometry(){target.style.width=innerWidth*${ identity === 'desktop' ? 0.5 : identity === 'mobile' ? 0.4 : 0.3 }+'px';}addEventListener('resize',geometry);geometry();
+// A source can choose its internal coordinate space from DPR, then scale it
+// back to the same visible box. Fractional capture DPR changes content size
+// even though a bounding-box-only check would still pass (Canva #1594).
+const frame=document.createElement('div');frame.id='runtime-frame';
+const frameWidth=devicePixelRatio<1?260:256;
+frame.style.cssText='width:'+frameWidth+'px;height:100px;transform-origin:0 0;transform:scale('+307.425/frameWidth+')';
+frame.textContent='Runtime coordinate space';document.body.append(frame);
 </script>` : '';
 		response.end( `<!doctype html><html><head><meta charset="utf-8"><base href="/assets/${ identity }/"><meta id="${ identity }-viewport" name="viewport" content="${ meta }"><title>Neutral capture source</title><style>body{margin:0;font:16px Arial}main{width:${ width };height:400px}h1{margin:0;font:24px Arial}img{width:80px;height:60px}@media(max-width:980px){main{border:0}}@media(device-width:402px){body.mobile h1{font-size:29px}body.mobile img{width:96px;height:72px}}</style></head><body class="${ identity }"><main data-source-document="${ identity }"><h1>${ identity } source document</h1><p>Authored baseline content.</p><img src="${ identity }.svg" alt="${ identity } source image"></main>${ artifacts }</body></html>` );
 	} );
@@ -78,6 +85,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'profile acquisiti
 			expect( JSON.stringify( report ) ).toContain( `motion-${ key }` );
 			expect( readFileSync( join( directory, profile.html! ), 'utf8' ) ).toContain( `data-blocks-engine-capture-native-profile="${ key }"` );
 			if ( key !== 'tablet' ) expect( route.nativeViewTimelines![ key ] ).toEqual( evidence );
+		}
+		// Assert the source coordinate space, not just its invariant outer box.
+		expect( route.profiles!.desktop!.deviceScaleFactor ).toBe( 1 );
+		expect( readFileSync( join( directory, route.profiles!.desktop!.html! ), 'utf8' ) ).toMatch( /id="runtime-frame"[^>]*width: 256px/ );
+		const reference = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
+		for ( const entry of reference.entries.filter( entry => entry.profile === 'desktop' ) ) {
+			expect( readFileSync( join( directory, entry.document!.path ), 'utf8' ) ).toMatch( /id="runtime-frame"[^>]*width: 256px/ );
 		}
 		expect( route.profiles!.desktop!.fluid ).toEqual( route.fluid );
 		expect( route.profiles!.mobile!.fluid ).toEqual( route.fluidMobile );

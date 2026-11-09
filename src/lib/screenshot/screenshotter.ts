@@ -2563,9 +2563,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Each profile loads as a real browser: builders can select viewport
 	// metadata, navigation, and layout from the identity, and anti-bot
 	// challenges refuse Playwright's default HeadlessChrome one.
-	// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every desktop
-	// screenshot while the layout pass stays at the logical viewport (so CSS
-	// media queries hit their real desktop branch); see types.ts.
+	// Keep desktop DPR native: source scripts can use it for geometry as well
+	// as raster resolution. Reducing it is not a screenshot-only optimization.
 	// Resolve device/caller overrides first. createSourceContext then applies the
 	// matching wire and navigator identity to this final UA, not the desktop seed.
 	const profileContextOptions = ( viewport: Viewport, sessionContext: BrowserContextOptions ): BrowserContextOptions => {
