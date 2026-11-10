@@ -1152,6 +1152,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		const dismissedEarly = await dismissOverlays( page, { consentViewports: args.consentViewports } );
 		await triggerLazyLoad( page, args.learnFluid === true, { expandContent: false } );
 		const dismissedLate = await dismissOverlays( page, { consentViewports: args.consentViewports } );
+		args.phases?.enter( 'baseline' );
 		const dismissedHere = [ ...dismissedEarly, ...dismissedLate ];
 		if ( dismissedHere.length > 0 ) {
 			// Accumulates within one run (desktop + mobile both append); on a resumed
@@ -1218,6 +1219,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	// --- html (desktop only) --------------------------------------------------
 	if ( plan.captureGeometry ) {
+		args.phases?.enter( 'layout-geometry' );
 		let capture: GeometryCapture;
 		try {
 			capture = await captureLayoutGeometry( page, viewport );
@@ -1237,6 +1239,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// geometry; their root classes are not evidence of source width behavior.
 	let rootClassWidths: RootClassContract[] = [];
 	if ( isDesktop && plan.captureHtml ) {
+		args.phases?.enter( 'root-class' );
 		try {
 			const startedAt = Date.now();
 			const onUnproven = ( reason: string ) => args.diagnostics?.push( {
@@ -1265,7 +1268,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	// The root-class ladder resized the page; a runtime that remounts on resize
 	// replayed its script entrances. Read the initial document at rest.
+	args.phases?.enter( 'script-motion' );
 	await settleScriptEntrances();
+	args.phases?.enter( 'baseline-snapshot' );
 	// Initial component states are immutable evidence, read before exploration.
 	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );

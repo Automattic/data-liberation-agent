@@ -7,6 +7,16 @@
  * accumulate. The result is recorded on the profile's manifest entry, making
  * every capture its own performance evidence.
  *
+ * Pre-observation phases in capture order:
+ * - `lazy-load`: overlay dismissal around the lazy-load scroll only.
+ * - `baseline`: post-scroll responsiveness, adapter preparation, responsive
+ *   image collection and baseline pose / generated-ID reset.
+ * - `layout-geometry`: optional layout geometry capture and sidecar write.
+ * - `root-class`: optional source width ladder and root-class contracts.
+ * - `script-motion`: entrance settling after the root-class resize ladder.
+ * - `baseline-snapshot`: initial component / document evidence and serialization.
+ * These end at `observe-source`; optional steps only enter when performed.
+ *
  * `onEnter`, when given, observes every phase as it opens, so a stalled route
  * names the step it is in while it is still running (in-progress phase
  * evidence, #817).
