@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.195] - 2026-11-10
+
+### Changed
+- regenerate plugin bundles
+- detect fluid rest with a 200 ms quiet window polled per frame
+- give each pre-observe step its own phase
+- Bound governed source admission by the caller's request timeout
+- Measure scroll-reveal elements in their settled state
+- Capture Framer width-selected layouts as one SSR-variant tree
+- Keep body-linked stylesheets and the shared body id in dual assembly
+- read chrome styles only for structurally matching roots
+
 ## [0.33.194] - 2026-11-10
 
 ### Changed
