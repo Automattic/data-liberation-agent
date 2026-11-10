@@ -965,7 +965,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// The origin governor owns every wait on source throttling and refusal:
 		// Retry-After pauses, refusal confirmation and the blocked-client verdict
 		// all apply at document admission, so this loop never sleeps for them.
-		const governor = sourceGovernorFor( page.context(), url );
+		const governor = sourceGovernorFor( page.context?.(), url );
 		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut && ! governor?.blockedClient;
 		let redirectedTo: string | undefined;
 		while ( ++attempt <= MAX_NAV_ATTEMPTS ) {
