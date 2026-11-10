@@ -671,6 +671,29 @@ export async function observePage(
 				'fontStretch', 'fontVariant', 'fontFeatureSettings', 'fontVariationSettings', 'fontKerning',
 				'whiteSpace', 'textTransform', 'wordSpacing', 'direction', 'writingMode', 'verticalAlign',
 				'color', 'textDecorationLine', 'textDecorationStyle', 'textDecorationColor' ] as const;
+			// A metric fallback face whose sources are all local() names a host
+			// font, not a source asset: Framer's `src: local("Arial")` placeholder
+			// errors on a host without Arial. Such a face cannot leave the source
+			// unready once the primary face is loaded; failed url() faces still do.
+			const unquote = ( family: string ) => family.trim().replace( /^(["'])(.*)\1$/s, '$2' ).replace( /\\(.)/g, '$1' );
+			const localOnlyFamilies = new Map<string, boolean>();
+			const collectFaces = ( rules: CSSRuleList ) => {
+				for ( const rule of rules ) {
+					if ( rule instanceof CSSFontFaceRule ) {
+						const family = unquote( rule.style.getPropertyValue( 'font-family' ) );
+						const src = rule.style.getPropertyValue( 'src' );
+						localOnlyFamilies.set( family, ( localOnlyFamilies.get( family ) ?? true ) && /\blocal\(/i.test( src ) && ! /\burl\(/i.test( src ) );
+					} else if ( 'cssRules' in rule ) collectFaces( ( rule as CSSGroupingRule ).cssRules );
+				}
+			};
+			for ( const sheet of document.styleSheets ) {
+				try { collectFaces( sheet.cssRules ); } catch { /* cross-origin sheet: its faces stay unproven */ }
+			}
+			const fallbackFacesSettled = ( fontFamily: string ) => {
+				const families = ( fontFamily.match( /(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,])+/g ) ?? [] ).slice( 1 ).map( unquote );
+				return [ ...document.fonts ].every( face => ! families.includes( unquote( face.family ) ) || face.status === 'loaded' ||
+					face.status === 'error' && localOnlyFamilies.get( unquote( face.family ) ) === true );
+			};
 			let run: { text: string; style: CSSStyleDeclaration; signature: string; first: DOMRect; last: DOMRect; width: number } | undefined;
 			const flush = () => {
 				if ( ! run ) return;
@@ -685,6 +708,7 @@ export async function observePage(
 				const primary = style.fontFamily.match( /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,])+/ )?.[ 0 ].trim() ?? style.fontFamily;
 				const primaryFont = `${ style.fontStyle } ${ style.fontWeight } ${ style.fontSize } ${ primary }`;
 				if ( context ) context.font = font;
+				const primaryLoaded = document.fonts.check( primaryFont, text );
 				typography.push( {
 					key: text.slice( 0, 120 ),
 					fontFamily: style.fontFamily,
@@ -693,8 +717,8 @@ export async function observePage(
 					lineHeight: Number.parseFloat( style.lineHeight ) || fontSize * 1.2,
 					letterSpacing: Number.parseFloat( style.letterSpacing ) || 0,
 					advance: Math.round( ( context?.measureText( text ).width ?? width ) * 100 ) / 100,
-					loaded: document.fonts.check( font, text ),
-					primaryLoaded: document.fonts.check( primaryFont, text ),
+					loaded: document.fonts.check( font, text ) || primaryLoaded && fallbackFacesSettled( style.fontFamily ),
+					primaryLoaded,
 					// The run's first painted line box, in the same frame as image boxes.
 					top: Math.round( first.top ),
 					left: Math.round( first.left ),
