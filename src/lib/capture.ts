@@ -669,6 +669,7 @@ async function runCaptureWebsite(
 				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
 				governors: sourceGovernors,
 				styleNormalization: adapter.templateStyleNormalization,
+				maxTotalBytes: options.maxTotalBytes,
 			} )
 		: undefined;
 	if ( templateGrouping?.report?.frontier ) {
@@ -968,6 +969,8 @@ async function deriveTemplateClusterMembers( input: {
 	frontierUrls: string[];
 	governors: SourceRequestGovernors;
 	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
+	/** The run byte budget (`--max-total-bytes`); each cluster's resource store spends it like the capture's. */
+	maxTotalBytes?: number;
 } ): Promise< TemplateClusterDerivation > {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
@@ -1074,7 +1077,7 @@ async function deriveTemplateClusterMembers( input: {
 				// the two, so each member is derived from both.
 				const repMobilePath = repEntry.mobileHtml ? resolve( input.outputDir, repEntry.mobileHtml ) : undefined;
 				const repProcessedMobileHtml = repMobilePath && pathWithin( input.outputDir, repMobilePath ) && existsSync( repMobilePath ) ? readFileSync( repMobilePath, 'utf8' ) : undefined;
-				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl );
+				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
 				let derivedInCluster = record.derived.length;
 				let clusterFailed = false;
 

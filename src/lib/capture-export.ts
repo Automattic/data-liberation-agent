@@ -1409,9 +1409,13 @@ function buildExportCapture(
 	budget: ExportTotalBudget,
 	exclusions: ExportBudgetExclusions,
 ): ExportBuild {
+	// An explicit run budget (`--max-total-bytes`) is the single budget: media
+	// may spend all of it, and the export total budget still bounds the site.
 	const portableMediaTotalBytesLimit = Math.max(
 		0,
-		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
+		Math.floor( options.limits?.portableMediaTotalBytes ?? (
+			options.limits?.maxTotalBytes !== undefined ? budget.maxTotalBytes - budget.reservedBytes : MAX_PORTABLE_MEDIA_TOTAL_BYTES
+		) )
 	);
 	validateMaxFileBytes( options.limits?.maxFileBytes );
 	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
