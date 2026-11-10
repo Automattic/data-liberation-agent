@@ -7,6 +7,8 @@ import { documentRedirect, isNavigationTimeout, navigateSourceDocument, inspectS
 import { join } from 'node:path';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 import { isRouteDrift, navigationDocumentUrl } from './screenshot/document-integrity.js';
+import { SourceRequestGovernors } from './source-request-governor.js';
+import { governSourceContext } from './browser-kit/source-traffic.js';
 
 describe('source response declarations', () => {
 	it('uses the canonical same-site protocol/www boundary without admitting other hosts or ports', async () => {
@@ -283,6 +285,31 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			await new Promise<void>(resolve => server.close(() => resolve()));
 		}
 	}, 60_000);
+	it('bounds origin admission by the navigation budget while a throttled slot is held', async () => {
+		const server = createServer((_request, response) => { response.setHeader('content-type', 'text/html'); response.end('<h1>Admitted</h1>'); });
+		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
+		const governors = new SourceRequestGovernors({concurrency: 1});
+		const governor = governors.forOrigin(origin);
+		// A 429 drops the origin to one slot; a slow subresource holds it.
+		governor.observeBrowserOutcome(429, '0');
+		await governor.acquire();
+		const held = setTimeout(() => governor.release(), 10_000);
+		const browser = await chromium.launch();
+		try {
+			const context = await browser.newContext();
+			governSourceContext(context, governors, origin);
+			const page = await context.newPage();
+			const started = Date.now();
+			const failed = await navigateSourceDocument(page, `${origin}/document`, {timeoutMs: 1_000}).catch((error: unknown) => error);
+			expect(Date.now() - started).toBeLessThan(3_000);
+			expect(isNavigationTimeout(failed)).toBe(true);
+		} finally {
+			clearTimeout(held); governor.release();
+			await browser.close(); server.closeAllConnections();
+			await new Promise<void>(resolve => server.close(() => resolve()));
+		}
+	}, 30_000);
 });
 
 describe('navigation timeout classification', () => {
