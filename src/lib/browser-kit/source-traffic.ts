@@ -137,23 +137,31 @@ export async function sourceDocumentHtml(context: BrowserContext, url: string, h
 
 /** Document-only re-sampling uses the same context identity and origin admission. */
 export async function getSourceResponse(context: BrowserContext, url: string, options: NonNullable<Parameters<BrowserContext['request']['get']>[1]> = {}): Promise<APIResponse> {
-  const response = await governedResponse(context, url, () => context.request.get(url, options), 4, url, 'device-check');
+  const response = await governedResponse(context, url, timeout => context.request.get(url, { ...options, timeout }), 4, url, 'device-check', options.timeout);
   if (options.headers && response.ok()) await rememberSourceDocument(context, url, options.headers, {
     url, status: response.status(), headers: response.headers(), body: await response.body(),
   });
   return response;
 }
 
-async function governedResponse(context: BrowserContext, url: string, task: () => Promise<APIResponse>, maxAttempts: number, routeUrl: string | undefined = url, category: SourceRequestCategory = traffic.get(context)?.category ?? 'document'): Promise<APIResponse> {
+/**
+ * A caller's `timeout` bounds the whole request, origin admission included: a
+ * throttled governor must not queue a document past its navigation budget.
+ * The task receives the budget left after admission.
+ */
+async function governedResponse(context: BrowserContext, url: string, task: (timeout: number | undefined) => Promise<APIResponse>, maxAttempts: number, routeUrl: string | undefined = url, category: SourceRequestCategory = traffic.get(context)?.category ?? 'document', timeout?: number): Promise<APIResponse> {
   const governor = sourceGovernorFor(context, url);
-  if (!governor) return task();
+  if (!governor) return task(timeout);
+  const bounded = timeout !== undefined && timeout > 0;
+  const deadline = bounded ? Date.now() + timeout : undefined;
+  const signal = bounded ? AbortSignal.timeout(timeout) : undefined;
   const result = await governor.run(async attempt => {
-    const response = await task();
+    const response = await task(deadline === undefined ? timeout : Math.max(1, deadline - Date.now()));
     const status = response.status();
     const headers = new Headers(response.headersArray().map(({ name, value }): [string, string] => [name, value]));
     if ((status === 429 || status === 503) && attempt < maxAttempts) await response.dispose();
     return { status, headers, response };
-  }, { browser: true, maxAttempts, routeUrl, category });
+  }, { browser: true, maxAttempts, routeUrl, category, signal });
   return result.response.response;
 }
 
@@ -162,5 +170,5 @@ export async function fetchSourceRoute(route: Route, options: NonNullable<Parame
   const state = traffic.get(context);
   const url = options.url ?? route.request().url();
   if (!state || new URL(url).origin !== state.origin) return route.fetch(options);
-  return governedResponse(context, url, () => route.fetch({ ...options, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), route.request().resourceType() === 'document' ? state.category ?? 'document' : 'subresource');
+  return governedResponse(context, url, timeout => route.fetch({ ...options, timeout, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), route.request().resourceType() === 'document' ? state.category ?? 'document' : 'subresource', options.timeout);
 }
