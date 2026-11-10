@@ -673,3 +673,25 @@ it( 'reconciles a phone-only wrapper that has no desktop counterpart', async () 
 		}
 	} finally { await browser.close(); }
 } );
+
+it( 'reconciles a component whose ancestor differs only by a class token into one copy (#1605)', async () => {
+	const documents = Object.fromEntries( [ 'desktop', 'mobile' ].map( key => [ key, `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>.extra h2{color:rgb(0, 0, 180)}</style></head><body><div id="root" class="root${ key === 'mobile' ? ' extra' : '' }"><section id="sec"><h2 style="font-size:${ key === 'mobile' ? 18 : 40 }px">Recent work</h2><p>Shared paragraph.</p></section></div></body></html>` ] ) );
+	const pair: DeviceDocumentSelection = { ...selection, documents: [ 'desktop', 'mobile' ], rules: selection.rules.filter( rule => rule.document !== 'tablet' ) };
+	const assembly = assembleDeviceDocuments( documents, pair );
+	expect( assembly.evidence?.devices.mobile ).toMatchObject( { outcome: 'collapsed-identity-subset', divergedComponents: 0 } );
+	expect( cheerio.load( assembly.html )( 'h2' ) ).toHaveLength( 1 );
+	const browser = await chromium.launch( { headless: true } );
+	try {
+		for ( const key of pair.documents ) {
+			const context = await browser.newContext( { userAgent: key === 'mobile' ? 'iPhone' : 'Desktop' } );
+			try {
+				const page = await context.newPage();
+				const observe = () => page.evaluate( () => [ ...document.querySelectorAll<HTMLElement>( 'h2' ) ].filter( node => node.getClientRects().length ).map( node => [ node.closest( '[class~="root"]' )!.className, getComputedStyle( node ).fontSize, getComputedStyle( node ).color ] ) );
+				await page.setContent( documents[ key ] );
+				const expected = await observe();
+				await page.setContent( installDeviceSelection( assembly.html, assembly ) );
+				expect( await observe(), key ).toEqual( expected );
+			} finally { await context.close(); }
+		}
+	} finally { await browser.close(); }
+} );
