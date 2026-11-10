@@ -732,14 +732,14 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
         if (remaining <= 0) break;
         const sweep = await sweepToBottom(remaining);
         await waitForImages(page);
-        if (sweep.total === previousHeight) break;
+        if (sweep?.total === previousHeight) break;
         // A sweep the document never outgrew, still at that height once its
         // images settled, revealed no tail for another round to reach.
-        if (sweep.initial === sweep.total && await withEvaluateTimeout(page.evaluate(
+        if (sweep && sweep.initial === sweep.total && await withEvaluateTimeout(page.evaluate(
           (expected) => ((window as LazyScrollWindow).__dlaLazyScroller?.element.scrollHeight ?? document.documentElement.scrollHeight) === expected,
           sweep.total,
         ), EVALUATE_GRACE_MS)) break;
-        previousHeight = sweep.total;
+        previousHeight = sweep?.total;
       }
     };
     if ( requireNetworkIdle ) {

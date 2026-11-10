@@ -516,12 +516,14 @@ describe('triggerLazyLoad', () => {
   }, 30_000);
 
   it('restores the top pose when a sweep step is interrupted after reaching the bottom', async () => {
-    // The first sweep reaches the bottom; the next settle round's sweep is
-    // interrupted (as a stalled renderer or destroyed context would). The
-    // caller measures right after this and must not see the parked page.
+    // The first sweep reaches the bottom and the document grows once, so a
+    // second settle round runs; that sweep is interrupted (as a stalled
+    // renderer or destroyed context would). The caller measures right after
+    // this and must not see the parked page.
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     try {
-      await page.setContent('<style>body{margin:0}</style><main style="height:4000px">Content</main>');
+      await page.setContent(`<style>body{margin:0}</style><main id="main" style="height:4000px">Content</main>
+        <script>addEventListener('scroll', () => { if (scrollY > 3000) main.style.height = '5000px'; });</script>`);
       let sweeps = 0;
       const interrupted = new Proxy(page, {
         get(target, property, receiver) {
