@@ -70,6 +70,17 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 		} finally { await browser.close(); }
 	}, 30_000 );
 
+	it( 'excludes clipped capitalized labels that innerText reports in their rendered case', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>.sub{position:absolute;height:0;overflow:hidden;text-transform:capitalize}</style>
+				<nav><a href="#">Services</a><div class="sub"><a href="/a">Business continuity</a><a href="/b">*NEW* submit a ticket</a></div></nav><p>Visible prose.</p>` );
+			const observation = await observePage( page, page.url(), 1440, 0, null, undefined, undefined, true, true );
+			expect( observation.textChars ).toBe( 'Services Visible prose.'.length );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it( 'counts only the selected label of a closed select on either side without forgiving missing prose', async () => {
 		const browser = await chromium.launch();
 		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );

@@ -910,7 +910,7 @@ export async function observePage(
 			// ancestor clip; any partly painted run remains counted. Do not use
 			// carousel selectors, aria-hidden, or viewport position.
 			bodyText = bodyText.replace( /\s+/g, ' ' ).trim();
-			const textNodes: Array< { text: string; clipped: boolean; replacement?: string } > = [];
+			const textNodes: Array< { text: string; clipped: boolean; replacement?: string; caseless?: boolean } > = [];
 			const closedSelect = ( element: Element ): element is HTMLSelectElement =>
 				element instanceof HTMLSelectElement && ! element.multiple && element.size <= 1;
 			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT );
@@ -942,16 +942,21 @@ export async function observePage(
 				const transform = getComputedStyle( parent ).textTransform;
 				const rendered = transform === 'uppercase' ? value.toLocaleUpperCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined )
 					: transform === 'lowercase' ? value.toLocaleLowerCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined ) : value;
-				textNodes.push( { text: rendered.length === value.length ? rendered : value, clipped: ! painted } );
+				// Capitalization follows the browser's own word boundaries, so a
+				// capitalized node is found in the stream without regard to case.
+				textNodes.push( { text: rendered.length === value.length ? rendered : value, clipped: ! painted, caseless: transform === 'capitalize' } );
 			}
 			let textSearchFrom = 0;
-			for ( const { text, clipped, replacement } of textNodes ) {
+			for ( const { text, clipped, replacement, caseless } of textNodes ) {
 				// Map each DOM text node in document order to the normalized
 				// innerText stream. Advancing for visible nodes prevents identical
 				// later text from being mistaken for an earlier occurrence.
 				const normalizedText = text.replace( /\s+/g, ' ' ).trim();
 				if ( ! normalizedText ) continue;
-				const at = bodyText.indexOf( normalizedText, textSearchFrom );
+				const lowered = caseless ? bodyText.toLowerCase() : '';
+				const at = caseless && lowered.length === bodyText.length
+					? lowered.indexOf( normalizedText.toLowerCase(), textSearchFrom )
+					: bodyText.indexOf( normalizedText, textSearchFrom );
 				if ( at >= 0 ) {
 					if ( replacement !== undefined ) {
 						const label = replacement.replace( /\s+/g, ' ' ).trim();
