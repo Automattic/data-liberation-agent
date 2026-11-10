@@ -93,6 +93,7 @@ Naming an unknown target lists the registered ones.
 |---|---|
 | Blogger | Browser capture + feed accounting; opt-in orchestrated HTTP review capture |
 | Carrd | Section routes with shared chrome and portable navigation |
+| Duda | Generic discovery + single-page blog pager marked inert |
 | EmDash CMS | Ready |
 | Gamma | Generic discovery + card section anchors and video embeds |
 | Ghost | Ready |
