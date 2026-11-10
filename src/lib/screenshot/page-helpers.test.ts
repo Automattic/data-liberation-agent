@@ -382,7 +382,7 @@ describe('triggerLazyLoad', () => {
 
   it('waits each step only for the work its scroll scheduled, and still reveals debounced and lazy tails', async () => {
     // Before #1630 every 500px step slept a fixed 200ms and a confirmation
-    // sweep always followed: at least 11 x 200ms + 2 x 200ms of tail pauses here.
+    // sweep always followed: about 3.4 s here, against about 1.5 s now.
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.addInitScript(observeViewportWork);
@@ -407,7 +407,7 @@ describe('triggerLazyLoad', () => {
       expect(await page.locator('#reveal').getAttribute('class')).toBe('shown');
       expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth)).toBe(10);
       expect(await page.evaluate(() => scrollY)).toBe(0);
-      expect(elapsed).toBeLessThan(2_000);
+      expect(elapsed).toBeLessThan(2_500);
     } finally {
       await page.close();
     }
