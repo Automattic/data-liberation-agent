@@ -2,7 +2,7 @@ import type { APIResponse, BrowserContext, Page, Request, Route } from 'playwrig
 import { isSourceTransportThrottle } from '../source-request-governor.js';
 import type { SourceRequestCategory, SourceRequestGovernors } from '../source-request-governor.js';
 
-const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string; category?: SourceRequestCategory }>();
+const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string; category?: SourceRequestCategory; inFlight: Set<Request> }>();
 
 /** Device checks precede capture. Keep a bounded response handoff for this capture. */
 const documents = new WeakMap<SourceRequestGovernors, Map<string, { url: string; status: number; headers: Record<string, string>; body: Buffer }>>();
@@ -36,7 +36,8 @@ export async function takeSourceDocument(context: BrowserContext, url: string, h
 
 /** Capture-owned state; contexts outside capture and third-party origins stay unchanged. */
 export function governSourceContext(context: BrowserContext, governors: SourceRequestGovernors, sourceUrl: string): void {
-  traffic.set(context, { governors, origin: new URL(sourceUrl).origin });
+  const inFlight = new Set<Request>();
+  traffic.set(context, { governors, origin: new URL(sourceUrl).origin, inFlight });
   context.on('response', response => {
     const entry = nativeRequests.get(response.request());
     if (!entry) return;
@@ -51,11 +52,22 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     const entry = nativeRequests.get(request);
     if (!entry) return;
     nativeRequests.delete(request);
+    inFlight.delete(request);
     if (failed && !entry.throttled && isSourceTransportThrottle(new Error(request.failure()?.errorText ?? ''))) recordInterruptedLoad(request);
     if (!entry.throttled) entry.governor.observeBrowserOutcome(failed ? undefined : entry.status, undefined,
       failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl, entry.refusalAdmission, entry.category);
     if (entry.acquired) entry.governor.release();
   };
+  // A closing context emits no outcome for requests still in flight: return
+  // their admission slots, or a throttled origin stays full for good.
+  context.once('close', () => {
+    for (const request of inFlight) {
+      const entry = nativeRequests.get(request);
+      nativeRequests.delete(request);
+      if (entry?.acquired) entry.governor.release();
+    }
+    inFlight.clear();
+  });
   context.on('requestfinished', request => finish(request, false));
   context.on('requestfailed', request => finish(request, true));
 }
@@ -104,9 +116,11 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
     try { await governor.acquire(abort.signal, true); }
     finally { context.off('close', close); }
   }
+  traffic.get(context)?.inFlight.add(request);
   nativeRequests.set(request, { governor, acquired, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
   catch (error) {
+    traffic.get(context)?.inFlight.delete(request);
     if (nativeRequests.delete(request) && acquired) governor.release();
     throw error; // failure-class: operational
   }
