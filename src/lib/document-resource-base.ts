@@ -22,7 +22,9 @@ export function resolveDocumentReferences( html: string, documentUrl: string, br
 		baseUrl = documentUrl;
 	}
 	const resolve = ( reference: string ): string => {
-		if ( ! reference.trim() ) return reference;
+		// An absolute reference names its target already. Re-serializing it
+		// (URL#href) would change authored spelling, such as an origin's slash.
+		if ( ! reference.trim() || /^[a-z][a-z0-9+.-]*:/i.test( reference ) ) return reference;
 		// A document fragment remains local when its base still names this document.
 		if ( reference.startsWith( '#' ) && new URL( baseUrl ).href.split( '#' )[ 0 ] === documentUrl.split( '#' )[ 0 ] ) return reference;
 		try {
