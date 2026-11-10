@@ -359,7 +359,7 @@ export class SourceRequestGovernor {
 	/** Wait for a free slot, then for any pause to pass. */
 	async acquire( signal?: AbortSignal, browser = false ): Promise< void > {
 		for ( ;; ) {
-			if (this.confirmation || this.blockedClient) await this.admitSourceRequest();
+			await this.admitSourceRequest();
 			if ( signal?.aborted ) throw abortReason( signal ); // failure-class: operational
 			if ( (browser && !this.browserThrottled) || this.active < this.limit ) {
 				const wait = this.pausedUntil - Date.now();
