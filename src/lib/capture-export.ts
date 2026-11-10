@@ -36,7 +36,7 @@ import {
 	planPortableMediaFamilies,
 	type PortableMediaCandidate,
 } from './portable-media-plan.js';
-import { isElementNode, isYuiRuntimeId, YUI_RUNTIME_ID } from './html-nodes.js';
+import { isElementNode, isYuiRuntimeId, RUNTIME_ID_TOKEN, YUI_RUNTIME_ID } from './html-nodes.js';
 import {
 	assembleResponsiveCapture,
 	DEFAULT_SWITCH_WIDTH,
@@ -626,45 +626,62 @@ function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?:
 }
 
 /**
- * A captured header may carry hydration-only widget IDs which change on every
- * route. Share a stable identity only when no retained HTML, script, or style
- * reads the original ID. Rewrite the exact attribute, never the whole document:
- * reserializing a page would change unrelated source markup and SVGs.
+ * Builder runtimes write hydration IDs (`yui_3_17_2_1_<load time>_<n>`) that
+ * name one page load, not a component. The same footer, form or popup then
+ * differs on every route, so nothing downstream can share it. Rename each such
+ * ID after its structural position, counted from the nearest ancestor with an
+ * authored ID (or the document root), and rename its in-document references
+ * with it. An ID that another retained file reads keeps its name. Exact
+ * attribute and token rewrites keep unrelated source markup and SVGs intact.
+ *
+ * @return The rewritten document and the old-to-new ID map, so route evidence
+ *         that names these IDs can follow.
  */
-export function canonicalizeUnreferencedHeaderIds(
+export function canonicalizeUnreferencedRuntimeIds(
 	html: string,
 	externalTexts: readonly string[] = []
-): string {
-	if ( ! YUI_RUNTIME_ID.test( html ) ) return html;
+): { html: string; ids: Map< string, string > } {
+	const ids = new Map< string, string >();
+	if ( ! YUI_RUNTIME_ID.test( html ) ) return { html, ids };
 	const $ = cheerio.load( html );
-	const header = $( 'header' ).filter( ( _index, node ) =>
-		$( node ).find( 'nav' ).length > 0 && $( node ).parents( 'main, article, section' ).length === 0
-	).first();
-	if ( ! header.length ) return html;
-	const rewrites = new Map< string, string >();
-	header.find( '[id]' ).each( ( _index, node ) => {
+	const declared = new Map< string, number >();
+	$( '[id]' ).each( ( _index, node ) => {
 		const id = $( node ).attr( 'id' ) ?? '';
-		if ( ! isYuiRuntimeId( id ) || html.split( id ).length !== 2 || externalTexts.some( ( text ) => text.includes( id ) ) ) return;
+		declared.set( id, ( declared.get( id ) ?? 0 ) + 1 );
+	} );
+	const taken = new Set( declared.keys() );
+	$( '[id]' ).each( ( _index, node ) => {
+		const id = $( node ).attr( 'id' ) ?? '';
+		if ( ! isYuiRuntimeId( id ) || declared.get( id ) !== 1 || externalTexts.some( ( text ) => text.includes( id ) ) ) return;
 		const segments: string[] = [];
 		let element: Element | null = node;
-		while ( element && element !== header[ 0 ] ) {
+		while ( element ) {
 			let position = 0;
 			for ( let sibling = element.prev; sibling; sibling = sibling.prev ) {
 				if ( isElementNode( sibling ) && sibling.name === element.name ) position++;
 			}
 			segments.unshift( `${ element.name }:${ position }` );
-			element = element.parent && isElementNode( element.parent ) ? element.parent : null;
+			const parent: Element | null = element.parent && isElementNode( element.parent ) ? element.parent : null;
+			const anchor = parent && ! [ 'html', 'body' ].includes( parent.name ) ? parent.attribs.id ?? '' : '';
+			if ( anchor && ! isYuiRuntimeId( anchor ) ) {
+				segments.unshift( `#${ anchor }` );
+				break;
+			}
+			element = parent;
 		}
-		if ( element !== header[ 0 ] ) return;
 		const stable = `data-blocks-engine-capture-shared-${ createHash( 'sha256' ).update( segments.join( '/' ) ).digest( 'hex' ).slice( 0, 16 ) }`;
-		if ( html.includes( `id="${ stable }"` ) || [ ...rewrites.values() ].includes( stable ) ) return;
-		rewrites.set( id, stable );
+		if ( taken.has( stable ) ) return;
+		taken.add( stable );
+		ids.set( id, stable );
 	} );
-	for ( const [ id, stable ] of rewrites ) {
-		const escaped = id.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
-		html = html.replace( new RegExp( `\\bid(\\s*=\\s*["'])${ escaped }(?=["'])`, 'g' ), ( full ) => full.replace( id, stable ) );
-	}
-	return html;
+	return { html: renameIdTokens( html, ids ), ids };
+}
+
+/** Rename whole ID tokens only: `yui_…_35` must not touch `yui_…_351`. */
+export function renameIdTokens( text: string, ids: ReadonlyMap< string, string > ): string {
+	if ( ! ids.size ) return text;
+	const pattern = new RegExp( `${ RUNTIME_ID_TOKEN.source }`, 'g' );
+	return text.replace( pattern, ( token ) => ids.get( token ) ?? token );
 }
 
 /** An incomplete reference audit cannot prove an ID is safe to canonicalize. */
@@ -2273,8 +2290,14 @@ function buildExportCapture(
 		const path = join( websiteDir, routePathOf( entry.url ) );
 		const html = readFileSync( path, 'utf8' );
 		const externalTexts = portableTexts.filter( ( item ) => item.path !== path ).map( ( item ) => item.text );
-		const stable = canonicalizeUnreferencedHeaderIds( html, externalTexts );
-		if ( stable !== html ) writeFileSync( path, stable );
+		const stable = canonicalizeUnreferencedRuntimeIds( html, externalTexts );
+		if ( ! stable.ids.size ) continue;
+		writeFileSync( path, stable.html );
+		// Interaction evidence names the same elements; keep it in step.
+		const interactions = interactionPages.indexOf( entry.interactions! );
+		if ( interactions >= 0 ) interactionPages[ interactions ] = JSON.parse( renameIdTokens( JSON.stringify( interactionPages[ interactions ] ), stable.ids ) );
+		const scroll = scrollStatesPages.indexOf( entry.scrollStates! );
+		if ( scroll >= 0 ) scrollStatesPages[ scroll ] = JSON.parse( renameIdTokens( JSON.stringify( scrollStatesPages[ scroll ] ), stable.ids ) );
 	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
