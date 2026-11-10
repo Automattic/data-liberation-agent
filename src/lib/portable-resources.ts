@@ -5,7 +5,7 @@ import { isInlineUrl } from './self-contain.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { fileHash, pathWithin, portableResourcePath, portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 import { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
-import { dependencyReferences, isExcludedRendition, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSource, removeDanglingResourceReference, stripExcludedRenditionReferences, type PortableDependency } from './portable-references.js';
+import { dependencyReferences, isExcludedRendition, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSources, removeDanglingResourceReference, stripExcludedRenditionReferences, type DanglingMediaSource, type PortableDependency } from './portable-references.js';
 import { stripImageSetCandidates } from './srcset.js';
 
 /** The format named by a recognized binary signature, or undefined for text and unknown bytes. */
@@ -296,6 +296,11 @@ export function materializePortableResources( options: PortableResourceOptions )
 		let html = options.excludedRenditions?.size
 			? stripExcludedRenditionReferences( originalHtml, entry.url, options.excludedRenditions )
 			: originalHtml;
+		const danglingMedia: DanglingMediaSource[] = [];
+		const flushDanglingMedia = () => {
+			html = removeDanglingMediaSources( html, danglingMedia, rejectedReplacementKeys );
+			danglingMedia.length = 0;
+		};
 		for ( const dependency of dependencyReferences( html, entry.url, false, embeddedSources ) ) {
 			// A retrieved URL owns its bytes, even when media selection supplied
 			// a fallback for another rendition of the same picture.
@@ -319,20 +324,19 @@ export function materializePortableResources( options: PortableResourceOptions )
 					promoteCapturedMediaReplacement( dependency.url, entry.url );
 				}
 			} else {
-				html =
-					dependency.kind === 'media'
-						? removeDanglingMediaSource(
-								html,
-								dependency.reference,
-								dependency.url,
-								mediaReplacements,
-								rejectedReplacementKeys
-						  )
-						: dependency.kind === 'css'
+				if ( dependency.kind === 'media' ) {
+					danglingMedia.push( { ...dependency, mediaReplacements: new Map( mediaReplacements ) } );
+				} else {
+					// These rewrites read intermediate HTML (and resource removal
+					// serializes it), so preserve their position among media batches.
+					flushDanglingMedia();
+					html = dependency.kind === 'css'
 						? replaceDanglingCssUrl( html, dependency.reference, rejectedReplacementKeys )
 						: removeDanglingResourceReference( html, dependency.reference );
+				}
 			}
 		}
+		flushDanglingMedia();
 		if ( html !== originalHtml ) writeFileSync( entry.htmlPath, html );
 	}
 
