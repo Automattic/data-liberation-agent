@@ -41,12 +41,11 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     const entry = nativeRequests.get(response.request());
     if (!entry) return;
     entry.status = response.status();
-    entry.governor.observeSourceResponse();
     if (entry.status === 429 || entry.status === 503) {
       entry.throttled = true;
       recordInterruptedLoad(response.request());
-      entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after'], undefined, entry.routeUrl, undefined, entry.category);
-    }
+      entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after'], undefined, entry.routeUrl, entry.refusalAdmission, entry.category);
+    } else entry.governor.observeSourceResponse(entry.status, entry.category);
   });
   const finish = (request: Request, failed: boolean) => {
     const entry = nativeRequests.get(request);

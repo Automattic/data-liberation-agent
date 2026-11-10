@@ -21,7 +21,7 @@ it('requires earlier responses, consecutive refusals and distinct document paths
   governor.observeBrowserOutcome(200);
   for (let i = 0; i < 4; i++) await fail('a');
   expect(governor.isConfirmingRefusal).toBe(false);
-  governor.observeBrowserOutcome(503);
+  governor.observeBrowserOutcome(200);
   await fail('b');
   expect(governor.isConfirmingRefusal).toBe(false);
   expect(governor.blockedClient).toBeUndefined();
@@ -85,5 +85,22 @@ it('resumes on any HTTP answer during confirmation', async () => {
   await admission;
   expect(governor.blockedClient).toBeUndefined();
   expect(probe).toHaveBeenCalledTimes(2);
+ } finally { probe.mockRestore(); vi.useRealTimers(); }
+});
+
+it('ends on documents the source keeps throttling after backoff, whatever its subresources do', async () => {
+ vi.useFakeTimers();
+ const probe = vi.spyOn(globalThis, 'fetch');
+ try {
+  const governor = new SourceRequestGovernor('http://example.test');
+  governor.observeBrowserOutcome(200);
+  governor.observeBrowserOutcome(429, '1', undefined, 'http://example.test/products/a');
+  for (const path of ['a', 'b', 'c']) {
+   await vi.advanceTimersByTimeAsync(1000);
+   governor.observeBrowserOutcome(200, undefined, undefined, 'http://example.test/', undefined, 'subresource');
+   governor.observeBrowserOutcome(429, '1', undefined, `http://example.test/products/${path}`, governor.refusalAdmission());
+  }
+  await expect(governor.admitSourceRequest()).rejects.toMatchObject({ code: 'source_blocked_client', evidence: { refusal: 'throttle' } });
+  expect(probe).not.toHaveBeenCalled();
  } finally { probe.mockRestore(); vi.useRealTimers(); }
 });

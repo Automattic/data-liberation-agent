@@ -17,8 +17,11 @@
  * - Each `recoveryStep` consecutive successes raise the limit by one, back up
  *   to `concurrency`.
  *
- * Throttle rates stay log-only. Confirmed client refusal additionally exposes
- * bounded evidence (first refusal time and request count) for the receipt.
+ * Throttle rates stay log-only. Documents the source keeps refusing after
+ * the capture has slowed down end the capture with `source_blocked_client`
+ * and bounded evidence (first refusal time and request count) for the
+ * receipt. An explicit throttle status is the source's own answer; ambiguous
+ * transport resets are first confirmed by escalating probes.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -58,15 +61,17 @@ export function parseRetryAfter( header: string | null | undefined, options: { f
 	return Math.min( maxMs, Math.max( 0, Number.isFinite( requested ) ? requested : fallbackMs ) );
 }
 
-/** Earlier success, three consecutive refusals, and at least two route paths are required. */
+/** Earlier response, three consecutive document refusals, and at least two route paths are required. */
 export const SOURCE_REFUSAL_DEFAULTS = { consecutive: 3, probeAtMs: [2000, 8000, 20000, 60000], probeTimeoutMs: 3000 } as const;
 
 export type SourceRequestCategory = 'document' | 'device-check' | 'asset-original' | 'subresource' | 'refusal-probe' | 'retry';
 export type SourceRequestCounts = Record<SourceRequestCategory, number>;
+/** Page documents decide whether this client can still capture the source. */
+const DOCUMENT_CATEGORIES: ReadonlySet<SourceRequestCategory> = new Set(['document', 'device-check']);
 
 export class SourceBlockedClientError extends Error {
 	readonly code = 'source_blocked_client';
-	constructor(readonly evidence: { origin: string; requestsBeforeFirstRefusal: number; firstRefusalAt: string; requestCounts?: SourceRequestCounts }) {
+	constructor(readonly evidence: { origin: string; requestsBeforeFirstRefusal: number; firstRefusalAt: string; refusal?: 'throttle' | 'transport'; requestCounts?: SourceRequestCounts }) {
 		super(`source_blocked_client: The source ${evidence.origin} blocked this network; retry later or from another network.`);
 	}
 }
@@ -149,9 +154,23 @@ export class SourceRequestGovernor {
 		if (this.blockedClient) throw this.blockedClient; // failure-class: operational
 	}
 
-	/** An HTTP response, even a throttle/error status, disproves transport refusal. */
-	observeSourceResponse(): void {
-		this.reachable();
+	/** Response headers from the browser, ahead of its finished or failed body. */
+	observeSourceResponse(status: number, category: SourceRequestCategory): void {
+		this.observeAccess(status, undefined, category);
+	}
+
+	/**
+	 * Any response proves the network reaches the source. Only a document the
+	 * source serves proves this client can still capture it: a throttled
+	 * document is refusal evidence, like a transport reset, and subresources
+	 * neither prove nor disprove access to pages.
+	 */
+	private observeAccess(status: number | undefined, error: unknown, category: SourceRequestCategory, routeUrl?: string, admission?: number): void {
+		if (status !== undefined) this.hadResponse = true;
+		if (!DOCUMENT_CATEGORIES.has(category)) return;
+		if (status !== undefined && !THROTTLE_STATUSES.has(status)) this.reachable();
+		else if (status !== undefined) this.observeRefusal('throttle', routeUrl, admission);
+		else if (isSourceTransportThrottle(error, true)) this.observeRefusal('transport', routeUrl, admission);
 	}
 
 	private reachable(): void {
@@ -168,8 +187,8 @@ export class SourceRequestGovernor {
 		return this.browserThrottled && this.limit === 1 && Date.now() >= this.pausedUntil ? this.throttles : undefined;
 	}
 
-	private observeRefusal(error: unknown, routeUrl?: string, admission?: number): void {
-		if (!this.hadResponse || this.confirmation || !isSourceTransportThrottle(error, true)) return;
+	private observeRefusal(refusal: 'throttle' | 'transport', routeUrl?: string, admission?: number): void {
+		if (!this.hadResponse || this.confirmation || this.blockedClient) return;
 		this.firstRefusal ??= { requestsBeforeFirstRefusal: this.requests - 1, firstRefusalAt: new Date().toISOString() };
 		// Failures from the original fan-out (or an older backoff) are pressure,
 		// not proof that this client is still refused after slowing down.
@@ -177,7 +196,13 @@ export class SourceRequestGovernor {
 		this.refusalCount++;
 		if (routeUrl) this.refusalRoutes.add(new URL(routeUrl).pathname);
 		if (this.refusalCount < SOURCE_REFUSAL_DEFAULTS.consecutive || this.refusalRoutes.size < 2) return;
-		const evidence = { origin: this.origin, ...this.firstRefusal };
+		const evidence = { origin: this.origin, ...this.firstRefusal, refusal };
+		if (refusal === 'throttle') {
+			// Already admitted one at a time after each Retry-After: no probe can say more.
+			this.blockedClient = new SourceBlockedClientError({ ...evidence, requestCounts: this.stats().requestCounts });
+			for (const wake of this.waiters.splice(0)) wake();
+			return;
+		}
 		const generation = this.responseGeneration;
 		this.confirmation = this.confirmRefusal(routeUrl ?? this.origin, generation, evidence).finally(() => {
 			this.confirmation = undefined;
@@ -275,7 +300,7 @@ export class SourceRequestGovernor {
 				response = await task( attempt );
 			} catch (error) {
 				if (!isSourceTransportThrottle(error)) throw error; // failure-class: operational
-				this.observeRefusal(error, options.routeUrl, refusalAdmission);
+				this.observeAccess(undefined, error, options.category ?? 'document', options.routeUrl, refusalAdmission);
 				throttles++;
 				this.recordThrottle(this.fallbackRetryAfterMs);
 				if (this.confirmation) {
@@ -289,7 +314,7 @@ export class SourceRequestGovernor {
 			} finally {
 				this.release();
 			}
-			this.reachable();
+			this.observeAccess(response.status, undefined, options.category ?? 'document', options.routeUrl, refusalAdmission);
 			if ( ! THROTTLE_STATUSES.has( response.status ) ) {
 				this.recordSuccess();
 				return { response, attempts: attempt, throttles };
@@ -313,8 +338,7 @@ export class SourceRequestGovernor {
 	/** Outcomes observed by the browser's native network stack. */
 	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string, admission?: number, category: SourceRequestCategory = 'document'): void {
 		this.recordRequest(category);
-		if (status !== undefined) this.reachable();
-		else this.observeRefusal(error, routeUrl, admission);
+		this.observeAccess(status, error, category, routeUrl, admission);
 		if ((status !== undefined && THROTTLE_STATUSES.has(status)) || isSourceTransportThrottle(error)) {
 			this.recordThrottle(parseRetryAfter(retryAfter, { fallbackMs: this.fallbackRetryAfterMs, maxMs: this.maxRetryAfterMs }));
 		} else if (status !== undefined) this.recordSuccess();
