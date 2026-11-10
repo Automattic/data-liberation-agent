@@ -6,7 +6,8 @@ it( 'resolves inline CSS and srcsets against the rendered base while preserving 
 	const html = `<style>@import 'theme.css';.tile{background:url(images/tile.svg)}.paint{fill:url(#paint)}</style>
 		<img src="images/thumb.svg" srcset="images/small.svg 1x, images/large.svg 2x" style="background:url('images/inline.svg')">
 		<a href="next?view=grid#photos">Next</a><a id="fragment" href="#photos">Photos</a>
-		<a id="mail" href="mailto:photos@example.com">Mail</a><img id="data" src="data:image/svg+xml,hello">`;
+		<a id="mail" href="mailto:photos@example.com">Mail</a><img id="data" src="data:image/svg+xml,hello">
+		<a id="external" href="https://example.org">External</a>`;
 	const $ = cheerio.load( resolveDocumentReferences( html, 'https://example.com/albums/', 'https://example.com/albums/' ) );
 	expect( $( 'img' ).first().attr( 'srcset' ) ).toBe( 'https://example.com/albums/images/small.svg 1x, https://example.com/albums/images/large.svg 2x' );
 	expect( $( 'img' ).first().attr( 'style' ) ).toContain( 'https://example.com/albums/images/inline.svg' );
@@ -17,6 +18,8 @@ it( 'resolves inline CSS and srcsets against the rendered base while preserving 
 	expect( $( '#fragment' ).attr( 'href' ) ).toBe( '#photos' );
 	expect( $( '#mail' ).attr( 'href' ) ).toBe( 'mailto:photos@example.com' );
 	expect( $( '#data' ).attr( 'src' ) ).toBe( 'data:image/svg+xml,hello' );
+	// An absolute reference has nothing to resolve; URL#href would append a slash.
+	expect( $( '#external' ).attr( 'href' ) ).toBe( 'https://example.org' );
 } );
 
 it( 'uses the first authored base for captures without browser metadata, including fragment links', () => {
