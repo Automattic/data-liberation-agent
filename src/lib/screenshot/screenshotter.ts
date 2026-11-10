@@ -276,24 +276,12 @@ interface CapturePerViewportArgs {
 	routeScope?: ScreenshotOpts['routeScope'];
 }
 
-/** Sleep helper for navigation backoff. */
-function navSleep( ms: number ): Promise< void > {
-	return new Promise( ( resolve ) => setTimeout( resolve, ms ) );
-}
-
 /** Failure reason for a route whose source app crashed into its client error shell. */
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
 
-/**
- * Backoff before retrying a throttled / transiently-failed navigation. Honors a
- * numeric `Retry-After` (seconds) when the throttler supplies one; otherwise
- * exponential (1s, 2s, 4s…), capped at 15s.
- */
-function navBackoffMs( attempt: number, retryAfter?: string ): number {
-	const cap = 15_000;
-	const raSec = retryAfter ? Number( retryAfter ) : NaN;
-	if ( Number.isFinite( raSec ) && raSec >= 0 ) return Math.min( raSec * 1000, cap );
-	return Math.min( 1000 * 2 ** ( attempt - 1 ), cap );
+/** Pause before retrying a navigation that failed for a reason the origin governor does not pace. */
+function navBackoff( attempt: number ): Promise< void > {
+	return new Promise( resolve => setTimeout( resolve, Math.min( 1000 * 2 ** ( attempt - 1 ), 15_000 ) ) );
 }
 
 export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string ): Promise< string > {
@@ -974,12 +962,16 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		let timedOut: { budgetMs: number; error: string } | undefined;
 		let navigated = false;
 		let attempt = 0;
-		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut && ! sourceGovernorFor(page.context?.(), url)?.blockedClient;
+		// The origin governor owns every wait on source throttling and refusal:
+		// Retry-After pauses, refusal confirmation and the blocked-client verdict
+		// all apply at document admission, so this loop never sleeps for them.
+		const governor = sourceGovernorFor( page.context(), url );
+		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut && ! governor?.blockedClient;
 		let redirectedTo: string | undefined;
 		while ( ++attempt <= MAX_NAV_ATTEMPTS ) {
 			try {
-				const governor = sourceGovernorFor(page.context?.(), url);
-				if (governor?.isConfirmingRefusal || governor?.blockedClient) await governor.admitSourceRequest();
+				// Refusal confirmation waits here, outside the navigation budget.
+				await governor?.admitSourceRequest();
 				args.phases?.enter( 'navigate' );
 				const started = Date.now();
 				const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope, timeoutMs: budgetMs});
@@ -999,10 +991,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					: undefined);
 				const status = response ? response.status() : 0;
 				if ( status >= 400 ) {
-					if ( RETRYABLE_STATUS.has( status ) && mayRetry() ) {
-						if (!sourceGovernorFor(page.context(), url)) await navSleep( navBackoffMs( attempt, response?.headers()[ 'retry-after' ] ) );
-						continue;
-					}
+					if ( RETRYABLE_STATUS.has( status ) && mayRetry() ) continue;
 					// Evidence only: a body that cannot be read leaves the plain status.
 					const rejectedBody = status === 403 ? await Promise.resolve().then( () => response?.text() ).catch( () => undefined ) : undefined;
 					loadFail( 'goto', rejectedNavigationReason( status, response?.headers?.(), rejectedBody ), attempt );
@@ -1030,15 +1019,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					if ( mayRetry() ) {
 						timedOut = { budgetMs, error: err instanceof Error ? err.message.split( '\n' )[ 0 ]! : String( err ) };
 						budgetMs = maxSourceNavigationBudgetMs();
-						await navSleep( navBackoffMs( attempt ) );
+						await navBackoff( attempt );
 						continue;
 					}
 					loadFail( 'goto', err, attempt );
 					return false;
 				}
 				if ( mayRetry() && !(err instanceof SourceNavigationError) ) {
-					const governor = sourceGovernorFor(page.context?.(), url);
-					if (!governor || !isSourceTransportThrottle(err) || governor.hasSustainedRefusal) await navSleep( navBackoffMs( attempt ) );
+					if ( ! isSourceTransportThrottle( err ) ) await navBackoff( attempt );
 					continue;
 				}
 				loadFail( 'goto', err, attempt );

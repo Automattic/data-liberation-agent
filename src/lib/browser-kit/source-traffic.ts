@@ -107,7 +107,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   const request = route.request();
   const governor = sourceGovernorFor(context, request.url());
   if (!governor) return route.continue(options);
-  if (governor.isConfirmingRefusal || governor.blockedClient) await governor.admitSourceRequest();
+  await governor.admitSourceRequest();
   const acquired = governor.isBrowserThrottled;
   if (acquired) {
     const abort = new AbortController();
