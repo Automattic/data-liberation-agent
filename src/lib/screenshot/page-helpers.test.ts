@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
+import { observeViewportWork } from './viewport-work.js';
 import {
   waitForStable,
   triggerLazyLoad,
@@ -374,6 +375,39 @@ describe('triggerLazyLoad', () => {
       expect(await page.evaluate(() => scrollY)).toBe(0);
       expect(await page.locator('body').getAttribute('class')).toContain('loaded');
       expect(await page.locator('main').evaluate((element) => getComputedStyle(element).backgroundColor)).toBe('rgb(1, 2, 3)');
+    } finally {
+      await page.close();
+    }
+  }, 30_000);
+
+  it('waits each step only for the work its scroll scheduled, and still reveals debounced and lazy tails', async () => {
+    // Before #1630 every 500px step slept a fixed 200ms and a confirmation
+    // sweep always followed: at least 11 x 200ms + 2 x 200ms of tail pauses here.
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.addInitScript(observeViewportWork);
+      await page.route('https://assets.test/lazy.svg', route => route.fulfill({
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>',
+      }));
+      await page.route('https://fixture.test/', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><style>html,body{margin:0}</style>
+        <div style="height:5600px"></div><section id="reveal">Reveal</section>
+        <img loading="lazy" width="10" height="10" src="https://assets.test/lazy.svg">
+        <script>
+          new IntersectionObserver(entries => {
+            if (entries.some(entry => entry.isIntersecting)) setTimeout(() => reveal.classList.add('shown'), 100);
+          }).observe(reveal);
+        </script>` }));
+      // A navigation, unlike setContent, runs the init script before the source.
+      await page.goto('https://fixture.test/');
+      const started = Date.now();
+      await triggerLazyLoad(page);
+      const elapsed = Date.now() - started;
+      await waitForImages(page);
+      expect(await page.locator('#reveal').getAttribute('class')).toBe('shown');
+      expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth)).toBe(10);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+      expect(elapsed).toBeLessThan(2_000);
     } finally {
       await page.close();
     }
