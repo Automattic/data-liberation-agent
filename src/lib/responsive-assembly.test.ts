@@ -22,6 +22,15 @@ import { middleLayoutSampleWidth } from './screenshot/device-mode.js';
 const dirs: string[] = [];
 
 describe( 'responsive identity CSS recovery', () => {
+	it( 'aliases exact attribute id selectors to the renamed phone copy', () => {
+		const renamed = new Map( [ [ 'target', 'target--data-blocks-engine-capture-mobile' ] ] );
+		const css = '[data-mesh-id=g] > [id="target"] { position: relative } [id^="target"] { top: 0 } [id="target" i] { left: 0 }';
+		const projected = projectResponsiveIdentityCss( css, renamed, false );
+		expect( projected ).toContain( '[data-mesh-id=g] > :is([id="target"],[id="target--data-blocks-engine-capture-mobile"])' );
+		expect( projected ).toContain( '[id^="target"]' );
+		expect( projected ).toContain( '[id="target" i]' );
+	} );
+
 	it( 'preserves browser-recovered declarations and priorities through projection and scoping', async () => {
 		const css = '#target { display: none; !important } #next { color: red; !important; opacity: .5; color: green !important; content: "!important" } #next { color: blue }';
 		const browser = await chromium.launch();

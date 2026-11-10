@@ -1701,7 +1701,7 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 	// declaration; identity-free styles need no rewriting or recovery here.
 	const preludes = source.replace( /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '' )
 		.match( /[^{};]+\{/g )?.join( '\n' ) ?? '';
-	if ( ! preludes.includes( '#' ) && ( ! namedAliases || ! /\[\s*name\b/i.test( preludes ) ) ) return source;
+	if ( ! preludes.includes( '#' ) && ! /\[\s*id\s*=/i.test( preludes ) && ( ! namedAliases || ! /\[\s*name\b/i.test( preludes ) ) ) return source;
 	// CSS accepts legacy HTML-comment wrappers; PostCSS rejects the closing CDC.
 	// Strip only outer tokens, preserving quoted content inside the stylesheet.
 	const css = parseCss( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
@@ -1710,6 +1710,8 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 		if ( ! selectors ) return;
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; aliases: Array<selectorParser.Identifier | selectorParser.Attribute> }> = [];
 		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value?.length ) replacements.push( { node: id, aliases: [ value ].flat().map( name => { const alias = id.clone(); alias.value = name; return alias; } ) } ); } );
+		// Exact attribute ids (`[id="x"]`, Wix mesh child rules) are the same identity.
+		selectors.walkAttributes( attribute => { const value = attribute.attribute === 'id' && attribute.operator === '=' && ! attribute.insensitive && attribute.value ? renamed.get( attribute.value ) : undefined; if ( value?.length ) replacements.push( { node: attribute, aliases: [ value ].flat().map( name => { const alias = attribute.clone(); alias.setValue( name, { quoteMark: '"' } ); return alias; } ) } ); } );
 		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-blocks-engine-capture-anchor-alias'; replacements.push( { node: attribute, aliases: [ alias ] } ); } } );
 		for ( const { node, aliases } of replacements ) node.replaceWith( selectorParser.pseudo( { value: ':is', nodes: [
 			selectorParser.selector( { value: '', nodes: [ node.clone() ] } ), ...aliases.map( alias => selectorParser.selector( { value: '', nodes: [ alias ] } ) ),
