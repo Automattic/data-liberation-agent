@@ -3,6 +3,7 @@ import { mergeConsentLayouts, sameConsentLayout } from '../consent-banner-layout
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
 import { isConsentNotice } from '../consent-overlay.js';
+import { VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 
 /** Slack given to an in-page step beyond its own budget before Node gives up on it. */
 const EVALUATE_GRACE_MS = 5_000;
@@ -661,8 +662,25 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     // thread is spinning never answers, so its own budget never fires.
     const sweepToBottom = (maxMs: number) =>
       withEvaluateTimeout(page.evaluate(
-        async ({ step, pauseMs, maxMs, poseKey }) => {
+        async ({ step, pauseMs, maxMs, poseKey, workKey }) => {
           const started = Date.now();
+          // Each step waits for what its scroll scheduled, never longer than
+          // `pauseMs`: the rendering update that delivers scroll and
+          // IntersectionObserver callbacks, then any short timeout those
+          // callbacks set (a debounced reveal). A page without the
+          // viewport-work tracker keeps the fixed pause.
+          const work = (window as unknown as Record<symbol, ViewportWork | undefined>)[Symbol.for(workKey)];
+          const scrollAndSettle = async (top: number) => {
+            const stepStarted = Date.now();
+            work?.arm();
+            target.scrollTo({ top, left: 0, behavior: 'instant' });
+            if (!work) {
+              await new Promise((r) => setTimeout(r, pauseMs));
+              return;
+            }
+            await work.release();
+            while (work.pending() > 0 && Date.now() - stepStarted < pauseMs) await work.sleep(16);
+          };
           // A later sweep or a pose restore supersedes this one. The driver can
           // stop waiting for this evaluate while the page keeps running it.
           const owner = window as unknown as Record<string, number>;
@@ -672,6 +690,7 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
           const scrollHeight = () => target === window ? document.documentElement.scrollHeight : (target as HTMLElement).scrollHeight;
           let y = target === window ? window.scrollY : (target as HTMLElement).scrollTop;
           let total = scrollHeight();
+          const initial = total;
           // The viewport already covers the final innerHeight pixels. Walking
           // toward scrollHeight overscrolls a clamped page and sleeps despite
           // revealing nothing, again on every image-settling round.
@@ -681,8 +700,7 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
             // into a wide window) jumps over content that never intersects, so
             // its viewport-gated loads and entrances never run.
             y = Math.min(y + Math.max(1, Math.min(step, height())), bottom);
-            target.scrollTo({ top: y, left: 0, behavior: 'instant' });
-            await new Promise((r) => setTimeout(r, pauseMs));
+            await scrollAndSettle(y);
             total = scrollHeight();
             bottom = Math.max(0, total - height());
           }
@@ -696,16 +714,15 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
             tail.style.cssText = `position:absolute!important;top:${total}px!important;left:0!important;width:1px!important;height:${height()}px!important;pointer-events:none!important;visibility:hidden!important;`;
             document.documentElement.appendChild(tail);
             try {
-              target.scrollTo({ top: Math.max(0, Math.min(total - height() / 2, scrollHeight() - height())), left: 0, behavior: 'instant' });
-              await new Promise((r) => setTimeout(r, pauseMs));
+              await scrollAndSettle(Math.max(0, Math.min(total - height() / 2, scrollHeight() - height())));
             } finally {
               tail.remove();
             }
             total = scrollHeight();
           }
-          return total;
+          return { initial, total };
         },
-        { step: 500, pauseMs: 200, maxMs, poseKey: SCROLL_POSE_GENERATION },
+        { step: 500, pauseMs: 200, maxMs, poseKey: SCROLL_POSE_GENERATION, workKey: VIEWPORT_WORK_KEY },
       ), maxMs + EVALUATE_GRACE_MS);
     const settleScroll = async () => {
       const deadline = Date.now() + 20_000;
@@ -713,10 +730,16 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
       for (let round = 0; round < 10; round++) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
-        const height = await sweepToBottom(remaining);
+        const sweep = await sweepToBottom(remaining);
         await waitForImages(page);
-        if (height === previousHeight) break;
-        previousHeight = height;
+        if (sweep?.total === previousHeight) break;
+        // A sweep the document never outgrew, still at that height once its
+        // images settled, revealed no tail for another round to reach.
+        if (sweep && sweep.initial === sweep.total && await withEvaluateTimeout(page.evaluate(
+          (expected) => ((window as LazyScrollWindow).__dlaLazyScroller?.element.scrollHeight ?? document.documentElement.scrollHeight) === expected,
+          sweep.total,
+        ), EVALUATE_GRACE_MS)) break;
+        previousHeight = sweep?.total;
       }
     };
     if ( requireNetworkIdle ) {

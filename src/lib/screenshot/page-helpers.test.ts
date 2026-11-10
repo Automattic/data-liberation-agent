@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
+import { observeViewportWork } from './viewport-work.js';
 import {
   waitForStable,
   triggerLazyLoad,
@@ -379,6 +380,39 @@ describe('triggerLazyLoad', () => {
     }
   }, 30_000);
 
+  it('waits each step only for the work its scroll scheduled, and still reveals debounced and lazy tails', async () => {
+    // Before #1630 every 500px step slept a fixed 200ms and a confirmation
+    // sweep always followed: about 3.4 s here, against about 1.5 s now.
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    try {
+      await page.addInitScript(observeViewportWork);
+      await page.route('https://assets.test/lazy.svg', route => route.fulfill({
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>',
+      }));
+      await page.route('https://fixture.test/', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><style>html,body{margin:0}</style>
+        <div style="height:5600px"></div><section id="reveal">Reveal</section>
+        <img loading="lazy" width="10" height="10" src="https://assets.test/lazy.svg">
+        <script>
+          new IntersectionObserver(entries => {
+            if (entries.some(entry => entry.isIntersecting)) setTimeout(() => reveal.classList.add('shown'), 100);
+          }).observe(reveal);
+        </script>` }));
+      // A navigation, unlike setContent, runs the init script before the source.
+      await page.goto('https://fixture.test/');
+      const started = Date.now();
+      await triggerLazyLoad(page);
+      const elapsed = Date.now() - started;
+      await waitForImages(page);
+      expect(await page.locator('#reveal').getAttribute('class')).toBe('shown');
+      expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth)).toBe(10);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+      expect(elapsed).toBeLessThan(2_500);
+    } finally {
+      await page.close();
+    }
+  }, 30_000);
+
   it('all in-page scrollTo calls are explicit-instant (smooth-scroll glide immunity)', async () => {
     // html{scroll-behavior:smooth} makes a bare scrollTo GLIDE: the restore
     // scrollTo(0,0) was still mid-glide (y=4, is-scrolled on) when the snap
@@ -482,12 +516,14 @@ describe('triggerLazyLoad', () => {
   }, 30_000);
 
   it('restores the top pose when a sweep step is interrupted after reaching the bottom', async () => {
-    // The first sweep reaches the bottom; the next settle round's sweep is
-    // interrupted (as a stalled renderer or destroyed context would). The
-    // caller measures right after this and must not see the parked page.
+    // The first sweep reaches the bottom and the document grows once, so a
+    // second settle round runs; that sweep is interrupted (as a stalled
+    // renderer or destroyed context would). The caller measures right after
+    // this and must not see the parked page.
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     try {
-      await page.setContent('<style>body{margin:0}</style><main style="height:4000px">Content</main>');
+      await page.setContent(`<style>body{margin:0}</style><main id="main" style="height:4000px">Content</main>
+        <script>addEventListener('scroll', () => { if (scrollY > 3000) main.style.height = '5000px'; });</script>`);
       let sweeps = 0;
       const interrupted = new Proxy(page, {
         get(target, property, receiver) {
