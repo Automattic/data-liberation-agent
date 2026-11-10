@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.193] - 2026-11-10
+
+### Changed
+- regenerate plugin bundles
+- Let --max-total-bytes size derivation and portable media budgets
+- replay Vary: Accept and Vary: Available-Dictionary responses across routes
+- Capture tabs that re-render a sibling panel without aria-controls
+
 ## [0.33.192] - 2026-11-09
 
 ### Changed
