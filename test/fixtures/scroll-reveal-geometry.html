@@ -1,0 +1,36 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Entrance geometry</title>
+<style>
+body { margin: 0; }
+.spacer { height: 1200px; }
+section { height: 160px; }
+img { width: 82px; height: 82px; }
+#transition { opacity: 0; transform: translateY(20%); transition: opacity .25s, transform .25s; }
+#transition.visible { opacity: 1; transform: none; }
+#static { transform: translateY(12px); }
+</style>
+<main>
+<div class="spacer"></div>
+<section id="script" style="opacity:0;transform:translateY(18px)"><p>Script entrance</p><img alt="Script illustration" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></section>
+<section id="transition"><p>Transition entrance</p><img alt="Transition illustration" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></section>
+<section id="static"><p>Authored offset</p><img alt="Static illustration" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></section>
+</main>
+<script>
+(() => {
+const observer = new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    if (entry.target.id === 'script') {
+      entry.target.animate([
+        { opacity: 0, transform: 'translateY(18px)' },
+        { opacity: 1, transform: 'none' }
+      ], { duration: 250, fill: 'forwards' });
+    } else entry.target.classList.add('visible');
+    observer.unobserve(entry.target);
+  }
+});
+observer.observe(document.getElementById('script'));
+observer.observe(document.getElementById('transition'));
+})();
+</script>

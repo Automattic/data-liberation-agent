@@ -69,6 +69,33 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { await browser.close(); }
 	}, 60_000 );
 
+	it( 'measures scroll entrances at rest against a settled copy without erasing authored offsets', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+			const html = readFileSync( join( process.cwd(), 'test/fixtures/scroll-reveal-geometry.html' ), 'utf8' );
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( html );
+				const source = await observePage( page, 'about:blank', width, 0, null, undefined, undefined, true );
+				// Model a destination with the same layout and no entrance runtime.
+				await page.evaluate( () => {
+					for ( const animation of document.getAnimations() ) animation.cancel();
+					for ( const id of [ 'script', 'transition' ] ) {
+						const element = document.getElementById( id )!;
+						element.style.cssText = 'transition:none;opacity:1;transform:none';
+					}
+				} );
+				const copy = await observePage( page, 'about:blank', width, 0, null, undefined, undefined, true, true );
+				expect( checkImageGeometry( source, copy ).failures ?? [] ).toEqual( [] );
+				expect( source.typography ).toEqual( copy.typography );
+				await page.locator( '#static' ).evaluate( element => { ( element as HTMLElement ).style.transform = 'none'; } );
+				const changed = await observePage( page, 'about:blank', width, 0, null, undefined, undefined, true, true );
+				expect( checkImageGeometry( source, changed ).failures?.join( ' ' ) ).toContain( 'image geometry differs' );
+			}
+		} finally { await browser.close(); }
+	}, 60_000 );
+
 	it( 'brings every region into a layout viewport shorter than the sweep step', async () => {
 		const browser = await chromium.launch();
 		try {

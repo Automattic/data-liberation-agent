@@ -504,15 +504,22 @@ export async function observePage(
 				return left < right;
 			};
 			// Geometry has a resting-layout precondition, not a wall-clock phase.
-			// Empty keyframes temporarily expose authored styles (including static
-			// transforms) on images AND their ancestors. Unlike cancel/finish or
-			// seeking currentTime, this also works for infinite/view timelines and
-			// leaves play state, timeline bindings and motion evidence intact.
+			// Empty keyframes expose authored styles (including static transforms).
+			// A finite fade-in is different: its authored style may be the entrance
+			// start pose. Measure its terminal keyframe instead. Keep decorative
+			// infinite/view motion at authored rest, without changing play state,
+			// timeline bindings or the motion evidence collected below.
 			const { images, backgrounds, widestImage, typography, paintedTextRects } = await ( async () => {
 			const effects = document.getAnimations().flatMap( animation =>
-				animation.effect instanceof KeyframeEffect ? [ { effect: animation.effect, frames: animation.effect.getKeyframes() } ] : [] );
+				animation.effect instanceof KeyframeEffect ? [ { animation, effect: animation.effect, frames: animation.effect.getKeyframes() } ] : [] );
 			try {
-			for ( const { effect } of effects ) effect.setKeyframes( [] );
+			for ( const { animation, effect, frames } of effects ) {
+				const first = frames[ 0 ], last = frames.at( -1 );
+				const entrance = effect.getTiming().iterations !== Infinity && effect.getComputedTiming().endTime !== Infinity &&
+					animation.timeline instanceof DocumentTimeline &&
+					first?.opacity !== undefined && last?.opacity !== undefined && Number( first.opacity ) < Number( last.opacity ) && Number( last.opacity ) === 1;
+				effect.setKeyframes( entrance ? [ { ...last, offset: 0 }, { ...last, offset: 1 } ] : [] );
+			}
 			// The painted image is the content box. Padding and borders are the
 			// element's frame, which a copy may legitimately move to a wrapper
 			// (a figure around the image) without changing what is painted.
