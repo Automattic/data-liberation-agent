@@ -669,6 +669,11 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// source laid out lines and tables under different rules, so record the
 				// mode the source rendered in for the transform to honor.
 				if ( document.compatMode === 'BackCompat' ) snapshot.setAttribute( 'data-blocks-engine-capture-compat-mode', 'BackCompat' );
+				// Source cleanup hides a match the source runtime re-rendered after
+				// its removal, rather than fighting the runtime. Leave it out of the
+				// copy. This runs last: the walks above pair document and snapshot
+				// nodes by position.
+				for ( const hidden of snapshot.querySelectorAll( '[data-dla-cleanup-hidden]' ) ) hidden.remove();
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();
