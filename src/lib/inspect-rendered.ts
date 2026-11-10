@@ -1,6 +1,6 @@
 import { isNonDocumentUrl } from './extraction/sitemap.js';
 import type { Browser, Page } from 'playwright';
-import { desktopContextOptions, sourceSessionCookieHeader } from './browser-kit/browser-kit.js';
+import { desktopContextOptions, launchChromium, sourceSessionCookieHeader } from './browser-kit/browser-kit.js';
 import { createSourceContext } from './browser-kit/source-identity.js';
 import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
 
@@ -119,14 +119,13 @@ function perOriginLimiter(limit: number) {
  * POSTs and service workers are blocked; inspection never activates controls. */
 export async function createRenderedInspector(signal: AbortSignal, requestTimeoutMs: number) {
   signal.throwIfAborted();
-  const { chromium } = await import('playwright');
   const withOriginSlot = perOriginLimiter(RENDERED_REQUESTS_PER_ORIGIN);
   let browser: Browser | undefined;
   const close = async () => { await browser?.close(); };
   const abort = () => { void close().catch(() => undefined); };
   signal.addEventListener('abort', abort, { once: true });
   try {
-    browser = await chromium.launch({ timeout: Math.min(requestTimeoutMs, 10_000) });
+    browser = await launchChromium({ timeout: Math.min(requestTimeoutMs, 10_000) });
     signal.throwIfAborted();
   } catch (error) {
     signal.removeEventListener('abort', abort);

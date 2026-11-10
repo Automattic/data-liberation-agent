@@ -1,7 +1,7 @@
 import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, resolvePageLink, normalizeDiscoveredRoutes } from '../../lib/extraction/sitemap.js';
 import { extractNavLinks } from '../../lib/html-extract/index.js';
 import { extractSiteMetadata } from '../site-metadata.js';
-import { createSourcePage, sourceContextOptions, getPlaywright } from '../../lib/browser-kit/browser-kit.js';
+import { createSourcePage, sourceContextOptions, launchChromium } from '../../lib/browser-kit/browser-kit.js';
 import type { InventoryUrl } from '../shared.js';
 import type { DefaultInventory } from './types.js';
 
@@ -44,8 +44,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
   // sitemap.xml. Render their primary navigation before falling back to one route.
   if (sitemapUrls.length < 5) {
     try {
-      const pw = await getPlaywright();
-      const browser = await pw.chromium.launch({ headless: true });
+      const browser = await launchChromium();
       try {
         const page = await createSourcePage(browser, await sourceContextOptions(browser, normalized));
         await page.goto(normalized, { waitUntil: 'domcontentloaded', timeout: 15000 });

@@ -5,10 +5,10 @@ import { join } from 'node:path';
 // Browser-lifecycle behavior (timeouts, cache invalidation, bounded close)
 // tested against fakes — the real-Chromium render path is covered in
 // svg-raster.test.ts.
-const { mockGetPlaywright } = vi.hoisted(() => ({ mockGetPlaywright: vi.fn() }));
+const { mockLaunchChromium } = vi.hoisted(() => ({ mockLaunchChromium: vi.fn() }));
 vi.mock('../browser-kit/index.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../browser-kit/index.js')>();
-  return { ...mod, getPlaywright: mockGetPlaywright };
+  return { ...mod, launchChromium: mockLaunchChromium };
 });
 
 // cwd-local tmp dir per repo guidance (no os.tmpdir, no output/ reads).
@@ -54,17 +54,15 @@ function fakeBrowser() {
 }
 
 function stubLaunches(...browsers: unknown[]) {
-  const launch = vi.fn();
   for (const b of browsers) {
-    if (typeof b === 'function') launch.mockImplementationOnce(b as () => unknown);
-    else launch.mockResolvedValueOnce(b);
+    if (typeof b === 'function') mockLaunchChromium.mockImplementationOnce(b as () => unknown);
+    else mockLaunchChromium.mockResolvedValueOnce(b);
   }
-  mockGetPlaywright.mockResolvedValue({ chromium: { launch } });
-  return launch;
+  return mockLaunchChromium;
 }
 
 beforeEach(() => {
-  mockGetPlaywright.mockReset();
+  mockLaunchChromium.mockReset();
   mkdirSync(TMP_ROOT, { recursive: true });
   writeFileSync(SVG_PATH, '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"/>');
 });

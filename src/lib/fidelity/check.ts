@@ -12,7 +12,7 @@ import { resolveInteractionComponents, type ComponentPage } from '../captured-in
 import * as cheerio from 'cheerio';
 import { restoreRuntimeEmoji, RUNTIME_EMOJI_PREDICATE_SOURCE } from '../screenshot/runtime-emoji.js';
 import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
-import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
+import { createSourcePage, launchChromium, sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { load } from 'cheerio';
 import { documentRequestUrl } from '../url/route-key.js';
 import { spreadSample } from '../route-budget.js';
@@ -1283,7 +1283,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or a portable runtime receipt' );
 		validateMotionContract( motionContract );
 	}
-	const browser = options.observe ? null : await (await import('playwright')).chromium.launch();
+	const browser = options.observe ? null : await launchChromium();
 	let server: Awaited<ReturnType<typeof startStaticServer>> | null = null;
 	try {
 		server = options.observe || candidate ? null : await startStaticServer( websiteDir );
@@ -1677,7 +1677,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	let resources: Promise<void> | undefined;
 	const startResources = () => resources ??= ( async () => {
 		server = await startStaticServer( websiteDir );
-		browser = await ( await import( 'playwright' ) ).chromium.launch();
+		browser = await launchChromium();
 	} )();
 	// Keep legacy evidence paths, including their last-writer semantics. Duplicate
 	// caller selections or slug aliases are not independent evidence writers.

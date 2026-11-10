@@ -2,7 +2,7 @@ import { closeSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { openExclusive } from './exclusive-file.js';
 import { basename, dirname, join } from 'path';
 import { safeFilename } from './media.js';
-import { getPlaywright } from '../browser-kit/index.js';
+import { launchChromium } from '../browser-kit/index.js';
 import { withTimeout } from '../concurrency.js';
 
 /**
@@ -50,8 +50,7 @@ let browserPromise: Promise<CachedBrowser> | null = null;
 function getRasterBrowser(): Promise<CachedBrowser> {
   if (!browserPromise) {
     const attempt: Promise<CachedBrowser> = (async () => {
-      const pw = await getPlaywright();
-      return pw.chromium.launch({ headless: true });
+      return launchChromium();
     })().catch((err) => {
       // Failed launch must not poison the cache — let the next call retry.
       if (browserPromise === attempt) browserPromise = null;

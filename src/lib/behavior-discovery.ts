@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createSourcePage, sourceContextOptions } from './browser-kit/browser-kit.js';
+import { createSourcePage, launchChromium, sourceContextOptions } from './browser-kit/browser-kit.js';
 import { captureSourceBehavior } from './screenshot/behavior-capture.js';
 import { modelSourceBehavior, timeDependentTargets } from './behavior-model.js';
 import { learnMotion, type LearnedMotion } from './learned-motion.js';
@@ -19,8 +19,7 @@ export async function discoverCapturedBehavior( directory: string ): Promise< vo
 	const source = JSON.parse( readFileSync( path, 'utf8' ) ) as { pages?: Array< { url: string; status: string } > };
 	const pages = ( source.pages ?? [] ).filter( ( page ) => page.status === 'unreproduced' );
 	if ( ! pages.length ) return;
-	const { chromium } = await import( 'playwright' );
-	const browser = await chromium.launch();
+	const browser = await launchChromium();
 	const observations: Array< Record< string, unknown > > = [];
 	const learned: Array< { url: string; learned: LearnedMotion } > = [];
 	const failures: Array< { url: string; error: string } > = [];
