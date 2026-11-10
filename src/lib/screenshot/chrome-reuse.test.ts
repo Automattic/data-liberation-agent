@@ -70,6 +70,38 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 		expect( retargetCurrentRoute( html, 'https://fixture/a', `https://fixture/${ route }/` ) ).toBe( expected );
 	} );
 
+	// One browser pass (~1 s): count actual style reads, not elapsed time.
+	it( 'reads styles only for structural candidates, once per root, and still rejects different paint', async () => {
+		const browser = await chromium.launch();
+		try {
+			const view = await browser.newPage();
+			const fixture = ( route: boolean ) => `<style>nav::before{content:"Menu";color:${ route ? 'blue' : 'red' }}</style>
+<header><nav><button>Open</button></nav><p>${ route ? 'Route-specific' : 'Home' }</p></header><footer>${ route ? 'Other' : 'Footer' }</footer>`;
+			await view.setContent( fixture( false ) );
+			const evidence = { url: 'https://fixture/', landmarks: await readChromeLandmarks( view ), states: [], unanchored: 0 };
+			await view.setContent( fixture( true ) );
+			const calls = await view.evaluateHandle( () => {
+				const calls: string[] = [];
+				const original = window.getComputedStyle;
+				window.getComputedStyle = ( element, pseudo ) => {
+					calls.push( `${ element.tagName }${ pseudo ?? '' }` );
+					return original.call( window, element, pseudo );
+				};
+				return calls;
+			} );
+			const reuse = await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } );
+			expect( reuse.decision ).toMatchObject( { chromeReused: false, landmarks: { matched: 0 } } );
+			// The nested nav is a structural candidate despite its unmatched parent.
+			// Its generated content paints differently, so it cannot be reused.
+			// No styles are read for the unmatched header, paragraph or footer,
+			// and the nav/button are not read again through their enclosing header.
+			expect( await calls.jsonValue() ).toEqual( [ 'NAV', 'NAV::before', 'NAV::after', 'BUTTON', 'BUTTON::before', 'BUTTON::after' ] );
+			await calls.dispose();
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it( 'matches a copy that renders alike under renamed ids and replays its states under the route\'s names', async () => {
 		const browser = await chromium.launch();
 		try {
