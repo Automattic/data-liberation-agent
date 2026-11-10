@@ -2198,8 +2198,8 @@ describe( 'exportWebsiteCapture', () => {
 				[ 1600, 1600, 640 ], [ 1728, 1728, 691.2 ],
 			] ) {
 				await page.setViewportSize( { width, height: 900 } );
-				const hero = await page.locator( '#hero:visible img' ).boundingBox();
-				const split = await page.locator( '#split:visible img' ).boundingBox();
+				const hero = await page.locator( '.hero:visible img' ).boundingBox();
+				const split = await page.locator( '.split:visible img' ).boundingBox();
 				expect( Math.abs( hero!.width - heroWidth ), `hero width at ${ width }` ).toBeLessThan( 2 );
 				expect( Math.abs( split!.width - splitWidth ), `split width at ${ width }` ).toBeLessThan( 2 );
 				expect( split!.x, `split x at ${ width }` ).toBe( 0 );

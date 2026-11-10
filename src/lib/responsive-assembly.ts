@@ -1747,7 +1747,11 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		aliases.add( name );
 		changed = true;
 	} );
-	const desktopIds = new Set( $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).toArray().map( element => $( element ).attr( 'id' )! ) );
+	const idCounts = new Map<string, number>();
+	$( '[id]' ).each( ( _index, element ) => {
+		const id = $( element ).attr( 'id' )!;
+		idCounts.set( id, ( idCounts.get( id ) ?? 0 ) + 1 );
+	} );
 	let responsiveFragments = false;
 	const variantTarget = ( { document, suffix }: typeof variants[ number ], fragment: string ): boolean => {
 		const variantId = `${ fragment }${ suffix }`;
@@ -1757,7 +1761,7 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 			// target still carries the original id and collides with the desktop
 			// copy; preserve its associations when assigning the variant identity.
 			const authored = document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === fragment );
-			if ( authored.length === 1 && ! desktopIds.has( fragment ) ) return false;
+			if ( authored.length === 1 && ( idCounts.get( fragment ) ?? 0 ) < 2 ) return false;
 			if ( authored.length === 1 ) {
 				authored.attr( 'id', variantId );
 				renamed.set( fragment, [ ...( renamed.get( fragment ) ?? [] ), variantId ] );
@@ -1783,6 +1787,12 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		return true;
 	};
 	for ( const variant of variants ) {
+		// An id is a destination even when only another route links to it. Keep
+		// every device copy unique, not just ids named by this page's links.
+		for ( const element of variant.document.find( '[id]' ).toArray() ) {
+			const id = $( element ).attr( 'id' )!;
+			if ( ( idCounts.get( id ) ?? 0 ) > 1 ) variantTarget( variant, id );
+		}
 		// Register captured section targets independently of local links: another
 		// route may be the only place linking here. Other authored ids become
 		// fragment targets only when a local link names them (below).

@@ -363,6 +363,19 @@ describe( 'assembleResponsiveCapture', () => {
 		} finally { await browser.close(); }
 	} );
 
+	it( 'namespaces ids in every remaining device copy even without local links', () => {
+		const html = routePhoneDocumentFragments( page( `<div class="data-blocks-engine-capture-desktop-document"><section id="about"></section></div>
+			<div class="data-blocks-engine-capture-mobile-document"><section id="about"><label for="field">Email</label><input id="field"></section></div>
+			<div class="data-blocks-engine-capture-middle-document"><section id="about"><label for="field">Email</label><input id="field"></section></div>` ), '/index.html' );
+		const $ = cheerio.load( html );
+		const ids = $( '[id]' ).toArray().map( element => $( element ).attr( 'id' )! );
+		expect( new Set( ids ).size ).toBe( ids.length );
+		$( 'label' ).each( ( _index, element ) => {
+			const target = $( element ).attr( 'for' );
+			expect( $( element ).parent().find( 'input' ).attr( 'id' ) ).toBe( target );
+		} );
+	} );
+
 	it.each( [
 		{ name: 'padding shorthand', important: 'padding:6px!important', desktop: 'padding-top:40px', mobile: 'padding-top:80px', padding: '6px', display: 'block' },
 		{ name: 'all reset', important: 'all:initial!important', desktop: 'display:block;width:220px;padding:40px', mobile: 'display:block;width:160px;padding:80px', padding: '0px', display: 'inline' },
@@ -780,7 +793,7 @@ describe( 'exportWebsiteCapture responsive assembly', () => {
 			} );
 			await copy.goto( 'https://copy.test/' );
 			for ( const id of [ 'inline', 'linked', 'presentation' ] ) {
-				const result = await copy.locator( `.${ MOBILE_DOCUMENT_CLASS } [id="${ id }"]` ).evaluate( node => {
+				const result = await copy.locator( `.${ MOBILE_DOCUMENT_CLASS } [id="${ id }--data-blocks-engine-capture-mobile"]` ).evaluate( node => {
 					const clip = getComputedStyle( node ).clipPath;
 					const targetId = clip.match( /#([^"')]+)/ )?.[ 1 ];
 					const target = targetId ? document.getElementById( targetId ) : null;

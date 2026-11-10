@@ -96,8 +96,8 @@ it.skipIf( !!process.env.SKIP_BROWSER_TESTS ).each( [ false, true ] )(
 					return { local: new URL( url ).origin === location.origin, decoded: image.naturalWidth };
 				} );
 				expect( background ).toEqual( { local: true, decoded: 40 } );
-				expect( await page.locator( '#next:visible' ).getAttribute( 'href' ) ).toBe( `${ origin }/${ authoredBase ? width < 768 ? 'phone-assets' : 'assets' : 'albums' }/next` );
-				expect( await page.locator( '#fragment:visible' ).getAttribute( 'href' ) ).toBe( authoredBase
+				expect( await page.getByRole( 'link', { name: 'Next', exact: true } ).getAttribute( 'href' ) ).toBe( `${ origin }/${ authoredBase ? width < 768 ? 'phone-assets' : 'assets' : 'albums' }/next` );
+				expect( await page.getByRole( 'link', { name: 'Heading', exact: true } ).getAttribute( 'href' ) ).toBe( authoredBase
 					? `${ origin }/${ width < 768 ? 'phone-assets' : 'assets' }/#heading`
 					: '#heading' );
 			}
