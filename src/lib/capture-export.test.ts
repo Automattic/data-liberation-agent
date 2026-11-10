@@ -13,7 +13,7 @@ import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
-	canonicalizeUnreferencedHeaderIds,
+	canonicalizeUnreferencedRuntimeIds,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
@@ -272,16 +272,20 @@ describe( 'exportWebsiteCapture', () => {
 		for ( const path of receipt.reports ) expect( statSync( join( outputDir, path ) ).isFile() ).toBe( true );
 	} );
 
-	it( 'stabilizes only unreferenced runtime header ids across routes', () => {
-		const page = ( token: string ) => `<html><body><header><div id="yui_3_17_2_1_${ token }_3" class="announcement"><div id="yui_3_17_2_1_${ token }_4"><a aria-labelledby="announcement-label" href="/tickets"></a><span id="announcement-label">Tickets</span></div></div><nav><a href="/">Home</a></nav></header><main><div id="yui_3_17_2_1_${ token }_5">Body</div></main></body></html>`;
-		const home = canonicalizeUnreferencedHeaderIds( page( '111' ) );
-		const about = canonicalizeUnreferencedHeaderIds( page( '222' ) );
-		expect( home.replace( '111_5', 'body' ) ).toBe( about.replace( '222_5', 'body' ) );
-		expect( home ).toContain( 'id="announcement-label"' );
-		expect( home ).toContain( 'id="yui_3_17_2_1_111_5"' );
-		expect( home ).not.toContain( 'id="yui_3_17_2_1_111_3"' );
-		expect( canonicalizeUnreferencedHeaderIds( page( '111' ), [ '#yui_3_17_2_1_111_3{display:block}' ] ) ).toContain( 'id="yui_3_17_2_1_111_3"' );
-		expect( canonicalizeUnreferencedHeaderIds( page( '111' ).replace( 'href="/tickets"', 'href="#yui_3_17_2_1_111_3"' ) ) ).toContain( 'id="yui_3_17_2_1_111_3"' );
+	it( 'shares runtime ids across routes and renames their in-document references together', () => {
+		// A popup outside the header, an id that is a prefix of another, and an
+		// in-page reference: all follow the element's structural position.
+		const page = ( token: string, route: string ) => `<html><body id="item-${ route }"><header><div id="yui_3_17_2_1_${ token }_3"><nav><a href="/">Home</a></nav></div></header><main><h1>${ route }</h1></main><div class="popup"><form id="yui_3_17_2_1_${ token }_35" aria-labelledby="yui_3_17_2_1_${ token }_351"><span id="yui_3_17_2_1_${ token }_351">Join</span></form></div></body></html>`;
+		const home = canonicalizeUnreferencedRuntimeIds( page( '111', 'home' ) );
+		const about = canonicalizeUnreferencedRuntimeIds( page( '222', 'about' ) );
+		expect( home.html.replace( />home</, '><' ).replace( 'item-home', '' ) ).toBe( about.html.replace( />about</, '><' ).replace( 'item-about', '' ) );
+		expect( home.html ).not.toContain( 'yui_' );
+		expect( home.html ).toContain( `aria-labelledby="${ home.ids.get( 'yui_3_17_2_1_111_351' ) }"` );
+		expect( home.ids.get( 'yui_3_17_2_1_111_35' ) ).not.toBe( home.ids.get( 'yui_3_17_2_1_111_351' ) );
+		// A retained stylesheet that reads the id keeps it, and only it.
+		const styled = canonicalizeUnreferencedRuntimeIds( page( '111', 'home' ), [ '#yui_3_17_2_1_111_35{display:block}' ] );
+		expect( styled.html ).toContain( 'id="yui_3_17_2_1_111_35"' );
+		expect( styled.html ).not.toContain( 'id="yui_3_17_2_1_111_351"' );
 	} );
 
 	it( 'exports structurally shared header IDs without rewriting independent page content', () => {
