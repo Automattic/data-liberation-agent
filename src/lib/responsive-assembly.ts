@@ -1591,6 +1591,21 @@ function withVariantLinkedStyles( html: string, mobileHtml: string, media: strin
 }
 
 /**
+ * A stylesheet linked from a document's body applies at every width, even
+ * inside a hidden document wrapper. Import each one under its document's width
+ * media, as head links from a non-default document already are.
+ */
+function widthLocalBodyLinks( body: string, media: string ): string {
+	return body.replace( /<link\b[^>]*>/gi, tag => {
+		const link = cheerio.load( tag, undefined, false )( 'link' );
+		const rel = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
+		if ( ! rel.includes( 'stylesheet' ) || rel.includes( 'alternate' ) || ! link.attr( 'href' ) || link.attr( 'disabled' ) !== undefined ) return tag;
+		const href = JSON.stringify( link.attr( 'href' ) ).replace( /</g, '\\3c ' );
+		return `<style media="${ escapeHtmlAttr( link.attr( 'media' ) ?? 'all' ) }">@import url(${ href }) ${ media };</style>`;
+	} );
+}
+
+/**
  * Marks corresponding editable leaves from source identity, without comparing
  * their content or visual geometry. The nearest unique source id owns a leaf's
  * tag-relative slot even when the two responsive documents wrap it differently.
@@ -1994,12 +2009,17 @@ function assembleResponsiveHtml(
 	// The desktop body is replaced below: scope its retained styles just like
 	// the head. Phone styles (including learned rules) have one owner in
 	// responsiveMobileStyles, so none remain in the phone body.
-	desktopBody = scopedStyles( rewrite( desktopBody ), desktopMedia, shared );
-	mobileBody = mobileBody.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' );
+	desktopBody = widthLocalBodyLinks( scopedStyles( rewrite( desktopBody ), desktopMedia, shared ), desktopMedia );
+	mobileBody = widthLocalBodyLinks( mobileBody.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ), `(max-width:${ switchWidth }px)` );
 	const sharedBodyClasses = [ ...new Set( documentBodies[ 0 ].classes ) ].filter(
 		( className ) => documentBodies.slice( 1 ).every( body => body.classes.includes( className ) )
 	);
-	const outerBody = `<body${
+	// Linked stylesheets are not projected, so a body id every document shares
+	// (`#dmRoot.responsiveTablet …`) must stay on the real body.
+	const bodyIds = [ desktopBodyMatch?.attributes ?? '', mobileBodyMatch?.attributes ?? '', ...middleDocuments.map( middle => middle.attributes ) ]
+		.map( attributes => cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'id' ) );
+	const sharedBodyId = bodyIds[ 0 ] && bodyIds.every( id => id === bodyIds[ 0 ] ) ? bodyIds[ 0 ] : undefined;
+	const outerBody = `<body${ sharedBodyId ? ` id="${ escapeHtmlAttr( sharedBodyId ) }"` : '' }${
 		sharedBodyClasses.length > 0
 			? ` class="${ escapeHtmlAttr( sharedBodyClasses.join( ' ' ) ) }"`
 			: ''
@@ -2011,7 +2031,7 @@ function assembleResponsiveHtml(
 		middle.className,
 		middle.attributes,
 		middle.variables
-	) } data-blocks-engine-capture-document-scope>${ middle.body.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ) }</div>` ).join( '' ) }<div ${ wrapperAttributes(
+	) } data-blocks-engine-capture-document-scope>${ widthLocalBodyLinks( middle.body.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ), middleMedia( middle ) ) }</div>` ).join( '' ) }<div ${ wrapperAttributes(
 		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.attributes ?? '',
 		phone.variables

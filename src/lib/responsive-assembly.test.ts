@@ -154,6 +154,26 @@ it( 'keeps body styles single-owned and width-local in dual assembly (#1312)', a
 	} finally { await browser.close(); }
 } );
 
+it( 'keeps body-linked stylesheets width-local in dual assembly (#1602)', async () => {
+	// Duda links each device's stylesheet from the body; the later phone sheet must not win on desktop.
+	const sheet = ( css: string ) => `<link rel="stylesheet" href="data:text/css,${ encodeURIComponent( css ) }">`;
+	// Its desktop sheet also hides phone rows through the body id it shares with the phone document.
+	const desktop = page( `${ sheet( '.frame{width:1200px}#root.site .phone-row{display:none}' ) }<div class="frame"><p>Desktop</p><nav>a</nav></div><p class="phone-row">Phone row</p>`, '', ' id="root" class="site wide"' );
+	const mobile = page( `${ sheet( '.frame{width:291px}' ) }<div class="frame"><p>Phone</p><button>menu</button></div>`, '', ' id="root" class="site narrow"' );
+	const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+	expect( assembled.evidence?.outcome ).toBe( 'dual-structural' );
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		await tab.setContent( assembled.html );
+		for ( const [ width, expected ] of [ [ 1440, '1200px' ], [ 390, '291px' ] ] as const ) {
+			await tab.setViewportSize( { width, height: 900 } );
+			expect( await tab.locator( '.frame:visible' ).evaluate( node => getComputedStyle( node ).width ), `${ width }px` ).toBe( expected );
+			expect( await tab.locator( '.phone-row:visible' ).count(), `${ width }px` ).toBe( 0 );
+		}
+	} finally { await browser.close(); }
+} );
+
 it.each( [ false, true ] )( 'scopes body styles after single-document projection (subset=%s)', subset => {
 	const desktop = page( '<style>.frame{width:1440px}</style><main id="frame" class="frame" style="height:40px">Content</main>' );
 	const mobile = page( `<style>.frame{width:402px}</style><main id="frame" class="frame" style="height:20px">Content</main>${ subset ? '<aside id="phone">Phone</aside>' : '' }` );
