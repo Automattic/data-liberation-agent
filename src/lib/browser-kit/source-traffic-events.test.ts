@@ -55,3 +55,17 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   expect(acquire).toHaveBeenCalledTimes(2);
   expect(governor.stats().requestCounts).toMatchObject({ subresource: 4, 'asset-original': 0, 'device-check': 0 });
 });
+
+it('returns admission slots of requests still in flight when their context closes', async () => {
+  const governors = new SourceRequestGovernors({ concurrency: 1, fallbackRetryAfterMs: 0 });
+  const governor = governors.forOrigin('https://source.test');
+  governor.observeBrowserOutcome(429, '0');
+  const context = new EventEmitter() as EventEmitter & BrowserContext;
+  governSourceContext(context, governors, 'https://source.test');
+  const request = { url: () => 'https://source.test/image', isNavigationRequest: () => false, resourceType: () => 'image', frame: () => ({ url: () => 'https://source.test/page' }) } as Request;
+  await continueSourceRoute({ request: () => request, continue: vi.fn().mockResolvedValue(undefined) } as unknown as Route, context, {});
+  context.emit('close');
+  const next = new AbortController();
+  setTimeout(() => next.abort(), 100);
+  await expect(governor.acquire(next.signal, true)).resolves.toBeUndefined();
+});
