@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import { sourceFetch } from '../media-fetch/capture-requests.js';
 import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
-import { createSourcePage, sourceContextOptions } from '../browser-kit/browser-kit.js';
+import { createSourcePage, launchChromium, sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { assertPublicHttpUrl, safeFetch } from '../media-fetch/safe-fetch.js';
 
 function decodeXml(value: string): string {
@@ -611,8 +611,7 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string, signal
   const abort = () => { void browser?.close().catch(() => {}); };
   try {
     signal?.throwIfAborted();
-    const { chromium } = await import('playwright');
-    browser = await chromium.launch({ headless: true });
+    browser = await launchChromium();
     signal?.addEventListener('abort', abort, { once: true });
     signal?.throwIfAborted();
     const page = await createSourcePage(browser, await sourceContextOptions(browser, baseUrl, { publicUrlsOnly: true }));

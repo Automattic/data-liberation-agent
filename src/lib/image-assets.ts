@@ -9,7 +9,7 @@ import { metadataImageReferences } from './identity-resources.js';
 import { MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
 import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
-import { getPlaywright } from './browser-kit/index.js';
+import { launchChromium } from './browser-kit/index.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { pathWithin } from './portable-assets.js';
 import { isPlatformDefaultIconLink } from './platform-default-icons.js';
@@ -408,8 +408,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 						return expected && expected !== contentType;
 					} ) ) throw new Error( 'font bytes do not match declared format' ); // failure-class: operational
 					if ( record.kind === 'image' && ! page ) {
-						const pw = await getPlaywright();
-						browser ??= await pw.chromium.launch( { headless: true, timeout: 30000 } );
+						browser ??= await launchChromium( { timeout: 30000 } );
 						page = await browser.newPage();
 						await page.route( '**/*', route => route.abort() );
 					}

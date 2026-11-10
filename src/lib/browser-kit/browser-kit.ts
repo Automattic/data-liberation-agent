@@ -29,6 +29,21 @@ export async function getPlaywright(): Promise<typeof import('playwright')> {
 }
 
 type PwBrowserRaw = Awaited<ReturnType<(typeof import('playwright'))['chromium']['launch']>>;
+type ChromiumLaunchOptions = NonNullable<Parameters<(typeof import('playwright'))['chromium']['launch']>[0]>;
+
+/**
+ * Pages loaded for capture run untrusted JavaScript. WebRTC lets that script
+ * send UDP (STUN/TURN ICE gathering) to arbitrary hosts — anti-bot and
+ * fingerprinting scripts do this to discover the visitor's real IP. Capture
+ * never needs WebRTC, so every launched Chromium refuses non-proxied UDP.
+ */
+const CHROMIUM_ARGS = ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
+
+/** Launch Chromium with the capture browser policy. Every launch goes through here. */
+export async function launchChromium(options: ChromiumLaunchOptions = {}): Promise<PwBrowserRaw> {
+  const pw = await getPlaywright();
+  return await pw.chromium.launch({ ...options, args: [...(options.args ?? []), ...CHROMIUM_ARGS] });
+}
 
 export interface ConnectBrowserOpts {
   cdpPort?: number;
@@ -45,7 +60,7 @@ export async function connectBrowser(opts: ConnectBrowserOpts): Promise<PwBrowse
   if (opts.cdpPort) {
     return await pw.chromium.connectOverCDP(`http://127.0.0.1:${opts.cdpPort}`);
   }
-  return await pw.chromium.launch({ headless: !opts.headed });
+  return await launchChromium({ headless: !opts.headed });
 }
 
 /**

@@ -38,7 +38,7 @@ import type { PageSignature, SectionSignature } from './page-signature.js';
 import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
 import { extractFaqsFromHtml, type ExtractedFaq } from './faq-extract.js';
 import { buildSelector, type SelectorParts } from './section-selector.js';
-import { getPlaywright } from '../browser-kit/index.js';
+import { getPlaywright, launchChromium } from '../browser-kit/index.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
 
@@ -3282,8 +3282,7 @@ export async function extractFullFromSavedHtml(
   enforceSameOrigin(url, [url]);
   const stripped = html.replace(/<script[\s\S]*?<\/script>/gi, '');
 
-  const pw = await getPlaywright();
-  const browser = await pw.chromium.launch({ headless: true });
+  const browser = await launchChromium();
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
@@ -3334,7 +3333,7 @@ export async function extractFullFromUrl(
   const pw = await getPlaywright();
   const browser = opts.cdpPort
     ? await pw.chromium.connectOverCDP(`http://127.0.0.1:${opts.cdpPort}`)
-    : await pw.chromium.launch({ headless: true });
+    : await launchChromium();
 
   // Polyfill tsx/esbuild's __name helper inside the page (mirrors screenshotter).
   const context = await browser.newContext({

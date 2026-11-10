@@ -3,6 +3,7 @@ export {
   getPlaywright,
   connectBrowser,
   launchBrowser,
+  launchChromium,
   desktopContextOptions,
   desktopUserAgent,
   sourceContextOptions,

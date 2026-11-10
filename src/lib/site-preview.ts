@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { startStaticServer } from './replicate/local-site/static-server.js';
+import { launchChromium } from './browser-kit/browser-kit.js';
 
 /** Render the portable entrypoint, independent of optional full-page evidence. */
 export async function captureSitePreview( websiteDir: string ) {
-	const { chromium } = await import( 'playwright' );
 	const server = await startStaticServer( websiteDir );
-	let browser: Awaited< ReturnType< typeof chromium.launch > > | undefined;
+	let browser: Awaited< ReturnType< typeof launchChromium > > | undefined;
 	try {
-		browser = await chromium.launch( { headless: true } );
+		browser = await launchChromium();
 		const page = await browser.newPage( { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 } );
 		page.setDefaultTimeout( 15_000 );
 		const response = await page.goto( server.url, { waitUntil: 'load', timeout: 30_000 } );
