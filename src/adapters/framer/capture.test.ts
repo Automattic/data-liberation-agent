@@ -6,9 +6,20 @@ import { load } from 'cheerio';
 import { expect, it } from 'vitest';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
-import { loadFramerDocument } from './capture.js';
+import { loadFramerDocument, settleFramerEntranceStyle } from './capture.js';
 import { installSourceDocumentLoader } from '../../lib/source-navigation.js';
 import { checkSelfConsistency } from '../../lib/fidelity/self-consistency.js';
+
+it('settles only hinted inline entrance poses', () => {
+	for (const style of [
+		'opacity:0;transform:translateY(18px)',
+		'will-change:contents;opacity:0',
+		'will-change:transform;opacity:0;transform:rotate(20deg)',
+		'display:none;opacity:0',
+	]) expect(settleFramerEntranceStyle(style)).toBe(style);
+	expect(settleFramerEntranceStyle('will-change:opacity;opacity:.2;color:red')).toContain('opacity:1');
+	expect(settleFramerEntranceStyle('will-change:transform;transform:scale(0.8)')).toContain('transform:none');
+});
 
 // One browser capture (~20s), using the same document loader as liberation.
 it('keeps width-selected SSR variants as one portable tree', async () => {
@@ -22,11 +33,13 @@ it('keeps width-selected SSR variants as one portable tree', async () => {
 	try {
 		const page = await browser.newPage();
 		const before: number[] = [];
+		const sourceTops: number[] = [];
 		for (const width of [390, 1024, 1440]) {
 			await page.setViewportSize({ width, height: 900 });
 			await page.goto(url);
 			await page.waitForFunction(() => document.querySelectorAll('.ssr-variant').length === 1);
 			before.push(await page.locator('.ssr-variant').count());
+			sourceTops.push((await page.locator('#services').boundingBox())!.y);
 		}
 		await captureScreenshots({ urls: [url], primaryUrl: url, outputDir, concurrency: 1, settleMs: 50, learnFluid: false, force: true, deviceMode: 'auto',
 			initScript: async page => {
@@ -51,6 +64,11 @@ it('keeps width-selected SSR variants as one portable tree', async () => {
 			await page.setViewportSize({ width, height: 900 });
 			await page.setContent(html);
 			after.push(await page.locator('.ssr-variant:visible').innerText());
+			const entrance = page.locator('#services');
+			expect(await entrance.evaluate(node => ({ opacity: getComputedStyle(node).opacity, transform: getComputedStyle(node).transform })))
+				.toEqual({ opacity: '1', transform: 'none' });
+			expect((await entrance.boundingBox())!.y).toBeCloseTo(sourceTops[after.length - 1]!, 1);
+			expect(await page.locator('#intentionally-hidden').evaluate(node => getComputedStyle(node).opacity)).toBe('0');
 		}
 		expect(after).toEqual(['Phone layout', 'Tablet layout', 'Desktop layout']);
 		console.info('SSR variant evidence', { before, after, headers: $('header').length, forms: $('form').length });

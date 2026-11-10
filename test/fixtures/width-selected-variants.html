@@ -12,9 +12,13 @@ body{margin:0;font:16px sans-serif}header,main,footer{padding:16px}
 <div class="ssr-variant hidden-phone hidden-desktop"><article>Tablet layout</article></div>
 <div class="ssr-variant hidden-phone hidden-tablet"><aside>Desktop layout</aside></div>
 </section><section id="work"><h2>Selected work</h2><p>Common content</p></section>
+<section id="services" style="will-change:transform;opacity:0;transform:translateY(18px)"><h2>Services</h2><p>Settled entrance content</p></section>
+<div id="intentionally-hidden" style="opacity:0">Hidden content without an entrance hint</div>
 <form><label>Email<input name="email" type="email"></label><button>Send</button></form></main>
 <footer>Project information</footer>
 <script type="module" data-framer-bundle>
+document.querySelector('#services').style.opacity='1';
+document.querySelector('#services').style.transform='none';
 const breakpoint=innerWidth<810?'phone':innerWidth<1200?'tablet':'desktop';
 document.querySelectorAll('.ssr-variant.hidden-'+breakpoint).forEach(node=>node.remove());
 </script>
