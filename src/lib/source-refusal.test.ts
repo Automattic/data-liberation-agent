@@ -51,6 +51,7 @@ it('ignores stale burst failures even after the throttle pause', async () => {
    await vi.advanceTimersByTimeAsync(1000);
   }
   expect(governor.isConfirmingRefusal).toBe(false);
+  expect(governor.hasSustainedRefusal).toBe(false);
  } finally { vi.useRealTimers(); }
 });
 

@@ -144,6 +144,9 @@ export class SourceRequestGovernor {
 	private readonly probeAtMs: readonly number[];
 	blockedClient?: SourceBlockedClientError;
 
+	/** Persistent transport failures need navigation backoff as well as admission pacing. */
+	get hasSustainedRefusal(): boolean { return this.refusalCount >= 2; }
+
 	get isConfirmingRefusal(): boolean { return this.confirmation !== undefined; }
 
 	async admitSourceRequest(): Promise<void> {

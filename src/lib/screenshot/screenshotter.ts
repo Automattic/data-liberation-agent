@@ -962,9 +962,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		let timedOut: { budgetMs: number; error: string } | undefined;
 		let navigated = false;
 		let attempt = 0;
-		// The origin governor owns every wait on source throttling and refusal:
-		// Retry-After pauses, refusal confirmation and the blocked-client verdict
-		// all apply at document admission, so this loop never sleeps for them.
+		// The origin governor owns Retry-After pauses, refusal confirmation and
+		// the blocked-client verdict; this loop adds backoff only below.
 		const governor = sourceGovernorFor( page.context?.(), url );
 		const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut && ! governor?.blockedClient;
 		let redirectedTo: string | undefined;
@@ -1026,7 +1025,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					return false;
 				}
 				if ( mayRetry() && !(err instanceof SourceNavigationError) ) {
-					if ( ! isSourceTransportThrottle( err ) ) await navBackoff( attempt );
+					// The governor paces one refusal; a sustained one also needs this
+					// backoff so the route outlasts a burst of resets.
+					if ( ! governor || ! isSourceTransportThrottle( err ) || governor.hasSustainedRefusal ) await navBackoff( attempt );
 					continue;
 				}
 				loadFail( 'goto', err, attempt );
