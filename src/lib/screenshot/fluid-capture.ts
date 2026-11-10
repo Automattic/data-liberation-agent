@@ -1289,13 +1289,13 @@ async function resizeViewport( page: Page, size: { width: number; height: number
  * re-expands after the sweep returns to the top on the source's own schedule,
  * and the runtime rewrites the geometry that depends on it as it goes.
  * Sampling mid-transition teaches the fitter the scrolled state, which is not
- * the state the copy renders. Watch exactly what is sampled: rest is two
- * identical reads 250 ms apart once no timeout the resize or scroll scheduled
- * is still pending (see viewport-work.ts). A debounced resize handler is
+ * the state the copy renders. Watch exactly what is sampled: rest is 200 ms of
+ * unchanged geometry, checked every 16 ms, once no timeout the resize or scroll
+ * scheduled is still pending (see viewport-work.ts). A debounced resize handler is
  * waited for because its timeout is pending, not because a fixed window
- * happens to outlast it; a width whose geometry settled at once pays one read
- * interval. The bound keeps a perpetually animating page from stalling the
- * sweep.
+ * happens to outlast it. The quiet window also covers frame-driven refits and
+ * intermittently updated motion (such as a 150 ms animation timer). The bound
+ * keeps a perpetually animating page from stalling the sweep.
  *
  * Sampled widths share one sweep: the first width's scroll-through visits the
  * document end to end, and a later width can only reach lazy work the earlier
@@ -1338,8 +1338,8 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 					pixel( style.height ) === null ? null : geometry.parent?.clientHeight ] ) ] as const;
 			} ) );
 		};
-		// An element whose geometry changes on every observation for
-		// PERPETUAL_TICKS in a row is running a perpetual animation (a script
+		// An element whose geometry keeps changing without a quiet window for
+		// PERPETUAL_MS is running a perpetual animation (a script
 		// writing transforms each frame), not settling. It can never be quiet, so
 		// it is excluded from rest for the rest of this wait; every other element
 		// must still be quiet. A finite transition shorter than the window settles
@@ -1348,17 +1348,25 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		// later widths: they are the same tagged elements, so each width only
 		// needs its own quiet window rather than re-proving the animation. A new
 		// run tags afresh and starts with no movers.
-		const PERPETUAL_TICKS = 8;
-		const streaks = new Map< string, number >();
+		// Preserve the old eight 250 ms observations' two-second motion window.
+		const PERPETUAL_MS = 2000;
+		const QUIET_MS = 200;
+		const streaks = new Map< string, { started: number; changed: number } >();
 		const perpetual = ( state as unknown as { perpetual?: Set< string > } ).perpetual ??= new Set< string >();
 		const unchanged = ( before: Map< string, string >, after: Map< string, string > ) => {
 			let same = true;
+			const now = Date.now();
 			for ( const [ id, record ] of after ) {
 				if ( perpetual.has( id ) ) continue;
-				if ( before.get( id ) === record ) { streaks.delete( id ); continue; }
-				const streak = ( streaks.get( id ) ?? 0 ) + 1;
+				const prior = streaks.get( id );
+				if ( before.get( id ) === record ) {
+					if ( prior && now - prior.changed >= QUIET_MS ) streaks.delete( id );
+					continue;
+				}
+				const streak = prior ?? { started: now, changed: now };
+				streak.changed = now;
 				streaks.set( id, streak );
-				if ( streak >= PERPETUAL_TICKS ) perpetual.add( id );
+				if ( now - streak.started >= PERPETUAL_MS ) perpetual.add( id );
 				else same = false;
 			}
 			for ( const id of before.keys() ) if ( ! after.has( id ) && ! perpetual.has( id ) ) same = false;
@@ -1425,9 +1433,10 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		// The rest budget bounds a page that never rests. Additional sweeps share it.
 		const deadline = Date.now() + settleMs + 3500;
 		let previous = snapshot();
-		let quiet = 0;
+		let quietSince = Date.now();
 		while ( Date.now() < deadline ) {
-			await sleep( 250 );
+			// Short, untracked polling also progresses when the page stops rendering frames.
+			await sleep( 16 );
 			const currentContent = content();
 			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) => source !== sweptContent.sources.get( image ) );
 			const currentHeight = document.documentElement.scrollHeight;
@@ -1438,7 +1447,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 				// tail after the first sweep. Observe it before declaring readiness.
 				sweptContent = currentContent;
 				await sweep();
-				quiet = 0;
+				quietSince = Date.now();
 				previous = snapshot();
 				continue;
 			}
@@ -1448,12 +1457,12 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// revealed images and document growth retain the full sweep above.
 			sweptContent = currentContent;
 			if ( lazy && changedImages.length ) {
-				quiet = 0;
+				quietSince = Date.now();
 				previous = snapshot();
 				continue;
 			}
 			const current = snapshot();
-			quiet = unchanged( previous, current ) ? quiet + 1 : 0;
+			if ( ! unchanged( previous, current ) ) quietSince = Date.now();
 			previous = current;
 			// A display:none device variant cannot be reached by scrolling. Its
 			// pending native lazy images do not describe this width's geometry;
@@ -1462,9 +1471,9 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// equally unreachable by this vertical sweep.
 			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
 			// Pending timeouts cover debounces. A missing tagged role can also
-			// be between an unwrap and an rAF-driven refit: allow one more tick
-			// for its replacement, without charging intact documents that wait.
-			if ( quiet >= ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) break;
+			// be between an unwrap and an rAF-driven refit: allow a second quiet
+			// window for its replacement, without charging intact documents that wait.
+			if ( Date.now() - quietSince >= QUIET_MS * ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) break;
 		}
 		// Later widths reuse this wait's visited extent and content (see `reuse`),
 		// so what the last sweep actually observed is what they compare against.

@@ -3,11 +3,72 @@ import { chromium, type Browser } from 'playwright';
 import { COARSE_SWEEP_WIDTHS, DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { waitForImages } from './page-helpers.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
+import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 
 describe( 'responsive readiness contract', () => {
 	let browser: Browser;
 	beforeAll( async () => { browser = await chromium.launch( { headless: true } ); } );
 	afterAll( async () => { await browser.close(); } );
+
+	// One browser pass per fixture; expected wall time: about two seconds total.
+	it( 'checks still geometry frequently and waits for a 150 ms resize debounce', async () => {
+		for ( const debounce of [ false, true ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			try {
+				await page.setContent( `<style>body{margin:0}</style><div id="box" style="width:720px;height:40px">Text</div>
+					<script>
+					window.debouncedWidth = 1440;
+					let timer;
+					addEventListener('resize', () => {
+						${ debounce ? `clearTimeout(timer); timer = setTimeout(() => {
+							document.querySelector('#box').style.width = innerWidth / 2 + 'px';
+							window.debouncedWidth = innerWidth;
+						}, 150);` : '' }
+					});
+					</script>` );
+				await page.evaluate( observeViewportWork );
+				// Observe the existing private readiness boundary, without adding a
+				// production timing hook. sleep() is untracked; release() uses its
+				// own lexical sleep, so these are rest-loop checks only on this short page.
+				await page.evaluate( key => {
+					const work = ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( key ) ]!;
+					const sleep = work.sleep;
+					const arm = work.arm;
+					const scope = window as unknown as { rest: { started: number; checks: number; intervals: number[] } };
+					work.arm = () => { scope.rest = { started: performance.now(), checks: 0, intervals: [] }; arm(); };
+					work.sleep = ms => { scope.rest.checks++; scope.rest.intervals.push( ms ); return sleep( ms ); };
+				}, VIEWPORT_WORK_KEY );
+				const result = await learnAndApplyFluidGeometry( page, {
+					widths: [ 390, 768, 1440 ], settleMs: 0,
+					prepareViewport: async source => {
+						const observed = await source.evaluate( () => {
+							const scope = window as unknown as { rest: { started: number; checks: number; intervals: number[] }; debouncedWidth: number };
+							return { ...scope.rest, elapsedMs: performance.now() - scope.rest.started,
+								width: innerWidth, debouncedWidth: scope.debouncedWidth, box: document.querySelector( '#box' )!.getBoundingClientRect().width };
+						} );
+						process.stdout.write( JSON.stringify( { fixture: debounce ? 'rest-debounce-150' : 'rest-static', ...observed } ) + '\n' );
+						expect( observed.checks ).toBeGreaterThan( 0 );
+						if ( ! debounce ) {
+							expect( observed.intervals.every( ms => ms === 16 ) ).toBe( true );
+							expect( observed.checks ).toBeGreaterThanOrEqual( 2 );
+							expect( observed.checks ).toBeLessThanOrEqual( 13 );
+							expect( observed.intervals.reduce( ( sum, ms ) => sum + ms, 0 ) ).toBeLessThan( 225 );
+						}
+						if ( debounce ) {
+							expect( observed.debouncedWidth ).toBe( observed.width );
+							expect( observed.box ).toBeCloseTo( observed.width / 2, 0 );
+						}
+					},
+				} );
+				if ( debounce ) {
+					expect( result.applied ).toBeGreaterThan( 0 );
+					await page.setViewportSize( { width: 1000, height: 900 } );
+					// Learned CSS, not the source's pending timer, already reflows.
+					expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 500, 0 );
+				} else expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+			} finally { await page.close(); }
+		}
+	}, 15_000 );
 
 	it( 'observes opt-in relative slide offsets before source preparation and sampling', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
