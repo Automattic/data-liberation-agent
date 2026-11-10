@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { load } from 'cheerio';
 import type { Element as DomElement } from 'domhandler';
 import type { Page } from 'playwright';
@@ -42,6 +41,47 @@ export const OUTSIDE_CHROME = `:not([${ CHROME_ROOT_ATTRIBUTE }] *)`;
 /** Attributes that identify a chrome node; presentation and current-route state are left out. */
 const SIGNATURE_ATTRIBUTES = [ 'id', 'role', 'aria-haspopup', 'aria-controls', 'href', 'type' ];
 
+/**
+ * Bounded rendering contract: box geometry, layout, typography and paint,
+ * including generated content and fragment-based effects. No custom properties
+ * (their resolved consumers are compared), animations/transitions (transient
+ * capture state), or interaction-only properties such as cursor/touch-action.
+ * Keep font-family, grid placement and pseudo styles: renamed-id matching must
+ * still distinguish id/class-keyed CSS, with the exclusions below in styleOf.
+ */
+const CHROME_STYLE_PROPERTIES = [
+	'display', 'visibility', 'opacity', 'content', 'box-sizing', 'position', 'z-index',
+	'top', 'right', 'bottom', 'left', 'width', 'height', 'min-width', 'max-width', 'min-height', 'max-height',
+	'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+	'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+	'overflow-x', 'overflow-y', 'overflow-clip-margin', 'clip', 'clip-path',
+	'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink', 'flex-basis', 'order',
+	'justify-content', 'align-content', 'align-items', 'align-self', 'justify-items', 'justify-self',
+	'row-gap', 'column-gap', 'grid-template-columns', 'grid-template-rows', 'grid-template-areas',
+	'grid-auto-flow', 'grid-auto-columns', 'grid-auto-rows',
+	'grid-row-start', 'grid-row-end', 'grid-column-start', 'grid-column-end',
+	'float', 'clear', 'vertical-align', 'table-layout', 'border-collapse', 'border-spacing',
+	'font-family', 'font-size', 'font-weight', 'font-style', 'font-stretch', 'font-variant',
+	'font-feature-settings', 'font-variation-settings', 'line-height', 'letter-spacing', 'word-spacing',
+	'white-space', 'word-break', 'overflow-wrap', 'text-align', 'text-indent', 'text-transform',
+	'text-decoration-line', 'text-decoration-color', 'text-decoration-style', 'text-decoration-thickness',
+	'text-underline-offset', 'text-overflow', 'text-shadow', 'direction', 'writing-mode',
+	'color', 'background-color', 'background-image', 'background-position', 'background-size',
+	'background-repeat', 'background-origin', 'background-clip', 'background-attachment',
+	'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+	'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+	'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+	'border-top-left-radius', 'border-top-right-radius', 'border-bottom-left-radius', 'border-bottom-right-radius',
+	'border-image-source', 'border-image-slice', 'border-image-width', 'border-image-outset', 'border-image-repeat',
+	'outline-width', 'outline-style', 'outline-color', 'outline-offset', 'box-shadow',
+	'transform', 'transform-origin', 'translate', 'rotate', 'scale', 'perspective', 'perspective-origin',
+	'filter', 'backdrop-filter', 'mix-blend-mode', 'isolation', 'object-fit', 'object-position',
+	'list-style-type', 'list-style-position', 'list-style-image', 'appearance', 'accent-color',
+	'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity',
+	'stroke-dasharray', 'stroke-dashoffset', 'stroke-linecap', 'stroke-linejoin',
+	'mask-image', 'mask-size', 'mask-position', 'mask-repeat', 'mask-mode', 'mask-composite',
+] as const;
+
 export interface ChromeLandmark {
 	/** Hash of the subtree signature. */
 	signature: string;
@@ -62,7 +102,7 @@ export interface ChromeLandmark {
 	ids: string[];
 	/** Classes built from one of those ids, in order of first appearance. */
 	classes: string[];
-	/** A hash of each element's computed style, in document order. */
+	/** A hash of each element's computed style, in document order; empty for a non-candidate route root. */
 	styles: string[];
 	/** Positions in `styles` inside the current-route item. */
 	current: number[];
@@ -300,10 +340,15 @@ function retargetState< T >( state: T, from: string, to: string ): T | null {
 	return failed ? null : result;
 }
 
-export async function readChromeLandmarks( page: Page, mark = false, builderRoots: readonly string[] = [] ): Promise< ChromeLandmark[] > {
+/**
+ * With candidates, read styles only for structurally matching roots. Structure
+ * and styles share one evaluate, so nested roots need no additional round trips.
+ * Without candidates, establish the complete entrypoint rendering evidence.
+ */
+export async function readChromeLandmarks( page: Page, mark = false, builderRoots: readonly string[] = [], candidates?: readonly ChromeLandmark[] ): Promise< ChromeLandmark[] > {
 	await normalizeCaptureState( page );
 	await normalizeGeneratedIds( page );
-	const raw = await page.evaluate( ( { selector, attributes, rootAttribute, mark, builderRoots } ) => {
+	const raw = await page.evaluate( ( { selector, attributes, rootAttribute, mark, builderRoots, signatures, properties } ) => {
 		const skipped = new Set( [ 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE' ] );
 		const kept = ( element: Element ) => ! skipped.has( element.tagName );
 		const sameTag = ( element: Element ) => Array.from( element.parentElement?.children ?? [] ).filter( sibling => sibling.tagName === element.tagName );
@@ -401,6 +446,10 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			};
 			lines.push( `${ root.tagName.toLowerCase() } ${ describe( root ) }` );
 			walk( root, '' );
+			const signature = hash( `${ lines.join( '\n' ) }\n${ text.join( ' ' ) }` );
+			// Only structural candidates can change the reuse decision. Entrypoint
+			// reads (no signatures supplied) establish styles for every root once.
+			const needsStyles = signatures === null || signatures.includes( signature );
 			// Computed style, relabelled like the markup. A fragment URL resolves
 			// against this route, so it is compared as the bare fragment. A font
 			// family paints only text: an element without text of its own passes
@@ -418,9 +467,8 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 					const style = getComputedStyle( element, pseudo );
 					if ( pseudo && [ 'none', 'normal' ].includes( style.content ) ) continue;
 					parts.push( pseudo ?? '' );
-					for ( let index = 0; index < style.length; index++ ) {
-						const name = style[ index ]!;
-						if ( ! name.startsWith( '--' ) && ( pseudo || ! ignored.has( name ) ) ) parts.push( `${ name }:${ style.getPropertyValue( name ) }` );
+					for ( const name of properties ) {
+						if ( pseudo || ! ignored.has( name ) ) parts.push( `${ name }:${ style.getPropertyValue( name ) }` );
 					}
 				}
 				const value = parts.join( ';' ).split( `url("${ page }#` ).join( 'url("#' );
@@ -433,18 +481,18 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			return {
 				ids,
 				classes,
-				styles: elements.map( styleOf ),
+				styles: needsStyles ? elements.map( styleOf ) : [],
 				current,
-				raw: `${ lines.join( '\n' ) }\n${ text.join( ' ' ) }`,
+				raw: signature,
 				prefixes: [ chain( root, compact, false ), chain( root, positional, false ), chain( root, positional, true ) ],
 				label: `${ root.tagName.toLowerCase() }${ root.getAttribute( 'role' ) ? `[role=${ root.getAttribute( 'role' ) }]` : '' }${ root.classList[ 0 ] ? `.${ root.classList[ 0 ] }` : '' }`,
 				identity: identities.get( root ),
 				parent: roots.indexOf( root.parentElement?.closest( selector )! ),
 			};
 		} );
-	}, { selector: CHROME_LANDMARK_SELECTOR, attributes: SIGNATURE_ATTRIBUTES, rootAttribute: CHROME_ROOT_ATTRIBUTE, mark, builderRoots: [ ...builderRoots ] } );
+	}, { selector: CHROME_LANDMARK_SELECTOR, attributes: SIGNATURE_ATTRIBUTES, rootAttribute: CHROME_ROOT_ATTRIBUTE, mark, builderRoots: [ ...builderRoots ], signatures: candidates ? candidates.map( root => root.signature ) : null, properties: CHROME_STYLE_PROPERTIES } );
 	return raw.map( ( { raw: signature, prefixes, label, identity, ids, classes, styles, current, parent } ) => ( {
-		signature: createHash( 'sha256' ).update( signature ).digest( 'hex' ).slice( 0, 32 ),
+		signature,
 		prefixes: prefixes as ChromeLandmark['prefixes'],
 		label,
 		ids,
@@ -578,7 +626,7 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		return { decision: { chromeReused: false, reason: probe.status === 'skipped' ? probe.reason ?? 'the entrypoint chrome was not probed' : `the entrypoint chrome probe failed: ${ probe.reason ?? 'no evidence' }` }, states: [] };
 	}
 	if ( ! evidence.landmarks.length ) return { decision: { chromeReused: false, reason: 'the entrypoint has no chrome landmarks' }, states: [] };
-	const landmarks = await readChromeLandmarks( page, false, evidence.landmarks.flatMap( landmark => landmark.identity ? [ landmark.identity ] : [] ) );
+	const landmarks = await readChromeLandmarks( page, false, evidence.landmarks.flatMap( landmark => landmark.identity ? [ landmark.identity ] : [] ), evidence.landmarks );
 	const counts = { route: landmarks.length, entrypoint: evidence.landmarks.length };
 	if ( ! landmarks.length ) return { decision: { chromeReused: false, reason: 'this route has no chrome landmarks', landmarks: { ...counts, matched: 0 } }, states: [] };
 	// The n-th occurrence of a signature pairs with its n-th occurrence here.
