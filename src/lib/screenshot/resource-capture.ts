@@ -200,6 +200,8 @@ export interface CapturedResourceReplay {
 }
 
 interface CapturedResourceReplayMetadata {
+	/** RFC 9111 §4.1 secondary key; undefined values mean the header was absent. */
+	requestHeaders: Record< string, string | undefined >;
 	expiresAt: number;
 	headers: Record< string, string >;
 }
@@ -218,7 +220,8 @@ function cacheControlSeconds( cacheControl: string, directive: string ): number 
  */
 function replayableResponseMetadata(
 	status: number,
-	headers: Record< string, string >
+	headers: Record< string, string >,
+	requestHeaders?: Record< string, string >
 ): CapturedResourceReplayMetadata | undefined {
 	const cacheControl = headers[ 'cache-control' ] ?? '';
 	if (
@@ -255,11 +258,16 @@ function replayableResponseMetadata(
 		.split( ',' )
 		.map( ( value ) => value.trim().toLowerCase() )
 		.filter( Boolean );
-	if ( vary.some( ( value ) => ! [ 'accept-encoding', 'origin' ].includes( value ) ) ) {
-		return undefined;
-	}
+	if ( vary.some( ( value ) => value === '*' || value === 'cookie' ) ) return undefined;
+	// Content-coding negotiation does not matter for decoded replay bodies.
+	// Preserve the existing Origin handling (CORS response headers are replayed).
+	const secondaryKey = vary.filter( value => ! [ 'accept-encoding', 'available-dictionary', 'origin' ].includes( value ) );
+	// Direct fetches do not expose their complete outgoing headers: fail closed
+	// rather than mistake an unknown value for an absent header.
+	if ( secondaryKey.length && ! requestHeaders ) return undefined;
 
 	return {
+		requestHeaders: Object.fromEntries( secondaryKey.map( name => [ name, requestHeaders?.[ name ] ] ) ),
 		expiresAt,
 		headers: Object.fromEntries(
 			Object.entries( headers ).filter( ( [ name ] ) => REPLAY_RESPONSE_HEADERS.has( name ) )
@@ -654,14 +662,15 @@ export class CapturedResourceStore {
 		}
 	}
 
-	getReplayableResponse( url: string, resourceType: string ): CapturedResourceReplay | undefined {
+	getReplayableResponse( url: string, resourceType: string, requestHeaders: Record< string, string > = {} ): CapturedResourceReplay | undefined {
 		if ( ! REPLAYABLE_RESOURCE_TYPES.has( resourceType ) ) return undefined;
 		const resource = this.replayResources.get( url );
 		const metadata = this.replayMetadata.get( url );
 		if (
 			! resource ||
 			! metadata ||
-			metadata.expiresAt <= Date.now()
+			metadata.expiresAt <= Date.now() ||
+			Object.entries( metadata.requestHeaders ).some( ( [ name, value ] ) => requestHeaders[ name ] !== value )
 		)
 			return undefined;
 		if ( ! existsSync( resource.path ) ) return undefined;
@@ -977,7 +986,7 @@ export class CapturedResourceStore {
 		if ( existing ) return existing;
 		const capture = ( async () => {
 			const headers = response.headers();
-			const metadata = replayableResponseMetadata( response.status(), headers );
+			const metadata = replayableResponseMetadata( response.status(), headers, response.request().headers?.() ?? {} );
 			if ( ! metadata ) return;
 			const declaredBytes = Number( headers[ 'content-length' ] );
 			if (
@@ -1142,7 +1151,7 @@ export class CapturedResourceStore {
 		}
 		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType, renderCritical );
 		this.browserLoadedResources.add( requestedUrl.href );
-		const replayMetadata = replayableResponseMetadata( status, headers );
+		const replayMetadata = replayableResponseMetadata( status, headers, fetched ? undefined : response.request().headers?.() ?? {} );
 		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
 	}
 

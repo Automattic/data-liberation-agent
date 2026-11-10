@@ -335,6 +335,49 @@ describe( 'CapturedResourceStore', () => {
 		expect( $( '#missing' ).attr( 'href' ) ).toBe( missing );
 	} );
 
+	it( 'replays shared resources on a second route only when their Vary secondary keys match', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-vary-replay-' ) );
+		dirs.push( outputDir );
+		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
+		const firstRoute = new EventEmitter();
+		store.observe( firstRoute as never );
+		const accept = 'image/avif,image/webp,image/*,*/*;q=0.8';
+		for ( const [ path, resourceType, vary, requestHeaders ] of [
+			[ '/image.jpg', 'image', 'Accept', { accept } ],
+			[ '/script.js', 'script', 'Accept-Encoding, Available-Dictionary', { 'accept-encoding': 'gzip' } ],
+			[ '/custom.css', 'stylesheet', 'X-Theme, X-Optional', { 'x-theme': 'dark' } ],
+			[ '/wildcard.css', 'stylesheet', '*', {} ],
+			[ '/cookie.css', 'stylesheet', 'Cookie', {} ],
+		] as const ) {
+			firstRoute.emit( 'response', {
+				url: () => `https://example.com${ path }`,
+				status: () => 200,
+				headers: () => ( { 'cache-control': 'public, max-age=3600', vary } ),
+				body: async () => Buffer.from( path ),
+				request: () => ( { resourceType: () => resourceType, headers: () => requestHeaders } ),
+			} );
+		}
+		await store.settle( firstRoute as never );
+
+		// The next route's requests reuse the real store without another response.
+		const image = store.getReplayableResponse( 'https://example.com/image.jpg', 'image', { accept } );
+		const script = store.getReplayableResponse( 'https://example.com/script.js', 'script', {
+			'accept-encoding': 'br', 'available-dictionary': ':dictionary:',
+		} );
+		expect( image ).toBeDefined();
+		expect( script ).toBeDefined();
+		expect( readFileSync( image!.path, 'utf8' ) ).toBe( '/image.jpg' );
+		expect( readFileSync( script!.path, 'utf8' ) ).toBe( '/script.js' );
+		expect( store.getReplayableResponse( 'https://example.com/image.jpg', 'image', { accept: 'image/png' } ) ).toBeUndefined();
+		expect( store.getReplayableResponse( 'https://example.com/image.jpg', 'image' ) ).toBeUndefined();
+		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'dark' } ) ).toBeDefined();
+		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'light' } ) ).toBeUndefined();
+		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'dark', 'x-optional': '' } ) ).toBeUndefined();
+		for ( const path of [ 'wildcard.css', 'cookie.css' ] ) {
+			expect( store.getReplayableResponse( `https://example.com/${ path }`, 'stylesheet' ) ).toBeUndefined();
+		}
+	} );
+
 	it( 'replays only fresh static responses with response semantics intact', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime( new Date( '2026-08-29T00:00:00Z' ) );
@@ -354,7 +397,7 @@ describe( 'CapturedResourceStore', () => {
 			[ 'https://example.com/api/data', 'fetch', 'public, max-age=3600', '' ],
 			[ 'https://example.com/styles/private.css', 'stylesheet', 'no-store', '' ],
 			[ 'https://example.com/styles/context.css', 'stylesheet', 'private, max-age=3600', '' ],
-			[ 'https://example.com/images/variant.jpg', 'image', 'public, max-age=3600', 'User-Agent' ],
+			[ 'https://example.com/images/variant.jpg', 'image', 'public, max-age=3600', 'Cookie' ],
 			// RFC 9111 §4.2.2: 10% of 30 days since Last-Modified is a 3-day lifetime.
 			[ 'https://example.com/images/background.png', 'image', '', '', validatorOnly ],
 			[ 'https://example.com/styles/revalidate.css', 'stylesheet', 'no-cache, max-age=3600', '' ],
