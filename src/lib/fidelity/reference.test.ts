@@ -528,18 +528,24 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		try {
 			await page.route('http://fixture.invalid/primary.ttf', route => route.fulfill({ contentType: 'font/ttf', body: squareFont }));
 			await page.route('http://fixture.invalid/failed.ttf', route => route.fulfill({ status: 404, body: '' }));
+			// A local()-only metric fallback absent from the host names a host font,
+			// not a source asset; the text includes a glyph outside the primary face.
+			const absent = 'local("No Such Neutral Font 1646")';
 			for (const [primary, fallback, loaded, primaryLoaded] of [
 				['primary.ttf', 'failed.ttf', false, true],
 				['failed.ttf', 'primary.ttf', false, false],
 				['primary.ttf', 'primary.ttf', true, true],
+				['primary.ttf', absent, true, true],
+				['failed.ttf', absent, false, false],
 			] as const) {
+				const source = (file: string) => file.startsWith('local(') ? file : `url("http://fixture.invalid/${file}")`;
 				await page.setContent(`<style>
-					@font-face{font-family:"Example, Display";src:url("http://fixture.invalid/${primary}")}
-					@font-face{font-family:Fallback;src:url("http://fixture.invalid/${fallback}")}
+					@font-face{font-family:"Example, Display";src:${source(primary)}}
+					@font-face{font-family:Fallback;src:${source(fallback)}}
 					h1{font:40px "Example, Display",Fallback,sans-serif}
-					</style><h1>MMMM</h1>`);
+					</style><h1>MMMM ☎</h1>`);
 				const observation = await observePage(page, 'about:blank', 1280, 0, null, undefined, undefined, true);
-				expect(observation.typography![0]).toMatchObject({ loaded, primaryLoaded });
+				expect(observation.typography![0], `${primary} + ${fallback}`).toMatchObject({ loaded, primaryLoaded });
 			}
 		} finally { await page.close(); }
 	}, 30_000);
