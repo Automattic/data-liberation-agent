@@ -47,7 +47,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		'document-scope': 'a', 'device-document': 'a', 'device-style': 'a', 'device-body': 'a', 'device-selection': 'a',
 		'device-visibility': 'a', 'device-unavailable': 'a', 'document-unavailable': 'a', 'selected-document': 'a',
 		'source-media': 'a', 'compat-mode': 'a',
-		'device-only': 'a', 'device-hide': 'a', 'device-inline': 'a', 'reconcile-node': 'a', 'source-selector': 'a',
+		'device-only': 'a', 'device-hide': 'a', 'device-inline': 'a', 'device-class': 'a', 'reconcile-node': 'a', 'source-selector': 'a',
 		'desktop-document': 'c', 'mobile-document': 'c', 'desktop-only': 'c', 'mobile-only': 'c',
 		/** Wrapper of a source's middle width-range layout, between the phone and desktop documents (#1379). */
 		'middle-document': 'c',

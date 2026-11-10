@@ -709,9 +709,19 @@ export function identitySubsetMerge(
 		if ( deviceKey ) {
 			if ( d.get( 0 )!.tagName !== m.get( 0 )!.tagName ||
 				d.contents().filter( ( _i, node ) => node.type === 'text' ).text() !== m.contents().filter( ( _i, node ) => node.type === 'text' ).text() ||
-				( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== RESPONSIVE_DESKTOP_ONLY_CLASS && token !== RESPONSIVE_MOBILE_ONLY_CLASS ).join( ' ' ) !== ( m.attr( 'class' ) ?? '' ) || d.attr( 'sizes' ) !== m.attr( 'sizes' ) ) {
+				d.attr( 'sizes' ) !== m.attr( 'sizes' ) ) {
 				divergedRoots.add( path.split( '/' )[ 0 ] as string );
 				return;
+			}
+			// A class token is a per-device attribute like an inline style, not
+			// a structural difference: the selected device's runtime swaps the
+			// recorded tokens, leaving any token added after reconciliation.
+			const ownClasses = ( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== RESPONSIVE_DESKTOP_ONLY_CLASS && token !== RESPONSIVE_MOBILE_ONLY_CLASS ).join( ' ' );
+			if ( ownClasses !== ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).join( ' ' ) ) {
+				d.attr( 'data-blocks-engine-capture-device-class', JSON.stringify( { ...( defaultKey ? { [ defaultKey ]: ownClasses } : {} ), [ deviceKey ]: m.attr( 'class' ) ?? '' } ) );
+				const original = m.attr( 'class' );
+				deviceInlineRestores.push( () => { if ( original === undefined ) m.removeAttr( 'class' ); else m.attr( 'class', original ); } );
+				m.attr( 'class', d.attr( 'class' ) ?? '' );
 			}
 			// Keep native inline priority instead of promoting declarations to !important.
 			if ( ! sameInlineStyle( d.attr( 'style' ), m.attr( 'style' ) ) ) {

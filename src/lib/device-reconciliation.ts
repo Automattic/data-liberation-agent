@@ -11,6 +11,7 @@ const NODE = 'data-blocks-engine-capture-reconcile-node';
 const ONLY = 'data-blocks-engine-capture-device-only';
 const HIDE = 'data-blocks-engine-capture-device-hide';
 const INLINE = 'data-blocks-engine-capture-device-inline';
+const CLASS = 'data-blocks-engine-capture-device-class';
 
 export interface DeviceReconciliationEvidence {
 	outcome: 'collapsed-identity-subset' | 'dual-structural';
@@ -150,8 +151,8 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 			}
 			const entrance = entrances.get( source.attr( NODE )! );
 			if ( entrance !== undefined ) target.attr( VIEWPORT_ENTRANCE_ATTRIBUTE, entrance );
-			if ( source.attr( INLINE ) ) {
-				target.attr( INLINE, JSON.stringify( { ...JSON.parse( target.attr( INLINE ) ?? '{}' ), ...JSON.parse( source.attr( INLINE )! ) } ) );
+			for ( const attribute of [ INLINE, CLASS ] ) if ( source.attr( attribute ) ) {
+				target.attr( attribute, JSON.stringify( { ...JSON.parse( target.attr( attribute ) ?? '{}' ), ...JSON.parse( source.attr( attribute )! ) } ) );
 			}
 		} );
 		$( `[${ ONLY }]` ).filter( ( _i, node ) => $( node ).parents( `[${ ONLY }]` ).length === 0 ).each( ( _i, node ) => {
