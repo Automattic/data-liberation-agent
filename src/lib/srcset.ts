@@ -185,6 +185,26 @@ export function stripImageSetCandidates( content: string, drop: ( url: string ) 
 	return result + content.slice( offset );
 }
 
+/** CSS URLs use their own delimiters. In quoted values parentheses belong to
+ * the URL; capture-state JSON may backslash-escape and HTML-encode the quotes. */
+export function rewriteCssUrlReferences(
+	content: string,
+	replaceUrl: ( url: string ) => string,
+	replaceOther: ( content: string ) => string = text => text
+): string {
+	const urls = /\burl\(\s*(?:(\\?(?:&quot;|&#34;|&#x22;|&apos;|&#39;|&#x27;|["']))([\s\S]*?)\1|([^\s)'"]+))\s*\)/gi;
+	let result = '';
+	let offset = 0;
+	for ( const match of content.matchAll( urls ) ) {
+		result += replaceOther( content.slice( offset, match.index ) );
+		const value = match[ 2 ] ?? match[ 3 ];
+		const start = match[ 0 ].length - match[ 0 ].match( /\s*\)$/ )![ 0 ].length - ( match[ 1 ]?.length ?? 0 ) - value.length;
+		result += match[ 0 ].slice( 0, start ) + replaceUrl( value ) + match[ 0 ].slice( start + value.length );
+		offset = match.index! + match[ 0 ].length;
+	}
+	return result + replaceOther( content.slice( offset ) );
+}
+
 /** Protect resource attribute URL tokens from a general HTML/CSS/script replacement
  * pass. The callback for other content retains the caller's own policy. */
 export function rewriteMediaReferences(
@@ -192,11 +212,12 @@ export function rewriteMediaReferences(
 	replaceUrl: ( url: string ) => string,
 	replaceOther: ( content: string ) => string
 ): string {
-	const attributes = /\s(srcset|data-srcset|src|poster|data-src|data-lazy-src|data-original|data-image|data-image-src|href|xlink:href)\s*=\s*(["'])([\s\S]*?)\2/gi;
+	const rewriteOther = ( text: string ): string => rewriteCssUrlReferences( text, replaceUrl, replaceOther );
+	const attributes = /\s(srcset|data-srcset|src|poster|data-bg|data-src|data-lazy-src|data-original|data-image|data-image-src|href|xlink:href)\s*=\s*(["'])([\s\S]*?)\2/gi;
 	let result = '';
 	let offset = 0;
 	for ( const match of content.matchAll( attributes ) ) {
-		result += replaceOther( content.slice( offset, match.index ) );
+		result += rewriteOther( content.slice( offset, match.index ) );
 		const value = match[ 3 ];
 		const replaced = /srcset$/i.test( match[ 1 ] ) || isSrcsetShaped( value )
 			? rewriteSrcset( value, replaceUrl )
@@ -207,5 +228,5 @@ export function rewriteMediaReferences(
 		result += match[ 0 ].slice( 0, valueStart ) + replaced + match[ 2 ];
 		offset = match.index + match[ 0 ].length;
 	}
-	return result + replaceOther( content.slice( offset ) );
+	return result + rewriteOther( content.slice( offset ) );
 }

@@ -77,6 +77,17 @@ describe('rewriteMediaUrls', () => {
     expect(onMissing).not.toHaveBeenCalled();
   });
 
+  it('uses complete CSS and lazy-attribute URLs rather than a prefix ending before a parenthesis', () => {
+    const source = 'https://cdn/banner.png?format=300w';
+    const html = `<div data-bg="${source})" style="background:url(&quot;${source})&quot;)"></div><style>.plain{background:url(${source})}</style>`;
+    expect(rewriteMediaUrls(html, new Map([[source, '/media/prefix.png']]))).toBe(
+      `<div data-bg="${source})" style="background:url(&quot;${source})&quot;)"></div><style>.plain{background:url(/media/prefix.png)}</style>`,
+    );
+    expect(rewriteMediaUrls(html, new Map([[source + ')', '/media/whole.png']]))).toContain(
+      'data-bg="/media/whole.png" style="background:url(&quot;/media/whole.png&quot;)"',
+    );
+  });
+
   it('ignores a root-path mapping that would rewrite every slash', () => {
     const html = '<link rel="icon" href="https://cdn.example/favicon.ico" type="image/x-icon"><img src="/"><a href="/about/">About</a>';
     const map = new Map([['/', 'https://example.com/']]);

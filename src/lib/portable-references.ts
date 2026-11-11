@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import { mapMetadataImages, metadataImageReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
-import { isSrcsetShaped, rewriteMediaReferences, rewriteSrcset, srcsetCandidates, srcsetReferences, stripImageSetCandidates } from './srcset.js';
+import { isSrcsetShaped, rewriteCssUrlReferences, rewriteMediaReferences, rewriteSrcset, srcsetCandidates, srcsetReferences, stripImageSetCandidates } from './srcset.js';
 import { URL_START_LOOKBEHIND, URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 export interface PortableDependency {
@@ -253,15 +253,13 @@ export function dependencyReferences(
 	) ) {
 		add( match[ 2 ] );
 	}
-	for ( const match of cssContent.matchAll(
-		/\burl\(\s*(?:(["'])([\s\S]*?)\1|([^\s)'";]+))\s*\)/gi
-	) ) {
-		const reference = match[ 2 ] ?? match[ 3 ];
+	rewriteCssUrlReferences( cssContent, reference => {
 		if ( reference && ! reference.startsWith( '#' ) ) {
 			cssReferences.add( reference.replace( /&amp;/g, '&' ) );
 			add( reference );
 		}
-	}
+		return reference;
+	} );
 	for ( const match of cssContent.matchAll( /@import\s*(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
 		const reference = match[ 2 ];
 		cssReferences.add( reference.replace( /&amp;/g, '&' ) );

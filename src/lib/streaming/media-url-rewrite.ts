@@ -190,10 +190,11 @@ function escapeRegex(input: string): string {
 // match is the whole URL: end of string, whitespace, quote, tag/CSS boundary,
 // or an entity-encoded quote (attribute JSON encodes both the quote and any
 // `&` inside the URL, so the terminator may itself be double-encoded).
-// Everything else — letters, `/`, `?`, `&`, `:`, `,`, `;`, `=` — continues the
-// longer URL.
+// Parentheses also continue a quoted URL. CSS url(...) delimiters are handled
+// by rewriteMediaReferences before this fallback runs, so they need not be
+// treated as raw terminators (which would splice a prefix of `image.png)`).
 export const URL_TERMINATOR_LOOKAHEAD =
-  '(?=$|[\\s"\'()<>]|&(?:amp;)?(?:quot|apos|#3[49]|#x2[27]);?)';
+  '(?=$|[\\s"\'<>]|\\\\?(?:&(?:amp;)?(?:quot|apos|#3[49]|#x2[27]);?))';
 
 // The same boundary before the match. A relative reference such as
 // `media/photo.jpg` is also the tail of `/media/photo.jpg`, the local path an
