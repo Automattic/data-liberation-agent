@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { bloggerContentIndex } from '../adapters/blogger/template-content.js';
+import { structuredContentIndex } from './content-index.js';
 import { canonicalLinkHref } from './route-aliases.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
@@ -170,7 +170,8 @@ interface ExportBuild {
 }
 
 interface ExportCaptureOptions {
-	bloggerEntries?: import('../adapters/blogger/feed.js').BloggerFeedEntry[];
+	/** Adapter structured content (#1701): entry slugs, term archives, content index and redirects. */
+	structuredContent?: { source: import('../platform/types.js').StructuredContentSource; entries: import('../platform/types.js').StructuredContentEntry[] };
 	routeScope?: SiteRouteScope;
 	resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
 	input?: HttpExportInput;
@@ -1727,7 +1728,7 @@ function buildExportCapture(
 			const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 			writeFileSync( stagedHtmlPath, html );
 			capturedEntries.push( {
-				slug: options.bloggerEntries?.find( feed => normalizedUrl( feed.permalink ) === normalizedUrl( url ) )?.slug ?? entry.slug ?? basename( entry.html, '.html' ),
+				slug: options.structuredContent?.entries.find( feed => normalizedUrl( feed.permalink ) === normalizedUrl( url ) )?.slug ?? entry.slug ?? basename( entry.html, '.html' ),
 				url,
 				htmlPath: stagedHtmlPath,
 				evidenceDocuments: [
@@ -2055,8 +2056,9 @@ function buildExportCapture(
 			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 		} );
 	}
-	if ( options.bloggerEntries?.length ) {
-		for ( const term of bloggerContentIndex( options.bloggerEntries, routes ).terms ) {
+	if ( options.structuredContent?.entries.length ) {
+		const { source, entries } = options.structuredContent;
+		for ( const term of structuredContentIndex( entries, routes, source, options.sourceUrl ).terms ) {
 			portableRouteLinks.set( documentRequestUrl( term.sourceUrl ), term.path );
 		}
 	}
@@ -2310,8 +2312,9 @@ function buildExportCapture(
 		const scroll = scrollStatesPages.indexOf( entry.scrollStates! );
 		if ( scroll >= 0 ) scrollStatesPages[ scroll ] = JSON.parse( renameIdTokens( JSON.stringify( scrollStatesPages[ scroll ] ), stable.ids ) );
 	}
-	if ( options.bloggerEntries?.length ) {
-		const content = bloggerContentIndex( options.bloggerEntries, routes );
+	if ( options.structuredContent?.entries.length ) {
+		const { source, entries } = options.structuredContent;
+		const content = structuredContentIndex( entries, routes, source, options.sourceUrl );
 		for ( const term of content.terms ) {
 			if ( routes.some( route => route.url === term.sourceUrl ) ) continue;
 			const page = cheerio.load( '<!doctype html><html><head><meta charset="utf-8"><title></title></head><body><main><h1></h1><ul></ul></main></body></html>' );
@@ -2327,7 +2330,7 @@ function buildExportCapture(
 			writeFileSync( file, page.html() );
 			routes.push( { url: term.sourceUrl, path: `website${ term.path }` } );
 		}
-		writeFileSync( join( websiteDir, 'blogger-content.json' ), JSON.stringify( content, null, 2 ) );
+		writeFileSync( join( websiteDir, 'content-index.json' ), JSON.stringify( content, null, 2 ) );
 		for ( const redirect of content.redirects ) {
 			const from = new URL( redirect.from ).pathname;
 			if ( from !== redirect.to && ! portableRedirects.some( rule => rule.from === from ) ) portableRedirects.push( { from, to: redirect.to } );

@@ -97,6 +97,9 @@ export interface Platform {
 	 * Declared only when the runtime generates per-item page-local CSS; the generic
 	 * fingerprint is unchanged for platforms without this hook. */
 	templateStyleNormalization?: TemplateStyleNormalization;
+	/** Content the platform publishes as structured data (a feed or API). Template-cluster
+	 * capture derives members from it instead of fetching each member's page (#1701). */
+	structuredContent?: StructuredContentSource;
 	/** Read-only selectors identifying platform-owned application surfaces. */
 	inspection?: CapabilityRule[];
 	/**
@@ -105,6 +108,45 @@ export interface Platform {
 	 * counters are left out. See `lib/engagement-stats.ts`.
 	 */
 	engagementStats?( urls: readonly string[], opts: { deadline?: number } ): Promise< import( '../lib/engagement-stats.js' ).EngagementStatsReading | undefined >;
+}
+
+/** One content item a platform publishes as structured data. */
+export interface StructuredContentEntry {
+	permalink: string;
+	/** Source slug from the permalink; the export keeps it as the item's slug. */
+	slug: string;
+	kind: 'post' | 'page';
+	title: string;
+	contentHtml: string;
+	published: string;
+	updated: string;
+	author: string;
+	/** Source taxonomy terms (Blogger labels, tags, categories). */
+	terms: string[];
+}
+
+export interface StructuredContentEnumeration {
+	entries: StructuredContentEntry[];
+	diagnostics: Array< { code: string; url: string; reason: string } >;
+}
+
+/**
+ * Adapter-owned structured content. Capture stays generic: it adds the
+ * entries' permalinks and term archives to the inventory, and uses an entry
+ * as a cluster member's content only after the cluster's representative and
+ * verification member prove `bodyEquivalent` against their browser captures.
+ */
+export interface StructuredContentSource {
+	/** Enumerate published content. Every source request goes through `governors`. */
+	enumerate( sourceUrl: string, options: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors } ): Promise< StructuredContentEnumeration >;
+	/** True only when the document's single content slot matches the entry. Fail closed. */
+	bodyEquivalent( html: string, entry: StructuredContentEntry ): boolean;
+	/** The representative's server document with the member's content in its slot. */
+	memberDocument( representativeHtml: string, representative: StructuredContentEntry, member: StructuredContentEntry ): string | undefined;
+	/** The source URL of a term's archive. */
+	termArchiveUrl( term: string, sourceUrl: string ): string;
+	/** The term named by a term-archive URL, or undefined for other routes. */
+	termName( url: string ): string | undefined;
 }
 
 /** Serializable, segment-bounded route ownership; query strings retain document identity. */

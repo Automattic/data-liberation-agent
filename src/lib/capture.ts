@@ -482,19 +482,19 @@ async function runCaptureWebsite(
 		resume: options.resume === true,
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
-	const bloggerFeed = adapter.id === 'blogger'
-		? await ( await import( '../adapters/blogger/feed.js' ) ).enumerateBloggerPosts( new URL( sourceUrl ).origin, { governors: sourceGovernors } )
-		: undefined;
-	const bloggerEntries = bloggerFeed?.entries ?? [];
-	inventory.diagnostics = [ ...( inventory.diagnostics ?? [] ), ...( bloggerFeed?.rejected ?? [] ) ];
+	// Structured content (#1701) only feeds template-cluster derivation.
+	const contentSource = options.templateClusters === true ? adapter.structuredContent : undefined;
+	const structuredContent = contentSource ? await contentSource.enumerate( sourceUrl, { governors: sourceGovernors } ) : undefined;
+	const contentEntries = structuredContent?.entries ?? [];
+	inventory.diagnostics = [ ...( inventory.diagnostics ?? [] ), ...( structuredContent?.diagnostics ?? [] ) ];
 	const sourceRoute = documentRequestUrl( sourceUrl );
 	// Action URLs and declared runtime paths leave before the budget sees them, so they never
 	// spend, and never appear as omitted, failed or missing routes.
 	const excludedActions = new Map< string, { code: string; url: string; reason: string } >();
 	const inventoryUrls = await normalizeDiscoveredRoutes( [
 		sourceUrl,
-		...bloggerEntries.map( entry => entry.permalink ),
-		...[ ...new Set( bloggerEntries.flatMap( entry => entry.labels ) ) ].map( label => new URL( `/search/label/${ encodeURIComponent( label ) }`, sourceUrl ).href ),
+		...contentEntries.map( entry => entry.permalink ),
+		...( contentSource ? [ ...new Set( contentEntries.flatMap( entry => entry.terms ) ) ].map( term => contentSource.termArchiveUrl( term, sourceUrl ) ) : [] ),
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
 			.filter( ( url ) => {
@@ -504,9 +504,9 @@ async function runCaptureWebsite(
 				return ! action;
 			} ),
 	] );
-	// Atom alternate links already declare the post's canonical identity. Do not
-	// fetch every post merely to rediscover that identity before derivation.
-	const feedPermalinks = new Set( bloggerEntries.map( entry => entry.permalink ) );
+	// Structured content already declares each entry's canonical permalink. Do
+	// not fetch every entry merely to rediscover that identity before derivation.
+	const feedPermalinks = new Set( contentEntries.map( entry => entry.permalink ) );
 	const aliasProbe = await probeCanonicalRouteAliases( { sourceUrl, urls: inventoryUrls.filter( url => ! feedPermalinks.has( url ) ), routeScope } );
 	const aliasKeys = new Set( aliasProbe.aliases.map( ( { url } ) => documentRequestUrl( url ) ) );
 	if ( aliasProbe.aliases.length ) {
@@ -525,7 +525,7 @@ async function runCaptureWebsite(
 	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { bloggerEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
+		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
 	// Verification members (#784 §4.2): one per multi-member cluster, kept right
 	// after the representatives so a budget that fits every template also fits
@@ -677,7 +677,8 @@ async function runCaptureWebsite(
 	// its `route_omitted_by_budget` diagnostic.
 	const derivedTemplateClusters = ! sourceGovernors.forOrigin( sourceUrl ).blockedClient && templateClusters && templateGrouping?.report
 		? await deriveTemplateClusterMembers( {
-				bloggerEntries,
+				contentEntries,
+				contentSource,
 				sourceUrl,
 				outputDir,
 				report: templateGrouping.report,
@@ -782,7 +783,7 @@ async function runCaptureWebsite(
 	}
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
 	const captureReceiptPath = exportWebsiteCapture( {
-		bloggerEntries,
+		...( contentSource && contentEntries.length ? { structuredContent: { source: contentSource, entries: contentEntries } } : {} ),
 		outputDir,
 		sourceUrl,
 		platform: detection.platform,
@@ -886,7 +887,10 @@ async function runCaptureWebsite(
  * failure yields one `template_grouping_unavailable` discovery diagnostic and
  * no representatives, so the budget falls back to discovery order.
  */
-export async function groupInventoryTemplates( input: { bloggerEntries?: import('../adapters/blogger/feed.js').BloggerFeedEntry[]; sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
+/** Feed posts sampled across the archive to choose the provisional post cohort (#1701). */
+const FEED_COHORT_SAMPLES = 6;
+
+export async function groupInventoryTemplates( input: { contentEntries?: import('../platform/types.js').StructuredContentEntry[]; sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
 	report?: import('./template-groups.js').TemplateGroupsReport;
 	representatives?: string[];
 	diagnostic?: { code: string; url: string; reason: string };
@@ -896,16 +900,23 @@ export async function groupInventoryTemplates( input: { bloggerEntries?: import(
 		const { buildTemplateGroups, templateRepresentatives } = await import( './template-groups.js' );
 		// Feed cohorts are provisional until the ordinary cluster verification
 		// compares their transplanted documents with real browser captures.
-		const feedPosts = new Set( ( input.bloggerEntries ?? [] ).filter( entry => entry.kind === 'post' ).map( entry => entry.permalink ) );
-		const postSamples = input.urls.filter( url => feedPosts.has( url ) ).slice( 0, 2 );
+		// Sample entries spread across the archive, so one recent variant cannot
+		// decide the cohort; the cohort is the group holding most samples.
+		const feedPosts = new Set( ( input.contentEntries ?? [] ).filter( entry => entry.kind === 'post' ).map( entry => entry.permalink ) );
+		const feedUrls = input.urls.filter( url => feedPosts.has( url ) );
+		const sampleCount = Math.min( FEED_COHORT_SAMPLES, feedUrls.length );
+		const postSamples = [ ...new Set( Array.from( { length: sampleCount }, ( _, i ) => feedUrls[ Math.floor( i * ( feedUrls.length - 1 ) / Math.max( 1, sampleCount - 1 ) ) ]! ) ) ];
 		const groupingUrls = input.urls.filter( url => ! feedPosts.has( url ) || postSamples.includes( url ) );
 		let report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: groupingUrls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
-		const cohort = report.groups.find( group => postSamples.length === 2 && postSamples.every( url => group.members.includes( url ) ) );
+		const sampled = ( group: { members: string[] } ) => postSamples.filter( url => group.members.includes( url ) ).length;
+		const cohort = postSamples.length >= 2
+			? report.groups.filter( group => sampled( group ) >= 2 ).sort( ( a, b ) => sampled( b ) - sampled( a ) )[ 0 ]
+			: undefined;
 		if ( ! cohort && groupingUrls.length !== input.urls.length ) {
 			report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, styleNormalization: input.styleNormalization } );
 		}
 		if ( cohort ) {
-			cohort.representative = postSamples[ 0 ]!;
+			cohort.representative = postSamples.find( url => cohort.members.includes( url ) )!;
 			for ( const url of input.urls ) {
 				if ( feedPosts.has( url ) && ! cohort.members.includes( url ) ) {
 					cohort.members.push( url );
@@ -1000,7 +1011,8 @@ export interface TemplateClusterDerivation {
  * transplant (§3.1 step 4) is remaining phase-1 work.
  */
 export async function deriveTemplateClusterMembers( input: {
-	bloggerEntries?: import('../adapters/blogger/feed.js').BloggerFeedEntry[];
+	contentEntries?: import('../platform/types.js').StructuredContentEntry[];
+	contentSource?: import('../platform/types.js').StructuredContentSource;
 	sourceUrl: string;
 	outputDir: string;
 	report: import('./template-groups.js').TemplateGroupsReport;
@@ -1019,8 +1031,10 @@ export async function deriveTemplateClusterMembers( input: {
 	const { ManifestQueue } = await import( './screenshot/manifest-queue.js' );
 	const { slugify } = await import( './url/index.js' );
 
-	const { feedBodyEquivalent, feedMemberDocument } = await import( '../adapters/blogger/template-content.js' );
-	const feedEntries = new Map( ( input.bloggerEntries ?? [] ).map( entry => [ normalizedUrl( entry.permalink ), entry ] ) );
+	const contentSource = input.contentSource;
+	const feedEntries = new Map( ( contentSource ? input.contentEntries ?? [] : [] ).map( entry => [ normalizedUrl( entry.permalink ), entry ] ) );
+	const feedBodyEquivalent = ( html: string, entry: import('../platform/types.js').StructuredContentEntry ) => contentSource!.bodyEquivalent( html, entry );
+	const feedMemberDocument = ( html: string, representative: import('../platform/types.js').StructuredContentEntry, member: import('../platform/types.js').StructuredContentEntry ) => contentSource!.memberDocument( html, representative, member );
 	const diagnostics: RouteDiagnostic[] = [];
 	const clusters: import('./template-clusters.js').TemplateClusterRecord[] = [];
 	const derivedUrls: string[] = [];

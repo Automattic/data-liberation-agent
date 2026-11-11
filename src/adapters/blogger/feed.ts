@@ -1,4 +1,5 @@
 import { routeKey } from '../../lib/extraction/sitemap.js';
+import type { StructuredContentEntry } from '../../platform/types.js';
 import { XMLParser } from 'fast-xml-parser';
 import { safeFetch } from '../../lib/media-fetch/safe-fetch.js';
 
@@ -13,17 +14,8 @@ export interface FeedDiagnostic {
 	reason: string;
 }
 
-export interface BloggerFeedEntry {
-	permalink: string;
-	slug: string;
-	kind: 'post' | 'page';
-	title: string;
-	contentHtml: string;
-	published: string;
-	updated: string;
-	author: string;
-	labels: string[];
-}
+/** A retained feed entry; labels are its `terms`. */
+export type BloggerFeedEntry = StructuredContentEntry;
 
 export interface ParsedBloggerFeed {
 	entries: BloggerFeedEntry[];
@@ -118,7 +110,7 @@ export function parseBloggerFeed(xml: string, origin: string, kind: 'post' | 'pa
 			published: text(entry.published),
 			updated: text(entry.updated),
 			author: text(authors[0]?.name),
-			labels: [...new Set(categories.map(category => text(category.term)).filter(Boolean))],
+			terms: [...new Set(categories.map(category => text(category.term)).filter(Boolean))],
 		});
 	}
 	return {

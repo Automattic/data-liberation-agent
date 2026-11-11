@@ -71,7 +71,7 @@ describe('Blogger feed accounting', () => {
 			permalink: `${origin}/p/about-us.html`, slug: 'about-us', kind: 'page',
 			title: 'About & contact', contentHtml: '<p>Hello &amp; welcome</p>',
 			published: '2011-02-03T04:05:06.123Z', updated: '2026-01-02T03:04:05.678Z',
-			author: 'Alice', labels: ['Board games', 'Reviews'],
+			author: 'Alice', terms: ['Board games', 'Reviews'],
 		}]);
 	});
 
@@ -118,7 +118,7 @@ describe('Blogger feed accounting', () => {
 		for (const [index, entry] of result.entries.entries()) {
 			expect(entry.slug).toBe(`post-${index + 1}`);
 			expect(entry.contentHtml).toBe(`<p>secret-body-${index + 1}</p>`);
-			expect(entry.labels).toEqual(['Invented']);
+			expect(entry.terms).toEqual(['Invented']);
 		}
 	});
 
@@ -148,7 +148,7 @@ describe('Blogger feed accounting', () => {
 		expect(result.entries[0]).toMatchObject({
 			permalink: `${origin}/2026/01/post-1.html`, slug: 'post-1', kind: 'post',
 			title: 'Post 1', contentHtml: '<p>secret-body-1</p>',
-			published: '2026-01-01T00:00:00.000Z', labels: ['Invented'],
+			published: '2026-01-01T00:00:00.000Z', terms: ['Invented'],
 		});
 		expect(result.posts.some((url) => url.includes('/search/label/'))).toBe(false);
 	});

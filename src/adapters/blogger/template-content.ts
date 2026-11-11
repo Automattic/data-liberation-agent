@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
-import { createHash } from 'node:crypto';
-import type { BloggerFeedEntry } from './feed.js';
+import type { StructuredContentSource } from '../../platform/types.js';
+import { enumerateBloggerPosts, type BloggerFeedEntry } from './feed.js';
 
 const BODY = '.post-body, [itemprop="articleBody"]';
 
@@ -51,22 +51,19 @@ export function bloggerLabel(url: string): string | undefined {
 	} catch { return undefined; }
 }
 
-/** Portable semantic index; paths are allocated by the HTML exporter, not guessed. */
-export function bloggerContentIndex(entries: BloggerFeedEntry[], routes: Array<{ url: string; path: string }>) {
-	const paths = new Map(routes.map(route => [route.url, `/${route.path.replace(/^website\//, '')}`]));
-	const terms = routes.flatMap(route => {
-		const name = bloggerLabel(route.url);
-		return name === undefined ? [] : [{ name, kind: 'term-archive' as const, sourceUrl: route.url, path: paths.get(route.url)! }];
-	});
-	for (const name of new Set(entries.flatMap(entry => entry.labels))) {
-		if (terms.some(term => term.name === name)) continue;
-		terms.push({ name, kind: 'term-archive', sourceUrl: new URL(`/search/label/${encodeURIComponent(name)}`, entries[0]!.permalink).href, path: `/terms/${createHash('sha256').update(name).digest('hex')}.html` });
-	}
-	const posts = entries.filter(entry => paths.has(entry.permalink)).map(entry => ({
-		...entry, terms: entry.labels, path: paths.get(entry.permalink)!,
-	}));
-	return {
-		schema: 'data-liberation-agent/blogger-content/v1', posts, terms,
-		redirects: [...posts.map(post => ({ from: post.permalink, to: post.path })), ...terms.map(term => ({ from: term.sourceUrl, to: term.path }))],
-	};
+export function bloggerLabelUrl(label: string, sourceUrl: string): string {
+	return new URL(`/search/label/${encodeURIComponent(label)}`, sourceUrl).href;
 }
+
+/** Blogger's posts and pages feeds, verified against the captured `.post-body`. */
+export const bloggerStructuredContent: StructuredContentSource = {
+	async enumerate(sourceUrl, { governors }) {
+		const origin = new URL(sourceUrl).origin;
+		const feeds = await Promise.all((['post', 'page'] as const).map(kind => enumerateBloggerPosts(origin, { governors, kind })));
+		return { entries: feeds.flatMap(feed => feed.entries), diagnostics: feeds.flatMap(feed => feed.rejected) };
+	},
+	bodyEquivalent: feedBodyEquivalent,
+	memberDocument: feedMemberDocument,
+	termArchiveUrl: bloggerLabelUrl,
+	termName: bloggerLabel,
+};
