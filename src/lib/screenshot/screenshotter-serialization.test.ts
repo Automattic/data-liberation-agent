@@ -365,4 +365,24 @@ describe('capturePageHtml stylesheet serialization', () => {
     expect(await page.locator('#gallery').getAttribute('src')).toContain('1x,');
     await page.close();
   });
+
+  it('paints the data-bg image of a lazy background the source never loaded', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+    const gif = 'data:image/gif;id=1;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+    await page.setContent(`<!doctype html><html><head><base href="https://site.example.test/"></head><body>
+      <div id="placeholder" class="lazy" data-bg="/media/card.jpg" style="background-image:url(&quot;${gif}&quot;);background-size:cover"></div>
+      <div id="unentered" class="lazy" data-bg="https://cdn.example.test/tile.webp"></div>
+      <div id="loaded" class="lazy" data-bg="/media/other.jpg" style="background-image:url(/media/loaded.jpg)"></div>
+    </body></html>`);
+    const liveBefore = await page.evaluate(() => document.body.innerHTML);
+
+    const doc = load(await capturePageHtml(page));
+
+    expect(doc('#placeholder').attr('style')).toContain('background-image: url("https://site.example.test/media/card.jpg")');
+    expect(doc('#placeholder').attr('style')).toContain('background-size: cover');
+    expect(doc('#unentered').attr('style')).toContain('background-image: url("https://cdn.example.test/tile.webp")');
+    expect(doc('#loaded').attr('style')).toContain('/media/loaded.jpg');
+    expect(await page.evaluate(() => document.body.innerHTML)).toBe(liveBefore);
+    await page.close();
+  });
 });
