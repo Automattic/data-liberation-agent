@@ -145,10 +145,10 @@ const PROBE_WIDTHS = [ 390, 768, 1920 ];
  *
  * Repeated chrome sized by script (a banner whose height tracks the viewport)
  * answers the same on every route, yet each route would pay the whole ladder
- * to relearn it. A route reuses a stored ladder only when every tagged element
- * has one under its signature, with the same properties, and the probe widths
- * it sampled match the stored samples exactly (value and container). Any
- * mismatch sweeps as usual, and that sweep is what later routes reuse.
+ * to relearn it. Each element reuses its stored ladder when its signature and
+ * property set match and every probe matches exactly (value, container and
+ * transform origin, except identity scales). Only unexplained elements drive
+ * further sampling; their swept series join the memo for later routes.
  */
 export type FluidSeriesMemo = Map< string, ReadonlyMap< string, readonly GeometrySample[] > >;
 
@@ -156,25 +156,31 @@ function reuseSweptSeries(
 	observations: ReadonlyMap< string, readonly GeometrySample[] >,
 	keyOf: ( id: string ) => string,
 	memo: FluidSeriesMemo
-): Map< string, GeometrySample[] > | null {
+): Map< string, GeometrySample[] > {
 	const properties = new Map< string, number >();
 	for ( const key of observations.keys() ) {
 		const id = key.slice( 0, key.indexOf( ':' ) );
 		properties.set( id, ( properties.get( id ) ?? 0 ) + 1 );
 	}
 	const reused = new Map< string, GeometrySample[] >();
+	const unexplained = new Set< string >();
 	for ( const [ key, probed ] of observations ) {
 		const id = key.slice( 0, key.indexOf( ':' ) );
 		const stored = memo.get( keyOf( id ) );
 		const series = stored?.get( key.slice( id.length + 1 ) );
-		if ( ! stored || ! series || stored.size !== properties.get( id ) ) return null;
+		if ( ! stored || ! series || stored.size !== properties.get( id ) ) {
+			unexplained.add( id );
+			continue;
+		}
 		for ( const sample of probed ) {
 			const match = series.find( candidate => candidate.viewport === sample.viewport );
 			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) ||
-				( !( match.value === 1000 && sample.value === 1000 ) && match.transformOrigin !== sample.transformOrigin ) ) return null;
+				( !( match.value === 1000 && sample.value === 1000 ) && match.transformOrigin !== sample.transformOrigin ) ) unexplained.add( id );
 		}
 		reused.set( key, series.map( sample => ( { ...sample } ) ) );
 	}
+	// One mismatched property invalidates reuse for the whole element.
+	for ( const key of reused.keys() ) if ( unexplained.has( key.slice( 0, key.indexOf( ':' ) ) ) ) reused.delete( key );
 	return reused;
 }
 const COLLINEAR_TOLERANCE_PX = 0.5;
@@ -565,55 +571,53 @@ async function learnFluidGeometry(
 	if ( ! adaptive ) {
 		for ( const width of widths ) await sample( width );
 	} else {
-		// The probe widths come first. When every tagged series is identical
-		// across them (perpetual movers excluded) and no runtime stylesheet
-		// varied, every learned rule would be `constant` — the frozen copy
-		// already carries it — so the rest of the sweep is skipped.
+		// Probe first, then reuse explained elements independently. Only the
+		// unexplained series drive the remaining sweep. If those are constant
+		// (perpetual movers excluded) and runtime sheets are constant too,
+		// the probes suffice; repeated chrome keeps its stored ladder.
 		for ( const width of PROBE_WIDTHS ) await sample( width );
 		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 		const sheets = await runtimeSheetsObserved( page );
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
-		let reused: Map< string, GeometrySample[] > | null = null;
+		const reused = memo ? reuseSweptSeries( observations, memoKey, memo ) : new Map< string, GeometrySample[] >();
+		const unexplained = () => new Map( [ ...observations ].filter( ( [ key ] ) => ! reused.has( key ) ) );
 		const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
 		const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
 			series.every( sample => Number.isFinite( sample.value ) && sample.value === series[ 0 ]!.value ) );
-		if ( ! sheetsConstant || ! constantAcross( observations, PROBE_WIDTHS.length, await perpetual() ) ) {
-			reused = memo && reuseSweptSeries( observations, memoKey, memo );
-			if ( ! reused ) {
-				for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
-				// Runtime-fitted phone text can have an offset as well as a slope.
-				// Observe below 390 and a third interior phone width: a bounded
-				// quantized affine fit needs three non-clamped observations.
-				const phoneSeries = [ ...refinementSeries( observations, await perpetual() ), ...await runtimeSheetSeries( page, sampledWidths ) ];
-				if ( phoneSeries.some( series => {
-					const phone = series.find( sample => sample.viewport === 390 );
-					const large = series.find( sample => sample.viewport === 600 );
-					return phone && large && phone.value !== large.value;
-				} ) ) {
-					for ( const width of [ 320, 360, 414 ] ) await sample( width );
-				}
-				// Refine only intervals some series leaves unexplained.
-				for ( ;; ) {
-					const series = refinementSeries( observations, await perpetual() );
-					const next = refinementWidths( [ ...series, ...await runtimeSheetSeries( page, sampledWidths ) ], sampledWidths, widths );
-					if ( next.length === 0 ) break;
-					for ( const width of next ) await sample( width );
-				}
+		if ( ! sheetsConstant || ! constantAcross( unexplained(), PROBE_WIDTHS.length, await perpetual() ) ) {
+			for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
+			// Runtime-fitted phone text can have an offset as well as a slope.
+			// Observe below 390 and a third interior phone width: a bounded
+			// quantized affine fit needs three non-clamped observations.
+			const phoneSeries = [ ...refinementSeries( unexplained(), await perpetual() ), ...await runtimeSheetSeries( page, sampledWidths ) ];
+			if ( phoneSeries.some( series => {
+				const phone = series.find( sample => sample.viewport === 390 );
+				const large = series.find( sample => sample.viewport === 600 );
+				return phone && large && phone.value !== large.value;
+			} ) ) {
+				for ( const width of [ 320, 360, 414 ] ) await sample( width );
+			}
+			// Refine only intervals unexplained elements or runtime sheets need.
+			for ( ;; ) {
+				const series = refinementSeries( unexplained(), await perpetual() );
+				const next = refinementWidths( [ ...series, ...await runtimeSheetSeries( page, sampledWidths ) ], sampledWidths, widths );
+				if ( next.length === 0 ) break;
+				for ( const width of next ) await sample( width );
 			}
 		}
 		// Every skipped ladder width now sits inside a straight interval of every
 		// series, so the fitters receive the full ladder's observations.
 		const moving = await perpetual();
 		for ( const [ key, samples ] of observations ) {
-			if ( reused ) observations.set( key, reused.get( key )! );
+			if ( reused.has( key ) ) observations.set( key, reused.get( key )! );
 			else if ( ! moving.has( key.slice( 0, key.indexOf( ':' ) ) ) ) observations.set( key, interpolateSamples( samples, sampledWidths, widths ) );
 		}
 		// A redundant minimum can be sampled again by another element's sweep;
 		// discard it after the sweep too, so its partial series cannot be fitted.
 		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 		// A sweep past the probes is what later routes may reuse.
-		if ( memo && ! reused && sampledWidths.length > PROBE_WIDTHS.length && moving.size === 0 ) {
+		if ( memo && sampledWidths.length > PROBE_WIDTHS.length && moving.size === 0 ) {
 			const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
 			for ( const [ key, samples ] of observations ) {
 				const id = key.slice( 0, key.indexOf( ':' ) );

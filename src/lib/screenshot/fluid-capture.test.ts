@@ -832,8 +832,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( learned[ 2 ]![ 1 ] ).toBe( 'height: 20vw; 78px' );
 	}, 60_000 );
 
-	// Two local browser routes (~8s): one full sweep, then only the memo probes.
-	it( 'reuses shared header series despite root state classes and identity-scale origins', async () => {
+	// Two local browser routes (~8s): one full sweep, then only the memo probes, even with new constant content.
+	it( 'reuses shared header series despite new constant content, root state classes and identity-scale origins', async () => {
 		const memo: FluidSeriesMemo = new Map();
 		const lookup = vi.spyOn( memo, 'get' );
 		const learned = [];
@@ -844,6 +844,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 					<!doctype html><html class="runtime-${ index }"><body class="cookiebot-theme ${ index ? 'has-action-bar' : 'show-all-popups' }">
 					<style>main { height: ${ height }px; }</style>
 					<div class="frame" style="width:100%;transform:scale(1)"><header style="font-size:10px">Shared header</header><main>Route content</main></div>
+					${ index ? '<aside style="min-height:42px">New constant content</aside>' : '' }
 					<script>
 						const update = () => {
 							const frame = document.querySelector('.frame');
@@ -858,7 +859,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				const result = await learnAndApplyFluidGeometry( page, { document: 'desktop', settleMs: 10, memo } );
 				if ( index === 1 ) {
 					expect( lookup ).toHaveBeenCalled();
-					expect( lookup.mock.results.every( call => call.value !== undefined ) ).toBe( true );
+					expect( lookup.mock.results.some( call => call.value !== undefined ) ).toBe( true );
+					expect( lookup.mock.results.some( call => call.value === undefined ) ).toBe( true );
+					expect( await page.locator( 'aside' ).getAttribute( 'style' ) ).toBe( 'min-height:42px' );
 				}
 				learned.push( {
 					origin, result,
