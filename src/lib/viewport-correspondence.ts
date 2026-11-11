@@ -172,7 +172,7 @@ const RECONCILE_SKIP = new Set( [ 'script', 'style', 'noscript', 'template' ] );
 const SOURCE_REFERENCE_ATTRIBUTES: Record< string, readonly string[] > = {
 	a: [ 'href' ],
 	area: [ 'href' ],
-	img: [ 'src', 'srcset' ],
+	img: [ 'src' ],
 	video: [ 'src', 'poster' ],
 	audio: [ 'src' ],
 	iframe: [ 'src' ],
@@ -223,8 +223,16 @@ function canonicalReference( value: string ): string {
 	}
 }
 
-/** Resolved navigation or media identity, or '' when the element carries none. */
+/**
+ * Resolved navigation or media identity, or '' when the element carries none.
+ * An image is the resource its `src` names: `srcset` lists renditions a source
+ * runtime may pick per viewport (Blogger writes `=w1600` on one capture and
+ * `=s1600` on the other), so it only names the image when there is no `src`.
+ */
 export function referenceOf( element: Element ): string {
+	if ( element.tagName === 'img' && ! ( element.attribs?.src ?? '' ).trim() ) {
+		return canonicalReference( ( element.attribs?.srcset ?? '' ).trim() );
+	}
 	const attributes = SOURCE_REFERENCE_ATTRIBUTES[ element.tagName ];
 	if ( ! attributes ) return '';
 	const values = attributes
