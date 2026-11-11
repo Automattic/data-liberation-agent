@@ -17,6 +17,24 @@ function runCli(args: string[]): Promise<{ code: number | null; stdout: string; 
 }
 
 describe('cli', () => {
+  it('rejects misspelled flags before treating their values as the URL', async () => {
+    const result = await runCli(['--route-limt', '5', 'https://example.invalid/']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('Did you mean --route-limit?');
+    expect(result.stderr).not.toContain('"5" is not a valid URL');
+  }, 30_000);
+
+  it('rejects non-numeric inspect and runtime limits before making requests', async () => {
+    for (const args of [
+      ['inspect', 'https://example.invalid/', '--sample-limit', 'NaN'],
+      ['https://example.invalid/', '--runtime-route-limit', 'NaN'],
+    ]) {
+      const result = await runCli(args);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(`${args[args.length - 2]} requires an integer`);
+    }
+  }, 30_000);
+
   it('prints usage for --help regardless of a preceding unrecognized token, instead of crashing on a fetch', async () => {
     const result = await runCli(['capture', '--help']);
     expect(result.code).toBe(0);

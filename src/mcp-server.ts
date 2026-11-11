@@ -11,7 +11,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { resolveOutputBase } from './lib/paths.js';
+import { mcpInputSchema, convertMcpOptions, version, type Verb } from './options.js';
 import { loadExternalPlatforms } from './platform/load-external.js';
 
 /**
@@ -33,86 +33,16 @@ const errorResult = (message: string): ToolResult => ({
   isError: true,
 });
 
-const TOOLS = [
-  {
-    name: 'inspect',
-    description: 'Bounded, read-only source assessment. Returns measured route and document observations, coverage, unknowns, and issues without writing a site.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'Site to inspect.' },
-        discoveryLimit: { type: 'integer', description: 'Maximum routes inventoried (1-100; default 50).' },
-        sampleLimit: { type: 'integer', description: 'Maximum routes sampled (1-10; default 5).' },
-        requestTimeoutMs: { type: 'integer', description: 'Per-request timeout in milliseconds (1000-30000).' },
-        overallTimeoutMs: { type: 'integer', description: 'Total inspection timeout in milliseconds (1000-60000).' },
-        rendered: { type: 'boolean', description: 'Render bounded samples (default true). False returns HTTP facts with unknown complexity.' },
-      },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'liberate',
-    description:
-      'Liberate a website into a portable HTML site. Browser capture is the default; HTTP mode creates an explicitly unverified review candidate. Returns the website directory, route counts, and completeness.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'Site to liberate.' },
-        trustedOrigins: { type: 'array', items: { type: 'string' }, description: 'Origins the caller vouches for, e.g. http://localhost:8884/ for a local development site on this machine. Each entry is an absolute http(s) URL; its exact origin (scheme, host, port) bypasses the loopback/private-host guard for the entry URL, subresources and redirects. Other internal targets stay blocked. Default: none.' },
-        outputDir: { type: 'string', description: 'Output base directory. Defaults to ~/data-liberation.' },
-        resume: { type: 'boolean', description: 'Reuse artifacts already on disk instead of recapturing.' },
-        checkpoint: { type: 'boolean', description: 'Defer export/archive finalization while time-budget-skipped routes remain. Returns a resumable checkpoint; resume into the same output directory. When no routes remain, exports normally.' },
-        screenshots: { type: 'boolean', description: 'Also capture full-page and scrolled PNGs.' },
-        acquisition: { type: 'string', enum: ['browser', 'http'], description: 'Browser by default; HTTP produces an explicitly unverified review candidate.' },
-        routeLimit: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'string', enum: ['all'] }], description: 'Route budget shared by browser and HTTP capture, entrypoint included: the entrypoint plus an even spread of the rest, linked pages counted. Browser default: observed-time admission within 17 minutes; HTTP default all. Explicit limits override default time admission. Omitted routes are diagnosed (route_omitted_by_budget) and counted in routesOmitted, never failed.' },
-        routeSelection: { type: 'string', enum: ['discovery-order', 'template-coverage'], description: 'How the route budget picks routes. discovery-order (default): the entrypoint plus an even spread. template-coverage: fetch each route\'s server HTML, group routes by template fingerprint, and keep one route per group first; writes template-groups.json next to website/. Grouping problems fall back to discovery-order.' },
-        templateClusters: { type: 'boolean', description: 'Opt-in template-clustered capture (#784): implies template-coverage selection, adds one verification member per multi-member cluster, and derives every other member of a verified cluster by transplanting its HTTP content into the representative capture. Derived routes carry route_template_derived loss rows and compare as uncompared scope.' },
-        runtimeRouteLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Maximum HTTP routes observed for runtime regions; default 0.' },
-        timeBudgetMs: { type: 'integer', minimum: 1, description: 'Browser capture time budget in ms until export must begin: no new routes start near the end, routes still running at the budget are abandoned, and export runs on what was captured. The entrypoint is always captured. Unadmitted routes are route_omitted_by_budget scope diagnostics unless routeLimit is explicit; abandoned routes are route_capture_skipped_budget missing routes. Set to the caller deadline minus post-capture headroom. Default: 17 minutes unless routeLimit is explicit.' },
-        routeReserveMs: { type: 'integer', minimum: 0, description: 'Milliseconds of the capture time budget held per started route (entrypoint included) for downstream work: admission closes so every started route still leaves its reserve unspent, and routes left out are route_capture_skipped_budget missing routes naming the reserve. Set to the measured per-route cost of what follows capture, e.g. a build that costs seconds per page. No effect without a time budget. Default: 0.' },
-        maxFileBytes: { type: 'integer', minimum: 1, description: 'Largest file exported into the site, in bytes (default 52428800, 50 MiB). Larger assets are not written and are reported as asset_exceeds_file_limit.' },
-        maxTotalBytes: { type: 'integer', minimum: 1, description: 'Most bytes exported into the site, every file counted (default 262144000, 250 MiB). Over it, assets the entrypoint does not need are dropped largest first (fonts last), then non-entry routes; reported as asset_exceeds_total_budget and route_exceeds_total_budget. The entrypoint is never dropped.' },
-        maxFiles: { type: 'integer', minimum: 1, description: 'Most files exported into the site (default 5000), enforced like maxTotalBytes.' },
-        portableMotion: { type: 'object', description: 'Optional author-supplied, hash-pinned portable motion recipe verified in the browser before export.' },
-      },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'compare',
-    description:
-      'Verify frozen source/capture evidence or portable capture/candidate fidelity. Explicit drift stage revisits the live source. Returns coverage, pending evidence and scores.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        directory: { type: 'string', description: 'A liberated run directory.' },
-        screenshots: { type: 'boolean', description: 'Write source/copy/diff PNGs as evidence.' },
-        candidateUrl: { type: 'string', description: 'Base URL of another rendered copy of the site, such as one built from the capture, to compare instead of the capture.' },
-        stage: { type: 'string', enum: ['capture', 'materialization', 'drift'], description: 'Defaults to capture, or materialization with candidateUrl. Only drift visits the source.' },
-        profiles: { type: 'array', items: { type: 'string' }, description: 'Named frozen source document identities; defaults to all declared profile cells.' },
-        motionContract: { type: 'object', description: 'Authored routes, widths, readiness selectors, text, canvas and click probes for independent source/candidate behavior verification.' },
-      },
-      required: ['directory'],
-    },
-  },
-  {
-    name: 'publish',
-    description: 'Publish a liberated site to a live URL. Returns the live URL and any claim link.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        directory: { type: 'string', description: 'A liberated run directory.' },
-        target: { type: 'string', description: 'Publish target. Defaults to spacefast.' },
-        token: { type: 'string', description: 'Token for the target, if publishing into an account. For an anonymous space, its claim key.' },
-        space: { type: 'string', description: 'Existing space id to add a version to, instead of creating a new space.' },
-      },
-      required: ['directory'],
-    },
-  },
-];
+const descriptions: Record<Verb, string> = {
+  inspect: 'Bounded, read-only source assessment. Returns measured observations, coverage, unknowns and issues without writing a site.',
+  liberate: 'Liberate a website into a portable HTML site. Browser capture is the default; HTTP creates an unverified review candidate.',
+  compare: 'Verify frozen source/capture evidence or portable capture/candidate fidelity. Only explicit drift revisits the live source.',
+  publish: 'Publish a liberated site to a live URL. Returns the live URL and any claim link.',
+};
+const TOOLS = (Object.keys(descriptions) as Verb[]).map(name => ({ name, description: descriptions[name], inputSchema: mcpInputSchema(name) }));
 
 const server = new Server(
-  { name: 'data-liberation', version: '1.0.0' },
+  { name: 'data-liberation', version },
   { capabilities: { tools: {} } }
 );
 
@@ -126,14 +56,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   };
 
   try {
+    if (!(name in descriptions)) return errorResult(`Unknown tool: ${name}`);
+    const options = convertMcpOptions(name as Verb, args);
     if (name === 'inspect') {
       const { inspectSource } = await import('./lib/inspect.js');
       return textResult(await inspectSource(String(args.url ?? ''), {
-        rendered: typeof args.rendered === 'boolean' ? args.rendered : undefined,
-        discoveryLimit: typeof args.discoveryLimit === 'number' ? args.discoveryLimit : undefined,
-        sampleLimit: typeof args.sampleLimit === 'number' ? args.sampleLimit : undefined,
-        requestTimeoutMs: typeof args.requestTimeoutMs === 'number' ? args.requestTimeoutMs : undefined,
-        overallTimeoutMs: typeof args.overallTimeoutMs === 'number' ? args.overallTimeoutMs : undefined,
+        ...options,
         log,
       }));
     }
@@ -141,25 +69,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'liberate') {
       const { liberateSite } = await import('./ui/liberate.js');
       const result = await liberateSite({
-        acquisition: args.acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
-        trustedOrigins: Array.isArray(args.trustedOrigins) ? args.trustedOrigins.map(String) : undefined,
-        http: args.acquisition === 'http' || args.runtimeRouteLimit !== undefined ? { runtimeRouteLimit: args.runtimeRouteLimit as number | undefined } : undefined,
-        routeLimit: args.routeLimit as import('./lib/capture.js').CaptureOptions['routeLimit'],
-        routeSelection: args.routeSelection as import('./lib/capture.js').CaptureOptions['routeSelection'],
-        templateClusters: args.templateClusters as boolean | undefined,
-        timeBudgetMs: typeof args.timeBudgetMs === 'number' ? args.timeBudgetMs : undefined,
-        routeReserveMs: typeof args.routeReserveMs === 'number' ? args.routeReserveMs : undefined,
-        maxFileBytes: typeof args.maxFileBytes === 'number' ? args.maxFileBytes : undefined,
-        maxTotalBytes: typeof args.maxTotalBytes === 'number' ? args.maxTotalBytes : undefined,
-        maxFiles: typeof args.maxFiles === 'number' ? args.maxFiles : undefined,
-        url: String(args.url ?? ''),
-        outputBase: typeof args.outputDir === 'string' ? args.outputDir : resolveOutputBase(),
-        resume: args.resume === true,
-        checkpoint: args.checkpoint === true,
-        screenshots: args.screenshots === true,
-        portableMotion: args.portableMotion && typeof args.portableMotion === 'object' ? args.portableMotion as import('./lib/portable-motion.js').PortableMotionRecipe : undefined,
-        // A tool call has no terminal to hold, so it never serves.
-        serve: false,
+        ...options as Omit<Parameters<typeof liberateSite>[0], 'url'>,
+        url: String(args.url),
         log,
       });
       return textResult({
@@ -178,16 +89,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === 'compare') {
-      const { checkFidelity } = await import('./lib/fidelity/check.js');
-      const report = await checkFidelity({
-        directory: String(args.directory ?? ''),
-        screenshots: args.screenshots === true,
-        candidateUrl: typeof args.candidateUrl === 'string' ? args.candidateUrl : undefined,
-        stage: typeof args.stage === 'string' ? args.stage as import('./lib/fidelity/reference.js').FidelityStage : undefined,
-        profiles: Array.isArray(args.profiles) ? args.profiles as string[] : undefined,
-        motionContract: args.motionContract && typeof args.motionContract === 'object' ? args.motionContract as import('./lib/fidelity/candidate-motion.js').MotionContract : undefined,
-        log,
-      });
+      const { runCompare } = await import('./ui/compare.js');
+      const report = await runCompare(String(args.directory), { ...options, log, write: log });
       return textResult(report);
     }
 
@@ -195,9 +98,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { publishSite } = await import('./ui/publish.js');
       const result = await publishSite({
         directory: String(args.directory ?? ''),
-        target: typeof args.target === 'string' ? args.target : 'spacefast',
-        token: typeof args.token === 'string' ? args.token : process.env.SPACEFAST_TOKEN,
-        space: typeof args.space === 'string' ? args.space : undefined,
+        ...options as { target: string; token?: string; space?: string },
         log,
       });
       return textResult(result);
