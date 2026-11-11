@@ -478,7 +478,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			};
 			const restoredImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
 			const restoredAspectRatios: Array< { image: HTMLImageElement; previous: string; priority: string } > = [];
-			const restoredBackgrounds: Array< { element: HTMLElement; previous: string | null } > = [];
+			const restoredBackgrounds: Array< { element: HTMLElement; previous: string | null; classes: string | null; status: string | null } > = [];
 			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
 			const srcsetShaped = ( value: string ) => /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
 			const durableImageUrl = ( value: string | null | undefined ): string => {
@@ -564,14 +564,44 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			// in data-bg and paint it only once the element enters the viewport. An
 			// element the capture never scrolled in, or that still paints the 1x1
 			// placeholder, would otherwise serialize as an empty box.
-			for ( const element of Array.from( document.body?.querySelectorAll< HTMLElement >( '[data-bg]' ) ?? [] ) ) {
+			const backgrounds = Array.from( document.body?.querySelectorAll< HTMLElement >( '[data-bg]' ) ?? [] );
+			// Snapshot loaded peers before restoring anything: a synthesized state must
+			// never become evidence for another element's loader contract.
+			const loadedBackgrounds = backgrounds.filter( ( element ) => {
+				const painted = getComputedStyle( element ).backgroundImage;
+				return element.getAttribute( 'data-ll-status' ) === 'loaded' && painted !== 'none' && ! painted.includes( 'data:image/gif' );
+			} ).map( ( element ) => ( { classes: Array.from( element.classList ), status: element.getAttribute( 'data-ll-status' )! } ) );
+			for ( const element of backgrounds ) {
 				const declared = ( element.getAttribute( 'data-bg' ) ?? '' ).trim().replace( /^url\(\s*(["']?)(.*?)\1\s*\)$/i, '$2' );
 				const next = durableImageUrl( declared );
 				if ( ! next ) continue;
 				const painted = getComputedStyle( element ).backgroundImage;
 				if ( painted !== 'none' && ! /^url\(\s*["']?data:image\/gif;(?:[^,]*;)?base64,R0lGODlhAQAB/i.test( painted ) ) continue;
-				restoredBackgrounds.push( { element, previous: element.getAttribute( 'style' ) } );
+				restoredBackgrounds.push( { element, previous: element.getAttribute( 'style' ), classes: element.getAttribute( 'class' ), status: element.getAttribute( 'data-ll-status' ) } );
 				element.style.setProperty( 'background-image', `url("${ next.replace( /"/g, '%22' ) }")` );
+				// A loader's hidden pre-load state (e.g. `.lazy{opacity:0}`) would hide
+				// the restored image. Adopt only those loaded-peer tokens that measurably
+				// reveal this element without changing its box, so peer component classes
+				// never leak in, whichever stylesheet (or origin) holds the reveal rule.
+				const hidden = ( style: CSSStyleDeclaration ) => style.visibility === 'hidden' || Number.parseFloat( style.opacity ) === 0;
+				if ( ! hidden( getComputedStyle( element ) ) ) continue;
+				const peer = loadedBackgrounds.find( ( candidate ) => candidate.classes.some( ( token ) => element.classList.contains( token ) ) );
+				if ( ! peer ) continue;
+				const box = ( style: CSSStyleDeclaration ) => [ style.display, style.position, style.width, style.height, style.top, style.left, style.transform ].join( '|' );
+				const before = box( getComputedStyle( element ) );
+				// Measure end states: a reveal transition would still read its start value.
+				const transition = [ element.style.getPropertyValue( 'transition' ), element.style.getPropertyPriority( 'transition' ) ] as const;
+				element.style.setProperty( 'transition', 'none', 'important' );
+				for ( const token of peer.classes.filter( ( candidate ) => ! element.classList.contains( candidate ) ) ) {
+					element.classList.add( token );
+					const style = getComputedStyle( element );
+					if ( hidden( style ) || box( style ) !== before ) element.classList.remove( token );
+				}
+				if ( transition[ 0 ] ) element.style.setProperty( 'transition', transition[ 0 ], transition[ 1 ] );
+				else element.style.removeProperty( 'transition' );
+				if ( element.getAttribute( 'class' ) !== restoredBackgrounds[ restoredBackgrounds.length - 1 ].classes ) {
+					element.setAttribute( 'data-ll-status', peer.status );
+				}
 			}
 			// outerHTML concatenates adjacent Text nodes. Re-parsing that string
 			// coalesces source shaping runs, which can change subpixel advances and
@@ -642,9 +672,13 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 					if ( previous === null ) image.removeAttribute( 'src' );
 					else image.setAttribute( 'src', previous );
 				}
-				for ( const { element, previous } of restoredBackgrounds.reverse() ) {
+				for ( const { element, previous, classes, status } of restoredBackgrounds.reverse() ) {
 					if ( previous === null ) element.removeAttribute( 'style' );
 					else element.setAttribute( 'style', previous );
+					if ( classes === null ) element.removeAttribute( 'class' );
+					else element.setAttribute( 'class', classes );
+					if ( status === null ) element.removeAttribute( 'data-ll-status' );
+					else element.setAttribute( 'data-ll-status', status );
 				}
 				for ( const { image, previous, priority } of restoredAspectRatios.reverse() ) {
 					if ( previous === '' ) image.style.removeProperty( 'aspect-ratio' );
