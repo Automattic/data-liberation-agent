@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.210] - 2026-11-11
+
+### Changed
+- regenerate plugin bundles
+- Lazy background URLs localize whole in every capture copy
+- Restored lazy backgrounds adopt the loader tokens that reveal them
+
 ## [0.33.209] - 2026-11-11
 
 ### Changed
