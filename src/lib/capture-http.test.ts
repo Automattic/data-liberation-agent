@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformAdapter } from '../types.js';
 
-const state = vi.hoisted(() => ({ runtime: false, redirected: false, multiple: false }));
+const state = vi.hoisted(() => ({ runtime: false, redirected: false, multiple: false, body: undefined as string | undefined }));
 vi.mock('./media-fetch/safe-fetch.js', async (importOriginal) => {
 	const original = await importOriginal<typeof import('./media-fetch/safe-fetch.js')>();
 	return {
@@ -15,6 +15,8 @@ vi.mock('./media-fetch/safe-fetch.js', async (importOriginal) => {
 			body: Buffer.from(
 				url.endsWith('.css')
 					? 'body{color:red}'
+					: state.body !== undefined
+						? `<html><head><title>Contact Support</title></head><body>${state.body}</body></html>`
 					: state.runtime
 						? `<html class="no-js"><head><title>Runtime fixture</title></head><body><div id="host"></div><p id="authored">Keep authored identity</p>${state.multiple ? '<section class="item"></section>'.repeat(20) : ''}<select id="choice"><option value="first">First</option><option value="second">Second</option></select><script>document.getElementById("host").textContent=${state.redirected ? 'document.baseURI' : '"Mounted ready"'};document.documentElement.className="js";document.getElementById("choice").value="second";document.querySelectorAll('.item').forEach((node,index)=>node.textContent='Observed item '+index);const s=document.createElement("style");s.textContent="#host{color:rgb(11,22,33);width:calc(100% - 24px)}";document.head.append(s)</script></body></html>`
 						: `<html><head><title>Article</title><link rel="stylesheet" href="https://cdn.example.com/site.css"></head><body><h1>${url}</h1><a href="https://example.com/post/">Post</a>${url.includes('requires-browser') ? '<canvas></canvas>' : ''}</body></html>`
@@ -30,7 +32,7 @@ const browserCapture = vi.hoisted(() =>
 );
 vi.mock('./screenshot/screenshotter.js', () => ({ captureScreenshots: browserCapture }));
 
-import { captureWebsite, IncompleteCaptureError, UnsupportedCapturePlatformError } from './capture.js';
+import { captureWebsite, IncompleteCaptureError, SourceHasNoContentError, UnsupportedCapturePlatformError } from './capture.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { discoverTenantHandle } from '../adapters/tenant-handle.js';
 
@@ -74,10 +76,24 @@ afterEach(() => {
 	state.runtime = false;
 	state.redirected = false;
 	state.multiple = false;
+	state.body = undefined;
 	vi.clearAllMocks();
 });
 
 describe('orchestrated HTTP review capture', () => {
+	it.each([
+		['an empty body', '\n\t<script>track()</script>\n', false],
+		['a lone image', '<img src="https://example.com/sign.png" alt="">', true],
+	])('fails closed with source_has_no_content only when the entry page has no content: %s', async (_, body, usable) => {
+		state.body = body;
+		state.redirected = true;
+		const capture = captureWebsite({ url, outputDir: directory(), acquisition: 'http', routeLimit: 1 }, { findAdapter: adapter });
+		if (usable) return expect(capture).resolves.toMatchObject({ entrypointCaptured: true });
+		const error = await capture.then(() => undefined, (caught: unknown) => caught);
+		expect(error).toBeInstanceOf(SourceHasNoContentError);
+		expect(error).toMatchObject({ code: 'source_has_no_content', requestedUrl: url, finalUrl: 'https://example.com/final/article/index.html', title: 'Contact Support' });
+		expect((error as Error).message).toBe('The source https://example.com/ (redirected to https://example.com/final/article/index.html) returned a page titled "Contact Support" with no content. The site may be offline, suspended, parked, or blank.');
+	});
 	it('uses the declared site name rather than the homepage share title in the capture receipt', async () => {
 		const homepage = 'https://example.com/owner/';
 		const html = '<html><head><meta property="og:site_name" content="Owner Site"><meta property="og:title" content="Homepage Share Title"><title>Document Title</title></head><body><h1>Owner</h1></body></html>';

@@ -29,6 +29,7 @@ import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
+import { assertEntrypointHasContent } from './source-content.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 export { DEFAULT_CAPTURE_TIME_BUDGET_MS, DEFAULT_ROUTE_SELECTION, ROUTE_SELECTIONS, type RouteLimit, type RouteSelection } from './route-budget.js';
@@ -272,6 +273,8 @@ export interface CaptureResult {
 export interface CaptureDependencies {
 	findAdapter( platform: string ): PlatformAdapter | null;
 }
+
+export { SourceHasNoContentError } from './source-content.js';
 
 export class UnsupportedCapturePlatformError extends Error {}
 
@@ -548,6 +551,7 @@ async function runCaptureWebsite(
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
 		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
+		assertEntrypointHasContent( outputDir, options.url, sourceUrl );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
 	}
@@ -779,6 +783,7 @@ async function runCaptureWebsite(
 		limits: captureExportLimits( options ),
 	} );
 	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
+	assertEntrypointHasContent( outputDir, options.url, sourceUrl );
 	const previewStartedAt = Date.now();
 	// A portable homepage preview is a deliverable, not optional capture evidence.
 	// Its failure must not turn an otherwise usable website into a failed capture.
