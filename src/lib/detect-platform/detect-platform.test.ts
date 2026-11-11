@@ -64,8 +64,10 @@ it('requests the entry document once for acquisition + detection + discovery', a
     } else if (request.url === '/_emdash/admin') {
       response.writeHead(302, { location: '/_emdash/admin/login' }).end();
     } else if (request.url === '/sitemap.xml') {
+      // Five routes keep discovery off its rendered SPA pass, which navigates
+      // a browser rather than reusing the fetched entry document.
       response.setHeader('content-type', 'application/xml');
-      response.end('<urlset></urlset>');
+      response.end(`<urlset>${['a', 'b', 'c', 'd', 'e'].map(path => `<url><loc>http://${request.headers.host}/${path}</loc></url>`).join('')}</urlset>`);
     } else {
       response.writeHead(404).end();
     }
