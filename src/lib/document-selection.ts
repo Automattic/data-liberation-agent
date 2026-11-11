@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
-import { parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { cssIdentifier, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { reconcileDeviceDocuments, deviceIslandCss, RESPONSIVE_FRAGMENT, type DeviceReconciliationEvidence, type LinkedStylesheetReader } from './device-reconciliation.js';
 import { IntegrityError } from './failure-class.js';
 import { RESPONSIVE_FRAGMENT_RUNTIME } from './responsive-assembly.js';
@@ -177,7 +177,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 					rule.selector = selectorParser( selectors => {
 						selectors.walkIds( node => {
 							const alternatives = islandIds( node.value );
-							if ( alternatives.length ) node.replaceWith( selectorParser().astSync( `:is(${ [ node.toString(), ...alternatives.map( id => `#${ id }` ) ].join( ',' ) })` ).first.first! );
+							if ( alternatives.length ) node.replaceWith( selectorParser().astSync( `:is(${ [ node.toString(), ...alternatives.map( id => `#${ cssIdentifier( id ) }` ) ].join( ',' ) })` ).first.first! );
 						} );
 						selectors.walkAttributes( node => {
 							if ( node.attribute !== 'id' || node.operator !== '=' || node.insensitive || ! node.value ) return;

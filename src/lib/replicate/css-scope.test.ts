@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scopeCss } from './css-scope.js';
+import { cssIdentifier, scopeCss } from './css-scope.js';
 
 describe('scopeCss — selectors', () => {
   // The scope is wrapped in :where() so it adds ZERO specificity — the carried
@@ -160,5 +160,13 @@ describe('scopeCss rem-base preservation', () => {
     expect(out).toMatch(/:root\s*\{[^}]*font-size:\s*62\.5%/);
     // the responsive font-size stays inside the @media (not hoisted, @media not emptied)
     expect(out).toMatch(/@media[^{]*\{[^}]*font-size:\s*18px/);
+  });
+});
+
+describe('cssIdentifier', () => {
+  it('escapes identifiers that need it and leaves plain ones untouched', () => {
+    expect(cssIdentifier('target--data-blocks-engine-capture-mobile')).toBe('target--data-blocks-engine-capture-mobile');
+    expect(cssIdentifier('9d047ce9--data-blocks-engine-capture-mobile')).toBe('\\39 d047ce9--data-blocks-engine-capture-mobile');
+    expect(cssIdentifier('-1x')).toBe('\\-1x');
   });
 });

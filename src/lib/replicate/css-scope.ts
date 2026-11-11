@@ -82,6 +82,18 @@ export function parseCss(css: string) {
 }
 
 /**
+ * Serialize `value` as a CSS identifier (the `x` in `#x`), escaping it the way
+ * the source would have to, e.g. `9d047ce9` becomes `\39 d047ce9`.
+ * postcss-selector-parser keeps an id's escaped source spelling in
+ * `raws.value`, so an alias for a renamed id is serialized from its new value.
+ */
+export function cssIdentifier(value: string): string {
+  const node = selectorParser.className({ value: '' });
+  node.value = value;
+  return node.toString().slice(1);
+}
+
+/**
  * Parse a rule's selector list, or undefined when it is invalid. Browsers drop
  * a rule whose selector list is invalid, so a projection leaves that rule as
  * authored: it stays inert exactly as it is on the source.

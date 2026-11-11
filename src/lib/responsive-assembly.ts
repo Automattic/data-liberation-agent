@@ -6,7 +6,7 @@ import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
-import { parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { cssIdentifier, parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { documentElementTags } from './screenshot/document-integrity.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
@@ -1709,7 +1709,7 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 		const selectors = parseSelectorList( rule.selector );
 		if ( ! selectors ) return;
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; aliases: Array<selectorParser.Identifier | selectorParser.Attribute> }> = [];
-		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value?.length ) replacements.push( { node: id, aliases: [ value ].flat().map( name => { const alias = id.clone(); alias.value = name; return alias; } ) } ); } );
+		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value?.length ) replacements.push( { node: id, aliases: [ value ].flat().map( name => selectorParser().astSync( `#${ cssIdentifier( name ) }` ).first.first as selectorParser.Identifier ) } ); } );
 		// Exact attribute ids (`[id="x"]`, Wix mesh child rules) are the same identity.
 		selectors.walkAttributes( attribute => { const value = attribute.attribute === 'id' && attribute.operator === '=' && ! attribute.insensitive && attribute.value ? renamed.get( attribute.value ) : undefined; if ( value?.length ) replacements.push( { node: attribute, aliases: [ value ].flat().map( name => { const alias = attribute.clone(); alias.setValue( name, { quoteMark: '"' } ); return alias; } ) } ); } );
 		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-blocks-engine-capture-anchor-alias'; replacements.push( { node: attribute, aliases: [ alias ] } ); } } );
