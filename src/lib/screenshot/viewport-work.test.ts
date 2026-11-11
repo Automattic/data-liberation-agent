@@ -45,9 +45,11 @@ describe( 'fluid rest ends on viewport work evidence', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'rests a width whose geometry settled at once without a fixed window', async () => {
+	it( 'rests a width whose geometry settled at once without a fixed window or long runtime timeouts', async () => {
+		// The two-second timeouts touch no geometry (like a gallery's "load more" guard).
 		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
-			<script>const box = document.querySelector('#box'); const fit = () => { box.style.width = innerWidth / 2 + 'px'; }; addEventListener('resize', fit); fit();</script>` );
+			<script>const box = document.querySelector('#box'); const fit = () => { box.style.width = innerWidth / 2 + 'px'; };
+			addEventListener('resize', () => { fit(); setTimeout(() => {}, 2000); }); addEventListener('scroll', () => setTimeout(() => {}, 2000)); fit();</script>` );
 		try {
 			const started = performance.now();
 			const result = await learnAndApplyFluidGeometry( page, { widths, settleMs: 800 } );

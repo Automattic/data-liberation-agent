@@ -36,8 +36,10 @@ export interface ViewportWork {
 export function observeViewportWork(): void {
 	const key = Symbol.for( 'data-liberation.viewport-work' );
 	if ( key in window ) return;
-	// Debounces outlast 250–500 ms; a multi-second timeout is not resize work.
-	const MAX_DELAY_MS = 2000;
+	// Debounces outlast 250–500 ms. A longer timeout is runtime bookkeeping
+	// (a gallery's two-second "load more" guard set from its scroll handler),
+	// not resize work; waiting for it costs every sampled width its delay.
+	const MAX_DELAY_MS = 1000;
 	const MAX_GENERATIONS = 4;
 	type Schedule = ( handler: unknown, delay?: number, ...args: unknown[] ) => number;
 	type Cancel = ( id?: number ) => void;
