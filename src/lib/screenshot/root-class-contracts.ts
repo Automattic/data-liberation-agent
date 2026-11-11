@@ -6,7 +6,7 @@ import selectorParser from 'postcss-selector-parser';
 import { parseSelectorList, projectStylesheet } from '../replicate/css-scope.js';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { DEFAULT_SWEEP_WIDTHS } from './fluid-capture.js';
-import { withEvaluateTimeout } from './page-helpers.js';
+import { withEvaluateTimeout, withRootClassesRestored } from './page-helpers.js';
 import { externalScriptSources, inlineRuntimeHash } from './device-mode.js';
 
 // Reuse the fluid ladder's tablet/desktop probes; never pay for its dense
@@ -143,6 +143,10 @@ export async function sampleRootClasses( page: Page, widths: readonly number[] =
 
 /** Undefined distinguishes an unproven ladder from a proven empty verdict. */
 export async function sampleRootClassLadder( page: Page, widths: readonly number[] = ROOT_CLASS_WIDTHS, onUnproven?: ( reason: string ) => void ): Promise<RootClassSample[] | undefined> {
+	return withRootClassesRestored( page, () => sampleLadder( page, widths, onUnproven ) );
+}
+
+async function sampleLadder( page: Page, widths: readonly number[], onUnproven?: ( reason: string ) => void ): Promise<RootClassSample[] | undefined> {
 	const original = page.viewportSize();
 	if ( ! original ) {
 		onUnproven?.( 'root class source probe unproven: no viewport' );
