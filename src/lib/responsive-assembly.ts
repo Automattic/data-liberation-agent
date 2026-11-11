@@ -1600,16 +1600,29 @@ function withVariantLinkedStyles( html: string, mobileHtml: string, media: strin
 	} );
 }
 
+function bodyStylesheetKey( link: cheerio.Cheerio<Element> ): string | undefined {
+	const rel = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
+	if ( ! rel.includes( 'stylesheet' ) || rel.includes( 'alternate' ) || ! link.attr( 'href' ) || link.attr( 'disabled' ) !== undefined ) return undefined;
+	return JSON.stringify( [ link.attr( 'href' ), link.attr( 'media' ) ?? 'all' ] );
+}
+
 /**
  * A stylesheet linked from a document's body applies at every width, even
  * inside a hidden document wrapper. Import each one under its document's width
- * media, as head links from a non-default document already are.
+ * media, as head links from a non-default document already are. Sheets shared
+ * by every document instead keep their original link once in the first body.
  */
-function widthLocalBodyLinks( body: string, media: string ): string {
+function widthLocalBodyLinks( body: string, media: string, shared: ReadonlySet< string >, retainShared = false ): string {
+	const retained = new Set< string >();
 	return body.replace( /<link\b[^>]*>/gi, tag => {
 		const link = cheerio.load( tag, undefined, false )( 'link' );
-		const rel = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
-		if ( ! rel.includes( 'stylesheet' ) || rel.includes( 'alternate' ) || ! link.attr( 'href' ) || link.attr( 'disabled' ) !== undefined ) return tag;
+		const key = bodyStylesheetKey( link );
+		if ( key === undefined ) return tag;
+		if ( shared.has( key ) ) {
+			if ( ! retainShared || retained.has( key ) ) return '';
+			retained.add( key );
+			return tag;
+		}
 		const href = JSON.stringify( link.attr( 'href' ) ).replace( /</g, '\\3c ' );
 		return `<style media="${ escapeHtmlAttr( link.attr( 'media' ) ?? 'all' ) }">@import url(${ href }) ${ media };</style>`;
 	} );
@@ -2031,8 +2044,13 @@ function assembleResponsiveHtml(
 	// The desktop body is replaced below: scope its retained styles just like
 	// the head. Phone styles (including learned rules) have one owner in
 	// responsiveMobileStyles, so none remain in the phone body.
-	desktopBody = widthLocalBodyLinks( scopedStyles( rewrite( desktopBody ), desktopMedia, shared ), desktopMedia );
-	mobileBody = widthLocalBodyLinks( mobileBody.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ), `(max-width:${ switchWidth }px)` );
+	const bodyLinkKeys = [ desktopBody, ...middleDocuments.map( middle => middle.body ), mobileBody ].map( body => {
+		const $ = cheerio.load( body, undefined, false );
+		return new Set( $( 'link' ).toArray().map( node => bodyStylesheetKey( $( node ) ) ).filter( key => key !== undefined ) );
+	} );
+	const sharedBodyLinks = new Set( [ ...bodyLinkKeys[ 0 ] ].filter( key => bodyLinkKeys.every( keys => keys.has( key ) ) ) );
+	desktopBody = widthLocalBodyLinks( scopedStyles( rewrite( desktopBody ), desktopMedia, shared ), desktopMedia, sharedBodyLinks, true );
+	mobileBody = widthLocalBodyLinks( mobileBody.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ), `(max-width:${ switchWidth }px)`, sharedBodyLinks );
 	const sharedBodyClasses = [ ...new Set( documentBodies[ 0 ].classes ) ].filter(
 		( className ) => documentBodies.slice( 1 ).every( body => body.classes.includes( className ) )
 	);
@@ -2053,7 +2071,7 @@ function assembleResponsiveHtml(
 		middle.className,
 		middle.attributes,
 		middle.variables
-	) } data-blocks-engine-capture-document-scope>${ widthLocalBodyLinks( middle.body.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ), middleMedia( middle ) ) }</div>` ).join( '' ) }<div ${ wrapperAttributes(
+	) } data-blocks-engine-capture-document-scope>${ widthLocalBodyLinks( middle.body.replace( /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '' ), middleMedia( middle ), sharedBodyLinks ) }</div>` ).join( '' ) }<div ${ wrapperAttributes(
 		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.attributes ?? '',
 		phone.variables
