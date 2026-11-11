@@ -18,6 +18,7 @@ import { atombioAdapter } from '../adapters/atombio/index.js';
 import { carrdAdapter } from '../adapters/carrd/index.js';
 import { bloggerAdapter } from '../adapters/blogger/index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
+import { dudaAdapter } from '../adapters/duda/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
 import { framerAdapter } from '../adapters/framer/index.js';
 import { gammaAdapter } from '../adapters/gamma/index.js';
@@ -50,6 +51,7 @@ const builtins: Platform[] = [
 	atombioAdapter,
 	bloggerAdapter,
 	carrdAdapter,
+	dudaAdapter,
 	emdashAdapter,
 	framerAdapter,
 	gammaAdapter,
