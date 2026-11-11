@@ -241,7 +241,7 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
  * 60 seconds, 2 MiB per document and 1000 retained routes. Diagnostics describe
  * linked-frontier closure, not unlinked pages or arbitrary runtime navigation.
  */
-export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<SitemapFetchResult> {
+export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps: readonly string[] = []): Promise<SitemapFetchResult> {
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
   let baseOrigin: string;
   try {
@@ -409,6 +409,10 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         break;
       }
     }
+  }
+  // Platform-specific sitemaps supplement rather than replace standard discovery.
+  for (const path of extraSitemaps) {
+    if (await fetchAndParse(new URL(path, baseOrigin).href, 0)) foundSitemap = true;
   }
   if (!foundSitemap) {
     diagnostics.push({

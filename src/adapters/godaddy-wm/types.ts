@@ -1,32 +1,3 @@
-import type { InventoryUrl } from '../shared.js';
-import type { NavLink } from '../../lib/html-extract/index.js';
-
-// ---------------------------------------------------------------------------
-// Adapter-level types
-// ---------------------------------------------------------------------------
-
-export interface GoDaddyWmAdapterOpts extends Record<string, unknown> {
-  delay?: number;
-  resume?: boolean;
-  dryRun?: boolean;
-  verbose?: boolean;
-  outputDir?: string;
-  limit?: number;
-}
-
-export interface GoDaddyWmInventory {
-  siteUrl: string;
-  discoveredAt: string;
-  siteMeta: {
-    title: string;
-    tagline: string;
-    language: string;
-  };
-  navigation: NavLink[];
-  counts: Record<string, number>;
-  urls: InventoryUrl[];
-}
-
 // ---------------------------------------------------------------------------
 // Draft.js interfaces
 // ---------------------------------------------------------------------------

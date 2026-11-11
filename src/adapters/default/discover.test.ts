@@ -129,6 +129,5 @@ describe('discoverDefault', () => {
       `${origin}/aviso-legal`,
       `${origin}/three?ref=footer`,
     ]);
-    expect(inventory.navigation).toContainEqual({ text: 'Resume', href: `${origin}/resume.pdf` });
   });
 });

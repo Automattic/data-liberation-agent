@@ -1,6 +1,8 @@
 import * as cheerio from 'cheerio';
 import { classifyUrl, routeKey } from '../../lib/extraction/sitemap.js';
 import type { InventoryUrl } from '../shared.js';
+import { extractSiteMetadata } from '../site-metadata.js';
+import { extractNavLinks } from '../../lib/html-extract/index.js';
 import { discoverDefault } from '../default/discover.js';
 import { BLOGGER_FEED_REQUESTED_RESULTS, enumerateBloggerPosts } from './feed.js';
 import type { BloggerInventory } from './types.js';
@@ -83,7 +85,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
 	const origin = new URL(normalized).origin;
 	const sitemapMissing = inventory.diagnostics?.some((diagnostic) => diagnostic.code === 'sitemap_missing' || diagnostic.code === 'sitemap_absent') ?? false;
 	const homepageHtml = await fetchHomepage(normalized);
-	let urls = addRoutes(inventory.urls, bloggerListingLinks(homepageHtml, normalized));
+	let urls = addRoutes(inventory.urls.map(entry => ({ ...entry, type: classifyUrl(entry.url) })), bloggerListingLinks(homepageHtml, normalized));
 	const diagnostics = [ ...(inventory.diagnostics ?? []) ];
 	const feed = await enumerateBloggerPosts(origin, { sample: !sitemapMissing });
 	diagnostics.push(...feed.rejected);
@@ -111,6 +113,13 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
 	}
 	return {
 		...inventory,
+		siteUrl: url,
+		discoveredAt: new Date().toISOString(),
+		siteMeta: {
+			...extractSiteMetadata(homepageHtml),
+			language: cheerio.load(homepageHtml)('html').attr('lang') || 'en-US',
+		},
+		navigation: extractNavLinks(homepageHtml, normalized),
 		urls,
 		counts: recount(urls),
 		diagnostics,

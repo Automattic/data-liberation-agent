@@ -1,17 +1,7 @@
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
 
-export interface DefaultAdapterOpts extends Record<string, unknown> {
-  delay?: number;
-  resume?: boolean;
-  dryRun?: boolean;
-  verbose?: boolean;
-  outputDir?: string;
-  limit?: number;
-  /** Render pages in a browser before extracting (default true). false = fetch only. */
-  render?: boolean;
-}
-
+/** Legacy rich inventory retained by specialized discovery (Blogger and tenant sites). */
 export interface DefaultInventory {
   siteUrl: string;
   discoveredAt: string;

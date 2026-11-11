@@ -3,7 +3,6 @@ import { detection } from './detection.js';
 import { discover } from './discover.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 
-export type { HostingerAdapterOpts, HostingerInventory } from './types.js';
 
 // ---------------------------------------------------------------------------
 // The adapter

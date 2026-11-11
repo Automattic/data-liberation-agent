@@ -292,7 +292,7 @@ const defaultDependencies: CaptureDependencies = { findAdapter };
 
 interface CaptureInventory {
 	siteMeta?: { title?: string };
-	urls?: Array< { url: string; type: string } >;
+	urls?: Array< { url: string } >;
 	diagnostics?: Array< { code: string; url: string; reason: string } >;
 }
 
