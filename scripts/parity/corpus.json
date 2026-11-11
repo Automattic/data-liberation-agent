@@ -1,0 +1,12 @@
+[
+  { "url": "https://www.ketatov.com", "platform": "wix", "routeLimit": 5 },
+  { "url": "https://www.lancashireloud.co.uk", "platform": "wix", "routeLimit": 5 },
+  { "url": "https://www.goodworknichols.com", "platform": "squarespace", "routeLimit": 5 },
+  { "url": "https://abcsteelbldg.com", "platform": "godaddy-wm", "routeLimit": 5 },
+  { "url": "https://www.zmission.org", "platform": "weebly", "routeLimit": 5 },
+  { "url": "https://vld-elec.framer.website", "platform": "framer", "routeLimit": 5 },
+  { "url": "https://adamadam.blog", "platform": "unknown", "routeLimit": 5 },
+  { "url": "https://cheesytech.ca", "platform": "unknown", "routeLimit": 5 },
+  { "url": "https://www.kroonsbeautysalon.nl", "platform": "unknown", "routeLimit": 5 },
+  { "url": "https://adriarenas.figma.site", "platform": "unknown", "routeLimit": 5 }
+]
