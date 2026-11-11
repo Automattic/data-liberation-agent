@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { canonicalLinkHref } from './route-aliases.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
 import { withoutPlatformDefaultIcons } from './platform-default-icons.js';
@@ -210,6 +211,7 @@ interface CaptureEntry {
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
+	canonicalLinkUrl?: string;
 	sourceData: SourceDataScript[];
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
@@ -1736,6 +1738,7 @@ function buildExportCapture(
 				...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
 				...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 				sections: entry.sections,
+				canonicalLinkUrl: canonicalMetadataUrl( canonicalLinkHref( desktopHtml, url ), url, options.routeScope ),
 				canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, options.routeScope ),
 				sourceData: sanitized.sourceData,
 				interactions: entry.interactions,

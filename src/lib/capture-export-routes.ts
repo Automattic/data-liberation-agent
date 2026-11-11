@@ -10,6 +10,7 @@ export interface RouteEntry {
 	url: string;
 	htmlPath: string;
 	canonicalUrl?: string;
+	canonicalLinkUrl?: string;
 	sourceData: SourceDataScript[];
 }
 
@@ -331,6 +332,25 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		if ( entry.sourceData.length > 0 ) duplicateSourceData.push( { claimed, sourceData: entry.sourceData } );
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( documentRequestUrl( entry.url ), routePath );
+	}
+	// Different paths do not compete for an output filename. Collapse explicit
+	// canonical links only onto a retained same-origin document; never infer
+	// aliases from social metadata, or drop cycles/chains with no final target.
+	const canonicalTargets = new Map< T, T >();
+	for ( const entry of retained ) {
+		if ( entry.url === entrypointUrl || ! entry.canonicalLinkUrl ) continue;
+		if ( new URL( entry.canonicalLinkUrl ).origin !== new URL( entry.url ).origin ) continue;
+		const target = entryForAddress( entry.canonicalLinkUrl );
+		if ( target && target !== entry && retained.has( target ) ) canonicalTargets.set( entry, target );
+	}
+	for ( const [ entry, target ] of canonicalTargets ) {
+		if ( canonicalTargets.has( target ) ) continue;
+		const routePath = routePathOf( target.url );
+		retained.delete( entry );
+		allocatedPaths.set( entry.url, routePath );
+		duplicateRoutes.push( { url: entry.url, canonicalUrl: target.url, path: `website/${ routePath }` } );
+		canonicalRouteAliases.set( documentRequestUrl( entry.url ), routePath );
+		if ( entry.sourceData.length > 0 ) duplicateSourceData.push( { claimed: target, sourceData: entry.sourceData } );
 	}
 	// Retained pages keep capture order, entrypoint first.
 	const retainedEntries = [

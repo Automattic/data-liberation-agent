@@ -81,6 +81,37 @@ afterEach(() => {
 });
 
 describe('orchestrated HTTP review capture', () => {
+	it('exports path aliases once when their canonical names another captured route', async () => {
+		const { captureWebsite: capture } = await import('../index.js');
+		const outputDir = directory();
+		const canonical = `${url}articles/post`;
+		const alias = `${url}archive/post`;
+		const documents = new Map([
+			[url, `<h1>Home</h1><a href="${alias}">Post</a>`],
+			[alias, '<link rel="canonical" href="/articles/post"><h1>Post</h1>'],
+			[canonical, '<link rel="canonical" href="/articles/post"><h1>Post</h1>'],
+			[`${url}external`, '<link rel="canonical" href="https://elsewhere.test/post"><h1>External canonical</h1>'],
+		]);
+		const originalFetch = vi.mocked(safeFetch).getMockImplementation()!;
+		vi.mocked(safeFetch).mockImplementation(async (target) => ({
+			finalUrl: target, status: 200,
+			headers: new Headers({ 'content-type': 'text/html' }),
+			body: Buffer.from(`<html><head><title>Fixture</title></head><body>${documents.get(target)}</body></html>`),
+		}));
+		const platform = adapter();
+		platform.discover = async () => ({ urls: [...documents.keys()].map(url => ({ url })) });
+		try {
+			const result = await capture({ url, outputDir, acquisition: 'http' }, { findAdapter: () => platform });
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.routes.map((route: { url: string }) => route.url)).toEqual([url, canonical, `${url}external`]);
+			const route = receipt.routes.find((route: { url: string }) => route.url === canonical);
+			expect(receipt.duplicateRoutes).toEqual([{ url: alias, canonicalUrl: canonical, path: route.path }]);
+			expect(existsSync(join(outputDir, 'website/archive/post/index.html'))).toBe(false);
+			expect(readFileSync(join(outputDir, 'website/index.html'), 'utf8')).toContain('href="/articles/post/index.html"');
+		} finally {
+			vi.mocked(safeFetch).mockImplementation(originalFetch);
+		}
+	});
 	it.each([
 		['an empty body', '\n\t<script>track()</script>\n', false],
 		['a lone image', '<img src="https://example.com/sign.png" alt="">', true],
