@@ -130,6 +130,13 @@ describe( 'viewport URL correspondence', () => {
 		} finally { await browser.close(); }
 	} );
 
+	it( 'pairs an image whose srcset renditions differ per viewport', () => {
+		const page = ( rendition: string ) => `<html><body><main><h1>Post</h1></main><aside><div id="Image3"><h2>Ad</h2><img id="Image3_img" src="https://cdn.test/a=s300" srcset="https://cdn.test/a=${ rendition } 1600w"></div></aside></body></html>`;
+		const merged = correspondenceMerge( page( 'w1600' ), page( 's1600' ), 767 );
+		expect( merged ).toBeDefined();
+		expect( cheerio.load( merged!.body )( '#Image3_img' ).length ).toBe( 1 );
+	} );
+
 	it( 'refuses a mobile-only insertion that introduces a unique source id conflict', () => {
 		const desktop = '<body><h1>Home</h1><div id="unique">Desktop</div></body>';
 		const mobile = '<body><h1>Home</h1><nav id="unique">Phone</nav></body>';
