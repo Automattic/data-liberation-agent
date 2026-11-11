@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { bloggerContentIndex } from '../adapters/blogger/template-content.js';
 import { canonicalLinkHref } from './route-aliases.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
@@ -169,6 +170,7 @@ interface ExportBuild {
 }
 
 interface ExportCaptureOptions {
+	bloggerEntries?: import('../adapters/blogger/feed.js').BloggerFeedEntry[];
 	routeScope?: SiteRouteScope;
 	resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
 	input?: HttpExportInput;
@@ -1725,7 +1727,7 @@ function buildExportCapture(
 			const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 			writeFileSync( stagedHtmlPath, html );
 			capturedEntries.push( {
-				slug: entry.slug ?? basename( entry.html, '.html' ),
+				slug: options.bloggerEntries?.find( feed => normalizedUrl( feed.permalink ) === normalizedUrl( url ) )?.slug ?? entry.slug ?? basename( entry.html, '.html' ),
 				url,
 				htmlPath: stagedHtmlPath,
 				evidenceDocuments: [
@@ -2053,6 +2055,11 @@ function buildExportCapture(
 			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 		} );
 	}
+	if ( options.bloggerEntries?.length ) {
+		for ( const term of bloggerContentIndex( options.bloggerEntries, routes ).terms ) {
+			portableRouteLinks.set( documentRequestUrl( term.sourceUrl ), term.path );
+		}
+	}
 	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {
 		if ( portableRouteLinks.has( aliasKey ) ) continue;
 		portableRouteLinks.set( aliasKey, `/${ routePath }` );
@@ -2302,6 +2309,29 @@ function buildExportCapture(
 		if ( interactions >= 0 ) interactionPages[ interactions ] = JSON.parse( renameIdTokens( JSON.stringify( interactionPages[ interactions ] ), stable.ids ) );
 		const scroll = scrollStatesPages.indexOf( entry.scrollStates! );
 		if ( scroll >= 0 ) scrollStatesPages[ scroll ] = JSON.parse( renameIdTokens( JSON.stringify( scrollStatesPages[ scroll ] ), stable.ids ) );
+	}
+	if ( options.bloggerEntries?.length ) {
+		const content = bloggerContentIndex( options.bloggerEntries, routes );
+		for ( const term of content.terms ) {
+			if ( routes.some( route => route.url === term.sourceUrl ) ) continue;
+			const page = cheerio.load( '<!doctype html><html><head><meta charset="utf-8"><title></title></head><body><main><h1></h1><ul></ul></main></body></html>' );
+			page( 'title, h1' ).text( term.name );
+			for ( const post of content.posts.filter( post => post.terms.includes( term.name ) ) ) {
+				const item = page( '<li><a></a></li>' );
+				item.find( 'a' ).attr( 'href', post.path ).text( post.title );
+				page( 'ul' ).append( item );
+			}
+			const file = join( websiteDir, term.path );
+			if ( existsSync( file ) ) continue; // Never replace a captured resource.
+			mkdirSync( dirname( file ), { recursive: true } );
+			writeFileSync( file, page.html() );
+			routes.push( { url: term.sourceUrl, path: `website${ term.path }` } );
+		}
+		writeFileSync( join( websiteDir, 'blogger-content.json' ), JSON.stringify( content, null, 2 ) );
+		for ( const redirect of content.redirects ) {
+			const from = new URL( redirect.from ).pathname;
+			if ( from !== redirect.to && ! portableRedirects.some( rule => rule.from === from ) ) portableRedirects.push( { from, to: redirect.to } );
+		}
 	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );

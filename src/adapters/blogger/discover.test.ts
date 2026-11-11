@@ -247,6 +247,9 @@ describe('Blogger discovery', () => {
 			`${origin}/search/label/FromHome`,
 			`${origin}/p/about.html`,
 		]));
+		expect(inventory.urls.find(entry => entry.url === `${origin}/search/label/Kept`)?.type).toBe('term-archive');
+		expect(inventory.urls.find(entry => entry.url === `${origin}/search/label/FromHome`)?.type).toBe('term-archive');
+		expect(inventory.counts['term-archive']).toBe(2);
 		expect(urls).not.toContain(`${origin}/2020/01/feed-only.html`);
 		expect(urls.some((url) => url.includes('/search/label/Invented'))).toBe(false);
 		expect(fetched.filter((url) => url.includes('/feeds/posts/default'))).toHaveLength(1);

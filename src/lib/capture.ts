@@ -482,12 +482,19 @@ async function runCaptureWebsite(
 		resume: options.resume === true,
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
+	const bloggerFeed = adapter.id === 'blogger'
+		? await ( await import( '../adapters/blogger/feed.js' ) ).enumerateBloggerPosts( new URL( sourceUrl ).origin, { governors: sourceGovernors } )
+		: undefined;
+	const bloggerEntries = bloggerFeed?.entries ?? [];
+	inventory.diagnostics = [ ...( inventory.diagnostics ?? [] ), ...( bloggerFeed?.rejected ?? [] ) ];
 	const sourceRoute = documentRequestUrl( sourceUrl );
 	// Action URLs and declared runtime paths leave before the budget sees them, so they never
 	// spend, and never appear as omitted, failed or missing routes.
 	const excludedActions = new Map< string, { code: string; url: string; reason: string } >();
 	const inventoryUrls = await normalizeDiscoveredRoutes( [
 		sourceUrl,
+		...bloggerEntries.map( entry => entry.permalink ),
+		...[ ...new Set( bloggerEntries.flatMap( entry => entry.labels ) ) ].map( label => new URL( `/search/label/${ encodeURIComponent( label ) }`, sourceUrl ).href ),
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
 			.filter( ( url ) => {
@@ -497,7 +504,10 @@ async function runCaptureWebsite(
 				return ! action;
 			} ),
 	] );
-	const aliasProbe = await probeCanonicalRouteAliases( { sourceUrl, urls: inventoryUrls, routeScope } );
+	// Atom alternate links already declare the post's canonical identity. Do not
+	// fetch every post merely to rediscover that identity before derivation.
+	const feedPermalinks = new Set( bloggerEntries.map( entry => entry.permalink ) );
+	const aliasProbe = await probeCanonicalRouteAliases( { sourceUrl, urls: inventoryUrls.filter( url => ! feedPermalinks.has( url ) ), routeScope } );
 	const aliasKeys = new Set( aliasProbe.aliases.map( ( { url } ) => documentRequestUrl( url ) ) );
 	if ( aliasProbe.aliases.length ) {
 		process.stderr.write( `[capture] canonical route aliases: ${ aliasProbe.aliases.length } of ${ inventoryUrls.length } inventory routes skipped before capture; their rel=canonical is another inventory route (${ aliasProbe.probes } server-HTML probes)\n` );
@@ -515,7 +525,7 @@ async function runCaptureWebsite(
 	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
+		? await groupInventoryTemplates( { bloggerEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
 	// Verification members (#784 §4.2): one per multi-member cluster, kept right
 	// after the representatives so a budget that fits every template also fits
@@ -667,6 +677,7 @@ async function runCaptureWebsite(
 	// its `route_omitted_by_budget` diagnostic.
 	const derivedTemplateClusters = ! sourceGovernors.forOrigin( sourceUrl ).blockedClient && templateClusters && templateGrouping?.report
 		? await deriveTemplateClusterMembers( {
+				bloggerEntries,
 				sourceUrl,
 				outputDir,
 				report: templateGrouping.report,
@@ -771,6 +782,7 @@ async function runCaptureWebsite(
 	}
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
 	const captureReceiptPath = exportWebsiteCapture( {
+		bloggerEntries,
 		outputDir,
 		sourceUrl,
 		platform: detection.platform,
@@ -874,7 +886,7 @@ async function runCaptureWebsite(
  * failure yields one `template_grouping_unavailable` discovery diagnostic and
  * no representatives, so the budget falls back to discovery order.
  */
-async function groupInventoryTemplates( input: { sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
+export async function groupInventoryTemplates( input: { bloggerEntries?: import('../adapters/blogger/feed.js').BloggerFeedEntry[]; sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
 	report?: import('./template-groups.js').TemplateGroupsReport;
 	representatives?: string[];
 	diagnostic?: { code: string; url: string; reason: string };
@@ -882,7 +894,27 @@ async function groupInventoryTemplates( input: { sourceUrl: string; urls: string
 	const startedAt = Date.now();
 	try {
 		const { buildTemplateGroups, templateRepresentatives } = await import( './template-groups.js' );
-		const report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
+		// Feed cohorts are provisional until the ordinary cluster verification
+		// compares their transplanted documents with real browser captures.
+		const feedPosts = new Set( ( input.bloggerEntries ?? [] ).filter( entry => entry.kind === 'post' ).map( entry => entry.permalink ) );
+		const postSamples = input.urls.filter( url => feedPosts.has( url ) ).slice( 0, 2 );
+		const groupingUrls = input.urls.filter( url => ! feedPosts.has( url ) || postSamples.includes( url ) );
+		let report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: groupingUrls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
+		const cohort = report.groups.find( group => postSamples.length === 2 && postSamples.every( url => group.members.includes( url ) ) );
+		if ( ! cohort && groupingUrls.length !== input.urls.length ) {
+			report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, styleNormalization: input.styleNormalization } );
+		}
+		if ( cohort ) {
+			cohort.representative = postSamples[ 0 ]!;
+			for ( const url of input.urls ) {
+				if ( feedPosts.has( url ) && ! cohort.members.includes( url ) ) {
+					cohort.members.push( url );
+					cohort.size++;
+					report.coverage.routes++;
+					report.coverage.fingerprinted++;
+				}
+			}
+		}
 		const { coverage } = report;
 		process.stderr.write( `[template-groups] ${ coverage.routes } routes: ${ coverage.fingerprinted } fingerprinted into ${ coverage.groups } groups (${ coverage.singletons } singletons), ${ coverage.unfingerprinted } unfingerprinted, ${ report.throttle.events } throttle events, ${ Date.now() - startedAt }ms\n` );
 		const source = input.governors.forOrigin( input.sourceUrl ).stats();
@@ -967,7 +999,8 @@ export interface TemplateClusterDerivation {
  * member without a derived phone document ships desktop-only. The mobile
  * transplant (§3.1 step 4) is remaining phase-1 work.
  */
-async function deriveTemplateClusterMembers( input: {
+export async function deriveTemplateClusterMembers( input: {
+	bloggerEntries?: import('../adapters/blogger/feed.js').BloggerFeedEntry[];
 	sourceUrl: string;
 	outputDir: string;
 	report: import('./template-groups.js').TemplateGroupsReport;
@@ -986,6 +1019,8 @@ async function deriveTemplateClusterMembers( input: {
 	const { ManifestQueue } = await import( './screenshot/manifest-queue.js' );
 	const { slugify } = await import( './url/index.js' );
 
+	const { feedBodyEquivalent, feedMemberDocument } = await import( '../adapters/blogger/template-content.js' );
+	const feedEntries = new Map( ( input.bloggerEntries ?? [] ).map( entry => [ normalizedUrl( entry.permalink ), entry ] ) );
 	const diagnostics: RouteDiagnostic[] = [];
 	const clusters: import('./template-clusters.js').TemplateClusterRecord[] = [];
 	const derivedUrls: string[] = [];
@@ -1077,9 +1112,11 @@ async function deriveTemplateClusterMembers( input: {
 			}
 			const startedAt = Date.now();
 			try {
-				const repFetch = await safeFetch( group.representative, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } );
+				const repFetch = await safeFetch( group.representative, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
 				const repServerHtml = repFetch.body.toString( 'utf8' );
 				const repProcessedHtml = readFileSync( repHtmlPath, 'utf8' );
+				const repFeed = feedEntries.get( normalizedUrl( group.representative ) );
+				let feedVerified = Boolean( repFeed && feedBodyEquivalent( repProcessedHtml, repFeed ) );
 				// A dual-device representative has a phone document too; export merges
 				// the two, so each member is derived from both.
 				const repMobilePath = repEntry.mobileHtml ? resolve( input.outputDir, repEntry.mobileHtml ) : undefined;
@@ -1101,7 +1138,7 @@ async function deriveTemplateClusterMembers( input: {
 				// scored. Preferred verification members are already in the budget.
 				const capturedMembers = group.members
 					.filter( url => url !== group.representative && isCaptured( url ) && ! derivedUrls.includes( url ) )
-					.sort( ( a, b ) => a.localeCompare( b ) );
+					.sort( ( a, b ) => Number( feedEntries.has( normalizedUrl( b ) ) ) - Number( feedEntries.has( normalizedUrl( a ) ) ) || a.localeCompare( b ) );
 				const verificationUrl = capturedMembers[ 0 ] ?? members[ 0 ];
 				const verificationCaptured = verificationUrl !== undefined &&
 					isCaptured( verificationUrl );
@@ -1112,11 +1149,20 @@ async function deriveTemplateClusterMembers( input: {
 				if ( verificationCaptured ) {
 					const realEntry = capturedEntry( verificationUrl )!;
 					const realHtml = readFileSync( resolve( input.outputDir, realEntry.html! ), 'utf8' );
-					const memberFetch = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } );
-					const derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberFetch.body.toString( 'utf8' ), baseUrl: group.representative } );
+					const verificationFeed = feedEntries.get( normalizedUrl( verificationUrl ) );
+					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
+					const feedHtml = feedVerified && repFeed && verificationFeed ? feedMemberDocument( repServerHtml, repFeed, verificationFeed ) : undefined;
+					const memberHtml = feedHtml ?? ( await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ) ).body.toString( 'utf8' );
+					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative } );
+					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } ).equal ) ) {
+						feedVerified = false;
+						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: 'feed template verification mismatch; using governed page acquisition for this cluster' } );
+						const fallback = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
+						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: fallback.body.toString( 'utf8' ), baseUrl: group.representative } );
+					}
 					if ( derivation.ok ) {
 						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } );
-						verificationRecord = { url: verificationUrl, captured: true, checks: comparison.checks, equal: comparison.equal };
+						verificationRecord = { url: verificationUrl, captured: true, checks: { ...comparison.checks, ...( repFeed ? { feedBody: feedVerified } : {} ) }, equal: comparison.equal };
 						verified = comparison.equal;
 						if ( ! comparison.equal ) {
 							const failing = Object.entries( comparison.checks ).filter( ( [ , ok ] ) => ! ok ).map( ( [ name ] ) => name ).join( ', ' );
@@ -1133,8 +1179,10 @@ async function deriveTemplateClusterMembers( input: {
 				if ( ! verified ) clusterFailed = true;
 
 				for ( const url of members ) {
-					if ( clusterFailed || derivedInCluster >= TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes ) break;
-					const response = await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs } ).catch( ( error: unknown ) => {
+					if ( clusterFailed || derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
+					const memberFeed = feedEntries.get( normalizedUrl( url ) );
+					const feedHtml = feedVerified && repFeed && memberFeed ? feedMemberDocument( repServerHtml, repFeed, memberFeed ) : undefined;
+					const response = feedHtml ? { status: 200, body: Buffer.from( feedHtml ) } : await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ).catch( ( error: unknown ) => {
 						record.unavailable.push( { url, reason: String( ( error as Error ).message ?? error ) } );
 						unavailableCount++;
 						return undefined;
@@ -1172,7 +1220,7 @@ async function deriveTemplateClusterMembers( input: {
 						memberMobilePath = `screenshots/derived/${ slugify( url ) }.mobile.html`;
 						writeFileSync( resolve( input.outputDir, memberMobilePath ), mobileDerivation.html );
 					}
-					const slug = await queue.claimSlug( slugify( url ) );
+					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
 					const repProfile = repEntry.profiles?.desktop;
 					const repMobileProfile = memberMobilePath ? repEntry.profiles?.mobile : undefined;
