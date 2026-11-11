@@ -3,145 +3,14 @@
 //
 // Four verbs: inspect a source, liberate a site, verify the copy, publish it.
 //
-import { createRequire } from 'node:module';
-import { resolveOutputBase } from './lib/paths.js';
+import { HELP, version, parseCliOptions } from './options.js';
 import { loadExternalPlatforms } from './platform/load-external.js';
 
 const args = process.argv.slice(2);
-const version = ( createRequire( import.meta.url )( '../package.json' ) as { version: string } )
-  .version;
-
-function getArg(name: string): string | null {
-  const i = args.indexOf(name);
-  if (i === -1) return null;
-  const val = args[i + 1];
-  if (val === undefined || val.startsWith('--')) return null;
-  return val;
-}
-
 const SUBCOMMANDS = ['inspect', 'compare', 'publish', 'mcp'];
-
 function isParseableUrl(candidate: string): boolean {
-  try {
-    new URL(candidate);
-    return true;
-  } catch {
-    return false;
-  }
+  try { new URL(candidate); return true; } catch { return false; }
 }
-
-const HELP = `
-  data-liberation — Liberate any website into a complete, portable HTML site
-
-  Usage:
-    data-liberation <url>              Liberate a website into a portable HTML site
-    data-liberation inspect <url>      Assess a source without writing a site
-    data-liberation compare <dir>      Verify a liberated copy against its source
-    data-liberation publish <dir>      Publish a liberated site (--to spacefast)
-    data-liberation mcp                Start MCP server (stdio transport)
-    data-liberation --version          Show version
-
-  Liberate options:
-    --acquisition <mode> browser (default), or http for an unverified review candidate
-    --trusted-origin <url>  Vouch for an origin you own, e.g. http://localhost:8884,
-                         so capture can run against a site served on this machine
-                         (a local WordPress site, wp-env, Local). Repeatable. Exact
-                         origin match (scheme, host, port); redirects to any other
-                         internal host stay blocked. Without it, loopback and private
-                         hosts are refused
-    --route-limit <n|all> Capture at most n routes, homepage included: the
-                         homepage plus an even spread of the rest, linked pages
-                         counted (browser default: 17-minute time window; http default all). Omitted
-                         routes are diagnosed and counted, never failed.
-    --route-selection <mode> How the route budget picks routes: discovery-order
-                         (default, the even spread) or template-coverage (fetch
-                         each route's server HTML, keep one route per template
-                         group first; writes template-groups.json).
-    --template-clusters  Opt-in template-clustered capture (#784): group routes
-                         by template, keep representatives plus one verification
-                         member in the budget, and derive every other member of
-                         a verified cluster by transplanting its HTTP content
-                         into the representative's capture. Derived routes are
-                         reported as losses (route_template_derived) and frozen
-                         comparison lists them as uncompared scope.
-    --runtime-route-limit <n> Observe HTTP runtime regions on at most n routes (0-50)
-    --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
-    --resume             Reuse artifacts already on disk instead of recapturing
-    --checkpoint         Defer export while time-budget-skipped routes remain
-    --screenshots        Also capture full-page + scrolled PNG screenshots
-    --serve              Keep a local server running on the liberated site until
-                         interrupted, for browsing it. Liberation writes the site
-                         and exits without this.
-    --no-learn-fluid     Skip the width sweep and freeze the layout at one width.
-    --reference-sample <n|all>  Freeze baseline reference evidence for the
-                         homepage plus n-1 sampled routes (default 1: homepage
-                         only), or every route with "all" for full-route parity.
-                         Unsampled routes skip reference navigation; compare
-                         reports them as uncompared scope instead of failing them.
-    --time-budget <duration>  Stop starting routes and export what was captured
-                         when this much time has passed, e.g. 13m, 780s (bare
-                         numbers are ms). Default: 17m unless --route-limit is set.
-                         Unadmitted routes are route_omitted_by_budget; abandoned
-                         routes are route_capture_skipped_budget. Set to your deadline
-                         minus post-capture headroom. Browser capture only.
-    --route-deadline <duration>  Bound each route, e.g. 30s; optional probe phases
-                         receive smaller wall-clock budgets within this deadline.
-    --route-reserve <duration>  Hold this much of the time budget per started
-                         route for downstream work, e.g. 8s (your measured
-                         per-route build cost). Admission closes so every
-                         started route still leaves its reserve unspent; routes
-                         left out are route_capture_skipped_budget, with the
-                         reserve named in the reason. No effect without a time
-                         budget. Browser capture only.
-    --max-file-bytes <n> Largest file exported into the site (default 52428800,
-                         50 MiB). Larger assets are not written and are reported
-                         as asset_exceeds_file_limit.
-    --max-total-bytes <n> Most bytes exported into the site, every file counted
-                         (default 262144000, 250 MiB). Over it, assets the
-                         entrypoint does not need are dropped largest first,
-                         fonts last, then non-entry routes; reported as
-                         asset_exceeds_total_budget / route_exceeds_total_budget.
-    --max-files <n>      Most files exported into the site (default 5000),
-                         enforced like --max-total-bytes.
-    --device-mode <mode> auto (default) captures each route once, at desktop,
-                         when the homepage serves phones the same HTML and DOM
-                         (the phone layout is CSS reflow); otherwise it also
-                         captures a phone document. dual always captures both;
-                         reflow-only always captures desktop only.
-    --portable-motion <json>  Author a portable runtime from pinned independent
-                         scripts and verify it against the live source before export.
-                         Learning is on by default: it keeps the copy reflowing
-                         like the source instead of pinning it to the capture width.
-
-  Compare options:
-    --screenshots        Write source/liberated/diff PNGs as evidence. Pixel score
-                         never decides pass/fail.
-    --stage <stage>      capture (default), materialization, or live-source drift
-    --profiles <ids>     Frozen document identities, comma-separated; default all declared cells
-    --candidate <url>    Compare the portable capture to another rendered copy.
-    --motion-contract <json>  With --stage drift --candidate, verify source/candidate
-                          text, canvas-pointer and click behavior at named widths.
-
-  Inspect options:
-    --http-only           Skip rendered observations; complexity remains unknown
-    --discovery-limit <n>  Maximum routes inventoried (1-100, default: 50)
-    --sample-limit <n>     Maximum routes fetched for observations (1-10, default: 5)
-    --request-timeout <ms> Per-request timeout (1000-30000, default: 10000)
-    --overall-timeout <ms> Total inspection timeout (1000-60000, default: 30000)
-
-  Publish options:
-    --to <target>        Where to publish. Targets: spacefast (default)
-    --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
-                         Without it the publish is anonymous and returns a claim link.
-    --space <id>         Add a version to an existing space instead of creating
-                         one: the space id from an earlier publish. For an owned
-                         space keep --token; for an anonymous one pass its claim
-                         key as --token.
-
-  Environment:
-    DLA_OUTPUT_DIR       Default output base directory
-    SPACEFAST_TOKEN      Publish token for the spacefast target
-`;
 
 try {
 await main();
@@ -169,53 +38,18 @@ if (args.includes('--help')) {
 } else if (args[0] === '--version') {
   console.log(version);
 } else if (args[0] === 'compare') {
-  const directory = args[1];
-  if (!directory || directory.startsWith('-')) {
-    console.error('Error: directory required. Usage: data-liberation compare <dir> [--screenshots] [--candidate <url>]');
-    process.exit(1);
-  }
-  const candidateIndex = args.indexOf('--candidate');
-  const candidateUrl = candidateIndex === -1 ? undefined : args[candidateIndex + 1];
-  if (candidateIndex !== -1 && (!candidateUrl || candidateUrl.startsWith('-'))) {
-    console.error('Error: --candidate requires a URL.');
-    process.exit(1);
-  }
-  const motionIndex = args.indexOf('--motion-contract');
-  const motionPath = motionIndex === -1 ? undefined : args[motionIndex + 1];
-  if (motionIndex !== -1 && (!motionPath || motionPath.startsWith('-'))) {
-    console.error('Error: --motion-contract requires a JSON file.');
-    process.exit(1);
-  }
-  const motionContract = motionPath ? JSON.parse((await import('node:fs')).readFileSync(motionPath, 'utf8')) : undefined;
+  const { positional: directory, options } = parseCliOptions('compare', args.slice(1));
+  if (!directory) throw new Error('directory required. Usage: data-liberation compare <dir>');
   const { runCompare } = await import('./ui/compare.js');
-  const stageIndex = args.indexOf('--stage');
-  const stage = stageIndex === -1 ? undefined : args[stageIndex + 1];
-  if ((stage !== undefined && !['capture', 'materialization', 'drift'].includes(stage)) || (stageIndex !== -1 && !stage)) throw new Error('--stage requires capture, materialization or drift');
-  const profileArgument = getArg('--profiles');
-  if (args.includes('--profiles') && !profileArgument) throw new Error('--profiles requires comma-separated document identities');
-  const profiles = profileArgument?.split(',').map(value => value.trim());
-  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl, motionContract, profiles, stage: stage as import('./lib/fidelity/reference.js').FidelityStage | undefined });
+  const report = await runCompare(directory, options);
   process.exit(report.pass ? 0 : 1);
 } else if (args[0] === 'inspect') {
-  const url = args[1];
-  if (!url || url.startsWith('-')) {
-    console.error('Error: URL required. Usage: data-liberation inspect <url>');
-    process.exit(1);
-  }
-  const inspectNumber = (name: string): number | undefined => {
-    if (!args.includes(name)) return undefined;
-    const value = getArg(name);
-    if (value === null) throw new Error(`${name} requires a value`);
-    return Number(value);
-  };
+  const { positional: url, options } = parseCliOptions('inspect', args.slice(1));
+  if (!url) throw new Error('URL required. Usage: data-liberation inspect <url>');
   try {
     const { inspectSource } = await import('./lib/inspect.js');
     const result = await inspectSource(url, {
-      rendered: !args.includes('--http-only'),
-      discoveryLimit: inspectNumber('--discovery-limit'),
-      sampleLimit: inspectNumber('--sample-limit'),
-      requestTimeoutMs: inspectNumber('--request-timeout'),
-      overallTimeoutMs: inspectNumber('--overall-timeout'),
+      ...options,
       log: (message) => process.stderr.write(`${message}\n`),
     });
     console.log(JSON.stringify(result, null, 2));
@@ -224,20 +58,15 @@ if (args.includes('--help')) {
     process.exit(1);
   }
 } else if (args[0] === 'publish') {
-  const directory = args[1];
-  if (!directory || directory.startsWith('-')) {
-    console.error('Error: directory required. Usage: data-liberation publish <dir> [--to <target>]');
-    process.exit(1);
-  }
+  const { positional: directory, options } = parseCliOptions('publish', args.slice(1));
+  if (!directory) throw new Error('directory required. Usage: data-liberation publish <dir>');
 
   const { publishSite } = await import('./ui/publish.js');
   const { PublishError } = await import('./lib/publish/index.js');
   try {
     const result = await publishSite({
       directory,
-      target: getArg('--to') ?? 'spacefast',
-      token: getArg('--token') ?? process.env.SPACEFAST_TOKEN ?? undefined,
-      space: getArg('--space') ?? undefined,
+      ...options as { target: string; token?: string; space?: string },
       log: (message) => process.stderr.write(`${message}\n`),
     });
 
@@ -277,7 +106,7 @@ if (args.includes('--help')) {
 } else {
   // A bare URL means full-site HTML liberation: every retained route becomes a
   // portable local site that runs on its own.
-  const url = args.find((a: string) => !a.startsWith('-'));
+  const { positional: url, options } = parseCliOptions('liberate', args);
   if (!url) {
     console.error('Error: URL required. Run with --help for usage.');
     process.exit(1);
@@ -290,94 +119,10 @@ if (args.includes('--help')) {
   }
 
   const { liberateSite } = await import('./ui/liberate.js');
-  const portablePath = getArg('--portable-motion');
-  if (args.includes('--portable-motion') && !portablePath) {
-    console.error('Error: --portable-motion requires a JSON recipe file.');
-    process.exit(1);
-  }
-  const portableMotion = portablePath ? JSON.parse((await import('node:fs')).readFileSync(portablePath, 'utf8')) : undefined;
-  const acquisition = getArg('--acquisition') ?? undefined;
-  if (args.includes('--acquisition') && !acquisition) throw new Error('--acquisition requires browser or http');
-  const trustedOrigins: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] !== '--trusted-origin') continue;
-    const value = args[i + 1];
-    if (value === undefined || value.startsWith('--')) throw new Error('--trusted-origin requires an origin URL, e.g. http://localhost:8884');
-    trustedOrigins.push(value);
-  }
-  const httpNumber = (name: string) => {
-    if (!args.includes(name)) return undefined;
-    const value = getArg(name);
-    if (value === null) throw new Error(`${name} requires an integer`);
-    return Number(value);
-  };
-  const routeLimitArg = args.includes('--route-limit') ? getArg('--route-limit') : undefined;
-  const routeLimit = routeLimitArg === undefined ? undefined : routeLimitArg === 'all' ? 'all' as const : Number(routeLimitArg);
-  if (routeLimitArg !== undefined && routeLimit !== 'all' && (routeLimitArg === null || !Number.isSafeInteger(routeLimit) || (routeLimit as number) < 1)) {
-    throw new Error('--route-limit requires a positive integer or "all"');
-  }
-  const routeSelection = args.includes('--route-selection') ? getArg('--route-selection') : undefined;
-  if (routeSelection !== undefined && routeSelection !== 'discovery-order' && routeSelection !== 'template-coverage') {
-    throw new Error('--route-selection requires discovery-order or template-coverage');
-  }
-  const templateClusters = args.includes('--template-clusters');
-  const runtimeRouteLimit = httpNumber('--runtime-route-limit');
-  const referenceSampleArg = args.includes('--reference-sample') ? getArg('--reference-sample') : undefined;
-  const referenceSample = referenceSampleArg === undefined ? undefined : referenceSampleArg === 'all' ? 'all' as const : Number(referenceSampleArg);
-  if (referenceSampleArg !== undefined && referenceSample !== 'all' && (referenceSampleArg === null || !Number.isInteger(referenceSample) || (referenceSample as number) < 1)) {
-    throw new Error('--reference-sample requires a positive integer or "all"');
-  }
-  const timeBudgetArg = args.includes('--time-budget') ? getArg('--time-budget') : undefined;
-  const { parseDurationMs } = await import('./lib/duration.js');
-  const timeBudgetMs = timeBudgetArg === undefined ? undefined : parseDurationMs(timeBudgetArg ?? '');
-  if (timeBudgetArg !== undefined && timeBudgetMs === undefined) throw new Error('--time-budget requires a positive duration such as 13m, 780s or 780000ms');
-  const routeDeadlineArg = args.includes('--route-deadline') ? getArg('--route-deadline') : undefined;
-  const routeDeadlineMs = routeDeadlineArg === undefined ? undefined : parseDurationMs(routeDeadlineArg ?? '');
-  if (routeDeadlineArg !== undefined && routeDeadlineMs === undefined) throw new Error('--route-deadline requires a positive duration such as 30s or 30000ms');
-  const routeReserveArg = args.includes('--route-reserve') ? getArg('--route-reserve') : undefined;
-  const routeReserveMs = routeReserveArg === undefined ? undefined : parseDurationMs(routeReserveArg ?? '');
-  if (routeReserveArg !== undefined && routeReserveMs === undefined) throw new Error('--route-reserve requires a positive duration such as 8s, 5m or 8000ms');
-  const maxFileBytesArg = args.includes('--max-file-bytes') ? getArg('--max-file-bytes') : undefined;
-  const maxFileBytes = maxFileBytesArg === undefined ? undefined : Number(maxFileBytesArg);
-  if (maxFileBytesArg !== undefined && (maxFileBytesArg === null || !Number.isSafeInteger(maxFileBytes) || (maxFileBytes as number) < 1)) {
-    throw new Error('--max-file-bytes requires a positive integer');
-  }
-  const deviceMode = args.includes('--device-mode') ? getArg('--device-mode') : undefined;
-  if (deviceMode !== undefined && deviceMode !== 'auto' && deviceMode !== 'dual' && deviceMode !== 'reflow-only') {
-    throw new Error('--device-mode requires auto, dual or reflow-only');
-  }
-  const positiveIntegerArg = (name: string): number | undefined => {
-    const value = args.includes(name) ? getArg(name) : undefined;
-    if (value === undefined) return undefined;
-    const parsed = Number(value);
-    if (value === null || !Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} requires a positive integer`);
-    return parsed;
-  };
-  const maxTotalBytes = positiveIntegerArg('--max-total-bytes');
-  const maxFiles = positiveIntegerArg('--max-files');
+  const { acquisition } = options;
   const result = await liberateSite({
-    acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
-    trustedOrigins,
-    http: acquisition === 'http' || runtimeRouteLimit !== undefined ? {runtimeRouteLimit} : undefined,
-    routeLimit,
-    routeSelection,
-    templateClusters,
+    ...options as Omit<Parameters<typeof liberateSite>[0], 'url'>,
     url,
-    outputBase: getArg('--output') || resolveOutputBase(),
-    resume: args.includes('--resume'),
-    checkpoint: args.includes('--checkpoint'),
-    screenshots: args.includes('--screenshots'),
-    learnFluid: !args.includes('--no-learn-fluid'),
-    referenceSample,
-    timeBudgetMs,
-    routeReserveMs,
-    routeDeadlineMs,
-    maxFileBytes,
-    maxTotalBytes,
-    maxFiles,
-    deviceMode,
-    portableMotion,
-    serve: args.includes('--serve'),
     log: (message) => process.stderr.write(`${message}\n`),
   });
 
