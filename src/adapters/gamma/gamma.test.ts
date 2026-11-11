@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { detectFromResponse } from '../../lib/detect-platform/detect-platform.js';
 import { resolvePlatform } from '../../index.js';
+import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
+import { applyCaptureRemovals } from '../../lib/screenshot/apply-removals.js';
 import { nextjsAdapter } from '../nextjs/index.js';
 import { gammaAdapter } from './index.js';
 
@@ -21,6 +23,8 @@ function gammaPage( videoNodes: object[], renderedVideos = videoNodes.length ): 
 		<nav><a href="#card-alpha" data-export-link="https://gamma.app/docs/abc#card-alpha">First</a>
 		<a href="#card-beta" data-export-link="https://gamma.app/docs/abc#card-beta">Second</a></nav>
 		<div class="ProseMirror">
+			<div class="css-badge" style="position:fixed;bottom:0"><div role="group" class="chakra-button__group"><a target="_blank" class="chakra-link chakra-button" href="https://gamma.app" data-id="made-with-gamma-btn">Made with <div><div><svg viewBox="0 0 1111 192"><path d="M0 0h1111v192H0z" /></svg></div></div></a></div></div>
+			<div contenteditable="false" class="card-divider" data-editor-chrome="" data-is-nested-card="false" data-print-hidden="true" data-id="card-divider" style="display:none"><button>Insert section</button><button>Add from template</button></div>
 			<div class="node-card"><div class="card-wrapper" data-card-id="alpha" data-card-scroll-element="true"><p>First</p></div></div>
 			<div class="node-card"><div class="card-wrapper" data-card-id="unlinked" data-card-scroll-element="true"><p>Unlinked</p></div></div>
 			<div class="node-card"><div class="card-wrapper" data-card-id="beta" data-card-scroll-element="true"><p>Second</p>
@@ -56,6 +60,19 @@ describe( 'gamma platform', () => {
 		expect( gammaAdapter.liberation?.removeSelectors ).toContain( '[data-testid="media-placeholder"]' );
 		expect( gammaAdapter.liberation?.clientErrorShellSelectors ).toEqual( nextjsAdapter.liberation?.clientErrorShellSelectors );
 		expect( gammaAdapter.resolveImageOriginal?.( 'https://site.test/_next/image?url=%2Fphoto.jpg&w=640' ) ).toBe( 'https://site.test/photo.jpg' );
+	} );
+
+	it( 'removes the nested Gamma badge wrapper and editor chrome, retaining card content', async () => {
+		const page = await prepared( gammaPage( [] ) );
+		try {
+			await applyCaptureRemovals( page, { removeSelectors: gammaAdapter.liberation?.removeSelectors, ctx: { url: 'https://fixture.test/', viewport: 'desktop' } } );
+			const report = await applySourceCleanup( page, cleanupPolicy( gammaAdapter.liberation?.cleanupRules ) );
+			expect( await page.locator( '[data-id="made-with-gamma-btn"], .css-badge, .chakra-button__group' ).count() ).toBe( 0 );
+			expect( await page.locator( '[data-editor-chrome], .card-divider' ).count() ).toBe( 0 );
+			expect( await page.locator( '.card-wrapper' ).allTextContents() ).toEqual( [ 'First', 'Unlinked', expect.stringContaining( 'Second' ) ] );
+			expect( report.records ).toContainEqual( expect.objectContaining( { rule: 'gamma-badge', category: 'source-attribution', action: 'remove' } ) );
+			expect( report.failures ).toEqual( [] );
+		} finally { await page.close(); }
 	} );
 
 	it( 'gives each linked card the id its section links name, so they scroll without Gamma', async () => {
