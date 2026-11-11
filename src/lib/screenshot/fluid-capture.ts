@@ -154,7 +154,7 @@ export type FluidSeriesMemo = Map< string, ReadonlyMap< string, readonly Geometr
 
 function reuseSweptSeries(
 	observations: ReadonlyMap< string, readonly GeometrySample[] >,
-	keyOf: ( id: string ) => string,
+	keyOf: ( id: string ) => string | null,
 	memo: FluidSeriesMemo
 ): Map< string, GeometrySample[] > {
 	const properties = new Map< string, number >();
@@ -166,7 +166,8 @@ function reuseSweptSeries(
 	const unexplained = new Set< string >();
 	for ( const [ key, probed ] of observations ) {
 		const id = key.slice( 0, key.indexOf( ':' ) );
-		const stored = memo.get( keyOf( id ) );
+		const signature = keyOf( id );
+		const stored = signature === null ? undefined : memo.get( signature );
 		const series = stored?.get( key.slice( id.length + 1 ) );
 		if ( ! stored || ! series || stored.size !== properties.get( id ) ) {
 			unexplained.add( id );
@@ -403,7 +404,8 @@ async function learnFluidGeometry(
 	await restoreLoadTimeSheets( page );
 	await bindRuntimeSheets( page );
 	// The element path up to its nearest identified ancestor, with sibling
-	// position; a signature two tagged elements share cannot key a reuse.
+	// position. A signature two tagged elements share (repeated components
+	// reusing one id) cannot key a reuse: only those elements are left out.
 	const signatures = adaptive && options.memo ? await baseline.evaluate( ( state, attribute ) => {
 		const step = ( node: Element ) => {
 			const position = node.parentElement ? [ ...node.parentElement.children ].filter( sibling => sibling.tagName === node.tagName ).indexOf( node ) : 0;
@@ -421,9 +423,12 @@ async function learnFluidGeometry(
 			}
 			byId[ element.getAttribute( attribute )! ] = path.join( '<' );
 		}
-		return new Set( Object.values( byId ) ).size === Object.keys( byId ).length ? byId : null;
+		const counts = new Map< string, number >();
+		for ( const signature of Object.values( byId ) ) counts.set( signature, ( counts.get( signature ) ?? 0 ) + 1 );
+		for ( const [ id, signature ] of Object.entries( byId ) ) if ( counts.get( signature )! > 1 ) delete byId[ id ];
+		return byId;
 	}, ID_ATTRIBUTE ) : null;
-	const memoKey = ( id: string ) => `${ options.document ?? '' }|${ signatures![ id ] }`;
+	const memoKey = ( id: string ) => signatures?.[ id ] === undefined ? null : `${ options.document ?? '' }|${ signatures[ id ] }`;
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
@@ -621,9 +626,11 @@ async function learnFluidGeometry(
 			const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
 			for ( const [ key, samples ] of observations ) {
 				const id = key.slice( 0, key.indexOf( ':' ) );
-				const series = byElement.get( memoKey( id ) ) ?? new Map();
+				const signature = memoKey( id );
+				if ( signature === null ) continue;
+				const series = byElement.get( signature ) ?? new Map();
 				series.set( key.slice( id.length + 1 ), samples.map( sample => ( { ...sample } ) ) );
-				byElement.set( memoKey( id ), series );
+				byElement.set( signature, series );
 			}
 			for ( const [ key, series ] of byElement ) memo.set( key, series );
 		}
