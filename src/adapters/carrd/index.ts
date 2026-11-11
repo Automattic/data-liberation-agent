@@ -58,6 +58,10 @@ const prepare: NonNullable<LiberationHooks['prepare']> = async (page, ctx) => {
 			section.style.setProperty('visibility', 'visible', 'important');
 		}
 		if (selected.dataset.title) document.title = selected.dataset.title;
+		// Carrd's router follows every section switch with a resize so its
+		// scroll events re-measure the shown section and play its on-visible
+		// effects; without it they keep their rewound state.
+		dispatchEvent(new Event('resize'));
 	}, { url: ctx.url, selector: sectionSelector });
 };
 
