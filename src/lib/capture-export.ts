@@ -65,6 +65,7 @@ import { wireCapturedComponents } from './static-components.js';
 import { routeComponents, componentReplayStates } from './screenshot/component-states.js';
 import { wireNativeViewTimelines } from './native-view-timelines.js';
 import { wireNativeControlState } from './native-control-state.js';
+import { indexRuntimeIdReferences } from './runtime-id-references.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
@@ -639,7 +640,7 @@ function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?:
  */
 export function canonicalizeUnreferencedRuntimeIds(
 	html: string,
-	externalTexts: readonly string[] = []
+	isExternallyReferenced: ( id: string ) => boolean = () => false
 ): { html: string; ids: Map< string, string > } {
 	const ids = new Map< string, string >();
 	if ( ! YUI_RUNTIME_ID.test( html ) ) return { html, ids };
@@ -652,7 +653,7 @@ export function canonicalizeUnreferencedRuntimeIds(
 	const taken = new Set( declared.keys() );
 	$( '[id]' ).each( ( _index, node ) => {
 		const id = $( node ).attr( 'id' ) ?? '';
-		if ( ! isYuiRuntimeId( id ) || declared.get( id ) !== 1 || externalTexts.some( ( text ) => text.includes( id ) ) ) return;
+		if ( ! isYuiRuntimeId( id ) || declared.get( id ) !== 1 || isExternallyReferenced( id ) ) return;
 		const segments: string[] = [];
 		let element: Element | null = node;
 		while ( element ) {
@@ -2286,11 +2287,11 @@ function buildExportCapture(
 	}
 	projectPortableResourceIntegrity( websiteDir, resourceStage.sourceHashesByPortablePath );
 	const portableTexts = portableTextReferences( websiteDir );
-	if ( portableTexts ) for ( const entry of retainedEntries ) {
+	const externallyReferenced = portableTexts && indexRuntimeIdReferences( portableTexts );
+	if ( portableTexts && externallyReferenced ) for ( const entry of retainedEntries ) {
 		const path = join( websiteDir, routePathOf( entry.url ) );
 		const html = readFileSync( path, 'utf8' );
-		const externalTexts = portableTexts.filter( ( item ) => item.path !== path ).map( ( item ) => item.text );
-		const stable = canonicalizeUnreferencedRuntimeIds( html, externalTexts );
+		const stable = canonicalizeUnreferencedRuntimeIds( html, id => externallyReferenced( id, path ) );
 		if ( ! stable.ids.size ) continue;
 		writeFileSync( path, stable.html );
 		// Interaction evidence names the same elements; keep it in step.

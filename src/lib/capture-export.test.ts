@@ -38,6 +38,36 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'audits runtime IDs without searching every other document for each ID', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-id-work-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ) );
+		const sourceUrl = 'https://example.test/';
+		const entries = Object.fromEntries( Array.from( { length: 16 }, ( _, page ) => {
+			const html = `html/${ page }.html`;
+			writeFileSync( join( outputDir, html ), `<html><body><main><h1>Page ${ page }</h1>${ Array.from( { length: 16 }, ( _, item ) => `<p id="yui_${ page }_${ item }">Content</p>` ).join( '' ) }<img src="/missing.jpg" srcset="/small.jpg 320w, /large.jpg 1280w"></main></body></html>` );
+			return [ page ? `${ sourceUrl }page-${ page }/` : sourceUrl, { html } ];
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const includes = String.prototype.includes;
+		let searchedBytes = 0;
+		const search = vi.spyOn( String.prototype, 'includes' ).mockImplementation( function ( this: string, value: string, position?: number ) {
+			if ( /^yui_\d+_\d+$/.test( value ) ) searchedBytes += this.length;
+			return includes.call( this, value, position );
+		} );
+		let receipt;
+		try {
+			receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
+		} finally {
+			search.mockRestore();
+		}
+		// No per-ID full-file substring search is allowed, regardless of CPU speed.
+		expect( searchedBytes ).toBe( 0 );
+		for ( const route of receipt.routes ) {
+			const html = readResolvedPage( join( outputDir, 'website' ), join( outputDir, route.path ) );
+			expect( html ).toContain( 'data-blocks-engine-capture-shared-' );
+		}
+	} );
 	it( 'localizes relative and absolute sprite references in routes and shared chrome', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-sprite-parts-' ) );
 		dirs.push( outputDir );
@@ -283,7 +313,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( home.html ).toContain( `aria-labelledby="${ home.ids.get( 'yui_3_17_2_1_111_351' ) }"` );
 		expect( home.ids.get( 'yui_3_17_2_1_111_35' ) ).not.toBe( home.ids.get( 'yui_3_17_2_1_111_351' ) );
 		// A retained stylesheet that reads the id keeps it, and only it.
-		const styled = canonicalizeUnreferencedRuntimeIds( page( '111', 'home' ), [ '#yui_3_17_2_1_111_35{display:block}' ] );
+		const styled = canonicalizeUnreferencedRuntimeIds( page( '111', 'home' ), ( id ) => '#yui_3_17_2_1_111_35{display:block}'.includes( id ) );
 		expect( styled.html ).toContain( 'id="yui_3_17_2_1_111_35"' );
 		expect( styled.html ).not.toContain( 'id="yui_3_17_2_1_111_351"' );
 	} );
