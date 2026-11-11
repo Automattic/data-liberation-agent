@@ -310,16 +310,25 @@ export function localizedSrcsetRendition(
 	return best?.local;
 }
 
-export function removeDanglingMediaSource(
+export interface DanglingMediaSource {
+	reference: string;
+	url: string;
+	/** Replacement state when this dependency failed, before later copies promote renditions. */
+	mediaReplacements: Map< string, string >;
+}
+
+export function removeDanglingMediaSources(
 	html: string,
-	reference: string,
-	resolvedUrl: string,
-	mediaReplacements: Map< string, string >,
+	dependencies: readonly DanglingMediaSource[],
 	rejectedKeys?: Set< string >
 ): string {
-	return rewriteAroundMetadataImages( html, content =>
-		removeDanglingVisualMediaSource( content, reference, resolvedUrl, mediaReplacements, rejectedKeys )
-	);
+	if ( dependencies.length === 0 ) return html;
+	return rewriteAroundMetadataImages( html, content => {
+		for ( const { reference, url, mediaReplacements } of dependencies ) {
+			content = removeDanglingVisualMediaSource( content, reference, url, mediaReplacements, rejectedKeys );
+		}
+		return content;
+	} );
 }
 
 function removeDanglingVisualMediaSource(
@@ -383,7 +392,7 @@ function removeDanglingVisualMediaSource(
 	const variants = [
 		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
 	].sort( ( a, b ) => b.length - a.length );
-	// Callers run this once per dangling reference over the whole document.
+	// The batch runs this once per dangling reference over each unprotected span.
 	// When the tag pass already blanked the only occurrence, skip the
 	// attribute-aware scan: neither replacement below can match.
 	if ( ! variants.some( ( variant ) => withoutSources.includes( variant ) ) ) return withoutSources;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { srcsetCandidates, srcsetReferences } from './srcset.js';
-import { preparePortableReplacements, removeDanglingMediaSource } from './portable-references.js';
+import { preparePortableReplacements, removeDanglingMediaSources } from './portable-references.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 
 describe( 'shared srcset tokenization', () => {
@@ -31,7 +31,7 @@ describe( 'shared srcset tokenization', () => {
 		const expected = `<img src="/media/square.png" data-srcset="/media/square.png, ${ next }" srcset="/media/square.png, ${ next }"><source srcset="/media/square.png 1x, ${ first }/:/resize,w_900 2x">`;
 		expect( preparePortableReplacements( mapping )( html ) ).toBe( expected );
 		expect( rewriteMediaUrls( html, mapping ) ).toBe( expected );
-		expect( removeDanglingMediaSource( html, 'w_480.png', 'https://example.test/w_480.png', new Map() ) ).toBe( html );
+		expect( removeDanglingMediaSources( html, [ { reference: 'w_480.png', url: 'https://example.test/w_480.png', mediaReplacements: new Map() } ] ) ).toBe( html );
 	} );
 	it( 'honors browser descriptor grammar and consumes invalid parenthesized descriptors as one candidate', () => {
 		expect( srcsetCandidates( '/width.png 320w 180h, /density.png .5x, /exponent.png 1e1x, /zero.png 0x' ) ).toEqual( [
