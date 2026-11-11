@@ -38,7 +38,7 @@ import type { PageSignature, SectionSignature } from './page-signature.js';
 import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
 import { extractFaqsFromHtml, type ExtractedFaq } from './faq-extract.js';
 import { buildSelector, type SelectorParts } from './section-selector.js';
-import { getPlaywright, launchChromium } from '../browser-kit/index.js';
+import { launchChromium } from '../browser-kit/index.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
 
@@ -3324,16 +3324,13 @@ export async function extractFullFromSavedHtml(
 export async function extractFullFromUrl(
   url: string,
   mediaMap: Record<string, string>,
-  opts: { cdpPort?: number; timeoutMs?: number; settleMs?: number } = {},
+  opts: { timeoutMs?: number; settleMs?: number } = {},
 ): Promise<{ specs: SectionSpec[]; landmarks: SourceLandmark[] }> {
   // Same-origin hygiene: a single URL trivially shares its own origin, but this
   // also normalizes/validates the URL the same way the capture pipeline does.
   enforceSameOrigin(url, [url]);
 
-  const pw = await getPlaywright();
-  const browser = opts.cdpPort
-    ? await pw.chromium.connectOverCDP(`http://127.0.0.1:${opts.cdpPort}`)
-    : await launchChromium();
+  const browser = await launchChromium();
 
   // Polyfill tsx/esbuild's __name helper inside the page (mirrors screenshotter).
   const context = await browser.newContext({

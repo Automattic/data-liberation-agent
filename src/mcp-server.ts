@@ -12,6 +12,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { resolveOutputBase } from './lib/paths.js';
+import { loadExternalPlatforms } from './platform/load-external.js';
 
 /**
  * MCP tool result envelope. The index signature is what keeps it assignable to
@@ -209,6 +210,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+  const { failed } = await loadExternalPlatforms();
+  for (const { entry, error } of failed) console.error(`External platform ${entry}: ${error}`);
   const transport = new StdioServerTransport();
 
   const shutdown = async () => {

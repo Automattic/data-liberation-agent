@@ -15,7 +15,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     // calls below don't throw "Invalid URL" — matches the guard that
     // hubspot/weebly/hostinger already have at the top of their discover().
     url = ensureUrlScheme(url);
-    const { browser, page, close } = await launchBrowser({ cdpPort: wixOpts.cdpPort });
+    const { browser, page, close } = await launchBrowser({});
 
     try {
     const p = page as {

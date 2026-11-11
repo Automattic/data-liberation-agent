@@ -3,7 +3,6 @@
 // ---------------------------------------------------------------------------
 
 export interface WixAdapterOpts extends Record<string, unknown> {
-  cdpPort?: number;
   token?: string;
   delay?: number;
   resume?: boolean;

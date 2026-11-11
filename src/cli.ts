@@ -5,6 +5,7 @@
 //
 import { createRequire } from 'node:module';
 import { resolveOutputBase } from './lib/paths.js';
+import { loadExternalPlatforms } from './platform/load-external.js';
 
 const args = process.argv.slice(2);
 const version = ( createRequire( import.meta.url )( '../package.json' ) as { version: string } )
@@ -153,6 +154,10 @@ await main();
 }
 
 async function main(): Promise<void> {
+if (args[0] !== 'mcp') {
+  const { failed } = await loadExternalPlatforms();
+  for (const { entry, error } of failed) console.error(`External platform ${entry}: ${error}`);
+}
 if (args.includes('--help')) {
   // --help always prints usage, whatever precedes it — a subcommand typo
   // like `capture --help` should never reach argument parsing below.

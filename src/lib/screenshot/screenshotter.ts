@@ -2837,16 +2837,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const glyphColors = new GlyphColorCache();
 
 	// --- browser -----------------------------------------------------------
-	let browser: Browser = ( await connectBrowser( {
-		cdpPort: opts.cdpPort,
-	} ) ) as unknown as Browser;
+	let browser: Browser = ( await connectBrowser( {} ) ) as unknown as Browser;
 	let browserRestarts = 0;
 	let urlsSinceRestart = 0;
 
 	// One relaunch shared by every worker that saw the same browser die, bounded
-	// so a browser that crashes on every launch still ends the run. An attached
-	// (cdpPort) browser is reconnected; if it is gone too, the retry is skipped
-	// and the original failures are recorded.
+	// so a browser that crashes on every launch still ends the run.
 	let crashRelaunch: Promise< boolean > | null = null;
 	let crashRelaunches = 0;
 	const replaceCrashedBrowser = ( crashed: Browser ): Promise< boolean > => {
@@ -2858,7 +2854,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			crashRelaunches++;
 			sendLog( server, '[restart] browser disconnected mid-segment; relaunching' );
 			void crashed.close().catch( () => {} );
-			crashRelaunch = connectBrowser( { cdpPort: opts.cdpPort } )
+			crashRelaunch = connectBrowser( {} )
 				.then(
 					( next ) => {
 						browser = next as unknown as Browser;
@@ -3555,7 +3551,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
 					await browser.close().catch( () => {} );
-					browser = ( await connectBrowser( { cdpPort: opts.cdpPort } ) ) as unknown as Browser;
+					browser = ( await connectBrowser( {} ) ) as unknown as Browser;
 					browserRestarts++;
 					urlsSinceRestart = 0;
 				}

@@ -8,8 +8,6 @@ export interface DefaultAdapterOpts extends Record<string, unknown> {
   verbose?: boolean;
   outputDir?: string;
   limit?: number;
-  /** Connect to an already-running Chrome over CDP instead of launching one. */
-  cdpPort?: number;
   /** Render pages in a browser before extracting (default true). false = fetch only. */
   render?: boolean;
 }

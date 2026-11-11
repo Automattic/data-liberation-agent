@@ -7,7 +7,6 @@ export interface ShopifyAdapterOpts extends Record<string, unknown> {
   dryRun?: boolean;
   verbose?: boolean;
   outputDir?: string;
-  cdpPort?: number;
   /** Shopify shop domain, e.g. `my-store.myshopify.com` — required for GraphQL */
   shopDomain?: string;
   /** Shopify Admin API access token. When present, products are fetched via GraphQL. */

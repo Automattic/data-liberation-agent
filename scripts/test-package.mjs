@@ -202,7 +202,6 @@ try {
   run(process.execPath, [join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--target', 'ES2022', 'runtime-types.mts'], { cwd: consumerDir });
 
   for (const relativePath of [
-    'scripts/run.mjs',
     'skills/liberate/SKILL.md',
   ]) {
     if (!existsSync(join(packageRoot, relativePath))) {

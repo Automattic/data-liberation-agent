@@ -46,20 +46,14 @@ export async function launchChromium(options: ChromiumLaunchOptions = {}): Promi
 }
 
 export interface ConnectBrowserOpts {
-  cdpPort?: number;
   headed?: boolean;
 }
 
 /**
- * Open a Playwright browser — CDP if cdpPort is set, otherwise a fresh headless
- * Chromium. Caller owns context/page creation and cleanup. Use launchBrowser()
+ * Open a fresh Playwright Chromium browser. Caller owns context/page creation and cleanup. Use launchBrowser()
  * instead if you just want a page to scrape one-off.
  */
 export async function connectBrowser(opts: ConnectBrowserOpts): Promise<PwBrowserRaw> {
-  const pw = await getPlaywright();
-  if (opts.cdpPort) {
-    return await pw.chromium.connectOverCDP(`http://127.0.0.1:${opts.cdpPort}`);
-  }
   return await launchChromium({ headless: !opts.headed });
 }
 
@@ -275,7 +269,7 @@ export function __resetSourceSessionsForTests(): void {
   sourceSessions.clear();
 }
 
-export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }): Promise<{
+export async function launchBrowser(opts: { headed?: boolean }): Promise<{
   browser: PwBrowser;
   page: unknown;
   close: () => Promise<void>;
@@ -298,12 +292,8 @@ export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }
     );
   let page: PwPage;
   try {
-    const ctx = opts.cdpPort
-      ? browser.contexts()[0] || (await newContext())
-      : await newContext();
-    // A page that materializes after the deadline must be closed before we
-    // disconnect, or under CDP it survives as an orphan tab in the user's
-    // real browser.
+    const ctx = await newContext();
+    // Close a page that materializes after the deadline.
     const pending = ctx.newPage();
     page = await withTimeout(pending, CREATE_TIMEOUT_MS, 'page create', (late) => {
       void late.close().catch(() => {});
@@ -317,7 +307,6 @@ export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }
     browser,
     page,
     close: async () => {
-      // Under CDP, browser.close() only disconnects — close our tab first.
       await withTimeout(page.close(), CLOSE_TIMEOUT_MS, 'page close').catch(() => {});
       await withTimeout(browser.close(), CLOSE_TIMEOUT_MS, 'browser close').catch(() => {});
     },

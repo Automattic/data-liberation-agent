@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { resolve as resolvePath } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -6,6 +8,7 @@ import { inspectSource } from './lib/inspect.js';
 
 const SERVER = fileURLToPath(new URL('./mcp-server.ts', import.meta.url));
 let fixture: Server | undefined;
+let platformDir: string | undefined;
 
 async function startFixture(): Promise<string> {
   fixture = createServer((request, response) => {
@@ -25,11 +28,13 @@ async function startFixture(): Promise<string> {
 afterEach(async () => {
   if (fixture) await new Promise<void>((resolve, reject) => fixture!.close((error) => error ? reject(error) : resolve()));
   fixture = undefined;
+  if (platformDir) await rm(platformDir, { recursive: true, force: true });
+  platformDir = undefined;
 });
 
-function inspectViaMcp(url: string): Promise<unknown> {
+function inspectViaMcp(url: string, env = process.env): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', 'tsx', SERVER], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--import', 'tsx', SERVER], { stdio: ['pipe', 'pipe', 'pipe'], env });
     let buffer = '';
     const timer = setTimeout(() => {
       child.kill();
@@ -56,6 +61,35 @@ function inspectViaMcp(url: string): Promise<unknown> {
 }
 
 describe('MCP inspect', () => {
+  it('loads env-named external platforms before CLI and MCP detection', async () => {
+    const url = await startFixture();
+    await mkdir('.tmp-test', { recursive: true });
+    platformDir = await mkdtemp(resolvePath('.tmp-test/external-platform-'));
+    const modulePath = resolvePath(platformDir, 'platform.mjs');
+    await writeFile(modulePath, `export default async ({ registerPlatform }) => {
+      await Promise.resolve();
+      registerPlatform({
+        id: 'startup-fixture',
+        detection: { sourceSignals: [{ pattern: /<title>fixture<\\/title>/, signal: 'fixture title' }] },
+        discover: async (url) => ({ urls: [{ url, type: 'homepage' }] }),
+      });
+    };`);
+    const env = { ...process.env, DATA_LIBERATION_PLATFORMS: modulePath };
+    const cli = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'inspect', url, '--http-only'], { env });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('error', reject);
+      child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+    expect(cli.stderr).not.toContain('External platform');
+    expect(cli.code).toBe(0);
+    expect(JSON.parse(cli.stdout).source.platform.id).toBe('startup-fixture');
+    expect(await inspectViaMcp(url, env)).toMatchObject({ source: { platform: { id: 'startup-fixture' } } });
+  }, 45_000);
+
   it('returns the public inspection result through the inspect tool', async () => {
     const url = await startFixture();
     const expected = await inspectSource(url, { discoveryLimit: 2, sampleLimit: 1 });
