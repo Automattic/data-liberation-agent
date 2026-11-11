@@ -372,6 +372,16 @@ describe( 'assembleResponsiveCapture', () => {
 		} finally { await browser.close(); }
 	} );
 
+	// Ids starting with a digit must be escaped in source CSS (`#\31 2a`). The
+	// phone copy's alias has to carry its own escape, not the source spelling.
+	it( 'routes escaped digit-leading id selectors to the namespaced phone copy', () => {
+		const html = routePhoneDocumentFragments( page( `<div class="data-blocks-engine-capture-desktop-document"><div id="9d047ce9"></div></div>
+			<div class="data-blocks-engine-capture-mobile-document"><div id="9d047ce9"></div></div>`,
+		'<style>#\\39 d047ce9{flex-direction:column}</style>' ), '/index.html' );
+		expect( cheerio.load( html )( '.data-blocks-engine-capture-mobile-document > div' ).attr( 'id' ) ).toBe( '9d047ce9--data-blocks-engine-capture-mobile' );
+		expect( html ).toContain( ':is(#\\39 d047ce9,#\\39 d047ce9--data-blocks-engine-capture-mobile)' );
+	} );
+
 	it( 'namespaces ids in every remaining device copy even without local links', () => {
 		const html = routePhoneDocumentFragments( page( `<div class="data-blocks-engine-capture-desktop-document"><section id="about"></section></div>
 			<div class="data-blocks-engine-capture-mobile-document"><section id="about"><label for="field">Email</label><input id="field"></section></div>
