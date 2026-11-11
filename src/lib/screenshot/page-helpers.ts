@@ -848,6 +848,25 @@ export async function withEvaluateTimeout<T>(p: Promise<T>, ms: number): Promise
   }
 }
 
+/**
+ * Run a probe that resizes the page and restores its viewport. A source script
+ * may add a root class at a narrow width and never remove it on widening, so
+ * the restored width would otherwise keep a class that a fresh load at that
+ * width never has. Hand the capture-width root classes back unchanged.
+ */
+export async function withRootClassesRestored<T>(page: Page, probe: () => Promise<T>): Promise<T> {
+  const before = await withEvaluateTimeout(page.evaluate(() => [[...document.documentElement.classList], [...document.body.classList]]), 1500).catch(() => undefined);
+  try {
+    return await probe();
+  } finally {
+    if (before) await withEvaluateTimeout(page.evaluate(([html, body]) => {
+      for (const [element, tokens] of [[document.documentElement, html], [document.body, body]] as const) {
+        if ([...element.classList].sort().join(' ') !== [...tokens].sort().join(' ')) element.className = tokens.join(' ');
+      }
+    }, before), 1500).catch(() => undefined);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Overlay dismissal (takeover modals + cookie/consent banners)
 // ===========================================================================
@@ -1640,12 +1659,14 @@ export async function dismissOverlays(
       for (const t of targets) {
         const consentBanner = t.kind === 'consent'
           ? await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(() => undefined) : undefined;
-        if (consentBanner?.presentation && opts.consentViewports?.length) {
+        const presentation = consentBanner?.presentation;
+        const consentViewports = opts.consentViewports;
+        if (presentation && consentViewports?.length) await withRootClassesRestored(page, async () => {
           const original = page.viewportSize();
           // Node owns both bounds: hostile source timers cannot extend the probe.
           const deadline = Date.now() + 4000;
           let resizes = 0;
-          const layouts = consentBanner.presentation.layout ?? [];
+          const layouts = presentation.layout ?? [];
           const sampleAt = async (viewport: { width: number; height: number }) => {
             if (resizes >= 32 || Date.now() >= deadline) return undefined;
             resizes++;
@@ -1656,7 +1677,7 @@ export async function dismissOverlays(
             return layout;
           };
           try {
-            for (const viewport of opts.consentViewports) {
+            for (const viewport of consentViewports) {
               if (viewport.width !== original?.width) await sampleAt(viewport);
             }
             while (resizes < 32 && Date.now() < deadline) {
@@ -1667,14 +1688,14 @@ export async function dismissOverlays(
               // Keep actual observations on both sides, never a guessed midpoint.
               // Re-sort each time: an intermediate sample may reveal a third layout.
               const width = Math.floor((ordered[index - 1].max_width! + ordered[index].min_width!) / 2);
-              if (!await sampleAt({ width, height: original?.height ?? opts.consentViewports[0].height })) break;
+              if (!await sampleAt({ width, height: original?.height ?? consentViewports[0].height })) break;
             }
           } catch {
             // A bounded, best-effort probe keeps the observations already made.
           } finally {
             if (original) await withEvaluateTimeout(page.setViewportSize(original), 1000);
           }
-        }
+        });
         if (consentBanner?.presentation?.layout) consentBanner.presentation.layout = mergeConsentLayouts(consentBanner.presentation.layout);
         const method = await withEvaluateTimeout(dismissOne(page, t), 10_000);
         if (method) {
