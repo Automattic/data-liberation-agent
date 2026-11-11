@@ -21,23 +21,3 @@ The legacy rich `DefaultInventory` type remains for Blogger and tenant-site
 adapters. Blogger reconstructs its existing rich fields from the homepage it
 already fetches; feed selection, enumeration and counting remain specialized.
 Wix, Shopify and Squarespace discovery are unchanged.
-
-## Verification evidence
-
-Live discovery against the checkout baseline and this implementation:
-
-| Corpus URL | Baseline routes | Generic routes | Missing baseline routes |
-| --- | ---: | ---: | ---: |
-| https://www.zmission.org | 111 | 112 | 0 |
-| https://abcsteelbldg.com | 23 | 24 | 0 |
-
-Slash-equivalent route spellings were treated as the same route in that check.
-The fixture parity tests retain the old sitemap leaves and verify additional
-chrome links. A single Webflow browser fixture verifies both Shift_JIS metadata
-decoding and rendered SPA links (roughly one second locally).
-
-A live one-route Weebly capture also completed. Its compare passed offline
-self-consistency, but frozen fidelity failed on a desktop text position at 768px
-and a mobile image geometry difference at 390px; desktop 1440px passed. This is
-not evidence of full-site fidelity parity, and those export/layout differences
-are not addressed by this discovery refactor.
