@@ -640,7 +640,7 @@ function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?:
  */
 export function canonicalizeUnreferencedRuntimeIds(
 	html: string,
-	externalTexts: readonly string[] | ( ( id: string ) => boolean ) = []
+	isExternallyReferenced: ( id: string ) => boolean = () => false
 ): { html: string; ids: Map< string, string > } {
 	const ids = new Map< string, string >();
 	if ( ! YUI_RUNTIME_ID.test( html ) ) return { html, ids };
@@ -653,7 +653,7 @@ export function canonicalizeUnreferencedRuntimeIds(
 	const taken = new Set( declared.keys() );
 	$( '[id]' ).each( ( _index, node ) => {
 		const id = $( node ).attr( 'id' ) ?? '';
-		if ( ! isYuiRuntimeId( id ) || declared.get( id ) !== 1 || ( typeof externalTexts === 'function' ? externalTexts( id ) : externalTexts.some( ( text ) => text.includes( id ) ) ) ) return;
+		if ( ! isYuiRuntimeId( id ) || declared.get( id ) !== 1 || isExternallyReferenced( id ) ) return;
 		const segments: string[] = [];
 		let element: Element | null = node;
 		while ( element ) {

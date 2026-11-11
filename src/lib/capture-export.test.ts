@@ -313,7 +313,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( home.html ).toContain( `aria-labelledby="${ home.ids.get( 'yui_3_17_2_1_111_351' ) }"` );
 		expect( home.ids.get( 'yui_3_17_2_1_111_35' ) ).not.toBe( home.ids.get( 'yui_3_17_2_1_111_351' ) );
 		// A retained stylesheet that reads the id keeps it, and only it.
-		const styled = canonicalizeUnreferencedRuntimeIds( page( '111', 'home' ), [ '#yui_3_17_2_1_111_35{display:block}' ] );
+		const styled = canonicalizeUnreferencedRuntimeIds( page( '111', 'home' ), ( id ) => '#yui_3_17_2_1_111_35{display:block}'.includes( id ) );
 		expect( styled.html ).toContain( 'id="yui_3_17_2_1_111_35"' );
 		expect( styled.html ).not.toContain( 'id="yui_3_17_2_1_111_351"' );
 	} );
