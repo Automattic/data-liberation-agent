@@ -119,9 +119,16 @@ function entrypointAbsenceReason(
 	const recorded = routeDiagnostics.find( ( { url } ) => documentIdentity( url ) === sourceIdentity );
 	if ( recorded ) {
 		const failure = `Source homepage ${ sourceUrl } was not captured: ${ recorded.reason }`;
-		return isSecurityServiceRejection( recorded.reason )
-			? `${ failure }. The source's security service refused the request, so its content could not be captured. Try a publicly accessible URL or provide a supported HTML capture.`
-			: failure;
+		if ( isSecurityServiceRejection( recorded.reason ) )
+			return `${ failure }. The source's security service refused the request, so its content could not be captured. Try a publicly accessible URL or provide a supported HTML capture.`;
+		if ( /\bHTTP 401\b/.test( recorded.reason ) )
+			return `${ failure }. The page needs a login; send the published public URL or an export of the site.`;
+		if ( /\bHTTP 403\b/.test( recorded.reason ) )
+			return `${ failure }. The site refused the request; send a publicly accessible URL or an export.`;
+		const nonHtml = /Not an HTML document \(([^)]+)\)/.exec( recorded.reason );
+		if ( nonHtml )
+			return `${ failure }. The URL returns ${ nonHtml[ 1 ] }, not a web page; send the address of the site's HTML homepage.`;
+		return failure;
 	}
 	const redirect = redirectAliases.find( ( { url } ) => documentIdentity( url ) === sourceIdentity );
 	if ( ! redirect ) return undefined;
