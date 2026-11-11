@@ -196,6 +196,11 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 	}
 }
 
+async function renderedQueryAlias( page: Page, url: string, scope: ScreenshotOpts['routeScope'] ): Promise< string | undefined > {
+	const canonical = await page.evaluate( () => ( document.querySelector( 'link[rel~="canonical" i][href]' ) as HTMLLinkElement | null )?.href ).catch( () => undefined );
+	return queryOnlyCanonicalTarget( url, canonical, scope );
+}
+
 interface CapturePerViewportArgs {
 	page: Page;
 	rootClassEvidence: RootClassEvidence;
@@ -1077,8 +1082,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// plain HTTP probes (#835). It continues as an alias, so the canonical
 		// route is captured once and no rendition spends a full browser pass.
 		if ( args.canonicalQueryAlias && new URL( url ).search ) {
-			const canonical = await page.evaluate( () => ( document.querySelector( 'link[rel~="canonical" i][href]' ) as HTMLLinkElement | null )?.href ).catch( () => undefined );
-			const target = queryOnlyCanonicalTarget( url, canonical, args.routeScope );
+			const target = await renderedQueryAlias( page, url, args.routeScope );
 			if ( target ) {
 				args.diagnostics?.push( { code: ROUTE_ALIAS_CANONICAL, reason: `rendered rel=canonical resolves to ${ target }; captured once under that route` } );
 				entry.redirectedTo = target;
@@ -2968,6 +2972,47 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;
 		const desktopPlan = shouldAnalyzeUrl ? { ...plan.desktop, needsLoad: true } : plan.desktop;
 		const effectivePlan = { ...plan, desktop: desktopPlan };
+		const finishAlias = ( target: string ): void => {
+			const targetRoute = enqueue(target, frontier?.depths.get(url) ?? 0, 'alias', url);
+			// The alias's reference evidence belongs to the canonical route.
+			if ( targetRoute ) {
+				if ( referenceRoutes?.has( url ) ) referenceRoutes.add( targetRoute );
+				opts.onRouteAlias?.( url, targetRoute );
+			}
+			skipped++;
+			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
+			completed++;
+			opts.onProgress?.( completed, urls.length, url );
+		};
+		// Query renditions can resolve from one rendered navigation. Do this
+		// before opening the device comparison pair, using the same canonical
+		// reader and alias ownership path as baseline capture (#1077).
+		if ( reflowViewports && routeComparison && ! reuseOnly && ( force || ! existing?.deviceMode ) &&
+			new URL( url ).search && ( ! primaryRef || documentRequestUrl( url ) !== documentRequestUrl( primaryRef ) ) ) {
+			const context = await createSourceContext( browser, profileContextOptions( desktopProfile!, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) ), { governors: opts.governors, sourceUrl: entryUrl } );
+			trackRouteContext( url, context );
+			let target: string | undefined;
+			try {
+				const page = await context.newPage();
+				await opts.initScript?.( page ).catch( () => undefined );
+				const navigation = await navigateSourceDocument( page, url, { publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope, timeoutMs: SOURCE_NAVIGATION_LIMITS.timeoutMs } );
+				if ( ! navigation.boundary && ! navigation.redirectedTo && ( navigation.response?.status() ?? 0 ) < 400 ) {
+					target = await renderedQueryAlias( page, url, opts.routeScope );
+				}
+			} catch {
+				// An inconclusive early visit leaves the normal capture/retry path in charge.
+			} finally {
+				await context.close().catch( () => undefined );
+				untrackRouteContext( url, context );
+			}
+			if ( target ) {
+				if ( routeBudget && ! routeBudget.commit( url ) ) return;
+				if ( ! routeDeadlines.commit( url ) ) return;
+				await manifest.updateEntry( url, { slug, capturedAt: capturedAt(), redirectedTo: target } );
+				finishAlias( target );
+				return;
+			}
+		}
 		// Decide before capture opens its context: the check's comparison pair
 		// must not compete with capture's own loads (#1155). Its wall time is
 		// attributed to the desktop profile as `device-check`.
@@ -3398,18 +3443,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			return;
 		}
 		if ( entry.redirectedTo && !urlFailures.length ) {
-			const target = entry.redirectedTo;
-			const targetRoute = enqueue(target, frontier?.depths.get(url) ?? 0, 'alias', url);
-			// The alias holds no document of its own: whatever evidence was owed to
-			// it (a reference sample slot) belongs to the route that captures it.
-			if ( targetRoute ) {
-				if ( referenceRoutes?.has( url ) ) referenceRoutes.add( targetRoute );
-				opts.onRouteAlias?.( url, targetRoute );
-			}
-			skipped++;
-			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
-			completed++;
-			opts.onProgress?.( completed, urls.length, url );
+			finishAlias( entry.redirectedTo );
 			return;
 		}
 

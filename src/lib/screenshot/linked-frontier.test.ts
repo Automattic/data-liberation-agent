@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { captureScreenshots } from './screenshotter.js';
 import { LinkedFrontier } from './linked-frontier.js';
 import { createReferenceCollector, readReferenceArtifact } from '../fidelity/reference.js';
@@ -448,7 +448,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
 		}
 	}, 240_000);
-	it('resolves linked query renditions to their rendered rel=canonical route instead of capturing each one', async () => {
+	it('resolves linked query renditions before device checks and exports them as duplicates', async () => {
 		const requests: string[] = [];
 		// The canonical is written by script: plain HTTP probes never see it, only the rendered document.
 		const page = (path: string | undefined, body: string) => `<meta name="viewport" content="width=device-width,initial-scale=1">${path ? `<script>var l=document.createElement('link');l.rel='canonical';l.href=${JSON.stringify(path)};document.head.appendChild(l)</script>` : ''}${body}`;
@@ -470,7 +470,13 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'canonical-frontier-'));
 		try {
 			const url = `${origin}/`;
-			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 1, settleMs: 0, learnFluid: false, viewports: [{id: 'desktop', width: 390, height: 844}]});
+			const timing: string[] = [];
+			const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => { timing.push(String(chunk)); return true; });
+			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 1, settleMs: 0, learnFluid: false, deviceMode: 'auto'}).finally(() => stderr.mockRestore());
+			const checked = timing.filter(line => line.startsWith('[timing] device-check ')).map(line => JSON.parse(line.slice('[timing] device-check '.length)).url);
+			expect(checked.filter(url => url.includes('ref='))).toEqual([]);
+			expect(checked.filter(url => url === `${origin}/story`)).toHaveLength(1);
+			expect(checked).toContain(`${origin}/list?page=2`);
 			expect(capture.failed).toBe(0);
 			// Three documents captured in full; five renditions resolved as aliases.
 			expect(capture.captured).toBe(3);
