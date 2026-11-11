@@ -171,7 +171,7 @@ try {
       "const { registerPlatform, detectPlatform, registeredPlatforms } = publicApi;",
       "registerPlatform({",
       "  id: 'acme-builder',",
-      "  detection: { urlPatterns: [/acme-builder\\.example/i] },",
+      "  detection: { hosts: ['acme-builder.example'] },",
       "  discover: async (url) => ({ urls: [{ url, type: 'homepage' }] }),",
       "  liberation: { removeSelectors: ['.acme-cookie-banner'] },",
       "});",
