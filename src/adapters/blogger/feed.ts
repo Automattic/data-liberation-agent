@@ -13,7 +13,20 @@ export interface FeedDiagnostic {
 	reason: string;
 }
 
+export interface BloggerFeedEntry {
+	permalink: string;
+	slug: string;
+	kind: 'post' | 'page';
+	title: string;
+	contentHtml: string;
+	published: string;
+	updated: string;
+	author: string;
+	labels: string[];
+}
+
 export interface ParsedBloggerFeed {
+	entries: BloggerFeedEntry[];
 	totalResults: number | null;
 	declaredItemsPerPage: number | null;
 	entryCount: number;
@@ -22,6 +35,7 @@ export interface ParsedBloggerFeed {
 }
 
 export interface BloggerFeedEnumeration {
+	entries: BloggerFeedEntry[];
 	posts: string[];
 	pageEntryCounts: number[];
 	declaredItemsPerPage: number | null;
@@ -37,18 +51,24 @@ export interface BloggerFeedEnumeration {
 export interface EnumerateBloggerPostsOptions {
 	fetch?: typeof fetch;
 	maxPages?: number;
+	/** Static pages use the same pagination and accounting as posts. */
+	kind?: 'post' | 'page';
+	governors?: import('../../lib/source-request-governor.js').SourceRequestGovernors;
 	/** One accounting page. Does not treat the unpaged remainder as a safety-cap stop. */
 	sample?: boolean;
 }
 
-export function parseBloggerFeed(xml: string, origin: string): ParsedBloggerFeed {
-	const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '', removeNSPrefix: true, parseTagValue: false, isArray: name => name === 'entry' || name === 'link' });
+export function parseBloggerFeed(xml: string, origin: string, kind: 'post' | 'page' = 'post'): ParsedBloggerFeed {
+	const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '', removeNSPrefix: true, parseTagValue: false, isArray: name => name === 'entry' || name === 'link' || name === 'category' || name === 'author' });
 	const parsedFeed = parser.parse(xml).feed;
 	if (parsedFeed === undefined) throw new Error('Response contains no Atom feed');
 	const feed = typeof parsedFeed === 'object' && parsedFeed !== null ? parsedFeed as Record<string, unknown> : {};
 	const entries = Array.isArray(feed.entry) ? feed.entry as Array<Record<string, unknown>> : [];
 	const number = (value: unknown) => typeof value === 'string' && /^\d+$/.test(value.trim()) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
 	const posts: string[] = [];
+	const retainedEntries: BloggerFeedEntry[] = [];
+	const text = (value: unknown): string => typeof value === 'string' ? value
+		: value && typeof value === 'object' && '#text' in value ? String(value['#text']) : '';
 	const rejected: FeedDiagnostic[] = [];
 	for (const entry of entries) {
 		const id = typeof entry.id === 'string' ? entry.id : origin;
@@ -84,8 +104,25 @@ export function parseBloggerFeed(xml: string, origin: string): ParsedBloggerFeed
 		}
 		parsed.hash = '';
 		posts.push(parsed.href);
+		const categories = Array.isArray(entry.category) ? entry.category as Array<Record<string, unknown>> : [];
+		const authors = Array.isArray(entry.author) ? entry.author as Array<Record<string, unknown>> : [];
+		const encodedSlug = parsed.pathname.split('/').at(-1)!.replace(/\.html$/, '');
+		let slug = encodedSlug;
+		try { slug = decodeURIComponent(encodedSlug); } catch { /* Preserve malformed source escapes. */ }
+		retainedEntries.push({
+			permalink: parsed.href,
+			slug,
+			kind,
+			title: text(entry.title),
+			contentHtml: text(entry.content),
+			published: text(entry.published),
+			updated: text(entry.updated),
+			author: text(authors[0]?.name),
+			labels: [...new Set(categories.map(category => text(category.term)).filter(Boolean))],
+		});
 	}
 	return {
+		entries: retainedEntries,
 		totalResults: number(feed.totalResults),
 		declaredItemsPerPage: number(feed.itemsPerPage),
 		entryCount: entries.length,
@@ -94,8 +131,8 @@ export function parseBloggerFeed(xml: string, origin: string): ParsedBloggerFeed
 	};
 }
 
-export function bloggerFeedUrl(origin: string, startIndex: number): string {
-	const url = new URL('/feeds/posts/default', origin);
+export function bloggerFeedUrl(origin: string, startIndex: number, kind: 'post' | 'page' = 'post'): string {
+	const url = new URL(`/feeds/${kind === 'page' ? 'pages' : 'posts'}/default`, origin);
 	url.searchParams.set('max-results', String(BLOGGER_FEED_REQUESTED_RESULTS));
 	url.searchParams.set('start-index', String(startIndex));
 	return url.href;
@@ -108,6 +145,7 @@ export async function enumerateBloggerPosts(
 	const fetchImpl = options.fetch ?? fetch;
 	const maxPages = options.sample ? 1 : options.maxPages ?? BLOGGER_FEED_PAGE_CAP;
 	const posts: string[] = [];
+	const entries: BloggerFeedEntry[] = [];
 	const seen = new Set<string>();
 	const pageEntryCounts: number[] = [];
 	const rejected: FeedDiagnostic[] = [];
@@ -120,16 +158,16 @@ export async function enumerateBloggerPosts(
 	let reachedCap = false;
 
 	for (let page = 0; page < maxPages; page++) {
-		const pageUrl = bloggerFeedUrl(origin, startIndex);
+		const pageUrl = bloggerFeedUrl(origin, startIndex, options.kind);
 		fetchedUrls.push(pageUrl);
 		let parsed: ParsedBloggerFeed;
 		try {
 			const response = await safeFetch(pageUrl, {
-				fetchImpl, timeoutMs: 15_000, maxBytes: 8 * 1024 * 1024,
+				fetchImpl, governors: options.governors, timeoutMs: 15_000, maxBytes: 32 * 1024 * 1024,
 				headers: { 'User-Agent': SOURCE_USER_AGENT, Accept: 'application/atom+xml, application/xml, text/xml' },
 			});
 			if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
-			parsed = parseBloggerFeed(response.body.toString('utf8'), origin);
+			parsed = parseBloggerFeed(response.body.toString('utf8'), origin, options.kind);
 		} catch (error) {
 			unavailable = pagesFetched === 0;
 			rejected.push({
@@ -155,6 +193,7 @@ export async function enumerateBloggerPosts(
 			break;
 		}
 		let fresh = 0;
+		const pageEntries = new Map(parsed.entries.map(entry => [entry.permalink, entry]));
 		for (const post of parsed.posts) {
 			let key: string;
 			try {
@@ -166,6 +205,8 @@ export async function enumerateBloggerPosts(
 			if (seen.has(key)) continue;
 			seen.add(key);
 			posts.push(post);
+			const entry = pageEntries.get(post);
+			if (entry) entries.push(entry);
 			fresh++;
 		}
 		if (fresh === 0) {
@@ -191,6 +232,7 @@ export async function enumerateBloggerPosts(
 		});
 	}
 	return {
+		entries,
 		posts,
 		pageEntryCounts,
 		declaredItemsPerPage,
