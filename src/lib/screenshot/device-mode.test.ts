@@ -114,6 +114,33 @@ describe( 'device-mode evidence', () => {
 		expect( normalizeServerHtml( '<input type="hidden" name="plan" value="pro">' ) ).toBe( '<input type="hidden" name="plan" value="pro">' );
 	} );
 
+	it( 'ignores only Cloudflare per-request challenge parameters', () => {
+		const page = ( ray: string, timestamp: string, text = 'Hello', extra = '' ) => `<html><body><p>${ text }</p><script>(function(){var d=document.createElement('script');d.innerHTML="window.__CF$cv$params={r:'${ ray }',t:'${ timestamp }'};";var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=${ ray }';${ extra }})();</script></body></html>`;
+		const original = page( 'a588614b4c78baf2', 'MTc5NDM0ODU1MA==' );
+		for ( const [ candidate, expected ] of [
+			[ page( 'b699725c5d89caf3', 'MTc5NDM0ODU1MQ==' ), 'identical-after-normalization' ],
+			[ page( 'b699725c5d89caf3', 'MTc5NDM0ODU1MQ==', 'Hello phone' ), 'different' ],
+			[ page( 'b699725c5d89caf3', 'MTc5NDM0ODU1MQ==', 'Hello', 'doSomething();' ), 'different' ],
+		] as const ) {
+			expect( compareServerHtml( original, candidate ) ).toBe( expected );
+		}
+		for ( const template of [
+			'<script>window.__CF$cv$params={r:"VALUE",t:"time"};</script>',
+			'<script>window.__CF$cv$params = { "t": "VALUE", "r": "ray" };</script>',
+			'<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=VALUE"></script>',
+		] ) {
+			expect( compareServerHtml( template.replace( 'VALUE', 'one' ), template.replace( 'VALUE', 'two' ) ) ).toBe( 'identical-after-normalization' );
+		}
+		for ( const template of [
+			'<script>window.cfg={r:"VALUE",t:"time"};</script>',
+			'<script>window.__CF$cv$params={r:"ray",t:"time",other:"VALUE"};</script>',
+			'<script>var u="/app/main.js?ray=VALUE";</script>',
+			'<script>var u="/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=ray&mode=VALUE";</script>',
+		] ) {
+			expect( compareServerHtml( template.replace( 'VALUE', 'one' ), template.replace( 'VALUE', 'two' ) ) ).toBe( 'different' );
+		}
+	} );
+
 	it.each( [
 		[ '<p>same</p>', '<p>same</p>', 'identical', 'reflow-only' ],
 		[ '<script nonce="a"></script>', '<script nonce="b"></script>', 'identical-after-normalization', 'reflow-only' ],
