@@ -192,7 +192,7 @@ export function rewriteCssUrlReferences(
 	replaceUrl: ( url: string ) => string,
 	replaceOther: ( content: string ) => string = text => text
 ): string {
-	const urls = /\burl\(\s*(?:(\\?(?:&quot;|&#34;|&#x22;|&apos;|&#39;|&#x27;|["']))([\s\S]*?)\1|([^\s)'";]+))\s*\)/gi;
+	const urls = /\burl\(\s*(?:(\\?(?:&quot;|&#34;|&#x22;|&apos;|&#39;|&#x27;|["']))([\s\S]*?)\1|([^\s)'"]+))\s*\)/gi;
 	let result = '';
 	let offset = 0;
 	for ( const match of content.matchAll( urls ) ) {

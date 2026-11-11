@@ -4,6 +4,19 @@ import { preparePortableReplacements, removeDanglingMediaSources } from './porta
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 
 describe( 'shared srcset tokenization', () => {
+	it.each( [
+		[ 'unquoted', 'url(https://cdn.example/x.jpg?w=600&format=webp)', 'url(/media/x.webp)' ],
+		[ 'unquoted HTML-encoded query', 'url(https://cdn.example/x.jpg?w=600&amp;format=webp)', 'url(/media/x.webp)' ],
+		[ 'quoted parenthesis', "url('https://cdn.example/x.jpg?w=600&format=webp)')", "url('/media/whole.webp')" ],
+		[ 'HTML-encoded quotes and parenthesis', 'url(&quot;https://cdn.example/x.jpg?w=600&amp;format=webp)&quot;)', 'url(&quot;/media/whole.webp&quot;)' ],
+	] )( 'rewrites whole CSS URL tokens: %s', ( _name, value, expected ) => {
+		const url = 'https://cdn.example/x.jpg?w=600&format=webp';
+		const mapping = new Map( [ [ url, '/media/x.webp' ], [ `${ url })`, '/media/whole.webp' ] ] );
+		const html = `<div style="background:${ value }">`;
+		const localized = `<div style="background:${ expected }">`;
+		expect( preparePortableReplacements( mapping )( html ) ).toBe( localized );
+		expect( rewriteMediaUrls( html, mapping ) ).toBe( localized );
+	} );
 	it( 'recognizes browser-trimmed single URLs while retaining quoted attribute whitespace', () => {
 		const url = 'https://source.test/photo.png';
 		const mapping = new Map( [ [ url, '/media/photo.png' ], [ 'photo.png', '/media/wrong.png' ] ] );
