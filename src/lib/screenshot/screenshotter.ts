@@ -1480,11 +1480,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 		const learned = await capturePageHtml( page, args.diagnostics );
 		const baseUrl = await page.evaluate( () => document.baseURI );
-		const projected = projectRootClassContracts( projectInitialDocument( initialDocument, learned ), rootClassWidths, href => {
+		const linkedSheet = ( href: string ) => {
 			const absolute = new URL( href, baseUrl ).href;
 			const resource = resourceStore.getReplayableResponse( absolute, 'stylesheet' );
 			return resource ? { css: readFileSync( resource.path, 'utf8' ), url: absolute } : undefined;
-		} );
+		};
+		const projected = projectRootClassContracts( projectInitialDocument( initialDocument, learned, linkedSheet ), rootClassWidths, linkedSheet );
 		const captured = typeof initialTitle === 'string' ? withDocumentTitle( projected, initialTitle ) : projected;
 		rawDocument = frozen ? sanitizeFrozenHtml( captured ) : captured;
 		const html = canonicalize( rawDocument );
