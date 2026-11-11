@@ -9,6 +9,7 @@ import { createReferenceCollector, readReferenceArtifact } from '../fidelity/ref
 import { exportWebsiteCapture } from '../capture-export.js';
 import { checkFidelity } from '../fidelity/check.js';
 import { documentRequestUrl } from '../url/route-key.js';
+import { findAdapter } from '../../adapters/index.js';
 
 it('merges slash identities while preserving query, depth and time boundaries', () => {
 	const frontier = new LinkedFrontier({maxPages: 2, maxDepth: 1, timeoutMs: 100}, 0);
@@ -114,6 +115,19 @@ it('keeps adapter namespace admission ahead of every discovery-budget ownership 
 	expect(frontier.coverage()).toMatchObject({scheduled: 2, diagnostics: [{url: 'https://source.test/customer/unknown', reason: 'timeoutMs=1 exhausted'}]});
 });
 
+it('matches platform runtime prefixes by segment and source origin before alias resolution', () => {
+	const origin = 'https://source.test';
+	const frontier = new LinkedFrontier({}, 0, undefined,
+		new Map([[`${origin}/_dm/alias`, `${origin}/ordinary`]]), [],
+		{sourceUrl: origin, runtimePaths: findAdapter('duda')!.runtimePaths});
+	for (const [path, admitted] of [['/_dm', false], ['/_dm/alias', false], ['/_dm/s/rt/action', false], ['/_dmx', true], ['/ordinary', true]] as const) {
+		expect(frontier.admit(origin + path, 0, 0)).toBe(admitted);
+	}
+	expect(frontier.admit('https://other.test/_dm/page', 0, 0)).toBe(true);
+	expect(frontier.coverage().scheduled).toBe(3);
+	expect(frontier.diagnostics.map(row => row.code)).toEqual(Array(3).fill('route_excluded_platform_runtime'));
+});
+
 it('refuses action URLs for every ownership kind before budget or required evidence', () => {
 	const frontier = new LinkedFrontier({maxPages: 256, capturePageLimit: 2}, 0);
 	expect(frontier.admit('https://source.test/', 0, 0, 'inventory')).toBe(true);
@@ -134,6 +148,37 @@ it('refuses action URLs for every ownership kind before budget or required evide
 });
 
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded rendered linked frontier', () => {
+	it.each(['linked', 'inventory'] as const)('excludes Duda runtime from %s admission in a neutral phone document', async mode => {
+		const runtimePath = '/_dm/s/rt/actions/emailshare?text=Share&site=https%3A%2F%2Fexample.test%2Fpost&lang=en';
+		const requests: string[] = [];
+		const source = createServer((request, response) => {
+			requests.push(request.url!);
+			response.writeHead(200, {'content-type': 'text/html'});
+			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>@media(min-width:600px){nav{display:none}}</style><h1>Neutral page</h1>${request.url === '/' ? `<nav><a href="${runtimePath}">Email</a><a href="/ordinary">Page</a></nav>` : ''}`);
+		});
+		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
+		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
+		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'duda-frontier-'));
+		try {
+			const capture = await captureScreenshots({
+				urls: mode === 'inventory' ? [origin + '/', origin + runtimePath, origin + '/ordinary'] : [origin + '/'],
+				primaryUrl: origin + '/', runtimePaths: findAdapter('duda')!.runtimePaths,
+				outputDir: directory, linkedPages: {maxPages: 2}, limit: 2,
+				concurrency: 1, settleMs: 0, learnFluid: false,
+				viewports: [{id: 'desktop', width: 390, height: 844}],
+			});
+			expect(capture.failed).toBe(0);
+			expect(capture.linkedPageCoverage).toMatchObject({
+				requiredUrls: [origin + '/', origin + '/ordinary'], scheduled: 2,
+				diagnostics: [{code: 'route_excluded_platform_runtime', url: origin + runtimePath, reason: expect.any(String)}],
+			});
+			expect(requests.some(path => path.startsWith('/_dm/'))).toBe(false);
+		} finally {
+			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));
+			rmSync(directory, {recursive: true, force: true});
+		}
+	}, 120_000);
 	it('never visits linked action URLs, records them once, and keeps them as named unresolved anchors', async () => {
 		const requests: string[] = [];
 		const docs: Record<string, string> = {

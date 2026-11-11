@@ -9,8 +9,8 @@ import { documentRequestUrl } from './route-key.js';
  * `undo_item`, `wc-ajax`. Session: `customer-logout`. Comments: `replytocom`,
  * `unapproved`, `moderation-hash`. Keys match case-insensitively on any host.
  *
- * This is the single list. The platform contract has no discovery-policy hook,
- * so adapters do not extend it; add a key here when a platform needs one.
+ * This is the single generic query-key list. Platforms declare their own
+ * runtime path namespaces through `Platform.runtimePaths` instead.
  */
 export const STATE_CHANGING_QUERY_KEYS: readonly string[] = [
 	'add-to-cart', 'add_to_wishlist', 'remove_item', 'undo_item', 'wc-ajax',
@@ -23,6 +23,20 @@ const STATE_CHANGING_ACTIONS: readonly string[] = [ 'logout' ];
 
 /** Discovery diagnostic code for a route refused because it is an action URL. */
 export const ROUTE_EXCLUDED_ACTION_URL = 'route_excluded_action_url';
+
+/** A platform runtime namespace is not a document, even when it serves HTML. */
+export function platformRuntimeExclusion( url: string, sourceUrl: string, runtimePaths: readonly string[] = [] ): { code: string; url: string; reason: string } | undefined {
+	if ( ! runtimePaths.length ) return undefined;
+	const parsed = new URL( url );
+	if ( parsed.origin !== new URL( sourceUrl ).origin ) return undefined;
+	const prefix = runtimePaths.find( path => {
+		const base = path.replace( /\/+$/, '' );
+		return path.startsWith( '/' ) && ( parsed.pathname === base || parsed.pathname.startsWith( `${ base }/` ) );
+	} );
+	return prefix === undefined ? undefined : {
+		code: 'route_excluded_platform_runtime', url: documentRequestUrl( url ), reason: `Platform runtime path (${ prefix })`,
+	};
+}
 
 /** Unresolved-anchor reason for a link whose target is an action URL. */
 export const ACTION_URL_REASON = 'target is a state-changing action URL';

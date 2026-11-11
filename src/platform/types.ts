@@ -80,6 +80,8 @@ export interface Platform {
 	id: string;
 	/** Adapter-owned document namespaces on a shared origin. Omitted means the whole site; never an asset policy. */
 	routeScope?( sourceUrl: string ): SiteRouteScope;
+	/** Segment-bounded path prefixes on the source origin that are runtime, never site documents. */
+	runtimePaths?: string[];
 	/** Automatic-detection signals owned by this platform. */
 	detection?: PlatformDetection;
 	/** Inventory a site: sitemap/routes/navigation. Required. */

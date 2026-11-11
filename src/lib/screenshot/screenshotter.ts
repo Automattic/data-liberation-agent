@@ -2730,7 +2730,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const frontier = opts.linkedPages ? new LinkedFrontier( {
 		...opts.linkedPages,
 		capturePageLimit: opts.limit !== undefined && opts.limit >= 0 ? opts.limit : undefined,
-	}, startTime, opts.routeScope, linkedAliasMap( opts.linkedCanonicalAliases ), opts.linkedCanonicalAliases ?? [] ) : undefined;
+	}, startTime, opts.routeScope, linkedAliasMap( opts.linkedCanonicalAliases ), opts.linkedCanonicalAliases ?? [],
+		opts.primaryUrl ? { sourceUrl: opts.primaryUrl, runtimePaths: opts.runtimePaths } : undefined ) : undefined;
 	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0, startTime, 'inventory'));
 	// Under a time budget the entrypoint starts first, so the budget never skips it.
 	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
