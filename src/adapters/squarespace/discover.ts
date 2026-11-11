@@ -5,9 +5,8 @@ import { extractNavLinks } from '../../lib/html-extract/index.js';
 import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
-import type { SquarespaceAdapterOpts, SquarespaceInventory } from './types.js';
+import type { SquarespaceInventory } from './types.js';
 import { fetchSqsJson } from './content.js';
-import { discoverAdmin, mergeAdminDiscovery } from './admin.js';
 
 const MAX_ARCHIVE_PAGES = 200;
 const BLOG_PREFIXES = ['/blog', '/journal', '/news', '/posts', '/stories'];
@@ -107,7 +106,6 @@ async function discoverArchiveUrls(siteUrl: string, prefix: string): Promise<str
 }
 
 export async function discover(url: string, opts: Record<string, unknown>): Promise<SquarespaceInventory> {
-  const sqOpts = opts as SquarespaceAdapterOpts;
   // 1. Fetch site metadata via ?format=json
   const siteJson = await fetchSqsJson(url);
 
@@ -200,7 +198,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     counts[type] = (counts[type] || 0) + 1;
   }
 
-  let inventory: SquarespaceInventory = {
+  const inventory: SquarespaceInventory = {
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
     siteMeta: {
@@ -212,22 +210,6 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     urls: inventoryUrls,
     diagnostics: sitemap.diagnostics,
   };
-
-  // Admin discovery via CDP — finds drafts, unlisted pages, password-protected content
-  if (sqOpts.cdpPort) {
-    try {
-      const adminEntries = await discoverAdmin(url, sqOpts.cdpPort);
-      if (adminEntries.length > 0) {
-        inventory = mergeAdminDiscovery(inventory, adminEntries);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      (inventory as unknown as Record<string, unknown>).adminWarning =
-        `Squarespace admin discovery failed: ${message}. ` +
-        'Drafts, unlisted pages, and password-protected content may be missing. ' +
-        'Make sure you are logged in to Squarespace admin in the Chrome window connected via CDP.';
-    }
-  }
 
   return inventory;
 }

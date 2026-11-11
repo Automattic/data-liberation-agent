@@ -50,7 +50,6 @@ export interface ScreenshotOpts {
 	 * defaults to 6 on unconstrained hosts, measured admission under a Node memory constraint. */
 	concurrency?: number;
 	browserRestartEvery?: number; // default: 100
-	cdpPort?: number;
 	force?: boolean;
 	types?: UrlType[];
 	/** Route budget for the whole capture: initial routes and linked admissions together. */

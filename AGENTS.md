@@ -120,6 +120,8 @@ Reuse is opt-in: a plain re-run recaptures, and `--resume` is what reports `reus
 
 ## Non-obvious details
 
+- Put ad-hoc probe scripts in `.tmp-probe/` so they stay out of version control.
+
 - **The MCP server is one long-lived process — editing `src/` does not hot-reload it.** ESM modules are cached per process, so a re-called tool keeps running the code loaded at server start. Restart it after editing. Vitest always uses on-disk source.
 - Liberation writes the site and exits. `--serve` opts into a server that holds the process until interrupted. Anything automated should not pass it.
 - Guidance goes to stderr; stdout stays the machine-readable result.

@@ -386,17 +386,16 @@ describe('launchBrowser close()', () => {
     }
   });
 
-  it('under cdp, a page that arrives after the deadline is closed instead of orphaned', async () => {
+  it('a page that arrives after the deadline is closed instead of orphaned', async () => {
     vi.useFakeTimers();
     try {
       let resolvePage!: (p: unknown) => void;
       const latePage = { close: vi.fn(async () => {}) };
-      const ctx = { newPage: vi.fn(() => new Promise((r) => { resolvePage = r; })) };
+      const ctx = { newPage: vi.fn(() => new Promise((r) => { resolvePage = r; })), addInitScript: vi.fn(), on: vi.fn(), pages: () => [] };
       const browserClose = vi.fn(async () => {});
-      const pw = await import('playwright');
-      vi.mocked(pw.chromium.connectOverCDP).mockResolvedValueOnce({
-        contexts: () => [ctx],
-        newContext: vi.fn(),
+      mockPwLaunch.mockResolvedValueOnce({
+        contexts: () => [],
+        newContext: vi.fn(async () => ctx),
         close: browserClose,
         isConnected: () => true,
       } as never);
@@ -404,7 +403,7 @@ describe('launchBrowser close()', () => {
       const { launchBrowser } = await vi.importActual<typeof import('./browser-kit.js')>(
         './browser-kit.js'
       );
-      const pendingRejects = expect(launchBrowser({ cdpPort: 9222 })).rejects.toThrow('page create timed out');
+      const pendingRejects = expect(launchBrowser({})).rejects.toThrow('page create timed out');
       await vi.advanceTimersByTimeAsync(30_000);
       await pendingRejects;
       expect(browserClose).toHaveBeenCalledTimes(1);
@@ -417,12 +416,11 @@ describe('launchBrowser close()', () => {
     }
   });
 
-  it('under cdp with no existing context, a hanging newContext() rejects and disconnects', async () => {
+  it('a hanging newContext() rejects and closes the browser', async () => {
     vi.useFakeTimers();
     try {
       const browserClose = vi.fn(async () => {});
-      const pw = await import('playwright');
-      vi.mocked(pw.chromium.connectOverCDP).mockResolvedValueOnce({
+      mockPwLaunch.mockResolvedValueOnce({
         contexts: () => [],
         newContext: vi.fn(() => new Promise(() => {})),
         close: browserClose,
@@ -432,7 +430,7 @@ describe('launchBrowser close()', () => {
       const { launchBrowser } = await vi.importActual<typeof import('./browser-kit.js')>(
         './browser-kit.js'
       );
-      const pendingRejects = expect(launchBrowser({ cdpPort: 9222 })).rejects.toThrow('context create timed out');
+      const pendingRejects = expect(launchBrowser({})).rejects.toThrow('context create timed out');
       await vi.advanceTimersByTimeAsync(30_000);
       await pendingRejects;
       expect(browserClose).toHaveBeenCalledTimes(1);

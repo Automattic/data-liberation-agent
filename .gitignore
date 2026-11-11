@@ -6,12 +6,10 @@ node_modules/
 *.log
 # dist/ is build output, EXCEPT the committed plugin bundles: the Claude/Codex
 # plugin installer copies this package verbatim (no npm install, no build), so
-# the self-contained MCP server bundle and the skill-invoked driver bundles
-# must live in git.
+# the self-contained MCP server and runtime bundles must live in git.
 dist/*
 !dist/mcp-server.bundle.mjs
 !dist/capture-engine.bundle.mjs
-!dist/scripts/
 # Release packaging output: `npm pack` tarballs and Homeboy's release build
 # directory. Left untracked they fail the next release's working-tree preflight.
 *.tgz
@@ -24,7 +22,9 @@ qa-screenshots/
 .playwright-mcp/
 .superpowers/
 .worktrees/
-.tmp-test/
+/.*.mjs
+/.tmp-*/
+/agent-task-*
 TODOS.md
 # Streaming compose-then-install scratch dir
 .tmp-compose/

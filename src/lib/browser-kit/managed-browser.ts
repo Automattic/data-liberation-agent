@@ -31,7 +31,6 @@ export interface ManagedBrowser {
  * bounded and swallowed; launch failures reject the acquire that hit them.
  */
 export function createManagedBrowser(opts: {
-  cdpPort?: number;
   headed?: boolean;
 }): ManagedBrowser {
   let launching: Promise<BrowserSession> | null = null;

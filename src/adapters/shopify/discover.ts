@@ -4,65 +4,9 @@ import { fetchSitemapWithDiagnostics, classifyUrl } from '../../lib/extraction/s
 import { extractNavLinks } from '../../lib/html-extract/index.js';
 import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
-import type { ShopifyAdapterOpts, ShopifyInventory, ShopifyPage, ShopifyBlog, ShopifyArticle } from './types.js';
+import type { ShopifyInventory, ShopifyPage, ShopifyBlog, ShopifyArticle } from './types.js';
 import { fetchShopifyPaginated } from './http.js';
 import { extractShopDomain } from './content.js';
-
-async function discoverProductsViaCdp(cdpPort: number, origin: string): Promise<string[]> {
-  const { launchBrowser } = await import('../../lib/browser-kit/index.js');
-  const { page, close } = await launchBrowser({ cdpPort });
-
-  const handles: string[] = [];
-  const seen = new Set<string>();
-
-  try {
-    const pw = page as import('playwright').Page;
-
-    pw.on('response', async (response) => {
-      const url = response.url();
-      if (!url.includes('admin.shopify.com/api/operations/')) return;
-      if (!url.includes('ProductIndex') && !url.includes('ProductList')) return;
-
-      try {
-        const json = await response.json() as Record<string, unknown>;
-        const data = json.data as Record<string, unknown> | undefined;
-        if (!data) return;
-
-        const products = data.filteredProducts as Record<string, unknown> | undefined;
-        const edges = (products?.edges || []) as Array<{ node: { handle?: string } }>;
-
-        for (const edge of edges) {
-          const handle = edge.node?.handle;
-          if (handle && !seen.has(handle)) {
-            seen.add(handle);
-            handles.push(handle);
-          }
-        }
-      } catch {
-        // Response parsing failed
-      }
-    });
-
-    try {
-      await pw.goto(`${origin}/admin/products`, { waitUntil: 'networkidle', timeout: 30000 });
-    } catch {
-      // Navigation may timeout but we still capture intercepted responses
-    }
-
-    // Scroll to trigger lazy loading
-    for (let i = 0; i < 5; i++) {
-      await pw.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await new Promise((r) => setTimeout(r, 2000));
-      if (handles.length > 200) break;
-    }
-
-    await new Promise((r) => setTimeout(r, 1000));
-  } finally {
-    await close();
-  }
-
-  return handles;
-}
 
 export async function discover(url: string, _opts: Record<string, unknown>): Promise<ShopifyInventory> {
   const normalized = url.includes('://') ? url : `https://${url}`;
@@ -159,22 +103,6 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
     const type = classifyUrl(clean);
     inventoryUrls.push({ url: clean, type });
     counts[type] = (counts[type] || 0) + 1;
-  }
-
-  // 5. CDP-based admin discovery (if cdpPort provided)
-  const shopifyOpts = _opts as ShopifyAdapterOpts;
-  if (shopifyOpts.cdpPort) {
-    try {
-      const cdpHandles = await discoverProductsViaCdp(shopifyOpts.cdpPort, origin);
-      for (const handle of cdpHandles) {
-        const productUrl = `${origin}/products/${handle}`;
-        if (inventoryUrls.some((inv) => inv.url === productUrl)) continue;
-        inventoryUrls.push({ url: productUrl, type: 'product' });
-        counts['product'] = (counts['product'] || 0) + 1;
-      }
-    } catch {
-      // CDP discovery failed — continue with existing results
-    }
   }
 
   // If we still have nothing, add the homepage
