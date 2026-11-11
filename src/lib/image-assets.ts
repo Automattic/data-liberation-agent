@@ -4,7 +4,7 @@ import { copyExclusive, moveExclusive } from './media-fetch/exclusive-file.js';
 import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
-import { srcsetCandidates } from './srcset.js';
+import { rewriteCssUrlReferences, srcsetCandidates } from './srcset.js';
 import { metadataImageReferences } from './identity-resources.js';
 import { MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
 import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
@@ -261,7 +261,10 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 					}
 					if ( ! /^(?:background(?:-image)?|(?:-webkit-)?mask(?:-image)?|border-image(?:-source)?|list-style(?:-image)?|content)$/i.test( declaration.prop ) ) return;
 					const location = `declaration:${ declarationIndex++ }:${ declaration.prop }`;
-					for ( const match of declaration.value.matchAll( /url\(\s*["']?([^\s"')]+)["']?\s*\)/gi ) ) add( [ match[ 1 ] ], match[ 1 ], url, reference( match[ 1 ], 'CSS', location ) );
+					rewriteCssUrlReferences( declaration.value, source => {
+						add( [ source ], source, url, reference( source, 'CSS', location ) );
+						return source;
+					} );
 				} );
 			} catch { /* The stylesheet owner reports malformed CSS. */ }
 		}

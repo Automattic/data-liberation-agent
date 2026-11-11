@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as cheerio from 'cheerio';
-import { localizeMetadataImageReferences, preparePortableReplacements } from './portable-references.js';
+import { dependencyReferences, localizeMetadataImageReferences, preparePortableReplacements } from './portable-references.js';
 
 describe( 'localizeMetadataImageReferences', () => {
 	it( 'localizes Squarespace lazy galleries and product variants without bypassing ordinary image rewrites', () => {
@@ -36,6 +36,16 @@ describe( 'localizeMetadataImageReferences', () => {
 		expect( $( '#normal' ).attr( 'src' ) ).toBe( '/media/normal.webp' );
 		expect( $( '#normal' ).attr( 'srcset' ) ).toBe( '/media/normal.webp 400w, /media/normal-large.webp 800w' );
 		expect( JSON.parse( $( 'script' ).text() ).hasVariant[ 0 ].image ).toBe( '/media/variant.webp' );
+	} );
+} );
+
+describe( 'dependencyReferences', () => {
+	it( 'extracts whole quoted CSS URLs and unescaped identities from serialized capture styles', () => {
+		const url = 'https://cdn.test/banner.png?format=300w)';
+		const css = `a{background:url("${ url }")} b{background:url(\\"${ url }\\")}`;
+		expect( dependencyReferences( css, 'https://example.test/', true ) ).toEqual( [
+			{ reference: url, url, kind: 'css' },
+		] );
 	} );
 } );
 
