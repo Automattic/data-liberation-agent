@@ -25,6 +25,7 @@ export const SERVER_HTML_IGNORED = [
 	'nonce attribute values',
 	'values of attributes, meta tags, hidden inputs and JSON keys named like csrf, xsrf, nonce or authenticity token',
 	'ISO-8601 date-time stamps',
+	'Cloudflare window.__CF$cv$params r/t values and challenge-platform scripts/jsd/main.js ray query values',
 ] as const;
 
 /** Elements left out of the rendered structure comparison. */
@@ -77,6 +78,10 @@ export function normalizeServerHtml( html: string ): string {
 				: tag )
 		// Inline configuration: "nonce":"…", "csrfToken": "…".
 		.replace( new RegExp( String.raw`(["']${ TOKEN_NAME }["']\s*:\s*)(?:"[^"]*"|'[^']*')`, 'gi' ), '$1""' )
+		// Cloudflare's inline challenge changes its ray ID and timestamp on every request.
+		.replace( /(\bwindow\.__CF\$cv\$params\s*=\s*\{)([^{}]*)(\})/g, ( _, prefix, params: string, suffix ) =>
+			prefix + params.replace( /((?:^|,)\s*(?:["']?[rt]["']?)\s*:\s*)(["'])[^"']*\2/g, '$1$2$2' ) + suffix )
+		.replace( /(\/cdn-cgi\/challenge-platform\/scripts\/jsd\/main\.js\?ray=)[^&"'\\\s<>#]*/g, '$1' )
 		.replace( /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, '<timestamp>' );
 }
 
