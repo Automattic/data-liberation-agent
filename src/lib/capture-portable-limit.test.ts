@@ -89,7 +89,7 @@ it('exports a body JPEG above the dimension ceiling within the byte cap as real 
 }, 30_000);
 
 it('exports a head-only scaled JPEG original without a rendition', async () => {
-	await captureFixture('', (dir, url) => {
+	await captureFixture('<p>Photos</p>', (dir, url) => {
 		const manifest = JSON.parse(readFileSync(join(dir, 'resources/manifest.json'), 'utf8'));
 		expect(manifest.resources[url + 'dell-scaled.jpeg'].path).toMatch(/dell-scaled\.jpg$/);
 		const $ = cheerio.load(readFileSync(join(dir, 'website/index.html'), 'utf8'));
