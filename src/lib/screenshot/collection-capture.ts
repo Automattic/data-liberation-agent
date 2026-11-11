@@ -76,7 +76,10 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 					const url = anchor?.href;
 					const text = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
 					const media = Array.from(child.querySelectorAll('img')).map(img => img.getAttribute('src') ?? '').join('|');
-					return { key: url || `text:${text}|media:${media}`, ...(url ? { url } : {}), text, html: child.outerHTML };
+					// A destination is not a member identity: distinct cards (or layout
+					// columns) can link to the same page. Include observed content so
+					// deduplication cannot erase one or invent a membership change.
+					return { key: JSON.stringify([url ?? null, text, media]), ...(url ? { url } : {}), text, html: child.outerHTML };
 				}));
 				for (const member of members) if (!evidence.members.some(item => item.key === member.key)) {
 					if (evidence.members.length >= limits.members) { evidence.coverage = 'partial'; break; }
