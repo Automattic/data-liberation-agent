@@ -32,8 +32,7 @@ describe('Google Sites adapter', () => {
     for (const html of ['<p>Google Sites</p>', '<a href="https://sites.google.com/view/example">Example</a>', '<div jscontroller="OtherGoogleApp">']) {
       expect(detection.sourceSignals!.some(({ pattern }) => pattern.test(html))).toBe(false);
     }
-    expect(detection.urlPatterns![0].test('https://sites.google.com/view/garden')).toBe(true);
-    expect(detection.urlPatterns![0].test('https://sites.google.com.evil.test/')).toBe(false);
+    expect(detection.hosts).toEqual(['sites.google.com']);
   });
 
   it('uses authored full-page embed HTML but leaves ordinary pages unchanged', () => {

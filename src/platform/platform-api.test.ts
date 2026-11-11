@@ -66,7 +66,7 @@ const sourceUrl = 'https://blog.acme-builder.example/';
 const acmePlatform = {
 	id,
 	detection: {
-		urlPatterns: [ /acme-builder\.example/i ],
+		hosts: [ 'acme-builder.example' ],
 		httpSignals: [
 			{ header: 'x-generator', value: 'ACME', signal: 'X-Generator: acme header' },
 		],

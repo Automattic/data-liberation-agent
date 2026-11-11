@@ -14,7 +14,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /^https?:\/\/[^/]+\.ghost\.io(?:[/:?#]|$)/i ],
+	hosts: [ 'ghost.io' ],
 	httpSignals: [
 		{ header: 'ghost-fastly', signal: 'ghost-fastly header (Ghost(Pro) CDN)' },
 	],

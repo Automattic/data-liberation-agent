@@ -44,10 +44,9 @@ registerPlatform( defaultAdapter, { fallback: true } );
 
 // Registration order is deterministic and doubles as the cross-platform
 // tiebreak order if several platforms' signals ever matched the same response
-// (the last matching platform wins). Frameworks register before more specific
-// platforms, which may themselves use that framework's infrastructure.
+// (the first matching platform wins). Specific platforms register before
+// frameworks whose infrastructure they may share.
 const builtins: Platform[] = [
-	nextjsAdapter,
 	atombioAdapter,
 	bloggerAdapter,
 	carrdAdapter,
@@ -69,6 +68,7 @@ const builtins: Platform[] = [
 	webflowAdapter,
 	weeblyAdapter,
 	wixAdapter,
+	nextjsAdapter,
 ];
 
 for ( const platform of builtins ) {

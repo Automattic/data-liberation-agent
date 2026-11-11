@@ -5,7 +5,7 @@ import { discoverTenantHandle, tenantHandleRouteScope } from '../tenant-handle.j
 export const atombioAdapter: PlatformAdapter = {
 	id: 'atombio',
 	detection: {
-		urlPatterns: [/^https?:\/\/(?:www\.)?atom\.bio(?::\d+)?(?:\/|$)/i],
+		hosts: ['atom.bio'],
 	},
 	routeScope: tenantHandleRouteScope,
 	discover: (url) => discoverTenantHandle(url),

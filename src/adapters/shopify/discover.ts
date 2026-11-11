@@ -20,8 +20,8 @@ export async function discover(url: string, _opts: Record<string, unknown>): Pro
   }
 
   // 2. Fetch homepage HTML for metadata
-  let homepageHtml = '';
-  try {
+  let homepageHtml = typeof _opts.entryHtml === 'string' ? _opts.entryHtml : '';
+  if (typeof _opts.entryHtml !== 'string') try {
     const resp = await fetch(normalized, {
       signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': SOURCE_USER_AGENT },

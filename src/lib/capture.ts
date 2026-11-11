@@ -462,7 +462,7 @@ async function runCaptureWebsite(
 		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )
 		: '';
 	const outputDir = options.outputDir;
-	const detection = await detect( sourceUrl );
+	const detection = await detect( sourceUrl, { headers: response.headers, html: entryHtml } );
 	const adapter = dependencies.findAdapter( detection.platform );
 	if ( ! adapter )
 		throw new UnsupportedCapturePlatformError(
@@ -478,6 +478,7 @@ async function runCaptureWebsite(
 	progress( { phase: 'discovering', url: sourceUrl } );
 	const inventory = ( await adapter.discover( sourceUrl, {
 		outputDir,
+		entryHtml,
 		resume: options.resume === true,
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );

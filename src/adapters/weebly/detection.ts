@@ -2,7 +2,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /weebly\.com/i ],
+	hosts: [ 'weebly.com' ],
 	httpSignals: [
 		{
 			header: 'x-host',

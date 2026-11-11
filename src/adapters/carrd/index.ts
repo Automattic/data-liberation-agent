@@ -68,7 +68,7 @@ const prepare: NonNullable<LiberationHooks['prepare']> = async (page, ctx) => {
 export const carrdAdapter: PlatformAdapter = {
 	id: 'carrd',
 	detection: {
-		urlPatterns: [/^https?:\/\/[^/]+\.carrd\.co(?::\d+)?(?:\/|$)/i],
+		hosts: ['carrd.co'],
 		sourceSignals: [
 			{ pattern: /<meta\s+name=["']generator["']\s+content=["']Carrd\b/i, signal: 'Carrd generator' },
 			{ pattern: /indexedDB\.open\(['"]carrd['"]\)/, signal: 'Carrd runtime' },

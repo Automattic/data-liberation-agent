@@ -2,7 +2,7 @@ import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
 	urlPatterns: [
-		/^https?:\/\/(?:[a-z0-9-]+\.)*blogspot\.[a-z]{2,3}(?:\.[a-z]{2})?(?::\d+)?(?:[/?#]|$)/i,
+		/^(?:[a-z0-9-]+\.)*blogspot\.[a-z]{2,3}(?:\.[a-z]{2})?$/i,
 	],
 	sourceSignals: [
 		{

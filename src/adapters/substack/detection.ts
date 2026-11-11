@@ -9,7 +9,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /^https?:\/\/[^/]+\.substack\.com(?:[/:?#]|$)/i ],
+	hosts: [ 'substack.com' ],
 	httpSignals: [
 		{ header: 'x-served-by', value: 'substack', signal: 'X-Served-By: Substack header' },
 		{ header: 'x-cluster', value: 'substack', signal: 'X-Cluster: substack header' },
