@@ -38,7 +38,11 @@ export async function discoverGeneric(
     // Network error — retain sitemap and supplemental browser results.
   }
 
-  const sitemap = await fetchSitemapWithDiagnostics(normalized, extraSitemaps);
+  const sitemap = await fetchSitemapWithDiagnostics(normalized, {
+    extraSitemaps,
+    // Reuse the entry document so feed autodiscovery and the coverage crawl do not refetch it.
+    entryHtml: typeof opts.entryHtml === 'string' || homepageHtml ? homepageHtml : undefined,
+  });
   let navigation = extractNavLinks(homepageHtml, normalized);
   let renderedUrls: string[] = [];
   if (sitemap.urls.length < 5) {
