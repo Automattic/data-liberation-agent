@@ -8,6 +8,8 @@ export const dudaAdapter: PlatformAdapter = {
 	id: 'duda',
 	detection,
 	discover: discoverDefault,
+	// Share-widget emailshare actions and runtime CSS both live under /_dm/.
+	runtimePaths: ['/_dm/'],
 	liberation: {
 		beforeSerialize: async ( page ) => { await markInertPagers( page ); },
 	},

@@ -27,6 +27,8 @@ export interface ScreenshotOpts {
 	outputDir: string;
 	primaryUrl?: string; // reference for same-origin enforcement
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
+	/** Platform runtime namespaces on the primary source origin, excluded from route admission. */
+	runtimePaths?: string[];
 	viewports?: Viewport[];
 	/**
 	 * Whether the default phone profile is captured as its own document (see

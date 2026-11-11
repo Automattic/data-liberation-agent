@@ -3,7 +3,7 @@ import type { SiteRouteScope } from '../../platform/types.js';
 import { routeInScope, scopedRouteKey, validateRouteScope } from '../url/route-scope.js';
 import { ROUTE_OMITTED_BY_BUDGET, routeBudgetReason } from '../route-budget.js';
 import type { CanonicalRouteAlias } from '../route-aliases.js';
-import { actionUrlExclusion } from '../url/action-url.js';
+import { actionUrlExclusion, platformRuntimeExclusion } from '../url/action-url.js';
 import { isNonDocumentUrl } from '../extraction/sitemap.js';
 
 export interface LinkedPageLimits {
@@ -42,7 +42,8 @@ export class LinkedFrontier {
 	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope,
 		/** Routes dropped before capture because their rel=canonical is another inventory route. */
 		private readonly aliases: ReadonlyMap<string, string> = new Map(),
-		private readonly aliasRecords: readonly CanonicalRouteAlias[] = []) {
+		private readonly aliasRecords: readonly CanonicalRouteAlias[] = [],
+		private readonly runtime?: { sourceUrl: string; runtimePaths?: readonly string[] }) {
 		this.capturePageLimit = limits.capturePageLimit;
 		if (routeScope) validateRouteScope(routeScope);
 		this.limits = {
@@ -58,6 +59,11 @@ export class LinkedFrontier {
 
 	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked', redirectFrom?: string): boolean {
 		if (!routeInScope(url, this.routeScope)) return false;
+		const runtime = this.runtime && platformRuntimeExclusion(url, this.runtime.sourceUrl, this.runtime.runtimePaths);
+		if (runtime) {
+			this.omit(runtime.url, runtime.code, runtime.reason);
+			return false;
+		}
 		url = scopedRouteKey(url, this.routeScope);
 		// A link to a route whose server-HTML canonical is another inventory route
 		// counts as a link to that route: the capture holds its document, so the

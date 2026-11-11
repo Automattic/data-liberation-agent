@@ -15,7 +15,7 @@ import { extractNavigationLandmarkLinks } from './html-extract/index.js';
 import { decodeHtml } from './decode-html.js';
 import { normalizeDiscoveredRoutes } from './extraction/sitemap.js';
 import { routeInScope, scopedRouteKey, validateRouteScope } from './url/route-scope.js';
-import { actionUrlExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
+import { actionUrlExclusion, platformRuntimeExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
@@ -483,7 +483,7 @@ async function runCaptureWebsite(
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	const sourceRoute = documentRequestUrl( sourceUrl );
-	// Action URLs leave the inventory before the budget sees it, so they never
+	// Action URLs and declared runtime paths leave before the budget sees them, so they never
 	// spend, and never appear as omitted, failed or missing routes.
 	const excludedActions = new Map< string, { code: string; url: string; reason: string } >();
 	const inventoryUrls = await normalizeDiscoveredRoutes( [
@@ -492,7 +492,7 @@ async function runCaptureWebsite(
 			.map( ( entry ) => entry.url )
 			.filter( ( url ) => {
 				if ( ! routeInScope( url, routeScope ) || documentRequestUrl( url ) === sourceRoute ) return false;
-				const action = actionUrlExclusion( url );
+				const action = platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) ?? actionUrlExclusion( url );
 				if ( action ) excludedActions.set( action.url, action );
 				return ! action;
 			} ),
@@ -587,6 +587,7 @@ async function runCaptureWebsite(
 		maxTotalBytes: options.maxTotalBytes,
 		urls,
 		routeScope,
+		runtimePaths: adapter.runtimePaths,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
 		...( aliasProbe.aliases.length ? { linkedCanonicalAliases: aliasProbe.aliases } : {} ),
