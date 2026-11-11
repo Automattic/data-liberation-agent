@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.209] - 2026-11-11
+
+### Changed
+- regenerate plugin bundles
+- Add Duda detection and mark single-page blog pagers inert
+- keep the series memo when element signatures collide
+- stop counting multi-second timeouts as viewport work
+- Alias query renditions by rendered canonical before the device check
+- Normalize Cloudflare challenge values before the device-mode comparison
+
+### Fixed
+- escape renamed digit-leading ids in device CSS aliases
+
 ## [0.33.208] - 2026-11-11
 
 ### Changed
