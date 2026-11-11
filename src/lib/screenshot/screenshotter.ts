@@ -473,6 +473,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			};
 			const restoredImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
 			const restoredAspectRatios: Array< { image: HTMLImageElement; previous: string; priority: string } > = [];
+			const restoredBackgrounds: Array< { element: HTMLElement; previous: string | null } > = [];
 			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
 			const srcsetShaped = ( value: string ) => /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
 			const durableImageUrl = ( value: string | null | undefined ): string => {
@@ -554,6 +555,19 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				restoredImages.push( { image, previous: image.getAttribute( 'src' ) } );
 				image.setAttribute( 'src', next );
 			}
+			// Lazy background loaders (vanilla-lazyload, lazysizes) keep the real image
+			// in data-bg and paint it only once the element enters the viewport. An
+			// element the capture never scrolled in, or that still paints the 1x1
+			// placeholder, would otherwise serialize as an empty box.
+			for ( const element of Array.from( document.body?.querySelectorAll< HTMLElement >( '[data-bg]' ) ?? [] ) ) {
+				const declared = ( element.getAttribute( 'data-bg' ) ?? '' ).trim().replace( /^url\(\s*(["']?)(.*?)\1\s*\)$/i, '$2' );
+				const next = durableImageUrl( declared );
+				if ( ! next ) continue;
+				const painted = getComputedStyle( element ).backgroundImage;
+				if ( painted !== 'none' && ! /^url\(\s*["']?data:image\/gif;(?:[^,]*;)?base64,R0lGODlhAQAB/i.test( painted ) ) continue;
+				restoredBackgrounds.push( { element, previous: element.getAttribute( 'style' ) } );
+				element.style.setProperty( 'background-image', `url("${ next.replace( /"/g, '%22' ) }")` );
+			}
 			// outerHTML concatenates adjacent Text nodes. Re-parsing that string
 			// coalesces source shaping runs, which can change subpixel advances and
 			// painted glyphs even when the text and element boxes are identical.
@@ -622,6 +636,10 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				for ( const { image, previous } of restoredImages.reverse() ) {
 					if ( previous === null ) image.removeAttribute( 'src' );
 					else image.setAttribute( 'src', previous );
+				}
+				for ( const { element, previous } of restoredBackgrounds.reverse() ) {
+					if ( previous === null ) element.removeAttribute( 'style' );
+					else element.setAttribute( 'style', previous );
 				}
 				for ( const { image, previous, priority } of restoredAspectRatios.reverse() ) {
 					if ( previous === '' ) image.style.removeProperty( 'aspect-ratio' );
