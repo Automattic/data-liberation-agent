@@ -366,6 +366,29 @@ describe('capturePageHtml stylesheet serialization', () => {
     await page.close();
   });
 
+  it('reveals restored lazy backgrounds using loaded peer state without changing the live DOM', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><base href="https://site.example.test/">
+      <style>.lazy{opacity:0;transition:opacity 1000ms}.lazy.load{opacity:1}.banner{position:absolute;width:300px}</style></head><body>
+      <div id="loaded" class="banner lazy entered loaded load" data-ll-status="loaded" data-bg="/media/banner.jpg" style="background-image:url(/media/banner.jpg)"></div>
+      <div id="unentered" class="img lazy" data-bg="/media/card.jpg"></div>
+    </body></html>`);
+    const liveBefore = await page.content();
+    expect(await page.locator('#unentered').evaluate(element => getComputedStyle(element).opacity)).toBe('0');
+
+    const html = await capturePageHtml(page);
+
+    expect(await page.content()).toBe(liveBefore);
+    const doc = load(html);
+    // Only the token that reveals the element is adopted; the peer's component class is not.
+    expect(doc('#unentered').attr('class')?.split(/\s+/).sort()).toEqual(['img', 'lazy', 'load']);
+    expect(doc('#unentered').attr('data-ll-status')).toBe('loaded');
+    await page.setContent(html);
+    expect(await page.locator('#unentered').evaluate(element => getComputedStyle(element).opacity)).toBe('1');
+    expect(await page.locator('#unentered').evaluate(element => getComputedStyle(element).backgroundImage)).toContain('https://site.example.test/media/card.jpg');
+    await page.close();
+  });
+
   it('paints the data-bg image of a lazy background the source never loaded', async () => {
     const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
     const gif = 'data:image/gif;id=1;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
