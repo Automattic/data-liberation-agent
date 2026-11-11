@@ -3,7 +3,6 @@ import { detection } from './detection.js';
 import { discoverWebflow } from './discover.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 
-export type { WebflowInventory, WebflowAdapterOpts } from './discover.js';
 
 export const webflowAdapter: PlatformAdapter = {
   id: 'webflow',

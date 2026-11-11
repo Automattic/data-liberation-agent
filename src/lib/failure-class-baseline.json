@@ -5,11 +5,6 @@
 			"throw new Error('Response contains no Atom feed')": 1,
 			"throw new Error(`HTTP ${response.status}`)": 1
 		},
-		"src/adapters/hubspot/discover.ts": {
-			"throw new Error(`HubSpot discover(): HTTP ${resp.status} ${resp.statusText} for ${normalized}`)": 1,
-			"throw new Error(`HubSpot discover(): failed reading body of ${normalized}: ${(err as Error).message}`)": 1,
-			"throw new Error(`HubSpot discover(): fetch failed for ${normalized}: ${(err as Error).message}`)": 1
-		},
 		"src/adapters/shopify/acquisition.ts": {
 			"throw new Error('Brooklyn slide pause API is unavailable')": 1,
 			"throw new Error('Brooklyn slide runtime is unavailable')": 1

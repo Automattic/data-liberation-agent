@@ -24,7 +24,6 @@ async function preservePublicationEvidence(page: import('playwright').Page): Pro
 // Re-exports
 // ---------------------------------------------------------------------------
 
-export type { GoDaddyWmAdapterOpts, GoDaddyWmInventory } from './types.js';
 
 // ---------------------------------------------------------------------------
 // The adapter

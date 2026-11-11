@@ -1,7 +1,7 @@
 import type { PlatformAdapter } from '../../types.js';
 import { discoverDefault } from './discover.js';
 
-export type { DefaultInventory, DefaultAdapterOpts } from './types.js';
+export type { DefaultInventory } from './types.js';
 
 // The generic fallback never positively identifies a platform — it is reached
 // via the registry's fallback resolution when detection returns 'unknown' (or

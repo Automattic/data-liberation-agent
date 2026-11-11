@@ -3,7 +3,6 @@ import { detection } from './detection.js';
 import { discoverWeebly } from './discover.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 
-export type { WeeblyInventory, WeeblyAdapterOpts } from './types.js';
 
 // ---------------------------------------------------------------------------
 // The adapter
