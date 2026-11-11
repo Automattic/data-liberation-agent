@@ -30,6 +30,7 @@ import { randomUUID } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
 import { wireNativeControlState } from '../native-control-state.js';
+import { portableVisualIframeWidth } from '../visual-iframe-geometry.js';
 
 // A real page's sanitized HTML+CSS is many KB. Anything below this is almost
 // certainly a blank/shell capture (page didn't render) — fail loudly rather
@@ -66,7 +67,7 @@ export function sanitizeFrozenHtml(html: string): string {
       const value = frame.attr(name);
       if (value !== undefined) safe.attr(name,value);
     }
-    safe.attr('src',src).attr('width',width).attr('height',height);
+    safe.attr('src',src).attr('width',portableVisualIframeWidth(frame.attr('width'),width)).attr('height',height);
     for (const [name,value] of [[evidence.src,src],[evidence.width,width],[evidence.height,height]]) safe.attr(name!,value!);
     const placeholder = `<template id="${randomUUID()}"></template>`;
     frames.set(placeholder,$.html(safe));
