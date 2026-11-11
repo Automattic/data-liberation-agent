@@ -833,7 +833,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	}, 60_000 );
 
 	// Two local browser routes (~8s): one full sweep, then only the memo probes, even with new constant content.
-	it( 'reuses shared header series despite new constant content, root state classes and identity-scale origins', async () => {
+	it( 'reuses shared header series despite new constant content, duplicate ids, root state classes and identity-scale origins', async () => {
 		const memo: FluidSeriesMemo = new Map();
 		const lookup = vi.spyOn( memo, 'get' );
 		const learned = [];
@@ -845,6 +845,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 					<style>main { height: ${ height }px; }</style>
 					<div class="frame" style="width:100%;transform:scale(1)"><header style="font-size:10px">Shared header</header><main>Route content</main></div>
 					${ index ? '<aside style="min-height:42px">New constant content</aside>' : '' }
+					<p><span id="card"><i style="display:block;min-height:10px"></i></span></p><p><span id="card"><i style="display:block;min-height:10px"></i></span></p>
 					<script>
 						const update = () => {
 							const frame = document.querySelector('.frame');
