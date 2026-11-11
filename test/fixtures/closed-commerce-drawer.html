@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acme</title>
+<style>
+body { margin: 0; font-family: sans-serif; }
+.hero { padding: 64px 24px; background: #f4efe8; }
+.hero h1 { margin: 0 0 12px; font-size: 40px; }
+.drawer { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-rows: auto 1fr auto;
+  background: #9c6bd3; color: #fff; }
+.drawer--closed { visibility: hidden; opacity: 0; transform: translateX(100vw); }
+.drawer__header, .drawer__footer { padding: 16px 24px; }
+.drawer__methods { display: flex; gap: 8px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1>Acme Studio</h1>
+    <p>Handmade goods, made to order.</p>
+  </section>
+</main>
+<!-- Square Online's closed checkout shape; only its commerce runtime opens it. -->
+<div class="cko cko--close cko--flyover drawer drawer--closed">
+  <div class="drawer__header">
+    <button type="button" title="Back to Cart"><span>Back to Cart</span></button>
+    <div role="banner"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E" alt="Acme" height="24"></div>
+  </div>
+  <div class="drawer__body"></div>
+  <div class="drawer__footer">
+    <div>Secure checkout by Acme Pay</div>
+    <div class="drawer__methods">
+      <img alt="Card A"> <img alt="Card B"> <img alt="Card C"> <img alt="Card D">
+    </div>
+  </div>
+</div>
+<messages-plugin sellerkey="fixture-key" businessname="Acme" source="SQUARE_ONLINE_SITE"></messages-plugin>
+<!-- A closed navigation drawer is portable content, not a provider service. -->
+<button id="toggle" type="button" aria-controls="nav" aria-expanded="false">Menu</button>
+<nav id="nav" class="drawer drawer--closed"><a href="/shop">Shop</a></nav>
+<script>
+document.querySelector('#toggle').onclick = () => {
+  const closed = document.querySelector('#nav').classList.toggle('drawer--closed');
+  document.querySelector('#toggle').setAttribute('aria-expanded', String(!closed));
+};
+</script>
+</body>
+</html>
