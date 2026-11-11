@@ -2,7 +2,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /squarespace\.com/i ],
+	hosts: [ 'squarespace.com' ],
 	httpSignals: [
 		{ header: 'server', value: 'squarespace', signal: 'Server: Squarespace header' },
 		{ header: 'x-servedby', value: 'squarespace', signal: 'X-ServedBy: squarespace header' },

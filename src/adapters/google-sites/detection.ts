@@ -1,7 +1,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-  urlPatterns: [ /^https?:\/\/sites\.google\.com(?:[/:]|$)/i ],
+  hosts: [ 'sites.google.com' ],
   sourceSignals: [
     {
       pattern: /\bdata-legacy-theme-name\s*=/i,

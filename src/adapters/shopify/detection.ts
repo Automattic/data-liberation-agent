@@ -2,7 +2,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /myshopify\.com|shopify\.com/i ],
+	hosts: [ 'myshopify.com', 'shopify.com' ],
 	httpSignals: [
 		{ header: 'x-shopid', signal: 'X-ShopId header' },
 		{ header: 'powered-by', value: 'shopify', signal: 'Powered-by: Shopify header' },

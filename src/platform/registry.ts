@@ -68,7 +68,7 @@ function validatePlatform( platform: Platform, options: RegisterPlatformOptions 
 		if ( typeof detection !== 'object' ) {
 			throw new InvalidPlatformError( `Platform '${ platform.id }' detection must be an object` );
 		}
-		for ( const tier of [ 'urlPatterns', 'httpSignals', 'sourceSignals', 'pathProbes' ] as const ) {
+		for ( const tier of [ 'hosts', 'urlPatterns', 'httpSignals', 'sourceSignals', 'pathProbes' ] as const ) {
 			const signals = detection[ tier ];
 			if ( signals != null && ! Array.isArray( signals ) ) {
 				throw new InvalidPlatformError(

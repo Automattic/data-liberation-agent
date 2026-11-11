@@ -6,7 +6,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /wixsite\.com|wix\.com/i ],
+	hosts: [ 'wixsite.com', 'wix.com' ],
 	httpSignals: [ { header: 'x-wix-request-id', signal: 'X-Wix-Request-Id header' } ],
 	sourceSignals: [
 		{ pattern: /wixstatic\.com/i, signal: 'wixstatic.com in page source' },

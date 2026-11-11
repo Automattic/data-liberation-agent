@@ -12,7 +12,7 @@ import type { CapabilityRule } from '../lib/inspect-rendered.js';
 import type { TemplateStyleNormalization } from '../lib/template-groups.js';
 import type { HttpAcquisitionProfile } from './acquisition.js';
 
-/** URL substring/regex tested against the normalized site URL. */
+/** Regex matched against the entire hostname only (never path or query). */
 export type PlatformUrlSignal = RegExp;
 
 /**
@@ -59,7 +59,9 @@ export interface PlatformPathProbe {
  * registered fallback is selected implicitly).
  */
 export interface PlatformDetection {
-	/** Highest-priority tier: tested against the site URL before any fetch. */
+	/** Host suffixes, matched case-insensitively at a DNS label boundary. */
+	hosts?: string[];
+	/** Advanced host patterns; must match the entire hostname. */
 	urlPatterns?: PlatformUrlSignal[];
 	/** Response-header fingerprints, tested after the URL fetch. */
 	httpSignals?: PlatformHttpSignal[];

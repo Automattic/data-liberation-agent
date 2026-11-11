@@ -1,31 +1,7 @@
 import { sourceFetch as fetch } from '../media-fetch/capture-requests.js';
 import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
-
-// src/lib/detect-platform/detect-platform.ts
-//
-// The automatic-detection ENGINE. Platforms own their signals (declared on the
-// Platform contract and carried in the platform registry); this module only
-// implements the tiered matching order and never hardcodes a platform:
-//
-//   1. URL patterns   — tested against the site URL before any fetch (high).
-//   2. HTTP headers   — response-header fingerprints (high).
-//   3. Page source    — HTML markers, only when no header matched (medium).
-//   4. Path probes    — same-origin HEAD probes, only when all else failed
-//                       (high; extra HTTP round-trip, so strictly last).
-//
-// Platforms are consulted in registration order; when several signals match,
-// every matching signal is recorded and the last matching platform wins
-// (built-in signals fingerprint disjoint infrastructure, so in practice only
-// consumer-registered platforms can collide — deterministically).
 import { registeredPlatforms } from '../../platform/registry.js';
-import type {
-	Platform,
-	PlatformHttpSignal,
-	PlatformPathProbe,
-	PlatformSourceSignal,
-} from '../../platform/types.js';
-// Ensure the built-in platforms are registered before any detection query.
-// (Third-party platforms registered later simply join the same registry.)
+import type { Platform, PlatformHttpSignal, PlatformPathProbe, PlatformSourceSignal } from '../../platform/types.js';
 import '../../platform/builtins.js';
 
 export interface DetectionResult {
@@ -38,152 +14,114 @@ export interface FullDetectionResult extends DetectionResult {
   url: string;
 }
 
-export function detectFromUrl(url: string): string | null {
-  const normalized = url.includes('://') ? url : `https://${url}`;
-  for (const platform of registeredPlatforms()) {
-    for (const pattern of platform.detection?.urlPatterns ?? []) {
-      if (pattern.test(normalized)) return platform.id;
-    }
+function hostnameFromUrl(url: string): string | null {
+  try {
+    return new URL(url.includes('://') ? url : `https://${url}`).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return null;
   }
-  return null;
+}
+
+function matchesHost(platform: Platform, hostname: string): boolean {
+  return (platform.detection?.hosts ?? []).some(host => {
+    const suffix = host.toLowerCase();
+    return hostname === suffix || hostname.endsWith(`.${suffix}`);
+  }) || (platform.detection?.urlPatterns ?? []).some(pattern => {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(hostname);
+    return match?.index === 0 && match[0].length === hostname.length;
+  });
+}
+
+export function detectFromUrl(url: string): string | null {
+  const hostname = hostnameFromUrl(url);
+  if (!hostname) return null;
+  return registeredPlatforms().find(platform => matchesHost(platform, hostname))?.id ?? null;
+}
+
+function headerSignals(platform: Platform, headers: Headers): string[] {
+  return (platform.detection?.httpSignals ?? []).filter(sig => {
+    const value = headers.get(sig.header);
+    return value && (!sig.value || value.toLowerCase().includes(sig.value.toLowerCase()));
+  }).map(sig => sig.signal);
+}
+
+/** Highest confidence wins, then earliest registration, across URL and headers. */
+export function detectFromDocument(url: string, headers: Headers, html: string): DetectionResult {
+  const hostname = hostnameFromUrl(url);
+  const platforms = registeredPlatforms();
+  for (const platform of platforms) {
+    const hostMatch = hostname !== null && matchesHost(platform, hostname);
+    const signals = headerSignals(platform, headers);
+    if (hostMatch) signals.unshift(`URL contains ${platform.id} domain`);
+    if (signals.length) return { platform: platform.id, confidence: 'high', signals };
+  }
+  for (const platform of platforms) {
+    const signals = (platform.detection?.sourceSignals ?? []).filter(sig => {
+      sig.pattern.lastIndex = 0;
+      return sig.pattern.test(html);
+    }).map(sig => sig.signal);
+    if (signals.length) return { platform: platform.id, confidence: 'medium', signals };
+  }
+  return { platform: 'unknown', confidence: 'low', signals: [] };
 }
 
 /** Match HTTP headers and source evidence already obtained by a caller. */
 export function detectFromResponse(headers: Headers, html: string): DetectionResult {
-  const platforms = registeredPlatforms();
-  const headerMatch = matchHttpSignals(platforms, headers);
-  if (headerMatch.platform) return { platform: headerMatch.platform, confidence: 'high', signals: headerMatch.signals };
-  const sourceMatch = matchSourceSignals(platforms, html);
-  if (sourceMatch.platform) return { platform: sourceMatch.platform, confidence: 'medium', signals: sourceMatch.signals };
-  return { platform: 'unknown', confidence: 'low', signals: [] };
+  return detectFromDocument('', headers, html);
 }
 
-/** Match URL, HTTP, and source evidence already obtained by a caller. */
-export function detectFromDocument(url: string, headers: Headers, html: string): DetectionResult {
-  const urlResult = detectFromUrl(url);
-  if (urlResult) return { platform: urlResult, confidence: 'high', signals: [`URL contains ${urlResult} domain`] };
-  return detectFromResponse(headers, html);
-}
-
-function matchHttpSignals(
-  platforms: Platform[],
-  headers: Headers,
-): { platform: string | null; signals: string[] } {
-  let matched: string | null = null;
-  const signals: string[] = [];
-  for (const platform of platforms) {
-    for (const sig of platform.detection?.httpSignals ?? []) {
-      const headerVal = headers.get(sig.header);
-      if (headerVal && (!sig.value || headerVal.toLowerCase().includes(sig.value.toLowerCase()))) {
-        matched = platform.id;
-        signals.push(sig.signal);
-      }
-    }
-  }
-  return { platform: matched, signals };
-}
-
-function matchSourceSignals(
-  platforms: Platform[],
-  html: string,
-): { platform: string | null; signals: string[] } {
-  let matched: string | null = null;
-  const signals: string[] = [];
-  for (const platform of platforms) {
-    for (const sig of platform.detection?.sourceSignals ?? []) {
-      if (sig.pattern.test(html)) {
-        matched = platform.id;
-        signals.push(sig.signal);
-      }
-    }
-  }
-  return { platform: matched, signals };
-}
-
-async function matchPathProbes(
-  platforms: Platform[],
-  normalizedUrl: string,
-): Promise<{ platform: string | null; signal: string | null }> {
-  for (const platform of platforms) {
+async function matchPathProbes(url: string): Promise<DetectionResult> {
+  for (const platform of registeredPlatforms()) {
     for (const probe of platform.detection?.pathProbes ?? []) {
       try {
-        const probeUrlObj = new URL(probe.path, normalizedUrl);
-        if (probeUrlObj.origin !== new URL(normalizedUrl).origin) continue;
-        const probeUrl = probeUrlObj.toString();
-        const probeResp = await fetch(probeUrl, {
+        const target = new URL(probe.path, url);
+        if (target.origin !== new URL(url).origin) continue;
+        const response = await fetch(target.toString(), {
           method: 'HEAD',
           headers: { 'User-Agent': SOURCE_USER_AGENT },
           signal: AbortSignal.timeout(10000),
           redirect: 'manual',
         });
-        if (!probe.expectedStatus.includes(probeResp.status)) continue;
-        if (probe.locationContains) {
-          const loc = probeResp.headers.get('location') || '';
-          if (!loc.includes(probe.locationContains)) continue;
-        }
-        return { platform: platform.id, signal: probe.signal };
+        if (!probe.expectedStatus.includes(response.status)) continue;
+        if (probe.locationContains && !(response.headers.get('location') || '').includes(probe.locationContains)) continue;
+        return { platform: platform.id, confidence: 'high', signals: [probe.signal] };
       } catch {
-        // Probe fetch failed (network error, timeout, etc.) — try next probe.
+        // Probe fetch failed — try the next signal.
       }
     }
   }
-  return { platform: null, signal: null };
+  return { platform: 'unknown', confidence: 'low', signals: [] };
+}
+
+async function detectDocument(url: string, headers: Headers, html: string): Promise<DetectionResult> {
+  const result = detectFromDocument(url, headers, html);
+  return result.platform === 'unknown' ? matchPathProbes(url) : result;
 }
 
 export async function detectFromHttp(url: string): Promise<DetectionResult> {
-  const signals: string[] = [];
-  let platform = 'unknown';
-  let confidence: 'high' | 'medium' | 'low' = 'low';
-  const platforms = registeredPlatforms();
-
+  const normalized = url.includes('://') ? url : `https://${url}`;
   try {
-    const normalized = url.includes('://') ? url : `https://${url}`;
     const response = await fetch(normalized, {
       signal: AbortSignal.timeout(10000),
       redirect: 'follow',
       headers: { 'User-Agent': SOURCE_USER_AGENT },
     });
-
-    let documentResult = detectFromResponse(response.headers, '');
-    if (documentResult.platform === 'unknown') {
-      let html = '';
-      try { html = await response.text(); } catch { /* source matching is best-effort */ }
-      documentResult = detectFromResponse(response.headers, html);
-    }
-    platform = documentResult.platform;
-    confidence = documentResult.confidence;
-    signals.push(...documentResult.signals);
-
-    if (platform === 'unknown') {
-      const probeMatch = await matchPathProbes(platforms, normalized);
-      if (probeMatch.platform) {
-        platform = probeMatch.platform;
-        confidence = 'high';
-        signals.push(probeMatch.signal!);
-      }
-    }
+    let html = '';
+    try { html = await response.text(); } catch { /* source matching is best-effort */ }
+    return await detectDocument(normalized, response.headers, html);
   } catch {
-    // Network error — return unknown
+    return { platform: 'unknown', confidence: 'low', signals: [] };
   }
-
-  return { platform, confidence, signals };
 }
 
-export async function detect(url: string): Promise<FullDetectionResult> {
-  const urlResult = detectFromUrl(url);
-  if (urlResult) {
-    return {
-      url,
-      platform: urlResult,
-      confidence: 'high',
-      signals: [`URL contains ${urlResult} domain`],
-    };
-  }
-
-  const httpResult = await detectFromHttp(url);
-  return { url, ...httpResult };
+/** Supplied entry evidence avoids fetching the entry document again. */
+export async function detect(url: string, entry?: { headers: Headers; html: string }): Promise<FullDetectionResult> {
+  if (entry) return { url, ...await detectDocument(url, entry.headers, entry.html) };
+  const host = detectFromUrl(url);
+  // Without a response, the hostname is already high-confidence evidence.
+  if (host) return { url, platform: host, confidence: 'high', signals: [`URL contains ${host} domain`] };
+  return { url, ...await detectFromHttp(url) };
 }
 
-// Re-exported for consumers that want to type custom signals against the
-// engine's contract (the shapes live with the public Platform contract).
 export type { PlatformHttpSignal, PlatformPathProbe, PlatformSourceSignal };

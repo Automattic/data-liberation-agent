@@ -2,7 +2,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /\.gamma\.site(?:[/:?#]|$)/i ],
+	hosts: [ 'gamma.site' ],
 	httpSignals: [
 		{ header: 'server', value: 'gamma', signal: 'Server: gamma header' },
 		{ header: 'x-super-powered-by', value: 'gamma', signal: 'X-Super-Powered-By: gamma header' },

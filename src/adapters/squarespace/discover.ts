@@ -118,8 +118,8 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   // 3. Squarespace renders its primary navigation in the public homepage HTML.
   // Admin discovery below supplements this list with published admin-only pages.
   let navigation: NavLink[] = [];
-  let homepageHtml = '';
-  try {
+  let homepageHtml = typeof opts.entryHtml === 'string' ? opts.entryHtml : '';
+  if (typeof opts.entryHtml !== 'string') try {
     const homepageResp = await fetch(url, {
       signal: AbortSignal.timeout(15_000),
       headers: { 'User-Agent': SOURCE_USER_AGENT },
@@ -131,6 +131,8 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   } catch {
     // Public navigation is best-effort; sitemap and optional admin discovery continue.
   }
+
+  if (typeof opts.entryHtml === 'string') navigation = extractNavLinks(homepageHtml, url);
 
   const siteMetadata = extractSiteMetadata(homepageHtml, {
     title: siteJson?.website?.siteTitle || siteJson?.websiteSettings?.siteTitle,

@@ -2,7 +2,7 @@
 import type { PlatformDetection } from '../../platform/types.js';
 
 export const detection: PlatformDetection = {
-	urlPatterns: [ /\.framer\.(?:website|app|ai)(?:[/:?#]|$)/i ],
+	hosts: [ 'framer.website', 'framer.app', 'framer.ai' ],
 	httpSignals: [
 		{ header: 'server', value: 'framer', signal: 'Server: Framer header' },
 		{ header: 'framer-site-id', signal: 'framer-site-id header (Framer hosting)' },

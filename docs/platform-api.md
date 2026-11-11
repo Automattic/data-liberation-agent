@@ -85,8 +85,11 @@ Detection is tiered; each platform declares only the tiers it can fingerprint.
 The engine (shared, in core) runs them in a fixed order and never hardcodes a
 platform:
 
-1. **`urlPatterns: RegExp[]`** — tested against the site URL before any fetch
-   (match → high confidence, no network round-trip).
+1. **`hosts: string[]`** — hostname suffixes matched case-insensitively with a
+   DNS label boundary (`wix.com` matches `www.wix.com`, not `notwix.com`).
+   Paths and queries never participate. Advanced **`urlPatterns: RegExp[]`**
+   match the entire hostname only; anchor them with `^` and `$`.
+   A host match is high confidence and can avoid a network round-trip.
 2. **`httpSignals`** — response-header fingerprints, tested on the initial
    fetch (high confidence). `{ header, value?, signal }` — when `value` is set
    it must appear (case-insensitively) in the header value.
@@ -97,11 +100,16 @@ platform:
    every tier above failed (they cost an extra round-trip; match → high
    confidence).
 
-Every match records its human-readable `signal` string in the
-`DetectionResult.signals` evidence list. Detection consults platforms in
-registration order; if several platforms' signals match one response, the last
-matching platform wins — deterministic, and in practice only reachable when
-custom platforms deliberately share fingerprints.
+Detection chooses highest confidence first, then earliest registration order.
+URL and header evidence are both high confidence; source evidence is medium.
+When a response is available, URL and header matches compete together, not
+by tier precedence. Path probes remain fallback-only. The winning platform's
+matching signals are recorded in `DetectionResult.signals`.
+
+Capture reuses its entry response for detection (including fallback probes),
+and passes decoded `entryHtml: string` in discovery options. Adapters should
+use this even when empty, fetching the homepage only when it is absent.
+Rendered discovery may still navigate when live runtime evidence is required.
 
 `detectPlatform(url)` (alias of the internal `detect`) returns
 `{ url, platform, confidence: 'high' | 'medium' | 'low', signals: string[] }`,
@@ -191,7 +199,7 @@ import { registerPlatform, detectPlatform } from 'data-liberation';
 registerPlatform({
   id: 'acme-builder',
   detection: {
-    urlPatterns: [/acme-builder\.example/i],
+    hosts: ['acme-builder.example'],
     httpSignals: [{ header: 'x-generator', value: 'acme', signal: 'X-Generator: acme header' }],
     sourceSignals: [{ pattern: /cdn\.acme-static\.example/i, signal: 'acme CDN in page source' }],
   },

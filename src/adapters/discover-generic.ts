@@ -21,12 +21,13 @@ export interface GenericDiscoveryOptions {
 /** Sitemap discovery plus raw entry links and a supplemental rendered SPA pass. */
 export async function discoverGeneric(
   url: string,
-  _opts: Record<string, unknown>,
+  opts: Record<string, unknown>,
   { extraSitemaps, seeds }: GenericDiscoveryOptions = {},
 ): Promise<DiscoveryInventory> {
   const normalized = url.includes('://') ? url : `https://${url}`;
-  let homepageHtml = '';
-  try {
+  // Capture supplies the entry document it already fetched, even when empty.
+  let homepageHtml = typeof opts.entryHtml === 'string' ? opts.entryHtml : '';
+  if (typeof opts.entryHtml !== 'string') try {
     const resp = await sourceFetch(normalized, {
       signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': SOURCE_USER_AGENT },
