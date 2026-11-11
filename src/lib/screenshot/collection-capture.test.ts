@@ -32,12 +32,13 @@ if(innerWidth<600)document.querySelector('#filter-panel').hidden=true;let offset
 		expect(archive.members.map(member => member.url)).toEqual(Array.from({ length: 16 }, (_,i) => `${url}record/${i}`));
 		expect(new Set(archive.members.map(member => member.key)).size).toBe(16);
 		const even = archive.states.find(state => state.trigger?.value === 'Even')!;
-		expect(even.members).toEqual(Array.from({ length: 8 }, (_,i) => `${url}record/${i*2}`));
+		const recordKey = (index: number) => archive.members.find(member => member.url === `${url}record/${index}`)!.key;
+		expect(even.members).toEqual(Array.from({ length: 8 }, (_,i) => recordKey(i*2)));
 		expect(archive.states.find(state => state.trigger?.value === '__capture_no_matching_record__')?.members).toEqual([]);
 		expect(archive.states.find(state => state.trigger?.selector === '#search' && state.trigger.value === '')?.members).toHaveLength(16);
 		const portfolio = components.find(component => component.selector === '#projects')!.collection!;
-		expect(portfolio.states.find(state => state.trigger?.selector === '#decks')?.members).toEqual([`${url}deck`]);
-		expect(portfolio.states.find(state => state.trigger?.selector === '#bathrooms')?.members).toEqual([`${url}bathroom`]);
+		expect(portfolio.states.find(state => state.trigger?.selector === '#decks')?.members).toEqual([portfolio.members.find(member => member.url === `${url}deck`)!.key]);
+		expect(portfolio.states.find(state => state.trigger?.selector === '#bathrooms')?.members).toEqual([portfolio.members.find(member => member.url === `${url}bathroom`)!.key]);
 		await page.setViewportSize({ width: 390, height: 844 });
 		await page.reload();
 		const second = await captureCollections(page);
@@ -121,3 +122,26 @@ if (!document.cookie.includes('consent=')) {
 		expect(performance.now() - started).toBeLessThan(2_000);
 	} finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
 }, 45_000);
+
+// ~15 seconds: reduced from a revealed hero whose two columns link to the same detail page.
+// Motion, media, nested sections and all other controls can be removed without curing the loss.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('preserves distinct columns sharing a link through the public capture interface', async () => {
+	const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
+	const root = mkdtempSync(join(parent, 'shared-link-columns-'));
+	const source = readFileSync(new URL('./fixtures/shared-link-columns.html', import.meta.url), 'utf8');
+	const server = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end(source); });
+	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+	try {
+		const captured = await captureWebsite({ url, outputDir: root, captureImages: false, trustedOrigins: [url], learnFluid: false }, {
+			findAdapter: () => ({ id: 'default', detect: () => true, discover: async () => ({ urls: [{ url }] }) }),
+		});
+		expect(captured.summary.routesFailed).toBe(0);
+		const output = readFileSync(join(root, 'website', 'index.html'), 'utf8');
+		expect(output).toContain('id="visual"');
+		expect(output).toContain('Explore</a>');
+		expect(output).toContain('Featured</a>');
+		// An unrelated control must not turn an unchanged pair into a collection.
+		expect(existsSync(join(root, 'interaction-states.json'))).toBe(false);
+	} finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
+}, 90_000);
