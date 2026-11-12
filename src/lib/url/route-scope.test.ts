@@ -14,6 +14,12 @@ it( 'uses adapter-owned segment boundaries before required frontier accounting, 
 	expect( routeInScope('https://ordinary.test/about') ).toBe(true);
 } );
 
+it( 'refuses malformed excluded prefixes rather than widening ownership', () => {
+	for ( const excludedPathPrefixes of [ ['web'], ['/web/'], ['/web/../other'], ['/web?view=one'], ['//elsewhere.test/web'] ] ) {
+		expect( () => validateRouteScope( { origin: 'https://source.test', pathPrefixes: ['/'], excludedPathPrefixes } ) ).toThrow();
+	}
+} );
+
 it( 'refuses malformed declarations rather than widening ownership', () => {
 	for ( const pathPrefixes of [ [], ['tenant'], ['/tenant/'], ['/tenant/../other'], ['/tenant?view=one'], ['//elsewhere.test/tenant'] ] ) expect( () => validateRouteScope( {origin: 'https://source.test', pathPrefixes} ) ).toThrow();
 } );

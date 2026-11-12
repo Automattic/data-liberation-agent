@@ -502,7 +502,11 @@ async function runCaptureWebsite(
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
 			.filter( ( url ) => {
-				if ( ! routeInScope( url, routeScope ) || documentRequestUrl( url ) === sourceRoute ) return false;
+				if ( ! routeInScope( url, routeScope ) ) {
+					excludedActions.set( url, { code: 'route_outside_adapter_scope', url, reason: 'Route is outside the adapter-owned site route scope' } );
+					return false;
+				}
+				if ( documentRequestUrl( url ) === sourceRoute ) return false;
 				const action = platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) ?? actionUrlExclusion( url );
 				if ( action ) excludedActions.set( action.url, action );
 				return ! action;

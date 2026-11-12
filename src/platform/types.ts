@@ -153,6 +153,8 @@ export interface StructuredContentSource {
 export interface SiteRouteScope {
 	origin: string;
 	pathPrefixes: string[];
+	/** Segment-bounded document namespaces excluded from the allowed prefixes; never an asset policy. */
+	excludedPathPrefixes?: string[];
 	/** Platform query parameters that never select a different document (e.g. referral tags on every link). */
 	ignoredQueryParams?: string[];
 }
