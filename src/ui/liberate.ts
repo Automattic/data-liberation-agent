@@ -10,6 +10,7 @@ import { captureWebsite } from '../lib/capture.js';
 import type { CaptureOptions, UnresolvedAnchor } from '../lib/capture.js';
 import { isUsableCapture, type MissingRoute } from '../lib/capture-usability.js';
 import { siteOutputDir } from '../lib/paths.js';
+import { readMediaQueue, runMediaQueue } from '../lib/media-queue.js';
 import { startStaticServer } from '../lib/replicate/local-site/static-server.js';
 import type { StaticServer } from '../lib/replicate/local-site/static-server.js';
 import { authorPortableMotion, type PortableMotionRecipe } from '../lib/portable-motion.js';
@@ -29,6 +30,8 @@ export interface LiberateOptions {
 	/** Base directory; the site lands in a per-source subdirectory. */
 	outputBase: string;
 	resume?: boolean;
+	/** Leave queued media (media-queue.json) for a later `media` run instead of downloading it after export. */
+	deferMedia?: boolean;
 	/** Defer export while time-budget-skipped routes remain. */
 	checkpoint?: boolean;
 	/** Capture PNG screenshots alongside the HTML. Default: false. */
@@ -119,6 +122,11 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 	} );
 
 	const websiteDir = join( outputDir, 'website' );
+	// Media is its own stage (#1701): the export above is already complete.
+	if ( ! capture.checkpoint && ! options.deferMedia && readMediaQueue( outputDir ).entries.length ) {
+		log( '[liberate] media' );
+		await runMediaQueue( outputDir, { log } );
+	}
 	if ( options.portableMotion && capture.complete ) {
 		log( '[liberate] verifying authored portable motion against the live source' );
 		await authorPortableMotion( outputDir, options.portableMotion );

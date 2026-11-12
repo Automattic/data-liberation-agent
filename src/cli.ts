@@ -7,7 +7,7 @@ import { HELP, version, parseCliOptions } from './options.js';
 import { loadExternalPlatforms } from './platform/load-external.js';
 
 const args = process.argv.slice(2);
-const SUBCOMMANDS = ['inspect', 'compare', 'publish', 'mcp'];
+const SUBCOMMANDS = ['inspect', 'compare', 'publish', 'media', 'mcp'];
 function isParseableUrl(candidate: string): boolean {
   try { new URL(candidate); return true; } catch { return false; }
 }
@@ -57,6 +57,15 @@ if (args.includes('--help')) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
+} else if (args[0] === 'media') {
+  const directory = args[1];
+  if (!directory || args.length > 2) throw new Error('directory required. Usage: data-liberation media <dir>');
+  const { runMediaQueue } = await import('./lib/media-queue.js');
+  const controller = new AbortController();
+  process.once('SIGINT', () => controller.abort());
+  const report = await runMediaQueue(directory, { signal: controller.signal, log: (message) => process.stderr.write(`${message}\n`) });
+  console.log(JSON.stringify(report, null, 2));
+  if (report.failed || report.pending) process.exitCode = 1;
 } else if (args[0] === 'publish') {
   const { positional: directory, options } = parseCliOptions('publish', args.slice(1));
   if (!directory) throw new Error('directory required. Usage: data-liberation publish <dir>');

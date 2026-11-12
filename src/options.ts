@@ -37,6 +37,7 @@ export const options: Record<Verb, OptionDescriptor[]> = {
     integer('runtimeRouteLimit', 'runtime-route-limit', 'Observe HTTP runtime regions on at most n routes (0-50; default 0).', 0, 50),
     { key: 'outputBase', mcpKey: 'outputDir', flag: 'output', type: 'string', default: resolveOutputBase, metavar: 'dir', help: 'Output base directory (default: ~/data-liberation or DLA_OUTPUT_DIR).' },
     boolean('resume', 'resume', 'Reuse artifacts already on disk instead of recapturing.'),
+    boolean('deferMedia', 'defer-media', 'Skip the media stage after export. Queued media (media-queue.json) downloads later with: data-liberation media <dir>.'),
     boolean('checkpoint', 'checkpoint', 'Defer export while time-budget-skipped routes remain; resume into the same directory.'),
     boolean('screenshots', 'screenshots', 'Also capture full-page and scrolled PNG screenshots.'),
     { ...boolean('serve', 'serve', 'Keep a local server running until interrupted. Otherwise liberation writes the site and exits.'), surfaces: ['cli'] },
@@ -178,6 +179,7 @@ export const HELP = `
     data-liberation inspect <url>      Assess a source without writing a site
     data-liberation compare <dir>      Verify a liberated copy
     data-liberation publish <dir>      Publish a liberated site
+    data-liberation media <dir>        Download queued media into a liberated site (resumable)
     data-liberation mcp                Start MCP server (stdio transport)
     data-liberation --version          Show version
     data-liberation --help             Show usage
