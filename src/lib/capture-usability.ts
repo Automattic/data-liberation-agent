@@ -22,6 +22,14 @@ export const ROUTE_CAPTURE_SKIPPED_BUDGET = 'route_capture_skipped_budget';
  */
 export const ROUTE_CAPTURE_TIMEOUT = 'route_capture_timeout';
 
+/**
+ * One profile of a route the per-route deadline abandoned after at least one
+ * other profile completed. The route keeps its completed profiles and is
+ * captured; the abandoned profile is a profile-level loss (export also reports
+ * it as `route_profile_uncaptured`), not a missing route.
+ */
+export const ROUTE_PROFILE_CAPTURE_TIMEOUT = 'route_profile_capture_timeout';
+
 /** Codes of routes that were in scope and produced no page. */
 export const MISSING_ROUTE_CODES = [ 'route_capture_failed', ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT, ...EXPORT_DROPPED_ROUTE_CODES ] as const;
 
