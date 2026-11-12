@@ -141,6 +141,9 @@ export interface StructuredContentSource {
 	enumerate( sourceUrl: string, options: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors } ): Promise< StructuredContentEnumeration >;
 	/** True only when the document's single content slot matches the entry. Fail closed. */
 	bodyEquivalent( html: string, entry: StructuredContentEntry ): boolean;
+	/** CSS selector of the single content slot `memberDocument` fills. When set, a
+	 * synthesized member's cluster key is compared with this slot emptied. */
+	contentSlotSelector?: string;
 	/** The representative's server document with the member's content in its slot. */
 	memberDocument( representativeHtml: string, representative: StructuredContentEntry, member: StructuredContentEntry ): string | undefined;
 	/** The source URL of a term's archive. */
