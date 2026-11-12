@@ -15,6 +15,8 @@ export function summarize(site, receipt, findings, diagnostics, report, executio
     host: new URL(site.url).host, url: site.url, expectedPlatform: site.platform,
     platform: receipt?.source?.platform ?? null,
     counts: {
+      // The route budget caps `discovered`; the inventory is what discovery found.
+      inventory: receipt?.summary ? (receipt.summary.routesDiscovered ?? 0) + (receipt.summary.routesOmitted ?? 0) : null,
       discovered: receipt?.summary?.routesDiscovered ?? null,
       captured: receipt?.summary?.routesCaptured ?? null,
       exported: receipt ? receipt.routes.length : null,

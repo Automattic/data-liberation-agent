@@ -28,7 +28,7 @@ export function diff(before, after) {
     // Changing the experiment is never silently treated as parity.
     for (const key of ['url', 'expectedPlatform']) add(host, key, a[key], b[key], true);
     add(host, 'platform', a.platform, b.platform, b.platform !== b.expectedPlatform);
-    for (const key of ['discovered', 'captured', 'exported']) metric(host, `counts.${key}`, a.counts[key], b.counts[key], true);
+    for (const key of ['inventory', 'discovered', 'captured', 'exported']) metric(host, `counts.${key}`, a.counts[key], b.counts[key], true);
     for (const key of ['liberate', 'compare']) status(host, `exitCodes.${key}`, a.exitCodes[key] === 0, b.exitCodes[key] === 0);
     codes(host, 'findings', a.findings, b.findings);
     codes(host, 'failures', a.failures, b.failures);
@@ -44,9 +44,35 @@ export function diff(before, after) {
   }
   return changes;
 }
+/**
+ * A candidate field regresses only when it is worse than every baseline run. Two
+ * or more baselines of unchanged code define the source's own run-to-run range
+ * (timeouts, frozen-fidelity cells and interaction findings vary with load), so
+ * a change inside that range is reported as unstable rather than a regression.
+ */
+export function diffAgainstBaselines(baselines, candidate) {
+  const perBaseline = baselines.map(baseline => diff(baseline, candidate));
+  const key = change => `${change.host}\u0000${change.field}`;
+  const regressedIn = new Map();
+  for (const changes of perBaseline) for (const change of changes) {
+    if (change.regression) regressedIn.set(key(change), (regressedIn.get(key(change)) ?? 0) + 1);
+  }
+  const seen = new Set();
+  const result = [];
+  for (const change of perBaseline.flat()) {
+    if (seen.has(key(change))) continue;
+    seen.add(key(change));
+    const regressions = regressedIn.get(key(change)) ?? 0;
+    const kind = regressions === baselines.length ? 'regression' : regressions > 0 ? 'unstable' : 'improvement';
+    result.push({ ...change, regression: kind === 'regression', kind });
+  }
+  return result;
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 4) throw new Error('Usage: node scripts/parity/diff.mjs <before/summary.json> <after/summary.json>');
-  const changes = diff(...process.argv.slice(2).map(path => JSON.parse(readFileSync(path, 'utf8'))));
-  for (const change of changes) console.log(`${change.regression ? 'REGRESSION' : 'IMPROVEMENT'} ${change.host} ${change.field}: ${JSON.stringify(change.before)} -> ${JSON.stringify(change.after)}`);
+  const paths = process.argv.slice(2);
+  if (paths.length < 2) throw new Error('Usage: node scripts/parity/diff.mjs <baseline/summary.json>... <candidate/summary.json>');
+  const [candidate, ...baselines] = paths.reverse().map(path => JSON.parse(readFileSync(path, 'utf8')));
+  const changes = diffAgainstBaselines(baselines.reverse(), candidate);
+  for (const change of changes) console.log(`${change.kind.toUpperCase()} ${change.host} ${change.field}: ${JSON.stringify(change.before)} -> ${JSON.stringify(change.after)}`);
   process.exitCode = changes.some(change => change.regression) ? 1 : 0;
 }

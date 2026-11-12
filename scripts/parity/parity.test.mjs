@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { summarize } from './summary.mjs';
-import { diff } from './diff.mjs';
+import { diff, diffAgainstBaselines } from './diff.mjs';
 
 const site = { url: 'https://example.test', platform: 'unknown' };
 const execution = { exitCodes: { liberate: 0, compare: 0 }, wallTimeMs: { liberate: 100, compare: 30 } };
@@ -47,6 +47,7 @@ test('unchanged summaries and wall-time changes produce empty output', () => {
 test('each contract dimension independently detects regressions', () => {
   for (const mutate of [
     s => { s.platform = 'wix'; },
+    s => { s.counts.inventory--; },
     s => { s.counts.discovered--; },
     s => { s.counts.captured--; },
     s => { s.counts.exported--; },
@@ -68,6 +69,12 @@ test('each contract dimension independently detects regressions', () => {
     assert(diff(after, before).some(row => !row.regression), mutate.toString());
   }
   assert(diff(fixture(), { schema: 'parity/v1', sites: [] })[0].regression);
+});
+test('a candidate inside the baselines\' own range is unstable, outside it a regression', () => {
+  const slow = fixture(); slow.sites[0].compare.frozenFidelity = 'failed';
+  const candidate = fixture(); candidate.sites[0].compare.frozenFidelity = 'failed'; candidate.sites[0].counts.inventory = 1;
+  const kinds = Object.fromEntries(diffAgainstBaselines([fixture(), slow], candidate).map(row => [row.field, row.kind]));
+  assert.deepEqual(kinds, { 'compare.frozenFidelity': 'unstable', 'counts.inventory': 'regression' });
 });
 test('runner invokes built CLI, continues failures and reads the actual host directory', () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'parity-runner-')));
