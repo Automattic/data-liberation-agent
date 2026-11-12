@@ -105,6 +105,7 @@ import {
 import { extractSharedChrome } from './shared-chrome.js';
 import { lowerScriptedLinks } from './screenshot/scripted-links.js';
 import { MIDDLE_PROFILE_ID, type MiddleLayout } from './screenshot/device-mode.js';
+import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
 
 /** Strip correspondence used only during capture, before HTML is encoded as replay state. */
 function withoutCaptureBookkeeping( html: string ): string {
@@ -1071,7 +1072,7 @@ function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string
 			}
 		}
 		node.attr( 'src', source );
-		node.attr( 'width', width );
+		node.attr( 'width', portableVisualIframeWidth( node.attr( 'width' ), width ) );
 		node.attr( 'height', height );
 		node.empty();
 	} );

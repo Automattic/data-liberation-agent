@@ -28,6 +28,7 @@ import { documentsDiffer } from './responsive-assembly.js';
 import { collectAssetEvidenceReferences } from './capture-export-evidence.js';
 import { IntegrityError } from './failure-class.js';
 import { EXPORT_PUBLICATION_OWNED } from './export-publication.js';
+import { sanitizeFrozenHtml } from './screenshot/freeze.js';
 import { SITE_ANALYSIS_FILES } from './screenshot/aggregator.js';
 import { missingRoutes } from './capture-usability.js';
 
@@ -2530,7 +2531,7 @@ describe( 'exportWebsiteCapture', () => {
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( 'iframe' ) ).toHaveLength( 1 );
 		expect( $( 'iframe' ).attr( 'src' ) ).toBe( 'https://maps.example/embed' );
-		expect( $( 'iframe' ).attr( 'width' ) ).toBe( '1280' );
+		expect( $( 'iframe' ).attr( 'width' ) ).toBe( '100%' );
 		expect( $( 'iframe' ).attr( 'height' ) ).toBe( '350' );
 		expect( $( 'iframe' ).attr( 'class' ) ).toBe( 'map' );
 		// The authored box wins over the one viewport's attested pixel size.
@@ -2539,6 +2540,45 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'iframe' ).attr( 'onclick' ) ).toBeUndefined();
 		expect( $( 'iframe' ).attr( 'srcdoc' ) ).toBeUndefined();
 		expect( $.html() ).not.toContain( 'data-blocks-engine-capture-visual-iframe-' );
+	} );
+
+	it( 'keeps a percentage-width embed fitting viewports narrower than the one it was measured in', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-relative-iframe-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// Measured by a ~402px phone profile: the authored 100% resolved to 401px.
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			sanitizeFrozenHtml(
+				'<html><body style="margin:0"><main>' +
+					'<iframe title="Map" style="border:0" src="https://maps.example/embed" width="100%" height="100%" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="401" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
+				'</main></body></html>'
+			)
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const browser = await chromium.launch();
+		const server = await startStaticServer( join( outputDir, 'website' ) );
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+			await page.route( 'https://maps.example/**', route => route.fulfill( { contentType: 'text/html', body: '' } ) );
+			await page.goto( server.url );
+			const box = await page.locator( 'iframe[title="Map"]' ).boundingBox();
+			expect( await page.evaluate( () => document.documentElement.scrollWidth ) ).toBe( 390 );
+			expect( box ).toMatchObject( { width: 390, height: 300 } );
+		} finally {
+			await browser.close();
+			await server.close();
+		}
 	} );
 
 	it( 'rejects unsafe shared-style media attributes', () => {
