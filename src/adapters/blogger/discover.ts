@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { bloggerLabel } from './template-content.js';
 import { classifyUrl, routeKey } from '../../lib/extraction/sitemap.js';
 import type { InventoryUrl } from '../shared.js';
 import { extractSiteMetadata } from '../site-metadata.js';
@@ -111,6 +112,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
 			reason: `${absent.length} enumerated feed posts are absent from sitemap and homepage discovery; sitemap routes were retained and feed URLs were not merged`,
 		});
 	}
+	const labelled = urls.map(entry => bloggerLabel(entry.url) === undefined ? entry : { ...entry, type: 'term-archive' as const });
 	return {
 		...inventory,
 		siteUrl: url,
@@ -120,8 +122,8 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
 			language: cheerio.load(homepageHtml)('html').attr('lang') || 'en-US',
 		},
 		navigation: extractNavLinks(homepageHtml, normalized),
-		urls,
-		counts: recount(urls),
+		urls: labelled,
+		counts: recount(labelled),
 		diagnostics,
 		feed: {
 			requestedMaxResults: BLOGGER_FEED_REQUESTED_RESULTS,

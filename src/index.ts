@@ -61,6 +61,8 @@ export type {
 	PlatformSourceSignal,
 	PlatformPathProbe,
 	RegisterPlatformOptions,
+	StructuredContentEntry,
+	StructuredContentSource,
 } from './platform/types.js';
 export type { LiberationHooks, LiberationContext } from './adapters/page-actions.js';
 export type { DeviceDocumentSelection, DocumentSelection } from './lib/document-selection.js';

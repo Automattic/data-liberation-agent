@@ -39,12 +39,18 @@ describe('Blogger detection', () => {
 		});
 	});
 
+	it('detects a custom-domain template without the generator meta by its layout runtime', () => {
+		const html = `<html><body><script>_WidgetManager._Init('//www.blogger.com/rearrange?blogID\\x3d3481263765937927304', '//www.boardgamemonkeys.com/', '3481263765937927304');</script></body></html>`;
+		expect(detectFromResponse(new Headers(), html)).toMatchObject({ platform: 'blogger', signals: ['Blogger layout runtime'] });
+	});
+
 	it.each([
 		'<p>The generator is Blogger and blogspot.com is a host.</p>',
 		'<meta name="generator" content="WordPress">',
 		'<meta name="generator" content="blogger-theme">',
 		'<script src="https://www.blogger.com/static/runtime.js"></script>',
 		'<meta name="description" content="blogger">',
+		'<p>Call _WidgetManager._Init() from your theme.</p>',
 	])('does not infer Blogger from editorial or non-generator markup: %s', (html) => {
 		expect(detectFromResponse(new Headers(), html).platform).toBe('unknown');
 	});

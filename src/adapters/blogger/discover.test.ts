@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enumerateBloggerPosts, parseBloggerFeed } from './feed.js';
 import { discover } from './discover.js';
+import { SourceRequestGovernors } from '../../lib/source-request-governor.js';
 
 vi.mock('../../lib/browser-kit/browser-kit.js', () => ({
 	getPlaywright: async () => {
@@ -47,6 +48,80 @@ function response(body: string, status = 200, contentType = 'text/html'): Respon
 }
 
 describe('Blogger feed accounting', () => {
+	it('retains static-page content, dates, authors and terms without requesting permalinks', async () => {
+		const fetched: string[] = [];
+		const result = await enumerateBloggerPosts(origin, {
+			kind: 'page',
+			fetch: async input => {
+				fetched.push(String(input));
+				return response(`<feed><totalResults>1</totalResults><entry>
+					<title type="text">About &amp; contact</title>
+					<content type="html">&lt;p&gt;Hello &amp;amp; welcome&lt;/p&gt;</content>
+					<published>2011-02-03T04:05:06.123Z</published>
+					<updated>2026-01-02T03:04:05.678Z</updated>
+					<author><name>Alice</name></author>
+					<category term="Board games"/><category term="Reviews"/><category term="Reviews"/>
+					<link rel="alternate" href="${origin}/p/about-us.html"/>
+				</entry></feed>`);
+			},
+		});
+		expect(fetched).toHaveLength(1);
+		expect(new URL(fetched[0]!).pathname).toBe('/feeds/pages/default');
+		expect(result.entries).toEqual([{
+			permalink: `${origin}/p/about-us.html`, slug: 'about-us', kind: 'page',
+			title: 'About & contact', contentHtml: '<p>Hello &amp; welcome</p>',
+			published: '2011-02-03T04:05:06.123Z', updated: '2026-01-02T03:04:05.678Z',
+			author: 'Alice', terms: ['Board games', 'Reviews'],
+		}]);
+	});
+
+	it('retries a throttled feed page through the supplied source governor', async () => {
+		let requests = 0;
+		const result = await enumerateBloggerPosts(origin, {
+			governors: new SourceRequestGovernors({ fallbackRetryAfterMs: 1, maxRetryAfterMs: 5 }),
+			fetch: async () => ++requests === 1
+				? new Response('', { status: 429, headers: { 'Retry-After': '0.001' } })
+				: response(atomFeed({ total: 1, start: 1, posts: [1] })),
+		});
+		expect(requests).toBe(2);
+		expect(result.complete).toBe(true);
+		expect(result.entries).toHaveLength(1);
+		expect(result.rejected).toEqual([]);
+	});
+
+	it('reports an exhausted feed throttle instead of claiming an empty archive', async () => {
+		const result = await enumerateBloggerPosts(origin, {
+			governors: new SourceRequestGovernors({ fallbackRetryAfterMs: 0, maxRetryAfterMs: 0 }),
+			fetch: async () => new Response('', { status: 429, headers: { 'Retry-After': '0' } }),
+		});
+		expect(result.complete).toBe(false);
+		expect(result.unavailable).toBe(true);
+		expect(result.rejected).toContainEqual(expect.objectContaining({ code: 'feed_page_failed', reason: 'HTTP 429' }));
+	});
+	it('acquires a 2,181-post archive in feed requests only, retaining every body and slug', async () => {
+		const requested: string[] = [];
+		const count = 2181;
+		const result = await enumerateBloggerPosts(origin, {
+			fetch: async input => {
+				const url = new URL(String(input));
+				requested.push(url.pathname);
+				const start = Number(url.searchParams.get('start-index'));
+				return response(atomFeed({
+					total: count, start,
+					posts: Array.from({ length: Math.min(150, count - start + 1) }, (_, index) => start + index),
+				}));
+			},
+		});
+		expect(result.complete).toBe(true);
+		expect(result.entries).toHaveLength(count);
+		expect(requested).toEqual(Array(15).fill('/feeds/posts/default'));
+		for (const [index, entry] of result.entries.entries()) {
+			expect(entry.slug).toBe(`post-${index + 1}`);
+			expect(entry.contentHtml).toBe(`<p>secret-body-${index + 1}</p>`);
+			expect(entry.terms).toEqual(['Invented']);
+		}
+	});
+
 	it('pages by the 150 entries returned when 500 were requested', async () => {
 		const fetched: string[] = [];
 		const result = await enumerateBloggerPosts(origin, {
@@ -70,7 +145,11 @@ describe('Blogger feed accounting', () => {
 		expect(result.posts[150]).toBe(`${origin}/2026/01/post-151.html`);
 		expect(result.complete).toBe(true);
 		expect(result.bounded).toBe(false);
-		expect(JSON.stringify(result)).not.toContain('secret-body-1');
+		expect(result.entries[0]).toMatchObject({
+			permalink: `${origin}/2026/01/post-1.html`, slug: 'post-1', kind: 'post',
+			title: 'Post 1', contentHtml: '<p>secret-body-1</p>',
+			published: '2026-01-01T00:00:00.000Z', terms: ['Invented'],
+		});
 		expect(result.posts.some((url) => url.includes('/search/label/'))).toBe(false);
 	});
 
@@ -168,6 +247,9 @@ describe('Blogger discovery', () => {
 			`${origin}/search/label/FromHome`,
 			`${origin}/p/about.html`,
 		]));
+		expect(inventory.urls.find(entry => entry.url === `${origin}/search/label/Kept`)?.type).toBe('term-archive');
+		expect(inventory.urls.find(entry => entry.url === `${origin}/search/label/FromHome`)?.type).toBe('term-archive');
+		expect(inventory.counts['term-archive']).toBe(2);
 		expect(urls).not.toContain(`${origin}/2020/01/feed-only.html`);
 		expect(urls.some((url) => url.includes('/search/label/Invented'))).toBe(false);
 		expect(fetched.filter((url) => url.includes('/feeds/posts/default'))).toHaveLength(1);
