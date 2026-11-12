@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.34.2] - 2026-11-12
+
+### Changed
+- regenerate plugin bundles
+- Normalize Squarespace template churn in template grouping
+
+### Fixed
+- preserve in-page anchor targets in static exports
+
 ## [0.34.1] - 2026-11-12
 
 ### Changed
