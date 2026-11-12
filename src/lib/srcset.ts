@@ -13,7 +13,7 @@ interface SrcsetToken extends SrcsetCandidate {
 /** HTML's srcset splitting/descriptor loop: commas inside a URL are not separators.
  * https://html.spec.whatwg.org/multipage/images.html#parsing-a-srcset-attribute
  */
-function parseSrcset( value: string ): SrcsetToken[] {
+export function parseSrcset( value: string ): SrcsetToken[] {
 	const candidates: SrcsetToken[] = [];
 	const whitespace = ( character: string ) => /[\t\n\f\r ]/.test( character );
 	let offset = 0;
