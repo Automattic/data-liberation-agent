@@ -11,6 +11,7 @@ import * as fetching from '../../lib/media-fetch/safe-fetch.js';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
 import { readMediaQueue } from '../../lib/media-queue.js';
 import { bloggerImageOriginal } from './media.js';
+import { bloggerAcquisition } from './acquisition.js';
 
 const entries: BloggerFeedEntry[] = Array.from({ length: 8 }, (_, i) => ({
 	permalink: `https://fixture.blogspot.com/2025/01/post-${i}.html`, slug: `post-${i}`, kind: 'post',
@@ -125,6 +126,56 @@ describe('Blogger feed template content', () => {
 				}
 				expect(index.redirects).toContainEqual({ from: entry.permalink, to: post.path });
 			}
+		} finally { fetch.mockRestore(); rmSync(outputDir, { recursive: true, force: true }); }
+	});
+
+	it.each([
+		{ name: 'structurally different feed body derives', body: '<details><summary>Rules</summary><table><tbody><tr><td><div><ul><li>Feed body 3</li></ul></div></td></tr></tbody></table></details>', derived: 6, acquired: 0 },
+		{ name: 'unobserved embed escalates and is HTTP-acquired', body: '<p>Feed body 3</p><iframe src="https://www.youtube.com/embed/fixture"></iframe>', derived: 5, acquired: 1 },
+	])('$name', async ({ body, derived, acquired }) => {
+		const parent = join(process.cwd(), '.tmp-test');
+		mkdirSync(parent, { recursive: true });
+		const outputDir = mkdtempSync(join(parent, 'blogger-escalation-'));
+		mkdirSync(join(outputDir, 'screenshots'));
+		const feed = entries.map((entry, i) => i === 3 ? { ...entry, contentHtml: body } : entry);
+		const page = (entry: BloggerFeedEntry) => `<html><head><meta name="generator" content="blogger"><title>${entry.title}</title></head><body><div class="widget Blog" id="Blog1"><article id="post"><h1 class="post-title">${entry.title}</h1><div class="post-body" id="body">${entry.contentHtml}</div></article></div></body></html>`;
+		const manifestEntries = Object.fromEntries(feed.slice(0, 2).map((entry, i) => {
+			writeFileSync(join(outputDir, `screenshots/${i}.html`), page(entry));
+			return [entry.permalink, { slug: entry.slug, html: `screenshots/${i}.html`, capturedAt: new Date().toISOString() }];
+		}));
+		writeFileSync(join(outputDir, 'screenshots/manifest.json'), JSON.stringify({ version: 1, entries: manifestEntries }));
+		const fetch = vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => {
+			const entry = feed.find(entry => entry.permalink === String(url))!;
+			return { body: Buffer.from(page(entry)), status: 200, finalUrl: String(url), headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }) };
+		});
+		const fingerprint = templateFingerprint(page(feed[0]!), feed[0]!.permalink);
+		try {
+			const result = await deriveTemplateClusterMembers({
+				sourceUrl: feed[0]!.permalink, outputDir, contentSource: bloggerStructuredContent, contentEntries: feed, frontierUrls: [], governors: new SourceRequestGovernors(), acquisition: bloggerAcquisition,
+				report: {
+					schema: TEMPLATE_GROUPS_SCHEMA, sourceUrl: feed[0]!.permalink,
+					fingerprint: { version: 1, maxSkeletonDepth: 8 }, limits: { ...TEMPLATE_GROUPING_LIMITS }, throttle: { events: 0 },
+					coverage: { routes: 8, fingerprinted: 8, unfingerprinted: 0, groups: 1, singletons: 0 }, unfingerprinted: [],
+					groups: [{ id: 't1', ...fingerprint, representative: feed[0]!.permalink, size: feed.length, members: feed.map(entry => entry.permalink) }],
+				},
+			});
+			expect(result.summary).toMatchObject({ derived, escalated: acquired, httpAcquired: acquired });
+			// Two derivation rounds fetch the representative; only an escalation fetches its own page.
+			expect(fetch).toHaveBeenCalledTimes(2 + acquired);
+			expect(fetch.mock.calls.filter(([url]) => String(url) === feed[3]!.permalink)).toHaveLength(acquired);
+			const escalation = result.receipt.clusters[0]!.escalated;
+			expect(escalation.map(row => [row.url, row.gate, row.fallback?.acquired])).toEqual(acquired ? [[feed[3]!.permalink, 'runtime_slot_content', true]] : []);
+			if (acquired) expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'route_template_escalated', url: feed[3]!.permalink, reason: expect.stringMatching(/runtime_slot_content.*HTTP acquisition/) }));
+			const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots/manifest.json'), 'utf8'));
+			const member = manifest.entries[feed[3]!.permalink];
+			expect(member.html).toMatch(acquired ? /^screenshots\/http\// : /^screenshots\/derived\//);
+			expect(readFileSync(join(outputDir, member.html), 'utf8')).toContain('Feed body 3');
+			exportWebsiteCapture({ outputDir, sourceUrl: feed[0]!.permalink, platform: 'blogger', summary: {}, failures: [], structuredContent: { source: bloggerStructuredContent, entries: feed } });
+			const index = JSON.parse(readFileSync(join(outputDir, 'website/content-index.json'), 'utf8'));
+			expect(index.posts).toHaveLength(feed.length);
+			const post = index.posts.find((post: { permalink: string }) => post.permalink === feed[3]!.permalink);
+			expect(post).toMatchObject({ slug: 'post-3' });
+			expect(readFileSync(join(outputDir, 'website', post.path), 'utf8')).toContain('Feed body 3');
 		} finally { fetch.mockRestore(); rmSync(outputDir, { recursive: true, force: true }); }
 	});
 

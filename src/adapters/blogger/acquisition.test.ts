@@ -99,12 +99,17 @@ describe('Blogger HTTP preparation', () => {
 		expect(prepared).toMatchObject({ metadata: { document: 'blogger-server-rendered', rendering: 'unverified' } });
 	});
 
+	it('accepts a custom-domain template without the generator meta by its layout runtime', async () => {
+		const html = `<html><body><div class="widget Blog" id="Blog1"><div class="post-body">Readable</div></div><script>document.write('<!-- ');</script><script>_WidgetManager._Init('//www.blogger.com/rearrange?blogID\\x3d3481263765937927304', '//example.com/');</script></body></html>`;
+		expect((await bloggerAcquisition.prepare(html, context))?.html).toContain('Readable');
+	});
+
 	it.each([
 		['canvas app', document('<canvas id="app"></canvas><div class="widget Blog" id="Blog1"><div class="post-body">Readable</div></div>')],
 		['script-only editorial', document('<div class="widget Blog" id="Blog1"><div class="blog-posts"></div></div><script>window.__article = { body: "Only in script" };</script>')],
 		['unknown body', document('<div id="root"></div>')],
 		['widget shell without a post body', document('<div class="widget Blog" id="Blog1"><div class="blog-posts">Loading</div></div><script>window.__article = { body: "Only in script" };</script>')],
-		['missing generator', '<html><body><div class="widget Blog"><div class="post-body">Readable</div></div></body></html>'],
+		['no Blogger signal', '<html><body><div class="widget Blog"><div class="post-body">Readable</div></div></body></html>'],
 	])('returns undefined for %s', (_label, html) => {
 		expect(bloggerAcquisition.prepare(html, context)).toBeUndefined();
 	});

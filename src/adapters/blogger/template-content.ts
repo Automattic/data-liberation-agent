@@ -62,6 +62,7 @@ export const bloggerStructuredContent: StructuredContentSource = {
 		const feeds = await Promise.all((['post', 'page'] as const).map(kind => enumerateBloggerPosts(origin, { governors, kind })));
 		return { entries: feeds.flatMap(feed => feed.entries), diagnostics: feeds.flatMap(feed => feed.rejected) };
 	},
+	contentSlotSelector: BODY,
 	bodyEquivalent: feedBodyEquivalent,
 	memberDocument: feedMemberDocument,
 	termArchiveUrl: bloggerLabelUrl,

@@ -374,9 +374,17 @@ export function deriveMemberDocument( input: {
 	/** The member's server HTML (`H_M`), of the same cluster key. */
 	memberServerHtml: string;
 	baseUrl: string;
+	/**
+	 * Set only when `memberServerHtml` was synthesized from the representative's
+	 * server document (`StructuredContentSource.memberDocument`): the cluster key
+	 * is then compared with this content slot emptied in both documents, so the
+	 * member's body markup never decides template identity.
+	 */
+	contentSlotSelector?: string;
 } ): MemberDerivation {
-	const clusterKey = templateFingerprint( input.memberServerHtml, input.baseUrl ).key;
-	const repKey = templateFingerprint( input.repServerHtml, input.baseUrl ).key;
+	const keyOf = ( html: string ): string => templateFingerprint( input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html, input.baseUrl ).key;
+	const clusterKey = keyOf( input.memberServerHtml );
+	const repKey = keyOf( input.repServerHtml );
 	// The member fetched while the cluster was grouped re-checks its key against
 	// the representative's server document: an A/B variant or a rotating hash in
 	// a head asset diverges exactly here.
@@ -474,6 +482,13 @@ export function deriveMemberDocument( input: {
 	return { ok: true, html: repProcessed.html(), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
 }
 
+/** The document with every element matching the content slot emptied. */
+function withEmptySlot( html: string, selector: string ): string {
+	const $ = cheerio.load( html );
+	$( selector ).empty();
+	return $.html();
+}
+
 /** Replace one processed node's attributes and content with the member's head-slot node. */
 function replaceProcessedNode( repNode: Element, memberNode: Element ): void {
 	if ( repNode.name === 'title' || memberNode.name === 'title' ) {
@@ -560,7 +575,7 @@ export interface TemplateClusterRecord {
 	representative: string;
 	/** Members offered for derivation, and their outcomes. */
 	derived: Array< { url: string; slots: number; subtreeSlots: number } >;
-	escalated: Array< { url: string; gate: string; reason: string } >;
+	escalated: Array< { url: string; gate: string; reason: string; fallback?: { acquired: boolean; reason?: string } } >;
 	unavailable: Array< { url: string; reason: string } >;
 	verification?: {
 		url: string;
@@ -577,6 +592,8 @@ export interface TemplateClustersReceipt {
 	sourceUrl: string;
 	derivedCount: number;
 	escalatedCount: number;
+	/** Escalated members shipped through governed HTTP acquisition instead of omission. */
+	httpAcquiredCount?: number;
 	unavailableCount: number;
 	clusters: TemplateClusterRecord[];
 }
