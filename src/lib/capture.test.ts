@@ -255,6 +255,16 @@ describe( 'captureWebsite fluid learning', () => {
 		expect( exportWebsiteCapture ).toHaveBeenLastCalledWith( expect.objectContaining( { routeScope } ) );
 	} );
 
+	it( 'reports adapter-excluded application routes without capturing them', async () => {
+		const { odooAdapter } = await import( '../adapters/odoo/index.js' );
+		const excluded = [ '/web/login', '/web/signup', '/web/reset_password' ].map( path => `https://example.com${path}` );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( { ...odooAdapter, discover: async () => ( { urls: [ ...excluded, 'https://example.com/shop' ].map( url => ( { url } ) ) } ) } ),
+		} );
+		expect( captureScreenshotsMock ).toHaveBeenLastCalledWith( expect.objectContaining( { urls: [ sourceUrl, 'https://example.com/shop' ] } ) );
+		expect( result.discoveryDiagnostics.filter( row => row.code === 'route_outside_adapter_scope' ).map( row => row.url ) ).toEqual( excluded );
+	} );
+
 	it.each( [
 		{ option: undefined, expected: true, label: 'defaults to enabled' },
 		{ option: false, expected: false, label: 'supports explicit opt-out' },

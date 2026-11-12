@@ -105,6 +105,7 @@ Naming an unknown target lists the registered ones.
 | Shopify | Ready |
 | Soloist | Tenant-scoped authored links + Next page metadata discovery |
 | atom.bio | Tenant-scoped profile discovery |
+| Odoo | Generic discovery; application routes excluded |
 | Squarespace | Ready |
 | Substack | Ready |
 | Google Sites | Ready |

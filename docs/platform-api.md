@@ -44,6 +44,7 @@ interface Platform {
 interface SiteRouteScope {
   origin: string;
   pathPrefixes: string[];
+  excludedPathPrefixes?: string[];
 }
 ```
 
@@ -176,6 +177,9 @@ multi-tenant origin, for example `{ origin: 'https://builder.example',
 pathPrefixes: ['/customer'] }`. Prefixes are segment-bounded: `/customer` includes
 `/customer` and `/customer/about`, while `/customer-two` belongs elsewhere. Multiple
 prefixes compose one site; query renditions keep their exact request identity.
+Optional `excludedPathPrefixes` subtracts segment-bounded document namespaces from
+those prefixes. Odoo uses `pathPrefixes: ['/']` with `excludedPathPrefixes: ['/web']`
+to exclude application pages without changing resource acquisition.
 
 The pipeline carries this declaration through seeds, rendered link expansion,
 navigation redirects, HTTP document acquisition, export links and required-route
