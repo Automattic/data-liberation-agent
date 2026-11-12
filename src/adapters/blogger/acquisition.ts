@@ -31,8 +31,7 @@ function isExecutable(type: string): boolean {
 
 /** A Blogger-rendered document, by the same source signals detection uses. */
 function isBloggerDocument(html: string): boolean {
-	const source = html.replace(/<!--[\s\S]*?-->/g, '');
-	return (detection.sourceSignals ?? []).some(signal => signal.pattern.test(source));
+	return (detection.sourceSignals ?? []).some(signal => signal.pattern.test(html));
 }
 
 function classTokens(value: string | undefined): string[] {

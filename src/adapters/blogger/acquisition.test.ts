@@ -100,7 +100,7 @@ describe('Blogger HTTP preparation', () => {
 	});
 
 	it('accepts a custom-domain template without the generator meta by its layout runtime', async () => {
-		const html = `<html><body><div class="widget Blog" id="Blog1"><div class="post-body">Readable</div></div><script>_WidgetManager._Init('//www.blogger.com/rearrange?blogID\\x3d3481263765937927304', '//example.com/');</script></body></html>`;
+		const html = `<html><body><div class="widget Blog" id="Blog1"><div class="post-body">Readable</div></div><script>document.write('<!-- ');</script><script>_WidgetManager._Init('//www.blogger.com/rearrange?blogID\\x3d3481263765937927304', '//example.com/');</script></body></html>`;
 		expect((await bloggerAcquisition.prepare(html, context))?.html).toContain('Readable');
 	});
 
