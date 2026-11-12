@@ -93,6 +93,8 @@ These are the codes the degrade work added or relies on. Pre-existing codes are 
 | `route_capture_degraded` | route | warning | HTML saved, but some stages failed. `metrics.failedStages`. | no | #764 |
 | `route_profile_uncaptured` | profile | error | A declared capture profile produced no document. Makes `complete: false`. | no | #764 |
 | `responsive_layout_uncaptured` | profile | warning | A dual route's source renders a third width-selected layout between its phone and desktop documents that capture could not ship: the range has no upper bound (no later probed boundary changed the middle rendering) or its middle document was not captured. The copy switches at the source's first boundary and serves the desktop document across the range. A bounded range with its captured document ships as the middle document instead and records no finding. `metrics.minWidth`, `metrics.maxWidth` (absent when unbounded). | no | #1379 |
+| `route_capture_timeout` | route | error | The per-route deadline abandoned the route before any profile completed; nothing from it is recorded. `metrics.routeDeadlineMs`. | yes | #848 |
+| `route_profile_capture_timeout` | profile | error | The per-route deadline abandoned a profile after another profile of the route completed. The route keeps its completed profiles; export also reports the lost profile as `route_profile_uncaptured`. `metrics.routeDeadlineMs`. | no | #762 |
 | `stylesheet_unparseable` | stylesheet | warning | Author stylesheet left unprojected; `path` names the file. | no | #764 |
 | `phone_redirect_desktop_only` | profile | warning | The phone identity was sent to another same-site route (a separate mobile site) while desktop rendered the route; the route ships its desktop document alone, reflowed at phone widths. `profile: mobile`; loss class `degraded_unit` (the default for codes outside `SOURCE_FINDING_LOSS_CLASSES`). | no | #1338 |
 | `native_timeline_unproven` | block | warning | Native view-timeline evidence was lost on a saved page. | no | #773 |
@@ -229,8 +231,8 @@ The capture receipt and `diagnostics.json` sit next to `website/`, outside the a
 
 | Code | `loss_class` | `unit` |
 |---|---|---|
-| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget`, `route_exceeds_total_budget` | `omitted_unit` | route |
-| `route_profile_uncaptured` | `omitted_unit` | profile |
+| `route_capture_failed`, `route_export_failed`, `route_path_collision`, `route_off_origin`, `route_capture_skipped_budget`, `route_capture_timeout`, `route_exceeds_total_budget` | `omitted_unit` | route |
+| `route_profile_uncaptured`, `route_profile_capture_timeout` | `omitted_unit` | profile |
 | `asset_exceeds_file_limit`, `asset_exceeds_total_budget` | `omitted_unit` | asset |
 | `route_capture_degraded` | `degraded_unit` | route |
 | `stylesheet_unparseable` | `degraded_unit` | stylesheet |
