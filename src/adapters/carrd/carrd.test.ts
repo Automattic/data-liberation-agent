@@ -7,7 +7,7 @@ import { captureWebsite } from '../../index.js';
 import { checkSelfConsistency } from '../../lib/fidelity/self-consistency.js';
 import { readResolvedPage } from '../../lib/site-includes.js';
 
-const source = `<!doctype html><html><head><meta name="generator" content="Carrd"><title>Neutral studio</title>
+const source = `<!doctype html><html><head><meta name="generator" content="Carrd"><link rel="canonical" href="/"><title>Neutral studio</title>
 <style>section{padding:24px}section.inactive{display:none}footer{padding:20px}</style></head><body>
 <header><a href="#home">Home</a><a href="#about">About</a></header><main>
 <section id="home-section" class="active"><h1>Studio home</h1><a href="#contact">Contact</a><a href="#retired">Retired route</a></section>

@@ -102,7 +102,10 @@ export const carrdAdapter: PlatformAdapter = {
 				const html = await response.text();
 				const name = decodeURIComponent(target.pathname.replace(/^\/|\/$/g, ''));
 				if (!sections(html).slice(1).some(section => section.name === name)) return undefined;
-				return { headers: response.headers(), html: html.replace(/<head([^>]*)>/i, `<head$1><base href="${root}">`) };
+				// The section is this route's own page, not an alias of the root
+				// document it is served from: name it as its own canonical.
+				const page = html.replace(/<link\b[^>]*\brel=["']canonical["'][^>]*>/gi, `<link rel="canonical" href="${target.href}">`);
+				return { headers: response.headers(), html: page.replace(/<head([^>]*)>/i, `<head$1><base href="${root}">`) };
 			} finally { await response.dispose(); }
 		},
 		prepare,
