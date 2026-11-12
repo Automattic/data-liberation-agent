@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import type { HttpAcquisitionProfile, HttpDocumentContext, PreparedHttpDocument } from '../../platform/acquisition.js';
+import { detection } from './detection.js';
 
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
@@ -28,9 +29,10 @@ function isExecutable(type: string): boolean {
 	return EXECUTABLE_TYPES.has(type);
 }
 
-function hasBloggerGenerator(html: string): boolean {
+/** A Blogger-rendered document, by the same source signals detection uses. */
+function isBloggerDocument(html: string): boolean {
 	const source = html.replace(/<!--[\s\S]*?-->/g, '');
-	return /<meta\b(?=[^>]*\bname\s*=\s*['"]generator['"])(?=[^>]*\bcontent\s*=\s*['"]\s*blogger\s*['"])[^>]*>/i.test(source);
+	return (detection.sourceSignals ?? []).some(signal => signal.pattern.test(source));
 }
 
 function classTokens(value: string | undefined): string[] {
@@ -38,7 +40,7 @@ function classTokens(value: string | undefined): string[] {
 }
 
 export function prepareBloggerDocument(html: string, context: HttpDocumentContext): PreparedHttpDocument | undefined {
-	if (!hasBloggerGenerator(html)) return undefined;
+	if (!isBloggerDocument(html)) return undefined;
 	const $ = cheerio.load(html);
 	if ($('canvas').length > 0) return undefined;
 	const widget = $('div, section, article').filter((_, element) => {
