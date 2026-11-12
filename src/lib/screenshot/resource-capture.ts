@@ -677,7 +677,14 @@ export class CapturedResourceStore {
 		return { ...resource, headers: metadata.headers };
 	}
 
-	async captureDomDependencies( html: string, documentUrl: string ): Promise< void > {
+	/**
+	 * Capture a serialized document's render dependencies. With `deferMedia`,
+	 * media elements (img/source/video/audio sources, srcset candidates,
+	 * posters) and metadata images are reported instead of downloaded, unless
+	 * already captured; stylesheets, fonts and other dependencies still capture.
+	 */
+	async captureDomDependencies( html: string, documentUrl: string, options: { deferMedia?: ( url: string ) => void } = {} ): Promise< void > {
+		const { deferMedia } = options;
 		const pending = new Map< string, string >();
 		const renditions = new Map< string, string >();
 		const absolute = ( reference: string, base: string ): string | undefined => {
@@ -726,6 +733,13 @@ export class CapturedResourceStore {
 				'img[src],img[srcset],source[src],source[srcset],video[src],audio[src],video[poster]'
 			).each( ( _, element ) => {
 				const node = $( element );
+				if ( deferMedia ) {
+					for ( const reference of [ ...srcsetCandidates( node.attr( 'srcset' ) ?? '' ).map( candidate => candidate.url ), node.attr( 'src' ) ?? '', node.attr( 'poster' ) ?? '' ] ) {
+						const url = reference.trim() && ! reference.startsWith( 'data:' ) ? absolute( reference, baseUrl ) : undefined;
+						if ( url && ! this.manifest.resources[ url ] ) deferMedia( url );
+					}
+					return;
+				}
 				// A srcset declares renditions of one image even when the URL
 				// filenames differ (and cannot be grouped by CDN URL syntax).
 				// Each picture source gets its own decision: media/type branches
@@ -756,7 +770,11 @@ export class CapturedResourceStore {
 				const href = $( element ).attr( 'href' ) ?? '';
 				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ||
 					MEDIA_EXTENSION_RE.test( absolute( href, baseUrl )?.split( /[?#]/, 1 )[ 0 ] ?? '' ) ||
-					renditions.has( absolute( href, baseUrl ) ?? '' ) ) add( href, baseUrl );
+					renditions.has( absolute( href, baseUrl ) ?? '' ) ) {
+					const url = deferMedia && absolute( href, baseUrl );
+					if ( ! deferMedia ) add( href, baseUrl );
+					else if ( url && ! this.manifest.resources[ url ] ) deferMedia( url );
+				}
 			} );
 			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl, true );
 			$( 'link[href]' ).each( ( _, element ) => {
@@ -802,7 +820,10 @@ export class CapturedResourceStore {
 		// Declared metadata images (JSON-LD, og:image) are few and name the
 		// page's primary image; queue them before DOM candidates so the
 		// dependency cap cannot crowd them out on media-heavy pages.
-		for ( const image of metadataImageReferences( html ) ) add( image, documentUrl );
+		for ( const image of metadataImageReferences( html ) ) {
+			const url = deferMedia && absolute( image, documentUrl );
+			if ( url ) { if ( ! this.manifest.resources[ url ] ) deferMedia!( url ); } else if ( ! deferMedia ) add( image, documentUrl );
+		}
 		collect( html, documentUrl );
 		// A rolling pool: a slow resource (a large animated GIF) holds one slot,
 		// not a whole batch. Stylesheets and manifests feed their own references

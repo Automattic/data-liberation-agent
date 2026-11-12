@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { structuredContentIndex } from './content-index.js';
+import { deferredMediaReferences, linkDeferredMedia, recordMediaLedger } from './media-queue.js';
 import { canonicalLinkHref } from './route-aliases.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
@@ -1384,7 +1385,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const budget = resolveExportTotalBudget( options.limits );
 	// Build mutates manifest entries in place; a rebuild starts from the source.
 	const pristineEntries = JSON.stringify( capture.entries );
-	return publishExportGeneration( outputDir, ( stageDir ) => {
+	const receiptPath = publishExportGeneration( outputDir, ( stageDir ) => {
 		let exclusions = emptyExportBudgetExclusions();
 		for ( let pass = 1; ; pass++ ) {
 			if ( pass > 1 ) {
@@ -1401,6 +1402,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			exclusions = plan.next;
 		}
 	} );
+	// Queued media lives outside the generation; relink what has landed (#1701).
+	linkDeferredMedia( outputDir );
+	recordMediaLedger( outputDir );
+	return receiptPath;
 }
 
 /** Add the total budget outcome to the staged receipt and the log. */
@@ -2023,6 +2028,7 @@ function buildExportCapture(
 		excludedResources: exclusions.assets,
 		excludedRenditions: exclusions.renditions,
 		projectEmbeddedHtml: ( html ) => safeCapturedPageHtml( html ).html,
+		deferredMedia: deferredMediaReferences( outputDir ),
 	} );
 	for ( const { url, bytes } of resourceStage.oversizedResources ) routeCaptureDiagnostics.push( assetExceedsFileLimit( url, bytes, maxFileBytes ) );
 	// Every asset the budget dropped is reported, including one no retained page reaches any more.

@@ -23,4 +23,6 @@ A live browser check of BoardGameMonkeys matched feed and browser post bodies on
 
 This is not a completed 2,000-post live capture or a fidelity claim about the rest of that archive.
 
-**DLA #1701 (4) is a follow-up:** media still uses the existing blocking resource/materialization stages. This change does not add a resumable post-export media job, change rendition selection, or claim media retry/loss-ledger acceptance for that proposed job.
+## Media
+
+Derived posts queue their media instead of downloading it during derivation; see [media stage](media-stage.md). The Blogger adapter's `resolveImageOriginal` maps Blogger and googleusercontent renditions to the uploaded original: size path segments (`/s1600/`, `/w640-h480-p-k-no-nu/`) become `/s0/`, and `=s<N>` / `=w<N>-h<N>` suffixes on extensionless URLs become `=s0`. Representatives and section media still use the existing capture-time stages.

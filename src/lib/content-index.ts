@@ -12,7 +12,8 @@ export interface ContentIndexTerm {
 
 export interface ContentIndex {
 	schema: typeof CONTENT_INDEX_SCHEMA;
-	posts: Array< StructuredContentEntry & { path: string } >;
+	/** Entry facts without their bodies: each post's body ships in its own exported document. */
+	posts: Array< Omit< StructuredContentEntry, 'contentHtml' > & { path: string } >;
 	terms: ContentIndexTerm[];
 	redirects: Array< { from: string; to: string } >;
 }
@@ -32,7 +33,7 @@ export function structuredContentIndex( entries: StructuredContentEntry[], route
 		if ( terms.some( term => term.name === name ) ) continue;
 		terms.push( { name, kind: 'term-archive', sourceUrl: source.termArchiveUrl( name, sourceUrl ), path: `/terms/${ createHash( 'sha256' ).update( name ).digest( 'hex' ) }.html` } );
 	}
-	const posts = entries.filter( entry => paths.has( entry.permalink ) ).map( entry => ( { ...entry, path: paths.get( entry.permalink )! } ) );
+	const posts = entries.filter( entry => paths.has( entry.permalink ) ).map( ( { contentHtml: _body, ...entry } ) => ( { ...entry, path: paths.get( entry.permalink )! } ) );
 	return {
 		schema: CONTENT_INDEX_SCHEMA,
 		posts,

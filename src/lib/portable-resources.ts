@@ -56,6 +56,8 @@ export interface PortableResourceOptions {
 	/** Dependency URLs the total export budget excluded as redundant srcset renditions: their references leave every srcset and image-set list. */
 	excludedRenditions?: ReadonlyMap< string, unknown >;
 	projectEmbeddedHtml: ( html: string ) => string;
+	/** Uncaptured media queued for the media stage (#1701): source URL → deterministic portable URL. */
+	deferredMedia?: ReadonlyMap< string, string >;
 }
 
 export interface PortableResourceResult {
@@ -309,6 +311,12 @@ export function materializePortableResources( options: PortableResourceOptions )
 				continue;
 			}
 			const mediaReplacement = mediaReplacements.get( dependency.reference ) ?? mediaReplacements.get( dependency.url );
+			// Queued media keeps its deterministic path; the file lands after export.
+			const deferred = resourceManifest.resources[ dependency.url ] ? undefined : options.deferredMedia?.get( dependency.url );
+			if ( deferred && ( ! mediaReplacement || mediaReplacement === TRANSPARENT_IMAGE_DATA_URL || /^(?:https?:)?\/\//i.test( mediaReplacement ) ) ) {
+				mediaReplacements.set( dependency.reference, deferred );
+				continue;
+			}
 			if (
 				mediaReplacement &&
 				mediaReplacement !== TRANSPARENT_IMAGE_DATA_URL &&

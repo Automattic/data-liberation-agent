@@ -692,6 +692,7 @@ async function runCaptureWebsite(
 				governors: sourceGovernors,
 				styleNormalization: adapter.templateStyleNormalization,
 				maxTotalBytes: options.maxTotalBytes,
+				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
 			} )
 		: undefined;
 	if ( templateGrouping?.report?.frontier ) {
@@ -1028,6 +1029,8 @@ export async function deriveTemplateClusterMembers( input: {
 	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
 	/** The run byte budget (`--max-total-bytes`); each cluster's resource store spends it like the capture's. */
 	maxTotalBytes?: number;
+	/** Platform original-rendition resolver for queued member media (#1701). */
+	resolveImageOriginal?: import('../platform/types.js').Platform['resolveImageOriginal'];
 } ): Promise< TemplateClusterDerivation > {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
@@ -1040,6 +1043,9 @@ export async function deriveTemplateClusterMembers( input: {
 	const feedEntries = new Map( ( contentSource ? input.contentEntries ?? [] : [] ).map( entry => [ normalizedUrl( entry.permalink ), entry ] ) );
 	const feedBodyEquivalent = ( html: string, entry: import('../platform/types.js').StructuredContentEntry ) => contentSource!.bodyEquivalent( html, entry );
 	const feedMemberDocument = ( html: string, representative: import('../platform/types.js').StructuredContentEntry, member: import('../platform/types.js').StructuredContentEntry ) => contentSource!.memberDocument( html, representative, member );
+	const { enqueueMedia } = await import( './media-queue.js' );
+	const deferredMedia = new Set< string >();
+	const deferMedia = ( url: string ) => { deferredMedia.add( url ); };
 	const diagnostics: RouteDiagnostic[] = [];
 	const clusters: import('./template-clusters.js').TemplateClusterRecord[] = [];
 	const derivedUrls: string[] = [];
@@ -1226,16 +1232,17 @@ export async function deriveTemplateClusterMembers( input: {
 						escalated++;
 						continue;
 					}
-					// Localize the member's slot media exactly as capture does (§3.1
-					// step 3): the same captured-resource stage over the same store.
-					await store.captureDomDependencies( derivation.html, url );
+					// Template dependencies take the captured-resource stage over the
+					// same store (§3.1 step 3). Slot media is queued for the media
+					// stage instead of downloaded inline (#1701).
+					await store.captureDomDependencies( derivation.html, url, { deferMedia } );
 					const memberPath = `screenshots/derived/${ slugify( url ) }.html`;
 					const memberFile = resolve( input.outputDir, memberPath );
 					mkdirSync( dirname( memberFile ), { recursive: true } );
 					writeFileSync( memberFile, derivation.html );
 					let memberMobilePath: string | undefined;
 					if ( mobileDerivation?.ok ) {
-						await store.captureDomDependencies( mobileDerivation.html, url );
+						await store.captureDomDependencies( mobileDerivation.html, url, { deferMedia } );
 						memberMobilePath = `screenshots/derived/${ slugify( url ) }.mobile.html`;
 						writeFileSync( resolve( input.outputDir, memberMobilePath ), mobileDerivation.html );
 					}
@@ -1272,7 +1279,9 @@ export async function deriveTemplateClusterMembers( input: {
 					derivedInCluster++;
 				}
 				await store.flush();
-				process.stderr.write( `[template-clusters] cluster ${ group.id }: derived ${ record.derived.length }, escalated ${ record.escalated.length }, ${ Date.now() - startedAt }ms\n` );
+				const queued = enqueueMedia( input.outputDir, deferredMedia, input.resolveImageOriginal );
+				deferredMedia.clear();
+				process.stderr.write( `[template-clusters] cluster ${ group.id }: ${ queued } media queued, derived ${ record.derived.length }, escalated ${ record.escalated.length }, ${ Date.now() - startedAt }ms\n` );
 			} catch ( error ) {
 				// One cluster's derivation failure degrades only that cluster: the
 				// members keep their budget-omission rows (#761).
@@ -1285,6 +1294,7 @@ export async function deriveTemplateClusterMembers( input: {
 
 	if ( derivedUrls.length === derivedBefore ) break;
 	}
+	enqueueMedia( input.outputDir, deferredMedia, input.resolveImageOriginal );
 
 	const receipt: import('./template-clusters.js').TemplateClustersReceipt = {
 		schema: 'data-liberation-agent/template-clusters/v1',

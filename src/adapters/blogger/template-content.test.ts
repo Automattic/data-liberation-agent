@@ -9,13 +9,31 @@ import { TEMPLATE_GROUPING_LIMITS, TEMPLATE_GROUPS_SCHEMA, templateFingerprint }
 import { SourceRequestGovernors } from '../../lib/source-request-governor.js';
 import * as fetching from '../../lib/media-fetch/safe-fetch.js';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
+import { readMediaQueue } from '../../lib/media-queue.js';
+import { bloggerImageOriginal } from './media.js';
 
 const entries: BloggerFeedEntry[] = Array.from({ length: 8 }, (_, i) => ({
 	permalink: `https://fixture.blogspot.com/2025/01/post-${i}.html`, slug: `post-${i}`, kind: 'post',
-	title: `Post ${i}`, contentHtml: `<p>Feed body ${i} <a href="https://example.org/">link</a></p>`,
+	title: `Post ${i}`, contentHtml: `<p>Feed body ${i} <a href="https://example.org/">link</a></p><a href="https://blogger.googleusercontent.com/img/b/R29vZ2xl${i}/s1600/photo-${i}.jpg"><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl${i}/s320/photo-${i}.jpg" srcset="https://blogger.googleusercontent.com/img/b/R29vZ2xl${i}/s640/photo-${i}.jpg 2x"></a><img src="https://blogger.googleusercontent.com/img/a/AVvXsE${i}=w400-h300">`,
 	published: '2025-01-01T00:00:00Z', updated: '2025-01-02T00:00:00Z', author: 'Writer', terms: ['Board games', '日本語'],
 }));
 const document = (entry: BloggerFeedEntry) => `<html><head><title>${entry.title}</title></head><body><article id="post"><h1 class="post-title">${entry.title}</h1><div class="post-body" id="body">${entry.contentHtml}</div></article></body></html>`;
+
+describe('Blogger image originals', () => {
+	it.each([
+		['https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEh/s1600/photo.jpg', 'https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEh/s0/photo.jpg'],
+		['https://blogger.googleusercontent.com/img/b/R29vZ2xl/w640-h480-p-k-no-nu/photo.png', 'https://blogger.googleusercontent.com/img/b/R29vZ2xl/s0/photo.png'],
+		['https://1.bp.blogspot.com/-abc/XYZ/AAAA/def/s320/IMG_1.JPG', 'https://1.bp.blogspot.com/-abc/XYZ/AAAA/def/s0/IMG_1.JPG'],
+		['https://blogger.googleusercontent.com/img/a/AVvXsEgToken=s1600', 'https://blogger.googleusercontent.com/img/a/AVvXsEgToken=s0'],
+		['https://blogger.googleusercontent.com/img/a/AVvXsEgToken=w400-h300', 'https://blogger.googleusercontent.com/img/a/AVvXsEgToken=s0'],
+		['https://lh3.googleusercontent.com/blogger_img_proxy/AEn0k=s72-c', 'https://lh3.googleusercontent.com/blogger_img_proxy/AEn0k=s0'],
+		['https://blogger.googleusercontent.com/img/b/R29vZ2xl/s0/photo.jpg', undefined],
+		['https://blogger.googleusercontent.com/img/a/AVvXsEgToken', undefined],
+		['https://example.com/s1600/photo.jpg', undefined],
+	])('%s', (url, original) => {
+		expect(bloggerImageOriginal(url)).toBe(original);
+	});
+});
 
 describe('Blogger feed template content', () => {
 	it('groups the feed inventory from bounded samples, choosing the majority cohort when the newest post differs', async () => {
@@ -54,13 +72,14 @@ describe('Blogger feed template content', () => {
 		writeFileSync(join(outputDir, 'screenshots/manifest.json'), JSON.stringify({ version: 1, entries: manifestEntries }));
 		const fetch = vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => {
 			if (!mismatch) expect(String(url)).toBe(entries[0]!.permalink);
+			expect(String(url)).not.toContain('googleusercontent'); // derivation makes no media requests
 			const entry = entries.find(entry => entry.permalink === String(url))!;
 			return { body: Buffer.from(document(entry)), status: 200, finalUrl: String(url), headers: new Headers() };
 		});
 		const fingerprint = templateFingerprint(document(entries[0]!), entries[0]!.permalink);
 		try {
 			const result = await deriveTemplateClusterMembers({
-				sourceUrl: entries[0]!.permalink, outputDir, contentSource: bloggerStructuredContent, contentEntries: mismatch ? entries.map((entry, i) => i === 1 ? { ...entry, contentHtml: '<p>truncated feed</p>' } : entry) : entries, frontierUrls: [], governors: new SourceRequestGovernors(),
+				sourceUrl: entries[0]!.permalink, outputDir, contentSource: bloggerStructuredContent, resolveImageOriginal: bloggerImageOriginal, contentEntries: mismatch ? entries.map((entry, i) => i === 1 ? { ...entry, contentHtml: '<p>truncated feed</p>' } : entry) : entries, frontierUrls: [], governors: new SourceRequestGovernors(),
 				report: {
 					schema: TEMPLATE_GROUPS_SCHEMA, sourceUrl: entries[0]!.permalink,
 					fingerprint: { version: 1, maxSkeletonDepth: 8 }, limits: { ...TEMPLATE_GROUPING_LIMITS }, throttle: { events: 0 },
@@ -78,6 +97,12 @@ describe('Blogger feed template content', () => {
 				expect(saved.slug).toBe(entry.slug);
 				expect(readFileSync(join(outputDir, saved.html), 'utf8')).toContain(entry.contentHtml);
 			}
+			const queue = readMediaQueue(outputDir);
+			for (const entry of entries.slice(2)) {
+				const i = entry.slug.split('-')[1];
+				expect(queue.entries.filter(item => item.url.includes(`R29vZ2xl${i}/`)).map(item => item.originalUrl)).toEqual(Array(3).fill(`https://blogger.googleusercontent.com/img/b/R29vZ2xl${i}/s0/photo-${i}.jpg`));
+				expect(queue.entries.find(item => item.url.endsWith(`AVvXsE${i}=w400-h300`))).toMatchObject({ originalUrl: `https://blogger.googleusercontent.com/img/a/AVvXsE${i}=s0`, status: 'pending' });
+			}
 			exportWebsiteCapture({ outputDir, sourceUrl: entries[0]!.permalink, platform: 'blogger', summary: {}, failures: [], structuredContent: { source: bloggerStructuredContent, entries } });
 			const index = JSON.parse(readFileSync(join(outputDir, 'website/content-index.json'), 'utf8'));
 			expect(index.posts).toHaveLength(entries.length);
@@ -89,7 +114,15 @@ describe('Blogger feed template content', () => {
 			for (const entry of entries) {
 				const post = index.posts.find((post: { permalink: string }) => post.permalink === entry.permalink);
 				expect(post).toMatchObject({ slug: entry.slug, terms: entry.terms, published: entry.published, updated: entry.updated, author: entry.author });
-				expect(readFileSync(join(outputDir, 'website', post.path), 'utf8')).toContain(`Feed body ${entry.slug.split('-')[1]}`);
+				expect(post).not.toHaveProperty('contentHtml');
+				const i = entry.slug.split('-')[1];
+				const html = readFileSync(join(outputDir, 'website', post.path), 'utf8');
+				expect(html).toContain(`Feed body ${i}`);
+				// Derived posts reference queued media at its deterministic local path.
+				if (entries.indexOf(entry) >= 2) {
+					expect(html).toContain(`/${queue.entries.find(item => item.url.includes(`R29vZ2xl${i}/s320/`))!.path}`);
+					expect(html).toContain(`/${queue.entries.find(item => item.url.includes(`AVvXsE${i}=`))!.path}`);
+				}
 				expect(index.redirects).toContainEqual({ from: entry.permalink, to: post.path });
 			}
 		} finally { fetch.mockRestore(); rmSync(outputDir, { recursive: true, force: true }); }
