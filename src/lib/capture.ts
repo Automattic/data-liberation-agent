@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathWithin } from './portable-assets.js';
 import { findAdapter } from '../adapters/index.js';
+import { resolveEntryUrl } from '../platform/registry.js';
 import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
 import { normalizeTrustedOrigins, runWithTrustedOrigins, safeFetch } from './media-fetch/safe-fetch.js';
@@ -457,7 +458,7 @@ async function runCaptureWebsite(
 		onProgress?.( timedEvent );
 	};
 
-	const response = await fetchEntryDocument( options.url, sourceGovernors, { session: options.acquisition !== 'http' } );
+	const response = await fetchEntryDocument( await resolveEntryUrl( options.url ), sourceGovernors, { session: options.acquisition !== 'http' } );
 	const sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
 		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )

@@ -121,6 +121,18 @@ export function findPlatform( id: string ): Platform | null {
 }
 
 /** The registered generic fallback, if any. */
+/** The URL capture fetches for `url`: a claiming platform's resolved entry, or `url` itself. */
+export async function resolveEntryUrl( url: string ): Promise< string > {
+	let parsed: URL;
+	try {
+		parsed = new URL( url );
+	} catch {
+		return url;
+	}
+	const owner = registeredPlatforms().find( ( platform ) => platform.entry?.claims( parsed ) );
+	return owner?.entry ? owner.entry.resolve( url ) : url;
+}
+
 export function fallbackPlatform(): Platform | null {
 	return fallback;
 }

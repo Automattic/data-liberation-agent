@@ -30,6 +30,9 @@ interface Platform {
   routeScope?(sourceUrl: string): SiteRouteScope;
   /** This platform's automatic-detection signals (all tiers optional). */
   detection?: PlatformDetection;
+  /** Optional: resolve a link this platform owns (an editor or share link)
+   * to the URL capture fetches, before the entry fetch. */
+  entry?: { claims(url: URL): boolean; resolve(url: string): Promise<string> };
   /** Inventory a site: sitemap/routes/navigation. THE required capability. */
   discover(url: string, opts: Record<string, unknown>): Promise<unknown>;
   /** Optional optimizer/proxy unwrapping; undefined means an ordinary URL. */
@@ -43,6 +46,13 @@ interface SiteRouteScope {
   pathPrefixes: string[];
 }
 ```
+
+`entry` is for links that open a platform's own app rather than the site, such as
+a Figma Make editor link. Capture asks each registered platform whether it
+`claims` the link before fetching anything. The first that does resolves it, and
+capture continues from the resolved URL as if it had been given. Detection then
+runs on the resolved URL. A resolved URL that sets a session cookie on its own
+redirect keeps that session for every route.
 
 `resolveImageOriginal` is synchronous and source-only. Capture repeatedly applies
 it (bounded to 32 steps, stopping cycles and non-HTTP(S) targets), groups aliases
