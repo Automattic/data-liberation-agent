@@ -1,3 +1,9 @@
+import type { BrowserContext, BrowserContextOptions } from 'playwright';
+import { captureTriggeredDialogs } from './interaction-capture.js';
+import { captureSelectableSetStates } from './selectable-set-capture.js';
+import { restoreTopScrollState, dismissOverlays } from './page-helpers.js';
+import { withReadOnlyProbes, lockMainFrameNavigation } from './probe-guards.js';
+import { loadForComparison, type DeviceComparisonArgs } from './device-mode-probe.js';
 import { load } from 'cheerio';
 import type { Element as DomElement } from 'domhandler';
 import type { Page } from 'playwright';
@@ -726,4 +732,71 @@ export function summarizeSharedChrome(
 			probedInPlace: decisions.filter( decision => ! decision.chromeReused ).map( ( { url, profile, reason } ) => ( { url, profile, reason } ) ),
 		},
 	};
+}
+
+/** Bound on the one-time chrome probe of one profile; routes then probe their chrome in place. */
+const SHARED_CHROME_PROBE_MS = 120_000;
+
+/**
+ * Probe the shared chrome of a loaded, prepared entrypoint page: only controls
+ * inside chrome landmarks are clicked, and each recorded state is anchored to
+ * its chrome root so routes can rebase and verify it (see chrome-reuse.ts).
+ * `additionalStates` were recorded by another probe of a structurally
+ * identical page (the reflow-only phone-only probe) and are anchored here too.
+ * States stay as the entrypoint named them: a route translates them into its
+ * own names, and they are canonicalized with that route's document.
+ */
+export async function probeChromeOnPage(
+	page: Page,
+	url: string,
+	options: { additionalStates?: CapturedDialogInteraction[] }
+): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
+	// Read the resting landmark identity before any exploration.
+	await restoreTopScrollState( page );
+	await withReadOnlyProbes( page, () => dismissOverlays( page ) );
+	let landmarks = await readChromeLandmarks( page, true );
+	let states: CapturedDialogInteraction[] = [];
+	if ( landmarks.length ) {
+		const release = await lockMainFrameNavigation( page );
+		try {
+			states = ( await withReadOnlyProbes( page, () => captureTriggeredDialogs( page, url, { skip: OUTSIDE_CHROME } ) ) ).states;
+			states.push( ...await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: OUTSIDE_CHROME } ) ) );
+		} finally {
+			await release();
+			await clearChromeMarks( page );
+		}
+	}
+	// Phone-only controls of a builder navbar with no landmark name their own root.
+	const builderRoots = await builderChromeRoots( page, options.additionalStates ?? [] );
+	if ( builderRoots.length ) landmarks = await readChromeLandmarks( page, false, builderRoots );
+	const anchored = await anchorChromeStates( page, landmarks, [ ...states, ...( options.additionalStates ?? [] ) ] );
+	return { status: 'captured', evidence: { url, landmarks, unanchored: anchored.unanchored, states: anchored.states } };
+}
+
+export async function boundSharedChromeProbe( startedAt: number, probe: () => Promise< Omit< SharedChromeProbe, 'durationMs' > > ): Promise< SharedChromeProbe > {
+	let timer: ReturnType< typeof setTimeout > | undefined;
+	try {
+		const result = await Promise.race( [ probe(), new Promise< never >( ( _, reject ) => {
+			// failure-class: operational
+			timer = setTimeout( () => reject( new Error( `timed out after ${ SHARED_CHROME_PROBE_MS }ms` ) ), SHARED_CHROME_PROBE_MS );
+		} ) ] );
+		return { ...result, durationMs: Date.now() - startedAt };
+	} catch ( error ) {
+		return { status: 'failed', reason: error instanceof Error ? error.message : String( error ), durationMs: Date.now() - startedAt };
+	} finally {
+		clearTimeout( timer );
+	}
+}
+
+/** Load the entrypoint in one capture profile, as the device-mode probe does, and probe its shared chrome. */
+export async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile' } ): Promise< SharedChromeProbe > {
+	const contexts: BrowserContext[] = [];
+	try {
+		return await boundSharedChromeProbe( Date.now(), async () => {
+			const { page, target } = await loadForComparison( { ...args, desktop: args.options, phone: args.options }, args.options, args.viewport, 'probe', contexts );
+			return probeChromeOnPage( page, target, {} );
+		} );
+	} finally {
+		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+	}
 }

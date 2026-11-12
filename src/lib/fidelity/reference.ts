@@ -14,7 +14,7 @@ import { installImageReachability, observePageTraffic, settleDocument, waitForIm
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
-import { lockMainFrameNavigation } from '../screenshot/screenshotter.js';
+import { lockMainFrameNavigation } from '../screenshot/probe-guards.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 import { watchSourceRuntimeErrors } from '../source-readiness.js';

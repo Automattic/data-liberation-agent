@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { chromium } from 'playwright';
 import { exploreComponents, snapshotComponents } from './component-states.js';
-import { withReadOnlyProbes } from './screenshotter.js';
+import { withReadOnlyProbes } from './probe-guards.js';
 import { wireCapturedComponents } from '../static-components.js';
 
 // One browser pass, approximately three seconds. Uses the screenshotter's
