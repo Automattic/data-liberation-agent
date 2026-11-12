@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Width class</title>
+<style>
+body{margin:0;font-family:sans-serif}
+.card{padding:20px}
+.card .media{background:#4a6cf7;height:160px}
+.card:not(.narrow){display:flex;gap:20px}
+.card:not(.narrow) > *{width:50%}
+.card.narrow .text{margin-top:20px}
+</style></head><body><main>
+<div class="card"><div class="media"></div><div class="text"><h2>Title</h2><p>Body copy that stacks under the media on narrow cards.</p></div></div>
+</main>
+<script>
+const card=document.querySelector('.card');
+const fit=()=>card.classList.toggle('narrow',card.offsetWidth<600);
+fit(); addEventListener('resize',fit);
+</script></body></html>

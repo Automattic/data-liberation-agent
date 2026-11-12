@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
+import * as cheerio from 'cheerio';
+import { resolveDocumentReferences } from '../document-resource-base.js';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { Page } from 'playwright';
-import { COARSE_SWEEP_WIDTHS, SEGMENT_STYLE_ATTRIBUTE } from './fluid-capture.js';
+import { COARSE_SWEEP_WIDTHS } from './fluid-capture.js';
 import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
 import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 
@@ -15,9 +17,9 @@ import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './vie
  * state. Sweep the coarse widths, find each token whose presence changes with
  * width, locate its breakpoint, and carry the token as a width-scoped alias:
  * the element wears the alias instead, and every readable rule naming the
- * token gains a copy naming the alias inside the widths where the source
- * applied it. The copies live in a capture-generated rules block, which the
- * responsive assembly keeps intact with its own media conditions.
+ * token is projected in place into presence/absence media arms. In the
+ * presence arm the alias also satisfies the token, including under :not();
+ * in the absence arm only the original token does.
  */
 export const VIEWPORT_CLASS_PREFIX = 'data-blocks-engine-capture-width-class-';
 
@@ -85,12 +87,14 @@ async function stylesheetTexts( page: Page ): Promise< string[] | null > {
 	return texts;
 }
 
-/**
- * A copy of each rule naming an aliased token, naming the alias instead, kept
- * inside its own conditional groups and the widths the token applied at.
- */
-export function aliasRules( sheets: readonly string[], aliases: ReadonlyArray< { token: string; alias: string; media: string } > ): string[] {
+type WidthClassAlias = { token: string; alias: string; media: string };
+const CONTRACTS_ATTRIBUTE = 'data-blocks-engine-capture-width-class-contracts';
+
+/** Project each affected rule into both states, retaining specificity and context. */
+export function aliasRules( sheets: readonly string[], aliases: readonly WidthClassAlias[] ): string[] {
 	const copies: string[] = [];
+	// Many elements can share one token contract; project it only once.
+	const contracts = [ ...new Map( aliases.map( alias => [ `${ alias.token }|${ alias.alias }|${ alias.media }`, alias ] ) ).values() ];
 	for ( const css of sheets ) {
 		let root: postcss.Root;
 		try {
@@ -100,30 +104,79 @@ export function aliasRules( sheets: readonly string[], aliases: ReadonlyArray< {
 		}
 		root.walkRules( rule => {
 			if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( ( rule.parent as postcss.AtRule ).name ) ) return;
-			for ( const { token, alias, media } of aliases ) {
+			let projected = postcss.root().append( rule.clone() );
+			let affected = false;
+			for ( const { token, alias, media } of contracts ) {
 				let named = false;
-				let selector: string;
 				try {
-					selector = selectorParser( selectors => selectors.walkClasses( node => {
-						if ( node.value !== token ) return;
-						node.value = alias;
-						named = true;
+					selectorParser( selectors => selectors.walkClasses( node => {
+						if ( node.value === token ) named = true;
 					} ) ).processSync( rule.selector );
 				} catch {
 					continue;
 				}
 				if ( ! named ) continue;
-				let copy = rule.clone( { selector } ).toString();
-				for ( let parent = rule.parent; parent && parent.type === 'atrule'; parent = parent.parent ) {
-					const group = parent as postcss.AtRule;
-					if ( ! /^(media|supports|container|layer)$/i.test( group.name ) ) break;
-					copy = `@${ group.name } ${ group.params }{${ copy }}`;
-				}
-				copies.push( `@media ${ media }{${ copy }}` );
+				const active = postcss.atRule( { name: 'media', params: media } );
+				const inactive = postcss.atRule( { name: 'media', params: `not (${ media.split( ',' ).map( query => `(${ query })` ).join( ' or ' ) })` } );
+				// Compose contracts, so a selector naming several toggled tokens
+				// tests all their states rather than emitting competing copies.
+				const before = projected.toString();
+				// :is() keeps the class specificity, including under nested
+				// negation; ordinary elements still test their original token.
+				const after = selectorParser( selectors => selectors.walkClasses( node => {
+					if ( node.value === token ) node.replaceWith( selectorParser().astSync( `:is(${ node.toString() },.${ alias })` ).first.first! );
+				} ) );
+				const present = postcss.parse( before );
+				present.walkRules( child => { child.selector = after.processSync( child.selector ); } );
+				active.append( present.nodes );
+				inactive.append( postcss.parse( before ).nodes );
+				projected = postcss.root().append( active, inactive );
+				affected = true;
 			}
+			if ( ! affected ) return;
+			let copy = projected.toString();
+			for ( let parent = rule.parent; parent && parent.type === 'atrule'; parent = parent.parent ) {
+				const group = parent as postcss.AtRule;
+				if ( ! /^(media|supports|container|layer)$/i.test( group.name ) ) break;
+				copy = `@${ group.name } ${ group.params }{${ copy }}`;
+			}
+			copies.push( copy );
 		} );
 	}
 	return copies;
+}
+
+/** Rewrite the portable document only; never change source rules during learning. */
+export function projectViewportClassRules( html: string, linkedSheet: ( href: string ) => { css: string; url: string } | undefined = () => undefined ): string {
+	const $ = cheerio.load( html );
+	const marked = $( 'body' ).attr( CONTRACTS_ATTRIBUTE );
+	if ( ! marked ) return html;
+	const aliases: WidthClassAlias[] = JSON.parse( marked );
+	$( 'body' ).removeAttr( CONTRACTS_ATTRIBUTE );
+	const project = ( css: string ) => {
+		let root: postcss.Root;
+		try { root = postcss.parse( css ); } catch { return css; }
+		const rules: postcss.Rule[] = [];
+		root.walkRules( rule => { rules.push( rule ); } );
+		for ( const rule of rules ) {
+			if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( rule.parent.name ) ) continue;
+			const copies = aliasRules( [ rule.toString() ], aliases );
+			if ( copies.length ) rule.replaceWith( ...postcss.parse( copies.join( '\n' ) ).nodes );
+		}
+		return root.toString();
+	};
+	$( 'style' ).each( ( _, element ) => { $( element ).text( project( $( element ).text() ) ); } );
+	$( 'link[rel~="stylesheet"]:not([rel~="alternate"]):not([disabled])' ).each( ( _, element ) => {
+		const link = $( element );
+		const sheet = linkedSheet( link.attr( 'href' ) ?? '' );
+		if ( ! sheet || ! aliases.some( alias => sheet.css.includes( alias.token ) ) ) return;
+		const style = $( '<style>' ).text( project( sheet.css ) );
+		const media = link.attr( 'media' );
+		if ( media !== undefined ) style.attr( 'media', media );
+		const resolved = cheerio.load( resolveDocumentReferences( style.toString(), sheet.url, sheet.url ) );
+		link.replaceWith( resolved( 'style' ).toString() );
+	} );
+	return $.html();
 }
 
 export type ViewportClassMemo = Map< string, ReadonlyArray< { width: number; present: boolean } > >;
@@ -302,7 +355,7 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		const css = await stylesheetTexts( page );
 		if ( css === null ) return { ...none, sampledWidths };
 		const copies = aliasRules( css, aliases );
-		await page.evaluate( ( { key, aliases, attribute, copies, marker } ) => {
+		await page.evaluate( ( { key, aliases, marker, contractsAttribute } ) => {
 			const state = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!;
 			// The source script may rewrite the class attribute on any later
 			// resize, and only capture attributes reach the initial document.
@@ -311,13 +364,8 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 				const pairs = JSON.parse( element.getAttribute( marker ) ?? '[]' ) as string[][];
 				element.setAttribute( marker, JSON.stringify( [ ...pairs, [ token, alias ] ] ) );
 			}
-			if ( copies.length ) {
-				const style = document.createElement( 'style' );
-				style.setAttribute( attribute, '' );
-				style.textContent = copies.join( '\n' );
-				document.head.appendChild( style );
-			}
-		}, { key: STATE_KEY, aliases, attribute: SEGMENT_STYLE_ATTRIBUTE, copies, marker: WIDTH_CLASSES_ATTRIBUTE } );
+			document.body.setAttribute( contractsAttribute, JSON.stringify( aliases ) );
+		}, { key: STATE_KEY, aliases, marker: WIDTH_CLASSES_ATTRIBUTE, contractsAttribute: CONTRACTS_ATTRIBUTE } );
 		const rules = copies.length;
 		return { aliased: aliases.length, rules, sampledWidths };
 	} finally {

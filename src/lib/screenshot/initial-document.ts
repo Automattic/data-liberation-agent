@@ -4,7 +4,7 @@ import postcss from 'postcss';
 import type { Page } from 'playwright';
 import { isStackingArtifact } from './document-integrity.js';
 import { RUNTIME_SHEET_PRUNED_ATTRIBUTE } from './fluid-runtime-sheets.js';
-import { WIDTH_CLASSES_ATTRIBUTE } from './viewport-class-states.js';
+import { WIDTH_CLASSES_ATTRIBUTE, projectViewportClassRules } from './viewport-class-states.js';
 
 const NODE = 'data-blocks-engine-capture-initial-node';
 // Every property capture rewrites in the live DOM must be listed: an unlisted
@@ -51,7 +51,7 @@ function applyWidthClasses(target: cheerio.Cheerio<Element>): void {
 }
 
 /** Only learned style declarations may cross back from exploration to the initial tree. */
-export function projectInitialDocument(initial: string, learned: string): string {
+export function projectInitialDocument(initial: string, learned: string, linkedSheet?: Parameters<typeof projectViewportClassRules>[1]): string {
 	// Parsing would repair nested bodies and hide the integrity violation.
 	if (isStackingArtifact(initial) || isStackingArtifact(learned)) return isStackingArtifact(initial) ? initial : learned;
 	const $ = cheerio.load(initial);
@@ -86,5 +86,5 @@ export function projectInitialDocument(initial: string, learned: string): string
 		const to = later(node).text();
 		$('style').filter((_index, style) => $(style).text() === from).text(to);
 	}
-	return $.html();
+	return projectViewportClassRules($.html(), linkedSheet);
 }

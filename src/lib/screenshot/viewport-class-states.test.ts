@@ -7,7 +7,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
+import { aliasRules, captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
@@ -157,7 +157,7 @@ it.each( [
 			await page.setContent( route( breakpoint ) );
 			await markInitialDocument( page );
 			result = await captureViewportClassStates( page, { settleMs: 0, memo } );
-			css = await page.evaluate( () => [ ...document.querySelectorAll( 'style' ) ].map( style => style.textContent ).join( '\n' ) );
+			css = projectInitialDocument( await page.content(), await page.content() );
 			await page.close();
 		}
 		if ( sampled ) expect( [ ...result!.sampledWidths ].sort( ( a, b ) => a - b ) ).toEqual( sampled );
