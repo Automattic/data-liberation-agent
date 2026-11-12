@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.34.1] - 2026-11-12
+
+### Changed
+- regenerate plugin bundles
+- Hide a cleanup match the source runtime re-renders instead of removing it again
+- Replace blurred Wix slide placeholders with their declared source
+
+### Fixed
+- exclude application routes from website capture
+
 ## [0.34.0] - 2026-11-12
 
 ### Added
