@@ -673,7 +673,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// its removal, rather than fighting the runtime. Leave it out of the
 				// copy. This runs last: the walks above pair document and snapshot
 				// nodes by position.
-				for ( const hidden of snapshot.querySelectorAll( '[data-dla-cleanup-hidden]' ) ) hidden.remove();
+				for ( const hidden of snapshot.querySelectorAll( '[data-blocks-engine-capture-cleanup-hidden]' ) ) hidden.remove();
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();

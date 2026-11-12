@@ -60,6 +60,6 @@ it( 'hides a match the source runtime re-renders instead of removing it again', 
 		const html = await capturePageHtml( page );
 		expect( html ).toContain( 'Owner content' );
 		expect( html ).not.toContain( 'class="promo-bar"' );
-		expect( html ).not.toContain( 'data-dla-cleanup-hidden' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-cleanup-hidden' );
 	} finally { await browser.close(); }
 }, 30_000 );

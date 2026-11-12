@@ -384,7 +384,7 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
   };
   // Where a rule removed a node in an earlier sweep (rule id + position path).
   // A later match at the same place is the source runtime re-rendering it.
-  const HIDDEN_ATTRIBUTE = 'data-dla-cleanup-hidden';
+  const HIDDEN_ATTRIBUTE = 'data-blocks-engine-capture-cleanup-hidden';
   const removedEarlier = new Set<string>();
   let removedThisSweep: string[] = [];
   const removeMatching = () => {
