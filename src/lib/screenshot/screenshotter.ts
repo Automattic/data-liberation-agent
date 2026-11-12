@@ -3,6 +3,7 @@ import { totalmem } from 'node:os';
 import { incompleteDeviceDocument } from '../responsive-assembly.js';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
+import { parseSrcset, isSrcsetShaped } from '../srcset.js';
 import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
 import { categorizeSourceContext, forgetSourceDocument, getSourceResponse, sourceGovernorFor, sourceDocumentHtml } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
@@ -458,7 +459,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource } ) => {
+		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
@@ -480,7 +481,8 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			const restoredAspectRatios: Array< { image: HTMLImageElement; previous: string; priority: string } > = [];
 			const restoredBackgrounds: Array< { element: HTMLElement; previous: string | null; classes: string | null; status: string | null } > = [];
 			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
-			const srcsetShaped = ( value: string ) => /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
+			const srcsetShaped = new Function( 'return (' + srcsetShapedSource + ')' )() as typeof isSrcsetShaped;
+			const srcsetCandidates = new Function( 'return (' + parseSrcsetSource + ')' )() as typeof parseSrcset;
 			const durableImageUrl = ( value: string | null | undefined ): string => {
 				const url = ( value ?? '' ).trim();
 				if ( ! url || /^blob:/i.test( url ) || placeholderGif.test( url ) || srcsetShaped( url ) ) return '';
@@ -492,8 +494,11 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 			};
 			const firstHttpUrl = ( value: string ): string => {
-				const match = /https?:\/\/[^\s,"']+/i.exec( value );
-				return match ? durableImageUrl( match[ 0 ] ) : '';
+				for ( const candidate of srcsetCandidates( value ) ) {
+					const url = durableImageUrl( candidate.url );
+					if ( url ) return url;
+				}
+				return '';
 			};
 			const detached: Array< { element: Element; parent: Node; next: Node | null } > = [];
 			for ( const element of Array.from( document.body?.querySelectorAll( '*' ) ?? [] ) ) {
@@ -539,7 +544,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				const attribute = image.getAttribute( 'src' ) ?? '';
 				const shaped = srcsetShaped( attribute );
-				if ( ! placeholderGif.test( attribute ) && ! shaped && ! /^blob:/i.test( attribute ) ) continue;
+				if ( attribute.trim() && ! placeholderGif.test( attribute ) && ! shaped && ! /^blob:/i.test( attribute ) ) continue;
 				let next = durableImageUrl( image.currentSrc );
 				if ( ! next ) {
 					for ( const name of [ 'data-src', 'data-lazy-src', 'data-original', 'data-image' ] ) {
@@ -686,7 +691,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString() } );
+		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
 		diagnostics?.push( ...result.findings );
 		for ( const omitted of result.omittedStyles ?? [] ) diagnostics?.push( { code: 'runtime_stylesheet_omitted', reason: `Omitted unmatched runtime stylesheet (${ omitted.bytes } bytes, ${ omitted.rules } rules)` } );
 		return wireNativeControlState( result.html );
