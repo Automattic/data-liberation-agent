@@ -1120,6 +1120,9 @@ export const capture: LiberationHooks = {
 	 */
 	beforeSerialize: async ( page, ctx ) => {
 		await revealAndCollectWixSlideshows( page, ctx.serverHtml );
+		// A slide is snapshotted as soon as it mounts, often still on its
+		// blurred placeholder, so its declared source is supplied again here.
+		await normalizeWixImageSources( page ).catch( () => 0 );
 		// Maps and App Market widgets only work inside Wix's viewer (see embeds.ts).
 		await portWixRuntimeEmbeds( page ).catch( () => undefined );
 		// The video player is a runtime widget too: it becomes a standard
