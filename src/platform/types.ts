@@ -84,6 +84,9 @@ export interface Platform {
 	runtimePaths?: string[];
 	/** Automatic-detection signals owned by this platform. */
 	detection?: PlatformDetection;
+	/** Resolves a link this platform owns but does not serve the site from (an
+	 * editor or share link) to the URL capture fetches, before the entry fetch. */
+	entry?: PlatformEntryResolver;
 	/** Inventory a site: sitemap/routes/navigation. Required. */
 	discover( url: string, opts: Record< string, unknown > ): Promise< unknown >;
 	/** Resolve an image optimizer/proxy URL to its underlying HTTP(S) resource.
@@ -108,6 +111,14 @@ export interface Platform {
 	 * counters are left out. See `lib/engagement-stats.ts`.
 	 */
 	engagementStats?( urls: readonly string[], opts: { deadline?: number } ): Promise< import( '../lib/engagement-stats.js' ).EngagementStatsReading | undefined >;
+}
+
+/** Maps a platform-owned link to the site's own entry URL. */
+export interface PlatformEntryResolver {
+	/** Cheap and pure: does this platform own this link? */
+	claims( url: URL ): boolean;
+	/** The URL capture should fetch for this link. */
+	resolve( url: string ): Promise< string >;
 }
 
 /** One content item a platform publishes as structured data. */

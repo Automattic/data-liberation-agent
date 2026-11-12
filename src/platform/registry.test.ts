@@ -8,6 +8,7 @@ import {
 	registerPlatform,
 	registeredPlatforms,
 	resolvePlatform,
+	resolveEntryUrl,
 } from './registry.js';
 
 // This file imports ONLY the registry (never ./builtins.js), so it exercises
@@ -100,5 +101,18 @@ describe( 'platform registry', () => {
 		// findPlatform never falls back — only resolvePlatform does (a fallback
 		// IS registered at this point in the flow).
 		expect( findPlatform( 'nothing-registered' ) ).toBeNull();
+	} );
+	it( 'resolves a claimed entry link through its platform and leaves others unchanged', async () => {
+		registerPlatform( {
+			...stub( 'entry-owner' ),
+			entry: {
+				claims: ( url: URL ) => url.hostname === 'editor.example' && url.pathname.startsWith( '/project/' ),
+				resolve: async ( url: string ) => `https://site.example/?from=${ encodeURIComponent( url ) }`,
+			},
+		} );
+		await expect( resolveEntryUrl( 'https://editor.example/project/1' ) )
+			.resolves.toBe( 'https://site.example/?from=https%3A%2F%2Feditor.example%2Fproject%2F1' );
+		await expect( resolveEntryUrl( 'https://editor.example/blog' ) ).resolves.toBe( 'https://editor.example/blog' );
+		await expect( resolveEntryUrl( 'not a url' ) ).resolves.toBe( 'not a url' );
 	} );
 } );
