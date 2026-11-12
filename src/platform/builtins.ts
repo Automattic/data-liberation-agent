@@ -21,6 +21,7 @@ import { defaultAdapter } from '../adapters/default/index.js';
 import { dudaAdapter } from '../adapters/duda/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
 import { framerAdapter } from '../adapters/framer/index.js';
+import { figmaMakeAdapter } from '../adapters/figma-make/index.js';
 import { gammaAdapter } from '../adapters/gamma/index.js';
 import { googleSitesAdapter } from '../adapters/google-sites/index.js';
 import { ghostAdapter } from '../adapters/ghost/index.js';
@@ -52,6 +53,7 @@ const builtins: Platform[] = [
 	carrdAdapter,
 	dudaAdapter,
 	emdashAdapter,
+	figmaMakeAdapter,
 	framerAdapter,
 	gammaAdapter,
 	ghostAdapter,
