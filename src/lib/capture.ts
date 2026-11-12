@@ -6,6 +6,7 @@ import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
 import { normalizeTrustedOrigins, runWithTrustedOrigins, safeFetch } from './media-fetch/safe-fetch.js';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
+import { establishSourceSession, sourceSessionCookieHeader } from './browser-kit/browser-kit.js';
 import { captureAssets } from './image-assets.js';
 import { downloadSectionMedia } from './replicate/download-section-media.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
@@ -456,10 +457,7 @@ async function runCaptureWebsite(
 		onProgress?.( timedEvent );
 	};
 
-	const response = await safeFetch( options.url, { timeoutMs: 10_000, governors: sourceGovernors } ).catch( async error => {
-		if ( await completeSourceTlsChain( options.url, error ) ) return safeFetch( options.url, { timeoutMs: 10_000, governors: sourceGovernors } );
-		throw error; // failure-class: operational
-	} );
+	const response = await fetchEntryDocument( options.url, sourceGovernors, { session: options.acquisition !== 'http' } );
 	const sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
 		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )
@@ -895,6 +893,27 @@ async function runCaptureWebsite(
  */
 /** Feed posts sampled across the archive to choose the provisional post cohort (#1701). */
 const FEED_COHORT_SAMPLES = 6;
+
+/**
+ * Fetch the entry document. With `session`, the entry URL's own session is
+ * harvested first: a tokenized link may set it on a redirect that drops the
+ * token, and every later step continues from the redirected URL.
+ */
+export async function fetchEntryDocument( url: string, governors: SourceRequestGovernors, options: { session: boolean } ): ReturnType< typeof safeFetch > {
+	if ( options.session ) await establishSourceSession( url, { publicUrlsOnly: true, governors } );
+	const entryFetchOptions = {
+		timeoutMs: 10_000,
+		governors,
+		headersForOrigin: async ( origin: string ) => {
+			const cookie = await sourceSessionCookieHeader( origin );
+			return cookie ? { Cookie: cookie } : undefined;
+		},
+	};
+	return safeFetch( url, entryFetchOptions ).catch( async error => {
+		if ( await completeSourceTlsChain( url, error ) ) return safeFetch( url, entryFetchOptions );
+		throw error; // failure-class: operational
+	} );
+}
 
 export async function groupInventoryTemplates( input: { contentEntries?: import('../platform/types.js').StructuredContentEntry[]; sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
 	report?: import('./template-groups.js').TemplateGroupsReport;

@@ -10,6 +10,8 @@ import {
 } from './browser-kit.js';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
 import { downloadMedia } from '../media-fetch/media.js';
+import { fetchEntryDocument } from '../capture.js';
+import { SourceRequestGovernors } from '../source-request-governor.js';
 
 // validateOutputDir rejects paths outside cwd, so outputDirs live under a
 // cwd-local .tmp-test dir (matches screenshot/smoke.test.ts).
@@ -48,6 +50,12 @@ function startGatedSource(): Promise<{
         '<!doctype html><title>Entry</title><body>entry' +
           '<video src="/video.mp4" poster="/poster.jpg" preload="none"></video></body>'
       );
+      return;
+    }
+    // A tokenized share link that sets the session, then redirects to drop the token.
+    if ( path.startsWith( '/share?token=letmein' ) ) {
+      res.writeHead( 302, { location: '/', 'set-cookie': `${ SESSION_COOKIE }; Path=/; HttpOnly` } );
+      res.end();
       return;
     }
     if ( path.startsWith( '/redirect-to-other' ) ) {
@@ -249,6 +257,36 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'source session (real Chromiu
       await context.close();
     } finally {
       await freshBrowser.close();
+    }
+  }, 30_000 );
+
+  it( 'keeps the session an entry URL sets on a redirect that drops its token', async () => {
+    const response = await fetchEntryDocument( `${ source.url }/share?token=letmein`, new SourceRequestGovernors(), { session: true } );
+    expect( response.finalUrl ).toBe( `${ source.url }/` );
+    expect( response.status ).toBe( 200 );
+
+    // Capture continues from the redirected URL, which no longer carries the token.
+    const browser = await connectBrowser( {} );
+    try {
+      const context = await browser.newContext( await sourceContextOptions( browser, response.finalUrl ) );
+      const page = await context.newPage();
+      expect( ( await page.goto( `${ source.url }/about` ) )?.status() ).toBe( 200 );
+      await context.close();
+    } finally {
+      await browser.close();
+    }
+  }, 30_000 );
+
+  it( 'never forwards an entry redirect cookie to a different origin', async () => {
+    const other = await startOtherOrigin();
+    try {
+      await fetchEntryDocument( `${ source.url }/share?token=letmein`, new SourceRequestGovernors(), { session: true } );
+      const redirectUrl = `${ source.url }/redirect-to-other?to=${ encodeURIComponent( `${ other.url }/asset.png` ) }`;
+      await fetchEntryDocument( redirectUrl, new SourceRequestGovernors(), { session: true } );
+      expect( other.requested ).toBe( true );
+      expect( other.sawCookie ).toBe( false );
+    } finally {
+      await other.close();
     }
   }, 30_000 );
 

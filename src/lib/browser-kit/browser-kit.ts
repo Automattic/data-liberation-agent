@@ -246,6 +246,30 @@ export async function sourceContextOptions(
 }
 
 /**
+ * Harvest the session for `entryUrl` itself before anything else requests it.
+ * A tokenized link can set its session on a redirect that drops the token, so
+ * a harvest started later from the redirected URL never sees the token. The
+ * browser follows that redirect with its own cookie handling, and later calls
+ * for the same origin reuse the result. Best-effort and never throws.
+ */
+export async function establishSourceSession(
+  entryUrl: string,
+  options: { publicUrlsOnly?: boolean; governors?: import('../source-request-governor.js').SourceRequestGovernors } = {}
+): Promise<void> {
+  const origin = originOf(entryUrl);
+  if (!origin || sourceSessions.has(origin)) return;
+  let browser: PwBrowserRaw | undefined;
+  try {
+    browser = await connectBrowser({});
+    await sourceContextOptions(browser, entryUrl, options);
+  } catch {
+    // A failed harvest leaves capture on its existing path.
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+}
+
+/**
  * The `Cookie` header value already harvested for `origin`, or undefined
  * when nothing has been harvested for it (yet, or ever). Read-only — unlike
  * {@link sourceContextOptions}, this never triggers a harvest itself, so a
