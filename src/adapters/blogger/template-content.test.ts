@@ -114,6 +114,7 @@ describe('Blogger feed template content', () => {
 			for (const entry of entries) {
 				const post = index.posts.find((post: { permalink: string }) => post.permalink === entry.permalink);
 				expect(post).toMatchObject({ slug: entry.slug, terms: entry.terms, published: entry.published, updated: entry.updated, author: entry.author });
+				expect(post).not.toHaveProperty('contentHtml');
 				const i = entry.slug.split('-')[1];
 				const html = readFileSync(join(outputDir, 'website', post.path), 'utf8');
 				expect(html).toContain(`Feed body ${i}`);
