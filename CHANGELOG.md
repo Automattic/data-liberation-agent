@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.215] - 2026-11-12
+
+### Changed
+- regenerate plugin bundles
+- exclude the /_dm/ runtime namespace from route admission
+- Replay Carrd's post-switch resize when activating a section route
+- unify generic discovery and remove unused inventory fields
+
+### Fixed
+- anchor platform detection to hostnames and reuse entry responses
+- unify CLI and MCP options with shared descriptors
+
 ## [0.33.214] - 2026-11-11
 
 ### Changed
