@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.33.216] - 2026-11-12
+
+### Changed
+- regenerate plugin bundles
+- Keep a deadline-abandoned route's completed profiles
+- Name each Carrd section route as its own canonical page
+- feed-backed template members, labels as terms, slugs and redirect map
+- Accept a script redirect to the same route with an added query
+- Add a real-site parity corpus gate for refactors
+
+### Fixed
+- remove badge and editor chrome during capture
+
 ## [0.33.215] - 2026-11-12
 
 ### Changed
