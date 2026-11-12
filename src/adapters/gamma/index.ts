@@ -18,6 +18,13 @@ export const gammaAdapter: PlatformAdapter = {
 			// Gamma's empty-image slot: a grey box with an "images" icon, which the
 			// published page keeps under the card. Its parent paints the same grey.
 			'[data-testid="media-placeholder"]',
+			'[data-editor-chrome]',
+		],
+		cleanupRules: [
+			...( nextjsAdapter.liberation?.cleanupRules ?? [] ),
+			// Attribution cleanup does not reclaim empty ancestors: select the
+			// badge's fixed wrapper, not just its link or button group.
+			{ id: 'gamma-badge', category: 'source-attribution', selector: 'div:has(> [role="group"] > [data-id="made-with-gamma-btn"])' },
 		],
 		prepare: prepareGammaPage,
 	},
