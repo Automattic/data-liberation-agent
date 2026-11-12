@@ -183,6 +183,33 @@ it( 'keeps body-linked stylesheets width-local in dual assembly (#1602)', async 
 	} finally { await browser.close(); }
 } );
 
+it( 'keeps body stylesheets shared by every document once and unconditional (#1687)', () => {
+	const links = '<link rel="stylesheet" href="/shared.css" data-original="kept"><link rel="stylesheet" href="/print.css" media="print">';
+	const desktop = page( `<p>Before</p>${ links }<main>Desktop</main><nav>Wide</nav><link rel="stylesheet" href="/partial.css"><link rel="stylesheet" href="/media.css" media="screen">` );
+	const mobile = page( `${ links }<main>Phone</main><button>Menu</button><link rel="stylesheet" href="/partial.css"><link rel="stylesheet" href="/media.css" media="print">` );
+	const middle = page( `${ links }<main>Tablet</main><aside>Middle</aside><link rel="stylesheet" href="/media.css" media="screen">` );
+	for ( const middles of [ [], [ { html: middle, minWidth: 768, maxWidth: 1199 } ] ] ) {
+		const assembled = assembleResponsiveCapture( {
+			rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile,
+			portableMiddleHtml: middles,
+		} );
+		const $ = cheerio.load( assembled.html );
+		for ( const href of [ '/shared.css', '/print.css' ] ) {
+			const link = $( `link[href="${ href }"]` );
+			expect( link ).toHaveLength( 1 );
+			expect( link.closest( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
+			expect( $( 'style' ).text() ).not.toContain( href );
+		}
+		expect( $( 'link[href="/shared.css"]' ).attr( 'data-original' ) ).toBe( 'kept' );
+		expect( $( 'link[href="/shared.css"]' ).prev().text() ).toBe( 'Before' );
+		expect( $( 'link[href="/shared.css"]' ).attr( 'media' ) ).toBeUndefined();
+		expect( $( 'link[href="/print.css"]' ).attr( 'media' ) ).toBe( 'print' );
+		expect( $( 'link[href="/media.css"]' ) ).toHaveLength( 0 );
+		expect( $( 'style' ).text() ).toContain( '@import url("/media.css")' );
+		expect( $( 'link[href="/partial.css"]' ) ).toHaveLength( middles.length ? 0 : 1 );
+	}
+} );
+
 it.each( [ false, true ] )( 'scopes body styles after single-document projection (subset=%s)', subset => {
 	const desktop = page( '<style>.frame{width:1440px}</style><main id="frame" class="frame" style="height:40px">Content</main>' );
 	const mobile = page( `<style>.frame{width:402px}</style><main id="frame" class="frame" style="height:20px">Content</main>${ subset ? '<aside id="phone">Phone</aside>' : '' }` );
