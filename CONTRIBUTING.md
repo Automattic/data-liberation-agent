@@ -55,6 +55,44 @@ If you can't test against a real site, note that in the PR and explain what you 
 
 Ship a fix with the cheapest test that fails when the fix is reverted, usually a unit test of the pure function. Use a real-Chromium end-to-end test for behavior that only exists end to end. Reuse an existing pipeline run in the same file with `beforeAll` where possible, run one browser pass per behavior rather than per parameter value, and include the expected wall time in the PR. This helps keep feedback fast: 81 browser-test files accounted for more than 99% of test time, while PR CI grew from about 2 minutes in mid-September to about 19 minutes on Oct 8.
 
+### Real-site parity gate
+
+Before a capture/discovery/export refactor, run the fixed ten-site corpus on
+`origin/main` and on your branch (install dependencies, run `npm run setup:browser`
+and `npm run build` in each checkout first):
+
+```bash
+# On origin/main, use two fresh directories to check baseline repeatability:
+node scripts/parity/run.mjs --out .tmp-test/parity-main-1
+node scripts/parity/run.mjs --out .tmp-test/parity-main-2
+node scripts/parity/diff.mjs .tmp-test/parity-main-1/summary.json .tmp-test/parity-main-2/summary.json
+
+# On the branch, after rebuilding:
+node scripts/parity/run.mjs --out .tmp-test/parity-branch
+node scripts/parity/diff.mjs <main-checkout>/.tmp-test/parity-main-1/summary.json .tmp-test/parity-branch/summary.json
+```
+
+Paste the baseline `summary.json`, the main-to-main diff (expected to be empty),
+and the main-to-branch diff into the PR. Explain improvements and investigate any
+baseline flicker before claiming parity. A nonzero runner exit means at least one
+liberate/compare failed; it still writes the summary and continues the corpus.
+The diff exits nonzero on regressions; pre-existing failures alone do not fail it.
+Use `--only www.ketatov.com` for a focused run; compare summaries of the same scope.
+Output directories must be fresh and inside the checkout. Logs and full CLI
+artifacts remain alongside the summary for investigation; no resume is used.
+
+Summaries omit timestamps, absolute paths, messages, scores and resource filenames.
+Routes and finding/failure codes are sorted. Wall times are recorded as requested,
+but are explicitly excluded from regression checks because network latency and
+browser scheduling vary even on unchanged code. Live site changes can still alter
+route inventories, losses or fidelity: those are deliberately **not** ignored.
+Missing comparison evidence stays unproven, not a pass. A disappearing site or
+route, lower route counts, changed platform away from the expected platform,
+worse compare result or increased finding/failure count is a regression.
+
+The script-only tests run without browsers or network:
+`node --test scripts/parity/parity.test.mjs`.
+
 ### 3. Submit the PR
 
 ```bash
