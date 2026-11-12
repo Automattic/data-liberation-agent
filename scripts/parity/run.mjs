@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, createWriteStream } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, createWriteStream, realpathSync } from 'node:fs';
+import { resolve, join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { summarize } from './summary.mjs';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const root = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '../..'));
+// Compare real paths so symlinked temp/checkout prefixes (e.g. macOS /var -> /private/var) match.
+const real = path => existsSync(path) ? realpathSync(path) : join(real(dirname(path)), basename(path));
 const { values } = parseArgs({ options: { out: { type: 'string', default: '.tmp-test/parity' }, only: { type: 'string' } } });
-const out = resolve(values.out);
+const out = real(resolve(values.out));
 // Product validates output against cwd; use the checkout root, not the caller's cwd.
 if (!out.startsWith(root + '/')) throw new Error('--out must be inside the checkout');
 const corpus = JSON.parse(readFileSync(new URL('./corpus.json', import.meta.url), 'utf8'));

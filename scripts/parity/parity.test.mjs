@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, copyFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,7 +70,7 @@ test('each contract dimension independently detects regressions', () => {
   assert(diff(fixture(), { schema: 'parity/v1', sites: [] })[0].regression);
 });
 test('runner invokes built CLI, continues failures and reads the actual host directory', () => {
-  const root = mkdtempSync(join(tmpdir(), 'parity-runner-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'parity-runner-')));
   try {
     mkdirSync(join(root, 'scripts/parity'), { recursive: true });
     mkdirSync(join(root, 'dist'));
