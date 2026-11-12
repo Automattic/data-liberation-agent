@@ -382,13 +382,18 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
     }
     return true;
   };
+  // Where a rule removed a node in an earlier sweep (rule id + position path).
+  // A later match at the same place is the source runtime re-rendering it.
+  const HIDDEN_ATTRIBUTE = 'data-blocks-engine-capture-cleanup-hidden';
+  const removedEarlier = new Set<string>();
+  let removedThisSweep: string[] = [];
   const removeMatching = () => {
     for (const rule of policy.rules) {
       let matches: NodeListOf<Element>;
       try { matches = document.querySelectorAll(rule.selector); }
       catch { if (!report.failures.includes(rule.id)) report.failures.push(rule.id); continue; }
       for (const match of matches) {
-        if (!match.isConnected || !eligible(match, rule)) continue;
+        if (!match.isConnected || match.closest(`[${HIDDEN_ATTRIBUTE}]`) || !eligible(match, rule)) continue;
         if (report.removed >= 1000) { report.truncated = true; report.residual++; return; }
         if (rule.creditText) {
           const brand = rule.creditText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -460,8 +465,20 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
         else report.truncated = true;
         let parent = node.parentElement;
         orphanIdsIn(node);
-        node.remove();
         report.removed++;
+        // A node that reappears where this rule removed one in an earlier sweep
+        // belongs to a source runtime that re-renders it (a framework component
+        // re-mounting its banner). Detaching it again fights that runtime and can
+        // lock the page in a render loop, so hide it instead. Serialization
+        // leaves hidden nodes out of the captured HTML.
+        const place = `${rule.id} ${selectorFor(node)}`;
+        if (removedEarlier.has(place)) {
+          node.setAttribute(HIDDEN_ATTRIBUTE, rule.id);
+          (node as HTMLElement).style?.setProperty('display', 'none', 'important');
+          continue;
+        }
+        removedThisSweep.push(place);
+        node.remove();
         // Reclaim a wrapper the removal left empty (an ad slot, or a service
         // widget's custom-element host), never a content landmark or mixed container.
         const reclaimsWrappers = rule.category === 'advertisement' || rule.category === 'provider-service';
@@ -477,7 +494,12 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
       }
     }
   };
-  const sweep = () => { removeMatching(); stripOrphanedCss(); };
+  const sweep = () => {
+    removeMatching();
+    for (const place of removedThisSweep) removedEarlier.add(place);
+    removedThisSweep = [];
+    stripOrphanedCss();
+  };
   sweep();
   let scheduled = false;
   let rounds = 0;
