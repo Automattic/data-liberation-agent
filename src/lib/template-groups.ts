@@ -102,14 +102,15 @@ export interface TemplateStyleBlock {
 
 /**
  * Adapter-owned aggregation of a page's inline `<style>` blocks for the
- * template fingerprint's `pageStyles` divergence signal (#836).
+ * template fingerprint's `pageStyles` and `scripts` divergence signals (#836).
  *
  * Platforms whose runtime writes per-item CSS into page-local style blocks on
  * every request declare here which blocks are content rather than template,
  * and drop request-dependent churn (generation marker comments, block order)
  * that would otherwise split routes sharing one template. A site's own
  * authored template CSS must survive; only generated, per-item composition is
- * normalized.
+ * normalized. Platforms may also normalize resolved script URLs to remove
+ * runtime build hashes while preserving distinct template dependencies.
  */
 export interface TemplateStyleNormalization {
 	/**
@@ -118,6 +119,8 @@ export interface TemplateStyleNormalization {
 	 * Called with the blocks of one server document; must be deterministic.
 	 */
 	pageStyles( styles: readonly TemplateStyleBlock[] ): string | null;
+	/** Normalize one resolved `<script src>` URL before dependency hashing. */
+	scriptUrl?( url: string ): string;
 }
 
 /** What a skeleton cannot see, compared exactly between members of a group. */
@@ -126,7 +129,7 @@ export interface TemplateDivergence {
 	pageStyles: string | null;
 	/** Hash of the sorted, resolved `<link rel=stylesheet>` URLs. */
 	stylesheets: string;
-	/** Hash of the sorted, resolved `<script src>` URLs. */
+	/** Hash of the sorted, resolved `<script src>` URLs after adapter normalization, if declared. */
 	scripts: string;
 	/** The page has an executable inline `<script>`. */
 	inlineScripts: boolean;
@@ -180,15 +183,17 @@ function skeletonHash( element: Element, depth: number ): string {
 	return digest( children.size ? `${ self }(${ [ ...children ].sort().join( ',' ) })` : self );
 }
 
-function resolvedSet( values: Array< string | undefined >, baseUrl: string ): string {
+function resolvedSet( values: Array< string | undefined >, baseUrl: string, normalize?: ( url: string ) => string ): string {
 	const resolved = new Set< string >();
 	for ( const value of values ) {
 		if ( ! value?.trim() ) continue;
+		let url = value.trim();
 		try {
-			resolved.add( new URL( value.trim(), baseUrl ).href );
+			url = new URL( url, baseUrl ).href;
 		} catch {
-			resolved.add( value.trim() );
+			// Preserve unresolved dependencies as evidence too.
 		}
+		resolved.add( normalize ? normalize( url ) : url );
 	}
 	return digest( [ ...resolved ].sort().join( '\n' ) );
 }
@@ -231,7 +236,7 @@ export function templateFingerprint( html: string, baseUrl: string, normalizatio
 	const divergence: TemplateDivergence = {
 		pageStyles: styleText ? digest( styleText.replace( /\s+/g, ' ' ).trim() ) : null,
 		stylesheets: resolvedSet( $( 'link[rel~="stylesheet" i]' ).map( ( _index, element ) => $( element ).attr( 'href' ) ).get(), baseUrl ),
-		scripts: resolvedSet( $( 'script[src]' ).map( ( _index, element ) => $( element ).attr( 'src' ) ).get(), baseUrl ),
+		scripts: resolvedSet( $( 'script[src]' ).map( ( _index, element ) => $( element ).attr( 'src' ) ).get(), baseUrl, normalization?.scriptUrl?.bind( normalization ) ),
 		inlineScripts: $( 'script:not([src])' ).toArray().some( element => JAVASCRIPT_TYPES.has( ( element.attribs.type ?? '' ).trim().toLowerCase() ) && $( element ).text().trim() !== '' ),
 		forms: [ ...new Set( describe( 'form' ) ) ].sort(),
 		controls: [ ...new Set( controls ) ].sort(),
