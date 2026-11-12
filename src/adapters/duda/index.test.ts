@@ -28,6 +28,27 @@ describe('Duda adapter', () => {
 const hooksFor = (html: string) => findAdapter(detectFromResponse(new Headers(), html).platform)?.liberation;
 
 describe.skipIf(!existsSync(chromium.executablePath()))('Duda pager capture', () => {
+	it('materializes anchor ids without replacing existing or colliding ids', async () => {
+		const cases = [
+			{ markup: '<div data-anchor="Epson EB-U42"></div>', id: 'EpsonEB-U42' },
+			{ markup: '<div data-anchor="Gespannausfahrten - coming soon"></div>', id: 'Gespannausfahrten-comingsoon' },
+			{ markup: '<div data-anchor=" A&#9;B&#10;C "></div>', id: 'ABC' },
+			{ markup: '<div id="keep" data-anchor="Kept"></div>', id: 'keep' },
+			{ markup: '<div id="taken"></div><div data-anchor="ta ken"></div>', id: null },
+			{ markup: '<div data-anchor=" &#9; "></div>', id: null },
+		];
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.setContent(cases.map(test => test.markup).join(''));
+			await dudaAdapter.liberation!.beforeSerialize!(page, { url: 'https://duda.example/', viewport: 'desktop' });
+			expect(await page.locator('[data-anchor]').evaluateAll(elements => elements.map(element => element.getAttribute('id'))))
+				.toEqual(cases.map(test => test.id));
+		} finally {
+			await browser.close();
+		}
+	});
+
 	it('marks a single-page pager inert and leaves multi-page and non-Duda pagers alone', async () => {
 		const browser = await chromium.launch();
 		try {
