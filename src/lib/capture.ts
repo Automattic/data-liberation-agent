@@ -486,6 +486,7 @@ async function runCaptureWebsite(
 	const contentSource = options.templateClusters === true ? adapter.structuredContent : undefined;
 	const structuredContent = contentSource ? await contentSource.enumerate( sourceUrl, { governors: sourceGovernors } ) : undefined;
 	const contentEntries = structuredContent?.entries ?? [];
+	if ( structuredContent ) process.stderr.write( `[timing] structured content ${ adapter.id }: ${ contentEntries.length } entries, ${ structuredContent.diagnostics.length } diagnostics, ${ Date.now() - phaseStartedAt }ms\n` );
 	inventory.diagnostics = [ ...( inventory.diagnostics ?? [] ), ...( structuredContent?.diagnostics ?? [] ) ];
 	const sourceRoute = documentRequestUrl( sourceUrl );
 	// Action URLs and declared runtime paths leave before the budget sees them, so they never
@@ -912,6 +913,7 @@ export async function groupInventoryTemplates( input: { contentEntries?: import(
 		const cohort = postSamples.length >= 2
 			? report.groups.filter( group => sampled( group ) >= 2 ).sort( ( a, b ) => sampled( b ) - sampled( a ) )[ 0 ]
 			: undefined;
+		if ( feedPosts.size ) process.stderr.write( `[template-groups] structured content: ${ feedUrls.length } of ${ feedPosts.size } entries in inventory, ${ postSamples.length } samples, cohort ${ cohort ? `${ cohort.id } (${ sampled( cohort ) } samples)` : 'not found; grouping every route' }\n` );
 		if ( ! cohort && groupingUrls.length !== input.urls.length ) {
 			report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, styleNormalization: input.styleNormalization } );
 		}
