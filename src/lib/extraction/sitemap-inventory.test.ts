@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { fetchSitemapWithDiagnostics } from './sitemap.js';
 import { inspectSource } from '../inspect.js';
 
-it.each(['robots union', 'gzip download', 'gzip encoding', 'index', 'rss', 'atom', 'common feed', 'missing navigation'])(
+it.each(['robots union', 'gzip download', 'gzip encoding', 'index', 'rss', 'atom', 'common feed'])(
   'unifies discovery and inspection: %s', async (scenario) => {
     let origin = '';
     const requests: string[] = [];
@@ -38,7 +38,7 @@ it.each(['robots union', 'gzip download', 'gzip encoding', 'index', 'rss', 'atom
       }
       if (pages.includes(path) || path === '/extra') {
         res.setHeader('content-type', 'text/html');
-        return void res.end(`<title>Fixture</title><a href="/one">One</a>${path === '/' && scenario === 'missing navigation' ? '<nav><a href="/extra">Extra</a></nav>' : ''}${path === '/' && ['rss', 'atom'].includes(scenario) ? `<link rel="alternate" type="application/${scenario}+xml" href="/news-feed">` : ''}`);
+        return void res.end(`<title>Fixture</title><a href="/one">One</a>${path === '/' && ['rss', 'atom'].includes(scenario) ? `<link rel="alternate" type="application/${scenario}+xml" href="/news-feed">` : ''}`);
       }
       res.statusCode = 404;
       res.end();

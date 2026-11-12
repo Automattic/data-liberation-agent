@@ -476,7 +476,8 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, options: Site
       if (url.origin === baseOrigin) feeds.add(url.href);
     } catch { /* Invalid authored feed URL. */ }
   });
-  for (const path of ['/feed', '/feed/', '/atom.xml', '/rss.xml']) feeds.add(new URL(path, baseOrigin).href);
+  // Probe conventional feed paths only when the entry document declares none.
+  if (feeds.size === 0) for (const path of ['/feed', '/feed/', '/atom.xml', '/rss.xml']) feeds.add(new URL(path, baseOrigin).href);
   for (const url of feeds) {
     try {
       const response = await readText(url);
@@ -505,9 +506,10 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, options: Site
     }
   }
 
-  const uncovered = extractSameOriginLinks(entryHtml ?? '', normalizedBase, baseOrigin)
-    .some(url => !seenUrls.has(normalizedUrl(url)));
-  if (allUrls.length < 5 || uncovered) {
+  // Only a thin inventory pays for the linked-page crawl. Generic discovery already
+  // merges the entry document's own links; crawling past them on every healthy
+  // sitemap cost 15-65 s per site and admitted unverified deep links (#1693).
+  if (allUrls.length < 5) {
     const fallback = await crawlLinkedPages(normalizedBase, baseOrigin, allUrls, options.fetchDocument, entryHtml);
     allUrls.splice(0, allUrls.length, ...fallback.urls);
     if (fallback.closed) {
