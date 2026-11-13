@@ -20,7 +20,8 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 					.legacy { position:absolute; width:200px; height:30px; clip:rect(0px,0px,0px,0px) }
 					.inset { position:absolute; width:200px; height:30px; clip-path:inset(50%) }
 					.tiny { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%) }
-				</style><span class="zero">Repeated label</span>${ visible.replace( '<p>Visible descendant</p>', '<div class="zero">Unpainted parent<span style="font-size:16px;line-height:normal">Visible descendant</span></div>' ) }
+					.drawer { position:absolute; top:80px; opacity:0; pointer-events:none }
+				</style><nav class="drawer"><a href="/a">Closed drawer link</a></nav><span class="zero">Repeated label</span>${ visible.replace( '<p>Visible descendant</p>', '<div class="zero">Unpainted parent<span style="font-size:16px;line-height:normal">Visible descendant</span></div>' ) }
 				<span class="zero">Extra accessible name</span><span class="legacy">Legacy clip name</span>
 				<span class="inset">Inset clip name</span><span class="tiny">Tiny clip name</span>` );
 				const candidate = await observePage( page, page.url(), width, 0, null, undefined, undefined, true, true );
@@ -29,6 +30,7 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 				expect( keys ).toContain( 'Visible descendant' );
 				expect( keys ).not.toContain( 'Inset clip name' );
 				expect( keys ).not.toContain( 'Legacy clip name' );
+				expect( keys ).not.toContain( 'Closed drawer link' );
 				await page.close();
 			}
 		} finally { await browser.close(); }
