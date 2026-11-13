@@ -81,6 +81,37 @@ afterEach(() => {
 });
 
 describe('orchestrated HTTP review capture', () => {
+	it.each([
+		['https://author.github.io/project/', ['/project'], false],
+		['https://author.github.io/project/guide/', ['/project'], false],
+		['https://author.github.io/', undefined, true],
+		['https://author.github.io.evil.test/project/', undefined, true],
+		['https://example.test/project/', undefined, true],
+	] as const)('scopes shared-host project routes for %s', async (sourceUrl, prefixes, includesSibling) => {
+		const { captureWebsite: capture } = await import('../index.js');
+		const outputDir = directory();
+		const origin = new URL(sourceUrl).origin;
+		const sibling = `${origin}/other-project/`;
+		const originalFetch = vi.mocked(safeFetch).getMockImplementation()!;
+		// Reduced page from #1727: a footer points to another site on the same origin.
+		const html = '<!doctype html><html><head><title>Project</title></head><body><main><h1>Project home</h1></main><footer><a href="/other-project/">Other project</a></footer></body></html>';
+		vi.mocked(safeFetch).mockImplementation(async target => ({
+			finalUrl: target, status: 200, headers: new Headers({ 'content-type': 'text/html' }),
+			body: Buffer.from(html),
+		}));
+		const platform = adapter();
+		platform.discover = async () => ({ urls: [sourceUrl, sibling].map(url => ({ url })) });
+		try {
+			const result = await capture({ url: sourceUrl, outputDir, acquisition: 'http' }, { findAdapter: () => platform });
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.source.routeScope).toEqual(prefixes ? { origin, pathPrefixes: prefixes } : undefined);
+			expect(receipt.routes.map((route: { url: string }) => route.url)).toEqual(includesSibling ? [sourceUrl, sibling] : [sourceUrl]);
+			const exported = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
+			expect(exported).toContain(`href="${includesSibling ? '/other-project/index.html' : sibling}"`);
+		} finally {
+			vi.mocked(safeFetch).mockImplementation(originalFetch);
+		}
+	});
 	it('exports path aliases once when their canonical names another captured route', async () => {
 		const { captureWebsite: capture } = await import('../index.js');
 		const outputDir = directory();

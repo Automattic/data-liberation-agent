@@ -17,6 +17,7 @@ import { extractNavigationLandmarkLinks } from './html-extract/index.js';
 import { decodeHtml } from './decode-html.js';
 import { normalizeDiscoveredRoutes } from './extraction/sitemap.js';
 import { routeInScope, scopedRouteKey, validateRouteScope } from './url/route-scope.js';
+import { githubPagesRouteScope } from '../hosts/github-pages.js';
 import { actionUrlExclusion, platformRuntimeExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
@@ -470,7 +471,7 @@ async function runCaptureWebsite(
 		throw new UnsupportedCapturePlatformError(
 			`No adapter available for platform: ${ detection.platform }`
 		);
-	const routeScope = adapter.routeScope?.( sourceUrl );
+	const routeScope = githubPagesRouteScope( sourceUrl ) ?? adapter.routeScope?.( sourceUrl );
 	if ( routeScope ) {
 		validateRouteScope( routeScope );
 		if ( !routeInScope( sourceUrl, routeScope ) ) throw new Error( 'Source URL is outside its adapter route scope' );
