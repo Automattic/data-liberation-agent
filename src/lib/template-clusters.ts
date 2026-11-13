@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { srcsetCandidates } from './srcset.js';
-import { elementDescriptor, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION, type TemplateStyleNormalization } from './template-groups.js';
+import { elementDescriptor, styleBlocks, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION, type TemplateStyleNormalization } from './template-groups.js';
 
 /**
  * Template-clustered capture, phase 1 (#784).
@@ -577,6 +577,8 @@ export function compareDerivedWithCapture( input: {
 	/** Both server documents are required to distinguish runtime-only stylesheet links. */
 	repServerHtml?: string;
 	memberServerHtml?: string;
+	/** The adapter's style canonicalization, e.g. for server-shuffled @font-face rules. */
+	styleNormalization?: TemplateStyleNormalization;
 	baseUrl: string;
 } ): { equal: boolean; checks: Record< 'text' | 'links' | 'images' | 'skeleton' | 'fluidRules' | 'headStyles', boolean > } {
 	const derived = cheerio.load( input.derivedHtml );
@@ -607,7 +609,7 @@ export function compareDerivedWithCapture( input: {
 		? new Set( [ input.repServerHtml, input.memberServerHtml ].flatMap( html => collect( cheerio.load( html ), 'link[rel~="stylesheet"]', 'href' ) ) )
 		: undefined;
 	const styles = ( $: cheerio.CheerioAPI ): string[] =>
-		[ ...$( 'style' ).toArray().map( element => normalizedWhitespace( $( element ).text() ) ),
+		[ ...styleBlocks( $ ).map( block => normalizedWhitespace( input.styleNormalization?.pageStyles( [ block ] ) ?? block.text ) ),
 			...collect( $, 'link[rel~="stylesheet"]', 'href' ).filter( href => ! serverStyles || serverStyles.has( href ) ) ].filter( value => value !== '' ).sort();
 	const fluidSheets = ( $: cheerio.CheerioAPI ): string[] =>
 		$( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).toArray()

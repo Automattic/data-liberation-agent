@@ -154,3 +154,12 @@ describe('Squarespace structured blog content', () => {
 		expect(squarespaceTermName(`${origin}/journal/tag/%bad`)).toBeUndefined();
 	});
 });
+
+it('compares server-shuffled font-face rules as the same template style', () => {
+	// Squarespace emits the same @font-face rules in a per-request order.
+	const faces = ['italic', 'normal'].map(style => `@font-face { font-family: 'Sans'; font-style: ${style}; src: url(/${style}.woff2); }`);
+	const page = (rules: string[]) => `<html><head><style data-sqsp-font-ids="1">${rules.join('\n')}</style></head><body><p>Same</p></body></html>`;
+	const input = { derivedHtml: page(faces), realHtml: page([...faces].reverse()), baseUrl: 'https://fixture.example/' };
+	expect(compareDerivedWithCapture({ ...input, styleNormalization: squarespaceAdapter.templateStyleNormalization }).equal).toBe(true);
+	expect(compareDerivedWithCapture({ ...input, realHtml: page([faces[0]!]), styleNormalization: squarespaceAdapter.templateStyleNormalization }).equal).toBe(false);
+});
