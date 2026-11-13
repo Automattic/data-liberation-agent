@@ -217,6 +217,32 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 	} );
 } );
 
+describe( 'server-empty hydration mounts (#1775)', () => {
+	// Squarespace-style comments: the representative has a per-item mount the
+	// runtime fills after load; the member has comments off, so the container
+	// becomes a subtree slot.
+	const page = ( title: string, comments?: string ) => `<html><head><title>Post</title></head><body><article id="article-${ title }"><div class="content"><p>${ title }</p></div><section class="comments"><div id="comments-content" class="comments-content">${ comments === undefined ? '' : `<div id="comments-${ title }" class="mount">${ comments }</div>` }</div></section></article></body></html>`;
+	const hydrated = '<p>Comments (0)</p><button>Post Comment</button>';
+	const derive = ( captured: string ) => deriveMemberDocument( {
+		repServerHtml: page( 'One', '' ), repProcessedHtml: captured,
+		memberServerHtml: page( 'Two' ), baseUrl: BASE,
+	} );
+
+	it( 'maps a slot nested in a runtime-filled mount', () => {
+		const result = derive( page( 'One', hydrated ) );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<p>Two</p>' );
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: page( 'Two' ), baseUrl: BASE } ).equal ).toBe( true );
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: page( 'Two', 'Different comments' ), baseUrl: BASE } ).equal ).toBe( false );
+	} );
+
+	it( 'still rejects rewritten server text alongside a hydrated mount', () => {
+		const result = derive( page( 'One', hydrated ).replace( '<p>One</p>', '<p>Rewritten</p>' ) );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+} );
+
 describe( 'head slots pair head elements only (#784)', () => {
 	it( 'keeps body titles a malformed template emits after </html>, and titles the head from the first one', () => {
 		// Blogger templates can write `<title>` elements after `</html>`. The
