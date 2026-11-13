@@ -28,6 +28,7 @@ export interface SqsJsonResponse {
   collection?: {
     title?: string;
     urlId?: string;
+    fullUrl?: string;
     type?: number;
     typeName?: string;
     description?: string;
@@ -66,10 +67,13 @@ export interface SqsJsonResponse {
       seoDescription?: string;
     };
   };
+  pagination?: { nextPageOffset?: number | string; nextPage?: boolean };
   items?: Array<{
     title?: string;
     urlId?: string;
     fullUrl?: string;
+    updatedOn?: number;
+    author?: { displayName?: string };
     body?: string;
     excerpt?: string;
     publishOn?: number;
