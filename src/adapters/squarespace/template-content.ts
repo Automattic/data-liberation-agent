@@ -10,11 +10,11 @@ const BODY = '.blog-item-content, .blog-list-article-content-body';
 const FONTS = 'style[data-sqsp-font-ids]';
 // Squarespace item fields the template renders outside the body. Entry
 // identity keeps collection/run state out of the shared adapter singleton.
-interface ItemDetails { id?: string; image?: string; categories: string[]; date: string; newer?: StructuredContentEntry; older?: StructuredContentEntry }
+interface ItemDetails { id?: string; image?: string; categories: string[]; date: string; shortDate: string; dateOnly: string; newer?: StructuredContentEntry; older?: StructuredContentEntry }
 const details = new WeakMap<StructuredContentEntry, ItemDetails>();
 
-const longDate = (epoch: number, timeZone?: string): string => {
-	try { return new Intl.DateTimeFormat('en-US', { dateStyle: 'long', ...(timeZone ? { timeZone } : {}) }).format(epoch); } catch { return new Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(epoch); }
+const itemDate = (epoch: number, options: Intl.DateTimeFormatOptions, timeZone?: string, locale = 'en-US'): string => {
+	try { return new Intl.DateTimeFormat(locale, { ...options, ...(timeZone ? { timeZone } : {}) }).format(epoch); } catch { return new Intl.DateTimeFormat(locale, options).format(epoch); }
 };
 
 /** Fail closed on summaries, missing slots and ambiguous templates. */
@@ -51,11 +51,19 @@ export function squarespaceMemberDocument(html: string, representative: Structur
 		}
 	});
 	const adjacent = details.get(member);
-	if ($('.pagination, .item-pagination').length && !adjacent) return undefined;
+	if ($('.pagination, .item-pagination, #itemPagination').length && !adjacent) return undefined;
 	if (adjacent) {
 		// The 7.0 article meta and identity render from the item, as on its own page.
 		$('.blog-list-article-content-categories').html(adjacent.categories.map(category => $('<span>').text(category).toString()).join(''));
 		$('.blog-list-article-content-date').text(adjacent.date);
+		$('time[data-content-field="published-on"]').each((_, node) => {
+			const time = $(node);
+			const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(time.attr('datetime') ?? '');
+			time.attr('datetime', dateOnly ? adjacent.dateOnly : member.published);
+			const label = time.find('span');
+			if (label.length === 1) label.text(adjacent.shortDate);
+			else time.text(adjacent.shortDate);
+		});
 		const repId = details.get(representative)?.id;
 		if (repId && adjacent.id) $(`[id="article-${repId}"], [data-item-id="${repId}"]`).each((_, node) => {
 			if ($(node).attr('id') === `article-${repId}`) $(node).attr('id', `article-${adjacent.id}`);
@@ -64,14 +72,21 @@ export function squarespaceMemberDocument(html: string, representative: Structur
 	}
 	if (adjacent) for (const [direction, neighbor] of [['newer', adjacent.newer], ['older', adjacent.older]] as const) {
 		const rel = direction === 'newer' ? 'prev' : 'next';
-		$(`.pagination a.${direction}, .item-pagination a[rel="${rel}"]`).each((_, node) => {
+		$(`.pagination a.${direction}, .item-pagination a[rel="${rel}"], a.item-pagination-link--${rel}`).each((_, node) => {
 			const link = $(node);
 			if (!neighbor) { link.remove(); return; }
 			link.attr('href', new URL(neighbor.permalink).pathname);
-			link.find('span, .item-pagination-title').last().text(neighbor.title);
+			const title = link.find('.item-pagination-title');
+			if (title.length) title.text(neighbor.title);
+			else link.find('span').last().text(neighbor.title);
 			const image = details.get(neighbor)?.image;
 			if (image) link.find('.pagination-img').attr('style', `background-image:url(${image}?format=150w);`);
 			else link.find('.pagination-img').remove();
+			const thumbnail = link.find('.item-pagination-thumb img, .item-pagination-image img');
+			if (image) {
+				thumbnail.attr('src', image).removeAttr('srcset').removeAttr('data-srcset');
+				if (thumbnail.attr('data-src') !== undefined) thumbnail.attr('data-src', image);
+			} else link.find('.item-pagination-thumb, .item-pagination-image').remove();
 		});
 		if (!neighbor) $(`.pagination-direction .${direction}`).remove();
 	}
@@ -157,7 +172,7 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 					const entry: StructuredContentEntry = { permalink: permalink.href, slug, kind: 'post', title: item.title, contentHtml: item.body, published, updated, author: item.author?.displayName ?? '', terms: [...new Set([...(item.categories ?? []), ...(item.tags ?? [])].filter(term => typeof term === 'string' && term.trim()))] };
 					result.entries.push(entry);
 					collectionEntries.push(entry);
-					details.set(entry, { id: item.id, image: typeof item.assetUrl === 'string' ? item.assetUrl : undefined, categories: (item.categories ?? []).filter(category => typeof category === 'string'), date: longDate(item.publishOn!, json.website?.timeZone) });
+					details.set(entry, { id: item.id, image: typeof item.assetUrl === 'string' ? item.assetUrl : undefined, categories: (item.categories ?? []).filter(category => typeof category === 'string'), date: itemDate(item.publishOn!, { dateStyle: 'long' }, json.website?.timeZone), shortDate: itemDate(item.publishOn!, { month: 'short', day: 'numeric' }, json.website?.timeZone), dateOnly: itemDate(item.publishOn!, { year: 'numeric', month: '2-digit', day: '2-digit' }, json.website?.timeZone, 'en-CA') });
 				}
 				if (json.items.length === 0) break;
 				const next = json.pagination?.nextPageOffset;

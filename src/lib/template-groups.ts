@@ -205,7 +205,7 @@ function resolvedSet( values: Array< string | undefined >, baseUrl: string, norm
  * One server document's inline `<style>` blocks, as attributes and text, in
  * document order.
  */
-function styleBlocks( $: cheerio.CheerioAPI ): TemplateStyleBlock[] {
+export function styleBlocks( $: cheerio.CheerioAPI ): TemplateStyleBlock[] {
 	return $( 'style' ).toArray().flatMap( element => {
 		if ( ! isElement( element ) ) return [];
 		return [ { id: element.attribs.id ?? null, attributes: { ...element.attribs }, text: $( element ).text() } ];

@@ -101,6 +101,34 @@ describe('Squarespace structured blog content', () => {
 		expect(end('.pagination-home').text()).toBe('Back to Blog Home');
 	});
 
+	it('round-trips a 7.1 item date and prev/next neighbors without rel attributes', async () => {
+		vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => ({
+			body: Buffer.from(String(url).includes('format=json') ? JSON.stringify({ website: { timeZone: 'UTC' }, collection: { typeName: 'blog', fullUrl: '/journal' }, items: ['one', 'two', 'three', 'four'].map((id, index) => ({ ...post(id), publishOn: 1704067200000 + index * 86400000, assetUrl: `${origin}/${id}.jpg` })) }) : '<html></html>'),
+			status: 200, finalUrl: String(url), headers: new Headers(),
+		}));
+		const { entries } = await source.enumerate(`${origin}/journal`, { governors: new SourceRequestGovernors() });
+		const page = (index: number) => document(entries[index]!).replace(`<time datetime="${entries[index]!.published}"></time>`, `<time class="dt-published blog-meta-item blog-meta-item--date" datetime="2024-01-0${index + 1}" data-content-field="published-on"><span>Jan ${index + 1}</span></time>`).replace('</body>', `<section id="itemPagination" class="item-pagination item-pagination--prev-next">${(['prev', 'next'] as const).map((direction, offset) => {
+			const neighbor = entries[index + (offset ? -1 : 1)];
+			return neighbor ? `<a class="item-pagination-link item-pagination-link--${direction}" href="/journal/${neighbor.slug}"><div class="item-pagination-thumb"><img src="${origin}/${neighbor.slug}.jpg" data-src="${origin}/${neighbor.slug}.jpg"></div><div class="item-pagination-title">${neighbor.title}</div></a>` : '';
+		}).join('')}</section></body>`);
+		const synthesized = (await source.memberDocument(page(1), entries[1]!, entries[2]!))!;
+		const $ = cheerio.load(synthesized);
+		expect($('time').attr('datetime')).toBe('2024-01-03');
+		expect($('time span').text()).toBe('Jan 3');
+		for (const [direction, slug] of [['prev', 'four'], ['next', 'two']]) {
+			const link = $(`.item-pagination-link--${direction}`);
+			expect(link.attr('href')).toBe(`/journal/${slug}`);
+			expect(link.find('.item-pagination-title').text()).toBe(`Post ${slug}`);
+			expect(link.find('img').attr('src')).toBe(`${origin}/${slug}.jpg`);
+			expect(link.find('img').attr('data-src')).toBe(`${origin}/${slug}.jpg`);
+		}
+		const derived = deriveMemberDocument({ repServerHtml: page(1), repProcessedHtml: page(1), memberServerHtml: synthesized, baseUrl: origin, styleNormalization: squarespaceAdapter.templateStyleNormalization, contentSlotSelector: source.contentSlotSelector });
+		expect(derived.ok, JSON.stringify(derived)).toBe(true);
+		if (derived.ok) expect(compareDerivedWithCapture({ derivedHtml: derived.html, realHtml: page(2), baseUrl: origin }).equal).toBe(true);
+		const end = cheerio.load((await source.memberDocument(page(1), entries[1]!, entries[3]!))!);
+		expect(end('.item-pagination-link--prev')).toHaveLength(0);
+	});
+
 	it('fetches and transplants only the member font slot through the governed contract', async () => {
 		const rep = entry('one'), member = entry('two'), governors = new SourceRequestGovernors();
 		const font = (name: string) => `<style data-sqsp-font-ids="${name}">@font-face{font-family:${name};src:url(/${name}.woff)}</style>`;
@@ -125,4 +153,13 @@ describe('Squarespace structured blog content', () => {
 		expect(squarespaceTermName(`${origin}/journal/post`)).toBeUndefined();
 		expect(squarespaceTermName(`${origin}/journal/tag/%bad`)).toBeUndefined();
 	});
+});
+
+it('compares server-shuffled font-face rules as the same template style', () => {
+	// Squarespace emits the same @font-face rules in a per-request order.
+	const faces = ['italic', 'normal'].map(style => `@font-face { font-family: 'Sans'; font-style: ${style}; src: url(/${style}.woff2); }`);
+	const page = (rules: string[]) => `<html><head><style data-sqsp-font-ids="1">${rules.join('\n')}</style></head><body><p>Same</p></body></html>`;
+	const input = { derivedHtml: page(faces), realHtml: page([...faces].reverse()), baseUrl: 'https://fixture.example/' };
+	expect(compareDerivedWithCapture({ ...input, styleNormalization: squarespaceAdapter.templateStyleNormalization }).equal).toBe(true);
+	expect(compareDerivedWithCapture({ ...input, realHtml: page([faces[0]!]), styleNormalization: squarespaceAdapter.templateStyleNormalization }).equal).toBe(false);
 });
