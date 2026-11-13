@@ -1,4 +1,6 @@
 import { createServer } from 'node:http';
+import { gzipSync } from 'node:zlib';
+import { runWithTrustedOrigins } from '../media-fetch/safe-fetch.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -28,7 +30,7 @@ it.skipIf(skipBrowser)('replays immutable prefetches across routes and identitie
       return;
     }
     res.setHeader('cache-control', url === '/uncached.js' ? 'no-store' : 'public, max-age=31536000, immutable');
-    res.setHeader('vary', url.includes('.jpg') ? 'Accept' : 'Accept-Encoding, Available-Dictionary');
+    res.setHeader('vary', url.includes('.jpg') ? 'Accept' : 'Accept-Encoding');
     res.setHeader('content-type', url.includes('.jpg') ? 'image/png' : url.endsWith('.css') ? 'text/css' : 'text/javascript');
     res.end(url.includes('.jpg') ? png : url.endsWith('.css') ? 'img{width:100vw}' : '/* shared asset */');
   });
@@ -132,3 +134,59 @@ it.skipIf(skipBrowser)('replays immutable prefetches across routes and identitie
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 }, 30_000);
+
+// One browser pass (~1 second): Node-decoded CSS must replay as identity bytes.
+it.skipIf(skipBrowser)('replays decoded Node fetches across Accept-Encoding differences but not other Vary differences', async () => {
+  const requests = new Map<string, Array<string | undefined>>();
+  const css = 'body { color: rgb(12, 34, 56); }';
+  const server = createServer((req, res) => {
+    const path = req.url!;
+    requests.set(path, [...(requests.get(path) ?? []), req.headers['accept-encoding']]);
+    res.setHeader('cache-control', 'public, max-age=3600');
+    res.setHeader('vary', path === '/cookie.css' ? 'Cookie' : path === '/wildcard.css' ? '*' : path === '/dictionary.css' ? 'Available-Dictionary' : 'aCcEpT-EnCoDiNg');
+    res.setHeader('content-type', 'text/css');
+    res.setHeader('content-encoding', 'gzip');
+    res.end(gzipSync(css));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const dir = mkdtempSync(join(process.cwd(), '.tmp-test', 'encoding-replay-'));
+  const store = new CapturedResourceStore(dir, origin);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const paths = ['/encoding.css', '/cookie.css', '/wildcard.css', '/dictionary.css'];
+    const html = paths.map(path => `<link rel="stylesheet" href="${origin}${path}">`).join('');
+    await runWithTrustedOrigins([origin], () => store.captureDomDependencies(html, origin));
+    const context = await browser.newContext({ extraHTTPHeaders: { 'accept-encoding': 'identity', cookie: 'theme=light' } });
+    try {
+      const page = await context.newPage();
+      const replayed: string[] = [];
+      await page.route('**/*.css', async route => {
+        const request = route.request();
+        const replay = store.getReplayableResponse(request.url(), request.resourceType(), request.headers());
+        if (replay) {
+          replayed.push(new URL(request.url()).pathname);
+          await route.fulfill({ path: replay.path, contentType: replay.contentType, headers: replay.headers });
+        } else await route.continue();
+      });
+      await page.setContent(html + '<body>fixture</body>');
+      expect(await page.locator('body').evaluate(body => getComputedStyle(body).color)).toBe('rgb(12, 34, 56)');
+      expect(replayed).toEqual(['/encoding.css']);
+      expect(requests.get('/encoding.css')).toHaveLength(1);
+      expect(store.getReplayableResponse(`${origin}/encoding.css`, 'stylesheet')!.headers).not.toHaveProperty('content-encoding');
+      // Unknown outgoing Cookie values on the Node path fail closed; * never replays.
+      expect(requests.get('/cookie.css')).toHaveLength(2);
+      expect(requests.get('/wildcard.css')).toHaveLength(2);
+      expect(requests.get('/dictionary.css')).toHaveLength(2);
+      expect(requests.get('/encoding.css')![0]).not.toBe('identity');
+      expect(requests.get('/cookie.css')![1]).toBe('identity');
+    } finally { await context.close(); }
+    await store.flush();
+  } finally {
+    await browser.close();
+    rmSync(dir, { recursive: true, force: true });
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+}, 15_000);

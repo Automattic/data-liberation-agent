@@ -265,10 +265,10 @@ function replayableResponseMetadata(
 		.split( ',' )
 		.map( ( value ) => value.trim().toLowerCase() )
 		.filter( Boolean );
-	if ( vary.some( ( value ) => value === '*' || value === 'cookie' ) ) return undefined;
-	// Content-coding negotiation does not matter for decoded replay bodies.
-	// Preserve the existing Origin handling (CORS response headers are replayed).
-	const secondaryKey = vary.filter( value => ! [ 'accept-encoding', 'available-dictionary', 'origin' ].includes( value ) );
+	if ( vary.includes( '*' ) ) return undefined;
+	// Browser responses and Node fetches both supply decoded replay bodies.
+	// Only content-coding negotiation is irrelevant to the secondary key.
+	const secondaryKey = vary.filter( value => value !== 'accept-encoding' );
 	// Direct fetches do not expose their complete outgoing headers: fail closed
 	// rather than mistake an unknown value for an absent header.
 	if ( secondaryKey.length && ! requestHeaders ) return undefined;

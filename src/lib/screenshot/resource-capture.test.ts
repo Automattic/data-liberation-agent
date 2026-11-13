@@ -344,10 +344,12 @@ describe( 'CapturedResourceStore', () => {
 		const accept = 'image/avif,image/webp,image/*,*/*;q=0.8';
 		for ( const [ path, resourceType, vary, requestHeaders ] of [
 			[ '/image.jpg', 'image', 'Accept', { accept } ],
-			[ '/script.js', 'script', 'Accept-Encoding, Available-Dictionary', { 'accept-encoding': 'gzip' } ],
+			[ '/script.js', 'script', 'Accept-Encoding', { 'accept-encoding': 'gzip' } ],
+			[ '/dictionary.js', 'script', 'Available-Dictionary', { 'available-dictionary': ':first:' } ],
+			[ '/origin.css', 'stylesheet', 'Origin', { origin: 'https://example.com' } ],
 			[ '/custom.css', 'stylesheet', 'X-Theme, X-Optional', { 'x-theme': 'dark' } ],
 			[ '/wildcard.css', 'stylesheet', '*', {} ],
-			[ '/cookie.css', 'stylesheet', 'Cookie', {} ],
+			[ '/cookie.css', 'stylesheet', 'Cookie', { cookie: 'theme=dark' } ],
 		] as const ) {
 			firstRoute.emit( 'response', {
 				url: () => `https://example.com${ path }`,
@@ -375,8 +377,15 @@ describe( 'CapturedResourceStore', () => {
 		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'dark' } ) ).toBeDefined();
 		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'light' } ) ).toBeUndefined();
 		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'dark', 'x-optional': '' } ) ).toBeUndefined();
-		for ( const path of [ 'wildcard.css', 'cookie.css' ] ) {
-			expect( store.getReplayableResponse( `https://example.com/${ path }`, 'stylesheet' ) ).toBeUndefined();
+		expect( store.getReplayableResponse( 'https://example.com/wildcard.css', 'stylesheet' ) ).toBeUndefined();
+		for ( const [ path, type, name, value ] of [
+			[ 'dictionary.js', 'script', 'available-dictionary', ':first:' ],
+			[ 'origin.css', 'stylesheet', 'origin', 'https://example.com' ],
+			[ 'cookie.css', 'stylesheet', 'cookie', 'theme=dark' ],
+		] ) {
+			expect( store.getReplayableResponse( `https://example.com/${ path }`, type, { [ name ]: value } ) ).toBeDefined();
+			expect( store.getReplayableResponse( `https://example.com/${ path }`, type, { [ name ]: 'different' } ) ).toBeUndefined();
+			expect( store.getReplayableResponse( `https://example.com/${ path }`, type ) ).toBeUndefined();
 		}
 	} );
 
