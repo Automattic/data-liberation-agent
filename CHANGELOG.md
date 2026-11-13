@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.5] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- move the source load into load-baseline.ts
+
+### Fixed
+- preserve valid stylesheet media in responsive assembly
+- stabilize responsive projection hooks across pages
+- ignore whitespace in entrance transition identity
+- exclude client-routed soft-404s by nonce-sibling render match
+- record device-check loads for replay
+
 ## [0.35.4] - 2026-11-13
 
 ### Changed
