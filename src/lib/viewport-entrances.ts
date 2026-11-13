@@ -246,7 +246,9 @@ export function observeViewportEntrances(): void {
 			const timing = effect.effect?.getTiming();
 			if ( ! timing ) continue;
 			target.confirmed = true;
-			const text = ( element.textContent ?? '' ).replace( /\s+/g, ' ' ).trim().slice( 0, 120 );
+			// Identity, not presentation: whitespace between source elements is
+			// serialization (a block copy drops it), so it must not split a match.
+			const text = ( element.textContent ?? '' ).replace( /\s+/g, '' ).slice( 0, 120 );
 			const observed = transitions.get( element ) ?? new Map<string, string>();
 			if ( ! observed.has( effect.transitionProperty ) ) observed.set( effect.transitionProperty,
 				JSON.stringify( [ text, effect.transitionProperty, timing.duration, timing.delay, timing.easing,

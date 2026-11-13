@@ -129,6 +129,18 @@ addEventListener('scroll', update, { passive: true }); update();
 		} finally { await browser.close(); }
 	}, 30_000 );
 
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'matches an entrance whose copy drops the whitespace between its elements', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
+			const formatted = fixture( false ).replace( 'Viewport entrance</section>', '\n  <h2>Viewport</h2>\n  <p>entrance</p>\n</section>' );
+			const source = await observePage( page, `data:text/html,${ encodeURIComponent( formatted ) }`, 1024, 300, null );
+			const copy = await observePage( page, `data:text/html,${ encodeURIComponent( formatted.replace( /\n\s*/g, '' ) ) }`, 1024, 300, null );
+			expect( source.entranceTransitions ).toHaveLength( 2 );
+			expect( checkMotion( source, copy ) ).toEqual( {} );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'frozen capture comparison independently executes the portable entrances', async () => {
 		const browser = await chromium.launch( { headless: true } );
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-entrance-reference-' ) );
