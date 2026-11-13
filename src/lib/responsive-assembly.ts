@@ -1709,12 +1709,29 @@ export function projectResponsiveSvgCss( css: string, ids: ReadonlySet<string> )
 		ids.has( id ) ? `var(--capture-svg-${ Buffer.from( id ).toString( 'hex' ) }, ${ match })` : match );
 }
 
+/**
+ * Each maximal run of characters other than `{`, `}` and `;` that opens a
+ * block, with its `{`, joined by newlines: the matches of `/[^{};]+\{/g`.
+ * One linear pass; the regular expression rescans every start position of a
+ * long run (a data URI, say) that does not open a block.
+ */
+export function blockPreludes( css: string ): string {
+	const preludes: string[] = [];
+	let start = 0;
+	for ( let index = 0; index < css.length; index++ ) {
+		const code = css.charCodeAt( index );
+		if ( code !== 123 && code !== 125 && code !== 59 ) continue;
+		if ( code === 123 && index > start ) preludes.push( css.slice( start, index + 1 ) );
+		start = index + 1;
+	}
+	return preludes.join( '\n' );
+}
+
 export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string, string | readonly string[]>, namedAliases: boolean ): string {
 	// Do not parse unrelated source CSS just because another stylesheet owns
 	// a responsive anchor. Browsers may accept useful rules around a malformed
 	// declaration; identity-free styles need no rewriting or recovery here.
-	const preludes = source.replace( /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '' )
-		.match( /[^{};]+\{/g )?.join( '\n' ) ?? '';
+	const preludes = blockPreludes( source.replace( /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '' ) );
 	if ( ! preludes.includes( '#' ) && ! /\[\s*id\s*=/i.test( preludes ) && ( ! namedAliases || ! /\[\s*name\b/i.test( preludes ) ) ) return source;
 	// CSS accepts legacy HTML-comment wrappers; PostCSS rejects the closing CDC.
 	// Strip only outer tokens, preserving quoted content inside the stylesheet.

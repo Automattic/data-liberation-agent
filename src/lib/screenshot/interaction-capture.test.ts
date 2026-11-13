@@ -718,6 +718,45 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
+		'observes every captured panel\'s resting CSS in one width sweep',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			try {
+				const page = await browser.newPage( { viewport: { width: 390, height: 800 } } );
+				await page.setContent( `<!doctype html><html><head><style>
+					.toggle { position: fixed; top: 0; width: 48px; height: 48px; } #menu-toggle { left: 60px; }
+					.panel { display: none; position: fixed; top: 60px; left: 0; width: 250px; height: 300px; background: #fff; }
+					.panel.open { display: block; }
+					@media (min-width: 1280px) { #drawer-toggle { display: none; } #drawer { display: block; } }
+				</style></head><body><header>
+					<div id="drawer-toggle" class="toggle" role="button" tabindex="0" aria-haspopup="true" aria-controls="drawer" aria-expanded="false">Menu</div>
+					<nav id="drawer" class="panel"><a href="/home">Home</a></nav>
+					<div id="menu-toggle" class="toggle" role="button" tabindex="0" aria-haspopup="true" aria-controls="menu" aria-expanded="false">More</div>
+					<nav id="menu" class="panel"><a href="/about">About</a></nav>
+				</header><main><h1>About</h1></main><script>
+					window.resizes = 0; addEventListener('resize', () => window.resizes++);
+					for (const toggle of document.querySelectorAll('.toggle')) toggle.addEventListener('click', () => {
+						const open = toggle.getAttribute('aria-expanded') !== 'true';
+						toggle.setAttribute('aria-expanded', String(open));
+						document.getElementById(toggle.getAttribute('aria-controls')).classList.toggle('open', open);
+					});
+				</script></body></html>` );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states.find( item => item.trigger.selector === '#drawer-toggle' )?.dialog?.restingInline ).toBe( true );
+				const menu = report.states.find( item => item.trigger.selector === '#menu-toggle' );
+				expect( menu ).toMatchObject( { status: 'captured', dialog: { id: 'menu' } } );
+				expect( menu?.dialog?.restingInline ).toBeUndefined();
+				// 1440 and 768 once for both panels, then the restore to 390.
+				expect( await page.evaluate( () => ( window as unknown as { resizes: number } ).resizes ) ).toBe( 3 );
+				await page.close();
+			} finally {
+				await browser.close();
+			}
+		},
+		60_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'records a controlled drawer, not the zero-height header wrapping it and its trigger',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );

@@ -85,6 +85,15 @@ export function createRouteAdmission( {
 		}
 		return reserved !== undefined && available >= reserved;
 	};
+	// A route's built-in profiles run concurrently only once admission has a
+	// calibrated estimate and the memory now available covers every running
+	// route's reservation plus one more route-sized share for the second profile.
+	const roomForParallelProfiles = ( kind: RouteKind ): boolean => {
+		const available = sampleMemory();
+		const reference = routeEstimate( 'reference' ), plain = routeEstimate( 'plain' ), extra = routeEstimate( kind );
+		if ( reference === undefined || plain === undefined || extra === undefined ) return false;
+		return available >= activeRoutes.reference * reference + activeRoutes.plain * plain + extra;
+	};
 
 	return {
 		enabled,
@@ -92,6 +101,7 @@ export function createRouteAdmission( {
 		sample: sampleMemory,
 		estimate: routeEstimate,
 		admit,
+		roomForParallelProfiles,
 		start( kind: RouteKind ) { activeRoutes[ kind ]++; },
 		release( kind: RouteKind ) { activeRoutes[ kind ]--; },
 		calibrate( kind: RouteKind ) {

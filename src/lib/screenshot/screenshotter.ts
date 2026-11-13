@@ -2731,10 +2731,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const builtInProfiles = ( [ 'desktop', 'mobile' ] as const )
 			.map( id => routeProfiles.find( profile => profile.id === id ) )
 			.filter( ( profile ): profile is Viewport => Boolean( profile ) );
-		// Without memory admission the built-in profiles run concurrently; either
-		// way each is merged, in profile order, as soon as it completes, so a
-		// route abandoned at its deadline keeps the profiles that finished.
-		const builtInPending = memoryAdmission ? undefined : builtInProfiles.map( viewport => captureProfile( viewport ) );
+		// The built-in profiles run concurrently unless memory admission finds no
+		// room for a second profile: the memory now available must still cover
+		// every running route's reservation plus one more route-sized share.
+		// Either way each is merged, in profile order, as soon as it completes, so
+		// a route abandoned at its deadline keeps the profiles that finished.
+		const builtInPending = builtInProfiles.length > 1 && memoryAdmission && ! admission.roomForParallelProfiles( admission.kind( url ) )
+			? undefined
+			: builtInProfiles.map( viewport => captureProfile( viewport ) );
 		for ( const pending of builtInPending ?? [] ) pending.catch( () => {} );
 		for ( let index = 0; index < builtInProfiles.length; index++ ) {
 			const viewport = builtInProfiles[ index ]!;

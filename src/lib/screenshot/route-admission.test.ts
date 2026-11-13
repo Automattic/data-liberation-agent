@@ -61,4 +61,19 @@ describe( 'route admission calibration', () => {
 			vi.restoreAllMocks();
 		}
 	} );
+
+	it( 'runs a route\'s profiles concurrently only after calibration and with room for another share', () => {
+		let available = 900;
+		const admission = createRouteAdmission( { memoryLimit: 1000, availableMemory: () => available } );
+		admission.sample(); // 100-byte idle floor.
+		admission.start( 'reference' );
+		available = 700; // The running route uses 200 bytes above the idle floor.
+		// Uncalibrated: no estimate, so profiles stay sequential whatever is free.
+		expect( admission.roomForParallelProfiles( 'reference' ) ).toBe( false );
+		admission.calibrate( 'reference' );
+		// 700 free covers this route's 200 and another 200-byte share.
+		expect( admission.roomForParallelProfiles( 'reference' ) ).toBe( true );
+		available = 399; // The route grew to 501 bytes; 399 cannot cover 2 × 501.
+		expect( admission.roomForParallelProfiles( 'reference' ) ).toBe( false );
+	} );
 } );

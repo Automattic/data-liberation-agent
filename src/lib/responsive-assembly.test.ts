@@ -8,6 +8,7 @@ import { exportWebsiteCapture } from './capture-export.js';
 import { learnAndApplyFluidGeometry } from './screenshot/fluid-capture.js';
 import {
 	assembleResponsiveCapture,
+	blockPreludes,
 	DESKTOP_DOCUMENT_CLASS,
 	documentsDiffer,
 	MIDDLE_DOCUMENT_CLASS,
@@ -20,6 +21,17 @@ import { scopeCss } from './replicate/css-scope.js';
 import { middleLayoutSampleWidth } from './screenshot/device-mode.js';
 
 const dirs: string[] = [];
+
+describe( 'blockPreludes', () => {
+	it( 'matches the block-prelude regular expression in one linear pass', () => {
+		const samples = [ '', '{', 'a{', ';a{b}c;d{', '@media (x){.a,#b{c:d}}', 'a\n{b{c}}', '}}{{;;', `.a{background:url(data:image/png;base64,${ 'Q'.repeat( 4096 ) })}.b{` ];
+		for ( const css of samples ) expect( blockPreludes( css ) ).toBe( css.match( /[^{};]+\{/g )?.join( '\n' ) ?? '' );
+		// A long run that opens no block made the expression rescan every start position.
+		const started = performance.now();
+		expect( blockPreludes( `a:${ 'x'.repeat( 200_000 ) };b{` ) ).toBe( 'b{' );
+		expect( performance.now() - started ).toBeLessThan( 200 );
+	} );
+} );
 
 describe( 'responsive identity CSS recovery', () => {
 	it( 'aliases exact attribute id selectors to the renamed phone copy', () => {
