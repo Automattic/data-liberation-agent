@@ -62,21 +62,25 @@ Before a capture/discovery/export refactor, run the fixed ten-site corpus on
 and `npm run build` in each checkout first):
 
 ```bash
-# On origin/main, use two fresh directories to check baseline repeatability:
+# On origin/main, run the corpus twice into fresh directories:
 node scripts/parity/run.mjs --out .tmp-test/parity-main-1
 node scripts/parity/run.mjs --out .tmp-test/parity-main-2
-node scripts/parity/diff.mjs .tmp-test/parity-main-1/summary.json .tmp-test/parity-main-2/summary.json
 
-# On the branch, after rebuilding:
+# On the branch, after rebuilding, compare against both baselines:
 node scripts/parity/run.mjs --out .tmp-test/parity-branch
-node scripts/parity/diff.mjs <main-checkout>/.tmp-test/parity-main-1/summary.json .tmp-test/parity-branch/summary.json
+node scripts/parity/diff.mjs <main>/.tmp-test/parity-main-1/summary.json <main>/.tmp-test/parity-main-2/summary.json .tmp-test/parity-branch/summary.json
 ```
 
-Paste the baseline `summary.json`, the main-to-main diff (expected to be empty),
-and the main-to-branch diff into the PR. Explain improvements and investigate any
-baseline flicker before claiming parity. A nonzero runner exit means at least one
-liberate/compare failed; it still writes the summary and continues the corpus.
-The diff exits nonzero on regressions; pre-existing failures alone do not fail it.
+The last summary is the candidate; every earlier one is a baseline. Real sites
+are not deterministic between identical runs: route deadlines, frozen-fidelity
+cells and interaction findings move with network and machine load. A field is a
+`REGRESSION` only when the candidate is worse than every baseline, `UNSTABLE`
+when it is worse than some baselines but inside their observed range, and
+`IMPROVEMENT` otherwise. Paste the baseline summaries and the diff into the PR,
+explain improvements, and rerun the affected site (`--only`) for any unstable
+field the change could plausibly own. The diff exits nonzero only on regressions.
+`counts.inventory` is everything discovery found; `counts.discovered` is what the
+route budget admitted, so discovery changes show up in `inventory`.
 Use `--only www.ketatov.com` for a focused run; compare summaries of the same scope.
 Output directories must be fresh and inside the checkout. Logs and full CLI
 artifacts remain alongside the summary for investigation; no resume is used.
