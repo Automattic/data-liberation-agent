@@ -2,18 +2,22 @@ import { sourceFetch as fetch } from '../../lib/media-fetch/capture-requests.js'
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 import type { SqsJsonResponse } from './types.js';
+import { safeFetch } from '../../lib/media-fetch/safe-fetch.js';
+import type { SourceRequestGovernors } from '../../lib/source-request-governor.js';
 
 /**
  * Fetch a Squarespace URL with `?format=json` appended. Pure fetch, no Playwright.
  */
 const jsonRequests = new Map<string, { expires: number; request: Promise<SqsJsonResponse | null> }>();
 
-export async function fetchSqsJson(url: string): Promise<SqsJsonResponse | null> {
+export async function fetchSqsJson(url: string, governors?: SourceRequestGovernors): Promise<SqsJsonResponse | null> {
   let endpoint: URL;
   try { endpoint = new URL(url); } catch { return null; }
   endpoint.hash = '';
   endpoint.searchParams.set('format', 'json');
   const key = endpoint.href;
+  // Enumeration owns its request accounting; do not share another run's cache.
+  if (governors) return requestSqsJson(key, governors);
   const cached = jsonRequests.get(key);
   if (cached && cached.expires > Date.now()) return cached.request;
   // Bounded reuse for discovery and repeated route/profile serializations. Do
@@ -27,8 +31,16 @@ export async function fetchSqsJson(url: string): Promise<SqsJsonResponse | null>
   return request;
 }
 
-async function requestSqsJson(jsonUrl: string): Promise<SqsJsonResponse | null> {
+async function requestSqsJson(jsonUrl: string, governors?: SourceRequestGovernors): Promise<SqsJsonResponse | null> {
   try {
+    if (governors) {
+      const response = await safeFetch(jsonUrl, {
+        governors, timeoutMs: 15_000, maxBytes: 32 * 1024 * 1024,
+        headers: { 'User-Agent': SOURCE_USER_AGENT, Accept: 'application/json' },
+      });
+      if (response.status < 200 || response.status >= 300) return null;
+      return JSON.parse(response.body.toString('utf8')) as SqsJsonResponse;
+    }
     const resp = await fetch(jsonUrl, {
       signal: AbortSignal.timeout(15000),
       headers: {

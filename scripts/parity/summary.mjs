@@ -15,6 +15,8 @@ export function summarize(site, receipt, findings, diagnostics, report, executio
     host: new URL(site.url).host, url: site.url, expectedPlatform: site.platform,
     platform: receipt?.source?.platform ?? null,
     counts: {
+      // The route budget caps `discovered`; the inventory is what discovery found.
+      inventory: receipt?.summary ? (receipt.summary.routesDiscovered ?? 0) + (receipt.summary.routesOmitted ?? 0) : null,
       discovered: receipt?.summary?.routesDiscovered ?? null,
       captured: receipt?.summary?.routesCaptured ?? null,
       exported: receipt ? receipt.routes.length : null,
@@ -26,7 +28,8 @@ export function summarize(site, receipt, findings, diagnostics, report, executio
     compare: {
       pass: report?.pass ?? null,
       selfConsistency: offline?.pass ?? null,
-      frozenFidelity: report ? report.status ?? (report.pass ? 'proven' : 'failed') : 'unproven',
+      // A failed cell is failed whether or not other cells are still pending, as per route below.
+      frozenFidelity: (report?.scores ?? []).some(row => !row.pass) ? 'failed' : report ? report.status ?? (report.pass ? 'proven' : 'failed') : 'unproven',
       routes: paths.map(route => {
         const scores = (report?.scores ?? []).filter(row => row.route === route);
         const pending = (report?.pending ?? []).some(row => row.route === route);

@@ -29,6 +29,7 @@ import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
 import { hubspotAdapter } from '../adapters/hubspot/index.js';
 import { mediumAdapter } from '../adapters/medium/index.js';
+import { odooAdapter } from '../adapters/odoo/index.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { soloistAdapter } from '../adapters/soloist/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
@@ -63,6 +64,7 @@ const builtins: Platform[] = [
 	hubspotAdapter,
 	lovableAdapter,
 	mediumAdapter,
+	odooAdapter,
 	shopifyAdapter,
 	soloistAdapter,
 	squarespaceAdapter,

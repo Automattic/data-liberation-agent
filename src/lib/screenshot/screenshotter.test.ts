@@ -84,6 +84,8 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
       return { status: () => statusOf(currentUrl) };
     }),
     url: vi.fn().mockImplementation(() => currentUrl),
+    addStyleTag: vi.fn().mockResolvedValue({ evaluate: vi.fn().mockResolvedValue(undefined), dispose: vi.fn().mockResolvedValue(undefined) }),
+    locator: vi.fn().mockReturnValue({ evaluateAll: vi.fn().mockResolvedValue([]) }),
     viewportSize: vi.fn().mockReturnValue({ width: 1440, height: 900 }),
     setViewportSize: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
@@ -105,6 +107,8 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
       // mis-caught by the scroll branch below. Match a code identifier (comments
       // are stripped by the transpiler).
       if (s.includes('motionAnimatedElements')) return { rows: [], landmarks: [] };
+      // Post-baseline gallery discovery sees no roots in this DOM-free fixture.
+      if (s.includes('data-blocks-engine-capture-gallery-capture-width') || s.includes('runtimeOwned') || s.includes('popupTypes') || s.includes('maxStyleTargets')) return [];
       if (s.includes('scrollHeight')) return 3000;
       if (s.includes('scrollTo')) return undefined;
       const isHomepage = new URL(currentUrl).pathname === '/';

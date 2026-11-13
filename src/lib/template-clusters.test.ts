@@ -147,7 +147,7 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 	} );
 
 	it( 'escalates when a slot has no anchor in the processed document', () => {
-		const processed = representative.repProcessedHtml.replace( '<p>Second paragraph.</p>', '' );
+		const processed = representative.repProcessedHtml.replace( /<figure[\s\S]*?<\/figure>/, '' );
 		const derivation = deriveMemberDocument( { ...representative, repProcessedHtml: processed, memberServerHtml: serverDocument( 'post-2' ) } );
 		expect( derivation ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
 	} );
@@ -235,6 +235,16 @@ describe( 'slots anchor on element identity, not position (#784)', () => {
 		expect( result.html ).not.toContain( 'Original words' );
 		// The runtime's structure is the representative's capture, untouched.
 		expect( result.html ).toContain( '<div class="runtime-banner"><p>Injected</p></div>' );
+	} );
+
+	it( 'resolves an unanchored slot past runtime-inserted siblings and classes, and retitles body title copies', () => {
+		const page = ( title: string ) => `<html><head><title>${ title } | Site</title></head><body><div class="wrap"><div class="social">Social</div><div class="banner"><h1>${ title }</h1></div></div></body></html>`;
+		// The runtime prepends a sibling, adds a class and copies document.title into the body.
+		const captured = ( title: string ) => `<html><head><title>${ title } | Site</title></head><body><div class="wrap"><div class="cookie-mount"></div><div class="social">Social</div><div class="banner loaded"><h1>${ title }</h1></div></div><title>${ title } | Site</title></body></html>`;
+		const result = deriveMemberDocument( { repServerHtml: page( 'One' ), repProcessedHtml: captured( 'One' ), memberServerHtml: page( 'Two' ), baseUrl: BASE_URL } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: captured( 'Two' ), baseUrl: BASE_URL } ).equal ).toBe( true );
 	} );
 
 	it( 'falls back to data-testid when the anchor has no id', () => {

@@ -81,6 +81,20 @@ describe( 'wix beforeFluid image geometry', () => {
 		} finally { await tab.close(); }
 	}, 30_000 );
 
+	it( 'replaces a slide still on its blurred placeholder with its declared source before serialization', async () => {
+		const tab = await browser.newPage();
+		try {
+			const media = 'a1b2c3_0123456789abcdef0123456789abcdef~mv2.jpg';
+			const blur = `https://static.wixstatic.com/media/${ media }/v1/fill/w_78,h_52,al_c,q_80,usm_0.66_1.00_0.01,blur_2,enc_avif,quality_auto/${ media }`;
+			const sharp = `https://static.wixstatic.com/media/${ media }/v1/fill/w_1440,h_348,al_c,q_85,enc_avif,quality_auto/${ media }`;
+			const declared = JSON.stringify( { containerId: 'comp-a', alignType: 'center', displayMode: 'fill', targetWidth: 1189, targetHeight: 348, isLQIP: true, imageData: { width: 6000, height: 4000, uri: media, displayMode: 'fill' } } ).replace( /"/g, '&quot;' );
+			await tab.setContent( `<!doctype html><html><body><main><div data-blocks-engine-capture-captured-slide="1"><wow-image data-image-info="${ declared }"><img src="${ blur }" width="1189" height="348" alt="Slide"></wow-image></div><wow-image data-image-info="${ declared }"><img src="${ sharp }" alt="Hydrated"></wow-image></main></body></html>` );
+			await wixAdapter.liberation!.beforeSerialize!( tab, { url: 'https://example.com/', viewport: 'desktop', serverHtml: '<html></html>' } );
+			expect( await tab.locator( 'img[alt="Slide"]' ).getAttribute( 'src' ) ).toBe( `https://static.wixstatic.com/media/${ media }/v1/fill/w_1189,h_348,al_c,q_85,enc_avif,quality_auto/${ media }` );
+			expect( await tab.locator( 'img[alt="Hydrated"]' ).getAttribute( 'src' ) ).toBe( sharp );
+		} finally { await tab.close(); }
+	}, 30_000 );
+
 	it( 'leaves an image whose declared mode is not provably container-relative to the sweep', async () => {
 		const tab = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {

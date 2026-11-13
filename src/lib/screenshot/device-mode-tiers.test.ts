@@ -1,7 +1,7 @@
 import { it, expect } from 'vitest';
 import { createServer } from 'node:http';
 import { chromium, devices } from 'playwright';
-import { checkRouteDeviceMode } from './screenshotter.js';
+import { checkRouteDeviceMode } from './device-mode-probe.js';
 import { retryRouteDeviceCheck, RouteDeviceEvidence } from './device-mode.js';
 import { documentsDiffer } from '../responsive-assembly.js';
 

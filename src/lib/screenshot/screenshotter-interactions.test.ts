@@ -30,6 +30,9 @@ vi.mock( './interaction-capture.js', async ( importOriginal ) => ( {
 	captureTriggeredDialogs: vi.fn(),
 } ) );
 
+// Typed search drives real inputs; this file is about dialog evidence.
+vi.mock( './typed-search-capture.js', () => ( { captureTypedSearchStates: vi.fn().mockResolvedValue( [] ) } ) );
+
 const LOCAL_TMP = join( process.cwd(), '.tmp-test' );
 mkdirSync( LOCAL_TMP, { recursive: true } );
 
@@ -63,6 +66,8 @@ function makePage() {
 			if ( source.includes( 'DOCTYPE' ) ) return { html: '<html><body>Tianna Wolfson</body></html>', findings: [] };
 			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
+			// Post-baseline gallery discovery sees no roots in this DOM-free fixture.
+			if ( [ 'data-blocks-engine-capture-gallery-capture-width', 'runtimeOwned', 'popupTypes', 'maxStyleTargets' ].some( marker => source.includes( marker ) ) ) return [];
 			if ( source.includes( 'scrollHeight' ) ) return 3000;
 			if ( source.includes( 'scrollTo' ) ) return undefined;
 			return {

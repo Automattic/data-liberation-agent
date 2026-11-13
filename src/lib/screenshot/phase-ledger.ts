@@ -26,6 +26,8 @@ export interface CapturePhase {
 	ms: number;
 	/** Times the phase was entered, when more than once. */
 	count?: number;
+	/** Best-effort steps that failed in this phase. */
+	failed?: number;
 }
 
 /** How a named readiness wait ended across one profile; see settleDocument. */
@@ -38,6 +40,7 @@ export interface ReadinessTally {
 
 export interface PhaseLedger {
 	enter( phase: string ): void;
+	fail( phase: string ): void;
 	wait( name: string, outcome: { reason: 'quiet' | 'deadline'; ms: number } ): void;
 	finish(): CapturePhase[];
 	readiness(): Record< string, ReadinessTally >;
@@ -68,6 +71,7 @@ export function routePhaseBreakdown( profiles: Array< Array< CapturePhase > | un
 export function createPhaseLedger( now: () => number = Date.now, onEnter?: ( phase: string ) => void ): PhaseLedger {
 	const phases = new Map< string, CapturePhase >();
 	const waits: Record< string, ReadinessTally > = {};
+	const failures = new Map<string, number>();
 	let current: { phase: string; startedAt: number } | null = null;
 	const close = ( at: number ) => {
 		if ( ! current ) return;
@@ -84,6 +88,9 @@ export function createPhaseLedger( now: () => number = Date.now, onEnter?: ( pha
 			current = { phase, startedAt: at };
 			onEnter?.( phase );
 		},
+		fail( phase ) {
+			failures.set( phase, ( failures.get( phase ) ?? 0 ) + 1 );
+		},
 		wait( name, outcome ) {
 			const tally = waits[ name ] ??= { count: 0, ms: 0, deadline: 0 };
 			tally.count++;
@@ -92,7 +99,7 @@ export function createPhaseLedger( now: () => number = Date.now, onEnter?: ( pha
 		},
 		finish() {
 			close( now() );
-			return [ ...phases.values() ];
+			return [ ...phases.values() ].map( entry => failures.has( entry.phase ) ? { ...entry, failed: failures.get( entry.phase ) } : entry );
 		},
 		readiness() {
 			return { ...waits };

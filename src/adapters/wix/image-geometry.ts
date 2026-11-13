@@ -11,6 +11,8 @@ import type { Page } from 'playwright';
 import { wixStaticMediaUrl } from './capture.js';
 
 const WIX_IMAGE_HOST = 'wow-image[data-image-info]';
+/** The low-quality placeholder Wix shows before the real image loads: a `blur_N` transform. */
+const WIX_BLUR_PLACEHOLDER = /^https:\/\/static\.wixstatic\.com\/media\/[^?#]+\/v1\/[^/]+\/[^/]*\bblur_\d+/;
 
 /** Display modes whose rendering is the image filling its container box. */
 const OBJECT_FIT: Readonly< Record< string, string > > = { fill: 'cover', fit: 'contain' };
@@ -99,14 +101,14 @@ function applyWixImageGeometry( { selector, declared }: { selector: string; decl
 	return applied;
 }
 
-function applyWixImageSources( { selector, sources }: { selector: string; sources: Array< { info: string; src: string; width?: number; height?: number } | null > } ): number {
+function applyWixImageSources( { selector, sources }: { selector: string; sources: Array< { info: string; replaces: string | null; src: string; width?: number; height?: number } | null > } ): number {
 	const hosts = [ ...document.querySelectorAll( selector ) ];
 	let applied = 0;
 	hosts.forEach( ( host, index ) => {
 		const source = sources[ index ];
 		if ( ! source || host.getAttribute( 'data-image-info' ) !== source.info ) return;
 		const image = host.querySelector< HTMLImageElement >( ':scope > img' );
-		if ( ! image || image.hasAttribute( 'src' ) || image.hasAttribute( 'srcset' ) ) return;
+		if ( ! image || image.hasAttribute( 'srcset' ) || image.getAttribute( 'src' ) !== source.replaces ) return;
 		image.setAttribute( 'src', source.src );
 		if ( source.width && ! image.hasAttribute( 'width' ) ) image.setAttribute( 'width', String( source.width ) );
 		if ( source.height && ! image.hasAttribute( 'height' ) ) image.setAttribute( 'height', String( source.height ) );
@@ -115,15 +117,19 @@ function applyWixImageSources( { selector, sources }: { selector: string; source
 	return applied;
 }
 
-/** Supply the declared source for Wix images whose runtime never hydrated them. */
+/**
+ * Supply the declared source for Wix images whose runtime never hydrated them:
+ * an `<img>` with no source, or one still on its blurred placeholder (a slide
+ * the slideshow had not shown long enough to load its real image).
+ */
 export async function normalizeWixImageSources( page: Page ): Promise< number > {
 	const infos = await page.evaluate( selector =>
-		[ ...document.querySelectorAll( selector ) ].map( host => ( {
-			info: host.getAttribute( 'data-image-info' ),
-			missing: (() => { const image = host.querySelector( ':scope > img' ); return !!image && !image.hasAttribute( 'src' ) && !image.hasAttribute( 'srcset' ); })(),
-		} ) ), WIX_IMAGE_HOST );
-	const sources = infos.map( ( { info, missing } ) => {
-		if ( !info || !missing ) return null;
+		[ ...document.querySelectorAll( selector ) ].map( host => {
+			const image = host.querySelector( ':scope > img' );
+			return { info: host.getAttribute( 'data-image-info' ), image: !!image && !image.hasAttribute( 'srcset' ), src: image?.getAttribute( 'src' ) ?? null };
+		} ), WIX_IMAGE_HOST );
+	const sources = infos.map( ( { info, image, src } ) => {
+		if ( !info || !image || ( src !== null && !WIX_BLUR_PLACEHOLDER.test( src ) ) ) return null;
 		try {
 			const value = JSON.parse( info ) as { imageData?: { uri?: unknown }; targetWidth?: unknown; targetHeight?: unknown };
 			const uri = value.imageData?.uri;
@@ -132,7 +138,7 @@ export async function normalizeWixImageSources( page: Page ): Promise< number > 
 			const height = value.targetHeight;
 			const sized = typeof width === 'number' && width > 0 && typeof height === 'number' && height > 0;
 			const size = sized ? { width: width as number, height: height as number } : undefined;
-			return { info, src: wixStaticMediaUrl( uri, size ), ...( size ? { width: size.width, height: size.height } : {} ) };
+			return { info, replaces: src, src: wixStaticMediaUrl( uri, size ), ...( size ? { width: size.width, height: size.height } : {} ) };
 		} catch { return null; }
 	} );
 	return page.evaluate( applyWixImageSources, { selector: WIX_IMAGE_HOST, sources } );

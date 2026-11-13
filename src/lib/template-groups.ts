@@ -102,15 +102,19 @@ export interface TemplateStyleBlock {
 
 /**
  * Adapter-owned aggregation of a page's inline `<style>` blocks for the
- * template fingerprint's `pageStyles` divergence signal (#836).
+ * template fingerprint's `pageStyles` and `scripts` divergence signals (#836).
  *
  * Platforms whose runtime writes per-item CSS into page-local style blocks on
  * every request declare here which blocks are content rather than template,
  * and drop request-dependent churn (generation marker comments, block order)
  * that would otherwise split routes sharing one template. A site's own
  * authored template CSS must survive; only generated, per-item composition is
- * normalized.
+ * normalized. Platforms may also normalize resolved script URLs to remove
+ * runtime build hashes while preserving distinct template dependencies.
  */
+/** Adapter-declared template identity, used instead of a content-sensitive skeleton. */
+export type TemplateIdentity = (html: string, baseUrl: string) => string | undefined;
+
 export interface TemplateStyleNormalization {
 	/**
 	 * Reduce the page's inline `<style>` blocks (document order) to the text the
@@ -118,6 +122,8 @@ export interface TemplateStyleNormalization {
 	 * Called with the blocks of one server document; must be deterministic.
 	 */
 	pageStyles( styles: readonly TemplateStyleBlock[] ): string | null;
+	/** Normalize one resolved `<script src>` URL before dependency hashing. */
+	scriptUrl?( url: string ): string;
 }
 
 /** What a skeleton cannot see, compared exactly between members of a group. */
@@ -126,7 +132,7 @@ export interface TemplateDivergence {
 	pageStyles: string | null;
 	/** Hash of the sorted, resolved `<link rel=stylesheet>` URLs. */
 	stylesheets: string;
-	/** Hash of the sorted, resolved `<script src>` URLs. */
+	/** Hash of the sorted, resolved `<script src>` URLs after adapter normalization, if declared. */
 	scripts: string;
 	/** The page has an executable inline `<script>`. */
 	inlineScripts: boolean;
@@ -180,15 +186,17 @@ function skeletonHash( element: Element, depth: number ): string {
 	return digest( children.size ? `${ self }(${ [ ...children ].sort().join( ',' ) })` : self );
 }
 
-function resolvedSet( values: Array< string | undefined >, baseUrl: string ): string {
+function resolvedSet( values: Array< string | undefined >, baseUrl: string, normalize?: ( url: string ) => string ): string {
 	const resolved = new Set< string >();
 	for ( const value of values ) {
 		if ( ! value?.trim() ) continue;
+		let url = value.trim();
 		try {
-			resolved.add( new URL( value.trim(), baseUrl ).href );
+			url = new URL( url, baseUrl ).href;
 		} catch {
-			resolved.add( value.trim() );
+			// Preserve unresolved dependencies as evidence too.
 		}
+		resolved.add( normalize ? normalize( url ) : url );
 	}
 	return digest( [ ...resolved ].sort().join( '\n' ) );
 }
@@ -215,10 +223,11 @@ function pageStyleText( styles: readonly TemplateStyleBlock[], normalization?: T
 }
 
 /** Fingerprint one server HTML document. Pure and deterministic. */
-export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization ): TemplateFingerprint {
+export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization, identity?: TemplateIdentity ): TemplateFingerprint {
 	const $ = cheerio.load( html );
 	const body = $( 'body' ).get( 0 );
-	const skeleton = body ? skeletonHash( body, 0 ) : digest( '' );
+	const declaredIdentity = identity?.( html, baseUrl );
+	const skeleton = declaredIdentity ? digest( `adapter:${ declaredIdentity }` ) : body ? skeletonHash( body, 0 ) : digest( '' );
 	const styleText = pageStyleText( styleBlocks( $ ), normalization );
 	const describe = ( selector: string, kind?: string ) => $( selector ).toArray().filter( isElement ).map( element => `${ kind ? `${ kind }:` : '' }${ elementDescriptor( element ) }` );
 	const controls = [
@@ -231,13 +240,13 @@ export function templateFingerprint( html: string, baseUrl: string, normalizatio
 	const divergence: TemplateDivergence = {
 		pageStyles: styleText ? digest( styleText.replace( /\s+/g, ' ' ).trim() ) : null,
 		stylesheets: resolvedSet( $( 'link[rel~="stylesheet" i]' ).map( ( _index, element ) => $( element ).attr( 'href' ) ).get(), baseUrl ),
-		scripts: resolvedSet( $( 'script[src]' ).map( ( _index, element ) => $( element ).attr( 'src' ) ).get(), baseUrl ),
+		scripts: resolvedSet( $( 'script[src]' ).map( ( _index, element ) => $( element ).attr( 'src' ) ).get(), baseUrl, normalization?.scriptUrl?.bind( normalization ) ),
 		inlineScripts: $( 'script:not([src])' ).toArray().some( element => JAVASCRIPT_TYPES.has( ( element.attribs.type ?? '' ).trim().toLowerCase() ) && $( element ).text().trim() !== '' ),
 		forms: [ ...new Set( describe( 'form' ) ) ].sort(),
 		controls: [ ...new Set( controls ) ].sort(),
 		embeds,
 	};
-	return { key: digest( JSON.stringify( { version: TEMPLATE_FINGERPRINT_VERSION, skeleton, divergence } ) ), skeleton, divergence };
+	return { key: declaredIdentity ? digest( `adapter:${ declaredIdentity }` ) : digest( JSON.stringify( { version: TEMPLATE_FINGERPRINT_VERSION, skeleton, divergence } ) ), skeleton, divergence };
 }
 
 /** Why a route has no fingerprint. */
@@ -312,6 +321,7 @@ export interface TemplateGroupingInput {
 	limits?: Partial< TemplateGroupingLimits >;
 	/** Platform-owned `<style>` aggregation for the divergence fingerprint. */
 	styleNormalization?: TemplateStyleNormalization;
+	templateIdentity?: TemplateIdentity;
 	/**
 	 * The capture's per-origin source request governors, shared with the rest
 	 * of the capture. Default: a governor of this pass alone.
@@ -396,7 +406,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 			} catch {
 				decoder = new TextDecoder( 'utf-8' );
 			}
-			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization ) };
+			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization, input.templateIdentity ) };
 		} catch {
 			return { reason: 'fetch_failed' };
 		}

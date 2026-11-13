@@ -1,17 +1,23 @@
+import { runSteps } from './capture-steps.js';
+import { createPostBaselineState, postBaselineSteps, retainPartialPostBaseline } from './post-baseline-steps.js';
+import { createRouteAdmission, runtimeMemoryLimit, type RouteKind } from './route-admission.js';
+import { installReadOnlyProbeGuard, lockMainFrameNavigation } from './probe-guards.js';
+import { canonicalizeInteractionReport } from './canonicalize-interaction-report.js';
+import { probeDeviceMode, checkRouteDeviceMode, type DeviceComparisonArgs } from './device-mode-probe.js';
+import { probeSharedChrome } from './chrome-reuse.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { totalmem } from 'node:os';
 import { incompleteDeviceDocument } from '../responsive-assembly.js';
 import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { parseSrcset, isSrcsetShaped } from '../srcset.js';
 import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
-import { categorizeSourceContext, forgetSourceDocument, getSourceResponse, sourceGovernorFor, sourceDocumentHtml } from '../browser-kit/source-traffic.js';
+import { forgetSourceDocument, getSourceResponse, sourceGovernorFor } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 import { sameHttpSite } from './same-origin.js';
-import { externalNavigationMessage, navigateSourceDocument, inspectSourceDocument, replaySourceReload, storeExternalBoundary, boundaryIdentity, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_SCRIPT_NAVIGATION, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
+import { externalNavigationMessage, navigateSourceDocument, inspectSourceDocument, storeExternalBoundary, boundaryIdentity, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_SCRIPT_NAVIGATION, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
@@ -36,41 +42,35 @@ import { sanitizeFrozenHtml } from './freeze.js';
 import { waitForHiddenEmbeds } from './embed-readiness.js';
 import { portStaticShadowContent } from './shadow-content.js';
 import { normalizeCaptureState, normalizeGeneratedIds, settleScriptMotion, SCRIPT_MOTION_BUDGET_MS } from './capture-state.js';
-import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
-import { captureCollections } from './collection-capture.js';
-import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline, type CapturedComponent } from './component-states.js';
+import { markGalleryRoots } from './gallery-capture.js';
+import { snapshotComponents, type ComponentBaseline, type CapturedComponent } from './component-states.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { withDocumentTitle } from './document-title.js';
-import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
 import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
 import { RootClassEvidence, rootClassContracts, sampleRootClassLadder, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
 import {
-	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
 } from './interaction-capture.js';
-import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
+import { type ScrollStatesReport } from './scroll-state-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
 import { createPhaseBudget } from './phase-budget.js';
-import { captureSelectableSetStates } from './selectable-set-capture.js';
-import { captureTypedSearchStates } from './typed-search-capture.js';
-import { combineSkips, resolveProbeExclusions } from './probe-exclusions.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
 import { cleanPortableScaffolding } from './portable-scaffolding.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, routePhaseBreakdown, type PhaseLedger } from './phase-ledger.js';
-import { availableRuntimeMemory } from './runtime-memory.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument, observePageTraffic, waitForFonts } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -104,10 +104,10 @@ import {
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
-import { carrySelectors, recordedSelectors, withCarriedSelectors, inlineRuntimeHash, externalScriptSources, observeSwitchWidth, RouteDeviceEvidence, retryRouteDeviceCheck, compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, replayableRequestHeaders, resampleSiteServerHtml, renderedBodyClasses, renderedElementPaths, renderedElementStructure, SERVER_HTML_IGNORED, shortScroll, STRUCTURE_IGNORED, stylesheetSwitchBoundaries, summarizeRouteDecisions, type ObservedSwitch, visibleControlPaths, type DeviceModeDecision, type DeviceModeRequest, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth, switchProbeIdentity, type SwitchRendering } from './device-mode.js';
-import { anchorChromeStates, builderChromeRoots, CHROME_ROOT_ATTRIBUTE, CHROME_REUSED_ATTRIBUTE, clearChromeMarks, OUTSIDE_CHROME, readChromeLandmarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
-import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
-import { probeScriptedLinks, SCRIPTED_LINK_BUDGET_MS, stampScriptedLinkCandidates } from './scripted-links.js';
+import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
+import { summarizeSharedChrome, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
+import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
+import { stampScriptedLinkCandidates } from './scripted-links.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -669,6 +669,11 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// source laid out lines and tables under different rules, so record the
 				// mode the source rendered in for the transform to honor.
 				if ( document.compatMode === 'BackCompat' ) snapshot.setAttribute( 'data-blocks-engine-capture-compat-mode', 'BackCompat' );
+				// Source cleanup hides a match the source runtime re-rendered after
+				// its removal, rather than fighting the runtime. Leave it out of the
+				// copy. This runs last: the walks above pair document and snapshot
+				// nodes by position.
+				for ( const hidden of snapshot.querySelectorAll( '[data-blocks-engine-capture-cleanup-hidden]' ) ) hidden.remove();
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();
@@ -1709,143 +1714,29 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( args.rendererCrashed() || probesExpired ) return;
 
 	async function probeInteractions(): Promise< void > {
-	const budget = createPhaseBudget( page, Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ), diagnostic => {
-		probesExpired = true;
-		args.diagnostics?.push( diagnostic );
-	}, args.probeOverrun );
-	const probe = <T>( phase: string, drive: () => Promise<T>, partial: T ) => {
-		args.phases?.enter( phase );
-		return budget.run( phase, drive, partial );
-	};
-	try {
-		// The scrolled screenshot must not become the resting state for controls
-		// whose evidence is replayed against the top-of-document portable baseline.
-		args.phases?.enter( 'dialogs' );
-		await probe( 'dialogs', async () => {
-			await restoreTopScrollState( page );
-			await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-		}, undefined );
-		// Shared chrome the entrypoint already probed is not clicked again: its
-		// rebased, verified states join this route's report instead.
-		let chrome: ChromeReuse | undefined;
-		if ( args.sharedChrome ) {
-			args.phases?.enter( 'shared-chrome' );
-			chrome = await probe( 'shared-chrome', () => reuseSharedChrome( page, args.sharedChrome! ), undefined ).catch( ( error: unknown ) => ( {
-				decision: { chromeReused: false, reason: `chrome reuse failed: ${ error instanceof Error ? error.message : String( error ) }` }, states: [],
-			} ) );
-			entry.sharedChrome = chrome?.decision;
-			args.phases?.enter( 'dialogs' );
-		}
-		// Adapter-declared platform runtime is never driven by any probe below.
-		const excluded = await probe( 'exclusions', () => resolveProbeExclusions( page, args.probeExclusions ), { skip: undefined, diagnostics: [] } ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
-		args.diagnostics?.push( ...excluded.diagnostics );
-		const collections = await probe( 'collections', async () => {
-			const captured = await withReadOnlyProbes( page, () => captureCollections( page, excluded.skip, diagnostic => args.diagnostics?.push( diagnostic ) ) );
-			for ( const collection of captured ) {
-				( entry.blockLosses ??= [] ).push( { code: 'interaction_unreplayable', reason: collection.reason ?? 'Collection control replay unsupported', unit: 'block', profile: viewport.id } );
-				for ( const member of collection.collection?.members ?? [] ) await resourceStore.captureDomDependencies( member.html, navigationUrl );
-			}
-			return captured;
-		}, [] ).catch( () => [] );
-		const components = [ ...await probe( 'components', async () => {
-			const captured = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, combineSkips( excluded.skip, chrome?.skip ), [
-				{ id: viewport.id, width: viewport.width, height: viewport.height },
-				...( args.consentViewports ?? [] ).filter( candidate => candidate.id !== viewport.id ).map( candidate => ( { id: candidate.id, width: candidate.width, height: candidate.height } ) ),
-			] ) );
-			for ( const component of captured ) for ( const state of component.states ) {
-				await resourceStore.captureDomDependencies( state.html, navigationUrl );
-			}
-			return captured;
-		}, [] ), ...collections ];
-		const galleryStates = await probe( 'galleries', () => withReadOnlyProbes( page, () => captureGalleries( page, components.filter( component => component.slideshow ).map( component => component.selector ) ) ), [] ).catch( () => [] );
-		const skip = combineSkips( combineSkips( chrome?.skip, excluded.skip ), componentBaseline.skip );
-		// Keep chrome ownership marks through selectable and typed-search probes.
-		const interactions: InteractionStatesReport = await probe( 'dialogs', () => withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip, navigationSkip: combineSkips( excluded.skip, componentBaseline.skip ) ?? '' } ) : captureTriggeredDialogs( page, url ) ), {
-			schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: url, viewport: { width: viewport.width, height: viewport.height }, capturedAt: new Date().toISOString(), states: [],
-		} );
-		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
-		if ( isDesktop && args.reflowPhoneViewport && chrome?.unmatchedRoots?.length ) {
-			args.phases?.enter( 'shared-chrome' );
-			const phoneStates = await probe( 'shared-chrome', () => withReadOnlyProbes( page, () => probePhoneOnlyChrome( page, url, chrome!.unmatchedRoots!, args.reflowPhoneViewport! ) ), [] ).catch( () => [] );
-			if ( phoneStates.length ) interactions.states.push( ...phoneStates );
-			args.phases?.enter( 'dialogs' );
-		}
-		if ( args.rendererCrashed() ) return;
-		// Probes contribute replay evidence; they cannot replace the initial tree.
-		interactions.components = popupComponents( interactions.states, components );
-		interactions.states = [ ...galleryStates, ...interactions.states ];
-		if ( args.rendererCrashed() ) return;
-		try {
-			args.phases?.enter( 'selectable' );
-			const collectionSkip = collections.flatMap( component => component.collection?.controls ?? [] ).join( ',' ) || undefined;
-			const selectableStates = await probe( 'selectable', () => withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( combineSkips( combineSkips( excluded.skip, componentBaseline.skip ), collectionSkip ), chrome?.skip ) } ) ), [] );
-			if ( selectableStates.length > 0 ) {
-				interactions.states = [ ...interactions.states, ...selectableStates ];
-			}
-			// A probed choice group the export cannot replay ships as static
-			// markup; record the lost interaction instead of dropping it silently.
-			for ( const loss of choiceGroupInteractionLosses( selectableStates ) ) {
-				( entry.blockLosses ??= [] ).push( { ...loss, unit: 'block', profile: viewport.id } );
-			}
-			if ( args.rendererCrashed() ) return;
-			try {
-				interactions.states.push( ...await probe( 'typed-search', async () => {
-					await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-					return withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { skip: combineSkips( combineSkips( excluded.skip, collectionSkip ), chrome?.skip ) } ) );
-				}, [] ) );
-			} catch {
-				/* A failed input probe must not misreport a successful selectable drive. */
-			}
-		} catch ( error ) {
-			interactions.states.push( {
-				status: 'click-failed',
-				kind: 'selectable-set',
-				trigger: {
-					selector: 'html',
-					tag: 'html',
-					ariaHaspopup: '',
-					dataBindings: {},
-				},
-				error: ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 ),
-			} );
-		}
-		if ( chrome?.skip && ! budget.expired() ) await probe( 'shared-chrome', () => clearChromeMarks( page ), undefined );
-		if ( budget.expired() ) interactions.coverage = 'partial';
-		if (
-			( budget.expired() || interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
-			hasPromotableInteractionEvidence( entry.interactions, interactions )
-		) {
-			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
-		}
-	} catch {
-		/* best-effort: baseline capture remains valid when interaction probing fails */
+		const budget = createPhaseBudget( page, Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ), diagnostic => {
+			probesExpired = true;
+			args.diagnostics?.push( diagnostic );
+		}, args.probeOverrun );
+		const state = createPostBaselineState();
+		const promote = ( interactions: InteractionStatesReport ) => {
+			if ( budget.expired() ) interactions.coverage = 'partial';
+			if (
+				( budget.expired() || interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
+				hasPromotableInteractionEvidence( entry.interactions, interactions )
+			) entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
+		};
+		const context = {
+			page, url, navigationUrl, viewport, isDesktop, entry, resourceStore, componentBaseline,
+			sharedChrome: args.sharedChrome, probeExclusions: args.probeExclusions,
+			consentViewports: args.consentViewports, reflowPhoneViewport: args.reflowPhoneViewport,
+			diagnostics: args.diagnostics, scriptedLinkSignatures, routeRemainingMs: args.routeRemainingMs,
+			state, promote,
+		};
+		await runSteps( postBaselineSteps, context, { ledger: args.phases, budget, rendererCrashed: args.rendererCrashed } );
+		if ( budget.expired() && ! args.rendererCrashed() ) retainPartialPostBaseline( context );
 	}
 
-	// Scroll-driven chrome (a header/logo that shrinks or gains a background once
-	// the page scrolls past some offset) is a distinct trigger from clicks, so it
-	// gets its own probe. Also runs only after baseline artifacts, and is
-	// best-effort: a failed probe must not invalidate the rest of the capture.
-	if ( ! budget.expired() && ! args.rendererCrashed() && ! entry.scrollStates?.toggles.length ) {
-		try {
-			args.phases?.enter( 'scroll-states' );
-			const scrollStates = await probe( 'scroll-states', () => withReadOnlyProbes( page, () => captureScrollStates( page, url ) ), undefined );
-			if ( scrollStates && scrollStates.toggles.length > 0 ) {
-				entry.scrollStates = scrollStates;
-			}
-		} catch {
-			/* best-effort: baseline capture remains valid when scroll-state probing fails */
-		}
-	}
-	// Last: following a client-routed link re-renders the document, which no
-	// later probe should observe. Self-bounded below the phase budget.
-	if ( scriptedLinkSignatures.length && ! budget.expired() && ! args.rendererCrashed() ) {
-		args.phases?.enter( 'scripted-links' );
-		const startedAt = Date.now();
-		const evidence = await withReadOnlyProbes( page, () => probeScriptedLinks( page, scriptedLinkSignatures, Math.min( SCRIPTED_LINK_BUDGET_MS, args.routeRemainingMs() / 4 ) ) );
-		( entry.scriptedLinks ??= {} )[ viewport.id ] = evidence;
-		process.stderr.write( `[timing] scripted-links ${ JSON.stringify( { url, profile: viewport.id, durationMs: Date.now() - startedAt, candidates: evidence.candidates, resolved: evidence.resolved } ) }\n` );
-	}
-	}
 }
 
 // An inline cycle is proven per viewport even when no lightbox opens; its
@@ -2078,542 +1969,11 @@ function hasSingleUrlAggregate( outputDir: string ): boolean {
 	return true;
 }
 
-/** Marks phone-page controls the desktop pass already probes; removed from evidence. */
-const DESKTOP_CONTROL_ATTRIBUTE = 'data-lib-desktop-control';
-
-/**
- * Phone-only controls of a reflow-only route's chrome that has no reusable
- * entrypoint evidence: an interior template's header whose links differ from
- * the entrypoint's, say. The route is captured at desktop only, where a phone
- * menu button is not laid out, so the desktop probe never opens it, and its
- * dropdown would ship without the dropdown/dialog evidence that keeps it
- * closed and toggleable. The same document reflows to phone width, so the
- * page is resized there, the unmatched roots' controls not visible at desktop
- * are probed — as the entrypoint's phone-only probe does — and the desktop
- * size is restored. Nothing is resized when those roots hold no such control.
- */
-async function probePhoneOnlyChrome(
-	page: Page,
-	url: string,
-	roots: readonly string[],
-	phone: { width: number; height: number }
-): Promise< CapturedDialogInteraction[] > {
-	const marks = [ CHROME_ROOT_ATTRIBUTE, DESKTOP_CONTROL_ATTRIBUTE ];
-	const concealed = await page.evaluate( ( { roots, rootAttribute, desktopAttribute, reusedAttribute } ) => {
-		const shown = ( element: Element ) => {
-			const rect = element.getBoundingClientRect();
-			const style = getComputedStyle( element );
-			return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-		};
-		const control = 'button,summary,[role="button"],[aria-controls],[aria-expanded],[aria-haspopup]';
-		let hidden = 0;
-		for ( const selector of roots ) {
-			const root = document.querySelector( selector );
-			if ( ! root ) continue;
-			root.setAttribute( rootAttribute, '' );
-			for ( const element of [ root, ...Array.from( root.querySelectorAll( '*' ) ) ] ) {
-				if ( shown( element ) ) element.setAttribute( desktopAttribute, '' );
-				// A matching nested landmark is still owned by the entrypoint probe.
-				else if ( element.hasAttribute( reusedAttribute ) ) continue;
-				// A builder's menu control is a plain element with a pointer cursor.
-				else if ( element.matches( control ) || getComputedStyle( element ).cursor === 'pointer' ) hidden++;
-			}
-		}
-		return hidden;
-	}, { roots: [ ...roots ], rootAttribute: CHROME_ROOT_ATTRIBUTE, desktopAttribute: DESKTOP_CONTROL_ATTRIBUTE, reusedAttribute: CHROME_REUSED_ATTRIBUTE } );
-	const clear = () => page.evaluate( ( names ) => {
-		for ( const name of names ) for ( const element of Array.from( document.querySelectorAll( `[${ name }]` ) ) ) element.removeAttribute( name );
-	}, marks ).catch( () => undefined );
-	if ( ! concealed ) {
-		await clear();
-		return [];
-	}
-	const desktop = page.viewportSize();
-	const settle = () => page.evaluate( () => new Promise< void >( resolve => requestAnimationFrame( () => requestAnimationFrame( () => setTimeout( resolve, 150 ) ) ) ) );
-	try {
-		await page.setViewportSize( phone );
-		await settle();
-		await restoreTopScrollState( page );
-		const report = await captureTriggeredDialogs( page, url, { skip: `${ OUTSIDE_CHROME },[${ DESKTOP_CONTROL_ATTRIBUTE }],[${ CHROME_REUSED_ATTRIBUTE }]` } );
-		const marker = new RegExp( `\\s(?:${ marks.join( '|' ) })(?:="")?`, 'g' );
-		return canonicalizeInteractionReport( report, html => html.replace( marker, '' ) ).states;
-	} finally {
-		await clear();
-		if ( desktop ) {
-			await page.setViewportSize( desktop ).catch( () => undefined );
-			await settle().catch( () => undefined );
-			await restoreTopScrollState( page ).catch( () => undefined );
-		}
-	}
-}
-
-interface DeviceComparisonArgs {
-	governors?: ScreenshotOpts['governors'];
-	browser: Browser;
-	url: string;
-	desktop: BrowserContextOptions;
-	phone: BrowserContextOptions;
-	publicUrlsOnly: boolean;
-	routeScope?: ScreenshotOpts['routeScope'];
-	cleanupPolicy?: CleanupPolicy;
-	removeSelectors?: string[];
-	prepareCapture?: ScreenshotOpts['prepareCapture'];
-	initScript?: ScreenshotOpts['initScript'];
-	telemetryRequest?: ScreenshotOpts['telemetryRequest'];
-	probeDiagnostic?: ( diagnostic: ProfileDiagnostic ) => void;
-	deviceEvidence?: RouteDeviceEvidence;
-	identityHeaders?: Partial< Record< 'desktop' | 'mobile', Record< string, string > > >;
-}
-
-interface DeviceModeProbeArgs extends DeviceComparisonArgs {
-	requested: DeviceModeRequest;
-	/** Adapter hooks that declare per-device documents. */
-	deviceDocuments: string[];
-	canonicalizeHtml?: ( html: string ) => string;
-	/** Also run the one-time shared-chrome probe on the loaded entrypoint pages. */
-	sharedChrome?: boolean;
-}
-
-/** Resource types a structure check does without: no decode, little memory. */
-const CHECK_BLOCKED_RESOURCES = new Set( [ 'image', 'media', 'font' ] );
-const CHECK_LOAD_WAIT_MS = 2_000;
-/** Extra wait before a differing route is read a second time. */
-const CHECK_RECHECK_MS = 1_500;
-
-/**
- * Load one identity of a route for a desktop/phone comparison and read its
- * server HTML, element paths and body classes. `check` is the cheap per-route
- * form: images, media and fonts are blocked and settling is bounded. The
- * entrypoint probe loads everything, because its phone page also runs the
- * phone-only control probe. Both identities of one comparison always load the
- * same way, so their signatures are comparable.
- */
-async function loadForComparison( args: DeviceComparisonArgs, options: BrowserContextOptions, viewport: 'desktop' | 'mobile', mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
-	const startedAt = Date.now();
-	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url } );
-	contexts.push( context );
-	categorizeSourceContext(context, 'device-check');
-	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
-	const page = await context.newPage();
-	await args.initScript?.(page);
-	// The comparison and shared-chrome probes wait on the same render-affecting
-	// quiet as capture; watch the page's traffic from before its navigation.
-	observePageTraffic( page, args.telemetryRequest );
-	if ( args.publicUrlsOnly || mode === 'check' ) {
-		await page.route( '**/*', async ( route ) => {
-			const request = route.request();
-			// Embedded documents load whole third-party pages; their <iframe> element stays.
-			if ( mode === 'check' && ( CHECK_BLOCKED_RESOURCES.has( request.resourceType() ) || ( request.resourceType() === 'document' && request.frame() !== page.mainFrame() ) ) ) { await route.abort( 'blockedbyclient' ); return; }
-			if ( args.publicUrlsOnly ) {
-				try { assertPublicHttpUrl( request.url() ); }
-				catch { await route.abort( 'blockedbyclient' ); return; }
-			}
-			await route.fallback();
-		} );
-	}
-	let target = args.url;
-	const navigationOptions = { publicUrlsOnly: args.publicUrlsOnly, routeScope: args.routeScope, ...( mode === 'check' ? { loadWaitMs: CHECK_LOAD_WAIT_MS } : {} ) };
-	let navigation = await navigateSourceDocument( page, target, navigationOptions );
-	// A route is captured under its redirect target; compare that document.
-	if ( navigation.redirectedTo ) {
-		target = navigation.redirectedTo;
-		navigation = await navigateSourceDocument( page, target, navigationOptions );
-	}
-	// failure-class: operational
-	if ( navigation.boundary || navigation.redirectedTo ) throw new Error( `the ${ viewport } document left its route` );
-	const status = navigation.response?.status() ?? 0;
-	// failure-class: operational
-	if ( status >= 400 || status === 0 ) throw new Error( `the ${ viewport } document answered HTTP ${ status }` );
-	if ( args.identityHeaders && navigation.response ) args.identityHeaders[ viewport ] = replayableRequestHeaders( await navigation.response.request().allHeaders() );
-	const html = await navigation.response?.text().catch( () => undefined );
-	const settledAt = Date.now();
-	if ( timings ) timings.navigate = Math.max( timings.navigate, settledAt - startedAt );
-	await applySourceCleanup( page, cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), navigation.response, html ?? '') );
-	if ( mode === 'check' ) {
-		// Bounded after the document is parsed: up to CHECK_LOAD_WAIT_MS for
-		// `load`, up to 0.5 s of network quiet, the short scroll, then up to 1 s
-		// of DOM quiet. Both identities are bounded alike.
-		await Promise.race( [ page.waitForLoadState( 'networkidle' ).catch( () => {} ), new Promise( resolve => setTimeout( resolve, 500 ) ) ] );
-		await withEvaluateTimeout( shortScroll( page ), 5_000 );
-		await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
-	} else {
-		await waitForStable( page );
-		await withEvaluateTimeout( shortScroll( page ), 10_000 );
-		await waitForStable( page, 2_000 );
-	}
-	await applyCaptureRemovals( page, { removeSelectors: args.removeSelectors, prepare: args.prepareCapture, ctx: { url: target, viewport } } );
-	if ( mode === 'probe' ) await installReadOnlyProbeGuard( page, diagnostic => args.probeDiagnostic?.( diagnostic ) );
-	// Reuse the actual navigation identity (including client hints) for a cheap
-	// site-probe re-sample. Cookies come from the still-live source context.
-	const fetchServerHtml = async () => {
-		if ( ! navigation.response ) return undefined;
-		const headers = replayableRequestHeaders( await navigation.response.request().allHeaders() );
-		const response = await getSourceResponse(context, target, { headers, maxRedirects: 0, maxRetries: 0, timeout: 30_000 });
-		try { return response.ok() ? await response.text() : undefined; }
-		finally { await response.dispose(); }
-	};
-	const structure = await withEvaluateTimeout( renderedElementStructure( page ), 10_000 );
-	const result = { page, html, target, fetchServerHtml, paths: structure.paths, classTokens: structure.classTokens, bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
-	if ( timings ) timings.settle = Math.max( timings.settle, Date.now() - settledAt );
-	return result;
-}
-
-/** Neither or one identity produced a comparable document. `same`: both failed the same way. */
-class ComparisonUnavailable extends Error {
-	constructor( message: string, readonly same: boolean ) { super( message ); }
-}
-
-/**
- * Both identities of a comparison failed alike, so the route has no phone
- * document to keep. A timeout never counts: the check navigates once at the
- * base budget, while capture retries a slow source with a longer one, so a
- * slow route can still deliver both documents.
- */
-export function comparisonFailedAlike( desktop: unknown, phone: unknown ): boolean {
-	const message = ( reason: unknown ) => String( reason instanceof Error ? reason.message : reason ).replace( /^the (desktop|mobile) /, 'the ' );
-	return ! isNavigationTimeout( desktop ) && ! isNavigationTimeout( phone ) && message( desktop ) === message( phone );
-}
-
-/** Compare the desktop and phone identities of one route, loaded the same way. */
-async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
-	const [ desktopLoad, phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts, timings ), loadForComparison( args, args.phone, 'mobile', mode, contexts, timings ) ] );
-	if ( desktopLoad.status === 'rejected' || phoneLoad.status === 'rejected' ) {
-		const reason = ( result: PromiseSettledResult< unknown > ) => result.status === 'rejected' ? String( result.reason instanceof Error ? result.reason.message : result.reason ).replace( /^the (desktop|mobile) /, 'the ' ) : undefined;
-		// failure-class: operational
-		throw new ComparisonUnavailable( reason( desktopLoad ) ?? reason( phoneLoad )!, desktopLoad.status === 'rejected' && phoneLoad.status === 'rejected' && comparisonFailedAlike( desktopLoad.reason, phoneLoad.reason ) );
-	}
-	const desktop = desktopLoad.value;
-	const phone = phoneLoad.value;
-	// failure-class: operational
-	if ( phone.target !== desktop.target ) throw new Error( 'the desktop and phone documents redirect to different routes' );
-	const serverHtml: NonNullable< DeviceModeDecision['serverHtml'] > = desktop.html === undefined || phone.html === undefined ? 'unavailable' : compareServerHtml( desktop.html, phone.html );
-	return { desktop, phone, url: desktop.target, serverHtml, structure: compareStructure( desktop.paths, phone.paths ), bodyClasses: compareBodyClasses( desktop.bodyClasses, phone.bodyClasses ) };
-}
-
-/**
- * Per-route check under a `reflow-only` site. Both identities use the same
- * bounded, resource-blocked policy. Capture's fully loaded desktop is not a
- * comparable baseline: resource load handlers can change its DOM.
- * Both comparison contexts close before the route's capture starts, so the
- * pair never competes with capture's own loads.
- */
-export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promise< RouteDeviceDecision > {
-	const started = Date.now();
-	let switchCandidates: SwitchCandidates | undefined;
-	const result = await retryRouteDeviceCheck( async () => {
-		const contexts: BrowserContext[] = [];
-		try {
-			if ( args.publicUrlsOnly ) assertPublicHttpUrl( args.url );
-			const documents = await Promise.all( ( [ 'desktop', 'mobile' ] as const ).map( async identity => {
-				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone, { governors: args.governors, sourceUrl: args.url } );
-				contexts.push( context );
-				const headers = args.identityHeaders?.[ identity ];
-				if ( ! headers ) return undefined;
-				return sourceDocumentHtml(context, args.url, replayableRequestHeaders(headers));
-			} ) );
-			const [ desktop, phone ] = documents;
-			if ( desktop !== undefined && phone !== undefined ) {
-				const serverHtml = compareServerHtml( desktop, phone );
-				const scripts = externalScriptSources( desktop, args.url );
-				const inheritedFrom = serverHtml !== 'different' ? args.deviceEvidence?.covering( scripts, inlineRuntimeHash( desktop, args.url ) ) : undefined;
-				if ( inheritedFrom ) return { mode: 'reflow-only', reason: 'same server HTML and external scripts covered by a rendered route check', serverHtml, inheritedFrom, externalScripts: scripts };
-			}
-		} finally {
-			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
-		}
-		switchCandidates = undefined;
-		const rendered = await renderedRouteDeviceMode( args, candidates => { switchCandidates = candidates; } );
-		if ( rendered.mode === 'reflow-only' && rendered.externalScripts && rendered.serverHtml !== 'unavailable' ) args.deviceEvidence?.record( args.url, rendered.externalScripts, rendered.inlineRuntimeHash! );
-		return rendered;
-	} );
-	// The same HTML renders differently per identity: find the width where it
-	// stops. A failed probe observes nothing and export keeps its fallback.
-	const serverHtml = result.serverHtml;
-	if ( result.mode === 'dual' && ( serverHtml === 'identical' || serverHtml === 'identical-after-normalization' ) && switchCandidates?.widths.length ) {
-		const observed = await probeSwitchWidth( args, serverHtml, switchCandidates ).catch( () => undefined );
-		if ( observed !== undefined ) {
-			result.switchWidth = observed.switchWidth;
-			if ( observed.middleLayout ) result.middleLayout = observed.middleLayout;
-		}
-	}
-	result.checkMs = Date.now() - started;
-	process.stderr.write( `[timing] device-check ${ JSON.stringify( { url: args.url, ...result.checkTimings, ...result, total: result.checkMs } ) }\n` );
-	return result;
-}
-
-
-/** Stylesheet switch boundaries plus both capture-width renderings they are classified against. */
-interface SwitchCandidates { widths: number[]; desktop: SwitchRendering; phone: SwitchRendering }
-
-async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCandidates?: ( candidates: SwitchCandidates ) => void ): Promise< RouteDeviceDecision > {
-	const startedAt = Date.now();
-	const contexts: BrowserContext[] = [];
-	const checkTimings = { navigate: 0, settle: 0, equivalence: 0, recheck: 0 };
-	try {
-		const compared = await compareIdentities( args, 'check', contexts, checkTimings );
-		let { structure, bodyClasses } = compared;
-		let desktopRendered: SwitchRendering = { paths: compared.desktop.paths, bodyClasses: compared.desktop.bodyClasses, classTokens: compared.desktop.classTokens };
-		let phoneRendered: SwitchRendering = { paths: compared.phone.paths, bodyClasses: compared.phone.bodyClasses, classTokens: compared.phone.classTokens };
-		const differs = () => structure.differingPaths > 0 || bodyClasses.desktopOnly.length > 0 || bodyClasses.phoneOnly.length > 0;
-		let rechecked = false;
-		// Two loads race third-party scripts (an embed swapping its placeholder
-		// for an iframe, say). Read a difference once more after both pages
-		// settle again: a race converges, an identity-driven document does not.
-		// Try the exact export equivalence rule first. This is route-local
-		// evidence, not a site-wide guess: server HTML and body gates must match.
-		let equivalent = false;
-		let renderedDocuments: { desktop: string; phone: string } | undefined;
-		let runtimeStyles: { desktop: Array<[ string, string ]>; phone: Array<[ string, string ]> } | undefined;
-		const equivalenceStartedAt = Date.now();
-		if ( compared.serverHtml === 'identical' || compared.serverHtml === 'identical-after-normalization' ) {
-			const readStyles = ( page: Page ) => withEvaluateTimeout( page.evaluate( () => Array.from( document.querySelectorAll<HTMLStyleElement>( 'style[id]' ), style => [ style.id, style.textContent ?? '' ] as [ string, string ] ) ), 10_000 );
-			const [ desktop, phone ] = await Promise.all( [ readStyles( compared.desktop.page ), readStyles( compared.phone.page ) ] );
-			runtimeStyles = { desktop, phone };
-		}
-		if ( ( compared.serverHtml === 'identical' || compared.serverHtml === 'identical-after-normalization' ) && structure.differingPaths > 0 && ! bodyClasses.desktopOnly.length && ! bodyClasses.phoneOnly.length ) {
-			const [ desktop, phone ] = await Promise.all( [ compared.desktop.page.content(), compared.phone.page.content() ] );
-			renderedDocuments = { desktop, phone };
-			equivalent = decideRouteMode( { serverHtml: compared.serverHtml, structure, bodyClasses, renderedDocuments, runtimeStyles } ).mode === 'reflow-only';
-		}
-		checkTimings.equivalence += Date.now() - equivalenceStartedAt;
-		if ( compared.serverHtml !== 'different' && differs() && ! equivalent ) {
-			rechecked = true;
-			const recheckStartedAt = Date.now();
-			const reread = async ( page: Page ) => {
-				await new Promise( resolve => setTimeout( resolve, CHECK_RECHECK_MS ) );
-				await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
-				const structure = await withEvaluateTimeout( renderedElementStructure( page ), 10_000 );
-				return { paths: structure.paths, classTokens: structure.classTokens, bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
-			};
-			const [ desktop, phone ] = await Promise.all( [ reread( compared.desktop.page ), reread( compared.phone.page ) ] );
-			structure = compareStructure( desktop.paths, phone.paths );
-			bodyClasses = compareBodyClasses( desktop.bodyClasses, phone.bodyClasses );
-			desktopRendered = desktop;
-			phoneRendered = phone;
-			checkTimings.recheck = Date.now() - recheckStartedAt;
-			renderedDocuments = undefined;
-		}
-		const finalEquivalenceStartedAt = Date.now();
-		if ( ! renderedDocuments && compared.serverHtml !== 'different' && structure.differingPaths > 0 && ! bodyClasses.desktopOnly.length && ! bodyClasses.phoneOnly.length ) {
-			// Positional paths cascade when a runtime inserts a widget. After the
-			// recheck, let export's equivalence rule decide whether it is content.
-			const [ desktop, phone ] = await Promise.all( [ compared.desktop.page.content(), compared.phone.page.content() ] );
-			renderedDocuments = { desktop, phone };
-		}
-		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, runtimeStyles, bodyClasses: differs() ? bodyClasses : undefined } );
-		checkTimings.equivalence += Date.now() - finalEquivalenceStartedAt;
-		if ( decided.mode === 'dual' && compared.serverHtml !== 'different' ) onSwitchCandidates?.( { widths: await withEvaluateTimeout( stylesheetSwitchBoundaries( compared.desktop.page ), 10_000 ).catch( () => [] ), desktop: desktopRendered, phone: phoneRendered } );
-		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt, checkTimings };
-	} catch ( error ) {
-		// Both identities failed alike (an absent route, an off-site redirect):
-		// there is no phone document to keep, and capture records the outcome once.
-		if ( error instanceof ComparisonUnavailable && error.same ) return { mode: 'reflow-only', reason: `no document in either identity: ${ error.message }`, checkMs: Date.now() - startedAt, checkTimings };
-		return { ...decideRouteMode( { error: error instanceof Error ? error.message : String( error ) } ), checkMs: Date.now() - startedAt, checkTimings };
-	} finally {
-		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
-	}
-}
-
-/**
- * Load the phone identity at each candidate width, the way the route check
- * does, and classify what it renders against both capture-width renderings
- * by structure, body classes and element class tokens (`switchProbeIdentity`):
- * the first boundary above which it stops rendering the phone document is the
- * switch, and a middle rendering ends where the probe stops matching it (see
- * `observeSwitchWidth`).
- */
-async function probeSwitchWidth( args: DeviceComparisonArgs, serverHtml: 'identical' | 'identical-after-normalization', candidates: SwitchCandidates ): Promise< ObservedSwitch | undefined > {
-	const phone = args.phone.viewport, wide = args.desktop.viewport?.width;
-	if ( ! phone || ! wide ) return undefined;
-	const identity = switchProbeIdentity( candidates, serverHtml );
-	return observeSwitchWidth( candidates.widths, { phone: phone.width, desktop: wide }, async width => {
-		const contexts: BrowserContext[] = [];
-		try {
-			// Probe loads must not replace the capture-width identity headers.
-			const loaded = await loadForComparison( { ...args, identityHeaders: undefined }, { ...args.phone, viewport: { ...phone, width } }, 'mobile', 'check', contexts );
-			const rendering: SwitchRendering = { paths: loaded.paths, bodyClasses: loaded.bodyClasses, classTokens: loaded.classTokens };
-			return { rendered: identity.classify( rendering ), rendering };
-		} finally {
-			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
-		}
-	}, identity.same );
-}
-
-/**
- * Decide once, on the entrypoint, whether this site can be captured with
- * desktop-only routes at all (see `device-mode.ts`): adapter device documents,
- * persistently different server HTML or a failed probe keep the whole capture `dual`.
- * A first HTML difference is confirmed with paired document-only requests.
- * Rendered structure is decided per route by `checkRouteDeviceMode`.
- *
- * In a `reflow-only` site the probe's fully loaded phone page also runs one
- * interaction probe limited to controls that are not visible at desktop width,
- * such as a hamburger menu, so their states are not lost with the phone pass.
- * Its report merges into the entrypoint route like a phone pass's report would.
- */
-async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { decision: DeviceModeDecision; phoneInteractions?: InteractionStatesReport; url: string; sharedChrome?: Map< string, SharedChromeProbe > } > {
-	const startedAt = Date.now();
-	const { requested } = args;
-	const ignored = { serverHtml: SERVER_HTML_IGNORED, structure: STRUCTURE_IGNORED };
-	const deviceDocuments = args.deviceDocuments.join( ', ' );
-	if ( requested === 'dual' || ( requested === 'auto' && deviceDocuments ) ) {
-		return { url: args.url, decision: { ...decideSiteMode( { requested, deviceDocuments } ), requested, durationMs: Date.now() - startedAt } };
-	}
-	const contexts: BrowserContext[] = [];
-	let url = args.url;
-	let serverHtml: DeviceModeDecision['serverHtml'];
-	let structure: DeviceModeDecision['structure'];
-	try {
-		const compared = await compareIdentities( args, 'probe', contexts );
-		const { desktop, phone, bodyClasses } = compared;
-		url = compared.url;
-		const htmlSample = await resampleSiteServerHtml( compared.serverHtml, desktop.fetchServerHtml, phone.fetchServerHtml );
-		serverHtml = htmlSample.serverHtml;
-		structure = compared.structure;
-		const decided = decideSiteMode( { requested, serverHtml } );
-		const decision: DeviceModeDecision = { ...decided, requested, url, ...htmlSample, structure, ...( bodyClasses.desktopOnly.length || bodyClasses.phoneOnly.length ? { bodyClasses } : {} ), ignored };
-		let phoneInteractions: InteractionStatesReport | undefined;
-		if ( decided.mode === 'reflow-only' && structure.differingPaths > 0 ) {
-			// The entrypoint's own check then keeps it dual, and its phone pass probes these controls.
-			decision.phoneProbe = { status: 'skipped', triggers: 0, captured: 0, reason: 'phone structure differs, so desktop-visible controls cannot be mapped' };
-		} else if ( decided.mode === 'reflow-only' ) {
-			try {
-				// Controls visible at desktop width are the desktop pass's to probe.
-				const desktopControls = await withEvaluateTimeout( visibleControlPaths( desktop.page ), 10_000 );
-				await renderedElementPaths( phone.page, { attribute: DESKTOP_CONTROL_ATTRIBUTE, paths: desktopControls } );
-				await restoreTopScrollState( phone.page );
-				await withReadOnlyProbes( phone.page, () => dismissOverlays( phone.page ) );
-				const release = await lockMainFrameNavigation( phone.page );
-				let report: InteractionStatesReport;
-				try {
-					report = await withReadOnlyProbes( phone.page, () => captureTriggeredDialogs( phone.page, url, { skip: `[${ DESKTOP_CONTROL_ATTRIBUTE }]` } ) );
-				} finally {
-					await release();
-				}
-				const marker = new RegExp( `\\s${ DESKTOP_CONTROL_ATTRIBUTE }(?:="")?`, 'g' );
-				report = canonicalizeInteractionReport( report, html => html.replace( marker, '' ) );
-				// These states join the desktop document's evidence, so they must name
-				// its nodes: a runtime ID counter can number the phone rendering differently.
-				report = withCarriedSelectors( report, await withEvaluateTimeout( carrySelectors( phone.page, desktop.page, recordedSelectors( report.states ) ), 10_000 ).catch( () => new Map() ) );
-				if ( args.canonicalizeHtml ) report = canonicalizeInteractionReport( report, args.canonicalizeHtml );
-				// Initially visible dialogs are not phone-only; the desktop pass owns them.
-				const { initialDialogs: _initial, routeNavigation: _routes, ...phoneReport } = report;
-				const captured = phoneReport.states.filter( state => state.status === 'captured' ).length;
-				decision.phoneProbe = { status: captured ? 'captured' : 'none', triggers: phoneReport.states.length, captured };
-				if ( captured ) phoneInteractions = phoneReport;
-			} catch ( error ) {
-				decision.phoneProbe = { status: 'failed', triggers: 0, captured: 0, reason: error instanceof Error ? error.message : String( error ) };
-			}
-		}
-		decision.durationMs = Date.now() - startedAt;
-		// The loaded entrypoint pages also serve the one-time shared-chrome probe,
-		// so it costs no extra load. A reflow-only site captures desktop only, and
-		// its phone-only states join the desktop evidence; a dual site probes each
-		// identity's own, untouched page.
-		let sharedChrome: Map< string, SharedChromeProbe > | undefined;
-		if ( args.sharedChrome ) {
-			const [ desktopChrome, phoneChrome ] = await Promise.all( [
-				boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( desktop.page, url, phoneInteractions ? { additionalStates: phoneInteractions.states } : {} ) ),
-				decided.mode === 'dual' ? boundSharedChromeProbe( Date.now(), () => probeChromeOnPage( phone.page, url, {} ) ) : undefined,
-			] );
-			sharedChrome = new Map( [ [ 'desktop', desktopChrome ], ...( phoneChrome ? [ [ 'mobile', phoneChrome ] as const ] : [] ) ] );
-		}
-		return { url, phoneInteractions, decision, ...( sharedChrome ? { sharedChrome } : {} ) };
-	} catch ( error ) {
-		const probeError = error instanceof Error ? error.message : String( error );
-		return { url, decision: { ...decideSiteMode( { requested, probeError } ), requested, url, ...( serverHtml ? { serverHtml } : {} ), ...( structure ? { structure } : {} ), ignored, durationMs: Date.now() - startedAt } };
-	} finally {
-		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
-	}
-}
-
-/** Bound on the one-time chrome probe of one profile; routes then probe their chrome in place. */
-const SHARED_CHROME_PROBE_MS = 120_000;
-
-/**
- * Probe the shared chrome of a loaded, prepared entrypoint page: only controls
- * inside chrome landmarks are clicked, and each recorded state is anchored to
- * its chrome root so routes can rebase and verify it (see chrome-reuse.ts).
- * `additionalStates` were recorded by another probe of a structurally
- * identical page (the reflow-only phone-only probe) and are anchored here too.
- * States stay as the entrypoint named them: a route translates them into its
- * own names, and they are canonicalized with that route's document.
- */
-async function probeChromeOnPage(
-	page: Page,
-	url: string,
-	options: { additionalStates?: CapturedDialogInteraction[] }
-): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
-	// Read the resting landmark identity before any exploration.
-	await restoreTopScrollState( page );
-	await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-	let landmarks = await readChromeLandmarks( page, true );
-	let states: CapturedDialogInteraction[] = [];
-	if ( landmarks.length ) {
-		const release = await lockMainFrameNavigation( page );
-		try {
-			states = ( await withReadOnlyProbes( page, () => captureTriggeredDialogs( page, url, { skip: OUTSIDE_CHROME } ) ) ).states;
-			states.push( ...await withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: OUTSIDE_CHROME } ) ) );
-		} finally {
-			await release();
-			await clearChromeMarks( page );
-		}
-	}
-	// Phone-only controls of a builder navbar with no landmark name their own root.
-	const builderRoots = await builderChromeRoots( page, options.additionalStates ?? [] );
-	if ( builderRoots.length ) landmarks = await readChromeLandmarks( page, false, builderRoots );
-	const anchored = await anchorChromeStates( page, landmarks, [ ...states, ...( options.additionalStates ?? [] ) ] );
-	return { status: 'captured', evidence: { url, landmarks, unanchored: anchored.unanchored, states: anchored.states } };
-}
-
-async function boundSharedChromeProbe( startedAt: number, probe: () => Promise< Omit< SharedChromeProbe, 'durationMs' > > ): Promise< SharedChromeProbe > {
-	let timer: ReturnType< typeof setTimeout > | undefined;
-	try {
-		const result = await Promise.race( [ probe(), new Promise< never >( ( _, reject ) => {
-			// failure-class: operational
-			timer = setTimeout( () => reject( new Error( `timed out after ${ SHARED_CHROME_PROBE_MS }ms` ) ), SHARED_CHROME_PROBE_MS );
-		} ) ] );
-		return { ...result, durationMs: Date.now() - startedAt };
-	} catch ( error ) {
-		return { status: 'failed', reason: error instanceof Error ? error.message : String( error ), durationMs: Date.now() - startedAt };
-	} finally {
-		clearTimeout( timer );
-	}
-}
-
-/** Load the entrypoint in one capture profile, as the device-mode probe does, and probe its shared chrome. */
-async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile' } ): Promise< SharedChromeProbe > {
-	const contexts: BrowserContext[] = [];
-	try {
-		return await boundSharedChromeProbe( Date.now(), async () => {
-			const { page, target } = await loadForComparison( { ...args, desktop: args.options, phone: args.options }, args.options, args.viewport, 'probe', contexts );
-			return probeChromeOnPage( page, target, {} );
-		} );
-	} finally {
-		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
-	}
-}
-
-/**
- * The working set a route reserves before any route has calibrated memory
- * admission. Reference routes (the entrypoint with its fresh reference pages,
- * every profile) peaked at 0.9 GiB on wordpress.org and 1.8 GiB on a Wix source
- * with three profiles; a small runtime still admits one route at a time.
- */
-export const UNCALIBRATED_ROUTE_RESERVE_BYTES = 2 * 1024 ** 3;
-
 /**
  * Capture per-viewport screenshots + html + site metadata for a list of URLs.
  * Resumable via manifest.json / failures.json; same-origin enforced; output
  * directory validated against path traversal.
  */
-/** The memory this process group may use: its cgroup limit, or the machine's when it has none. */
-function runtimeMemoryLimit(): number {
-	const constrained = process.constrainedMemory();
-	const machine = totalmem();
-	return Number.isSafeInteger( constrained ) && constrained > 0 ? Math.min( constrained, machine ) : machine;
-}
-
 export async function captureScreenshots( opts: ScreenshotOpts ): Promise< ScreenshotResult > {
 	opts = { ...opts, governors: opts.governors ?? new SourceRequestGovernors() };
 	const startTime = Date.now();
@@ -2663,56 +2023,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// the capture. Calibrate on one complete route (including its fresh
 	// reference pages) before admitting parallel routes.
 	const memoryLimit = opts.concurrency === undefined ? runtimeMemoryLimit() : 0;
-	const memoryAdmission = memoryLimit > 0 && typeof process.availableMemory === 'function';
-	// Admission reserves memory per route, so it needs a per-route estimate:
-	// group growth above the idle floor (Node, Chromium and retained resources
-	// with no route running), divided across the routes active when sampled.
-	// The whole-group peak would count that floor and every concurrent route
-	// against each new route, throttling harder the more routes overlap.
-	// A route opens fresh reference pages only when it is in the reference
-	// sample, so routes are estimated per kind: a sample taken while any
-	// reference route runs is attributed to reference routes, one taken while
-	// only routes without reference pages run is attributed to those. Until a
-	// route without reference pages has been measured, it reserves the
-	// reference estimate.
-	type RouteKind = 'reference' | 'plain';
 	// A sampled route that resolves to a redirect alias hands its sample slot to
 	// the route holding its document (see `onRouteAlias`).
 	const referenceRoutes = opts.referenceSampleUrls ? new Set( opts.referenceSampleUrls ) : undefined;
-	const routeKind = ( url: string ): RouteKind => ! referenceRoutes || referenceRoutes.has( url ) ? 'reference' : 'plain';
-	let observedWorkingSet = 0;
-	let idleFloor: number | undefined;
-	const routeWorkingSet: Record< RouteKind, number > = { reference: 0, plain: 0 };
-	const activeRoutes: Record< RouteKind, number > = { reference: 0, plain: 0 };
-	const calibrated: Record< RouteKind, boolean > = { reference: false, plain: false };
-	let reportedUncalibratedAdmission = false;
-	const sampleMemory = (): number => {
-		const available = availableRuntimeMemory( memoryLimit );
-		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
-		const used = memoryLimit - available;
-		observedWorkingSet = Math.max( observedWorkingSet, used );
-		const active = activeRoutes.reference + activeRoutes.plain;
-		if ( active === 0 ) idleFloor = used;
-		else if ( idleFloor !== undefined ) {
-			const kind: RouteKind = activeRoutes.reference ? 'reference' : 'plain';
-			routeWorkingSet[ kind ] = Math.max( routeWorkingSet[ kind ], ( used - idleFloor ) / active );
-		}
-		return available;
-	};
-	// The working set to reserve for a route. Before reference calibration
-	// every route reserves a conservative prior (or more, once a larger share
-	// was observed), so a host with room for several such routes does not run
-	// the first one alone, while a small runtime still admits one at a time.
-	const routeEstimate = ( kind: RouteKind ): number => {
-		if ( ! calibrated.reference ) return Math.max( UNCALIBRATED_ROUTE_RESERVE_BYTES, routeWorkingSet.reference, routeWorkingSet.plain );
-		return kind === 'plain' && calibrated.plain ? routeWorkingSet.plain : routeWorkingSet.reference;
-	};
-	// A second concurrent profile of a running route needs another route-sized
-	// share beyond every running route's reservation.
-	const roomForParallelProfiles = ( kind: RouteKind ): boolean => {
-		const reserved = activeRoutes.reference * routeEstimate( 'reference' ) + activeRoutes.plain * routeEstimate( 'plain' );
-		return sampleMemory() >= reserved + routeEstimate( kind );
-	};
+	const admission = createRouteAdmission( { memoryLimit, referenceRoutes, report: message => sendLog( server, message ) } );
+	const memoryAdmission = admission.enabled;
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
 	const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;
 	const evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 5_000;
@@ -3449,7 +2764,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// every running route's reservation plus one more route-sized share.
 		// Either way each is merged, in profile order, as soon as it completes, so
 		// a route abandoned at its deadline keeps the profiles that finished.
-		const builtInPending = builtInProfiles.length > 1 && memoryAdmission && ! roomForParallelProfiles( routeKind( url ) )
+		const builtInPending = builtInProfiles.length > 1 && memoryAdmission && ! admission.roomForParallelProfiles( admission.kind( url ) )
 			? undefined
 			: builtInProfiles.map( viewport => captureProfile( viewport ) );
 		for ( const pending of builtInPending ?? [] ) pending.catch( () => {} );
@@ -3569,9 +2884,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// do not calibrate. Plain routes calibrate only once a sample was
 		// attributed to their kind.
 		if ( memoryAdmission && ( entry.html || entry.mobileHtml || absentFailures.length === 0 ) && ! entry.redirectedTo ) {
-			sampleMemory();
-			const kind = routeKind( url );
-			if ( kind === 'reference' || routeWorkingSet.plain > 0 ) calibrated[ kind ] = true;
+			admission.calibrate( admission.kind( url ) );
 		}
 		if ( urlFailures.length === 0 ) {
 			captured++;
@@ -3639,43 +2952,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let cursor = segStart;
 				const running = new Set< Promise<void> >();
 				const runningKinds = new Map< Promise<void>, RouteKind >();
-				// Reserve one observed per-route working set of its kind for every
-				// running route whose peak may still be ahead, plus the route being
-				// admitted. Even one unseen route can exceed the budget; this admits
-				// overlap, rather than enforcing a per-source byte cap.
-				const admit = ( kind: RouteKind ): boolean => {
-					if ( ! memoryAdmission ) return true;
-					const available = sampleMemory();
-					if ( running.size === 0 ) {
-						if ( available === 0 ) throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` );
-						return true;
-					}
-					let reserved = routeEstimate( kind );
-					for ( const runningKind of runningKinds.values() ) reserved += routeEstimate( runningKind );
-					const admitted = available >= reserved;
-					if ( ! admitted && ! calibrated.reference && completed > 0 && ! reportedUncalibratedAdmission ) {
-						reportedUncalibratedAdmission = true;
-						const message = '[memory-admission] limited to one route: reference memory calibration unavailable (no fresh non-absent, non-alias capture completed yet)';
-						sendLog( server, message );
-						process.stderr.write( `${ message }\n` );
-					}
-					return admitted;
-				};
-				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
+				const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
 				const budgetAdmits = (): boolean => {
 					while ( cursor < segEnd && reusedRoutes.has( urls[ cursor ]! ) ) cursor++;
 					return cursor < segEnd && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
 				};
 				try {
 					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
-						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admit( routeKind( urls[ cursor ]! ) ) ) {
+						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values(), completed ) ) {
 							const url = urls[ cursor++ ];
-							const kind = routeKind( url );
+							const kind = admission.kind( url );
 							routeBudget?.start( url );
-							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( { limitBytes: memoryLimit, availableBytes: sampleMemory(), observedWorkingSetBytes: observedWorkingSet, idleFloorBytes: idleFloor, routeWorkingSetBytes: { reference: Math.round( routeWorkingSet.reference ), plain: Math.round( routeWorkingSet.plain ) }, reservedBytes: routeEstimate( kind ), activeRoutes: running.size + 1, calibrated, kind, url } ) }\n` );
-							activeRoutes[ kind ]++;
-							const pending = processUrl( url ).finally( () => { partialRouteCommits.delete( url ); activeRoutes[ kind ]--; routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
-								if ( memoryAdmission ) sampleMemory();
+							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( admission.diagnostic( kind, running.size + 1, url ) ) }\n` );
+							admission.start( kind );
+							const pending = processUrl( url ).finally( () => { partialRouteCommits.delete( url ); admission.release( kind ); routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
+								if ( memoryAdmission ) admission.sample();
 							} );
 							// The slot frees even if abandonment unwinds slowly: the route's own
 							// deadline resolves the race at the deadline, after it abandoned the
@@ -3850,97 +3141,4 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		...(deviceMode ? {deviceMode: reflowViewports ? {...deviceMode, routes: summarizeRouteDecisions(routeDecisions)} : deviceMode} : {}),
 		...(entrypoint && sharedChromeResults.size ? {sharedChrome: summarizeSharedChrome(entrypoint, sharedChromeResults, sharedChromeDecisions)} : {}),
 	};
-}
-
-const READ_ONLY_METHODS = new Set( [ 'GET', 'HEAD', 'OPTIONS' ] );
-const readOnlyProbePages = new WeakMap< Page, { active: number } >();
-
-/** One page-owned handler; baseline and lazy-load requests pass through unchanged. */
-export async function installReadOnlyProbeGuard( page: Page, record: ( diagnostic: ProfileDiagnostic ) => void ): Promise< void > {
-	if ( ! page.route ) return;
-	if ( readOnlyProbePages.has( page ) ) return;
-	const state = { active: 0 };
-	readOnlyProbePages.set( page, state );
-	await page.route( '**/*', async route => {
-		const request = route.request();
-		if ( ! state.active || READ_ONLY_METHODS.has( request.method() ) ) { await route.fallback(); return; }
-		record( { code: 'interaction_request_blocked', reason: `${ request.method() } ${ new URL( request.url() ).pathname } blocked during interaction probing` } );
-		await route.fulfill( { status: 204, body: '' } );
-	} );
-}
-
-/** Scope protection to an interaction drive, including nested probes and failure paths. */
-export async function withReadOnlyProbes< T >( page: Page, probe: () => Promise< T > ): Promise< T > {
-	const state = readOnlyProbePages.get( page );
-	if ( ! state ) return probe();
-	state.active++;
-	try { return await probe(); }
-	finally { state.active--; }
-}
-
-/**
- * Keep the page on its route while post-baseline probes drive it. A probe can
- * trigger a navigation no click handler can cancel -- a script assigning
- * `location` after a swatch or card is activated -- and a committed navigation
- * replaces the document, taking the capture's in-page evidence with it, so a
- * route whose baseline was already captured would fail. Aborting main-frame
- * document requests leaves the current document in place; every other request
- * falls through to the capture's existing routing.
- */
-export async function lockMainFrameNavigation( page: Page, onAttempt?: ( destination: string ) => void, allowReload = false ): Promise< () => Promise< void > > {
-	if ( ! page.route ) return async () => {};
-	let reloads = 0;
-	const deadline = Date.now() + SOURCE_NAVIGATION_LIMITS.timeoutMs;
-	const guard = async ( route: Route ) => {
-		const request = route.request();
-		// Let the read-only guard record and block unsafe form submissions too.
-		if ( readOnlyProbePages.get( page )?.active && ! READ_ONLY_METHODS.has( request.method() ) ) { await route.fallback(); return; }
-		if ( request.isNavigationRequest() && request.frame() === page.mainFrame() ) {
-			if (allowReload && request.method() === 'GET' && reloads < SOURCE_NAVIGATION_LIMITS.hops && Date.now() < deadline) {
-				const current = new URL(page.url()); current.hash = '';
-				if (request.url() === current.href) {
-					reloads++;
-					try { await replaySourceReload(route, current.href, deadline - Date.now()); return; }
-					catch { /* A reload changing identity/outcome remains unexplained drift. */ }
-				}
-			}
-			onAttempt?.( request.url() );
-			await route.abort( 'aborted' );
-			return;
-		}
-		await route.fallback();
-	};
-	await page.route( '**/*', guard );
-	return async () => {
-		await page.unroute( '**/*', guard ).catch( () => {} );
-	};
-}
-
-/**
- * Apply an adapter's HTML rewrite to every string in an interaction report
- * (dialog markup, trigger and dialog selectors), then restate each dialog's
- * byte count, which consumers verify against the markup.
- */
-function canonicalizeInteractionReport< T >( report: T, canonicalize: ( html: string ) => string ): T {
-	const rewrite = ( value: unknown ): unknown => {
-		if ( typeof value === 'string' ) return canonicalize( value );
-		if ( Array.isArray( value ) ) return value.map( rewrite );
-		if ( value && typeof value === 'object' ) {
-			const source = value as Record< string, unknown >;
-			const out: Record< string, unknown > = {};
-			for ( const [ key, child ] of Object.entries( source ) ) out[ key ] = rewrite( child );
-			// A complete dialog's byte count describes its markup; a truncated one
-			// records the original size, which the rewrite does not change.
-			if (
-				typeof source.html === 'string' &&
-				typeof out.html === 'string' &&
-				source.htmlBytes === Buffer.byteLength( source.html )
-			) {
-				out.htmlBytes = Buffer.byteLength( out.html );
-			}
-			return out;
-		}
-		return value;
-	};
-	return rewrite( report ) as T;
 }

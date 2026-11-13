@@ -284,11 +284,13 @@
 			"throw new Error(`enforceSameOrigin: invalid URL: ${u}`)": 1,
 			"throw new Error(`enforceSameOrigin: invalid reference URL: ${reference}`)": 1
 		},
+		"src/lib/screenshot/route-admission.ts": {
+			"throw new Error( 'Capture memory admission: runtime available memory is invalid' )": 1,
+			"throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` )": 1
+		},
 		"src/lib/screenshot/screenshotter.ts": {
 			"reject(new Error( `screenshot timeout after ${ ms }ms` ))": 1,
-			"throw new Error( 'Capture memory admission: runtime available memory is invalid' )": 1,
 			"throw new Error( 'Duplicate source capture profile' )": 1,
-			"throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` )": 1,
 			"throw new Error( `Duplicate source capture profile: ${ profile.id }` )": 1,
 			"throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` )": 1,
 			"throw new Error( `Unknown source device profile: ${ viewport.device }` )": 1,
