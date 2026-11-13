@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.0] - 2026-11-13
+
+### Added
+- attribute source requests by phase and replay outcome
+- add structured product content and fix Dawn description matching
+
+### Changed
+- regenerate plugin bundles
+- Template clusters: prefetch member documents and reuse the representative key
+- run the post-baseline probes as declared steps
+- replay link prefetches across routes
+
 ## [0.34.3] - 2026-11-13
 
 ### Changed
