@@ -8,8 +8,6 @@ export interface CaptureStep<C> {
 	id: string;
 	/** Continuation work retains the currently running phase. */
 	continuePhase?: boolean;
-	/** Preserve historical explicit enter plus probe enter accounting. */
-	entries?: number;
 	when?( ctx: C ): boolean;
 	bound?: 'probe-budget';
 	guard?: 'read-only';
@@ -30,7 +28,7 @@ export async function runSteps<C extends { page: Page }>(
 	for ( const step of steps ) {
 		if ( rendererCrashed() || budget.expired() ) return;
 		if ( step.when && ! step.when( ctx ) ) continue;
-		if ( ! step.continuePhase ) for ( let i = 0; i < ( step.entries ?? 1 ); i++ ) ledger?.enter( step.id );
+		if ( ! step.continuePhase ) ledger?.enter( step.id );
 		try {
 			const drive = () => step.guard === 'read-only'
 				? withReadOnlyProbes( ctx.page, () => step.run( ctx ) ) : step.run( ctx );
