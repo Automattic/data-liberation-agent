@@ -1,7 +1,9 @@
+import { runSteps } from './capture-steps.js';
+import { createPostBaselineState, postBaselineSteps, retainPartialPostBaseline } from './post-baseline-steps.js';
 import { createRouteAdmission, runtimeMemoryLimit, type RouteKind } from './route-admission.js';
-import { installReadOnlyProbeGuard, withReadOnlyProbes, lockMainFrameNavigation } from './probe-guards.js';
+import { installReadOnlyProbeGuard, lockMainFrameNavigation } from './probe-guards.js';
 import { canonicalizeInteractionReport } from './canonicalize-interaction-report.js';
-import { probePhoneOnlyChrome, probeDeviceMode, checkRouteDeviceMode, type DeviceComparisonArgs } from './device-mode-probe.js';
+import { probeDeviceMode, checkRouteDeviceMode, type DeviceComparisonArgs } from './device-mode-probe.js';
 import { probeSharedChrome } from './chrome-reuse.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { incompleteDeviceDocument } from '../responsive-assembly.js';
@@ -40,30 +42,25 @@ import { sanitizeFrozenHtml } from './freeze.js';
 import { waitForHiddenEmbeds } from './embed-readiness.js';
 import { portStaticShadowContent } from './shadow-content.js';
 import { normalizeCaptureState, normalizeGeneratedIds, settleScriptMotion, SCRIPT_MOTION_BUDGET_MS } from './capture-state.js';
-import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
-import { captureCollections } from './collection-capture.js';
-import { snapshotComponents, exploreComponents, popupComponents, type ComponentBaseline, type CapturedComponent } from './component-states.js';
+import { markGalleryRoots } from './gallery-capture.js';
+import { snapshotComponents, type ComponentBaseline, type CapturedComponent } from './component-states.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { withDocumentTitle } from './document-title.js';
-import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
 import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
 import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
 import { RootClassEvidence, rootClassContracts, sampleRootClassLadder, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
 import {
-	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
 } from './interaction-capture.js';
-import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
+import { type ScrollStatesReport } from './scroll-state-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
 import { createPhaseBudget } from './phase-budget.js';
-import { captureSelectableSetStates } from './selectable-set-capture.js';
-import { captureTypedSearchStates } from './typed-search-capture.js';
-import { combineSkips, resolveProbeExclusions } from './probe-exclusions.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
@@ -73,7 +70,7 @@ import { createPhaseLedger, routePhaseBreakdown, type PhaseLedger } from './phas
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, restoreTopScrollState, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -108,9 +105,9 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
-import { clearChromeMarks, reuseSharedChrome, summarizeSharedChrome, type ChromeReuse, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
+import { summarizeSharedChrome, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
-import { probeScriptedLinks, SCRIPTED_LINK_BUDGET_MS, stampScriptedLinkCandidates } from './scripted-links.js';
+import { stampScriptedLinkCandidates } from './scripted-links.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -1717,143 +1714,29 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( args.rendererCrashed() || probesExpired ) return;
 
 	async function probeInteractions(): Promise< void > {
-	const budget = createPhaseBudget( page, Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ), diagnostic => {
-		probesExpired = true;
-		args.diagnostics?.push( diagnostic );
-	}, args.probeOverrun );
-	const probe = <T>( phase: string, drive: () => Promise<T>, partial: T ) => {
-		args.phases?.enter( phase );
-		return budget.run( phase, drive, partial );
-	};
-	try {
-		// The scrolled screenshot must not become the resting state for controls
-		// whose evidence is replayed against the top-of-document portable baseline.
-		args.phases?.enter( 'dialogs' );
-		await probe( 'dialogs', async () => {
-			await restoreTopScrollState( page );
-			await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-		}, undefined );
-		// Shared chrome the entrypoint already probed is not clicked again: its
-		// rebased, verified states join this route's report instead.
-		let chrome: ChromeReuse | undefined;
-		if ( args.sharedChrome ) {
-			args.phases?.enter( 'shared-chrome' );
-			chrome = await probe( 'shared-chrome', () => reuseSharedChrome( page, args.sharedChrome! ), undefined ).catch( ( error: unknown ) => ( {
-				decision: { chromeReused: false, reason: `chrome reuse failed: ${ error instanceof Error ? error.message : String( error ) }` }, states: [],
-			} ) );
-			entry.sharedChrome = chrome?.decision;
-			args.phases?.enter( 'dialogs' );
-		}
-		// Adapter-declared platform runtime is never driven by any probe below.
-		const excluded = await probe( 'exclusions', () => resolveProbeExclusions( page, args.probeExclusions ), { skip: undefined, diagnostics: [] } ).catch( () => ( { skip: undefined, diagnostics: [] } ) );
-		args.diagnostics?.push( ...excluded.diagnostics );
-		const collections = await probe( 'collections', async () => {
-			const captured = await withReadOnlyProbes( page, () => captureCollections( page, excluded.skip, diagnostic => args.diagnostics?.push( diagnostic ) ) );
-			for ( const collection of captured ) {
-				( entry.blockLosses ??= [] ).push( { code: 'interaction_unreplayable', reason: collection.reason ?? 'Collection control replay unsupported', unit: 'block', profile: viewport.id } );
-				for ( const member of collection.collection?.members ?? [] ) await resourceStore.captureDomDependencies( member.html, navigationUrl );
-			}
-			return captured;
-		}, [] ).catch( () => [] );
-		const components = [ ...await probe( 'components', async () => {
-			const captured = await withReadOnlyProbes( page, () => exploreComponents( page, componentBaseline, combineSkips( excluded.skip, chrome?.skip ), [
-				{ id: viewport.id, width: viewport.width, height: viewport.height },
-				...( args.consentViewports ?? [] ).filter( candidate => candidate.id !== viewport.id ).map( candidate => ( { id: candidate.id, width: candidate.width, height: candidate.height } ) ),
-			] ) );
-			for ( const component of captured ) for ( const state of component.states ) {
-				await resourceStore.captureDomDependencies( state.html, navigationUrl );
-			}
-			return captured;
-		}, [] ), ...collections ];
-		const galleryStates = await probe( 'galleries', () => withReadOnlyProbes( page, () => captureGalleries( page, components.filter( component => component.slideshow ).map( component => component.selector ) ) ), [] ).catch( () => [] );
-		const skip = combineSkips( combineSkips( chrome?.skip, excluded.skip ), componentBaseline.skip );
-		// Keep chrome ownership marks through selectable and typed-search probes.
-		const interactions: InteractionStatesReport = await probe( 'dialogs', () => withReadOnlyProbes( page, () => skip ? captureTriggeredDialogs( page, url, { skip, navigationSkip: combineSkips( excluded.skip, componentBaseline.skip ) ?? '' } ) : captureTriggeredDialogs( page, url ) ), {
-			schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: url, viewport: { width: viewport.width, height: viewport.height }, capturedAt: new Date().toISOString(), states: [],
-		} );
-		if ( chrome?.states.length ) interactions.states.push( ...chrome.states );
-		if ( isDesktop && args.reflowPhoneViewport && chrome?.unmatchedRoots?.length ) {
-			args.phases?.enter( 'shared-chrome' );
-			const phoneStates = await probe( 'shared-chrome', () => withReadOnlyProbes( page, () => probePhoneOnlyChrome( page, url, chrome!.unmatchedRoots!, args.reflowPhoneViewport! ) ), [] ).catch( () => [] );
-			if ( phoneStates.length ) interactions.states.push( ...phoneStates );
-			args.phases?.enter( 'dialogs' );
-		}
-		if ( args.rendererCrashed() ) return;
-		// Probes contribute replay evidence; they cannot replace the initial tree.
-		interactions.components = popupComponents( interactions.states, components );
-		interactions.states = [ ...galleryStates, ...interactions.states ];
-		if ( args.rendererCrashed() ) return;
-		try {
-			args.phases?.enter( 'selectable' );
-			const collectionSkip = collections.flatMap( component => component.collection?.controls ?? [] ).join( ',' ) || undefined;
-			const selectableStates = await probe( 'selectable', () => withReadOnlyProbes( page, () => captureSelectableSetStates( page, { skip: combineSkips( combineSkips( combineSkips( excluded.skip, componentBaseline.skip ), collectionSkip ), chrome?.skip ) } ) ), [] );
-			if ( selectableStates.length > 0 ) {
-				interactions.states = [ ...interactions.states, ...selectableStates ];
-			}
-			// A probed choice group the export cannot replay ships as static
-			// markup; record the lost interaction instead of dropping it silently.
-			for ( const loss of choiceGroupInteractionLosses( selectableStates ) ) {
-				( entry.blockLosses ??= [] ).push( { ...loss, unit: 'block', profile: viewport.id } );
-			}
-			if ( args.rendererCrashed() ) return;
-			try {
-				interactions.states.push( ...await probe( 'typed-search', async () => {
-					await withReadOnlyProbes( page, () => dismissOverlays( page ) );
-					return withReadOnlyProbes( page, () => captureTypedSearchStates( page, selectableStates, { skip: combineSkips( combineSkips( excluded.skip, collectionSkip ), chrome?.skip ) } ) );
-				}, [] ) );
-			} catch {
-				/* A failed input probe must not misreport a successful selectable drive. */
-			}
-		} catch ( error ) {
-			interactions.states.push( {
-				status: 'click-failed',
-				kind: 'selectable-set',
-				trigger: {
-					selector: 'html',
-					tag: 'html',
-					ariaHaspopup: '',
-					dataBindings: {},
-				},
-				error: ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 ),
-			} );
-		}
-		if ( chrome?.skip && ! budget.expired() ) await probe( 'shared-chrome', () => clearChromeMarks( page ), undefined );
-		if ( budget.expired() ) interactions.coverage = 'partial';
-		if (
-			( budget.expired() || interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
-			hasPromotableInteractionEvidence( entry.interactions, interactions )
-		) {
-			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
-		}
-	} catch {
-		/* best-effort: baseline capture remains valid when interaction probing fails */
+		const budget = createPhaseBudget( page, Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ), diagnostic => {
+			probesExpired = true;
+			args.diagnostics?.push( diagnostic );
+		}, args.probeOverrun );
+		const state = createPostBaselineState();
+		const promote = ( interactions: InteractionStatesReport ) => {
+			if ( budget.expired() ) interactions.coverage = 'partial';
+			if (
+				( budget.expired() || interactions.states.length > 0 || ( interactions.components?.length ?? 0 ) > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
+				hasPromotableInteractionEvidence( entry.interactions, interactions )
+			) entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
+		};
+		const context = {
+			page, url, navigationUrl, viewport, isDesktop, entry, resourceStore, componentBaseline,
+			sharedChrome: args.sharedChrome, probeExclusions: args.probeExclusions,
+			consentViewports: args.consentViewports, reflowPhoneViewport: args.reflowPhoneViewport,
+			diagnostics: args.diagnostics, scriptedLinkSignatures, routeRemainingMs: args.routeRemainingMs,
+			state, promote,
+		};
+		await runSteps( postBaselineSteps, context, { ledger: args.phases, budget, rendererCrashed: args.rendererCrashed } );
+		if ( budget.expired() && ! args.rendererCrashed() ) retainPartialPostBaseline( context );
 	}
 
-	// Scroll-driven chrome (a header/logo that shrinks or gains a background once
-	// the page scrolls past some offset) is a distinct trigger from clicks, so it
-	// gets its own probe. Also runs only after baseline artifacts, and is
-	// best-effort: a failed probe must not invalidate the rest of the capture.
-	if ( ! budget.expired() && ! args.rendererCrashed() && ! entry.scrollStates?.toggles.length ) {
-		try {
-			args.phases?.enter( 'scroll-states' );
-			const scrollStates = await probe( 'scroll-states', () => withReadOnlyProbes( page, () => captureScrollStates( page, url ) ), undefined );
-			if ( scrollStates && scrollStates.toggles.length > 0 ) {
-				entry.scrollStates = scrollStates;
-			}
-		} catch {
-			/* best-effort: baseline capture remains valid when scroll-state probing fails */
-		}
-	}
-	// Last: following a client-routed link re-renders the document, which no
-	// later probe should observe. Self-bounded below the phase budget.
-	if ( scriptedLinkSignatures.length && ! budget.expired() && ! args.rendererCrashed() ) {
-		args.phases?.enter( 'scripted-links' );
-		const startedAt = Date.now();
-		const evidence = await withReadOnlyProbes( page, () => probeScriptedLinks( page, scriptedLinkSignatures, Math.min( SCRIPTED_LINK_BUDGET_MS, args.routeRemainingMs() / 4 ) ) );
-		( entry.scriptedLinks ??= {} )[ viewport.id ] = evidence;
-		process.stderr.write( `[timing] scripted-links ${ JSON.stringify( { url, profile: viewport.id, durationMs: Date.now() - startedAt, candidates: evidence.candidates, resolved: evidence.resolved } ) }\n` );
-	}
-	}
 }
 
 // An inline cycle is proven per viewport even when no lightbox opens; its
