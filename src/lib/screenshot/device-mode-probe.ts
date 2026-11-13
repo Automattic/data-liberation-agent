@@ -218,10 +218,11 @@ export function comparisonFailedAlike( desktop: unknown, phone: unknown ): boole
 
 /** Compare the desktop and phone identities of one route, loaded the same way. */
 async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
-	// Finish warming replay before the sibling starts. Keep both settled results
-	// even on failure: comparisonFailedAlike still needs both identities' errors.
-	const [ desktopLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts, timings ) ] );
-	const [ phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.phone, 'mobile', mode, contexts, timings ) ] );
+	// Load sequentially so desktop warms replay for the phone load. Settle both:
+	// comparisonFailedAlike needs each identity's error.
+	const settled = <T,>( load: Promise< T > ): Promise< PromiseSettledResult< T > > => load.then( value => ( { status: 'fulfilled' as const, value } ), reason => ( { status: 'rejected' as const, reason } ) );
+	const desktopLoad = await settled( loadForComparison( args, args.desktop, 'desktop', mode, contexts, timings ) );
+	const phoneLoad = await settled( loadForComparison( args, args.phone, 'mobile', mode, contexts, timings ) );
 	if ( desktopLoad.status === 'rejected' || phoneLoad.status === 'rejected' ) {
 		const reason = ( result: PromiseSettledResult< unknown > ) => result.status === 'rejected' ? String( result.reason instanceof Error ? result.reason.message : result.reason ).replace( /^the (desktop|mobile) /, 'the ' ) : undefined;
 		// failure-class: operational
