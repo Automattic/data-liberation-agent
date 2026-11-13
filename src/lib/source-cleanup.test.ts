@@ -194,6 +194,7 @@ it('captures detected host residue as attribution cleanup but keeps the same fra
     residue: [{ selector: 'iframe#hud-badge', evidence: 'fixture host badge frame' }] });
   try {
     server = createServer((req, res) => {
+      if (req.url?.includes('liberation-absent-')) { res.writeHead(404); res.end(); return; }
       res.setHeader('content-type', 'text/html');
       if (req.url === '/') res.setHeader('x-fixture-host', 'yes');
       res.end(`<!doctype html><html><head><title>Owner</title></head><body><main>Owner content</main><script>

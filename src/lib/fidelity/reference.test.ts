@@ -750,6 +750,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const page = ( path: string, heading: string ): string => `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sampled route fixture</title><style>body{margin:0;font:16px Arial}h1{margin:0;font:24px Arial}</style></head><body><main><h1>${ heading }</h1><p>Baseline content.</p></main></body></html>`;
 		const source = createServer( ( request, response ) => {
 			const path = request.url?.split( '?' )[ 0 ] ?? '';
+			if ( path.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 			// Document navigations carry a text/html accept header; favicon and
 			// other incidental requests never do.
 			if ( [ '/', '/about', '/contact' ].includes( path ) && String( request.headers.accept ?? '' ).includes( 'text/html' ) ) {

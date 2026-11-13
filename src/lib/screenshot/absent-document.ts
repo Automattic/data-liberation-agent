@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+import { randomUUID } from 'node:crypto';
 import { readDocument } from '../parsed-documents.js';
 
 export function isAbsentDocumentStatus( status: number ): boolean {
@@ -48,10 +50,9 @@ const ABSENT_DOCUMENT_HEADING_TEXT = /^(404|410)$/;
  * Deliberately structural, not textual-English or vendor-specific: it never
  * matches a phrase like "Page Not Found" (that string is one platform's
  * wording, and doesn't exist in another's), and it never matches a vendor
- * name. The status numeral is the one thing every absent-document screen
- * shares, English or not, because it's the same protocol convention
- * #257 already treats as authoritative on the HTTP status line -- this is
- * that same signal, read from the page instead of the transport.
+ * name. Status numerals are the same protocol convention #257 already treats
+ * as authoritative on the HTTP status line. Screens without numerals need
+ * the separate nonce-sibling corroboration below.
  *
  * Both conditions are required so this only fires on documents that are
  * simultaneously (a) declaring themselves to be exactly that status and
@@ -59,10 +60,7 @@ const ABSENT_DOCUMENT_HEADING_TEXT = /^(404|410)$/;
  * is too weak: a heading of just "404" on a long real document (an article
  * about HTTP status codes, a hotel room number) would misfire on (a) alone;
  * a short real empty state ("Access Denied", "Sign in to vote") would
- * misfire on (b) alone. A caller with additional context -- e.g. that the
- * same rendered template, modulo the requested slug, recurs across more
- * than one discovered route -- can corroborate this further before excluding
- * a route on its strength alone.
+ * misfire on (b) alone.
  */
 export function isAbsentDocumentRender( html: string ): boolean {
 	const $ = readDocument( html );
@@ -76,6 +74,57 @@ export function isAbsentDocumentRender( html: string ): boolean {
 		if ( ABSENT_DOCUMENT_HEADING_TEXT.test( text ) ) hasAbsentDocumentHeading = true;
 	} );
 	return hasAbsentDocumentHeading;
+}
+
+/** Content-only signature: landmarks are shared chrome, not route evidence.
+ * Ignore machinery and the requested slug, but retain media/control identity so
+ * equally short pages with different non-text content do not become matches. */
+export function absentDocumentSignature( html: string, url: string ): string | undefined {
+	// Private parse: this removes chrome, so it must not mutate a shared readDocument() tree.
+	const $ = cheerio.load( html );
+	$( 'script, style, noscript, template, header, footer, nav, [role="banner"], [role="navigation"], [role="contentinfo"]' ).remove();
+	const main = $( 'main, [role="main"]' ).first();
+	const content = main.length ? main : $( 'body' );
+	let text = content.text().replace( /\s+/g, ' ' ).trim();
+	if ( ! text || text.length > ABSENT_DOCUMENT_MAX_BODY_TEXT_LENGTH ) return undefined;
+	const slug = new URL( url ).pathname.replace( /\/$/, '' ).split( '/' ).pop() ?? '';
+	let decoded = slug;
+	try { decoded = decodeURIComponent( slug ); } catch { /* Keep malformed escapes literal. */ }
+	for ( const value of new Set( [ slug, decoded ] ) ) {
+		if ( value ) text = text.split( value ).join( '' );
+	}
+	const media = content.find( CONTENT_BEARING_ELEMENTS ).map( ( _, element ) => {
+		const node = $( element );
+		return [ element.tagName, node.attr( 'src' ), node.attr( 'alt' ), node.attr( 'type' ), node.attr( 'name' ) ].join( ':' );
+	} ).get();
+	return JSON.stringify( [ text.replace( /\s+/g, ' ' ).trim(), media ] );
+}
+
+export interface AbsentSiblingRender { status: number; html: string }
+
+/** One render per parent, including failed/HTTP-404 probes. Store the promise
+ * before awaiting it so concurrent children cannot duplicate the probe. */
+export class AbsentDocumentProbes {
+	private readonly parents = new Map< string, Promise< string | undefined > >();
+
+	async matches( url: string, html: string, render: ( url: string ) => Promise< AbsentSiblingRender | undefined > ): Promise< boolean > {
+		const signature = absentDocumentSignature( html, url );
+		if ( ! signature ) return false;
+		const route = new URL( url );
+		route.search = '';
+		route.hash = '';
+		route.pathname = route.pathname.replace( /\/$/, '' ).replace( /[^/]*$/, '' );
+		const parent = route.href;
+		let probe = this.parents.get( parent );
+		if ( ! probe ) {
+			route.pathname += `liberation-absent-${ randomUUID() }`;
+			const sibling = route.href;
+			probe = render( sibling ).then( result => result && result.status === 200
+				? absentDocumentSignature( result.html, sibling ) : undefined );
+			this.parents.set( parent, probe );
+		}
+		return signature === await probe;
+	}
 }
 
 /** Elements whose presence makes a text-free body a real page: visible or

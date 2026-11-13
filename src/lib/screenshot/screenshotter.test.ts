@@ -65,8 +65,11 @@ interface MockBrowser { newContext: (opts?: unknown) => Promise<MockContext>; cl
 
 function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   let currentUrl = '';
-  const statusOf = (url: string) => typeof gotoStatus === 'function' ? gotoStatus(url) : gotoStatus;
+  // Unknown nonce routes are absent in this transport fixture, rather than
+  // reusing every real route's identical placeholder HTML as a soft-404.
+  const statusOf = (url: string) => url.includes('liberation-absent-') ? 404 : typeof gotoStatus === 'function' ? gotoStatus(url) : gotoStatus;
   return {
+    close: vi.fn().mockResolvedValue(undefined),
     route: vi.fn().mockResolvedValue(undefined),
     unroute: vi.fn().mockResolvedValue(undefined),
     mainFrame: vi.fn().mockReturnValue({}),
@@ -125,7 +128,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
 function makeMockBrowser(pageFactory = () => makeGoodPage()): MockBrowser {
   return {
     newContext: vi.fn().mockImplementation(() => Promise.resolve({
-      newPage: vi.fn().mockResolvedValue(pageFactory()),
+      newPage: vi.fn().mockImplementation(async () => pageFactory()),
       addInitScript: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
     } as MockContext)),

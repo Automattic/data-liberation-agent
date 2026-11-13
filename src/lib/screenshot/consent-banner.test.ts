@@ -232,6 +232,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects m
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click removes the banner, but never banner DOM', async () => {
   const fixture = readFileSync(new URL('./fixtures/consent-banner.html', import.meta.url), 'utf8');
   const server = createServer((req, res) => {
+    if (req.url?.includes('liberation-absent-')) { res.writeHead(404); res.end(); return; }
     res.setHeader('content-type', 'text/html');
     res.end(req.url === '/other' ? fixture.replace('This website uses cookies for analytics.', 'This website uses cookies for preferences.') : fixture);
   });

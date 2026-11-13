@@ -6,7 +6,10 @@ import { captureScreenshots } from './screenshotter.js';
 
 // Two sequential routes, ~5 seconds. The storm starts on a probe, after baseline HTML.
 it( 'contains a page-error storm without discarding baseline artifacts (#1022)', async () => {
-	const server = createServer( ( _, response ) => response.end( '<!doctype html><title>Fixture</title><main>Baseline</main>' ) );
+	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
+		response.end( '<!doctype html><title>Fixture</title><main>Baseline</main>' );
+	} );
 	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 	mkdirSync( '.tmp-test', { recursive: true } );
 	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test/page-errors-' ) );

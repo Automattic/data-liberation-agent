@@ -152,6 +152,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const runtimePath = '/_dm/s/rt/actions/emailshare?text=Share&site=https%3A%2F%2Fexample.test%2Fpost&lang=en';
 		const requests: string[] = [];
 		const source = createServer((request, response) => {
+			if (request.url?.includes('liberation-absent-')) {response.writeHead(404); response.end(); return;}
 			requests.push(request.url!);
 			response.writeHead(200, {'content-type': 'text/html'});
 			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>@media(min-width:600px){nav{display:none}}</style><h1>Neutral page</h1>${request.url === '/' ? `<nav><a href="${runtimePath}">Email</a><a href="/ordinary">Page</a></nav>` : ''}`);
@@ -384,6 +385,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const requests: string[] = [];
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
+			if (request.url?.includes('liberation-absent-')) {response.writeHead(404); response.end(); return;}
 			if (request.url === '/absent') {response.writeHead(404, {'content-type': 'text/html'}); response.end('<h1>404</h1>'); return;}
 			if (request.url === '/api/data') {response.writeHead(200, {'content-type': 'text/plain'}); response.end('not an HTML page'); return;}
 			response.setHeader('content-type', 'text/html');

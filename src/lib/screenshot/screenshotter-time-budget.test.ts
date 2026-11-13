@@ -17,6 +17,7 @@ async function site( slow: Set< string > = new Set() ): Promise< { origin: strin
 	const requested: string[] = [];
 	const server = createServer( ( request, response ) => {
 		requested.push( request.url ?? '' );
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		// A route that never answers: only the budget's deadline ends it.
 		if ( slow.has( request.url ?? '' ) ) return;
 		response.setHeader( 'content-type', 'text/html' );
@@ -187,6 +188,7 @@ it.skipIf( skipBrowser )( 'keeps the completed desktop profile of a route abando
 	const requested: string[] = [];
 	const server = createServer( ( request, response ) => {
 		requested.push( request.url ?? '' );
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		if ( request.url === '/' && /iPhone/.test( request.headers[ 'user-agent' ] ?? '' ) ) return;
 		response.setHeader( 'content-type', 'text/html' );
 		const title = request.url === '/' ? 'Home' : request.url ?? '';

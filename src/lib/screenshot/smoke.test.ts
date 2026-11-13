@@ -120,8 +120,9 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     const server: HttpServer = createServer((req, res) => {
       const path = (req.url || '/').replace(/^\//, '') || 'good.html';
       try {
+        const html = readFileSync(join(pagesDir, path));
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(readFileSync(join(pagesDir, path)));
+        res.end(html);
       } catch {
         res.writeHead(404);
         res.end();

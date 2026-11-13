@@ -34,6 +34,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 	const root = mkdtempSync(join(parent, 'role-navigation-'));
 	let copyRoot: string | undefined;
 	const server = createServer((request, response) => {
+		if (request.url?.includes('liberation-absent-')) {response.writeHead(404); response.end(); return;}
 		if (request.url === '/robots.txt') { response.end(''); return; }
 		if (request.url?.includes('sitemap')) { response.statusCode = 404; response.end(); return; }
 		response.setHeader('Content-Type', 'text/html');

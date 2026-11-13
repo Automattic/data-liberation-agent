@@ -13,6 +13,7 @@ it( 'bounds requests after a persistent cross-route refusal, but preserves healt
 		let resets = 0;
 		let refusedAt = 0;
 		const server = createServer( ( request, response ) => {
+			if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 			requests++;
 			if ( mode !== 'healthy' && requests > 2 && ( mode === 'blocked' || (mode === 'burst' ? resets < 3 : !refusedAt || Date.now() - refusedAt < 4500) ) ) {
 				firstRefusal ||= requests;
