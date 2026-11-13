@@ -10,6 +10,7 @@ import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { cssIdentifier, parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { documentElementTags } from './screenshot/document-integrity.js';
+import { VIEWPORT_CLASS_PREFIX } from './screenshot/viewport-class-states.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 import { CONSENT_OVERLAY_DIALOG_SELECTOR, CONSENT_VENDOR_RE, isConsentOverlayRoot } from './consent-overlay.js';
 import {
@@ -830,9 +831,11 @@ export function identitySubsetMerge(
 		}
 		// A styled token only the desktop rendering carries must not meet the
 		// phone side: a content-hashed rule the two captures share would size
-		// the phone rendering like the desktop one.
+		// the phone rendering like the desktop one. Width-sweep aliases already
+		// have their own presence ranges; renaming them loses learned states.
 		const desktopOnly = deviceKey ? [] : desktopClasses.filter( token =>
-			! mobileClasses.includes( token ) && desktopStyledClasses.has( token ) && ! token.startsWith( RESPONSIVE_PROJECTION_CLASS_PREFIX ) );
+			! mobileClasses.includes( token ) && desktopStyledClasses.has( token ) &&
+			! token.startsWith( RESPONSIVE_PROJECTION_CLASS_PREFIX ) && ! token.startsWith( VIEWPORT_CLASS_PREFIX ) );
 		if ( desktopOnly.length > 0 ) {
 			const renamed = new Map( desktopOnly.map( token => {
 				const alias = desktopClassAliases.get( token ) ?? `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }desktop-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
@@ -2361,6 +2364,14 @@ function resolveResponsivePair(
 	// collapse must not discard one profile's effects or redirect its subjects.
 	if ( /data-blocks-engine-capture-native-effects=/.test( desktopHtml + mobileHtml ) ) {
 		return { role, missingBody: false, dual: true, evidence: { ...dualStructuralEvidence( undefined ), reason: 'Native view timelines retain profile-scoped target and subject identities.' } };
+	}
+	// Root-mutating interactions were captured against each profile's native
+	// class list. A collapsed body with aliased phone flags cannot replay that
+	// contract faithfully; retain the two roots rather than guessing state.
+	const rootClasses = ( html: string ) => ( readDocument( html )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).sort().join( ' ' );
+	if ( rootClasses( desktopHtml ) !== rootClasses( mobileHtml ) &&
+		/(?:data-blocks-engine-capture-dialog-ancestor-state|aria-expanded)=/.test( desktopHtml + mobileHtml ) ) {
+		return { role, missingBody: false, dual: true, evidence: { ...dualStructuralEvidence( undefined ), reason: 'Profile-specific root classes with ancestor-state interactions retain native document roots.' } };
 	}
 	if ( requiresNativeInlineCascade( desktopHtml, mobileHtml ) ) {
 		return {

@@ -72,27 +72,44 @@ describe( 'media query intersection (#1780)', () => {
 } );
 
 it( 'projects viewport-dependent pagination classes through equivalent and correspondence trees', async () => {
-	const page = ( hiddenFrom: number, extra = '' ) => `<html><head><style>.cell{display:inline-block;width:80px;height:40px}.is-hidden{display:none}</style></head><body><h1>Gallery</h1><div class="grid">${ [ 1, 2, 3, 4 ].map( n => `<div class="cell${ n >= hiddenFrom ? ' is-hidden' : '' }"><img src="cover-${ n }.png" alt="Cover ${ n }"></div>` ).join( '' ) }</div>${ extra }<p>More covers</p></body></html>`;
+	const page = ( hiddenFrom: number, extra = '' ) => `<html><head><style>.cell{display:inline-block;width:80px;height:40px}.is-hidden{display:none}</style></head><body><h1>Gallery</h1>${ extra }<div class="grid">${ [ 1, 2, 3, 4 ].map( n => `<div class="cell${ n >= hiddenFrom ? ' is-hidden' : '' }"><img src="cover-${ n }.png" alt="Cover ${ n }"></div>` ).join( '' ) }</div><p>More covers</p></body></html>`;
 	const browser = await chromium.launch();
 	try {
 		const tab = await browser.newPage();
-		// The first pair used to collapse as equivalent and lose phone state;
-		// the second needs correspondence for an extra phone-only element.
-		for ( const extra of [ '', '<aside>Phone pagination</aside>' ] ) {
-			const desktop = page( 3 );
-			const mobile = page( 2, extra );
+		// Exercise anonymous correspondence and stable-id reconciliation, with
+		// and without the sweep's already-projected phone state. A phone-only
+		// sibling before matched content must never duplicate that content.
+		const alias = 'data-blocks-engine-capture-width-class-0123456789ab';
+		for ( const identified of [ false, true ] ) for ( const widthAlias of [ false, true ] ) for ( const extra of [ '', '<aside>Phone pagination</aside>', '<button class="menu-toggle">Menu</button>' ] ) {
+			const aliasCss = `<style>@media(max-width:767px){.cell:is(.is-hidden,.${ alias }){display:none}}</style>`;
+			const identify = ( html: string ) => identified ? html.replace( '<body>', '<body><main id="gallery">' ).replace( '</body>', '</main></body>' ) : html;
+			const desktop = identify( widthAlias ? page( 3 ).replace( 'class="cell"><img src="cover-2', `class="cell ${ alias }"><img src="cover-2` ).replace( '</head>', `${ aliasCss }</head>` ) : page( 3 ) );
+			const mobile = identify( widthAlias ? page( 2, extra ).replace( '</head>', `${ aliasCss }</head>` ) : page( 2, extra ) );
 			expect( documentsDiffer( desktop, mobile ) ).toBe( true );
 			const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
 			expect( assembly.evidence?.variants ).toBe( 1 );
+			const $ = cheerio.load( assembly.html );
+			expect( $( '.grid' ) ).toHaveLength( 1 );
+			expect( $( '.cell' ) ).toHaveLength( 4 );
+			expect( $( '.grid,p' ).toArray().some( node => ( $( node ).attr( 'class' ) ?? '' ).includes( 'responsive-class-' ) ) ).toBe( false );
+			if ( widthAlias ) expect( $( `.cell.${ alias }` ) ).toHaveLength( 1 );
 			for ( const [ width, visible ] of [ [ 1440, [ 'Cover 1', 'Cover 2' ] ], [ 390, [ 'Cover 1' ] ] ] as const ) {
 				await tab.setViewportSize( { width, height: 800 } );
 				await tab.setContent( assembly.html );
 				expect( await tab.$$eval( 'img', images => images.filter( image => image.getClientRects().length > 0 ).map( image => image.alt ) ), `${ extra }: ${ width }px` ).toEqual( visible );
+				if ( extra ) expect( await tab.locator( 'button,aside' ).isVisible() ).toBe( width === 390 );
 			}
 		}
 	} finally {
 		await browser.close();
 	}
+} );
+
+it( 'retains native roots for profile-specific root classes with disclosure state', () => {
+	const desktop = '<html><head></head><body class="wide"><h1>Gallery</h1><button aria-expanded="false">Menu</button></body></html>';
+	const mobile = desktop.replace( 'class="wide"', 'class="phone"' ).replace( '</h1>', '</h1><aside>Phone navigation</aside>' );
+	const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+	expect( assembly.evidence ).toMatchObject( { variants: 2, outcome: 'dual-structural' } );
 } );
 
 describe( 'blockPreludes', () => {

@@ -414,7 +414,13 @@ export function correspondenceMerge(
 			while ( i < dKids.length && desktopToMobile.has( dKids[ i ] ) ) i++;
 			while ( j < mKids.length && mobileToDesktop.has( mKids[ j ] ) ) j++;
 			if ( i >= dKids.length ) {
-				for ( ; j < mKids.length; j++ ) mobileOnlyInsertions.push( { parent: pd, element: mKids[ j ] } );
+				for ( ; j < mKids.length; j++ ) {
+					// The tail can still contain seeded matches after a phone-only
+					// sibling. They keep their identity, never become inserted islands.
+					if ( mobileToDesktop.has( mKids[ j ] ) ) continue;
+					if ( mobileWraps.has( mKids[ j ] ) ) { declined = true; return; }
+					mobileOnlyInsertions.push( { parent: pd, element: mKids[ j ] } );
+				}
 				return;
 			}
 			if ( j >= mKids.length ) return; // remaining desktop children are one-sided; the classification pass marks them
@@ -609,7 +615,8 @@ export function correspondenceMerge(
 			projected = true;
 		}
 		const desktopClasses = ( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-		const mobileClasses = ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+		// Insertion markers are assembly-owned visibility, not source state.
+		const mobileClasses = ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => Boolean( token ) && token !== RESPONSIVE_MOBILE_ONLY_CLASS && token !== RESPONSIVE_DESKTOP_ONLY_CLASS );
 		const missing = mobileClasses.filter( ( token ) => ! desktopClasses.includes( token ) );
 		if ( missing.length > 0 ) {
 			d.attr( 'class', [ ...desktopClasses, ...missing.map( aliasClass ) ].join( ' ' ) );
