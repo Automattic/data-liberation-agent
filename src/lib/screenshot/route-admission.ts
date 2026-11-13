@@ -3,14 +3,6 @@ import { availableRuntimeMemory } from './runtime-memory.js';
 
 export type RouteKind = 'reference' | 'plain';
 
-/**
- * The working set a route reserves before any route has calibrated memory
- * admission. Reference routes (the entrypoint with its fresh reference pages,
- * every profile) peaked at 0.9 GiB on wordpress.org and 1.8 GiB on a Wix source
- * with three profiles; a small runtime still admits one route at a time.
- */
-export const UNCALIBRATED_ROUTE_RESERVE_BYTES = 2 * 1024 ** 3;
-
 /** The memory this process group may use: its cgroup limit, or the machine's when it has none. */
 export function runtimeMemoryLimit(): number {
 	const constrained = process.constrainedMemory();
@@ -62,12 +54,10 @@ export function createRouteAdmission( {
 		}
 		return available;
 	};
-	// The working set to reserve for a route. Before reference calibration
-	// every route reserves a conservative prior (or more, once a larger share
-	// was observed), so a host with room for several such routes does not run
-	// the first one alone, while a small runtime still admits one at a time.
-	const routeEstimate = ( kind: RouteKind ): number => {
-		if ( ! calibrated.reference ) return Math.max( UNCALIBRATED_ROUTE_RESERVE_BYTES, routeWorkingSet.reference, routeWorkingSet.plain );
+	// The working set to reserve for a route, or undefined before reference
+	// calibration.
+	const routeEstimate = ( kind: RouteKind ): number | undefined => {
+		if ( ! calibrated.reference ) return undefined;
 		return kind === 'plain' && calibrated.plain ? routeWorkingSet.plain : routeWorkingSet.reference;
 	};
 	// Reserve one observed per-route working set of its kind for every
@@ -83,21 +73,26 @@ export function createRouteAdmission( {
 			return true;
 		}
 		let reserved = routeEstimate( kind );
-		for ( const runningKind of kinds ) reserved += routeEstimate( runningKind );
-		const admitted = available >= reserved;
-		if ( ! admitted && ! calibrated.reference && completed > 0 && ! reportedUncalibratedAdmission ) {
+		for ( const runningKind of kinds ) {
+			const estimate = routeEstimate( runningKind );
+			reserved = reserved === undefined || estimate === undefined ? undefined : reserved + estimate;
+		}
+		if ( reserved === undefined && completed > 0 && ! reportedUncalibratedAdmission ) {
 			reportedUncalibratedAdmission = true;
 			const message = '[memory-admission] limited to one route: reference memory calibration unavailable (no fresh non-absent, non-alias capture completed yet)';
 			report( message );
 			process.stderr.write( `${ message }\n` );
 		}
-		return admitted;
+		return reserved !== undefined && available >= reserved;
 	};
-	// A second concurrent profile of a running route needs another route-sized
-	// share beyond every running route's reservation.
+	// A route's built-in profiles run concurrently only once admission has a
+	// calibrated estimate and the memory now available covers every running
+	// route's reservation plus one more route-sized share for the second profile.
 	const roomForParallelProfiles = ( kind: RouteKind ): boolean => {
-		const reserved = activeRoutes.reference * routeEstimate( 'reference' ) + activeRoutes.plain * routeEstimate( 'plain' );
-		return sampleMemory() >= reserved + routeEstimate( kind );
+		const available = sampleMemory();
+		const reference = routeEstimate( 'reference' ), plain = routeEstimate( 'plain' ), extra = routeEstimate( kind );
+		if ( reference === undefined || plain === undefined || extra === undefined ) return false;
+		return available >= activeRoutes.reference * reference + activeRoutes.plain * plain + extra;
 	};
 
 	return {
