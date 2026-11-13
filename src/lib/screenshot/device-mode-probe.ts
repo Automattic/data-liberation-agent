@@ -1,4 +1,4 @@
-import { categorizeSourceContext, getSourceResponse, sourceDocumentHtml } from '../browser-kit/source-traffic.js';
+import { attributeSourceDevice, categorizeSourceContext, getSourceResponse, sourceDocumentHtml } from '../browser-kit/source-traffic.js';
 import { createSourceContext } from '../browser-kit/index.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 import { navigateSourceDocument, isNavigationTimeout } from '../source-navigation.js';
@@ -243,6 +243,8 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 			if ( args.publicUrlsOnly ) assertPublicHttpUrl( args.url );
 			const documents = await Promise.all( ( [ 'desktop', 'mobile' ] as const ).map( async identity => {
 				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone, { governors: args.governors, sourceUrl: args.url } );
+				attributeSourceDevice(context, identity === 'desktop' ? 'desktop' : 'mobile');
+				categorizeSourceContext(context, 'device-check');
 				contexts.push( context );
 				const headers = args.identityHeaders?.[ identity ];
 				if ( ! headers ) return undefined;

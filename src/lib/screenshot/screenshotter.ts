@@ -60,6 +60,7 @@ import { type ScrollStatesReport } from './scroll-state-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
+import { attributeSourcePhase, attributeSourceReplay } from '../browser-kit/source-traffic.js';
 import { createPhaseBudget } from './phase-budget.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
@@ -989,7 +990,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				const replay = resourceStore.getReplayableResponse(
 					request.url(),
 					request.resourceType(),
-					requestHeaders
+					requestHeaders,
+					outcome => { if (request.resourceType() !== 'document') attributeSourceReplay(page.context(), request, outcome); }
 				);
 				if ( replay ) {
 					await route.fulfill( {
@@ -999,7 +1001,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					} );
 					return;
 				}
-			}
+			} else if (request.resourceType() !== 'document') attributeSourceReplay(page.context(), request, 'miss:uncacheable');
 			await route.fallback();
 		} );
 	}
@@ -2588,7 +2590,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				let errorGuard: ReturnType< typeof guardPageErrors > | undefined;
 				// A stalled route names the step it entered last (#817) through the
 				// per-route deadline's abandonment reason; `route-phases` times the rest.
-				const phases = createPhaseLedger( Date.now, ( phase ) => routeDeadlinesNote( url, viewport.id, phase ) );
+				const phases = createPhaseLedger( Date.now, ( phase ) => {
+					routeDeadlinesNote( url, viewport.id, phase );
+					if (context) attributeSourcePhase(context, phase);
+				} );
 				const profileDiagnostics: ProfileDiagnostic[] = [];
 				phases.enter( 'context' );
 				try {

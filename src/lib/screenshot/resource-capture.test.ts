@@ -368,7 +368,9 @@ describe( 'CapturedResourceStore', () => {
 		expect( script ).toBeDefined();
 		expect( readFileSync( image!.path, 'utf8' ) ).toBe( '/image.jpg' );
 		expect( readFileSync( script!.path, 'utf8' ) ).toBe( '/script.js' );
-		expect( store.getReplayableResponse( 'https://example.com/image.jpg', 'image', { accept: 'image/png' } ) ).toBeUndefined();
+		const report = vi.fn();
+		expect( store.getReplayableResponse( 'https://example.com/image.jpg', 'image', { accept: 'image/png' }, report ) ).toBeUndefined();
+		expect(report).toHaveBeenCalledWith('miss:vary_mismatch');
 		expect( store.getReplayableResponse( 'https://example.com/image.jpg', 'image' ) ).toBeUndefined();
 		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'dark' } ) ).toBeDefined();
 		expect( store.getReplayableResponse( 'https://example.com/custom.css', 'stylesheet', { 'x-theme': 'light' } ) ).toBeUndefined();
@@ -432,7 +434,16 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( replay!.path, 'utf8' ) ).toBe(
 			'https://example.com/assets/app.js'
 		);
+		const outcomes: string[] = [];
+		const report = (outcome: string) => outcomes.push(outcome);
+		store.getReplayableResponse('https://example.com/assets/app.js', 'script', {}, report);
+		store.getReplayableResponse('https://example.com/api/data', 'fetch', {}, report);
+		store.getReplayableResponse('https://example.com/not-seen.css', 'stylesheet', {}, report);
+		store.getReplayableResponse('https://example.com/styles/private.css', 'stylesheet', {}, report);
+		expect(outcomes).toEqual(['hit', 'miss:type_not_replayable', 'miss:no_entry', 'miss:uncacheable']);
 		vi.setSystemTime( new Date( '2026-08-29T01:00:01Z' ) );
+		store.getReplayableResponse('https://example.com/assets/app.js', 'script', {}, report);
+		expect(outcomes.at(-1)).toBe('miss:stale');
 		expect(
 			store.getReplayableResponse( 'https://example.com/assets/app.js', 'script' )
 		).toBeUndefined();

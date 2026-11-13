@@ -388,7 +388,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 		if ( bytes >= limits.maxTotalBytes ) return { reason: 'byte_budget' };
 		let response;
 		try {
-			( { response } = await governor.run( () => request( url ), { signal: deadline.signal, onThrottle: () => throttleEvents++ } ) );
+			( { response } = await governor.run( () => request( url ), { signal: deadline.signal, onThrottle: () => throttleEvents++, attribution: { phase: 'template-groups', url } } ) );
 		} catch ( error ) {
 			if ( deadline.signal.aborted ) return { reason: 'time_budget' };
 			return { reason: error instanceof BodyTooLargeError ? 'too_large' : 'fetch_failed' };

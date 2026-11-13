@@ -1,15 +1,41 @@
 import type { APIResponse, BrowserContext, Page, Request, Route } from 'playwright';
 import { isSourceTransportThrottle } from '../source-request-governor.js';
-import type { SourceRequestCategory, SourceRequestGovernors } from '../source-request-governor.js';
+import type { SourceRequestAttribution, SourceReplayOutcome, SourceRequestCategory, SourceRequestGovernors } from '../source-request-governor.js';
 
-const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string; category?: SourceRequestCategory; inFlight: Set<Request> }>();
+const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string; category?: SourceRequestCategory; phase?: string; device?: string; inFlight: Set<Request> }>();
 
 /** Device checks precede capture. Keep a bounded response handoff for this capture. */
 const documents = new WeakMap<SourceRequestGovernors, Map<string, { url: string; status: number; headers: Record<string, string>; body: Buffer }>>();
 
 export function categorizeSourceContext(context: BrowserContext, category: SourceRequestCategory): void {
   const state = traffic.get(context);
-  if (state) state.category = category;
+  if (state) { state.category = category; state.phase = category; }
+}
+
+const pagePhases = new WeakMap<Page, string>();
+const replayOutcomes = new WeakMap<Request, SourceReplayOutcome>();
+
+export function attributeSourcePhase(target: BrowserContext | Page, phase: string): void {
+  if ('context' in target) pagePhases.set(target as Page, phase);
+  else { const state = traffic.get(target); if (state) state.phase = phase; }
+}
+
+export function attributeSourceDevice(context: BrowserContext, device: string): void {
+  const state = traffic.get(context);
+  if (state) state.device = device;
+}
+
+function attribution(context: BrowserContext, request?: Request): SourceRequestAttribution {
+  const state = traffic.get(context);
+  let phase = state?.phase;
+  try { if (request) phase = pagePhases.get(request.frame().page()) ?? phase; } catch { /* No page for service workers. */ }
+  return { phase, device: state?.device, outcome: request && replayOutcomes.get(request) || 'not_routed', url: request?.url() };
+}
+
+/** Misses are counted by the normal source ledger; hits never reach the source. */
+export function attributeSourceReplay(context: BrowserContext, request: Request, outcome: SourceReplayOutcome): void {
+  replayOutcomes.set(request, outcome);
+  if (outcome === 'hit') sourceGovernorFor(context, request.url())?.attributeRequest(attribution(context, request));
 }
 
 async function documentIdentity(context: BrowserContext, url: string, headers: Record<string, string>): Promise<string> {
@@ -45,7 +71,7 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     if (entry.status === 429 || entry.status === 503) {
       entry.throttled = true;
       recordInterruptedLoad(response.request());
-      entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after'], undefined, entry.routeUrl, entry.refusalAdmission, entry.category);
+      entry.governor.observeBrowserOutcome(entry.status, response.headers()['retry-after'], undefined, entry.routeUrl, entry.refusalAdmission, entry.category, entry.attribution);
     } else entry.governor.observeSourceResponse(entry.status, entry.category);
   });
   const finish = (request: Request, failed: boolean) => {
@@ -55,7 +81,7 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
     inFlight.delete(request);
     if (failed && !entry.throttled && isSourceTransportThrottle(new Error(request.failure()?.errorText ?? ''))) recordInterruptedLoad(request);
     if (!entry.throttled) entry.governor.observeBrowserOutcome(failed ? undefined : entry.status, undefined,
-      failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl, entry.refusalAdmission, entry.category);
+      failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl, entry.refusalAdmission, entry.category, entry.attribution);
     if (entry.acquired) entry.governor.release();
   };
   // A closing context emits no outcome for requests still in flight: return
@@ -100,6 +126,7 @@ const nativeRequests = new WeakMap<Request, {
   routeUrl?: string;
   status?: number;
   throttled?: boolean;
+  attribution: SourceRequestAttribution;
 }>();
 
 /** Preserve native streaming, multiplexing and range requests, even during recovery. */
@@ -107,6 +134,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   const request = route.request();
   const governor = sourceGovernorFor(context, request.url());
   if (!governor) return route.continue(options);
+  const requestAttribution = attribution(context, request);
   await governor.admitSourceRequest();
   const acquired = governor.isBrowserThrottled;
   if (acquired) {
@@ -117,7 +145,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
     finally { context.off('close', close); }
   }
   traffic.get(context)?.inFlight.add(request);
-  nativeRequests.set(request, { governor, acquired, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
+  nativeRequests.set(request, { governor, acquired, attribution: requestAttribution, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
   catch (error) {
     traffic.get(context)?.inFlight.delete(request);
@@ -162,9 +190,10 @@ export async function getSourceResponse(context: BrowserContext, url: string, op
  * throttled governor must not queue a document past its navigation budget.
  * The task receives the budget left after admission.
  */
-async function governedResponse(context: BrowserContext, url: string, task: (timeout: number | undefined) => Promise<APIResponse>, maxAttempts: number, routeUrl: string | undefined = url, category: SourceRequestCategory = traffic.get(context)?.category ?? 'document', timeout?: number): Promise<APIResponse> {
+async function governedResponse(context: BrowserContext, url: string, task: (timeout: number | undefined) => Promise<APIResponse>, maxAttempts: number, routeUrl: string | undefined = url, category: SourceRequestCategory = traffic.get(context)?.category ?? 'document', timeout?: number, request?: Request): Promise<APIResponse> {
   const governor = sourceGovernorFor(context, url);
   if (!governor) return task(timeout);
+  const requestAttribution = { ...attribution(context, request), url };
   const bounded = timeout !== undefined && timeout > 0;
   const deadline = bounded ? Date.now() + timeout : undefined;
   const signal = bounded ? AbortSignal.timeout(timeout) : undefined;
@@ -174,7 +203,7 @@ async function governedResponse(context: BrowserContext, url: string, task: (tim
     const headers = new Headers(response.headersArray().map(({ name, value }): [string, string] => [name, value]));
     if ((status === 429 || status === 503) && attempt < maxAttempts) await response.dispose();
     return { status, headers, response };
-  }, { browser: true, maxAttempts, routeUrl, category, signal });
+  }, { browser: true, maxAttempts, routeUrl, category, signal, attribution: requestAttribution });
   return result.response.response;
 }
 
@@ -183,5 +212,5 @@ export async function fetchSourceRoute(route: Route, options: NonNullable<Parame
   const state = traffic.get(context);
   const url = options.url ?? route.request().url();
   if (!state || new URL(url).origin !== state.origin) return route.fetch(options);
-  return governedResponse(context, url, timeout => route.fetch({ ...options, timeout, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), route.request().resourceType() === 'document' ? state.category ?? 'document' : 'subresource', options.timeout);
+  return governedResponse(context, url, timeout => route.fetch({ ...options, timeout, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), route.request().resourceType() === 'document' ? state.category ?? 'document' : 'subresource', options.timeout, route.request());
 }

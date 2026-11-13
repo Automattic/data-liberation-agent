@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { CapturedResourceStore } from './resource-capture.js';
 import { createSourceContext } from '../browser-kit/source-identity.js';
+import { attributeSourceDevice, attributeSourcePhase, attributeSourceReplay } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors } from '../source-request-governor.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
@@ -49,12 +50,16 @@ it.skipIf(skipBrowser)('replays immutable prefetches across routes and identitie
         try {
           const page = await context.newPage();
           store.observe(page);
+          attributeSourceDevice(context, mobile ? 'mobile' : 'desktop');
+          attributeSourcePhase(page, routeIndex === 0 ? 'navigate' : 'baseline');
           await page.route('**/*', async route => {
             const request = route.request();
             types.set(new URL(request.url()).pathname, request.resourceType());
             const headers = request.headers();
             const replay = request.method() === 'GET' && !headers.range && !headers.authorization
-              ? store.getReplayableResponse(request.url(), request.resourceType(), headers) : undefined;
+              ? store.getReplayableResponse(request.url(), request.resourceType(), headers, outcome => {
+                if (request.resourceType() !== 'document') attributeSourceReplay(context, request, outcome);
+              }) : undefined;
             if (replay) await route.fulfill({ path: replay.path, contentType: replay.contentType, headers: replay.headers });
             else await route.fallback();
           });
@@ -70,6 +75,29 @@ it.skipIf(skipBrowser)('replays immutable prefetches across routes and identitie
         } finally { await context.close(); }
       }
     }
+    // A governed context with no replay handler still contributes to the same ledger.
+    const unrouted = await createSourceContext(browser, { userAgent: 'Mozilla/5.0 Chrome/130.0.0.0' }, { governors, sourceUrl: origin });
+    try {
+      attributeSourcePhase(unrouted, 'template-groups');
+      const page = await unrouted.newPage();
+      await page.goto(`${origin}/not-routed.css`);
+      await page.waitForLoadState('networkidle');
+      await page.addStyleTag({ url: `${origin}/not-routed.css` });
+      await page.waitForLoadState('networkidle');
+    } finally { await unrouted.close(); }
+    const attribution = governors.attribution();
+    const totals = attribution.origins[0].totals;
+    console.info('fixture attribution', totals);
+    expect(totals['desktop/template-groups not_routed']).toBeGreaterThanOrEqual(2);
+    expect(totals['desktop/navigate miss:no_entry']).toBeGreaterThan(0);
+    expect(totals['mobile/navigate hit']).toBeGreaterThan(0);
+    expect(totals['desktop/baseline hit']).toBeGreaterThan(0);
+    expect(totals['mobile/baseline hit']).toBeGreaterThan(0);
+    expect(totals['desktop/baseline miss:uncacheable']).toBeGreaterThan(0);
+    expect(totals['desktop/navigate not_routed']).toBe(1); // document
+    const repeated = attribution.repeatedUrls.find(entry => entry.url === `${origin}/cdn/theme.css`)!;
+    expect(repeated.count).toBe(6);
+    expect(repeated.phases).toEqual({ 'desktop/navigate': 1, 'mobile/navigate': 1, 'desktop/baseline': 2, 'mobile/baseline': 2 });
     expect(types.get(prefetches[0])).toBe('other');
     console.info('fixture origin hits', Object.fromEntries(hits));
     expect(prefetches.map(url => hits.get(url))).toEqual(prefetches.map(() => 1));

@@ -1,5 +1,5 @@
 import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
-import { continueSourceRoute, fetchSourceRoute, governSourceContext, sourceGovernorFor } from './source-traffic.js';
+import { attributeSourceDevice, continueSourceRoute, fetchSourceRoute, governSourceContext, sourceGovernorFor } from './source-traffic.js';
 import { SourceBlockedClientError, isSourceTransportThrottle, type SourceRequestGovernors } from '../source-request-governor.js';
 import { installProbeIntrinsics } from './probe-intrinsics.js';
 
@@ -126,7 +126,10 @@ export async function createSourceContext(browser: Browser, options: BrowserCont
   try {
     const governors = traffic?.governors;
     const sourceUrl = traffic?.sourceUrl ?? options.baseURL;
-    if (governors && sourceUrl) governSourceContext(context, governors, sourceUrl);
+    if (governors && sourceUrl) {
+      governSourceContext(context, governors, sourceUrl);
+      attributeSourceDevice(context, options.isMobile ? 'mobile' : 'desktop');
+    }
     await installProbeIntrinsics(context);
     await installSourceIdentity(context, options);
     return context;
