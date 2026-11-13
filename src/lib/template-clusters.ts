@@ -466,18 +466,19 @@ export function deriveMemberDocument( input: {
 		}
 	}
 	// Resolve every anchor in the processed document before any slot applies:
-	// an attribute slot may rewrite an anchor's own id. The resolved node must
+	// an attribute slot may rewrite an anchor's own id. Content slots must also
 	// carry the representative's server text; a runtime that rewrote it makes
-	// the transplant unsafe, so the member escalates.
+	// the transplant unsafe. Attribute slots only need the element resolved.
 	let subtreeSlots = 0;
 	let unobservedSlots = 0;
 	const mapped: Array< { slot: Slot; anchor: SlotAnchor; node: Element } > = [];
 	for ( const { slot, anchor } of located ) {
-		const node = resolveAnchor( processedBody, anchor, candidate => candidate.name === slot.repNode.name && anchorText( candidate ) === anchorText( slot.repNode ) );
+		const matchesText = ( candidate: Element ): boolean => slot.kind === 'attribute' || anchorText( candidate ) === anchorText( slot.repNode );
+		const node = resolveAnchor( processedBody, anchor, candidate => candidate.name === slot.repNode.name && matchesText( candidate ) );
 		if ( ! node || node.name !== slot.repNode.name ) {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has no matching anchor in the representative's captured document` } };
 		}
-		if ( anchorText( node ) !== anchorText( slot.repNode ) ) {
+		if ( ! matchesText( node ) ) {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } carries different text in the representative's captured document than in its server document` } };
 		}
 		if ( slot.kind === 'subtree' || slot.kind === 'element' ) {
