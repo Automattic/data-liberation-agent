@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { readDocument, releaseDocument } from './parsed-documents.js';
 
 /**
  * Site builders serve their own logo as the favicon when the owner never set
@@ -59,7 +60,7 @@ export function isPlatformDefaultIconLink( rel: string | undefined, href: string
 export function withoutPlatformDefaultIcons( html: string, documentUrl: string ): string {
 	const lower = html.toLowerCase();
 	if ( ! PLATFORM_DEFAULT_ICONS.some( icon => icon.hosts.some( host => lower.includes( host ) ) ) ) return html;
-	const $ = cheerio.load( html );
+	const $ = readDocument( html );
 	let base = documentUrl;
 	try { base = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? documentUrl, documentUrl ).href; }
 	catch { /* Malformed base: retain the document URL. */ }
@@ -73,6 +74,7 @@ export function withoutPlatformDefaultIcons( html: string, documentUrl: string )
 	const comments = $.root().find( '*' ).addBack().contents().filter( ( _index, node ) =>
 		node.type === 'comment' && /<link\b/i.test( node.data ) && isDefaultIcon( node.data ) );
 	if ( ! links.length && ! comments.length ) return html;
+	releaseDocument( html, $ );
 	links.remove();
 	comments.remove();
 	return $.html();

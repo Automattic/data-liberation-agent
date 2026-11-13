@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 import * as cheerio from 'cheerio';
+import { readDocument } from './parsed-documents.js';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
@@ -274,8 +275,8 @@ function mobileBodyClassGatesDesktopCss(
  * responsive reconciliation would need to relocate those declarations.
  */
 function requiresNativeInlineCascade( desktopHtml: string, mobileHtml: string ): boolean {
-	const desktop = cheerio.load( desktopHtml );
-	const mobile = cheerio.load( mobileHtml );
+	const desktop = readDocument( desktopHtml );
+	const mobile = readDocument( mobileHtml );
 	const inlineStyles = ( $: cheerio.CheerioAPI ) => $( 'body [style],body[style]' )
 		.map( ( _, element ) => $( element ).attr( 'style' ) ?? '' ).get();
 	if ( JSON.stringify( inlineStyles( desktop ) ) === JSON.stringify( inlineStyles( mobile ) ) ) return false;

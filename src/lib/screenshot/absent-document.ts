@@ -1,4 +1,4 @@
-import * as cheerio from 'cheerio';
+import { readDocument } from '../parsed-documents.js';
 
 export function isAbsentDocumentStatus( status: number ): boolean {
 	return status === 404 || status === 410;
@@ -65,7 +65,7 @@ const ABSENT_DOCUMENT_HEADING_TEXT = /^(404|410)$/;
  * a route on its strength alone.
  */
 export function isAbsentDocumentRender( html: string ): boolean {
-	const $ = cheerio.load( html );
+	const $ = readDocument( html );
 	const bodyText = $( 'body' ).text().replace( /\s+/g, ' ' ).trim();
 	if ( bodyText.length === 0 || bodyText.length > ABSENT_DOCUMENT_MAX_BODY_TEXT_LENGTH ) {
 		return false;
@@ -93,7 +93,7 @@ const CONTENT_BEARING_ELEMENTS =
  * no vendor markup, no English phrasing, just "is there anything here".
  */
 export function isEmptyDocumentRender( html: string ): boolean {
-	const $ = cheerio.load( html );
+	const $ = readDocument( html );
 	const body = $( 'body' ).clone();
 	body.find( 'script, style, noscript, template' ).remove();
 	if ( body.text().trim().length > 0 ) return false;

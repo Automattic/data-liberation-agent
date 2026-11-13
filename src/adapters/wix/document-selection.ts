@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { readDocument } from '../../lib/parsed-documents.js';
 import type { DeviceDocumentSelection } from '../../lib/document-selection.js';
 import type { CaptureProfile } from '../../lib/screenshot/capture-profiles.js';
 
@@ -25,13 +26,13 @@ export const WIX_CLASSIC_DEVICE_SELECTION: DeviceDocumentSelection = {
 };
 
 export function wixDocumentSelection( documents: Readonly<Record<string, string>> ): DeviceDocumentSelection | undefined {
-	const desktop = cheerio.load( documents.desktop ?? '' );
-	const mobile = cheerio.load( documents.mobile ?? '' );
+	const desktop = readDocument( documents.desktop ?? '' );
+	const mobile = readDocument( documents.mobile ?? '' );
 	if ( desktop( 'meta#wixDesktopViewport[name="viewport"]' ).length !== 1 ||
 		mobile( 'meta#wixMobileViewport[name="viewport"]' ).length !== 1 ||
 		! mobile( 'body' ).hasClass( 'device-mobile-optimized' ) || mobile( 'body' ).hasClass( 'responsive' ) ) return undefined;
 	if ( documents.tablet ) {
-		const tablet = cheerio.load( documents.tablet );
+		const tablet = readDocument( documents.tablet );
 		if ( tablet( 'meta#wixTabletViewport[name="viewport"]' ).length !== 1 || ! tablet( 'body' ).hasClass( 'device-mobile-non-optimized' ) ) throw new Error( 'Wix tablet document identity is unproven' );
 	}
 	return WIX_CLASSIC_DEVICE_SELECTION;
