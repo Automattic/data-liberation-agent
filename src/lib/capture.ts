@@ -1229,10 +1229,27 @@ export async function deriveTemplateClusterMembers( input: {
 				record.verification = verificationRecord;
 				if ( ! verified ) clusterFailed = true;
 
-				for ( const url of members ) {
+				// Member documents are governed HTTP work; keep the governor's
+				// concurrency busy ahead of the CPU-bound derivation.
+				const phases: Record< string, number > = {};
+				let phaseStart = 0;
+				const lap = ( name: string ) => { phases[ name ] = ( phases[ name ] ?? 0 ) + Date.now() - phaseStart; phaseStart = Date.now(); };
+				const memberDocuments = new Map< string, Promise< string | undefined > >();
+				const memberDocument = ( index: number ): Promise< string | undefined > | undefined => {
+					for ( let ahead = index; ahead < Math.min( members.length, index + input.governors.forOrigin( input.sourceUrl ).concurrency ); ahead++ ) {
+						const next = members[ ahead ]!;
+						const nextFeed = feedEntries.get( normalizedUrl( next ) );
+						if ( ! memberDocuments.has( next ) ) memberDocuments.set( next, feedVerified && repFeed && nextFeed ? Promise.resolve( feedMemberDocument( repServerHtml, repFeed, nextFeed ) ).catch( () => undefined ) : Promise.resolve( undefined ) );
+					}
+					return memberDocuments.get( members[ index ]! );
+				};
+				for ( const [ index, url ] of members.entries() ) {
 					if ( clusterFailed || derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
 					const memberFeed = feedEntries.get( normalizedUrl( url ) );
-					const feedHtml = feedVerified && repFeed && memberFeed ? await feedMemberDocument( repServerHtml, repFeed, memberFeed ) : undefined;
+					phaseStart = Date.now();
+					const feedHtml = await memberDocument( index );
+					memberDocuments.delete( url );
+					lap( 'memberDocument' );
 					const response = feedHtml ? { status: 200, body: Buffer.from( feedHtml ) } : await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ).catch( ( error: unknown ) => {
 						record.unavailable.push( { url, reason: String( ( error as Error ).message ?? error ) } );
 						unavailableCount++;
@@ -1253,6 +1270,7 @@ export async function deriveTemplateClusterMembers( input: {
 						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, ...slotSelector } )
 						: undefined;
 					const derivation = mobileDerivation && ! mobileDerivation.ok ? mobileDerivation : desktopDerivation;
+					lap( 'derive' );
 					if ( ! derivation.ok ) {
 						// A gate failure is an escalation, not a loss: the member falls
 						// back to HTTP acquisition after derivation, or keeps its
@@ -1276,6 +1294,7 @@ export async function deriveTemplateClusterMembers( input: {
 						memberMobilePath = `screenshots/derived/${ slugify( url ) }.mobile.html`;
 						writeFileSync( resolve( input.outputDir, memberMobilePath ), mobileDerivation.html );
 					}
+					lap( 'dependencies' );
 					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
 					const repProfile = repEntry.profiles?.desktop;
@@ -1290,6 +1309,7 @@ export async function deriveTemplateClusterMembers( input: {
 						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
 					} as import('./screenshot/manifest-queue.js').ManifestEntry );
+					lap( 'manifest' );
 					diagnostics.push( {
 						code: ROUTE_TEMPLATE_DERIVED, url, reason: `derived from cluster ${ group.id } representative ${ group.representative }`,
 						unit: 'route', severity: 'warning',
@@ -1310,6 +1330,7 @@ export async function deriveTemplateClusterMembers( input: {
 				}
 				await store.flush();
 				const queued = enqueueMedia( input.outputDir, deferredMedia, input.resolveImageOriginal );
+				if ( Object.keys( phases ).length ) process.stderr.write( `[timing] template-cluster ${ group.id } members ${ JSON.stringify( phases ) }\n` );
 				deferredMedia.clear();
 				process.stderr.write( `[template-clusters] cluster ${ group.id }: ${ queued } media queued, derived ${ record.derived.length }, escalated ${ record.escalated.length }, ${ Date.now() - startedAt }ms\n` );
 			} catch ( error ) {
