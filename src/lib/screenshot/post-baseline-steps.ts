@@ -96,7 +96,7 @@ export const postBaselineSteps: CaptureStep<PostBaselineContext>[] = [
 		c.diagnostics?.push( ...c.state.excluded.diagnostics );
 	} } ),
 	step( { id: 'collections', bound: 'probe-budget', guard: 'read-only', run: async c => {
-		const captured = await captureCollections( c.page, c.state.excluded.skip, diagnostic => c.diagnostics?.push( diagnostic ) );
+		const captured = await captureCollections( c.page, c.state.excluded.skip, diagnostic => c.diagnostics?.push( diagnostic ), c.resourceStore );
 		for ( const collection of captured ) {
 			( c.entry.blockLosses ??= [] ).push( { code: 'interaction_unreplayable', reason: collection.reason ?? 'Collection control replay unsupported', unit: 'block', profile: c.viewport.id } );
 			for ( const member of collection.collection?.members ?? [] ) await c.resourceStore.captureDomDependencies( member.html, c.navigationUrl );

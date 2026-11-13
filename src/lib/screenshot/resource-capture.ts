@@ -1,3 +1,4 @@
+import { attributeSourceReplay } from '../browser-kit/source-traffic.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,9 +11,9 @@ import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetCandidates } from '../srcset.js';
 import { portableSrcsetRepresentative } from '../portable-media-limits.js';
 import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
-import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
+import { MAX_REDIRECTS, assertPublicHttpUrl, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
-import type { Page, Request, Response } from 'playwright';
+import type { BrowserContext, Page, Request, Response } from 'playwright';
 
 const CAPTURED_RESOURCE_TYPES = new Set( [
 	'script',
@@ -1286,4 +1287,41 @@ export class CapturedResourceStore {
 		}
 		return { version: 1, resources: {}, failures: [] };
 	}
+}
+
+/** Install before blocking routes: later page routes must get first refusal. */
+export async function installResourceReplay( target: Page | BrowserContext, store: CapturedResourceStore, publicUrlsOnly = false ): Promise< void > {
+	const context = 'context' in target ? target.context() : target;
+	await target.route( '**/*', async ( route ) => {
+		const request = route.request();
+		try {
+			if ( publicUrlsOnly ) assertPublicHttpUrl( request.url() );
+		} catch {
+			await route.abort( 'blockedbyclient' );
+			return;
+		}
+		const requestHeaders = request.headers();
+		// No cookie guard: a cookie-dependent response must declare `Vary: Cookie`, which the store already refuses.
+		if (
+			request.method() === 'GET' &&
+			! requestHeaders.range &&
+			! requestHeaders.authorization
+		) {
+			const replay = store.getReplayableResponse(
+				request.url(),
+				request.resourceType(),
+				requestHeaders,
+				outcome => { if (request.resourceType() !== 'document') attributeSourceReplay(context, request, outcome); }
+			);
+			if ( replay ) {
+				await route.fulfill( {
+					path: replay.path,
+					contentType: replay.contentType,
+					headers: replay.headers,
+				} );
+				return;
+			}
+		} else if (request.resourceType() !== 'document') attributeSourceReplay(context, request, 'miss:uncacheable');
+		await route.fallback();
+	} );
 }

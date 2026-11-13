@@ -1,3 +1,4 @@
+import { installResourceReplay, type CapturedResourceStore } from './resource-capture.js';
 import { attributeSourceDevice, categorizeSourceContext, getSourceResponse, sourceDocumentHtml } from '../browser-kit/source-traffic.js';
 import { createSourceContext } from '../browser-kit/index.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
@@ -85,6 +86,7 @@ export async function probePhoneOnlyChrome(
 }
 
 export interface DeviceComparisonArgs {
+	resourceStore?: CapturedResourceStore;
 	governors?: ScreenshotOpts['governors'];
 	browser: Browser;
 	url: string;
@@ -130,6 +132,7 @@ export async function loadForComparison( args: DeviceComparisonArgs, options: Br
 	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url } );
 	contexts.push( context );
 	categorizeSourceContext(context, 'device-check');
+	if ( args.resourceStore ) await installResourceReplay( context, args.resourceStore, args.publicUrlsOnly );
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
 	await args.initScript?.(page);

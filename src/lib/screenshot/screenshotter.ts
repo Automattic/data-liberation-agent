@@ -15,7 +15,6 @@ import { forgetSourceDocument, getSourceResponse, sourceGovernorFor } from '../b
 import { SourceRequestGovernors, isSourceTransportThrottle } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
-import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 import { sameHttpSite } from './same-origin.js';
 import { externalNavigationMessage, navigateSourceDocument, inspectSourceDocument, storeExternalBoundary, boundaryIdentity, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_SCRIPT_NAVIGATION, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
@@ -60,7 +59,7 @@ import { type ScrollStatesReport } from './scroll-state-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
-import { attributeSourcePhase, attributeSourceReplay } from '../browser-kit/source-traffic.js';
+import { attributeSourcePhase } from '../browser-kit/source-traffic.js';
 import { createPhaseBudget } from './phase-budget.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
@@ -72,7 +71,7 @@ import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactP
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
-import { CapturedResourceStore } from './resource-capture.js';
+import { CapturedResourceStore, installResourceReplay } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -971,40 +970,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 		return [ ...( settled?.reasons ?? [] ), ...sourceCrashes ];
 	};
-	if ( publicUrlsOnly && page.route ) {
-		await page.route( '**/*', async ( route ) => {
-			const request = route.request();
-			try {
-				assertPublicHttpUrl( request.url() );
-			} catch {
-				await route.abort( 'blockedbyclient' );
-				return;
-			}
-			const requestHeaders = request.headers();
-			// No cookie guard: a cookie-dependent response must declare `Vary: Cookie`, which the store already refuses.
-			if (
-				request.method() === 'GET' &&
-				! requestHeaders.range &&
-				! requestHeaders.authorization
-			) {
-				const replay = resourceStore.getReplayableResponse(
-					request.url(),
-					request.resourceType(),
-					requestHeaders,
-					outcome => { if (request.resourceType() !== 'document') attributeSourceReplay(page.context(), request, outcome); }
-				);
-				if ( replay ) {
-					await route.fulfill( {
-						path: replay.path,
-						contentType: replay.contentType,
-						headers: replay.headers,
-					} );
-					return;
-				}
-			} else if (request.resourceType() !== 'document') attributeSourceReplay(page.context(), request, 'miss:uncacheable');
-			await route.fallback();
-		} );
-	}
+	if ( publicUrlsOnly ) await installResourceReplay( page, resourceStore, true );
 
 	let serverHtml: string | undefined;
 	let navigationUrl = url;
@@ -2243,6 +2209,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } );
 		const requested = opts.deviceMode ?? 'dual';
 		const comparison = {
+			resourceStore,
 			deviceEvidence: new RouteDeviceEvidence(),
 			identityHeaders: {},
 			desktop: profileContextOptions( desktopProfile, sessionContext ),
