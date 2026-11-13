@@ -17,6 +17,7 @@ export interface OptionDescriptor {
   max?: number;
   default?: unknown | (() => unknown);
   invert?: boolean;
+  negatable?: boolean;
   repeat?: boolean;
   mcpKey?: string;
   surfaces?: ('cli' | 'mcp')[];
@@ -33,7 +34,7 @@ export const options: Record<Verb, OptionDescriptor[]> = {
     { key: 'trustedOrigins', flag: 'trusted-origin', type: 'strings', repeat: true, default: () => [], help: 'Vouch for an exact origin you own (scheme, host, port), e.g. http://localhost:8884. Repeatable. Other internal hosts and redirects stay blocked.' },
     { key: 'routeLimit', flag: 'route-limit', type: 'count', min: 1, help: 'Capture at most n routes, homepage plus an even spread; browser default: 17-minute time window; http default all. Omitted routes are diagnosed, not failed.' },
     { key: 'routeSelection', flag: 'route-selection', type: 'string', enum: ['discovery-order', 'template-coverage'], metavar: 'mode', help: 'discovery-order (default), or template-coverage: fetch server HTML and keep one route per template group first; writes template-groups.json.' },
-    boolean('templateClusters', 'template-clusters', 'Opt-in template-clustered capture: verify a member before deriving others from HTTP content. Derived routes are reported as losses and uncompared scope.'),
+    { key: 'templateClusters', flag: 'template-clusters', type: 'boolean', negatable: true, help: 'Template-clustered capture: on by default for browser acquisition with structured-content adapters. Verify a member before deriving others from HTTP content; derived routes are reported as losses and uncompared scope.' },
     integer('runtimeRouteLimit', 'runtime-route-limit', 'Observe HTTP runtime regions on at most n routes (0-50; default 0).', 0, 50),
     { key: 'outputBase', mcpKey: 'outputDir', flag: 'output', type: 'string', default: resolveOutputBase, metavar: 'dir', help: 'Output base directory (default: ~/data-liberation or DLA_OUTPUT_DIR).' },
     boolean('resume', 'resume', 'Reuse artifacts already on disk instead of recapturing.'),
@@ -135,6 +136,9 @@ function distance(a: string, b: string): number {
 export function parseCliOptions(verb: Verb, args: string[]): { positional?: string; options: Record<string, unknown> } {
   const descriptors = options[verb].filter(d => visible(d, 'cli'));
   const config: ParseArgsConfig['options'] = Object.fromEntries(descriptors.map(d => [d.flag, { type: d.type === 'boolean' ? 'boolean' : 'string', multiple: d.repeat ?? false }]));
+  for (const d of descriptors) {
+    if (d.type === 'boolean' && d.negatable) config[`no-${d.flag}`] = { type: 'boolean' };
+  }
   let parsed;
   try {
     parsed = parseArgs({ args, options: config, strict: true, allowPositionals: true });
@@ -153,6 +157,11 @@ export function parseCliOptions(verb: Verb, args: string[]): { positional?: stri
       if (i >= 0) { normalized.splice(i, 2, `${normalized[i]}=${normalized[i + 1]}`); return parseCliOptions(verb, normalized); }
     }
     throw error;
+  }
+  for (const d of descriptors) {
+    if (d.type !== 'boolean' || !d.negatable || !parsed.values[`no-${d.flag}`]) continue;
+    if (parsed.values[d.flag] !== undefined) throw new Error(`Cannot use both --${d.flag} and --no-${d.flag}`);
+    parsed.values[d.flag] = false;
   }
   if (parsed.positionals.length > 1) throw new Error(`Unexpected argument: ${parsed.positionals[1]}`);
   return { positional: parsed.positionals[0], options: convert(verb, parsed.values, 'cli') };
@@ -187,7 +196,7 @@ ${(Object.keys(options) as Verb[]).map(verb => `
   ${verb[0].toUpperCase() + verb.slice(1)} options:
 ${options[verb].filter(d => visible(d, 'cli')).map(d => {
   const label = d.type === 'boolean' ? '' : ` <${d.metavar ?? (d.type === 'count' ? 'n|all' : d.type === 'integer' ? 'n' : d.type === 'duration' ? 'duration' : d.type === 'json' ? 'json' : 'value')}>`;
-  return `    --${d.flag}${label}  ${d.help}`;
+  return `    --${d.flag}${d.type === 'boolean' && d.negatable ? ` / --no-${d.flag}` : ''}${label}  ${d.help}`;
 }).join('\n')}`).join('\n')}
 
   Environment:

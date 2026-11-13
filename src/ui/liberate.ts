@@ -24,7 +24,7 @@ export interface LiberateOptions {
 	routeLimit?: CaptureOptions['routeLimit'];
 	/** How the route budget picks routes; see `CaptureOptions.routeSelection`. Default: 'discovery-order'. */
 	routeSelection?: CaptureOptions['routeSelection'];
-	/** Opt-in template-clustered capture, #784 phase 1; see `CaptureOptions.templateClusters`. */
+	/** Template-clustered capture; defaults on for structured-content adapters. See `CaptureOptions.templateClusters`. */
 	templateClusters?: boolean;
 	url: string;
 	/** Base directory; the site lands in a per-source subdirectory. */
