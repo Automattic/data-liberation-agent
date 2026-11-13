@@ -2931,7 +2931,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// restart-every-N invariant while keeping each worker on a stable browser.
 		let segStart = 0;
 		while (segStart < urls.length && ! routeBudget?.closed()) {
-			const waveEnd = urls.length;
+			// Cluster-aware discovery must run between admission batches, not only
+			// after the inventory has already spent the browser window.
+			const waveEnd = opts.groupLinkedRoutes
+				? Math.min( urls.length, segStart + ( segStart === 0 ? 1 : concurrency ) )
+				: urls.length;
 			while ( segStart < waveEnd && ! routeBudget?.closed() ) {
 				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
@@ -3030,7 +3034,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				}
 			}
 			if (frontier) {
-				for (const url of candidates) enqueue(url, candidateDepths.get(url)!);
+				if ( opts.groupLinkedRoutes && candidates.size && ! routeBudget?.closed() ) await opts.groupLinkedRoutes( [ ...candidates ] );
+				const rankedCandidates = opts.groupLinkedRoutes && opts.prioritizePendingRoutes ? opts.prioritizePendingRoutes( [ ...candidates ] ) : candidates;
+				for (const url of rankedCandidates) enqueue(url, candidateDepths.get(url)!);
+				if ( opts.groupLinkedRoutes && opts.prioritizePendingRoutes ) {
+					urls.splice( segStart, urls.length - segStart, ...opts.prioritizePendingRoutes( urls.slice( segStart ) ) );
+				}
 			} else if ( candidates.size ) {
 				let context: BrowserContext | undefined;
 				try {

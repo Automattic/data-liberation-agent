@@ -271,7 +271,7 @@ export interface TemplateGroup {
 	size: number;
 	/** Every member, in inventory order. */
 	members: string[];
-	/** Members discovered by the capture frontier and fingerprinted after capture. */
+	/** Members discovered by the capture frontier. */
 	frontierMembers?: string[];
 }
 
@@ -446,17 +446,23 @@ function groupTemplates( sourceUrl: string, urls: string[], outcomes: RouteOutco
 }
 
 /**
- * Extend only existing multi-member groups. The late pass retains its own
- * coverage/limits evidence; main coverage adds only the newly joined members.
+ * Extend existing multi-member groups; browser-window callers may also admit
+ * new groups (including singletons that can gain a verifier in a later wave).
+ * The late pass retains its own coverage/limits evidence.
  * Capture contains any stage-level failure, as it does initial grouping.
  */
-export async function extendTemplateGroups( report: TemplateGroupsReport, input: TemplateGroupingInput ): Promise< void > {
+export async function extendTemplateGroups( report: TemplateGroupsReport, input: TemplateGroupingInput, admitNewGroups = false ): Promise< void > {
 	const frontier = await buildTemplateGroups( input );
-	const byKey = new Map( report.groups.filter( group => group.size >= 2 ).map( group => [ group.key, group ] ) );
+	const byKey = new Map( report.groups.filter( group => admitNewGroups || group.size >= 2 ).map( group => [ group.key, group ] ) );
 	const grouped = new Set( report.groups.flatMap( group => group.members ) );
 	let joined = 0;
 	for ( const lateGroup of frontier.groups ) {
-		const group = byKey.get( lateGroup.key );
+		let group = byKey.get( lateGroup.key );
+		if ( ! group && admitNewGroups ) {
+			group = { ...lateGroup, id: `t${ report.groups.length + 1 }`, members: [], size: 0 };
+			report.groups.push( group );
+			byKey.set( group.key, group );
+		}
 		if ( ! group ) continue;
 		for ( const url of lateGroup.members ) {
 			if ( grouped.has( url ) ) continue;
@@ -474,6 +480,8 @@ export async function extendTemplateGroups( report: TemplateGroupsReport, input:
 	report.coverage.routes += joined - resolved.length;
 	report.coverage.fingerprinted += joined;
 	report.coverage.unfingerprinted -= resolved.length;
+	report.coverage.groups = report.groups.length;
+	report.coverage.singletons = report.groups.filter( group => group.size === 1 ).length;
 }
 
 /**
