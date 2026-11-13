@@ -4326,7 +4326,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
 		expect( html ).toContain( '<style media="(min-width:768px)">main{color:blue}</style>' );
 		expect( html ).toContain(
-			'<style media="(min-width:768px) and (print)">main{margin:0}</style>'
+			'<style media="print and (min-width:768px)">main{margin:0}</style>'
 		);
 		expect( html ).toContain( '<style media="(max-width:767px)">main{color:red}</style>' );
 		expect( html ).toContain( 'name="viewport"' );
