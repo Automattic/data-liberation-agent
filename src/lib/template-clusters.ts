@@ -311,9 +311,10 @@ function slotRuntimeObservation( element: Element ): { runtime: boolean; unobser
  * outside skipped and capture-owned elements, whitespace removed so that
  * serialization differences between server and captured HTML do not count.
  */
-function anchorText( element: Element ): string {
+function anchorText( element: Element, ignored: ReadonlySet< Element > = new Set() ): string {
 	const parts: string[] = [];
 	const walk = ( node: Element ): void => {
+		if ( ignored.has( node ) ) return;
 		for ( const child of node.children ) {
 			if ( child.type === 'text' ) parts.push( ( child as unknown as { data: string } ).data );
 			else if ( isElement( child ) && slotChildren( node ).includes( child ) ) walk( child );
@@ -321,6 +322,28 @@ function anchorText( element: Element ): string {
 	};
 	walk( element );
 	return parts.join( '' ).replace( /\s+/g, '' );
+}
+
+/**
+ * Map server-empty subtrees to their captured counterparts. Only their text is
+ * ignored by the anchor gate: the hydrated DOM stays intact for verification.
+ * Use the same identity/descriptor resolution as slots, not a text-prefix test
+ * that could hide a rewrite of authored content elsewhere in the anchor.
+ */
+function hydratedMounts( serverBody: Element, processedBody: Element, counts: Map< string, number > ): Set< Element > {
+	const mounts = new Set< Element >();
+	const walk = ( node: Element ): void => {
+		if ( anchorText( node ) === '' ) {
+			const matches = ( candidate: Element ) => describes( candidate, node.name, classTokens( node ) );
+			const counterpart = resolveAnchor( processedBody, slotAnchor( node, serverBody, counts ), matches );
+			if ( counterpart && matches( counterpart ) ) mounts.add( counterpart );
+		}
+		// Descendants are mapped too: a slot nested inside a mount needs its
+		// own counterpart ignored.
+		for ( const child of slotChildren( node ) ) walk( child );
+	};
+	walk( serverBody );
+	return mounts;
 }
 
 /** Apply one slot to its anchor in the processed document; false when the anchor cannot take it. */
@@ -450,6 +473,7 @@ export function deriveMemberDocument( input: {
 		return { ok: true, html: input.repProcessedHtml, stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
 	}
 	const anchorCounts = anchorValueCounts( repBody );
+	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
 	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
 	// Content gate before any mapping: one runtime-only slot escalates the member.
 	for ( const { slot, anchor } of located ) {
@@ -473,7 +497,7 @@ export function deriveMemberDocument( input: {
 	let unobservedSlots = 0;
 	const mapped: Array< { slot: Slot; anchor: SlotAnchor; node: Element } > = [];
 	for ( const { slot, anchor } of located ) {
-		const matchesText = ( candidate: Element ): boolean => slot.kind === 'attribute' || anchorText( candidate ) === anchorText( slot.repNode );
+		const matchesText = ( candidate: Element ): boolean => slot.kind === 'attribute' || anchorText( candidate, mounts ) === anchorText( slot.repNode );
 		const node = resolveAnchor( processedBody, anchor, candidate => candidate.name === slot.repNode.name && matchesText( candidate ) );
 		if ( ! node || node.name !== slot.repNode.name ) {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has no matching anchor in the representative's captured document` } };
