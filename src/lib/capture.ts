@@ -1188,7 +1188,7 @@ export async function deriveTemplateClusterMembers( input: {
 				const repProcessedMobileHtml = repMobilePath && pathWithin( input.outputDir, repMobilePath ) && existsSync( repMobilePath ) ? readFileSync( repMobilePath, 'utf8' ) : undefined;
 				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
 				let derivedInCluster = record.derived.length;
-				let clusterFailed = false;
+				let clusterFailure = { code: 'cluster_verification_missing', reason: 'cluster has no captured verification member' };
 
 				// Verification first (#784 §4.2): one member derived, then compared
 				// with its real capture, offline, on the six acceptance checks. A
@@ -1231,17 +1231,27 @@ export async function deriveTemplateClusterMembers( input: {
 						verified = comparison.equal;
 						if ( ! comparison.equal ) {
 							const failing = Object.entries( comparison.checks ).filter( ( [ , ok ] ) => ! ok ).map( ( [ name ] ) => name ).join( ', ' );
+							clusterFailure = { code: 'cluster_verification_mismatch', reason: `derived-vs-real comparison failed (${ failing })` };
 	diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification failed its derived-vs-real comparison (${ failing })`, metrics: { clusterSize: group.size } } );
 						}
 					} else {
 						verificationRecord = { url: verificationUrl, captured: true };
+						clusterFailure = derivation.gate;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification member failed the ${ derivation.gate.code } gate`, metrics: { clusterSize: group.size } } );
 					}
 				}
 				// The verdict is final here: record it so a failed cluster is visible
 				// in the receipt, not only in the diagnostics.
 				record.verification = verificationRecord;
-				if ( ! verified ) clusterFailed = true;
+				if ( ! verified ) {
+					for ( const url of members ) {
+						const { code: gate, reason } = clusterFailure;
+						record.escalated.push( { url, gate, reason } );
+						escalations.push( { url, gate, reason, slug: feedEntries.get( normalizedUrl( url ) )?.slug, clusterSize: group.size, record } );
+						escalated++;
+					}
+					continue;
+				}
 
 				// Member documents are governed HTTP work; keep the governor's
 				// concurrency busy ahead of the CPU-bound derivation.
@@ -1258,7 +1268,7 @@ export async function deriveTemplateClusterMembers( input: {
 					return memberDocuments.get( members[ index ]! );
 				};
 				for ( const [ index, url ] of members.entries() ) {
-					if ( clusterFailed || derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
+					if ( derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
 					const memberFeed = feedEntries.get( normalizedUrl( url ) );
 					phaseStart = Date.now();
 					// A prefetched governed request can time out while derivation holds
