@@ -533,7 +533,7 @@ async function runCaptureWebsite(
 	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
-		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
+		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
 	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
 	// Explicit count budgets select before capture observes the entry DOM. Only
@@ -689,6 +689,7 @@ async function runCaptureWebsite(
 				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
 				governors: sourceGovernors,
 				styleNormalization: adapter.templateStyleNormalization,
+				templateIdentity: adapter.templateIdentity,
 				maxTotalBytes: options.maxTotalBytes,
 				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
 				acquisition: adapter.acquisition,
@@ -915,7 +916,7 @@ export async function fetchEntryDocument( url: string, governors: SourceRequestG
 	} );
 }
 
-export async function groupInventoryTemplates( input: { contentEntries?: import('../platform/types.js').StructuredContentEntry[]; sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
+export async function groupInventoryTemplates( input: { contentEntries?: import('../platform/types.js').StructuredContentEntry[]; sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; templateIdentity?: import('./template-groups.js').TemplateIdentity; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {
 	report?: import('./template-groups.js').TemplateGroupsReport;
 	representatives?: string[];
 	diagnostic?: { code: string; url: string; reason: string };
@@ -932,14 +933,14 @@ export async function groupInventoryTemplates( input: { contentEntries?: import(
 		const sampleCount = Math.min( FEED_COHORT_SAMPLES, feedUrls.length );
 		const postSamples = [ ...new Set( Array.from( { length: sampleCount }, ( _, i ) => feedUrls[ Math.floor( i * ( feedUrls.length - 1 ) / Math.max( 1, sampleCount - 1 ) ) ]! ) ) ];
 		const groupingUrls = input.urls.filter( url => ! feedPosts.has( url ) || postSamples.includes( url ) );
-		let report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: groupingUrls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
+		let report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: groupingUrls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, templateIdentity: input.templateIdentity, ...( input.styleNormalization ? { styleNormalization: input.styleNormalization } : {} ) } );
 		const sampled = ( group: { members: string[] } ) => postSamples.filter( url => group.members.includes( url ) ).length;
 		const cohort = postSamples.length >= 2
 			? report.groups.filter( group => sampled( group ) >= 2 ).sort( ( a, b ) => sampled( b ) - sampled( a ) )[ 0 ]
 			: undefined;
 		if ( feedPosts.size ) process.stderr.write( `[template-groups] structured content: ${ feedUrls.length } of ${ feedPosts.size } entries in inventory, ${ postSamples.length } samples, cohort ${ cohort ? `${ cohort.id } (${ sampled( cohort ) } samples)` : 'not found; grouping every route' }\n` );
 		if ( ! cohort && groupingUrls.length !== input.urls.length ) {
-			report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, styleNormalization: input.styleNormalization } );
+			report = await buildTemplateGroups( { sourceUrl: input.sourceUrl, urls: input.urls, routeScope: input.routeScope, limits: await templateGroupingLimits( input ), governors: input.governors, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
 		}
 		if ( cohort ) {
 			cohort.representative = postSamples.find( url => cohort.members.includes( url ) )!;
@@ -1047,6 +1048,7 @@ export async function deriveTemplateClusterMembers( input: {
 	frontierUrls: string[];
 	governors: SourceRequestGovernors;
 	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
+	templateIdentity?: import('./template-groups.js').TemplateIdentity;
 	/** The run byte budget (`--max-total-bytes`); each cluster's resource store spends it like the capture's. */
 	maxTotalBytes?: number;
 	/** Platform original-rendition resolver for queued member media (#1701). */
@@ -1136,7 +1138,7 @@ export async function deriveTemplateClusterMembers( input: {
 		if ( round < maxRounds && candidates.length && Date.now() < lateDeadline && input.report.groups.some( group => group.size >= 2 ) ) {
 			await extendTemplateGroups( input.report, {
 				sourceUrl: input.sourceUrl, urls: candidates, routeScope: input.routeScope,
-				styleNormalization: input.styleNormalization, governors: input.governors,
+				templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, governors: input.governors,
 				// Never use the whole-inventory override for extra frontier work:
 				// retain the default route/byte caps and the capture-budget fraction.
 				limits: { ...lateLimits, maxRoutes: candidates.length, maxTotalBytes: perRoundBytes, timeBudgetMs: Math.max( 1, lateDeadline - Date.now() ) },
@@ -1202,12 +1204,12 @@ export async function deriveTemplateClusterMembers( input: {
 					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
 					const feedHtml = feedVerified && repFeed && verificationFeed ? await feedMemberDocument( repServerHtml, repFeed, verificationFeed ) : undefined;
 					const memberHtml = feedHtml ?? ( await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ) ).body.toString( 'utf8' );
-					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
+					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
 					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } ).equal ) ) {
 						feedVerified = false;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: 'feed template verification mismatch; using governed page acquisition for this cluster' } );
 						const fallback = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
-						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: fallback.body.toString( 'utf8' ), baseUrl: group.representative, styleNormalization: input.styleNormalization } );
+						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: fallback.body.toString( 'utf8' ), baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
 					}
 					if ( derivation.ok ) {
 						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } );
@@ -1246,9 +1248,9 @@ export async function deriveTemplateClusterMembers( input: {
 					// A synthesized member is the representative's template by
 					// construction: its key is compared outside the content slot.
 					const slotSelector = feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {};
-					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...slotSelector } );
+					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, ...slotSelector } );
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
-						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...slotSelector } )
+						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, ...slotSelector } )
 						: undefined;
 					const derivation = mobileDerivation && ! mobileDerivation.ok ? mobileDerivation : desktopDerivation;
 					if ( ! derivation.ok ) {
