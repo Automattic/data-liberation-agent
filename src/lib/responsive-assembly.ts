@@ -225,7 +225,7 @@ export function documentsDiffer( desktopHtml: string, mobileHtml: string ): bool
 	const desktopBody = documentElement( desktopHtml, 'body' )?.content;
 	const mobileBody = documentElement( mobileHtml, 'body' )?.content;
 	if ( desktopBody === undefined || mobileBody === undefined ) return false;
-	return responsiveBodySignature( desktopBody ) !== responsiveBodySignature( mobileBody );
+	return responsiveBodySignature( desktopBody, desktopHtml + mobileHtml ) !== responsiveBodySignature( mobileBody, desktopHtml + mobileHtml );
 }
 
 /**
@@ -501,7 +501,6 @@ export function identitySubsetMerge(
 	$d( '[class]' ).each( ( _index, node ) =>
 		( $d( node ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) )
 	);
-	let unsafeClassAlias = false;
 	const retainedClassTokens = new Set<string>();
 	const desktopClassAliases = new Map<string, string>();
 	const desktopStyledClasses = new Set( [ ...styleBlocks( desktopHtml ).join( '' ).matchAll( /\.(-?[_a-zA-Z][\w-]*)/g ) ].map( match => match[ 1 ] as string ) );
@@ -512,7 +511,7 @@ export function identitySubsetMerge(
 	const desktopBodyClasses = new Set( bodyClasses( desktopHtml ) );
 	for ( const token of deviceKey ? [] : bodyClasses( mobileHtml ) ) {
 		if ( desktopBodyClasses.has( token ) ) continue;
-		if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
+		if ( desktopClassTokens.has( token ) ) retainedClassTokens.add( token );
 		classAliases.set( token, `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` );
 	}
 	const mobileOnlyIds: string[] = [];
@@ -954,7 +953,6 @@ export function identitySubsetMerge(
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
 	if ( incompatibleEntrance ) return cannotMerge( 'Viewport entrance evidence is invalid or incompatible across device documents' );
-	if ( unsafeClassAlias ) return cannotMerge( 'Class projection would change the authored cascade' );
 	deviceInlineRestores.forEach( restore => restore() );
 	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds, deviceKey, identityOf );
 	if ( divergedComponents === undefined ) return cannotMerge( 'Divergent component anchor identity or placement cannot be preserved' );
@@ -1255,16 +1253,19 @@ function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, strin
 	try {
 		const root = postcss.parse( css );
 		root.walkRules( ( rule ) => {
-			let keepsOriginal = false;
 			const aliased = selectorParser( ( selectors ) => {
 				selectors.walkClasses( ( node ) => {
 					const alias = aliases.get( node.value );
 					if ( ! alias ) return;
-					if ( retained.has( node.value ) ) keepsOriginal = true;
-					node.value = alias;
+					if ( retained.has( node.value ) ) {
+						// Match either spelling at each position, including mixed
+						// selectors such as .state .state. :is keeps specificity.
+						const either = selectorParser().astSync( `:is(.${ cssIdentifier( node.value ) },.${ cssIdentifier( alias ) })` ).first!.first!;
+						node.replaceWith( either.clone() );
+					} else node.value = alias;
 				} );
 			} ).processSync( rule.selector );
-			rule.selector = keepsOriginal ? `${ rule.selector },${ aliased }` : aliased;
+			rule.selector = aliased;
 		} );
 		return root.toString();
 	} catch {
@@ -2372,7 +2373,7 @@ function resolveResponsivePair(
 			},
 		};
 	}
-	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
+	if ( responsiveBodySignature( desktopBody, desktopHtml + mobileHtml ) === responsiveBodySignature( mobileBody, desktopHtml + mobileHtml ) ) {
 		const projection = equivalentInlineProjection( desktopHtml, mobileHtml, switchWidth );
 		return {
 			role,
@@ -2605,7 +2606,11 @@ function scopedStyles(
 	);
 }
 
-function responsiveBodySignature( body: string ): string {
+function responsiveBodySignature( body: string, stylesHtml: string ): string {
+	// A styled state token changes rendering even when the element tree agrees.
+	// Ignore unstyled runtime markers, but send presentation differences through
+	// correspondence so each viewport keeps its captured classes.
+	const styledClasses = new Set( [ ...styleBlocks( stylesHtml ).join( '' ).matchAll( /\.(-?[_a-zA-Z][\w-]*)/g ) ].map( match => match[ 1 ] as string ) );
 	const $ = cheerio.load( `<body>${ body }</body>` );
 	$( 'script,style,noscript,iframe' ).remove();
 	// Consent managers lay out their own chrome per viewport; it is not the page.
@@ -2633,7 +2638,11 @@ function responsiveBodySignature( body: string ): string {
 	$( '*' ).each( ( _index, element ) => {
 		const node = $( element );
 		for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
-			if ( ! STRUCTURAL_SIGNATURE_ATTRIBUTES.has( attribute ) ) node.removeAttr( attribute );
+			if ( attribute === 'class' ) {
+				const tokens = ( node.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => styledClasses.has( token ) ).sort();
+				if ( tokens.length ) node.attr( 'class', tokens.join( ' ' ) );
+				else node.removeAttr( 'class' );
+			} else if ( ! STRUCTURAL_SIGNATURE_ATTRIBUTES.has( attribute ) ) node.removeAttr( attribute );
 		}
 		for ( const attribute of [ 'id', 'name' ] ) {
 			const value = node.attr( attribute );

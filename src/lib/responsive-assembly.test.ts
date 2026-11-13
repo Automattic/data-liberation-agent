@@ -71,6 +71,30 @@ describe( 'media query intersection (#1780)', () => {
 	} );
 } );
 
+it( 'projects viewport-dependent pagination classes through equivalent and correspondence trees', async () => {
+	const page = ( hiddenFrom: number, extra = '' ) => `<html><head><style>.cell{display:inline-block;width:80px;height:40px}.is-hidden{display:none}</style></head><body><h1>Gallery</h1><div class="grid">${ [ 1, 2, 3, 4 ].map( n => `<div class="cell${ n >= hiddenFrom ? ' is-hidden' : '' }"><img src="cover-${ n }.png" alt="Cover ${ n }"></div>` ).join( '' ) }</div>${ extra }<p>More covers</p></body></html>`;
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		// The first pair used to collapse as equivalent and lose phone state;
+		// the second needs correspondence for an extra phone-only element.
+		for ( const extra of [ '', '<aside>Phone pagination</aside>' ] ) {
+			const desktop = page( 3 );
+			const mobile = page( 2, extra );
+			expect( documentsDiffer( desktop, mobile ) ).toBe( true );
+			const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+			expect( assembly.evidence?.variants ).toBe( 1 );
+			for ( const [ width, visible ] of [ [ 1440, [ 'Cover 1', 'Cover 2' ] ], [ 390, [ 'Cover 1' ] ] ] as const ) {
+				await tab.setViewportSize( { width, height: 800 } );
+				await tab.setContent( assembly.html );
+				expect( await tab.$$eval( 'img', images => images.filter( image => image.getClientRects().length > 0 ).map( image => image.alt ) ), `${ extra }: ${ width }px` ).toEqual( visible );
+			}
+		}
+	} finally {
+		await browser.close();
+	}
+} );
+
 describe( 'blockPreludes', () => {
 	it( 'matches the block-prelude regular expression in one linear pass', () => {
 		const samples = [ '', '{', 'a{', ';a{b}c;d{', '@media (x){.a,#b{c:d}}', 'a\n{b{c}}', '}}{{;;', `.a{background:url(data:image/png;base64,${ 'Q'.repeat( 4096 ) })}.b{` ];

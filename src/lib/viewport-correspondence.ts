@@ -472,14 +472,14 @@ export function correspondenceMerge(
 	// meet desktop rules in the merged DOM, so it travels under an alias the
 	// mobile stylesheet is rewritten to.
 	const classAliases = new Map< string, string >();
-	let unsafeClassAlias = false;
+	const retainedClassTokens = new Set< string >();
 	const desktopClassTokens = new Set< string >();
 	$d( '[class]' ).each( ( _index, node ) => {
 		if ( ! isElementNode( node ) ) return;
 		( node.attribs?.class ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) );
 	} );
 	const aliasClass = ( token: string ): string => {
-		if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
+		if ( desktopClassTokens.has( token ) ) retainedClassTokens.add( token );
 		const alias = classAliases.get( token ) ?? `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
 		classAliases.set( token, alias );
 		return alias;
@@ -626,12 +626,11 @@ export function correspondenceMerge(
 	for ( const [ desktopElement, mobileElement ] of desktopToMobile ) {
 		project( $d( desktopElement ), $m( mobileElement ) );
 	}
-	if ( unsafeClassAlias ) return undefined;
 	$d( '[class]' ).each( ( _index, node ) => {
 		const element = $d( node );
 		element.attr(
 			'class',
-			( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => classAliases.get( token ) ?? token ).join( ' ' )
+			( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => retainedClassTokens.has( token ) && element.closest( `.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).length === 0 ? token : classAliases.get( token ) ?? token ).join( ' ' )
 		);
 	} );
 	const css =
@@ -647,6 +646,7 @@ export function correspondenceMerge(
 		projectedElements,
 		css,
 		classAliases,
+		retainedClassTokens,
 		divergedComponents: 0,
 		identityBasis: 'content',
 	};
