@@ -383,8 +383,9 @@ export function deriveMemberDocument( input: {
 	contentSlotSelector?: string;
 	/** The adapter's template normalization, the same one that grouped the cluster. */
 	styleNormalization?: TemplateStyleNormalization;
+	templateIdentity?: import('./template-groups.js').TemplateIdentity;
 } ): MemberDerivation {
-	const keyOf = ( html: string ): string => templateFingerprint( input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html, input.baseUrl, input.styleNormalization ).key;
+	const keyOf = ( html: string ): string => templateFingerprint( input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html, input.baseUrl, input.styleNormalization, input.templateIdentity ).key;
 	const clusterKey = keyOf( input.memberServerHtml );
 	const repKey = keyOf( input.repServerHtml );
 	// The member fetched while the cluster was grouped re-checks its key against

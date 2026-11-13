@@ -112,6 +112,9 @@ export interface TemplateStyleBlock {
  * normalized. Platforms may also normalize resolved script URLs to remove
  * runtime build hashes while preserving distinct template dependencies.
  */
+/** Adapter-declared template identity, used instead of a content-sensitive skeleton. */
+export type TemplateIdentity = (html: string, baseUrl: string) => string | undefined;
+
 export interface TemplateStyleNormalization {
 	/**
 	 * Reduce the page's inline `<style>` blocks (document order) to the text the
@@ -220,10 +223,11 @@ function pageStyleText( styles: readonly TemplateStyleBlock[], normalization?: T
 }
 
 /** Fingerprint one server HTML document. Pure and deterministic. */
-export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization ): TemplateFingerprint {
+export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization, identity?: TemplateIdentity ): TemplateFingerprint {
 	const $ = cheerio.load( html );
 	const body = $( 'body' ).get( 0 );
-	const skeleton = body ? skeletonHash( body, 0 ) : digest( '' );
+	const declaredIdentity = identity?.( html, baseUrl );
+	const skeleton = declaredIdentity ? digest( `adapter:${ declaredIdentity }` ) : body ? skeletonHash( body, 0 ) : digest( '' );
 	const styleText = pageStyleText( styleBlocks( $ ), normalization );
 	const describe = ( selector: string, kind?: string ) => $( selector ).toArray().filter( isElement ).map( element => `${ kind ? `${ kind }:` : '' }${ elementDescriptor( element ) }` );
 	const controls = [
@@ -242,7 +246,7 @@ export function templateFingerprint( html: string, baseUrl: string, normalizatio
 		controls: [ ...new Set( controls ) ].sort(),
 		embeds,
 	};
-	return { key: digest( JSON.stringify( { version: TEMPLATE_FINGERPRINT_VERSION, skeleton, divergence } ) ), skeleton, divergence };
+	return { key: declaredIdentity ? digest( `adapter:${ declaredIdentity }` ) : digest( JSON.stringify( { version: TEMPLATE_FINGERPRINT_VERSION, skeleton, divergence } ) ), skeleton, divergence };
 }
 
 /** Why a route has no fingerprint. */
@@ -317,6 +321,7 @@ export interface TemplateGroupingInput {
 	limits?: Partial< TemplateGroupingLimits >;
 	/** Platform-owned `<style>` aggregation for the divergence fingerprint. */
 	styleNormalization?: TemplateStyleNormalization;
+	templateIdentity?: TemplateIdentity;
 	/**
 	 * The capture's per-origin source request governors, shared with the rest
 	 * of the capture. Default: a governor of this pass alone.
@@ -401,7 +406,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 			} catch {
 				decoder = new TextDecoder( 'utf-8' );
 			}
-			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization ) };
+			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization, input.templateIdentity ) };
 		} catch {
 			return { reason: 'fetch_failed' };
 		}
