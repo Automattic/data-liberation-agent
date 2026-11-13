@@ -754,8 +754,9 @@ export function identitySubsetMerge(
 			let selector: string;
 			if ( id && isIdentityId( id ) ) selector = `#${ id }`;
 			else {
+				// Equal hooks must project equal rules, independent of document order.
 				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
-					.update( path )
+					.update( JSON.stringify( [ switchWidth, desktopStyle, projectedMobileStyle ] ) )
 					.digest( 'hex' )
 					.slice( 0, 12 ) }`;
 				d.addClass( hook );
@@ -1067,8 +1068,9 @@ function equivalentInlineProjection(
 			let selector: string;
 			if ( id && isStableIdentityId( id ) && idCounts.get( id ) === 1 ) selector = `#${ id }`;
 			else {
+				// Equal hooks must project equal rules, independent of document order.
 				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
-					.update( path )
+					.update( JSON.stringify( [ switchWidth, desktopStyle, projectedMobileStyle ] ) )
 					.digest( 'hex' )
 					.slice( 0, 12 ) }`;
 				d.addClass( hook );

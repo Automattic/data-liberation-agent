@@ -7,6 +7,23 @@ import { assembleResponsiveCapture } from './responsive-assembly.js';
 import { correspondenceMerge, RESPONSIVE_MOBILE_ONLY_CLASS } from './viewport-correspondence.js';
 
 describe( 'viewport URL correspondence', () => {
+	it( 'projects shared chrome identically regardless of preceding content without sharing different rules', () => {
+		const page = ( sections: number, ratio: string, phone: boolean ) =>
+			`<html><head></head><body>${ phone ? '<button class="menu-toggle">Menu</button>' : '' }${ Array.from( { length: sections }, ( _, i ) => `<section><h2>Topic ${ i }</h2><p>Body copy ${ i }</p></section>` ).join( '' ) }<div class="wrap"><footer class="site-footer"><img class="logo" src="logo.png" alt="Logo" style="aspect-ratio: ${ ratio }"><p>Copyright Example</p></footer></div></body></html>`;
+		const merge = ( sections: number, ratio = '272.156 / 41.375' ) => {
+			const merged = correspondenceMerge( page( sections, '880 / 133.812', false ), page( sections, ratio, true ), 767 );
+			expect( merged ).toBeDefined();
+			const $ = cheerio.load( merged!.body );
+			return { footer: $.html( $( 'footer' ) ), hook: $( 'footer img' ).attr( 'class' ), css: merged!.css };
+		};
+		const one = merge( 1 );
+		const three = merge( 3 );
+		expect( one.css ).toContain( '272.156' );
+		expect( three.footer ).toBe( one.footer );
+		expect( three.css ).toBe( one.css );
+		expect( merge( 1, '2 / 1' ).hook ).not.toBe( one.hook );
+	} );
+
 	it( 'does not let stable ids collapse different browser-base destinations', () => {
 		const html = '<html><head></head><body><main id="main"><h1>Shared</h1><a id="next" href="next">Next</a></main></body></html>';
 		const desktop = resolveDocumentReferences( html, 'https://source.test/albums/', 'https://source.test/assets/' );

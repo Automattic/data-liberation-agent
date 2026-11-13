@@ -568,20 +568,6 @@ export function correspondenceMerge(
 		if ( ! isStableIdentityId( id ) ) continue;
 		idCounts.set( id, ( idCounts.get( id ) ?? 0 ) + 1 );
 	}
-	// Hook names derive from an element's nearest stable-id ancestor and its
-	// own content, never from document order alone, so chrome repeated on
-	// every route serializes identically and stays recognizable downstream.
-	const identityPath = ( element: Element ): string => {
-		const parts: string[] = [];
-		for ( let current: Element | undefined = element; current && current !== bodyD; current = parentOf( current ) ) {
-			const id = current.attribs?.id ?? '';
-			if ( id && isStableIdentityId( id ) ) return `#${ id }/${ parts.join( '/' ) }`;
-			const parent = parentOf( current );
-			const siblings = parent ? childElements( parent ) : [];
-			parts.unshift( `${ current.tagName }[${ Math.max( 0, siblings.indexOf( current ) ) }]:${ ownText( current ).slice( 0, 64 ) }` );
-		}
-		return `body/${ parts.join( '/' ) }`;
-	};
 	const project = ( d: cheerio.Cheerio< Element >, m: cheerio.Cheerio< Element > ): void => {
 		let projected = false;
 		const desktopStyle = d.attr( 'style' ) ?? '';
@@ -595,8 +581,9 @@ export function correspondenceMerge(
 			let selector: string;
 			if ( id && isStableIdentityId( id ) && idCounts.get( id ) === 1 ) selector = `#${ id }`;
 			else {
+				// Equal hooks must project equal rules, independent of document order.
 				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
-					.update( identityPath( d.get( 0 ) as Element ) )
+					.update( JSON.stringify( [ switchWidth, desktopStyle, projectedMobileStyle ] ) )
 					.digest( 'hex' )
 					.slice( 0, 12 ) }`;
 				d.addClass( hook );
