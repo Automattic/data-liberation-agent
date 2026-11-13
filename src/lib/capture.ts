@@ -1261,7 +1261,9 @@ export async function deriveTemplateClusterMembers( input: {
 					if ( clusterFailed || derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
 					const memberFeed = feedEntries.get( normalizedUrl( url ) );
 					phaseStart = Date.now();
-					const feedHtml = await memberDocument( index );
+					// A prefetched governed request can time out while derivation holds
+					// the event loop; retry it once inline before the raw-page fallback.
+					const feedHtml = await memberDocument( index ) ?? ( feedVerified && repFeed && memberFeed ? await Promise.resolve( feedMemberDocument( repServerHtml, repFeed, memberFeed ) ).catch( () => undefined ) : undefined );
 					memberDocuments.delete( url );
 					lap( 'memberDocument' );
 					const response = feedHtml ? { status: 200, body: Buffer.from( feedHtml ) } : await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ).catch( ( error: unknown ) => {
