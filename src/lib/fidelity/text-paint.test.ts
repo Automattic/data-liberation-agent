@@ -21,7 +21,9 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 					.inset { position:absolute; width:200px; height:30px; clip-path:inset(50%) }
 					.tiny { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%) }
 					.drawer { position:absolute; top:80px; opacity:0; pointer-events:none }
-				</style><nav class="drawer"><a href="/a">Closed drawer link</a></nav><span class="zero">Repeated label</span>${ visible.replace( '<p>Visible descendant</p>', '<div class="zero">Unpainted parent<span style="font-size:16px;line-height:normal">Visible descendant</span></div>' ) }
+					.skip { position:absolute; left:-999px; top:8px }
+					.above { position:absolute; top:-200px }
+				</style><a class="skip" href="#main">Off-canvas skip link</a><span class="above">Above the document</span><nav class="drawer"><a href="/a">Closed drawer link</a></nav><span class="zero">Repeated label</span>${ visible.replace( '<p>Visible descendant</p>', '<div class="zero">Unpainted parent<span style="font-size:16px;line-height:normal">Visible descendant</span></div>' ) }
 				<span class="zero">Extra accessible name</span><span class="legacy">Legacy clip name</span>
 				<span class="inset">Inset clip name</span><span class="tiny">Tiny clip name</span>` );
 				const candidate = await observePage( page, page.url(), width, 0, null, undefined, undefined, true, true );
@@ -31,6 +33,7 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 				expect( keys ).not.toContain( 'Inset clip name' );
 				expect( keys ).not.toContain( 'Legacy clip name' );
 				expect( keys ).not.toContain( 'Closed drawer link' );
+				expect( keys ).not.toContain( 'Off-canvas skip link' );
 				await page.close();
 			}
 		} finally { await browser.close(); }
