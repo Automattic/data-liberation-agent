@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.6] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- cook candidate
+
+### Fixed
+- ignore runtime-filled mounts when anchoring template slots
+- rewrite 7.1 item dates and pagination during derivation
+
 ## [0.35.5] - 2026-11-13
 
 ### Changed
