@@ -135,6 +135,7 @@ export async function loadForComparison( args: DeviceComparisonArgs, options: Br
 	if ( args.resourceStore ) await installResourceReplay( context, args.resourceStore, args.publicUrlsOnly );
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
+	args.resourceStore?.observe( page, { replayOnly: true } );
 	await args.initScript?.(page);
 	// The comparison and shared-chrome probes wait on the same render-affecting
 	// quiet as capture; watch the page's traffic from before its navigation.
@@ -194,6 +195,7 @@ export async function loadForComparison( args: DeviceComparisonArgs, options: Br
 	};
 	const structure = await withEvaluateTimeout( renderedElementStructure( page ), 10_000 );
 	const result = { page, html, target, fetchServerHtml, paths: structure.paths, classTokens: structure.classTokens, bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+	await args.resourceStore?.settle( page );
 	if ( timings ) timings.settle = Math.max( timings.settle, Date.now() - settledAt );
 	return result;
 }
@@ -216,7 +218,10 @@ export function comparisonFailedAlike( desktop: unknown, phone: unknown ): boole
 
 /** Compare the desktop and phone identities of one route, loaded the same way. */
 async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
-	const [ desktopLoad, phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts, timings ), loadForComparison( args, args.phone, 'mobile', mode, contexts, timings ) ] );
+	// Finish warming replay before the sibling starts. Keep both settled results
+	// even on failure: comparisonFailedAlike still needs both identities' errors.
+	const [ desktopLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts, timings ) ] );
+	const [ phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.phone, 'mobile', mode, contexts, timings ) ] );
 	if ( desktopLoad.status === 'rejected' || phoneLoad.status === 'rejected' ) {
 		const reason = ( result: PromiseSettledResult< unknown > ) => result.status === 'rejected' ? String( result.reason instanceof Error ? result.reason.message : result.reason ).replace( /^the (desktop|mobile) /, 'the ' ) : undefined;
 		// failure-class: operational

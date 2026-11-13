@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type BrowserContext } from 'playwright';
 import { expect, it } from 'vitest';
 import { CapturedResourceStore, installResourceReplay } from './resource-capture.js';
 import { captureCollections } from './collection-capture.js';
-import { loadForComparison } from './device-mode-probe.js';
+import { checkRouteDeviceMode, loadForComparison } from './device-mode-probe.js';
 import { createSourceContext } from '../browser-kit/source-identity.js';
 import { attributeSourcePhase } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors } from '../source-request-governor.js';
@@ -62,6 +62,65 @@ it.skipIf(skipBrowser)('replays shared assets on collection and device probes wh
     expect(totals['desktop/device-check hit']).toBe(5);
     expect(totals['desktop/collections not_routed'] ?? 0).toBeLessThanOrEqual(1); // at most the document
     expect(totals['desktop/device-check not_routed'] ?? 0).toBeLessThanOrEqual(2); // at most the documents
+  } finally {
+    await Promise.all(contexts.map(context => context.close()));
+    await browser.close();
+    rmSync(dir, { recursive: true, force: true });
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+}, 30_000);
+
+// About 8 seconds: cold device check followed by capture, plus a no-replay control.
+it.skipIf(skipBrowser)('warms replay during device comparison without changing decisions or exported bytes', async () => {
+  const hits = new Map<string, number>();
+  const server = createServer((req, res) => {
+    const path = req.url!;
+    hits.set(path, (hits.get(path) ?? 0) + 1);
+    res.setHeader('content-type', path === '/' ? 'text/html' : path.endsWith('.css') ? 'text/css' : 'text/javascript');
+    if (path !== '/') res.setHeader('cache-control', 'public, max-age=31536000, immutable');
+    res.end(path === '/' ? '<!doctype html><link rel="stylesheet" href="/shared.css"><script src="/shared.js"></script><main>Same document</main>' :
+      path.endsWith('.css') ? 'main{color:rgb(1,2,3)}' : '/* shared immutable script */');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const dir = mkdtempSync(join(process.cwd(), '.tmp-test', 'cold-device-replay-'));
+  const browser = await chromium.launch({ headless: true });
+  const contexts: BrowserContext[] = [];
+  const exportedBytes = (root: string): Record<string, string> => Object.fromEntries(
+    readdirSync(root, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).map(entry => {
+      const path = join(entry.parentPath, entry.name);
+      return [path.slice(root.length), readFileSync(path).toString('base64')];
+    })
+  );
+  try {
+    const runs = [];
+    for (const replay of [false, true]) {
+      hits.clear();
+      const output = join(dir, replay ? 'replay' : 'control');
+      const store = new CapturedResourceStore(output, origin);
+      const decision = await checkRouteDeviceMode({ browser, url: origin, desktop: {}, phone: {}, publicUrlsOnly: false,
+        resourceStore: replay ? store : undefined });
+      // Device-only responses must not claim export ownership, even temporarily.
+      if (replay) {
+        expect(store.has(`${origin}/shared.css`)).toBe(false);
+        expect(store.has(`${origin}/shared.js`)).toBe(false);
+        expect(existsSync(join(output, 'resources'))).toBe(false);
+      }
+      const context = await createSourceContext(browser, {}, { sourceUrl: origin });
+      contexts.push(context);
+      const page = await context.newPage();
+      store.observe(page);
+      if (replay) await installResourceReplay(page, store);
+      await page.goto(origin);
+      await store.settle(page);
+      await store.flush();
+      for (const asset of ['/shared.css', '/shared.js']) expect(hits.get(asset), asset).toBe(replay ? 1 : 3);
+      runs.push({ decision: { ...decision, checkMs: undefined, checkTimings: undefined }, bytes: exportedBytes(join(output, 'resources')) });
+    }
+    expect(runs[1]).toEqual(runs[0]);
+    expect(runs[1].decision.mode).toBe('reflow-only');
   } finally {
     await Promise.all(contexts.map(context => context.close()));
     await browser.close();

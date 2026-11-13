@@ -970,7 +970,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 		return [ ...( settled?.reasons ?? [] ), ...sourceCrashes ];
 	};
-	if ( publicUrlsOnly ) await installResourceReplay( page, resourceStore, true );
+	await installResourceReplay( page, resourceStore, publicUrlsOnly );
 
 	let serverHtml: string | undefined;
 	let navigationUrl = url;
