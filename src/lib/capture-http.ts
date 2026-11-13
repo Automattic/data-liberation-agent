@@ -31,6 +31,8 @@ export async function captureHttpWebsite( input: {
 	discoveryDiagnostics: RouteDiagnostic[];
 	/** Receipt counts from template grouping, when `routeSelection: 'template-coverage'` ran it. */
 	templateGroups?: Record<string, unknown>;
+	/** Effective template-cluster policy resolved by capture orchestration. */
+	templateClustersDecision?: { enabled: boolean; source: string };
 	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
 	canonicalAliases?: ReadonlyArray< import('./route-aliases.js').CanonicalRouteAlias >;
 	/** The capture's per-origin source request governors, shared with template grouping. */
@@ -65,6 +67,7 @@ export async function captureHttpWebsite( input: {
 	receipt.failures = failures;
 	receipt.orchestration = { mode: 'http', requestedRoutes: urls.length, discoveredRoutes: urls.length + summary.routesOmitted, runtimeRouteLimit: options.http?.runtimeRouteLimit ?? 0, runtime, verification: 'unverified' };
 	if ( input.templateGroups ) receipt.templateGroups = input.templateGroups;
+	if ( input.templateClustersDecision ) receipt.templateClustersDecision = input.templateClustersDecision;
 	writeFileSync( captureReceiptPath, JSON.stringify( receipt, null, 2 ) + '\n' );
 	const diagnosticPath = join( options.outputDir, 'diagnostics.json' );
 	const diagnostic = JSON.parse( readFileSync( diagnosticPath, 'utf8' ) );

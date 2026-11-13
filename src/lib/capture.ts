@@ -210,6 +210,7 @@ export interface CaptureOptions {
 	deviceMode?: import('./screenshot/device-mode.js').DeviceModeRequest;
 	/**
 	 * Template-clustered capture, phase 1 of #784 (browser acquisition only).
+	 * Defaults on when the adapter declares structuredContent; false opts out.
 	 * Implies `routeSelection: 'template-coverage'`, adds one verification
 	 * member per multi-member cluster to the budget, and derives every other
 	 * member of a verified cluster from the representative's captured document
@@ -471,6 +472,12 @@ async function runCaptureWebsite(
 		throw new UnsupportedCapturePlatformError(
 			`No adapter available for platform: ${ detection.platform }`
 		);
+	const templateClusters = options.templateClusters ?? ( options.acquisition !== 'http' && !! adapter.structuredContent );
+	const templateClustersDecision = {
+		enabled: templateClusters,
+		source: options.templateClusters !== undefined ? 'explicit' : templateClusters ? 'adapter-structured-content' : 'default',
+	};
+	if ( options.templateClusters === true && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeScope = githubPagesRouteScope( sourceUrl ) ?? adapter.routeScope?.( sourceUrl );
 	if ( routeScope ) {
 		validateRouteScope( routeScope );
@@ -486,7 +493,7 @@ async function runCaptureWebsite(
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	// Structured content (#1701) only feeds template-cluster derivation.
-	const contentSource = options.templateClusters === true ? adapter.structuredContent : undefined;
+	const contentSource = templateClusters ? adapter.structuredContent : undefined;
 	const structuredContent = contentSource ? await contentSource.enumerate( sourceUrl, { governors: sourceGovernors } ) : undefined;
 	const contentEntries = structuredContent?.entries ?? [];
 	if ( structuredContent ) process.stderr.write( `[timing] structured content ${ adapter.id }: ${ contentEntries.length } entries, ${ structuredContent.diagnostics.length } diagnostics, ${ Date.now() - phaseStartedAt }ms\n` );
@@ -529,8 +536,6 @@ async function runCaptureWebsite(
 		reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
 		unit: 'route' as const,
 	} ) );
-	const templateClusters = options.templateClusters === true;
-	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
 		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
@@ -562,7 +567,7 @@ async function runCaptureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, templateClustersDecision, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
 		assertEntrypointHasContent( outputDir, options.url, sourceUrl );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
@@ -671,7 +676,7 @@ async function runCaptureWebsite(
 	);
 
 	// Phase 1 of #784: derive every ungated member of a verified multi-member
-	// cluster from its representative's captured document. Opt-in
+	// cluster from its representative's captured document. Enabled by
 	// (`templateClusters`), bounded by TEMPLATE_CLUSTER_LIMITS, and recorded in
 	// `template-clusters.json` next to `website/`. Derived entries become
 	// ordinary manifest entries before export, so export needs no second input
@@ -816,6 +821,7 @@ async function runCaptureWebsite(
 	}
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	receipt.preview = preview;
+	receipt.templateClustersDecision = templateClustersDecision;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	if ( derivedTemplateClusters ) {
 		receipt.templateClusters = derivedTemplateClusters.receiptSummary;

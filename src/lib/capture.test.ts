@@ -845,7 +845,24 @@ describe( 'captureWebsite route selection', () => {
 		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
 		expect( existsSync( join( root, 'template-groups.json' ) ) ).toBe( false );
 		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateGroups ).toBeUndefined();
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateClustersDecision ).toEqual( { enabled: false, source: 'default' } );
 		expect( result.discoveryDiagnostics.some( row => row.code === 'template_grouping_unavailable' ) ).toBe( false );
+	} );
+
+	it.each( [ true, false ] )( 'explicit false disables clusters with structured content=%s', async ( structured ) => {
+		serveHtml();
+		const enumerate = vi.fn( async () => ( { entries: [], diagnostics: [] } ) );
+		const platform = adapter().findAdapter();
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, templateClusters: false }, {
+			findAdapter: () => ( { ...platform, ...( structured ? { structuredContent: {
+				enumerate, bodyEquivalent: () => false, memberDocument: () => undefined,
+				termArchiveUrl: () => sourceUrl, termName: () => undefined,
+			} } : {} ) } ),
+		} );
+		expect( enumerate ).not.toHaveBeenCalled();
+		expect( buildTemplateGroupsMock ).not.toHaveBeenCalled();
+		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateClustersDecision ).toEqual( { enabled: false, source: 'explicit' } );
 	} );
 
 	it( 'spends the budget on one route per template first with template-coverage', async () => {
@@ -911,7 +928,7 @@ describe( 'captureWebsite route selection', () => {
 		expect( result.complete ).toBe( true );
 	} );
 
-	it( 'persists each cluster verification verdict in template-clusters.json', async () => {
+	it.each( [ true, undefined ] )( 'persists cluster verification with templateClusters=%s on a structured-content adapter', async ( templateClusters ) => {
 		const posts = [ 'https://example.com/post-a/', 'https://example.com/post-b/', 'https://example.com/post-c/' ];
 		const postHtml = ( url: string ): string => url === sourceUrl
 			? '<html><head></head><body><main><section class="hero"><h1>Home</h1></section></main></body></html>'
@@ -931,12 +948,22 @@ describe( 'captureWebsite route selection', () => {
 			writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
 			return { urls, captured: urls.length, skipped: 0, failed: 0, durationMs: 1 };
 		} );
-		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 3, templateClusters: true }, {
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 3, templateClusters }, {
 			findAdapter: () => ( {
 				id: 'generic', platform: 'generic',
+				structuredContent: {
+					enumerate: async () => ( { entries: [], diagnostics: [] } ),
+					bodyEquivalent: () => false,
+					memberDocument: () => undefined,
+					termArchiveUrl: ( term: string ) => `${ sourceUrl }category/${ term }/`,
+					termName: () => undefined,
+				},
 				discover: async () => ( { urls: posts.map( url => ( { url, type: 'page' } ) ) } ),
 				extract: async () => ( { title: '', content: '' } ),
 			} ),
+		} );
+		expect( JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) ).templateClustersDecision ).toEqual( {
+			enabled: true, source: templateClusters === true ? 'explicit' : 'adapter-structured-content',
 		} );
 		// Entrypoint, the posts representative and its verification member.
 		expect( capturedUrls() ).toEqual( [ sourceUrl, posts[ 0 ], posts[ 1 ] ] );
