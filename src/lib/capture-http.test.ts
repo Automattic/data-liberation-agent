@@ -81,6 +81,24 @@ afterEach(() => {
 });
 
 describe('orchestrated HTTP review capture', () => {
+	it.each([undefined, false, true])('keeps HTTP template-cluster behavior for %s with structured content', async (templateClusters) => {
+		const enumerate = vi.fn(async () => ({ entries: [], diagnostics: [] }));
+		const platform = { ...adapter(), structuredContent: {
+			enumerate, bodyEquivalent: () => false, memberDocument: () => undefined,
+			termArchiveUrl: () => url, termName: () => undefined,
+		} };
+		const run = captureWebsite({ url, outputDir: directory(), acquisition: 'http', templateClusters }, { findAdapter: () => platform });
+		if (templateClusters === true) {
+			await expect(run).rejects.toThrow('templateClusters applies to browser acquisition only');
+		} else {
+			const result = await run;
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.templateClustersDecision).toEqual({ enabled: false, source: templateClusters === false ? 'explicit' : 'default' });
+			expect(receipt.templateClusters).toBeUndefined();
+		}
+		expect(enumerate).not.toHaveBeenCalled();
+		expect(browserCapture).not.toHaveBeenCalled();
+	});
 	it.each([
 		['https://author.github.io/project/', ['/project'], false],
 		['https://author.github.io/project/guide/', ['/project'], false],
