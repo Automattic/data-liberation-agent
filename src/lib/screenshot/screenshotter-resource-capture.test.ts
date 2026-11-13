@@ -20,7 +20,8 @@ vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 	connectBrowser: vi.fn(),
 } ) );
 
-vi.mock( './resource-capture.js', () => ( {
+vi.mock( './resource-capture.js', async ( importOriginal ) => ( {
+	...( await importOriginal< typeof import( './resource-capture.js' ) >() ),
 	CapturedResourceStore: class {
 		captureDomDependencies = mocks.captureDomDependencies;
 		captureSelectedSrcsets = vi.fn().mockResolvedValue( undefined );
@@ -35,6 +36,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 	const routeHandlers: Array<(route: object) => Promise<void>> = [];
 	let currentUrl = '';
 	return {
+		context: vi.fn().mockReturnValue({}),
 		exposeBinding: vi.fn().mockResolvedValue(undefined),
 		once: vi.fn(),
 		on: vi.fn(),

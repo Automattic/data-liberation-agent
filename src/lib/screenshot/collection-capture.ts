@@ -1,3 +1,4 @@
+import { installResourceReplay, type CapturedResourceStore } from './resource-capture.js';
 import type { Page } from 'playwright';
 import type { CapturedComponent } from './component-states.js';
 
@@ -48,10 +49,11 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
  * Probe a disposable document: exploratory state can never overwrite the initial route tree.
  * Every control click is exploratory, so the probe page only ever sends read-only requests.
  */
-export async function captureCollections(page: Page, skip?: string, record?: (diagnostic: { code: 'interaction_request_blocked'; reason: string }) => void): Promise<CapturedComponent[]> {
+export async function captureCollections(page: Page, skip?: string, record?: (diagnostic: { code: 'interaction_request_blocked'; reason: string }) => void, resourceStore?: CapturedResourceStore): Promise<CapturedComponent[]> {
 	const regions = await collectionRegions(page, skip);
 	if (!regions.length) return [];
 	const probe = await page.context().newPage();
+	if (resourceStore) await installResourceReplay(probe, resourceStore);
 	await probe.route('**/*', async route => {
 		const request = route.request();
 		if (['GET', 'HEAD', 'OPTIONS'].includes(request.method())) { await route.fallback(); return; }
