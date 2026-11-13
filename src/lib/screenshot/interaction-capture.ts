@@ -517,6 +517,7 @@ export async function captureTriggeredDialogs(
 	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES, skip, runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE } ) ) as TriggerDescriptor[];
 
 	const states: CapturedDialogInteraction[] = [];
+	const restingPanels: Array< { candidate: number; settle: ( inline: boolean ) => void } > = [];
 	// Keep navigation defaults suppressed for the complete popup probe transaction,
 	// including Escape/close-trigger restoration clicks. Source click handlers
 	// still run; ordinary navigation probes happen outside this scope.
@@ -651,22 +652,25 @@ export async function captureTriggeredDialogs(
 			const restoredRoots = await rootClasses( page );
 			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
-			const restingInline = await observeInlineRestingPanel( page, trigger.probeSelector, dialog.selector );
-			states.push( {
-				status: 'captured',
-				trigger: triggerRecord( trigger ),
-				dialog: {
-					...surface,
-					...( restingInline ? { restingInline: true } : {} ),
-					...( addedCss ? { css: addedCss } : {} ),
-					...( closeControl ? { closeControl } : {} ),
-					...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
-					...( rootsRestored && rootClassState.length ? { rootClassState } : {} ),
-				},
+			const restingCandidate = await rememberRestingPanel( page, trigger.probeSelector, dialog.selector );
+			const capturedDialog = ( restingInline: boolean ): NonNullable< CapturedDialogInteraction[ 'dialog' ] > => ( {
+				...surface,
+				...( restingInline ? { restingInline: true } : {} ),
+				...( addedCss ? { css: addedCss } : {} ),
+				...( closeControl ? { closeControl } : {} ),
+				...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
+				...( rootsRestored && rootClassState.length ? { rootClassState } : {} ),
 			} );
+			const state: CapturedDialogInteraction = { status: 'captured', trigger: triggerRecord( trigger ), dialog: capturedDialog( false ) };
+			states.push( state );
+			if ( restingCandidate !== undefined ) restingPanels.push( { candidate: restingCandidate, settle: inline => { state.dialog = capturedDialog( inline ); } } );
 			if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 		}
+		// One width sweep observes every captured panel's closed resting CSS.
+		const inline = await observeInlineRestingPanels( page, restingPanels.map( panel => panel.candidate ) );
+		for ( const panel of restingPanels ) if ( inline.has( panel.candidate ) ) panel.settle( true );
 	} finally {
+		await page.evaluate( () => { delete ( globalThis as unknown as { __dlaRestingPanels?: unknown } ).__dlaRestingPanels; } ).catch( () => undefined );
 		await page.evaluate( () => {
 			const documentWithListener = document as Document & { __dlaPreventPopupNavigation?: EventListener };
 			if ( documentWithListener.__dlaPreventPopupNavigation ) {
@@ -1338,35 +1342,65 @@ async function panelIntersectsViewport( page: Page, selector: string ): Promise<
 		.catch( () => false );
 }
 
-/** Observe closed source CSS at the fidelity widths, before discarding its runtime. */
-async function observeInlineRestingPanel( page: Page, trigger: string, panel: string ): Promise< boolean > {
+/**
+ * Remember a closed panel and its trigger for the resting-CSS sweep. The panel
+ * is held by node, because the shared captured-dialog marker moves on to the
+ * next probe's dialog. Undefined when the selector does not name exactly one.
+ */
+async function rememberRestingPanel( page: Page, trigger: string, panel: string ): Promise< number | undefined > {
+	return page.evaluate( ( { trigger, panel } ) => {
+		const surfaces = document.querySelectorAll( panel );
+		if ( surfaces.length !== 1 ) return undefined;
+		const store = globalThis as unknown as { __dlaRestingPanels?: Array< { trigger: string; selector: string; panel: Element } > };
+		return ( store.__dlaRestingPanels ??= [] ).push( { trigger, selector: panel, panel: surfaces[ 0 ]! } ) - 1;
+	}, { trigger, panel } ).catch( () => undefined );
+}
+
+/**
+ * Observe closed source CSS at the fidelity widths, before discarding its
+ * runtime: which remembered panels rest inline (visible while their trigger is
+ * concealed) at some width. One sweep serves every panel the probe captured,
+ * stopping once each is found inline.
+ */
+async function observeInlineRestingPanels( page: Page, candidates: readonly number[] ): Promise< Set< number > > {
+	const inline = new Set< number >();
 	const viewport = page.viewportSize();
-	if ( !viewport || await page.locator( panel ).count() !== 1 ) return false;
+	if ( ! viewport || ! candidates.length ) return inline;
 	try {
 		// Widest first: a sidebar pinned at desktop is the common resting panel.
 		for ( const width of new Set( [ viewport.width, 1440, 768, 390 ] ) ) {
+			const pending = candidates.filter( candidate => ! inline.has( candidate ) );
+			if ( ! pending.length ) break;
 			if ( page.viewportSize()?.width !== width ) {
 				await page.setViewportSize( { ...viewport, width } );
 				// Runtimes often pin a sidebar from a debounced resize handler.
 				await settleDocument( page, 'inline-resting-panel', { quietMs: 300, timeoutMs: DIALOG_WAIT_MS, animations: true } );
 			}
-			const inline = await page.evaluate( ( { trigger, panel } ) => {
-				const control = document.querySelector( trigger ), surface = document.querySelector( panel );
-				if ( !control || !surface ) return false;
-				const buttonStyle = getComputedStyle( control ), buttonRect = control.getBoundingClientRect();
-				const concealed = buttonStyle.display === 'none' || buttonStyle.visibility === 'hidden' || buttonRect.width === 0 || buttonRect.height === 0;
-				const style = getComputedStyle( surface ), rect = surface.getBoundingClientRect();
-				// A pinned sidebar or fixed bar is resting chrome; a visible surface
-				// covering the viewport is an open overlay, not an inline panel.
-				const positioned = style.position === 'fixed' || style.position === 'absolute';
-				const overlay = positioned && ( rect.right <= 0 || rect.left >= innerWidth ||
-					rect.width >= innerWidth * 0.9 && rect.height >= innerHeight * 0.9 );
-				return concealed && style.display !== 'none' && style.visibility !== 'hidden' &&
-					!overlay && rect.width > 0 && rect.height > 0;
-			}, { trigger, panel } );
-			if ( inline ) return true;
+			const found = await page.evaluate( pending => {
+				const store = globalThis as unknown as { __dlaRestingPanels?: Array< { trigger: string; selector: string; panel: Element } > };
+				return pending.filter( candidate => {
+					const remembered = store.__dlaRestingPanels?.[ candidate ];
+					if ( !remembered ) return false;
+					// An authored id still names a panel its runtime re-rendered; the
+					// shared captured marker may name a later probe's dialog by now.
+					const surface = remembered.panel.isConnected || !remembered.selector.startsWith( '#' ) ? remembered.panel : document.querySelector( remembered.selector );
+					const control = document.querySelector( remembered.trigger );
+					if ( !control || !surface?.isConnected ) return false;
+					const buttonStyle = getComputedStyle( control ), buttonRect = control.getBoundingClientRect();
+					const concealed = buttonStyle.display === 'none' || buttonStyle.visibility === 'hidden' || buttonRect.width === 0 || buttonRect.height === 0;
+					const style = getComputedStyle( surface ), rect = surface.getBoundingClientRect();
+					// A pinned sidebar or fixed bar is resting chrome; a visible surface
+					// covering the viewport is an open overlay, not an inline panel.
+					const positioned = style.position === 'fixed' || style.position === 'absolute';
+					const overlay = positioned && ( rect.right <= 0 || rect.left >= innerWidth ||
+						rect.width >= innerWidth * 0.9 && rect.height >= innerHeight * 0.9 );
+					return concealed && style.display !== 'none' && style.visibility !== 'hidden' &&
+						!overlay && rect.width > 0 && rect.height > 0;
+				} );
+			}, pending );
+			for ( const candidate of found ) inline.add( candidate );
 		}
-		return false;
+		return inline;
 	} finally {
 		if ( page.viewportSize()?.width !== viewport.width ) {
 			await page.setViewportSize( viewport );
