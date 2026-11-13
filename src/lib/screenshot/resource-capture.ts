@@ -23,6 +23,12 @@ const CAPTURED_RESOURCE_TYPES = new Set( [
 	'media',
 ] );
 const REPLAYABLE_RESOURCE_TYPES = new Set( [ 'script', 'stylesheet', 'font', 'image' ] );
+
+// Chromium classifies link prefetches as `other`, not as the eventual asset
+// type. Do not admit arbitrary `other` responses (documents, telemetry, etc.).
+function isPrefetch( resourceType: string, headers: Record< string, string > ): boolean {
+	return resourceType === 'other' && /\bprefetch\b/i.test( headers[ 'sec-purpose' ] ?? headers.purpose ?? '' );
+}
 const REPLAY_RESPONSE_HEADERS = new Set( [
 	'access-control-allow-credentials',
 	'access-control-allow-origin',
@@ -442,6 +448,7 @@ export class CapturedResourceStore {
 	private readonly manifestPath: string;
 	private readonly manifest: CapturedResourceManifest;
 	private readonly captures = new Map< string, Promise< void > >();
+	private readonly replayCaptures = new Map< string, Promise< void > >();
 	private readonly browserLoadedResources = new Set< string >();
 	// Image responses arrive before serialization reveals their srcset family.
 	// Keep the response handle, not another stored/budgeted rendition's bytes.
@@ -654,7 +661,7 @@ export class CapturedResourceStore {
 	async flush(): Promise< void > {
 		try {
 			await this.captureDeferredImages();
-			await Promise.all( this.captures.values() );
+			await Promise.all( [ ...this.captures.values(), ...this.replayCaptures.values() ] );
 			mkdirSync( dirname( this.manifestPath ), { recursive: true } );
 			writeFileSync( this.manifestPath, `${ JSON.stringify( this.manifest, null, 2 ) }\n` );
 		} finally {
@@ -663,7 +670,7 @@ export class CapturedResourceStore {
 	}
 
 	getReplayableResponse( url: string, resourceType: string, requestHeaders: Record< string, string > = {} ): CapturedResourceReplay | undefined {
-		if ( ! REPLAYABLE_RESOURCE_TYPES.has( resourceType ) ) return undefined;
+		if ( ! REPLAYABLE_RESOURCE_TYPES.has( resourceType ) && ! isPrefetch( resourceType, requestHeaders ) ) return undefined;
 		const resource = this.replayResources.get( url );
 		const metadata = this.replayMetadata.get( url );
 		if (
@@ -932,6 +939,12 @@ export class CapturedResourceStore {
 	private capture( response: Response, deferImage = true ): Promise< void > {
 		const request = response.request();
 		const resourceType = request.resourceType();
+		// Prefetches need browser-cache replay, not portable artifact ownership.
+		// Apply the same freshness/Vary rules and bounded ephemeral storage as
+		// external scripts; never export speculative, possibly unused responses.
+		if ( resourceType === 'other' && ( request.method?.() ?? 'GET' ) === 'GET' && isPrefetch( resourceType, request.headers() ) ) {
+			return this.captureReplayOnly( response, new URL( response.url() ) );
+		}
 		if ( ! CAPTURED_RESOURCE_TYPES.has( resourceType ) ) return Promise.resolve();
 
 		// Only GET responses can be page resources. A POST/PUT/PATCH/DELETE response is the
@@ -1003,7 +1016,7 @@ export class CapturedResourceStore {
 
 	private captureReplayOnly( response: Response, resourceUrl: URL ): Promise< void > {
 		const url = resourceUrl.href;
-		const existing = this.captures.get( url );
+		const existing = this.replayCaptures.get( url );
 		if ( existing ) return existing;
 		const capture = ( async () => {
 			const headers = response.headers();
@@ -1033,7 +1046,7 @@ export class CapturedResourceStore {
 		} )().catch( () => {
 			// Ephemeral cache misses must not become portable artifact failures.
 		} );
-		this.captures.set( url, capture );
+		this.replayCaptures.set( url, capture );
 		return capture;
 	}
 
