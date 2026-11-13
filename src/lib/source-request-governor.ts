@@ -94,7 +94,11 @@ export function isSourceTransportThrottle(error: unknown, refusalOnly = false): 
 		|| (value.cause !== error && isSourceTransportThrottle(value.cause, refusalOnly));
 }
 
+export type SourceReplayOutcome = 'hit' | 'not_routed' | `miss:${'type_not_replayable' | 'no_entry' | 'vary_mismatch' | 'stale' | 'uncacheable'}`;
+export interface SourceRequestAttribution { phase?: string; device?: string; outcome?: SourceReplayOutcome; url?: string }
+
 export interface GovernedRequestOptions {
+	attribution?: SourceRequestAttribution;
 	category?: SourceRequestCategory;
 	/** Owning document URL, never an asset URL, for cross-route refusal proof. */
 	routeUrl?: string;
@@ -223,7 +227,7 @@ export class SourceRequestGovernor {
 			});
 			if (this.responseGeneration !== generation) return;
 			try {
-				this.recordRequest('refusal-probe');
+				this.recordRequest('refusal-probe', { phase: 'refusal-probe', url });
 				const response = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(Math.max(1, Math.min(SOURCE_REFUSAL_DEFAULTS.probeTimeoutMs, deadline - Date.now()))) });
 				await response.body?.cancel();
 				this.reachable();
@@ -247,7 +251,38 @@ export class SourceRequestGovernor {
 	private requests = 0;
 	private readonly requestCounts: SourceRequestCounts = { document: 0, 'device-check': 0, 'asset-original': 0, subresource: 0, 'refusal-probe': 0, retry: 0 };
 
-	private recordRequest(category: SourceRequestCategory): void {
+	private readonly attributionTotals = new Map<string, number>();
+	private readonly attributionUrls = new Map<string, Map<string, number>>();
+	private droppedUrlRequests = 0;
+
+	/** Replay hits are logical requests, not source network requests. */
+	attributeRequest(attribution: SourceRequestAttribution = {}): void {
+		const device = attribution.device === 'desktop' || attribution.device === 'mobile' ? attribution.device : 'unattributed';
+		const label = attribution.phase && /^[a-z][a-z0-9-]{0,63}$/.test(attribution.phase) ? attribution.phase : 'unattributed';
+		let phase = `${device}/${label}`;
+		if (this.attributionTotals.size >= 512 && !this.attributionTotals.has(`${phase} ${attribution.outcome ?? 'not_routed'}`)) phase = 'unattributed/unattributed';
+		const key = `${phase} ${attribution.outcome ?? 'not_routed'}`;
+		this.attributionTotals.set(key, (this.attributionTotals.get(key) ?? 0) + 1);
+		const url = attribution.url;
+		if (!url || url.length > 2048) { this.droppedUrlRequests++; return; }
+		let counts = this.attributionUrls.get(url);
+		if (!counts) {
+			if (this.attributionUrls.size >= 10000) { this.droppedUrlRequests++; return; }
+			this.attributionUrls.set(url, counts = new Map());
+		}
+		counts.set(phase, (counts.get(phase) ?? 0) + 1);
+	}
+
+	attribution() {
+		return {
+			origin: this.origin, totals: Object.fromEntries(this.attributionTotals), droppedUrlRequests: this.droppedUrlRequests,
+			repeatedUrls: [...this.attributionUrls].map(([url, phases]) => ({ url, count: [...phases.values()].reduce((a, b) => a + b, 0), phases: Object.fromEntries(phases) }))
+				.filter(entry => entry.count > 1).sort((a, b) => b.count - a.count || a.url.localeCompare(b.url)).slice(0, 50),
+		};
+	}
+
+	private recordRequest(category: SourceRequestCategory, attribution?: SourceRequestAttribution): void {
+		this.attributeRequest(attribution);
 		this.requests++;
 		this.requestCounts[category]++;
 		this.firstRequestAt ??= Date.now();
@@ -296,7 +331,7 @@ export class SourceRequestGovernor {
 			const refusalAdmission = this.refusalAdmission();
 			let response: T;
 			try {
-				this.recordRequest(attempt > 1 ? 'retry' : options.category ?? 'document');
+				this.recordRequest(attempt > 1 ? 'retry' : options.category ?? 'document', options.attribution ?? { url: options.routeUrl });
 				response = await task( attempt );
 			} catch (error) {
 				if (!isSourceTransportThrottle(error)) throw error; // failure-class: operational
@@ -336,8 +371,8 @@ export class SourceRequestGovernor {
 	}
 
 	/** Outcomes observed by the browser's native network stack. */
-	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string, admission?: number, category: SourceRequestCategory = 'document'): void {
-		this.recordRequest(category);
+	observeBrowserOutcome(status?: number, retryAfter?: string | null, error?: unknown, routeUrl?: string, admission?: number, category: SourceRequestCategory = 'document', attribution?: SourceRequestAttribution): void {
+		this.recordRequest(category, attribution);
 		this.observeAccess(status, error, category, routeUrl, admission);
 		if ((status !== undefined && THROTTLE_STATUSES.has(status)) || isSourceTransportThrottle(error)) {
 			this.recordThrottle(parseRetryAfter(retryAfter, { fallbackMs: this.fallbackRetryAfterMs, maxMs: this.maxRetryAfterMs }));
@@ -422,6 +457,11 @@ export class SourceRequestGovernors {
 	private readonly byOrigin = new Map< string, SourceRequestGovernor >();
 
 	constructor( private readonly defaults: SourceRequestGovernorOptions = {} ) {}
+
+	attribution() {
+		const origins = [...this.byOrigin.values()].map(governor => governor.attribution());
+		return { schemaVersion: 1, origins: origins.map(({ repeatedUrls, ...summary }) => summary), repeatedUrls: origins.flatMap(origin => origin.repeatedUrls).sort((a, b) => b.count - a.count || a.url.localeCompare(b.url)).slice(0, 50) };
+	}
 
 	stats(): SourceRequestGovernorStats[] {
 		return [...this.byOrigin.values()].map(governor => governor.stats());

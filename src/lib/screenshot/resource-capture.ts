@@ -457,6 +457,10 @@ export class CapturedResourceStore {
 	private readonly explicitDependencies = new Set< string >();
 	private readonly pageCaptures = new WeakMap< Page, Set< Promise< void > > >();
 	private readonly listeners = new WeakMap< Page, ( response: Response ) => void >();
+	private readonly uncacheableReplayUrls = new Set<string>();
+	private markUncacheableReplay(url: string): void {
+		if (this.uncacheableReplayUrls.size < 10000) this.uncacheableReplayUrls.add(url);
+	}
 	private readonly replayMetadata = new Map< string, CapturedResourceReplayMetadata >();
 	private readonly replayResources = new Map<
 		string,
@@ -504,6 +508,7 @@ export class CapturedResourceStore {
 		) => Promise< SafeFetchResult > = ( url, maxBytes, timeoutMs ) =>
 			safeFetch( url, {
 				category: 'subresource',
+				attribution: { phase: 'media' },
 				maxBytes,
 				timeoutMs,
 				headers: resourceRequestHeaders( url ),
@@ -669,18 +674,16 @@ export class CapturedResourceStore {
 		}
 	}
 
-	getReplayableResponse( url: string, resourceType: string, requestHeaders: Record< string, string > = {} ): CapturedResourceReplay | undefined {
-		if ( ! REPLAYABLE_RESOURCE_TYPES.has( resourceType ) && ! isPrefetch( resourceType, requestHeaders ) ) return undefined;
+	getReplayableResponse( url: string, resourceType: string, requestHeaders: Record< string, string > = {}, report?: ( outcome: import('../source-request-governor.js').SourceReplayOutcome ) => void ): CapturedResourceReplay | undefined {
+		const miss = (reason: 'type_not_replayable' | 'no_entry' | 'vary_mismatch' | 'stale' | 'uncacheable') => { report?.(`miss:${reason}`); return undefined; };
+		if ( ! REPLAYABLE_RESOURCE_TYPES.has( resourceType ) && ! isPrefetch( resourceType, requestHeaders ) ) return miss('type_not_replayable');
 		const resource = this.replayResources.get( url );
 		const metadata = this.replayMetadata.get( url );
-		if (
-			! resource ||
-			! metadata ||
-			metadata.expiresAt <= Date.now() ||
-			Object.entries( metadata.requestHeaders ).some( ( [ name, value ] ) => requestHeaders[ name ] !== value )
-		)
-			return undefined;
-		if ( ! existsSync( resource.path ) ) return undefined;
+		if (!resource || !metadata) return miss(this.uncacheableReplayUrls.has(url) || this.browserLoadedResources.has(url) || this.manifest.resources[url] ? 'uncacheable' : 'no_entry');
+		if (metadata.expiresAt <= Date.now()) return miss('stale');
+		if (Object.entries(metadata.requestHeaders).some(([name, value]) => requestHeaders[name] !== value)) return miss('vary_mismatch');
+		if (!existsSync(resource.path)) return miss('no_entry');
+		report?.('hit');
 		return { ...resource, headers: metadata.headers };
 	}
 
@@ -1021,7 +1024,7 @@ export class CapturedResourceStore {
 		const capture = ( async () => {
 			const headers = response.headers();
 			const metadata = replayableResponseMetadata( response.status(), headers, response.request().headers?.() ?? {} );
-			if ( ! metadata ) return;
+			if ( ! metadata ) { this.markUncacheableReplay(url); return; }
 			const declaredBytes = Number( headers[ 'content-length' ] );
 			if (
 				Number.isFinite( declaredBytes ) &&

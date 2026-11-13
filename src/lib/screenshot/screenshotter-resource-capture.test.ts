@@ -229,7 +229,8 @@ describe( 'screenshot resource capture', () => {
 			expect( mocks.getReplayableResponse ).toHaveBeenCalledWith(
 				'https://example.com/assets/site.css',
 				'stylesheet',
-				{ cookie: 'laravel_session=abc' }
+				{ cookie: 'laravel_session=abc' },
+				expect.any(Function)
 			);
 			expect( fulfill ).toHaveBeenCalledWith( {
 				path: '/capture/resources/assets/site.css',

@@ -231,6 +231,7 @@ export interface SafeFetchOpts {
   /** null when the caller already owns admission and accounting. */
   governors?: SourceRequestGovernors | null;
   category?: SourceRequestCategory;
+  attribution?: import('../source-request-governor.js').SourceRequestAttribution;
   /** Optional caller-owned admission check, before the initial request and every redirect hop. */
   authorizeUrl?: ( url: string ) => void;
   /** Per-request timeout in ms. Defaults to {@link DEFAULT_TIMEOUT_MS}. */
@@ -300,7 +301,7 @@ export async function safeFetch(rawUrl: string, opts: SafeFetchOpts = {}): Promi
         headers,
       });
       const governor = (opts.governors === null ? undefined : opts.governors ?? sourceRequestContext.getStore())?.forOrigin(currentUrl);
-      res = governor ? (await governor.run(request, { category: opts.category ?? 'document', signal: requestSignal })).response : await request();
+      res = governor ? (await governor.run(request, { category: opts.category ?? 'document', signal: requestSignal, attribution: { ...opts.attribution, url: currentUrl } })).response : await request();
     } catch (error) {
       throw withNetworkCause(error);
     }

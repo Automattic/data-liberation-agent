@@ -306,7 +306,7 @@ async function fetchMediaResponse(rawUrl: string, preserveOriginal = false, dead
       headers: { 'User-Agent': SOURCE_USER_AGENT, accept: preserveOriginal ? '*/*' : BROWSER_IMAGE_ACCEPT, ...(cookie ? { cookie } : {}) },
     });
     const governor = sourceRequestContext.getStore()?.forOrigin(currentUrl);
-    const res = governor ? (await governor.run(request, { category: preserveOriginal ? 'asset-original' : 'subresource' })).response : await request();
+    const res = governor ? (await governor.run(request, { category: preserveOriginal ? 'asset-original' : 'subresource', attribution: { phase: 'media', url: currentUrl } })).response : await request();
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       try { await res.body?.cancel(); } catch { /* ignore */ }

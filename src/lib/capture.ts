@@ -407,7 +407,15 @@ export async function captureWebsite(
 	const governors = new SourceRequestGovernors();
 	return sourceRequestContext.run(governors, async () => {
 		try { return await runWithTrustedOrigins( options.trustedOrigins, () => runCaptureWebsite( options, dependencies, governors ) ); }
-		finally { process.stderr.write(`[source-requests] ${JSON.stringify(governors.stats())}\n`); }
+		finally {
+			const attribution = governors.attribution();
+			process.stderr.write(`[source-requests] ${JSON.stringify(governors.stats())} attribution=${JSON.stringify(attribution.origins.map(({ origin, totals }) => ({ origin, totals })))}\n`);
+			// Diagnostics must never turn an otherwise successful capture into a failure.
+			try {
+				mkdirSync(options.outputDir, { recursive: true });
+				writeFileSync(join(options.outputDir, 'source-request-attribution.json'), `${JSON.stringify(attribution, null, 2)}\n`);
+			} catch { /* Output may be unavailable after a failed capture. */ }
+		}
 	});
 }
 
