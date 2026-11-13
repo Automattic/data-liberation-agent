@@ -100,6 +100,9 @@ export interface Platform {
 	 * Declared only when the runtime generates per-item page-local CSS; the generic
 	 * fingerprint is unchanged for platforms without this hook. */
 	templateStyleNormalization?: TemplateStyleNormalization;
+	/** Adapter-owned declared template identity, independent of variable item markup.
+	 * Unknown documents return undefined and retain the generic fingerprint. */
+	templateIdentity?: import('../lib/template-groups.js').TemplateIdentity;
 	/** Content the platform publishes as structured data (a feed or API). Template-cluster
 	 * capture derives members from it instead of fetching each member's page (#1701). */
 	structuredContent?: StructuredContentSource;
