@@ -88,6 +88,26 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( derivation.html ).toContain( '<h1 class="post-title">post-2</h1>' );
 	} );
 
+	it( 'transplants differing body style text with the member block id (#1796)', () => {
+		const page = ( id: string ) => serverDocument( 'Post', `<div id="block-${ id }"><p>Block ${ id }</p><style>#block-${ id } { color: red }</style></div>` );
+		const repServerHtml = page( 'A' );
+		const memberServerHtml = page( 'B' );
+		const result = deriveMemberDocument( {
+			repServerHtml,
+			repProcessedHtml: repServerHtml,
+			memberServerHtml,
+			baseUrl: BASE,
+			// Admit per-member block selectors without changing template identity.
+			styleNormalization: { pageStyles: styles => styles.map( style => style.text.replace( /#block-[AB]/g, '#block-slot' ) ).join( '\n' ) },
+		} );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<div id="block-B">' );
+		expect( result.html ).toContain( '<style>#block-B { color: red }</style>' );
+		expect( result.html ).not.toContain( '#block-A' );
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: memberServerHtml, baseUrl: BASE } ).checks.headStyles ).toBe( true );
+	} );
+
 	it( 'pairs head metadata by identity wherever the parser leaves it (Blogger)', () => {
 		// Blogger heads carry markup that closes <head> early, so the HTML parser
 		// leaves title and social metadata in <body>, in both captures.

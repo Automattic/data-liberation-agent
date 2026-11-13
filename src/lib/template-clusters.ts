@@ -60,7 +60,8 @@ export type MemberDerivation =
 
 const isElement = ( node: AnyNode ): node is Element => node.type === 'tag' || node.type === 'script' || node.type === 'style';
 
-const SKIPPED_ELEMENTS = new Set( [ 'script', 'style', 'noscript', 'template', 'br', 'wbr', 'link', 'meta', 'base' ] );
+// Body styles carry member content too (for example selectors for a block id).
+const SKIPPED_ELEMENTS = new Set( [ 'script', 'noscript', 'template', 'br', 'wbr', 'link', 'meta', 'base' ] );
 
 /** Inline (phrasing) elements: presence follows the text, so they never split slots by themselves. */
 const INLINE_ELEMENTS = new Set( [ 'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'img', 'ins', 'kbd', 'label', 'mark', 'picture', 'q', 's', 'samp', 'small', 'source', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'u', 'var', 'wbr' ] );
@@ -234,7 +235,7 @@ function resolveAnchor( body: Element, anchor: SlotAnchor, matches: ( node: Elem
 const html$ = ( html: string ) => cheerio.load( html );
 const serializeNode = ( node: AnyNode ): string => html$( '<w></w>' ).html( node as never ) ?? '';
 
-/** Every child node, text included, as HTML; skipped elements (scripts, styles) stay out. */
+/** Every child node, text and styles included, as HTML; skipped elements stay out. */
 function serializeChildNodes( element: Element ): string {
 	return element.children
 		.filter( node => node.type === 'text' || ( isElement( node ) && ! SKIPPED_ELEMENTS.has( node.name ) ) )
@@ -249,7 +250,8 @@ const ownTextNodes = ( element: Element ): Array< { data: string } > =>
 /**
  * Walk `H_R` and `H_M` together over element children and record every
  * divergence as a slot at an element path. The walk is between the two server
- * documents, so script/style/template children are skipped on both sides.
+ * documents, so script/noscript/template children are skipped on both sides.
+ * Body style text is walked like any other text, including member selectors.
  */
 function findServerSlots( repElement: Element, memberElement: Element, slots: Slot[] ): void {
 	const at = { repNode: repElement, memberNode: memberElement };
