@@ -72,21 +72,36 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );
 
-it( 'records the site name every captured route title repeats as the receipt title', () => {
+it.each( [
+	{
+		name: 'the shared route-title segment',
+		home: '<title>Acme Auto | Auto Repair in Springfield</title><main>Home</main>',
+		privacy: '<title>Privacy Policy | Acme Auto</title><main>Privacy</main>',
+		discovered: 'Acme Auto | Auto Repair in Springfield',
+		expected: 'Acme Auto',
+	},
+	{
+		name: 'the declared business instead of the Wix last title segment',
+		home: '<title>Acme Builders LLC | general contractor | 100 Main Street, Springfield</title><meta property="og:site_name" content="My Site"><script type="application/ld+json">{"@type":"LocalBusiness","name":"Acme Builders LLC"}</script><main>Home</main>',
+		privacy: '<title>Privacy Policy | My Site</title><main>Privacy</main>',
+		discovered: '100 Main Street, Springfield',
+		expected: 'Acme Builders LLC',
+	},
+] )( 'records $name as the receipt title', ( { home, privacy, discovered, expected } ) => {
 	const root = mkdtempSync( join( tmpdir(), 'capture-evidence-title-' ) );
 	try {
 		const captureRoot = join( root, 'capture' );
 		const stageRoot = join( root, 'stage' );
 		mkdirSync( captureRoot );
 		mkdirSync( join( stageRoot, 'website', 'privacy' ), { recursive: true } );
-		writeFileSync( join( stageRoot, 'website', 'index.html' ), '<title>Acme Auto | Auto Repair in Springfield</title><main>Home</main>' );
-		writeFileSync( join( stageRoot, 'website', 'privacy', 'index.html' ), '<title>Privacy Policy | Acme Auto</title><main>Privacy</main>' );
+		writeFileSync( join( stageRoot, 'website', 'index.html' ), home );
+		writeFileSync( join( stageRoot, 'website', 'privacy', 'index.html' ), privacy );
 		const identityHtmlPath = join( stageRoot, 'identity.html' );
 		writeFileSync( identityHtmlPath, '<main>Home</main>' );
 		const resourceManifest = { version: 1 as const, resources: {}, failures: [] };
 		const receiptPath = writeCaptureEvidence( {
 			locations: { captureRoot, stageRoot },
-			source: { sourceUrl: 'https://example.test/', platform: 'generic', title: 'Acme Auto | Auto Repair in Springfield', summary: { routesFailed: 0 }, failures: [] },
+			source: { sourceUrl: 'https://example.test/', platform: 'generic', title: discovered, summary: { routesFailed: 0 }, failures: [] },
 			capture: { entries: {}, absentRoutes: new Set(), interactivity: [] },
 			pages: [
 				{ slug: 'home', url: 'https://example.test/', routePath: 'index.html', identityHtmlPath, hasMobileDocument: false },
@@ -104,6 +119,6 @@ it( 'records the site name every captured route title repeats as the receipt tit
 				styles: { hoistedStylesheets: 0, diagnostics: [], diagnosticCounts: {}, diagnosticsTruncated: false },
 			},
 		} );
-		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).title ).toBe( 'Acme Auto' );
+		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).title ).toBe( expected );
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );
