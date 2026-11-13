@@ -10,6 +10,7 @@ const skip = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.exe
 
 it.skipIf(skip)('serializes identical settled chrome across route lengths, framework counters and repeat captures', async () => {
 	const server = createServer((request, response) => {
+		if (request.url?.includes('liberation-absent-')) {response.writeHead(404); response.end(); return;}
 		const counter = request.url === '/long' ? 71 : 3;
 		response.setHeader('content-type', 'text/html');
 		response.end(`<!doctype html><html><head><style>

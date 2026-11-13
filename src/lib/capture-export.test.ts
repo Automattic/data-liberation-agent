@@ -5540,7 +5540,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( receipt.summary.routesFailed ).toBe( 0 );
 	} );
 
-	it.each( [ 404, 410, 'rendered 404' ] )( 'reports a source-absent %s link without failing capture or cleanup completeness', ( absence ) => {
+	it.each( [ 404, 410, '404 (render matches absent nonce sibling)', 'rendered 404' ] )( 'reports a source-absent %s link without failing capture or cleanup completeness', ( absence ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-source-absence-' ) );
 		dirs.push( outputDir );
 		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );

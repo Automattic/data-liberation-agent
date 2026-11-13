@@ -412,6 +412,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 	let transientPhoneServed = false;
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
+			if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 			if ( ( request.url ?? '' ).endsWith( '.svg' ) ) {
 				response.setHeader( 'content-type', 'image/svg+xml' );
 				response.end( '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="#36c"/></svg>' );

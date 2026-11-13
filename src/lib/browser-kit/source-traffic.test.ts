@@ -34,6 +34,7 @@ it.skipIf(skipBrowser)('captures all routes through a resetting origin and leave
     let rangeRequests = 0;
     let imageBytes = 0;
     const server = createServer((req, res) => {
+      if (req.url?.includes('liberation-absent-')) {res.writeHead(404); res.end(); return;}
       peak = Math.max(peak, ++active);
       res.once('close', () => active--);
       const resetNavigation = !navigationReset && req.url === '/page-2';
@@ -110,6 +111,7 @@ it.skipIf(skipBrowser)('accounts for a reflow capture and reuses document and or
   let requests = 0;
   const server = createServer((req, res) => {
     requests++;
+    if (req.url?.includes('liberation-absent-')) {res.writeHead(404); res.end(); return;}
     res.setHeader('content-type', req.url === '/original.bmp' ? 'image/bmp' : 'text/html');
     res.end(req.url === '/original.bmp' ? image : '<!doctype html><title>Fixture</title><h1>Reflow fixture</h1><p>Same document at every width.</p>');
   });
@@ -133,7 +135,7 @@ it.skipIf(skipBrowser)('accounts for a reflow capture and reuses document and or
     const stats = governors.forOrigin(origin).stats();
     process.stderr.write(`fixture counts ${JSON.stringify({requests, stats})}\n`);
     expect(stats.requests).toBe(requests);
-    expect(stats.requestCounts).toEqual({ document: 1, 'device-check': 4, 'asset-original': 1, subresource: 0, 'refusal-probe': 0, retry: 0 });
+    expect(stats.requestCounts).toEqual({ document: 2, 'device-check': 4, 'asset-original': 1, subresource: 0, 'refusal-probe': 0, retry: 0 });
   } finally {
     rmSync(outputDir, { recursive: true, force: true });
     server.closeAllConnections();

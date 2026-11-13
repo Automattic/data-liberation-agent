@@ -25,6 +25,7 @@ document.querySelectorAll('#categories button').forEach((b,i)=>b.onclick=()=>{ca
 
 it.skipIf( skip )( 'retains baseline and follows server links when selectable and typed-search probes never settle', async () => {
 	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		response.setHeader( 'content-type', 'text/html' );
 		response.end( request.url === '/linked' ? '<!doctype html><title>Linked</title><main>Linked document</main>' : fixture( request.url === '/search' ? 'search' : 'selectable' ) );
 	} );

@@ -12,6 +12,7 @@ import type { ManifestEntry } from './manifest-queue.js';
 it.skipIf( ! existsSync( chromium.executablePath() ) )( 'reuses nested nav negative outcomes without skipping page content', async () => {
 	const clicks: Array<{ path: string; control: string }> = [];
 	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		const url = new URL( request.url!, 'http://fixture' );
 		if ( url.pathname === '/click' ) {
 			clicks.push( { path: url.searchParams.get( 'path' )!, control: url.searchParams.get( 'control' )! } );

@@ -1,3 +1,4 @@
+import { isIntegrityError } from '../failure-class.js';
 import { runSteps } from './capture-steps.js';
 import { createPostBaselineState, postBaselineSteps, retainPartialPostBaseline } from './post-baseline-steps.js';
 import { createRouteAdmission, runtimeMemoryLimit, type RouteKind } from './route-admission.js';
@@ -61,7 +62,7 @@ import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-styl
 import { observeViewportWork } from './viewport-work.js';
 import { attributeSourcePhase } from '../browser-kit/source-traffic.js';
 import { createPhaseBudget } from './phase-budget.js';
-import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
+import { AbsentDocumentProbes, isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
 import { cleanPortableScaffolding } from './portable-scaffolding.js';
@@ -204,6 +205,7 @@ async function renderedQueryAlias( page: Page, url: string, scope: ScreenshotOpt
 
 interface CapturePerViewportArgs {
 	page: Page;
+	absentDocument?: ( html: string ) => Promise< boolean >;
 	rootClassEvidence: RootClassEvidence;
 	routeDeadlineMs: number;
 	routeRemainingMs: () => number;
@@ -1309,6 +1311,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Probes above resized the page; serialize source sheets as loaded at this width.
 	await restoreLoadTimeSheets( page ).catch( () => 0 );
 	const initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml );
+	if ( await args.absentDocument?.( initialDocument ) ) {
+		fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
+		return;
+	}
 	// The serialized head is the initial one, so it is named by the title the
 	// browser reported for it, before exploration could retitle the page.
 	const initialTitle = await page.evaluate( () => document.title ).catch( () => undefined );
@@ -2000,6 +2006,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;
 	const evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 5_000;
 	const settleMs = opts.settleMs ?? 1_000;
+	const absentDocumentProbes = new AbsentDocumentProbes();
 	const force = opts.force ?? false;
 	const server = opts.server;
 
@@ -2597,6 +2604,25 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						await capturePerViewport( {
 							page,
 							rootClassEvidence,
+							absentDocument: isSourceCaptureUrl( url, opts.primaryUrl ?? urls[ 0 ] ) ? undefined : html => absentDocumentProbes.matches( url, html, async sibling => {
+								// Same identity and source-governed context, but never navigate the
+								// candidate itself or add the nonce to the discovery frontier.
+								let probe: Page | undefined;
+								try {
+									probe = await context!.newPage();
+									const navigation = await navigateSourceDocument( probe, sibling, { publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope, timeoutMs: SOURCE_NAVIGATION_LIMITS.timeoutMs } );
+									const status = navigation.response?.status() ?? 0;
+									if ( status !== 200 || navigation.boundary || navigation.redirectedTo || navigation.scriptNavigationUrl ) return undefined;
+									await waitForStable( probe );
+									await dismissOverlays( probe );
+									return { status, html: await probe.content() };
+								} catch ( error ) {
+									if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
+									return undefined;
+								} finally {
+									await probe?.close().catch( () => {} );
+								}
+							} ),
 							routeDeadlineMs,
 							routeRemainingMs: () => routeDeadlineMs ? Math.max( 1, routeDeadlineMs - ( Date.now() - routeStartedAt ) ) : 600_000,
 							probeOverrun: ms => probeOverruns.set( url, ( probeOverruns.get( url ) ?? 0 ) + ms ),

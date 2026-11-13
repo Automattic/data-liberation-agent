@@ -33,6 +33,7 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'exports scripted role=l
 	mkdirSync( parent, { recursive: true } );
 	const root = mkdtempSync( join( parent, 'scripted-links-' ) );
 	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		if ( request.url === '/robots.txt' ) { response.end( '' ); return; }
 		if ( request.url?.includes( 'sitemap' ) ) { response.statusCode = 404; response.end(); return; }
 		response.setHeader( 'Content-Type', 'text/html' );
