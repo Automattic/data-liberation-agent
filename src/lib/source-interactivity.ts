@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
-import * as cheerio from 'cheerio';
+import { readDocument } from './parsed-documents.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 
 export const SOURCE_INTERACTIVITY_SCHEMA = 'blocks-engine-capture/source-interactivity/v1';
@@ -29,7 +29,7 @@ export function inspectSourceInteractivity(
 	if ( ! /<script\b/i.test( html ) ) {
 		return { url: pageUrl, status: 'not_detected', signals: [], scripts: [] };
 	}
-	const $ = cheerio.load( html );
+	const $ = readDocument( html );
 	const hasCanvas = $( 'canvas' ).length > 0;
 	const canvasIds = $( 'canvas[id]' )
 		.map( ( _, element ) => $( element ).attr( 'id' ) ?? '' )

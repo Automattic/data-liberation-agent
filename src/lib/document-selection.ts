@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { ownDocument, readDocument } from './parsed-documents.js';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
@@ -91,7 +92,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	if ( ! base ) throw new Error( 'Default device document was not captured' );
 	const reconciliation = reconcileDeviceDocuments( documents, selection, readLinkedStylesheet );
 	const wrapperKey = ( key: string ) => reconciliation.reconciled.has( key ) ? selection.defaultDocument : key;
-	const $ = cheerio.load( base );
+	const $ = ownDocument( base );
 	$( 'style,link[rel~="stylesheet"],meta[name="viewport"],script:not([type="application/ld+json"])' ).remove();
 	$( 'html' ).removeAttr( 'style' ).removeAttr( 'class' );
 	$( 'body' ).empty().removeAttr( 'class' ).removeAttr( 'style' );
@@ -103,7 +104,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 	const sheets: Array<{ identity?: string; keys: string[]; copy: ReturnType<typeof $>; css?: string; rootClasses: string[]; rootProjection?: string }> = [];
 	for ( const key of selection.documents ) {
 		if ( documents[ key ] === undefined ) continue;
-		const source = cheerio.load( documents[ key ] );
+		const source = readDocument( documents[ key ] );
 		// This is a page-level runtime dependency, not a selected-device flag.
 		// Keep it when any captured document needs WordPress emoji support.
 		if ( source( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress' ) {

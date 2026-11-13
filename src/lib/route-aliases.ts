@@ -15,7 +15,7 @@
  * an alias of that route. Every uncertain case keeps the route; routes without
  * such a sibling are never fetched.
  */
-import * as cheerio from 'cheerio';
+import { readDocument } from './parsed-documents.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import { mapPool } from './concurrency.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
@@ -120,7 +120,7 @@ export function queryOnlyCanonicalTarget( url: string, canonical: string | undef
 
 /** First `<link rel="canonical">` of a server-HTML fragment, resolved against the response. */
 export function canonicalLinkHref( html: string, baseUrl: string ): string | undefined {
-	const $ = cheerio.load( html );
+	const $ = readDocument( html );
 	for ( const element of $( 'link[rel]' ).toArray() ) {
 		const relations = ( element.attribs.rel ?? '' ).toLowerCase().split( /\s+/ );
 		if ( ! relations.includes( 'canonical' ) ) continue;

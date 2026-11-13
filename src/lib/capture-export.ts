@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { structuredContentIndex } from './content-index.js';
 import { deferredMediaReferences, linkDeferredMedia, recordMediaLedger } from './media-queue.js';
 import { canonicalLinkHref } from './route-aliases.js';
+import { ownDocument, readDocument, withParsedDocuments } from './parsed-documents.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
 import { withoutPlatformDefaultIcons } from './platform-default-icons.js';
@@ -471,7 +472,7 @@ function rewriteRouteLinksIn(
 }
 
 function renderedHtml( html: string ): string {
-	const $ = cheerio.load( html.replace( /<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '' ) );
+	const $ = ownDocument( html.replace( /<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '' ) );
 	$( 'img[src],img[srcset]' ).each( ( _index, element ) => {
 		const node = $( element );
 		const source = `${ node.attr( 'src' ) ?? '' },${ node.attr( 'srcset' ) ?? '' }`;
@@ -618,7 +619,7 @@ function normalizedDeclarativeFormEmbeds( html: string ): string {
 }
 
 function openGraphUrl( html: string ): string | undefined {
-	return cheerio.load( html )( 'meta[property="og:url"]' ).first().attr( 'content' );
+	return readDocument( html )( 'meta[property="og:url"]' ).first().attr( 'content' );
 }
 
 function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?: SiteRouteScope ): string | undefined {
@@ -857,7 +858,7 @@ function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
 			occurrences.push( reference.trim().replace( /&amp;/g, '&' ) );
 			retained.set( family, occurrences );
 		};
-		const $ = cheerio.load( html );
+		const $ = readDocument( html );
 		$( 'img,source,video,audio' ).each( ( _index, element ) => {
 			const node = $( element );
 			const src = node.attr( 'src' );
@@ -1394,7 +1395,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				capture.entries = JSON.parse( pristineEntries ) as ScreenshotManifest[ 'entries' ];
 				if ( httpInput ) httpInput.entries = capture.entries as typeof httpInput.entries;
 			}
-			const built = buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, phoneSwitchWidth, stageDir, budget, exclusions );
+			const built = withParsedDocuments( () => buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, phoneSwitchWidth, stageDir, budget, exclusions ) );
 			const plan = planExportBudget( { websiteDir: join( stageDir, 'website' ), budget, ...built, exclusions } );
 			if ( plan.withinBudget || ! plan.next ) {
 				recordExportBudget( stageDir, budget, plan, exclusions, pass );
