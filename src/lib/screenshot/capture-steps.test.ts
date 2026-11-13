@@ -6,17 +6,20 @@ import { combineSkips } from './probe-exclusions.js';
 import { createPhaseLedger } from './phase-ledger.js';
 
 describe( 'runSteps', () => {
-	it.each( [ 'when', 'expiry', 'failure', 'integrity', 'crash' ] as const )( '%s', async scenario => {
+	it.each( [ 'when', 'expiry', 'failure', 'integrity', 'crash', 'drop-profile', 'evaluate', 'evaluate-timeout', 'drop-integrity' ] as const )( '%s', async scenario => {
 		const ctx = { page: {} as Page, values: [] as string[] };
 		let expired = false;
 		const ledger = createPhaseLedger();
 		const steps: CaptureStep<typeof ctx>[] = [ {
-			id: 'first', onFailure: 'best-effort', bound: 'probe-budget',
+			id: 'first',
+			onFailure: scenario === 'drop-profile' || scenario === 'drop-integrity' ? 'drop-profile' : 'best-effort',
+			bound: scenario.startsWith( 'evaluate' ) ? { evaluateMs: 5 } : 'probe-budget',
 			when: () => scenario !== 'when',
 			partial: c => c.values.push( 'partial' ),
 			run: async c => {
-				if ( scenario === 'integrity' ) throw new IntegrityError( 'test' );
-				if ( scenario === 'failure' ) throw new Error( 'test' );
+				if ( scenario.includes( 'integrity' ) ) throw new IntegrityError( 'test' );
+				if ( scenario === 'failure' || scenario === 'drop-profile' ) throw new Error( 'test' );
+				if ( scenario === 'evaluate-timeout' ) await new Promise<void>( () => {} );
 				c.values.push( 'first' );
 			},
 		}, {
@@ -29,13 +32,14 @@ describe( 'runSteps', () => {
 				return drive();
 			},
 		} } );
-		if ( scenario === 'integrity' ) await expect( run ).rejects.toBeInstanceOf( IntegrityError );
-		else await run;
+		if ( scenario.includes( 'integrity' ) ) await expect( run ).rejects.toBeInstanceOf( IntegrityError );
+		else expect( await run ).toBe( ! [ 'crash', 'expiry', 'drop-profile' ].includes( scenario ) );
 		expect( ctx.values ).toEqual( {
 			when: [ 'later' ], expiry: [ 'partial' ], failure: [ 'partial', 'later' ], integrity: [], crash: [],
+			'drop-profile': [ 'partial' ], evaluate: [ 'first', 'later' ], 'evaluate-timeout': [ 'partial', 'later' ], 'drop-integrity': [],
 		}[ scenario ] );
 		const phases = ledger.finish();
-		expect( phases.find( p => p.phase === 'first' )?.failed ).toBe( scenario === 'failure' ? 1 : undefined );
+		expect( phases.find( p => p.phase === 'first' )?.failed ).toBe( [ 'failure', 'drop-profile', 'evaluate-timeout' ].includes( scenario ) ? 1 : undefined );
 		if ( scenario === 'crash' ) expect( phases ).toEqual( [] );
 	} );
 } );

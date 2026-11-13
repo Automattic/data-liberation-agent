@@ -72,6 +72,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 		waitForLoadState: vi.fn().mockResolvedValue( undefined ),
 		evaluate: vi.fn().mockImplementation( async ( callback: unknown ) => {
 			const source = String( callback );
+			if ( source.includes( 'glyphs.push' ) ) return [];
 			if ( source.includes( 'ViewTimeline' ) ) return [];
 			// The serializer sweeps source cleanup in its own task, so match it first.
 			if ( source.includes( 'DOCTYPE' ) ) {

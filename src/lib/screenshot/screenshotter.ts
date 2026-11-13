@@ -1,3 +1,4 @@
+import { baselineSteps, createBaselineState, type CapturePerViewportArgs } from './baseline-steps.js';
 import { isIntegrityError } from '../failure-class.js';
 import { loadSourceBaseline, renderedQueryAlias } from './load-baseline.js';
 import { runSteps } from './capture-steps.js';
@@ -9,7 +10,7 @@ import { probeDeviceMode, checkRouteDeviceMode, type DeviceComparisonArgs } from
 import { probeSharedChrome } from './chrome-reuse.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { incompleteDeviceDocument } from '../responsive-assembly.js';
-import { dirname, join, relative } from 'node:path';
+import { join } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { parseSrcset, isSrcsetShaped } from '../srcset.js';
 import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
@@ -18,59 +19,35 @@ import { SourceRequestGovernors } from '../source-request-governor.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { navigateSourceDocument, inspectSourceDocument, boundaryIdentity, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS } from '../source-navigation.js';
-import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
-import { extractFull } from '../replicate/section-extract.js';
-import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
-import { readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
-import { captureChromeFidelity } from './capture-chrome-fidelity.js';
+import { cleanupPolicy } from '../source-cleanup.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
-import {
-	countBodyTags,
-	isRouteDrift,
-	isStackingArtifact,
-	matchClientErrorShell,
-	PHONE_REDIRECT_DESKTOP_ONLY,
-	profileRedirectMerge,
-} from './document-integrity.js';
-import { sanitizeFrozenHtml } from './freeze.js';
+import { PHONE_REDIRECT_DESKTOP_ONLY, profileRedirectMerge } from './document-integrity.js';
 import { portStaticShadowContent } from './shadow-content.js';
-import { normalizeCaptureState, normalizeGeneratedIds, settleScriptMotion, SCRIPT_MOTION_BUDGET_MS } from './capture-state.js';
-import { markGalleryRoots } from './gallery-capture.js';
-import { snapshotComponents, type ComponentBaseline, type CapturedComponent } from './component-states.js';
-import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { withDocumentTitle } from './document-title.js';
-import { wireCapturedDialogs } from '../static-dialogs.js';
-import { captureNativeViewTimelines } from './native-view-timelines.js';
+import { type CapturedComponent } from './component-states.js';
 import { observeNativeControlState, NATIVE_CONTROL_STATE_ATTRIBUTE, wireNativeControlState } from '../native-control-state.js';
-import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
-import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
-import { RootClassEvidence, rootClassContracts, sampleRootClassLadder, projectRootClassContracts, type RootClassContract } from './root-class-contracts.js';
-import {
-	type CapturedDialogInteraction,
-	type InteractionStatesReport,
-} from './interaction-capture.js';
-import { type ScrollStatesReport } from './scroll-state-capture.js';
+import { type FluidSeriesMemo } from './fluid-capture.js';
+import { type ViewportClassMemo } from './viewport-class-states.js';
+import { RootClassEvidence } from './root-class-contracts.js';
+import { type CapturedDialogInteraction, type InteractionStatesReport } from './interaction-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
-import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
+import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { observeViewportWork } from './viewport-work.js';
 import { attributeSourcePhase } from '../browser-kit/source-traffic.js';
 import { createPhaseBudget } from './phase-budget.js';
 import { AbsentDocumentProbes, isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
-import { installRuntimeWidgetAttribution, removeRuntimeWidgets } from './runtime-widgets.js';
-import { restoreRuntimeEmoji } from './runtime-emoji.js';
+import { installRuntimeWidgetAttribution } from './runtime-widgets.js';
 import { cleanPortableScaffolding } from './portable-scaffolding.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
-import { createPhaseLedger, routePhaseBreakdown, type PhaseLedger } from './phase-ledger.js';
+import { createPhaseLedger, routePhaseBreakdown } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
-import { waitForStable, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
+import { waitForStable, dismissOverlays, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
 import { CapturedResourceStore, installResourceReplay } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
-import { preserveStreamedVideoPosters } from './streamed-video.js';
-import { GlyphColorCache, recordGlyphColors } from './glyph-color.js';
+import { GlyphColorCache } from './glyph-color.js';
 import { isGoogleMapHost, portRenderedGoogleMaps } from './rendered-google-maps.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { LinkedFrontier } from './linked-frontier.js';
@@ -78,8 +55,11 @@ import { RouteTimeBudget, RouteDeadlines, deriveRouteDeadlineMs, routeProfileTim
 import { routeInScope, scopedRouteKey, validateRouteScope } from '../url/route-scope.js';
 import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
-import { analyzePage } from './site-analysis.js';
 import { guardPageErrors, PAGE_ERROR_STORM } from './page-error-guard.js';
+import { defaultViewports, SCREENSHOT_DEVICE_SCALE_FACTOR, type CaptureLogSink, type ScreenshotOpts, type ScreenshotResult, type Viewport } from './types.js';
+import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
+import { summarizeSharedChrome, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
+import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
 
 /** Alias request identity → its canonical route's identity, for link counting. */
 function linkedAliasMap( aliases?: readonly import('../route-aliases.js').CanonicalRouteAlias[] ): Map< string, string > {
@@ -89,27 +69,7 @@ function linkedAliasMap( aliases?: readonly import('../route-aliases.js').Canoni
 	}
 	return map;
 }
-import {
-	defaultViewports,
-	SCREENSHOT_DEVICE_SCALE_FACTOR,
-	type CaptureLogSink,
-	type ScreenshotOpts,
-	type ScreenshotResult,
-	type Viewport,
-} from './types.js';
-import type { GeometryCapture } from './layout-geometry-proof.js';
-import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
-import { summarizeSharedChrome, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
-import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
-import { stampScriptedLinkCandidates } from './scripted-links.js';
 
-/**
- * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
- * `viewport.height * SCROLL_OFFSET_RATIO` and clip a viewport-sized region
- * starting at that same Y. Both sites (the scroll and the clip origin) must
- * stay in lockstep; changing one changes the other.
- */
-const SCROLL_OFFSET_RATIO = 1.5;
 const ANALYSIS_SAMPLE_LIMIT = 1;
 const MAX_CAPTURED_DIALOGS = 8;
 const MAX_CRASH_RELAUNCHES = 3;
@@ -167,19 +127,6 @@ const MAX_CRASH_RELAUNCHES = 3;
  * Browser restart runs at BATCH BOUNDARIES only — never mid-batch.
  */
 
-/** Race a screenshot promise against a hard timeout. Mirrors withEvaluateTimeout. */
-async function withScreenshotTimeout< T >( p: Promise< T >, ms: number ): Promise< T > {
-	let timer: NodeJS.Timeout | undefined;
-	const timeout = new Promise< never >( ( _, reject ) => {
-		timer = setTimeout( () => reject( new Error( `screenshot timeout after ${ ms }ms` ) ), ms );
-	} );
-	try {
-		return await Promise.race( [ p, timeout ] );
-	} finally {
-		if ( timer ) clearTimeout( timer );
-	}
-}
-
 /** Best-effort log forwarder — never throws into the capture loop. */
 function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 	if ( /^\[(?:restart|retry)\]/.test( message ) ) console.error( message );
@@ -189,87 +136,6 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 	} catch {
 		/* logging transport not available */
 	}
-}
-
-interface CapturePerViewportArgs {
-	page: Page;
-	absentDocument?: ( html: string ) => Promise< boolean >;
-	rootClassEvidence: RootClassEvidence;
-	routeDeadlineMs: number;
-	routeRemainingMs: () => number;
-	serverLinks: Set<string>;
-	probeOverrun: ( ms: number ) => void;
-	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
-	phases?: PhaseLedger;
-	/** Stop best-effort stages after a crash or page-error storm. */
-	rendererCrashed: () => boolean;
-	learnFluid?: boolean;
-	/** Swept fluid series shared across this capture's routes. */
-	fluidMemo?: FluidSeriesMemo;
-	/** Class-state breakpoints located on earlier routes of this capture. */
-	classBreakpoints?: Set< number >;
-	classMemo?: ViewportClassMemo;
-	fluidWidths?: number[];
-	collectResponsiveImages?: (
-		page: import('playwright').Page,
-		ctx: import('../../adapters/page-actions.js').LiberationContext
-	) => Promise< Record< string, string > >;
-	removeSelectors?: string[];
-	clientErrorShellSelectors?: string[];
-	cleanupPolicy?: CleanupPolicy;
-	prepareCapture?: (
-		page: import('playwright').Page,
-		ctx: import('../../adapters/page-actions.js').LiberationContext
-	) => Promise< void >;
-	resolveClientRedirect?: ( page: Page, url: string ) => Promise< string | undefined >;
-	/** Resolve a query rendition whose rendered rel=canonical is its query-less route to that route. */
-	canonicalQueryAlias?: boolean;
-	initScript?: ScreenshotOpts['initScript'];
-	beforeFluid?: ScreenshotOpts['beforeFluid'];
-	beforeSerialize?: (
-		page: import('playwright').Page,
-		ctx: import('../../adapters/page-actions.js').LiberationContext
-	) => Promise< void >;
-	observeSource?: ScreenshotOpts['observeSource'];
-	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
-	canonicalizeHtml?: ( html: string, document?: string ) => string;
-	probeExclusions?: ScreenshotOpts['probeExclusions'];
-	/** The entrypoint's one-time chrome probe for this profile; see chrome-reuse.ts. */
-	sharedChrome?: SharedChromeProbe;
-	/**
-	 * Set on the desktop pass of a reflow-only route: its document also serves
-	 * phones, so chrome with no reusable entrypoint evidence has its phone-only
-	 * controls probed in place at this size (see `probePhoneOnlyChrome`).
-	 */
-	reflowPhoneViewport?: { width: number; height: number };
-	viewport: Viewport;
-	consentViewports?: ReadonlyArray<{ id?: string; width: number; height: number }>;
-	plan: ArtifactPlan;
-	url: string;
-	slug: string;
-	settleMs: number;
-	/** Additional bounded rendering time for a content-incomplete device retry. */
-	recoverIncompleteDocument?: boolean;
-	screenshotTimeoutMs: number;
-	evaluateTimeoutMs: number;
-	failures: FailureEntry[];
-	/** Non-fatal observations about this profile's capture, recorded on its manifest profile. */
-	diagnostics?: ProfileDiagnostic[];
-	entry: ManifestEntry;
-	aggregator: SiteAnalysisAggregator;
-	shouldAnalyze: boolean;
-	outputDir: string;
-	/** Accumulates {media id → mobile-variant URL} from the mobile viewport, for
-	 *  responsive-image carry. Mutated in place; written once after all captures. */
-	responsiveImages: Record< string, string >;
-	/** Accumulates {slug → mobile-DOM scrollHeight} from the mobile viewport, for the
-	 *  alt path's iframe mobile-DOM carry. Mutated in place; written once at run end. */
-	mobileHeights: Record< string, number >;
-	resourceStore: CapturedResourceStore;
-	/** Run-scoped glyph colours, shared by every route and profile (#924). */
-	glyphColors?: GlyphColorCache;
-	publicUrlsOnly: boolean;
-	routeScope?: ScreenshotOpts['routeScope'];
 }
 
 /** Failure reason for a route whose source app crashed into its client error shell. */
@@ -744,183 +610,17 @@ export function geometryCandidateIsSafe( candidate: {
 	return true;
 }
 
-async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise< GeometryCapture > {
-	return page.evaluate(
-		async ( { width, viewportId } ) => {
-			const candidateIsSafe = ( candidate: {
-				tag: string;
-				attributes: Record< string, string >;
-				runtimeSources: string[];
-			} ) => {
-				const tag = candidate.tag.toLowerCase();
-				if ( /^(?:article|aside|footer|form|header|main|nav|section)$/.test( tag ) ) return false;
-				const identity = `${ candidate.attributes.class ?? '' } ${ candidate.attributes.id ?? '' }`;
-				if (
-					/(?:^|[^a-z0-9])(?:band|carousel|loop|marquee|mask|rail|scroller|slider|ticker|track|viewport)(?:[^a-z0-9]|$)/i.test(
-						identity
-					)
-				)
-					return false;
-				for ( const [ name, value ] of Object.entries( candidate.attributes ) ) {
-					const attribute = name.toLowerCase();
-					if (
-						/^on/.test( attribute ) ||
-						/^aria-/.test( attribute ) ||
-						/^(?:id|role|tabindex|contenteditable|action|method|name|for|href|type|disabled)$/.test(
-							attribute
-						)
-					)
-						return false;
-					const references =
-						attribute === 'id'
-							? [
-									`#${ value }`,
-									`getElementById(${ value }`,
-									`getElementById('${ value }`,
-									`getElementById("${ value }`,
-							  ]
-							: attribute === 'class'
-							? value
-									.split( /\s+/ )
-									.filter( Boolean )
-									.map( ( className ) => `.${ className }` )
-							: [ `[${ attribute }`, `${ attribute }=` ];
-					if (
-						references.some( ( reference ) =>
-							candidate.runtimeSources.some( ( source ) => source.includes( reference ) )
-						)
-					)
-						return false;
-				}
-				return true;
-			};
-			const markIdentity = ( node: Element, identity: string ) => {
-				const identities = node.getAttribute( 'data-blocks-engine-capture-geometry-id' )?.split( /\s+/ ) ?? [];
-				if ( ! identities.includes( identity ) ) {
-					identities.push( identity );
-					node.setAttribute( 'data-blocks-engine-capture-geometry-id', identities.join( ' ' ) );
-				}
-			};
-			const omissions: Record< string, number > = {};
-			const omit = ( code: string ) => ( omissions[ code ] = ( omissions[ code ] ?? 0 ) + 1 );
-			const box = ( node: Element ) => {
-				const rect = node.getBoundingClientRect();
-				return {
-					x: Math.round( rect.x * 1000 ) / 1000,
-					y: Math.round( rect.y * 1000 ) / 1000,
-					width: Math.round( rect.width * 1000 ) / 1000,
-					height: Math.round( rect.height * 1000 ) / 1000,
-				};
-			};
-			const equal = ( left: ReturnType< typeof box >, right: ReturnType< typeof box > ) =>
-				[ 'x', 'y', 'width', 'height' ].every(
-					( key ) =>
-						Math.abs( left[ key as keyof typeof left ] - right[ key as keyof typeof right ] ) <= 1
-				);
-			const runtimeSources = Array.from( document.scripts, ( script ) => script.textContent ?? '' );
-			const observations: GeometryCapture[ 'observations' ] = [];
-			for ( const wrapper of Array.from(
-				document.body.querySelectorAll( 'div,section,article,main' )
-			) ) {
-				if ( observations.length >= 64 ) {
-					omit( 'candidate_limit' );
-					break;
-				}
-				const target = wrapper.firstElementChild;
-				if (
-					! target ||
-					wrapper.children.length !== 1 ||
-					Array.from( wrapper.childNodes ).some(
-						( node ) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
-					) ||
-					[ ...wrapper.querySelectorAll( '*' ), wrapper ].some( ( node ) =>
-						[ ...node.attributes ].some( ( attribute ) => /^on/i.test( attribute.name ) )
-					)
-				) {
-					omit( 'runtime_or_semantics_unproven' );
-					continue;
-				}
-				if (
-					! candidateIsSafe( {
-						tag: wrapper.tagName,
-						attributes: Object.fromEntries(
-							Array.from( wrapper.attributes, ( attribute ) => [ attribute.name, attribute.value ] )
-						),
-						runtimeSources,
-					} )
-				) {
-					omit( 'runtime_or_semantics_unproven' );
-					continue;
-				}
-				const wrapperStyle = getComputedStyle( wrapper );
-				const targetStyle = getComputedStyle( target );
-				if (
-					! /^(block|flex|grid)$/.test( targetStyle.display ) ||
-					wrapperStyle.display !== targetStyle.display
-				) {
-					omit( 'display_unproven' );
-					continue;
-				}
-				const sourceWrapper = box( wrapper );
-				const sourceTarget = box( target );
-				const wrapperHtml = wrapper as HTMLElement;
-				const priorDisplay = wrapperHtml.style.display;
-				wrapperHtml.style.display = 'contents';
-				const simulated = box( target );
-				wrapperHtml.style.display = priorDisplay;
-				if ( ! equal( sourceWrapper, sourceTarget ) || ! equal( sourceTarget, simulated ) ) {
-					omit( 'geometry_unproven' );
-					continue;
-				}
-				// Desktop and mobile DOMs can be composed into one portable document.
-				// Scope IDs to their captured viewport so both bindings remain unique.
-				const wrapperIdentity = `${ viewportId }-wrapper-${ observations.length }`;
-				const targetIdentity = `${ viewportId }-target-${ observations.length }`;
-				markIdentity( wrapper, wrapperIdentity );
-				markIdentity( target, targetIdentity );
-				observations.push( {
-					wrapperIdentity,
-					targetIdentity,
-					viewport: width,
-					state: 'default',
-					wrapper: sourceWrapper,
-					target: sourceTarget,
-					simulated,
-					facts: {
-						display: targetStyle.display,
-						position: targetStyle.position,
-						visibility: targetStyle.visibility,
-						childCount: wrapper.children.length,
-					},
-					invariants: { runtime: true, semantics: true },
-				} );
-			}
-			await new Promise< void >( ( resolve ) =>
-				requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) )
-			);
-			return { schema: 'blocks-engine-capture/layout-geometry-capture/v1', observations, omissions };
-		},
-		{ width: viewport.width, viewportId: viewport.id }
-	);
-}
-
 async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void > {
 	const {
 		page,
 		viewport,
 		plan,
 		url,
-		slug,
 		settleMs,
-		screenshotTimeoutMs,
 		evaluateTimeoutMs,
 		failures,
 		entry,
-		aggregator,
-		shouldAnalyze,
 		outputDir,
-		responsiveImages,
-		mobileHeights,
 		resourceStore,
 		publicUrlsOnly,
 	} = args;
@@ -934,13 +634,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// The adapter's rewrite of platform-owned identifiers applies to every stored
 	// HTML artifact alike, so page HTML and the captured dialogs that refer to it
 	// keep naming the same elements.
-	const canonicalize = ( html: string ): string => ( args.canonicalizeHtml ? args.canonicalizeHtml( html ) : html );
 	// Dialog markup holds only part of the page, so it is named after the raw
 	// document it was captured from and keeps meeting the page CSS.
-	let rawDocument: string | undefined;
+	const baseline = createBaselineState();
 	const canonicalizeInteractions = < T, >( report: T ): T => {
 		const canonicalizeHtml = args.canonicalizeHtml;
-		return canonicalizeHtml ? canonicalizeInteractionReport( report, html => canonicalizeHtml( html, rawDocument ) ) : report;
+		return canonicalizeHtml ? canonicalizeInteractionReport( report, html => canonicalizeHtml( html, baseline.rawDocument ) ) : report;
 	};
 
 	resourceStore.observe( page );
@@ -976,477 +675,15 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		prepareCapture: args.prepareCapture,
 	} );
 	if ( ! sourceLoad ) return;
-	const { serverHtml, navigationUrl, sourcePolicy, releaseBaselineNavigation } = sourceLoad;
+	const { navigationUrl, releaseBaselineNavigation } = sourceLoad;
 
 	// Install once, inactive outside the scoped interaction drives below.
 	await installReadOnlyProbeGuard( page, diagnostic => args.diagnostics?.push( diagnostic ) );
 
-	// --- responsive image map (mobile only) -----------------------------------
-	// Some platforms swap each image for a viewport-specific crop at runtime.
-	// Recording {media id → variant URL} lets the export serve that crop via
-	// <picture> with no JavaScript. Which URLs are variants is adapter
-	// knowledge (seam 2), so the capture path never learns a CDN's shape.
-	// Best-effort: a read failure must not fail the screenshot.
-	if ( isMobile && args.collectResponsiveImages ) {
-		try {
-			Object.assign(
-				responsiveImages,
-				await args.collectResponsiveImages( page, { url, viewport: 'mobile' } )
-			);
-		} catch {
-			/* best-effort — never block capture on the responsive-image probe */
-		}
-	}
-
-	// Sweeps and adapter preparation may leave a scrolled pose. Initial evidence
-	// must describe the same settled top state before geometry or components.
-	try {
-		await withEvaluateTimeout( normalizeCaptureState( page ), evaluateTimeoutMs );
-		await withEvaluateTimeout( normalizeGeneratedIds( page ), evaluateTimeoutMs );
-	} catch ( error ) {
-		fail( 'evaluate', `source baseline reset unproven: ${ String( error ) }` );
-		return;
-	}
-
-	// Best-effort: a page that does not answer keeps whatever pose it reached.
-	const settleScriptEntrances = async () => {
-		const outcome = await withEvaluateTimeout( settleScriptMotion( page ), SCRIPT_MOTION_BUDGET_MS + evaluateTimeoutMs ).catch( () => undefined );
-		if ( outcome?.swept ) process.stderr.write( `[timing] script-motion ${ JSON.stringify( { url, viewport: viewport.id, ...outcome } ) }\n` );
-	};
-
-	// --- html (desktop only) --------------------------------------------------
-	if ( plan.captureGeometry ) {
-		args.phases?.enter( 'layout-geometry' );
-		let capture: GeometryCapture;
-		try {
-			capture = await captureLayoutGeometry( page, viewport );
-		} catch {
-			capture = {
-				schema: 'blocks-engine-capture/layout-geometry-capture/v1',
-				observations: [],
-				omissions: { capture_failed: 1 },
-			};
-		}
-		mkdirSync( dirname( plan.paths.geometry ), { recursive: true } );
-		writeFileSync( plan.paths.geometry, `${ JSON.stringify( capture, null, 2 ) }\n` );
-	}
-
-	// Measure while the source runtime still owns layout. Later observation,
-	// fluid learning and serialization hooks may freeze timers or change DOM
-	// geometry; their root classes are not evidence of source width behavior.
-	let rootClassWidths: RootClassContract[] = [];
-	if ( isDesktop && plan.captureHtml ) {
-		args.phases?.enter( 'root-class' );
-		try {
-			const startedAt = Date.now();
-			const onUnproven = ( reason: string ) => args.diagnostics?.push( {
-				code: 'root_class_source_probe_unproven', reason: `${ url }: ${ reason }`,
-			} );
-			const initial = await withEvaluateTimeout( page.evaluate( () => ( {
-				width: innerWidth,
-				html: [ ...document.documentElement.classList ].sort(),
-				body: [ ...document.body.classList ].sort(),
-			} ) ), evaluateTimeoutMs );
-			// Only the server document separates authored root classes from
-			// runtime-added ones; without it, sample this route and prove nothing.
-			const ladder = () => sampleRootClassLadder( page, undefined, onUnproven );
-			const result = serverHtml
-				? await args.rootClassEvidence.contracts( url, serverHtml, initial, ladder )
-				: { contracts: rootClassContracts( await ladder() ?? [] ), inheritedFrom: undefined };
-			rootClassWidths = result.contracts;
-			process.stderr.write( `[timing] root-class ${ JSON.stringify( { url, durationMs: Date.now() - startedAt, inheritedFrom: result.inheritedFrom } ) }\n` );
-		} catch ( error ) {
-			// A bounded probe cannot safely hand a nonresponding renderer to
-			// subsequent DOM reads. Lose this profile rather than hang capture.
-			fail( 'evaluate', `root class source probe unproven: evaluate timeout or failure: ${ String( error ) }` );
-			return;
-		}
-	}
-
-	// The root-class ladder resized the page; a runtime that remounts on resize
-	// replayed its script entrances. Read the initial document at rest.
-	args.phases?.enter( 'script-motion' );
-	await settleScriptEntrances();
-	args.phases?.enter( 'baseline-snapshot' );
-	// Initial component states are immutable evidence, read before exploration.
-	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
-	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
-	if ( args.beforeSerialize ) await args.beforeSerialize( page, { url, viewport: viewport.id, serverHtml } ).catch( () => undefined );
-	const snapshot = await snapshotComponents( page ).catch( () => undefined );
-	const componentBaseline: ComponentBaseline = snapshot && Array.isArray( snapshot.components ) ? snapshot : { components: [], controls: [] };
-	await markGalleryRoots( page ).catch( () => undefined );
-	// Scripted links are numbered in the serialized document; their destinations
-	// are observed after the baseline, with the other interaction probes.
-	const scriptedLinkSignatures = plan.captureHtml || plan.captureMobileHtml ? await stampScriptedLinkCandidates( page, evaluateTimeoutMs ) : [];
-	await markInitialDocument( page );
-	// Probes above resized the page; serialize source sheets as loaded at this width.
-	await restoreLoadTimeSheets( page ).catch( () => 0 );
-	const initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml );
-	if ( await args.absentDocument?.( initialDocument ) ) {
-		fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
-		return;
-	}
-	// The serialized head is the initial one, so it is named by the title the
-	// browser reported for it, before exploration could retitle the page.
-	const initialTitle = await page.evaluate( () => document.title ).catch( () => undefined );
-
-	// Seam 1b: replace runtime-computed pixel geometry with the relationship the
-	// source actually obeys, learned by resizing while its runtime still runs.
-	// Must happen after removals (so stripped chrome is never modelled) and
-	// before serialization (so the learned CSS is what gets written).
-	args.phases?.enter( 'observe-source' );
-	await args.observeSource?.( page, url, viewport.id, sourceErrors(), args.browserProfile, viewport );
-	if ( args.rendererCrashed() ) return;
-	// A failed native timeline probe loses that block of evidence,
-	// not the page: record the loss and keep serializing once the page answers
-	// again at its capture viewport and at-top pose. A page that no longer
-	// answers (a stalled main thread) cannot be serialized, so the route fails.
-	const captureViewport = page.viewportSize();
-	const loseBlock = async ( stage: FailureEntry['stage'], loss: Omit< NonNullable< ManifestEntry['blockLosses'] >[ number ], 'unit' | 'profile' > ): Promise< boolean > => {
-		try {
-			if ( ! ( await pageResponds( page, evaluateTimeoutMs ) ) ) throw new Error( `no answer to an evaluate within ${ evaluateTimeoutMs }ms` );
-			if ( captureViewport ) await withEvaluateTimeout( page.setViewportSize( captureViewport ), evaluateTimeoutMs );
-			await withEvaluateTimeout( page.evaluate( () => window.scrollTo( { top: 0, left: 0, behavior: 'instant' } ) ), evaluateTimeoutMs );
-		} catch ( error ) {
-			fail( stage, `${ loss.reason }; the page did not return to its capture pose: ${ error instanceof Error ? error.message : String( error ) }` );
-			return false;
-		}
-		( entry.blockLosses ??= [] ).push( { ...loss, unit: 'block', profile: viewport.id } );
-		return true;
-	};
-	if ( plan.captureHtml || plan.captureMobileHtml ) {
-		let unproven: string | undefined;
-		try {
-			args.phases?.enter( 'native-timelines' );
-			const native = await captureNativeViewTimelines( page, viewport.id, evaluateTimeoutMs );
-			if ( native.samples.length || native.status === 'unproven' ) {
-				const path = join( outputDir, 'native-view-timelines', viewport.id, `${ slug }.json` );
-				mkdirSync( dirname( path ), { recursive: true } );
-				writeFileSync( path, JSON.stringify( native, null, 2 ) );
-				entry.nativeViewTimelines ??= {};
-				entry.nativeViewTimelines[ viewport.id ] = { path: `native-view-timelines/${ viewport.id }/${ slug }.json`, preserved: native.preserved, losses: native.losses, status: native.status, failures: native.failures };
-			}
-			if ( native.status === 'unproven' ) unproven = `native timeline source capture unproven: ${ native.failures.join( '; ' ) }`;
-		} catch ( error ) {
-			unproven = `native timeline capture failed: ${ String( error ) }`;
-		}
-		// Unproven timelines carry no effects into the page; the evidence record above keeps the loss.
-		if ( unproven !== undefined && ! ( await loseBlock( 'evaluate', { code: 'native_timeline_unproven', reason: unproven, severity: 'warning' } ) ) ) return;
-	}
-
-	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
-		args.phases?.enter( 'fluid' );
-		// Sweep classes before learning: resize-driven ancestor state changes can
-		// suspend fluid authority and remove segment markers. Learn from the
-		// settled post-sweep state, with no class-probe resizes left to undo it.
-		const classes = isDesktop ? await captureViewportClassStates( page, {
-			...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
-			settleMs: Math.max( args.settleMs, 800 ),
-			...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
-			...( args.classMemo ? { memo: args.classMemo } : {} ),
-		} ).catch( () => undefined ) : undefined;
-		try {
-			await args.beforeFluid?.( page, { url, viewport: viewport.id, serverHtml } ).catch( () => {
-				/* best-effort — the sweep learns whatever the hook left in place */
-			} );
-			const learned = await learnAndApplyFluidGeometry( page, {
-				// The middle layout's learned rules name its own geometry ids, never the phone document's.
-				document: isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile',
-				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
-				settleMs: Math.max( args.settleMs, 800 ),
-				...( args.fluidMemo ? { memo: args.fluidMemo } : {} ),
-			} );
-			entry[ isDesktop ? 'fluid' : 'fluidMobile' ] = {
-				applied: learned.applied,
-				unmodelled: learned.unmodelled,
-				breakpoints: learned.breakpoints,
-				canvasFloor: learned.canvasFloor,
-				byKind: learned.byKind,
-				sampledWidths: learned.sampledWidths,
-			};
-		} catch ( error ) {
-			// Never fail a capture over the optimization: a frozen copy still
-			// beats no copy, and the diagnostics record that it stayed frozen.
-			entry[ isDesktop ? 'fluid' : 'fluidMobile' ] = {
-				applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {},
-				diagnostic: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
-			};
-		}
-		if ( classes && classes.aliased > 0 && entry.fluid ) entry.fluid.byKind[ 'viewport-class' ] = classes.aliased;
-	}
-	if ( args.rendererCrashed() ) return;
-	if ( plan.captureHtml || plan.captureMobileHtml ) {
-		await resourceStore.captureSelectedSrcsets( page ).catch( () => undefined );
-	}
-
-	// Remove attributed non-content islands before interaction evidence and HTML.
-	args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
-	// Restore runtime emoji replacement images to their authored text (#954),
-	// so screenshots, interaction evidence and HTML all record text where the
-	// source's emoji script had swapped in Twemoji images.
-	args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
-	args.phases?.enter( 'before-serialize' );
-	if ( args.rendererCrashed() ) return;
-	// Width sweeps resize the page too. The screenshot and every serialization
-	// below read the entrances' rest pose, never a replay still in flight.
-	await settleScriptEntrances();
-	if ( args.rendererCrashed() ) return;
-
-	// Capture only after every operation that can change the live DOM, then
-	// serialize immediately below. This keeps runtime-driven components in the
-	// same state across the visual reference and its HTML transaction.
-	if ( plan.captureFullpage ) {
-		try {
-			args.phases?.enter( 'screenshot' );
-			const buf = await withScreenshotTimeout(
-				page.screenshot( { fullPage: true, type: 'png' } ),
-				screenshotTimeoutMs
-			);
-			mkdirSync( dirname( plan.paths.fullpage ), { recursive: true } );
-			writeFileSync( plan.paths.fullpage, buf );
-			const rel = `screenshots/${ viewport.id }/${ slug }.png`;
-			if ( isDesktop ) entry.desktop = rel;
-			else if ( isMobile ) entry.mobile = rel;
-		} catch ( err ) {
-			const msg = err instanceof Error ? err.message : String( err );
-			fail( /screenshot timeout/.test( msg ) ? 'screenshot-timeout' : 'screenshot-fullpage', msg );
-		}
-	}
-
-	if ( args.rendererCrashed() ) return;
-	// Record the rendered colour of single-colour icon glyphs as
-	// `data-blocks-engine-capture-glyph-color`, so compile never has to decode image bytes (#769).
-	// Bounded; a miss loses only that evidence.
-	if ( plan.captureHtml || plan.captureMobileHtml ) {
-		args.phases?.enter( 'glyph-colors' );
-		await recordGlyphColors( page, {}, args.glyphColors ).catch( () => undefined );
-		if ( args.rendererCrashed() ) return;
-	}
-	// The cleanup observer may have exhausted its budget before the page
-	// re-rendered a credit or ad; the saved document must be swept. A source
-	// that re-initialized its document after install has no state left to
-	// sweep — the policy lets the sweep reinstall on the fresh document.
-	// A frozen document (the static mobile carry) also has its scripts stripped.
-	const serializeDocument = async ( frozen: boolean ): Promise< { html: string; documentUrl: { url: string; baseUrl: string } } > => {
-		args.phases?.enter( 'serialize' );
-		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
-		await sweepSourceCleanup( page, sourcePolicy );
-		await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-		// Source width changes can rerender emoji replacement images (#954).
-		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
-		const learned = await capturePageHtml( page, args.diagnostics );
-		const baseUrl = await page.evaluate( () => document.baseURI );
-		const linkedSheet = ( href: string ) => {
-			const absolute = new URL( href, baseUrl ).href;
-			const resource = resourceStore.getReplayableResponse( absolute, 'stylesheet' );
-			return resource ? { css: readFileSync( resource.path, 'utf8' ), url: absolute } : undefined;
-		};
-		const projected = projectRootClassContracts( projectInitialDocument( initialDocument, learned, linkedSheet ), rootClassWidths, linkedSheet );
-		const captured = typeof initialTitle === 'string' ? withDocumentTitle( projected, initialTitle ) : projected;
-		rawDocument = frozen ? sanitizeFrozenHtml( captured ) : captured;
-		const html = canonicalize( rawDocument );
-		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
-		await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
-		return { html, documentUrl };
-	};
-	if ( plan.captureHtml ) {
-		try {
-			const { html, documentUrl } = await serializeDocument( false );
-			const shellSelector = matchClientErrorShell( html, args.clientErrorShellSelectors );
-			// Refuse to persist a capture whose page navigated away from the route we
-			// were asked to capture: every DOM-mutating step above (lazy-load probing,
-			// disclosure hydration, dialog probing…) runs on a live, script-controlled
-			// page, and this is the first point the actual document is compared against
-			// the intended one. A drifted document is a real, successfully-rendered
-			// page — just the WRONG one — so there is no corrupted markup to detect the
-			// way isStackingArtifact does; only comparing identities catches it.
-			// Recovering (re-navigating and re-running the capture) is not attempted:
-			// the fullpage screenshot above already ran on the drifted page too, so a
-			// re-fetched HTML would still be paired with the wrong screenshot. Refusing
-			// and recording it — the same discipline as isStackingArtifact below — keeps
-			// the receipt honest instead of shipping a mismatched pair silently.
-			const capturedUrl = page.url();
-			if ( sourceLoad.externalNavigation ) {
-				// A blocked external request leaves the loader DOM intact, not a public
-				// route; the failure was recorded when the lock blocked it.
-			} else if ( isRouteDrift( capturedUrl, navigationUrl ) ) {
-				fail( 'content', `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted` );
-			} else if ( isStackingArtifact( html ) ) {
-				fail( 'content', `nested document capture (${ countBodyTags( html ) } <body> in one page); HTML not persisted` );
-			} else if ( shellSelector !== undefined ) {
-				// The source's client runtime crashed under capture and replaced the
-				// document with its framework error shell. It is never page content:
-				// refuse it and let the route fail by name (route_capture_failed).
-				fail( 'content', `${ CLIENT_ERROR_SHELL_FAILURE }: the page's client runtime replaced the document with its framework error shell (matched ${ shellSelector }); HTML not persisted` );
-			} else {
-				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
-				writeFileSync( plan.paths.html, html );
-				args.glyphColors?.defer( plan.paths.html, html );
-				entry.html = relative( outputDir, plan.paths.html );
-				entry.documents = { ...entry.documents, [ viewport.id ]: documentUrl };
-			}
-		} catch ( err ) {
-			fail( 'content', err );
-		}
-	}
-	if ( args.rendererCrashed() ) return;
-
-	// --- mobile-DOM carry (mobile only) ---------------------------------------
-	// On the mobile pass, the mobile UA + isMobile emulation make JS builders like
-	// Wix serve their SEPARATE ~320px mobile DOM (classic/adaptive sites; desktop-DOM
-	// sites are identical, harmless). Persist that full document (scripts stripped, so
-	// it renders statically) + its height to html-mobile/. The alt reconstruct carries
-	// it in a viewport-isolated iframe to reproduce the mobile layout the desktop DOM
-	// can't reflow to. Best-effort: a miss leaves the page desktop-only.
-	if ( isMobile && plan.captureMobileHtml ) {
-		try {
-			const { html: mhtml, documentUrl } = await serializeDocument( true );
-			// Same route-identity guard as the desktop HTML write above — best-effort
-			// here too (this carry already silently skips on any other failure), so a
-			// drifted mobile capture just leaves the page desktop-only rather than
-			// recording a failure of its own.
-			if ( ! sourceLoad.externalNavigation && ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) && matchClientErrorShell( mhtml, args.clientErrorShellSelectors ) === undefined ) {
-				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
-				writeFileSync( plan.paths.htmlMobile, mhtml );
-				args.glyphColors?.defer( plan.paths.htmlMobile, mhtml );
-				entry.mobileHtml = relative( outputDir, plan.paths.htmlMobile );
-				entry.documents = { ...entry.documents, mobile: documentUrl };
-				mobileHeights[ slug ] = await page.evaluate( () => document.documentElement.scrollHeight );
-			}
-		} catch {
-			/* best-effort — desktop-only carry for this page on failure */
-		}
-	}
-
-	// --- section specs (desktop only) -----------------------------------------
-	// Capture extractFull from the SAME settled page so reconstruction can read
-	// the specs from disk instead of re-running Playwright. Desktop 1440×900
-	// matches the live-extract basis, so geometry/fullBleed agree. STRICTLY
-	// best-effort: a spec-capture miss must NOT mark the (successful) screenshot
-	// as failed — reconstruction falls back to a live extract when the cache is
-	// absent. So this never touches `failures[]`; it just leaves `entry.sections`
-	// unset.
-	if ( isDesktop && plan.captureSections ) {
-		try {
-			args.phases?.enter( 'sections' );
-			const { specs, landmarks } = await extractFull( page, {}, evaluateTimeoutMs );
-			SectionSpecsStore.load( outputDir ).set( url, specs, landmarks, {
-				width: viewport.width,
-				height: viewport.height,
-			} );
-			// Point at the store's ACTUAL path (keyed by slugify(url)); the screenshot
-			// `slug` may be a collision-deduped variant (`-2`), which the store doesn't use.
-			entry.sections = `sections/${ slugify( url ) }.json`;
-		} catch {
-			/* best-effort — reconstruction live-extracts when the spec cache is missing */
-		}
-	}
-	if ( isMobile && plan.captureMobileSections ) {
-		try {
-			args.phases?.enter( 'sections' );
-			const { specs, landmarks } = await extractFull( page, {}, evaluateTimeoutMs );
-			SectionSpecsStore.loadMobile( outputDir ).set( url, specs, landmarks, {
-				width: viewport.width,
-				height: viewport.height,
-			} );
-		} catch {
-			/* best-effort — desktop section evidence remains available */
-		}
-	}
-
-	// --- scrolled screenshot --------------------------------------------------
-	if ( args.rendererCrashed() ) return;
-	if ( plan.captureScrolled ) {
-		try {
-			const docHeight = await page.evaluate( () => document.documentElement.scrollHeight );
-			const scrollY = viewport.height * SCROLL_OFFSET_RATIO;
-			if ( docHeight < scrollY + viewport.height ) {
-				// Page is shorter than scroll-offset + viewport. No distinct scrolled
-				// state to capture. Skip silently (not a failure).
-			} else {
-				// Explicit-instant: css scroll-behavior:smooth would GLIDE here and
-				// the snap would clip mid-glide at the wrong scroll origin (see
-				// page-helpers triggerLazyLoad for the full smooth-scroll rationale).
-				await page.evaluate(
-					( y: number ) => window.scrollTo( { top: y, left: 0, behavior: 'instant' } ),
-					scrollY
-				);
-				// Plain viewport-sized screenshot of the now-scrolled page.
-				// fullPage:false captures the current viewport — no clip needed.
-				// (A clip would have to be inside the 0..viewport.height image, not at
-				// the page's absolute scroll position.)
-				args.phases?.enter( 'screenshot' );
-				const buf = await withScreenshotTimeout(
-					page.screenshot( { fullPage: false, type: 'png' } ),
-					screenshotTimeoutMs
-				);
-				mkdirSync( dirname( plan.paths.scrolled ), { recursive: true } );
-				writeFileSync( plan.paths.scrolled, buf );
-				const rel = `screenshots/${ viewport.id }/${ slug }.scrolled.png`;
-				if ( isDesktop ) entry.desktopScrolled = rel;
-				else if ( isMobile ) entry.mobileScrolled = rel;
-			}
-		} catch ( err ) {
-			const msg = err instanceof Error ? err.message : String( err );
-			fail( /screenshot timeout/.test( msg ) ? 'screenshot-timeout' : 'screenshot-scrolled', msg );
-		}
-	}
-
-	// --- desktop-only site analysis -------------------------------------------
-	if ( args.rendererCrashed() ) return;
-	if ( isDesktop && shouldAnalyze ) {
-		try {
-			args.phases?.enter( 'analysis' );
-			const analysis = await analyzePage( page, evaluateTimeoutMs );
-			entry.metadata = analysis.metadata;
-			aggregator.add( url, analysis );
-		} catch ( err ) {
-			fail( 'evaluate', err );
-		}
-		if ( args.rendererCrashed() ) return;
-		// Best-effort: capture source chrome computed-style fingerprint for later
-		// carry-vs-source fidelity audits. A failure here MUST NOT break the
-		// screenshot run — the try/catch ensures this is never propagated.
-		try {
-			// Write into the screenshots dir — where the audit driver reads it from
-			// (readChromeFidelity(join(outputDir, 'screenshots'))). Must stay in sync.
-			args.phases?.enter( 'chrome' );
-			const n = await captureChromeFidelity(
-				page,
-				url,
-				join( outputDir, 'screenshots' ),
-				CHROME_AUDIT_PROPERTIES
-			);
-			console.info( `[chrome-fidelity] ${ url } -> ${ n } elements` );
-		} catch ( err ) {
-			console.error(
-				`[chrome-fidelity] skipped ${ url }: ${
-					err instanceof Error ? err.message : String( err )
-				}`
-			);
-		}
-	}
-
-	// Dialogs and selectable sets are captured only after every baseline artifact
-	// so probing a trigger cannot alter screenshots, geometry, sidecars, or page
-	// HTML. The per-device documents probe separately: a desktop dialog must not
-	// suppress a mobile-only trigger, and their bounded successful evidence merges
-	// instead of replacing a desktop-only dialog with a mobile-only menu. An
-	// additional profile (an adapter's third document) contributes no interaction
-	// evidence: mergeProfile accepts desktop and mobile reports alone, and every
-	// consumer (interaction-states.json, export media localization, fidelity)
-	// reads that route-level report, so probing an additional profile produced
-	// evidence no stage ever read. Its captured artifacts (HTML, screenshots,
-	// fluid geometry, hydrated disclosures) are unaffected: they are produced and
-	// consumed per profile before this point.
+	if ( ! await runSteps( baselineSteps( args, sourceLoad, baseline, fail, sourceErrors, capturePageHtml ), { page }, {
+		ledger: args.phases, rendererCrashed: () => args.rendererCrashed() || baseline.stopped,
+	} ) || baseline.stopped ) return;
 	let probesExpired = false;
-	if ( args.rendererCrashed() ) return;
-	// Audit the authoritative resting document before a timed-out optional
-	// probe can close its page. Probe mutations are never serialized as baseline.
-	args.phases?.enter( 'cleanup-audit' );
-	const cleanup = await readSourceCleanup(page, sourcePolicy);
-	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
-	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
 	await releaseBaselineNavigation();
 	if ( isDesktop || isMobile ) {
 		const releaseNavigationLock = await lockMainFrameNavigation( page );
@@ -1472,10 +709,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			) entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
 		};
 		const context = {
-			page, url, navigationUrl, viewport, isDesktop, entry, resourceStore, componentBaseline,
+			page, url, navigationUrl, viewport, isDesktop, entry, resourceStore, componentBaseline: baseline.componentBaseline,
 			sharedChrome: args.sharedChrome, probeExclusions: args.probeExclusions,
 			consentViewports: args.consentViewports, reflowPhoneViewport: args.reflowPhoneViewport,
-			diagnostics: args.diagnostics, scriptedLinkSignatures, routeRemainingMs: args.routeRemainingMs,
+			diagnostics: args.diagnostics, scriptedLinkSignatures: baseline.scriptedLinkSignatures, routeRemainingMs: args.routeRemainingMs,
 			state, promote,
 		};
 		await runSteps( postBaselineSteps, context, { ledger: args.phases, budget, rendererCrashed: args.rendererCrashed } );

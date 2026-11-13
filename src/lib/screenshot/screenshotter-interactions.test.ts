@@ -56,11 +56,13 @@ function makePage() {
 		} ),
 		url: () => currentUrl,
 		viewportSize: () => null,
+		locator: vi.fn().mockReturnValue( { count: vi.fn().mockResolvedValue( 0 ) } ),
 		content: vi.fn().mockResolvedValue( '<html><body>Tianna Wolfson</body></html>' ),
 		screenshot: vi.fn().mockResolvedValue( Buffer.from( 'fakepng' ) ),
 		waitForLoadState: vi.fn().mockResolvedValue( undefined ),
 		evaluate: vi.fn().mockImplementation( async ( fn: unknown ) => {
 			const source = String( fn );
+			if ( source.includes( 'glyphs.push' ) ) return [];
 			if ( source.includes( 'ViewTimeline' ) ) return [];
 			// The serializer sweeps source cleanup in its own task, so match it first.
 			if ( source.includes( 'DOCTYPE' ) ) return { html: '<html><body>Tianna Wolfson</body></html>', findings: [] };
