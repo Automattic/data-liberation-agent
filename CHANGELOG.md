@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.2] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- Template clusters: retry a failed prefetched member document inline
+
+### Fixed
+- preserve sampled heights when content wrapping defeats fluid fitting
+- treat text under a transparent ancestor as unpainted
+
 ## [0.35.1] - 2026-11-13
 
 ### Changed
