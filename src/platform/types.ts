@@ -156,7 +156,9 @@ export interface StructuredContentSource {
 	 * synthesized member's cluster key is compared with this slot emptied. */
 	contentSlotSelector?: string;
 	/** The representative's server document with the member's content in its slot. */
-	memberDocument( representativeHtml: string, representative: StructuredContentEntry, member: StructuredContentEntry ): string | undefined;
+	memberDocument( representativeHtml: string, representative: StructuredContentEntry, member: StructuredContentEntry, options?: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors } ): string | undefined | Promise<string | undefined>;
+	/** Per-member head elements, fetched by the adapter and transplanted by identity. */
+	memberHeadSlotSelector?: string;
 	/** The source URL of a term's archive. */
 	termArchiveUrl( term: string, sourceUrl: string ): string;
 	/** The term named by a term-archive URL, or undefined for other routes. */

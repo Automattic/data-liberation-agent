@@ -7,6 +7,15 @@ import { fetchSqsJson } from './content.js';
 
 // 7.1 and 7.0 blog item templates respectively (never the listing excerpt).
 const BODY = '.blog-item-content, .blog-list-article-content-body';
+const FONTS = 'style[data-sqsp-font-ids]';
+// Squarespace item fields the template renders outside the body. Entry
+// identity keeps collection/run state out of the shared adapter singleton.
+interface ItemDetails { id?: string; image?: string; categories: string[]; date: string; newer?: StructuredContentEntry; older?: StructuredContentEntry }
+const details = new WeakMap<StructuredContentEntry, ItemDetails>();
+
+const longDate = (epoch: number, timeZone?: string): string => {
+	try { return new Intl.DateTimeFormat('en-US', { dateStyle: 'long', ...(timeZone ? { timeZone } : {}) }).format(epoch); } catch { return new Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(epoch); }
+};
 
 /** Fail closed on summaries, missing slots and ambiguous templates. */
 export function squarespaceBodyEquivalent(html: string, entry: StructuredContentEntry): boolean {
@@ -34,7 +43,38 @@ export function squarespaceMemberDocument(html: string, representative: Structur
 		if (link.length === 1) link.text(member.title).attr('href', member.permalink);
 		else $(node).text(member.title);
 	});
-	$('title').text($('title').text().replace(representative.title, member.title));
+	// The 7.0 banner title echoes the full page title outside the article.
+	// Rewrite text nodes, not markup, scripts or the member's own content.
+	$('title, body *').not('script, style').contents().each((_, node) => {
+		if (node.type === 'text' && !$(node).parents(BODY).length && representative.title) {
+			node.data = node.data.split(representative.title).join(member.title);
+		}
+	});
+	const adjacent = details.get(member);
+	if ($('.pagination, .item-pagination').length && !adjacent) return undefined;
+	if (adjacent) {
+		// The 7.0 article meta and identity render from the item, as on its own page.
+		$('.blog-list-article-content-categories').html(adjacent.categories.map(category => $('<span>').text(category).toString()).join(''));
+		$('.blog-list-article-content-date').text(adjacent.date);
+		const repId = details.get(representative)?.id;
+		if (repId && adjacent.id) $(`[id="article-${repId}"], [data-item-id="${repId}"]`).each((_, node) => {
+			if ($(node).attr('id') === `article-${repId}`) $(node).attr('id', `article-${adjacent.id}`);
+			if ($(node).attr('data-item-id') === repId) $(node).attr('data-item-id', adjacent.id!);
+		});
+	}
+	if (adjacent) for (const [direction, neighbor] of [['newer', adjacent.newer], ['older', adjacent.older]] as const) {
+		const rel = direction === 'newer' ? 'prev' : 'next';
+		$(`.pagination a.${direction}, .item-pagination a[rel="${rel}"]`).each((_, node) => {
+			const link = $(node);
+			if (!neighbor) { link.remove(); return; }
+			link.attr('href', new URL(neighbor.permalink).pathname);
+			link.find('span, .item-pagination-title').last().text(neighbor.title);
+			const image = details.get(neighbor)?.image;
+			if (image) link.find('.pagination-img').attr('style', `background-image:url(${image}?format=150w);`);
+			else link.find('.pagination-img').remove();
+		});
+		if (!neighbor) $(`.pagination-direction .${direction}`).remove();
+	}
 	$('a[href], link[href]').each((_, node) => {
 		if ($(node).attr('href') === representative.permalink) $(node).attr('href', member.permalink);
 	});
@@ -93,6 +133,7 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 			collections.add(collection.href);
 			// A post's JSON can name its collection but contain only `item`.
 			if (new URL(candidate).pathname !== collection.pathname) json = await fetchSqsJson(collection.href, governors);
+			const collectionEntries: StructuredContentEntry[] = [];
 			const offsets = new Set<string>();
 			for (let page = 0; page < 200; page++) {
 				if (!json || !Array.isArray(json.items)) {
@@ -113,7 +154,10 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 					seenEntries.add(permalink.href);
 					let slug = permalink.pathname.split('/').filter(Boolean).at(-1) ?? '';
 					try { slug = decodeURIComponent(slug); } catch { /* Preserve source escapes. */ }
-					result.entries.push({ permalink: permalink.href, slug, kind: 'post', title: item.title, contentHtml: item.body, published, updated, author: item.author?.displayName ?? '', terms: [...new Set([...(item.categories ?? []), ...(item.tags ?? [])].filter(term => typeof term === 'string' && term.trim()))] });
+					const entry: StructuredContentEntry = { permalink: permalink.href, slug, kind: 'post', title: item.title, contentHtml: item.body, published, updated, author: item.author?.displayName ?? '', terms: [...new Set([...(item.categories ?? []), ...(item.tags ?? [])].filter(term => typeof term === 'string' && term.trim()))] };
+					result.entries.push(entry);
+					collectionEntries.push(entry);
+					details.set(entry, { id: item.id, image: typeof item.assetUrl === 'string' ? item.assetUrl : undefined, categories: (item.categories ?? []).filter(category => typeof category === 'string'), date: longDate(item.publishOn!, json.website?.timeZone) });
 				}
 				if (json.items.length === 0) break;
 				const next = json.pagination?.nextPageOffset;
@@ -125,12 +169,30 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 				url.searchParams.set('offset', String(next));
 				json = await fetchSqsJson(url.href, governors);
 			}
+			collectionEntries.sort((a, b) => b.published.localeCompare(a.published));
+			collectionEntries.forEach((entry, index) => Object.assign(details.get(entry)!, { newer: collectionEntries[index - 1], older: collectionEntries[index + 1] }));
 		}
 		return result;
 	},
 	contentSlotSelector: BODY,
 	bodyEquivalent: squarespaceBodyEquivalent,
-	memberDocument: squarespaceMemberDocument,
+	memberHeadSlotSelector: FONTS,
+	memberDocument(html, representative, member, options) {
+		const synthesized = squarespaceMemberDocument(html, representative, member);
+		if (!synthesized || !cheerio.load(html)(FONTS).length) return synthesized;
+		// Font IDs are not in the collection feed. Never ship the representative's
+		// set on faith: one bounded governed document request supplies this slot.
+		if (!options) return undefined;
+		return safeFetch(member.permalink, { governors: options.governors, timeoutMs: 15_000, maxBytes: 32 * 1024 * 1024, headers: { 'User-Agent': SOURCE_USER_AGENT } }).then(response => {
+			if (response.status < 200 || response.status >= 300) return undefined;
+			const page = cheerio.load(response.body.toString('utf8'));
+			const $ = cheerio.load(synthesized);
+			const original = $(FONTS);
+			original.first().before(page(FONTS).toArray().map(node => page.html(node)).join(''));
+			original.remove();
+			return $.html();
+		}).catch(() => undefined);
+	},
 	termName: squarespaceTermName,
 	termArchiveUrl: squarespaceTermArchiveUrl,
 };
