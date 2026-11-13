@@ -72,8 +72,40 @@ function middleVariant( index: number ): { key: string; className: string } {
 	return { key, className: `data-blocks-engine-capture-${ key }-document` };
 }
 
+/**
+ * Intersect query lists, keeping media types before conditions. `undefined`
+ * requests separate gates: appending to `not print` would negate the width too,
+ * and distinct media types cannot share one query. Callers must retain both
+ * queries (a style media attribute plus an inner @media), never drop either.
+ */
+export function combineMediaQueries( left: string, right: string ): string | undefined {
+	const queries: string[] = [];
+	for ( const a of postcss.list.comma( left.trim() || 'all' ) ) {
+		for ( const b of postcss.list.comma( right.trim() || 'all' ) ) {
+			if ( /^all$/i.test( a ) ) { queries.push( b ); continue; }
+			if ( /^all$/i.test( b ) ) { queries.push( a ); continue; }
+			if ( /^not\b/i.test( a ) || /^not\b/i.test( b ) ) return undefined;
+			const parse = ( query: string ) => {
+				const type = /^(?:(only)\s+)?([a-z][\w-]*)(?:\s+and\s+|$)/i.exec( query );
+				const condition = type ? query.slice( type[ 0 ].length ).trim() : query;
+				return { type: type?.[ 2 ]?.toLowerCase(), only: Boolean( type?.[ 1 ] ), condition };
+			};
+			const x = parse( a );
+			const y = parse( b );
+			const types = [ x.type, y.type ].filter( type => type && type !== 'all' );
+			if ( new Set( types ).size > 1 ) return undefined;
+			const type = types[ 0 ] ?? ( x.only || y.only ? 'all' : undefined );
+			const conditions = [ x.condition, y.condition ].filter( Boolean ).map( condition =>
+				condition.startsWith( '(' ) && ! /\bor\b/i.test( condition ) ? condition : `(${ condition })`
+			);
+			queries.push( [ ...( type ? [ `${ x.only || y.only ? 'only ' : '' }${ type }` ] : [] ), ...conditions ].join( ' and ' ) );
+		}
+	}
+	return queries.join( ', ' );
+}
+
 function middleMedia( range: { minWidth: number; maxWidth: number } ): string {
-	return `(min-width:${ range.minWidth }px) and (max-width:${ range.maxWidth }px)`;
+	return combineMediaQueries( `(min-width:${ range.minWidth }px)`, `(max-width:${ range.maxWidth }px)` )!;
 }
 
 const RESPONSIVE_DOCUMENT_CSS = `.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
@@ -2559,7 +2591,9 @@ function scopedStyles(
 			if ( skip.has( css.trim() ) ) return `<style${ attributes }>${ css }</style>`;
 			const existingMedia = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
 			if ( ! existingMedia ) return `<style${ attributes } media="${ media }">${ css }</style>`;
-			const combined = `${ media } and (${ existingMedia[ 2 ] })`;
+			const combined = combineMediaQueries( media, existingMedia[ 2 ]! );
+			// Independent gates preserve whole-query negation, including query lists.
+			if ( combined === undefined ) return `<style${ attributes }>@media ${ media }{${ css }}</style>`;
 			const scopedAttributes = attributes.replace(
 				existingMedia[ 0 ],
 				`media=${ existingMedia[ 1 ] }${ combined }${ existingMedia[ 1 ] }`

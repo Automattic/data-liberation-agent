@@ -9,6 +9,7 @@ import { learnAndApplyFluidGeometry } from './screenshot/fluid-capture.js';
 import {
 	assembleResponsiveCapture,
 	blockPreludes,
+	combineMediaQueries,
 	DESKTOP_DOCUMENT_CLASS,
 	documentsDiffer,
 	MIDDLE_DOCUMENT_CLASS,
@@ -21,6 +22,54 @@ import { scopeCss } from './replicate/css-scope.js';
 import { middleLayoutSampleWidth } from './screenshot/device-mode.js';
 
 const dirs: string[] = [];
+
+const mediaCases = [
+	[ '(min-width:768px)', 'all', '(min-width:768px)' ],
+	[ 'all', '(min-width:768px)', '(min-width:768px)' ],
+	[ '', '(min-width:768px)', '(min-width:768px)' ],
+	[ '(min-width:768px)', '', '(min-width:768px)' ],
+	[ '(min-width:768px)', 'ALL', '(min-width:768px)' ],
+	[ '(min-width:768px)', 'screen', 'screen and (min-width:768px)' ],
+	[ '(min-width:768px)', 'print', 'print and (min-width:768px)' ],
+	[ 'screen', '(min-width:768px)', 'screen and (min-width:768px)' ],
+	[ '(min-width:768px)', '(orientation:landscape)', '(min-width:768px) and (orientation:landscape)' ],
+	[ '(min-width:768px)', 'orientation:landscape', '(min-width:768px) and (orientation:landscape)' ],
+	[ '(a)', 'screen, print', 'screen and (a), print and (a)' ],
+	[ '(a), (b)', 'screen, print', 'screen and (a), print and (a), screen and (b), print and (b)' ],
+	[ '(a)', 'only screen', 'only screen and (a)' ],
+	[ '(a)', 'screen and (color)', 'screen and (a) and (color)' ],
+	[ '(a)', '(color) or (monochrome)', '(a) and ((color) or (monochrome))' ],
+] as const;
+
+describe( 'media query intersection (#1780)', () => {
+	it.each( mediaCases )( 'combines %s with %s', ( left, right, expected ) => {
+		expect( combineMediaQueries( left, right ) ).toBe( expected );
+	} );
+
+	it.each( [ [ '(a)', 'not print' ], [ 'not screen', '(a)' ], [ '(a)', 'screen, not print' ], [ 'screen', 'print' ] ] )( 'requests independent gates for %s with %s', ( left, right ) => {
+		expect( combineMediaQueries( left!, right! ) ).toBeUndefined();
+	} );
+
+	it.each( [ 'all', 'screen', 'print', '(orientation:landscape)', 'screen, print', 'only screen', 'not print' ] )( 'retains source stylesheet media %s during assembly', sourceMedia => {
+		const desktop = page( `<style media="${ sourceMedia }">.frame{width:1440px}</style><main>Desktop</main><nav>Wide</nav>` );
+		const mobile = page( '<main>Phone</main><button>Menu</button>' );
+		const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( assembled.html );
+		const style = $( 'style' ).filter( ( _, node ) => $( node ).text().includes( 'width:1440px' ) );
+		const combined = combineMediaQueries( '(min-width:768px)', sourceMedia );
+		expect( style.attr( 'media' ) ).toBe( combined ?? sourceMedia );
+		if ( combined === undefined ) expect( style.text() ).toContain( '@media (min-width:768px){' );
+	} );
+
+	it( 'emits queries that Chromium does not parse as not all', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const tab = await browser.newPage();
+			const parsed = await tab.evaluate( queries => queries.map( query => window.matchMedia( query ).media ), mediaCases.map( ( [ , , expected ] ) => expected ) );
+			expect( parsed.every( query => query !== 'not all' ) ).toBe( true );
+		} finally { await browser.close(); }
+	} );
+} );
 
 describe( 'blockPreludes', () => {
 	it( 'matches the block-prelude regular expression in one linear pass', () => {
