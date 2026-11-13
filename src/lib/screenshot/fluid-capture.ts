@@ -735,10 +735,12 @@ async function learnFluidGeometry(
 		if ( transformX && scales?.some( sample => Number.isFinite( sample.value ) && sample.value !== 1000 ) ) continue;
 		// Preserve fitted dimension regimes even when an isolated observation
 		// fits no run: holding that observation locally is better than freezing
-		// the capture width everywhere. This applies to positioned frames as
-		// well as scaled ones. Constant dimensions keep their existing path.
+		// the capture width everywhere. Heights also follow this path in normal
+		// flow: content wrapping need not fit a formula, and freezing the desktop
+		// height can clip taller content at narrower widths. Constant dimensions
+		// keep their existing path.
 		const varyingDimension = ( property === 'width' || property === 'height' ) &&
-			( positioned.has( id ) || scales?.some( sample => Number.isFinite( sample.value ) && sample.value !== 1000 ) ) &&
+			( property === 'height' || positioned.has( id ) || scales?.some( sample => Number.isFinite( sample.value ) && sample.value !== 1000 ) ) &&
 			! constantAcross( new Map( [ [ key, samples ] ] ), samples.length, new Set() );
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );

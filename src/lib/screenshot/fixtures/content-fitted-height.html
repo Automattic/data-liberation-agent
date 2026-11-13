@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Content-fitted grid</title>
+<style>
+body { margin: 0; font: 16px/21px monospace; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; padding: 16px; }
+.card { background: #ddd; overflow-wrap: anywhere; }
+.image { aspect-ratio: 1; background: #aaa; }
+footer { height: 200px; background: #333; }
+@media (min-width: 500px) { .grid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 850px) { .grid { grid-template-columns: repeat(4, 1fr); } }
+</style></head><body>
+<div class="wrap" style="position:relative;height:2296px;overflow:visible"><div class="grid"></div></div>
+<footer></footer>
+<script>
+const grid = document.querySelector('.grid');
+for (let i = 0; i < 28; i++) {
+	const card = document.createElement('div');
+	card.className = 'card';
+	card.innerHTML = '<div class="image"></div>' + 'Product description with variable wrapping. '.repeat(1 + i % 5);
+	grid.append(card);
+}
+const wrap = grid.parentElement;
+function fit() { wrap.style.height = grid.getBoundingClientRect().height + 'px'; }
+new ResizeObserver(fit).observe(grid);
+fit();
+</script></body></html>
