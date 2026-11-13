@@ -141,6 +141,8 @@ export interface ScreenshotOpts {
 	referenceSampleUrls?: readonly string[];
 	/** Reorder only unstarted inventory routes after the entrypoint has rendered. */
 	prioritizePendingRoutes?: ( urls: string[] ) => string[];
+	/** Group newly discovered links before frontier admission, then rank pending work. */
+	groupLinkedRoutes?: ( urls: string[] ) => Promise< void >;
 	/**
 	 * A route resolved to a server redirect alias of `target`, the queued route
 	 * that captures its document. Evidence owed to the alias follows the target.

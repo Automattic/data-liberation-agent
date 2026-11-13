@@ -178,6 +178,53 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		}
 	}, 240_000 );
 
+	// Primary #1764 evidence: one browser pass, typically under 30 seconds.
+	it( 'admits a new crawl-only template representative and verifier before budget exhaustion (#1764)', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'template-clusters-new-frontier-' ) );
+		const origin = `${ BASE }:${ port }`;
+		const originals = new Map( rendered );
+		const paths = [ '/crawl-one/', '/crawl-two/', '/crawl-three/', '/crawl-four/' ];
+		// This family is absent from inventory and has a new page-style fingerprint.
+		// Entry links deliberately put unrelated inventory navigation first.
+		rendered.set( '/', member( 'home' ).replace( '</nav>', '<a href="/tabs/">Tabs</a><a href="/form/">Form</a></nav>' ).replace( '</article>', paths.map( path => `<a href="${ path }">Read</a>` ).join( '' ) + '</article>' ) );
+		for ( const path of paths ) rendered.set( path, member( path, { style: '<style>.crawl-family{color:navy}</style>' } ) );
+		const started = new Set< string >();
+		const start = RouteTimeBudget.prototype.start;
+		const admits = RouteTimeBudget.prototype.admits;
+		// Deterministic three-route window: main spends it on home/tabs/form.
+		const startSpy = vi.spyOn( RouteTimeBudget.prototype, 'start' ).mockImplementation( function ( this: RouteTimeBudget, url ) {
+			started.add( url ); start.call( this, url );
+		} );
+		const admissionSpy = vi.spyOn( RouteTimeBudget.prototype, 'admits' ).mockImplementation( function ( this: RouteTimeBudget, url, concurrency ) {
+			return started.size < 3 && admits.call( this, url, concurrency );
+		} );
+		try {
+			const result = await captureWebsite( { url: `${ origin }/`, outputDir, templateClusters: true, timeBudgetMs: 600_000 }, {
+				findAdapter: () => ( { id: 'neutral-clone', detect: () => true, discover: async () => ( { urls: [ '/tabs/', '/form/' ].map( path => ( { url: `${ origin }${ path }`, type: 'page' } ) ) } ) } ),
+			} );
+			const groups = JSON.parse( readFileSync( join( outputDir, 'template-groups.json' ), 'utf8' ) );
+			const group = groups.groups.find( ( group: { members: string[] } ) => group.members.includes( `${ origin }${ paths[ 0 ] }` ) );
+			expect( group.size ).toBe( 4 );
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ).entries;
+			expect( started.has( group.representative ) ).toBe( true );
+			expect( paths.filter( path => started.has( `${ origin }${ path }` ) ) ).toHaveLength( 2 );
+			for ( const url of started ) expect( manifest[ url ].html ).toBeTruthy();
+			const receipt = JSON.parse( readFileSync( join( outputDir, 'template-clusters.json' ), 'utf8' ) );
+			const cluster = receipt.clusters.find( ( cluster: { representative: string } ) => cluster.representative === group.representative );
+			expect( cluster.verification.equal ).toBe( true );
+			expect( cluster.derived ).toHaveLength( 2 );
+			for ( const { url } of cluster.derived ) {
+				expect( result.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_template_derived', url } ) );
+				expect( existsSync( join( outputDir, 'website', new URL( url ).pathname, 'index.html' ) ) ).toBe( true );
+			}
+		} finally {
+			startSpy.mockRestore(); admissionSpy.mockRestore();
+			rendered = originals;
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 240_000 );
+
 	it( 'derives links from derived documents and diagnoses the final captured wave (#1498)', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const outputDir = mkdtempSync( join( parent, 'template-clusters-links-' ) );
