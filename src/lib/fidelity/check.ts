@@ -6,7 +6,7 @@
 //
 import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import type { Page } from 'playwright';
+import type { Frame, Page, Request } from 'playwright';
 import { mapPool } from '../concurrency.js';
 import { resolveInteractionComponents, type ComponentPage } from '../captured-interactions.js';
 import * as cheerio from 'cheerio';
@@ -336,7 +336,23 @@ export async function observePage(
 	measurement: { runtimeEmoji?: boolean; navigate?: boolean } = {}
 ): Promise< LayoutObservation > {
 	const requests: Array<{ url: string; image: boolean }> = [];
-	const onRequest = ( request: { url: () => string; resourceType: () => string } ): void => {
+	// A cross-origin <iframe> (a map or video embed) is the embedding page's
+	// dependency only as a document: what that document loads is the
+	// provider's own traffic, identical whichever page embeds it.
+	const documentOrigin = ( () => { try { return new URL( url ).origin; } catch { return null; } } )();
+	const embeddedFrames = new Set<string>();
+	const onRequest = ( request: Request ): void => {
+		let frame: Frame | null = null;
+		try { frame = request.frame(); } catch { /* service-worker request: the page's own */ }
+		if ( frame && frame !== page.mainFrame() ) {
+			const frameUrl = request.isNavigationRequest() ? request.url() : frame.url();
+			let frameOrigin: string | null = null;
+			try { frameOrigin = new URL( frameUrl ).origin; } catch { /* about:blank, srcdoc */ }
+			if ( frameOrigin && frameOrigin !== 'null' && frameOrigin !== documentOrigin ) {
+				if ( ! request.isNavigationRequest() ) return;
+				embeddedFrames.add( new URL( frameUrl ).host );
+			}
+		}
 		requests.push( { url: request.url(), image: request.resourceType() === 'image' } );
 	};
 	page.on( 'request', onRequest );
@@ -1085,6 +1101,7 @@ export async function observePage(
 			overflow: measured.overflow,
 			externalHosts: [ ...new Set( requests.filter( request => ! ( request.image && emojiUrls.has( request.url ) ) )
 				.map( request => externalRequestHost( request.url, localOrigin ) ).filter( ( host ): host is string => host !== null ) ) ].sort(),
+			embeddedFrames: [ ...embeddedFrames ].sort(),
 			hashTargets: measured.hashTargets as HashTarget[],
 			internalRoutes,
 			dialogs,
