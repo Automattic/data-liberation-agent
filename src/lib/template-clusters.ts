@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { srcsetCandidates } from './srcset.js';
-import { elementDescriptor, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION } from './template-groups.js';
+import { elementDescriptor, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION, type TemplateStyleNormalization } from './template-groups.js';
 
 /**
  * Template-clustered capture, phase 1 (#784).
@@ -381,8 +381,10 @@ export function deriveMemberDocument( input: {
 	 * member's body markup never decides template identity.
 	 */
 	contentSlotSelector?: string;
+	/** The adapter's template normalization, the same one that grouped the cluster. */
+	styleNormalization?: TemplateStyleNormalization;
 } ): MemberDerivation {
-	const keyOf = ( html: string ): string => templateFingerprint( input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html, input.baseUrl ).key;
+	const keyOf = ( html: string ): string => templateFingerprint( input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html, input.baseUrl, input.styleNormalization ).key;
 	const clusterKey = keyOf( input.memberServerHtml );
 	const repKey = keyOf( input.repServerHtml );
 	// The member fetched while the cluster was grouped re-checks its key against

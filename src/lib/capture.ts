@@ -22,7 +22,7 @@ import { actionUrlExclusion, platformRuntimeExclusion, ROUTE_EXCLUDED_ACTION_URL
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
-import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
+import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, rankTemplateClusterRoutes, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
@@ -535,15 +535,6 @@ async function runCaptureWebsite(
 	const templateGrouping = routeSelection === 'template-coverage'
 		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
-	// Verification members (#784 §4.2): one per multi-member cluster, kept right
-	// after the representatives so a budget that fits every template also fits
-	// its verification. Derived members hang their cluster's verdict on it.
-	const verificationMembers = templateGrouping?.report && templateClusters
-		? templateGrouping.report.groups
-				.filter( group => group.size >= 2 )
-				.map( group => ( group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ] ?? '' ) )
-				.filter( url => url !== '' )
-		: [];
 	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
 	// Explicit count budgets select before capture observes the entry DOM. Only
 	// pay for an early render when server chrome cannot supply that priority.
@@ -552,10 +543,12 @@ async function runCaptureWebsite(
 		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors ) ) navigationTargets.add( normalizedUrl( href ) );
 	}
 	const entryNavigationRoutes = prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) );
-	// Navigation chrome is site-wide contract: rank its inventory destinations
-	// first, preserving discovery order within that tier, before template coverage
-	// and the general inventory spread.
-	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ), ...verificationMembers ], timeBudget?.projectAdmission && ! options.checkpoint );
+	// Cluster seeds unlock whole collections before navigation spends the window.
+	// Without clusters, preserve navigation-first selection and inventory spread.
+	const preferred = templateClusters
+		? rankTemplateClusterRoutes( prunedInventoryUrls, sourceUrl, templateGrouping?.report?.groups ?? [], navigationTargets, contentSource?.termName.bind( contentSource ) )
+		: [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ) ];
+	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, preferred, timeBudget?.projectAdmission && ! options.checkpoint );
 	let templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
 	const discoveryDiagnostics = [
 		...( inventory.diagnostics ?? [] ),
@@ -642,6 +635,7 @@ async function runCaptureWebsite(
 		// menu before subsequent admissions, without opening another browser page.
 		...( timeBudget?.projectAdmission ? {
 			prioritizePendingRoutes: ( pending: string[] ) => {
+				if ( templateClusters ) return rankTemplateClusterRoutes( pending, sourceUrl, templateGrouping?.report?.groups ?? [], navigationTargets, contentSource?.termName.bind( contentSource ) );
 				const pendingRoutes = new Set( pending );
 				const promoted = prunedInventoryUrls.filter( url => pendingRoutes.has( url ) && navigationTargets.has( normalizedUrl( url ) ) );
 				const promotedRoutes = new Set( promoted );
@@ -1208,12 +1202,12 @@ export async function deriveTemplateClusterMembers( input: {
 					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
 					const feedHtml = feedVerified && repFeed && verificationFeed ? feedMemberDocument( repServerHtml, repFeed, verificationFeed ) : undefined;
 					const memberHtml = feedHtml ?? ( await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ) ).body.toString( 'utf8' );
-					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, ...( feedHtml ? { contentSlotSelector } : {} ) } );
+					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...( feedHtml ? { contentSlotSelector } : {} ) } );
 					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } ).equal ) ) {
 						feedVerified = false;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: 'feed template verification mismatch; using governed page acquisition for this cluster' } );
 						const fallback = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
-						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: fallback.body.toString( 'utf8' ), baseUrl: group.representative } );
+						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: fallback.body.toString( 'utf8' ), baseUrl: group.representative, styleNormalization: input.styleNormalization } );
 					}
 					if ( derivation.ok ) {
 						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } );
@@ -1252,9 +1246,9 @@ export async function deriveTemplateClusterMembers( input: {
 					// A synthesized member is the representative's template by
 					// construction: its key is compared outside the content slot.
 					const slotSelector = feedHtml ? { contentSlotSelector } : {};
-					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, ...slotSelector } );
+					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...slotSelector } );
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
-						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, ...slotSelector } )
+						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...slotSelector } )
 						: undefined;
 					const derivation = mobileDerivation && ! mobileDerivation.ok ? mobileDerivation : desktopDerivation;
 					if ( ! derivation.ok ) {
