@@ -645,6 +645,10 @@ export async function observePage(
 					for ( let ancestor: Element | null = parent; ancestor; ancestor = ancestor.parentElement ) {
 						const ancestorStyle = paintStyle( ancestor );
 						if ( ancestorStyle.display === 'none' ) return false;
+						// A fully transparent ancestor (a closed fade-out drawer)
+						// paints none of its text. Reveal motion is settled before
+						// observation, so a resting opacity of 0 is the real state.
+						if ( Number.parseFloat( ancestorStyle.opacity ) === 0 ) return false;
 						if ( ancestorStyle.display === 'contents' ) continue;
 						const box = ancestor.getBoundingClientRect();
 						if ( ! isDocumentRootBox( ancestor ) ) {
