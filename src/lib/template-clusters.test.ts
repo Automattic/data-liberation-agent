@@ -127,6 +127,37 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( result.html ).toContain( '<body class="runtime-ready postid-407">' );
 	} );
 
+	it( 'derives a body id attribute slot despite capture-added body text (#1776)', () => {
+		const page = ( id: string, text: string ) => `<html><head><title>Post</title></head><body id="item-${ id }"><main><p>${ text }</p></main></body></html>`;
+		const repServerHtml = page( 'one', 'Representative article' );
+		const result = deriveMemberDocument( {
+			repServerHtml,
+			repProcessedHtml: repServerHtml.replace( '</body>', '<aside>Runtime-added chrome</aside></body>' ),
+			memberServerHtml: page( 'two', 'Member article' ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.stats ).toEqual( { slots: 2, subtreeSlots: 0 } );
+		expect( result.html ).toContain( '<body id="item-two">' );
+		expect( result.html ).toContain( '<p>Member article</p>' );
+		expect( result.html ).toContain( '<aside>Runtime-added chrome</aside>' );
+	} );
+
+	it.each( [
+		[ 'text', '<p>Member article</p>' ],
+		[ 'subtree', '<p>Member article</p><p>Another paragraph</p>' ],
+	] )( 'still rejects a %s slot whose anchor text capture rewrote (#1776)', ( _kind, memberContent ) => {
+		const page = ( content: string ) => `<html><head><title>Post</title></head><body><main id="article">${ content }</main></body></html>`;
+		const result = deriveMemberDocument( {
+			repServerHtml: page( '<p>Representative article</p>' ),
+			repProcessedHtml: page( '<p>Runtime-rewritten article</p>' ),
+			memberServerHtml: page( memberContent ),
+			baseUrl: BASE,
+		} );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+
 	it( 'rejects a member whose cluster key drifted (the fingerprint is what admits derivation)', () => {
 		// Same skeleton, different page-local style: a stale or A/B-variant member
 		// must never ship as derived.
