@@ -2595,6 +2595,14 @@ async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 
 }
 
 /**
+ * The working set a route reserves before any route has calibrated memory
+ * admission. Reference routes (the entrypoint with its fresh reference pages,
+ * every profile) peaked at 0.9 GiB on wordpress.org and 1.8 GiB on a Wix source
+ * with three profiles; a small runtime still admits one route at a time.
+ */
+export const UNCALIBRATED_ROUTE_RESERVE_BYTES = 2 * 1024 ** 3;
+
+/**
  * Capture per-viewport screenshots + html + site metadata for a list of URLs.
  * Resumable via manifest.json / failures.json; same-origin enforced; output
  * directory validated against path traversal.
@@ -2691,11 +2699,19 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		return available;
 	};
-	// The working set to reserve for a route, or undefined before reference
-	// calibration.
-	const routeEstimate = ( kind: RouteKind ): number | undefined => {
-		if ( ! calibrated.reference ) return undefined;
+	// The working set to reserve for a route. Before reference calibration
+	// every route reserves a conservative prior (or more, once a larger share
+	// was observed), so a host with room for several such routes does not run
+	// the first one alone, while a small runtime still admits one at a time.
+	const routeEstimate = ( kind: RouteKind ): number => {
+		if ( ! calibrated.reference ) return Math.max( UNCALIBRATED_ROUTE_RESERVE_BYTES, routeWorkingSet.reference, routeWorkingSet.plain );
 		return kind === 'plain' && calibrated.plain ? routeWorkingSet.plain : routeWorkingSet.reference;
+	};
+	// A second concurrent profile of a running route needs another route-sized
+	// share beyond every running route's reservation.
+	const roomForParallelProfiles = ( kind: RouteKind ): boolean => {
+		const reserved = activeRoutes.reference * routeEstimate( 'reference' ) + activeRoutes.plain * routeEstimate( 'plain' );
+		return sampleMemory() >= reserved + routeEstimate( kind );
 	};
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
 	const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;
@@ -3428,10 +3444,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const builtInProfiles = ( [ 'desktop', 'mobile' ] as const )
 			.map( id => routeProfiles.find( profile => profile.id === id ) )
 			.filter( ( profile ): profile is Viewport => Boolean( profile ) );
-		// Without memory admission the built-in profiles run concurrently; either
-		// way each is merged, in profile order, as soon as it completes, so a
-		// route abandoned at its deadline keeps the profiles that finished.
-		const builtInPending = memoryAdmission ? undefined : builtInProfiles.map( viewport => captureProfile( viewport ) );
+		// The built-in profiles run concurrently unless memory admission finds no
+		// room for a second profile: the memory now available must still cover
+		// every running route's reservation plus one more route-sized share.
+		// Either way each is merged, in profile order, as soon as it completes, so
+		// a route abandoned at its deadline keeps the profiles that finished.
+		const builtInPending = builtInProfiles.length > 1 && memoryAdmission && ! roomForParallelProfiles( routeKind( url ) )
+			? undefined
+			: builtInProfiles.map( viewport => captureProfile( viewport ) );
 		for ( const pending of builtInPending ?? [] ) pending.catch( () => {} );
 		for ( let index = 0; index < builtInProfiles.length; index++ ) {
 			const viewport = builtInProfiles[ index ]!;
@@ -3631,17 +3651,15 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						return true;
 					}
 					let reserved = routeEstimate( kind );
-					for ( const runningKind of runningKinds.values() ) {
-						const estimate = routeEstimate( runningKind );
-						reserved = reserved === undefined || estimate === undefined ? undefined : reserved + estimate;
-					}
-					if ( reserved === undefined && completed > 0 && ! reportedUncalibratedAdmission ) {
+					for ( const runningKind of runningKinds.values() ) reserved += routeEstimate( runningKind );
+					const admitted = available >= reserved;
+					if ( ! admitted && ! calibrated.reference && completed > 0 && ! reportedUncalibratedAdmission ) {
 						reportedUncalibratedAdmission = true;
 						const message = '[memory-admission] limited to one route: reference memory calibration unavailable (no fresh non-absent, non-alias capture completed yet)';
 						sendLog( server, message );
 						process.stderr.write( `${ message }\n` );
 					}
-					return reserved !== undefined && available >= reserved;
+					return admitted;
 				};
 				const timer = memoryAdmission ? setInterval( sampleMemory, 100 ) : undefined;
 				const budgetAdmits = (): boolean => {

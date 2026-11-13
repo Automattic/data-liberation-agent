@@ -303,6 +303,45 @@ describe('captureScreenshots', () => {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	} );
+	it( 'overlaps routes and profiles before calibration when memory covers the uncalibrated reserve', async () => {
+		// A host with room for several uncalibrated routes need not run the first
+		// route alone, nor a route's built-in profiles one after the other.
+		const GiB = 1024 ** 3;
+		const constrained = vi.spyOn( process, 'constrainedMemory' ).mockReturnValue( 16 * GiB );
+		const available = vi.spyOn( process, 'availableMemory' ).mockReturnValue( 12 * GiB );
+		const browser = makeMockBrowser();
+		const newContext = browser.newContext;
+		let open = 0, peakOpen = 0;
+		browser.newContext = vi.fn( async ( options ) => {
+			const context = await newContext( options );
+			peakOpen = Math.max( peakOpen, ++open );
+			const close = context.close;
+			context.close = async () => { try { await close(); } finally { open--; } };
+			return context;
+		} );
+		vi.mocked( connectBrowser ).mockResolvedValue( browser as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'memory-uncalibrated-overlap-' ) );
+		const write = vi.spyOn( process.stderr, 'write' ).mockImplementation( () => true );
+		try {
+			const observe = async () => { await new Promise( resolve => setTimeout( resolve, 200 ) ); };
+			const routes = await captureScreenshots( {
+				urls: [ 'https://example.com/a', 'https://example.com/b' ], outputDir, settleMs: 0, learnFluid: false,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 } ], observeSource: observe,
+			} );
+			expect( routes.captured ).toBe( 2 );
+			expect( peakOpen ).toBe( 2 );
+			peakOpen = 0;
+			const profiles = await captureScreenshots( {
+				urls: [ 'https://example.com/c' ], outputDir, settleMs: 0, learnFluid: false,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 } ], observeSource: observe,
+			} );
+			expect( profiles.captured ).toBe( 1 );
+			expect( peakOpen ).toBe( 2 );
+		} finally {
+			write.mockRestore(); constrained.mockRestore(); available.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 	it.each( [ 'server', 'client', 'late-control' ] )( 'validates %s protocol navigation against the observed server document', async ( navigation ) => {
 		const requested = 'https://example.com/author';
 		const landed = 'http://example.com/author/';
