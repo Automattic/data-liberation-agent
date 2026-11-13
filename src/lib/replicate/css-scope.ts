@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import postcss, { CssSyntaxError, type Rule } from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 
@@ -153,7 +154,47 @@ function scopeSelector(selector: string, scope: string, rootClasses: ReadonlySet
   }
 }
 
+/**
+ * A bounded memo for a pure CSS projection of large, repeated input. Export
+ * scopes the same site stylesheets once per route and device document; the
+ * projection is a pure function of its key, so a hit returns the same bytes.
+ * Only successful results are kept: an unparseable sheet throws every time.
+ */
+export class CssProjectionMemo {
+  private readonly entries = new Map<string, string>();
+  private size = 0;
+  constructor(private readonly maxChars = 32 * 1024 * 1024, private readonly minInputChars = 4096) {}
+  run(css: string, options: unknown, project: () => string): string {
+    if (css.length < this.minInputChars) return project();
+    const key = createHash('sha256').update(css).update('\0').update(JSON.stringify(options)).digest('base64');
+    const cached = this.entries.get(key);
+    if (cached !== undefined) {
+      this.entries.delete(key);
+      this.entries.set(key, cached);
+      return cached;
+    }
+    const projected = project();
+    if (projected.length > this.maxChars) return projected;
+    this.entries.set(key, projected);
+    this.size += projected.length;
+    for (const [oldest, value] of this.entries) {
+      if (this.size <= this.maxChars) break;
+      this.entries.delete(oldest);
+      this.size -= value.length;
+    }
+    return projected;
+  }
+}
+
+const scopedCssMemo = new CssProjectionMemo();
+
 export function scopeCss(css: string, opts: ScopeOpts): string {
+  // A URL rewriter is caller state, not part of the key.
+  if (opts.rewriteUrl) return scopeCssUncached(css, opts);
+  return scopedCssMemo.run(css, [opts.scope, opts.rootClasses ?? [], opts.scopeId ?? null], () => scopeCssUncached(css, opts));
+}
+
+function scopeCssUncached(css: string, opts: ScopeOpts): string {
   const root = parseCss(css);
   const rootClasses = new Set(opts.rootClasses ?? []);
 

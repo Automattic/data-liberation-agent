@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
-import { cssIdentifier, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
+import { CssProjectionMemo, cssIdentifier, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { reconcileDeviceDocuments, deviceIslandCss, RESPONSIVE_FRAGMENT, type DeviceReconciliationEvidence, type LinkedStylesheetReader } from './device-reconciliation.js';
 import { IntegrityError } from './failure-class.js';
 import { RESPONSIVE_FRAGMENT_RUNTIME } from './responsive-assembly.js';
@@ -55,7 +55,13 @@ export interface DeviceAssembly {
 /** display:contents wrappers cannot carry the real body margin or viewport overflow.
  * Keep authored root-only rules on the real roots, under the same device gate.
  */
+const rootCssMemo = new CssProjectionMemo();
+
 function rootCss( css: string, bodyClasses: readonly string[] ): string {
+	return rootCssMemo.run( css, bodyClasses, () => rootCssUncached( css, bodyClasses ) );
+}
+
+function rootCssUncached( css: string, bodyClasses: readonly string[] ): string {
 	const root = postcss.parse( css );
 	root.walkAtRules( rule => { if ( ! [ 'media', 'supports', 'layer', 'container' ].includes( rule.name ) ) rule.remove(); } );
 	root.walkRules( rule => {
