@@ -574,6 +574,9 @@ export function compareDerivedWithCapture( input: {
 	derivedHtml: string;
 	/** The member's real captured, processed document. */
 	realHtml: string;
+	/** Both server documents are required to distinguish runtime-only stylesheet links. */
+	repServerHtml?: string;
+	memberServerHtml?: string;
 	baseUrl: string;
 } ): { equal: boolean; checks: Record< 'text' | 'links' | 'images' | 'skeleton' | 'fluidRules' | 'headStyles', boolean > } {
 	const derived = cheerio.load( input.derivedHtml );
@@ -600,9 +603,12 @@ export function compareDerivedWithCapture( input: {
 					[ resolveUrl( candidate.url, input.baseUrl ), candidate.size, candidate.density ] ) ];
 		} ).map( image => JSON.stringify( image ) ).sort(),
 	);
+	const serverStyles = input.repServerHtml !== undefined && input.memberServerHtml !== undefined
+		? new Set( [ input.repServerHtml, input.memberServerHtml ].flatMap( html => collect( cheerio.load( html ), 'link[rel~="stylesheet"]', 'href' ) ) )
+		: undefined;
 	const styles = ( $: cheerio.CheerioAPI ): string[] =>
 		[ ...$( 'style' ).toArray().map( element => normalizedWhitespace( $( element ).text() ) ),
-			...collect( $, 'link[rel~="stylesheet"]', 'href' ) ].filter( value => value !== '' ).sort();
+			...collect( $, 'link[rel~="stylesheet"]', 'href' ).filter( href => ! serverStyles || serverStyles.has( href ) ) ].filter( value => value !== '' ).sort();
 	const fluidSheets = ( $: cheerio.CheerioAPI ): string[] =>
 		$( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).toArray()
 			.map( element => normalizedWhitespace( $( element ).text() ) )

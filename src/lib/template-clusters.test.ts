@@ -5,6 +5,20 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+it('ignores only stylesheet links absent from both server documents', () => {
+	const page = (links: string[], inline = 'body { color: black }') => `<html><head>${links.map(href => `<link rel="stylesheet" href="${href}">`).join('')}<style>${inline}</style></head><body><p>Same member</p></body></html>`;
+	const context = { baseUrl: 'https://fixture.example/post', repServerHtml: page(['/template.css']), memberServerHtml: page(['/template.css', '/member.css']) };
+	const derivedHtml = page(['/template.css', '/member.css', '/runtime-dialog.css']);
+	const realHtml = page(['/template.css', '/member.css']);
+	expect(compareDerivedWithCapture({ ...context, derivedHtml, realHtml }).equal).toBe(true);
+	expect(compareDerivedWithCapture({ ...context, derivedHtml: realHtml, realHtml: derivedHtml }).equal).toBe(true);
+	for (const links of [['/member.css'], ['/template.css']]) {
+		expect(compareDerivedWithCapture({ ...context, derivedHtml, realHtml: page(links) }).checks.headStyles).toBe(false);
+	}
+	expect(compareDerivedWithCapture({ ...context, derivedHtml, realHtml: page(['/template.css', '/member.css'], 'body { color: red }') }).checks.headStyles).toBe(false);
+	expect(compareDerivedWithCapture({ derivedHtml, realHtml, baseUrl: context.baseUrl }).checks.headStyles).toBe(false);
+});
+
 /**
  * The #784 phase-1 fixture, reduced from the 24-route acceptance fixture: a
  * home page and six posts sharing one template, one post with a two-column
