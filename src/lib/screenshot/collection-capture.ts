@@ -126,19 +126,36 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 			let changed = evidence.states.some(state => JSON.stringify(state.members) !== initialMembers);
 			// Reuse unchanged documents: member actions must not cause per-control navigation.
 			let reset = changed;
+			// Whether this untouched document already had its one visibility grace:
+			// a hidden control waited out its action timeout on it and still no
+			// control was acted on. Every navigation or dispatched action clears it.
+			let graced = false;
 			for (const [index, control] of controls.slice(0, limits.controls).entries()) {
 				if (Date.now() > deadline) { evidence.coverage = 'partial'; break; }
 				if (/^(?:next(?: page)?|previous(?: page)?|prev|load more|show more|older|›|»|→|‹|«|←)$/i.test(control.label.trim())) continue;
 				const values = control.tag === 'SELECT' ? control.options : control.tag === 'INPUT' ? [evidence.members[0]?.text.split(/\s+/)[0] ?? '', '__capture_no_matching_record__', ''] : [undefined];
 				for (const [variant, value] of values.entries()) {
-					if (reset) await probe.goto(page.url(), { waitUntil: 'load', timeout: 15_000 });
+					if (reset) { await probe.goto(page.url(), { waitUntil: 'load', timeout: 15_000 }); graced = false; }
 					reset = false;
 					const target = probe.locator(control.selector);
+					// A hidden control whose action never dispatched leaves this document
+					// untouched, so a failure need not reload it (see the catch below).
+					let untouched = false;
 					if (!await target.isVisible()) {
 						const opener = probe.locator(region.owner).getByRole('button', { name: /^filters?$/i }).first();
-						if (await opener.isVisible()) await opener.click({ timeout: 1_000 });
+						if (await opener.isVisible()) { await opener.click({ timeout: 1_000 }); graced = false; }
+						else untouched = true;
+					}
+					if (untouched) {
+						// The action would wait its 1 s timeout for the control to appear.
+						// Nothing acts on an untouched document, so one such wait shows
+						// what it reveals by itself; later hidden controls do not repeat it.
+						const appeared = !graced && await target.waitFor({ state: 'visible', timeout: 1_000 }).then(() => true, () => false);
+						graced = true;
+						if (!appeared) { evidence.coverage = 'partial'; continue; }
 					}
 					const action = control.tag === 'INPUT' ? 'fill' : control.tag === 'SELECT' ? 'select' : 'click';
+					graced = false;
 					try {
 						if (action === 'fill') await target.fill(value!, { timeout: 1_000 });
 						else if (action === 'select') await target.selectOption(value!, { timeout: 1_000 });
@@ -149,7 +166,12 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 						await exhaust(`control-${index}-${variant}`, { selector: control.selector, action, ...(value !== undefined ? { value } : {}) });
 						reset = JSON.stringify(await observe()) !== initialMembers;
 						changed ||= evidence.states.slice(stateStart).some(state => JSON.stringify(state.members) !== initialMembers);
-					} catch { evidence.coverage = 'partial'; reset = true; }
+					} catch {
+						evidence.coverage = 'partial';
+						// Playwright acts only on a visible target. One that stayed hidden
+						// through the timed-out action was never clicked, filled or scrolled to.
+						reset = !untouched || await target.isVisible().catch(() => true);
+					}
 				}
 			}
 			if (!changed) continue;

@@ -145,3 +145,26 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('preserves distinct columns s
 		expect(existsSync(join(root, 'interaction-states.json'))).toBe(false);
 	} finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 }, 90_000);
+
+// ~3 seconds, one browser. Reverting the untouched-document path reloads the probe once per hidden control.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('does not reload the probe document for hidden controls it never acted on', async () => {
+	const hidden = Array.from({ length: 4 }, (_, index) => `<button style="display:none">Menu ${index}</button>`).join('');
+	const source = `<!doctype html><html><body><main><section>${hidden}<div id="cards"><article><a href="/a">A</a></article><article><a href="/b">B</a></article></div></section></main></body></html>`;
+	let documents = 0;
+	const server = createServer((request, response) => { if (request.url === '/') documents++; response.setHeader('Content-Type', 'text/html'); response.end(source); });
+	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+	const browser = await chromium.launch();
+	try {
+		const page = await (await browser.newContext()).newPage();
+		await page.goto(url);
+		const started = Date.now();
+		expect(await captureCollections(page)).toEqual([]);
+		// The capture's own load plus one probe document; one shared 1 s visibility grace.
+		expect(documents).toBe(2);
+		expect(Date.now() - started).toBeLessThan(3_000);
+	} finally {
+		await browser.close();
+		await new Promise<void>(resolve => server.close(() => resolve()));
+	}
+}, 30_000);
