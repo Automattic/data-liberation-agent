@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as sharedChrome from './shared-chrome.js';
+import { probeCanonicalRouteAliases } from './route-aliases.js';
 import { includeReferences, readResolvedPage } from './site-includes.js';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
@@ -6199,6 +6200,51 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="/index.html"'
 		);
+	} );
+
+	it( 'rebases only the entrypoint-proven canonical host when collapsing query renditions', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-canonical-host-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const sourceUrl = 'https://site.example.net/';
+		const fixtures = [
+			[ '', 'https://www.example.test/' ],
+			[ 'shop', 'https://www.example.test/shop' ],
+			[ 'shop?order=a', 'https://www.example.test/shop' ],
+			[ 'shop?order=b', 'https://www.example.test/shop' ],
+			[ 'about', 'https://unrelated.example.org/about' ],
+		];
+		const entries = Object.fromEntries( fixtures.map( ( [ route, canonical ], index ) => {
+			const html = `html/${ index }.html`;
+			writeFileSync( join( outputDir, html ), `<link rel="canonical" href="${ canonical }"><meta property="og:url" content="${ canonical }"><h1>Route ${ index }</h1>` );
+			return [ new URL( route, sourceUrl ).href, { html } ];
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'fake', summary: {}, failures: [],
+			routeScope: { origin: 'https://site.example.net', pathPrefixes: [ '/' ] },
+		} ), 'utf8' ) );
+		expect( receipt.routes ).toEqual( [
+			{ url: sourceUrl, path: 'website/index.html' },
+			{ url: `${ sourceUrl }shop`, path: 'website/shop/index.html' },
+			{ url: `${ sourceUrl }about`, path: 'website/about/index.html' },
+		] );
+		expect( receipt.duplicateRoutes ).toEqual( [ 'a', 'b' ].map( order => ( {
+			url: `${ sourceUrl }shop?order=${ order }`, canonicalUrl: `${ sourceUrl }shop`, path: 'website/shop/index.html',
+		} ) ) );
+		expect( readdirSync( join( outputDir, 'website', 'shop' ) ) ).toEqual( [ 'index.html' ] );
+		expect( existsSync( join( outputDir, 'website', 'about', 'index.html' ) ) ).toBe( true );
+		const probe = await probeCanonicalRouteAliases( {
+			sourceUrl, urls: Object.keys( entries ),
+			routeScope: { origin: 'https://site.example.net', pathPrefixes: [ '/' ] },
+		}, { fetch: async url => ( {
+			finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ),
+			body: readFileSync( join( outputDir, entries[ url ].html ) ),
+		} ) } );
+		expect( probe.aliases ).toEqual( [ 'a', 'b' ].map( order => ( {
+			url: `${ sourceUrl }shop?order=${ order }`, canonicalUrl: `${ sourceUrl }shop`,
+		} ) ) );
 	} );
 
 	it( 'keeps one route when an alternate address declares the claimed route as canonical', () => {

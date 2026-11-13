@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { structuredContentIndex } from './content-index.js';
 import { deferredMediaReferences, linkDeferredMedia, recordMediaLedger } from './media-queue.js';
-import { canonicalLinkHref } from './route-aliases.js';
+import { canonicalLinkHref, entrypointCanonicalHost, rebaseCanonicalUrl } from './route-aliases.js';
 import { ownDocument, readDocument, withParsedDocuments } from './parsed-documents.js';
 import { imageSize } from 'image-size';
 import { readAssets, type AssetRecord } from './image-assets.js';
@@ -622,10 +622,10 @@ function openGraphUrl( html: string ): string | undefined {
 	return readDocument( html )( 'meta[property="og:url"]' ).first().attr( 'content' );
 }
 
-function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?: SiteRouteScope ): string | undefined {
+function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?: SiteRouteScope, sourceUrl = documentUrl, aliasHost?: string ): string | undefined {
 	if ( typeof value !== 'string' || value.trim() === '' ) return undefined;
 	try {
-		const resolved = new URL( value, documentUrl );
+		const resolved = rebaseCanonicalUrl( new URL( value, documentUrl ), sourceUrl, aliasHost );
 		if ( resolved.protocol !== 'http:' && resolved.protocol !== 'https:' ) return undefined;
 		if ( !routeInScope( resolved.href, routeScope ) ) return undefined;
 		return resolved.href;
@@ -1473,6 +1473,14 @@ function buildExportCapture(
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
 	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
 	const redirectAliases: Array< { url: string; target: string } > = [];
+	let canonicalHost: string | undefined;
+	const homepage = Object.entries( capture.entries ).find( ( [ url ] ) => isSourceCaptureUrl( url, options.sourceUrl ) )?.[ 1 ];
+	if ( homepage?.html ) {
+		const path = resolve( outputDir, homepage.html );
+		if ( pathWithin( outputDir, path ) && existsSync( path ) ) {
+			canonicalHost = entrypointCanonicalHost( options.sourceUrl, readFileSync( path, 'utf8' ), homepage.metadata?.openGraph?.[ 'og:url' ] );
+		}
+	}
 	const responsiveBodyClassProjections = new Map<string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] }>();
 	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
@@ -1748,8 +1756,8 @@ function buildExportCapture(
 				...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
 				...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 				sections: entry.sections,
-				canonicalLinkUrl: canonicalMetadataUrl( canonicalLinkHref( desktopHtml, url ), url, options.routeScope ),
-				canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, options.routeScope ),
+				canonicalLinkUrl: canonicalMetadataUrl( canonicalLinkHref( desktopHtml, url ), url, options.routeScope, options.sourceUrl, canonicalHost ),
+				canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, options.routeScope, options.sourceUrl, canonicalHost ),
 				sourceData: sanitized.sourceData,
 				interactions: entry.interactions,
 				scrollStates: entry.scrollStates,
