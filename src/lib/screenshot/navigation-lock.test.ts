@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { lockMainFrameNavigation } from './screenshotter.js';
+import { lockMainFrameNavigation } from './probe-guards.js';
 
 // A probe can trigger a script-driven navigation (a swatch assigning
 // `location`) that no click handler can cancel. While locked, the document and

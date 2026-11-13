@@ -1,6 +1,6 @@
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { installReadOnlyProbeGuard, lockMainFrameNavigation, withReadOnlyProbes } from './screenshotter.js';
+import { installReadOnlyProbeGuard, lockMainFrameNavigation, withReadOnlyProbes } from './probe-guards.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../source-cleanup.js';
 import {
