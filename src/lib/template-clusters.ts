@@ -388,6 +388,8 @@ function headSlots( $: cheerio.CheerioAPI ): Map< string, Element[] > {
  * document with every mapped slot replaced by the member's HTTP-acquired
  * content, including the head slots capture records as metadata.
  */
+let representativeKey: { html: string; identity: string; normalization?: TemplateStyleNormalization; templateIdentity?: unknown; key: string } | undefined;
+
 export function deriveMemberDocument( input: {
 	/** The representative's server HTML (`H_R`). */
 	repServerHtml: string;
@@ -419,7 +421,12 @@ export function deriveMemberDocument( input: {
 		return templateFingerprint( normalized, input.baseUrl, input.styleNormalization, input.templateIdentity ).key;
 	};
 	const clusterKey = keyOf( input.memberServerHtml );
-	const repKey = keyOf( input.repServerHtml );
+	// Every member of a cluster compares against the same representative key.
+	const repIdentity = JSON.stringify( [ input.baseUrl, input.contentSlotSelector, input.memberHeadSlotSelector ] );
+	if ( representativeKey?.html !== input.repServerHtml || representativeKey.identity !== repIdentity || representativeKey.normalization !== input.styleNormalization || representativeKey.templateIdentity !== input.templateIdentity ) {
+		representativeKey = { html: input.repServerHtml, identity: repIdentity, normalization: input.styleNormalization, templateIdentity: input.templateIdentity, key: keyOf( input.repServerHtml ) };
+	}
+	const repKey = representativeKey.key;
 	// The member fetched while the cluster was grouped re-checks its key against
 	// the representative's server document: an A/B variant or a rotating hash in
 	// a head asset diverges exactly here.
