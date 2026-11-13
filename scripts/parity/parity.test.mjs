@@ -36,6 +36,8 @@ test('pending and failed cells cannot be reported as proven', () => {
     selfConsistency: { pass: false, findings: [{ route: '/', kind: 'link-dangling' }] },
   }, execution);
   assert.equal(result.compare.routes[0].frozenFidelity, 'unproven');
+  const mixed = summarize(site, null, null, null, { status: 'unproven', pending: [{ route: '/' }], scores: [{ route: '/z/', pass: false }] }, execution);
+  assert.equal(mixed.compare.frozenFidelity, 'failed');
   assert.equal(result.compare.routes[0].selfConsistency, false);
   assert.deepEqual(result.compare.routes[0].findings, { 'link-dangling': 1 });
 });
