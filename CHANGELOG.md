@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.34.3] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- Template clusters: derive Squarespace blog members faithfully
+- Template clusters: admit cluster seeds before navigation, and fingerprint members with the adapter's normalization
+- enumerate blog posts from collection JSON as structured content
+- judge candidates against the baselines' own range and record the discovery inventory
+- Extract device-mode probing, the shared-chrome probe and memory admission from screenshotter.ts
+
+### Fixed
+- scope GitHub Pages project captures to their project path
+
 ## [0.34.2] - 2026-11-12
 
 ### Changed
