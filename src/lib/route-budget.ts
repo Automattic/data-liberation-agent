@@ -78,6 +78,37 @@ export function dedupeRouteInventory( urls: readonly string[] ): string[] {
 	} );
 }
 
+/** Cluster admission order, shared by initial selection and rendered-nav promotion. */
+export function rankTemplateClusterRoutes(
+	routes: readonly string[],
+	entrypoint: string,
+	groups: readonly Pick< import('./template-groups.js').TemplateGroup, 'size' | 'representative' | 'members' >[],
+	navigationTargets: ReadonlySet< string >,
+	termName?: ( url: string ) => string | undefined,
+): string[] {
+	const clustered = new Set< string >();
+	const seeds = new Map< string, number >();
+	const singletons = new Set( groups.filter( group => group.size < 2 ).map( group => normalizedUrl( group.representative ) ) );
+	for ( const group of [ ...groups ].filter( group => group.size >= 2 ).sort( ( a, b ) => b.size - a.size ) ) {
+		for ( const member of group.members ) clustered.add( normalizedUrl( member ) );
+		const verifier = group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ];
+		for ( const url of [ group.representative, ...( verifier ? [ verifier ] : [] ) ] ) seeds.set( normalizedUrl( url ), seeds.size );
+	}
+	const entryKey = normalizedUrl( entrypoint );
+	const ranked = routes.map( url => {
+		const key = normalizedUrl( url );
+		// Entry, cluster seeds, templates nothing can derive (singletons, nav),
+		// derivable nav, the rest, then cluster members their seeds derive.
+		const tier = key === entryKey ? 0
+			: seeds.has( key ) ? 1
+			: clustered.has( key ) ? ( navigationTargets.has( key ) ? 3 : 5 )
+			: singletons.has( key ) || navigationTargets.has( key ) ? 2 : 4;
+		const archive = termName?.( url ) !== undefined || /\/(?:tag|category)(?:\/|$)/.test( new URL( url ).pathname );
+		return { url, tier, archive: Number( archive ), seed: seeds.get( key ) ?? 0 };
+	} );
+	return ranked.sort( ( a, b ) => a.tier - b.tier || a.archive - b.archive || a.seed - b.seed ).map( route => route.url );
+}
+
 /**
  * Apply a route budget to an initial inventory whose first URL is the
  * entrypoint. Routes are deduplicated by discovery identity, then the
