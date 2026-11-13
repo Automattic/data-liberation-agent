@@ -529,14 +529,14 @@ export class CapturedResourceStore {
 		this.fetchMedia = fetchMedia;
 	}
 
-	observe( page: Page ): void {
+	observe( page: Page, options: { replayOnly?: boolean } = {} ): void {
 		const pending = new Set< Promise< void > >();
 		this.pageCaptures.set( page, pending );
 		const images = new Set< Response >();
 		this.pageImages.set( page, images );
 		const listener = ( response: Response ) => {
-			if ( response.request().resourceType() === 'image' ) images.add( response );
-			const capture = this.capture( response );
+			if ( ! options.replayOnly && response.request().resourceType() === 'image' ) images.add( response );
+			const capture = options.replayOnly ? this.captureForReplay( response ) : this.capture( response );
 			pending.add( capture );
 			void capture.finally( () => pending.delete( capture ) );
 		};
@@ -1016,6 +1016,19 @@ export class CapturedResourceStore {
 		);
 		this.captures.set( url, capture );
 		return capture;
+	}
+
+	/** Comparison pages warm the ephemeral cache, never portable resource ownership. */
+	private captureForReplay( response: Response ): Promise< void > {
+		const request = response.request();
+		const headers = request.headers();
+		if ( request.method() !== 'GET' || headers.range || headers.authorization ||
+			( ! REPLAYABLE_RESOURCE_TYPES.has( request.resourceType() ) && ! isPrefetch( request.resourceType(), headers ) ) ) return Promise.resolve();
+		try {
+			return this.captureReplayOnly( response, new URL( response.url() ) );
+		} catch {
+			return Promise.resolve();
+		}
 	}
 
 	private captureReplayOnly( response: Response, resourceUrl: URL ): Promise< void > {
