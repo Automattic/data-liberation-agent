@@ -553,7 +553,7 @@ async function runCaptureWebsite(
 	// pay for an early render when server chrome cannot supply that priority.
 	if ( routeLimit !== undefined && prunedInventoryUrls.length > routeLimit && navigationTargets.size === 0 && options.acquisition !== 'http' ) {
 		const { renderedEntryNavigation } = await import( './entry-navigation.js' );
-		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors ) ) navigationTargets.add( normalizedUrl( href ) );
+		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors, adapter.sourceTelemetry ) ) navigationTargets.add( normalizedUrl( href ) );
 	}
 	const entryNavigationRoutes = prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) );
 	// Cluster seeds unlock whole collections before navigation spends the window.
@@ -612,6 +612,7 @@ async function runCaptureWebsite(
 		urls,
 		routeScope,
 		runtimePaths: adapter.runtimePaths,
+		sourceTelemetry: adapter.sourceTelemetry,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
 		...( aliasProbe.aliases.length ? { linkedCanonicalAliases: aliasProbe.aliases } : {} ),

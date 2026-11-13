@@ -88,6 +88,7 @@ export async function probePhoneOnlyChrome(
 export interface DeviceComparisonArgs {
 	resourceStore?: CapturedResourceStore;
 	governors?: ScreenshotOpts['governors'];
+	sourceTelemetry?: ScreenshotOpts['sourceTelemetry'];
 	browser: Browser;
 	url: string;
 	desktop: BrowserContextOptions;
@@ -129,7 +130,7 @@ const CHECK_RECHECK_MS = 1_500;
  */
 export async function loadForComparison( args: DeviceComparisonArgs, options: BrowserContextOptions, viewport: 'desktop' | 'mobile', mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
 	const startedAt = Date.now();
-	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url } );
+	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url, sourceTelemetry: args.sourceTelemetry } );
 	contexts.push( context );
 	categorizeSourceContext(context, 'device-check');
 	if ( args.resourceStore ) await installResourceReplay( context, args.resourceStore, args.publicUrlsOnly );
@@ -251,7 +252,7 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 		try {
 			if ( args.publicUrlsOnly ) assertPublicHttpUrl( args.url );
 			const documents = await Promise.all( ( [ 'desktop', 'mobile' ] as const ).map( async identity => {
-				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone, { governors: args.governors, sourceUrl: args.url } );
+				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone, { governors: args.governors, sourceUrl: args.url, sourceTelemetry: args.sourceTelemetry } );
 				attributeSourceDevice(context, identity === 'desktop' ? 'desktop' : 'mobile');
 				categorizeSourceContext(context, 'device-check');
 				contexts.push( context );

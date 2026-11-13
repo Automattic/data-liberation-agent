@@ -61,7 +61,7 @@ export async function takeSourceDocument(context: BrowserContext, url: string, h
 }
 
 /** Capture-owned state; contexts outside capture and third-party origins stay unchanged. */
-export function governSourceContext(context: BrowserContext, governors: SourceRequestGovernors, sourceUrl: string): void {
+export async function governSourceContext(context: BrowserContext, governors: SourceRequestGovernors, sourceUrl: string, sourceTelemetry?: import('../../platform/types.js').Platform['sourceTelemetry']): Promise<void> {
   const inFlight = new Set<Request>();
   traffic.set(context, { governors, origin: new URL(sourceUrl).origin, inFlight });
   context.on('response', response => {
@@ -96,6 +96,18 @@ export function governSourceContext(context: BrowserContext, governors: SourceRe
   });
   context.on('requestfinished', request => finish(request, false));
   context.on('requestfailed', request => finish(request, true));
+  if (sourceTelemetry?.length) await context.route('**/*', async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const matches = url.origin === new URL(sourceUrl).origin && sourceTelemetry.some(pattern => {
+      if (typeof pattern === 'string') return url.pathname.startsWith(pattern);
+      // Stateful flags must not make alternate requests escape the policy.
+      return new RegExp(pattern.source, pattern.flags).test(url.pathname);
+    });
+    if (!matches) return route.fallback();
+    governors.forOrigin(sourceUrl).attributeRequest({ ...attribution(context, request), outcome: 'blocked:telemetry' });
+    await route.abort('blockedbyclient');
+  });
 }
 
 export function sourceGovernorFor(context: BrowserContext, url: string) {

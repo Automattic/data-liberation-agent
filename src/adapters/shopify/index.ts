@@ -20,6 +20,7 @@ export type { ShopifyAdapterOpts, ShopifyInventory } from './types.js';
 // ---------------------------------------------------------------------------
 
 export const shopifyAdapter: PlatformAdapter = {
+  sourceTelemetry: ['/.well-known/shopify/monorail/'],
   id: 'shopify',
   detection,
   liberation: capture,
