@@ -69,6 +69,7 @@ export interface SqsJsonResponse {
   };
   pagination?: { nextPageOffset?: number | string; nextPage?: boolean };
   items?: Array<{
+    id?: string;
     title?: string;
     urlId?: string;
     fullUrl?: string;
@@ -87,6 +88,7 @@ export interface SqsJsonResponse {
     siteTagLine?: string;
     siteDescription?: string;
     language?: string;
+    timeZone?: string;
   };
   websiteSettings?: {
     siteTitle?: string;

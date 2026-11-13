@@ -141,6 +141,8 @@ interface SlotAnchor {
 	value: string;
 	/** Element path below the anchor, over slot-eligible children. */
 	path: number[];
+	/** The same path as `[tag, classes, ordinal among siblings that match them]`, immune to runtime-inserted siblings. */
+	descriptors: Array< [ string, string[], number ] >;
 }
 
 /** Anchor attributes, most stable first. */
@@ -174,38 +176,58 @@ function anchorValueCounts( root: Element ): Map< string, number > {
 	return counts;
 }
 
+const classTokens = ( element: Element ): string[] => ( element.attribs.class ?? '' ).split( /\s+/ ).filter( Boolean );
+/** A runtime adds classes and siblings; it keeps the server element's tag and classes. */
+const describes = ( element: Element, tag: string, classes: readonly string[] ): boolean => {
+	const own = new Set( classTokens( element ) );
+	return element.name === tag && classes.every( token => own.has( token ) );
+};
+
 /** The slot's anchor in `H_R`: nearest ancestor-or-self with an identity unique in `H_R`. */
 function slotAnchor( node: Element, body: Element, counts: Map< string, number > ): SlotAnchor {
 	const path: number[] = [];
+	const descriptors: Array< [ string, string[], number ] > = [];
 	let current: Element = node;
 	while ( current !== body ) {
 		for ( const attribute of ANCHOR_ATTRIBUTES ) {
 			const value = current.attribs[ attribute ];
-			if ( value && counts.get( `${ attribute }\u0000${ value }` ) === 1 ) return { attribute, value, path };
+			if ( value && counts.get( `${ attribute }\u0000${ value }` ) === 1 ) return { attribute, value, path, descriptors };
 		}
 		const parent = current.parent as Element | null;
 		if ( ! parent || ! isElement( parent ) ) break;
-		path.unshift( slotChildren( parent ).indexOf( current ) );
+		const siblings = slotChildren( parent );
+		const tag = current.name, classes = classTokens( current );
+		path.unshift( siblings.indexOf( current ) );
+		descriptors.unshift( [ tag, classes, siblings.slice( 0, siblings.indexOf( current ) ).filter( sibling => describes( sibling, tag, classes ) ).length ] );
 		current = parent;
 	}
-	return { attribute: 'body', value: '', path };
+	return { attribute: 'body', value: '', path, descriptors };
 }
 
-/** Resolve an anchor in the representative's processed document; undefined when absent or ambiguous. */
-function resolveAnchor( body: Element, anchor: SlotAnchor ): Element | undefined {
-	let node: Element;
-	if ( anchor.attribute === 'body' ) node = body;
+/**
+ * Resolve an anchor in the representative's processed document; undefined when
+ * absent or ambiguous. Positions come first; when they miss the server element
+ * (a runtime inserted a sibling ahead of it), descriptor ordinals resolve it.
+ */
+function resolveAnchor( body: Element, anchor: SlotAnchor, matches: ( node: Element ) => boolean ): Element | undefined {
+	let root: Element;
+	if ( anchor.attribute === 'body' ) root = body;
 	else {
-		const matches = elementsWithAttribute( body, anchor.attribute, anchor.value );
-		if ( matches.length !== 1 ) return undefined;
-		node = matches[ 0 ]!;
+		const found = elementsWithAttribute( body, anchor.attribute, anchor.value );
+		if ( found.length !== 1 ) return undefined;
+		root = found[ 0 ]!;
 	}
-	for ( const index of anchor.path ) {
-		const next = slotChildren( node )[ index ];
-		if ( ! next ) return undefined;
-		node = next;
-	}
-	return node;
+	const walk = ( step: ( children: Element[], depth: number ) => Element | undefined ): Element | undefined => {
+		let node: Element | undefined = root;
+		for ( let depth = 0; node && depth < anchor.path.length; depth++ ) node = step( slotChildren( node ), depth );
+		return node;
+	};
+	const positional = walk( ( children, depth ) => children[ anchor.path[ depth ]! ] );
+	if ( positional && matches( positional ) ) return positional;
+	return walk( ( children, depth ) => {
+		const [ tag, classes, ordinal ] = anchor.descriptors[ depth ]!;
+		return children.filter( child => describes( child, tag, classes ) )[ ordinal ];
+	} ) ?? positional;
 }
 
 /** Serialize one node through a Cheerio API (cheerio has no module-level serializer). */
@@ -381,10 +403,20 @@ export function deriveMemberDocument( input: {
 	 * member's body markup never decides template identity.
 	 */
 	contentSlotSelector?: string;
+	/** Adapter-declared per-member head elements (never executable scripts). */
+	memberHeadSlotSelector?: string;
 	/** The adapter's template normalization, the same one that grouped the cluster. */
 	styleNormalization?: TemplateStyleNormalization;
 } ): MemberDerivation {
-	const keyOf = ( html: string ): string => templateFingerprint( input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html, input.baseUrl, input.styleNormalization ).key;
+	const keyOf = ( html: string ): string => {
+		let normalized = input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html;
+		if ( input.memberHeadSlotSelector ) {
+			const $ = cheerio.load( normalized );
+			$( input.memberHeadSlotSelector ).filter( 'style' ).remove();
+			normalized = $.html();
+		}
+		return templateFingerprint( normalized, input.baseUrl, input.styleNormalization ).key;
+	};
 	const clusterKey = keyOf( input.memberServerHtml );
 	const repKey = keyOf( input.repServerHtml );
 	// The member fetched while the cluster was grouped re-checks its key against
@@ -433,7 +465,7 @@ export function deriveMemberDocument( input: {
 	let unobservedSlots = 0;
 	const mapped: Array< { slot: Slot; anchor: SlotAnchor; node: Element } > = [];
 	for ( const { slot, anchor } of located ) {
-		const node = resolveAnchor( processedBody, anchor );
+		const node = resolveAnchor( processedBody, anchor, candidate => candidate.name === slot.repNode.name && anchorText( candidate ) === anchorText( slot.repNode ) );
 		if ( ! node || node.name !== slot.repNode.name ) {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has no matching anchor in the representative's captured document` } };
 		}
@@ -465,7 +497,12 @@ export function deriveMemberDocument( input: {
 	// only the member declares joins the head.
 	const memberTitle = member( 'title' ).first().toArray()[ 0 ] as Element | undefined;
 	const repTitle = repProcessed( 'head title' ).toArray()[ 0 ] as Element | undefined;
-	if ( memberTitle && repTitle ) replaceProcessedNode( repTitle, memberTitle );
+	if ( memberTitle && repTitle ) {
+		// A runtime can copy the document title into the body; each copy is the title slot too.
+		const repTitleText = repProcessed( repTitle ).text();
+		for ( const copy of repProcessed( 'body title' ).toArray() ) if ( repProcessed( copy ).text() === repTitleText ) repProcessed( copy ).text( member( memberTitle ).text() );
+		replaceProcessedNode( repTitle, memberTitle );
+	}
 	const memberSlots = headSlots( member );
 	const repSlots = headSlots( repProcessed );
 	for ( const [ key, repNodes ] of repSlots ) {
@@ -480,6 +517,15 @@ export function deriveMemberDocument( input: {
 		for ( const memberNode of memberNodes.slice( repSlots.get( key )?.length ?? 0 ) ) {
 			repProcessed( 'head' ).append( repProcessed( member.html( memberNode ) ) );
 		}
+	}
+	if ( input.memberHeadSlotSelector ) {
+		const selector = input.memberHeadSlotSelector;
+		// Keep the representative's cascade position; this contract only admits styles.
+		const replacements = member( selector ).toArray().filter( node => 'name' in node && node.name === 'style' );
+		const originals = repProcessed( selector );
+		if ( originals.length ) originals.first().before( replacements.map( node => member.html( node ) ).join( '' ) );
+		else repProcessed( 'head' ).append( replacements.map( node => member.html( node ) ).join( '' ) );
+		originals.remove();
 	}
 	return { ok: true, html: repProcessed.html(), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
 }

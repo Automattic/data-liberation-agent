@@ -1065,7 +1065,7 @@ export async function deriveTemplateClusterMembers( input: {
 	const feedEntries = new Map( ( contentSource ? input.contentEntries ?? [] : [] ).map( entry => [ normalizedUrl( entry.permalink ), entry ] ) );
 	const feedBodyEquivalent = ( html: string, entry: import('../platform/types.js').StructuredContentEntry ) => contentSource!.bodyEquivalent( html, entry );
 	const contentSlotSelector = contentSource?.contentSlotSelector;
-	const feedMemberDocument = ( html: string, representative: import('../platform/types.js').StructuredContentEntry, member: import('../platform/types.js').StructuredContentEntry ) => contentSource!.memberDocument( html, representative, member );
+	const feedMemberDocument = ( html: string, representative: import('../platform/types.js').StructuredContentEntry, member: import('../platform/types.js').StructuredContentEntry ) => contentSource!.memberDocument( html, representative, member, { governors: input.governors } );
 	const { enqueueMedia } = await import( './media-queue.js' );
 	const deferredMedia = new Set< string >();
 	const deferMedia = ( url: string ) => { deferredMedia.add( url ); };
@@ -1200,9 +1200,9 @@ export async function deriveTemplateClusterMembers( input: {
 					const realHtml = readFileSync( resolve( input.outputDir, realEntry.html! ), 'utf8' );
 					const verificationFeed = feedEntries.get( normalizedUrl( verificationUrl ) );
 					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
-					const feedHtml = feedVerified && repFeed && verificationFeed ? feedMemberDocument( repServerHtml, repFeed, verificationFeed ) : undefined;
+					const feedHtml = feedVerified && repFeed && verificationFeed ? await feedMemberDocument( repServerHtml, repFeed, verificationFeed ) : undefined;
 					const memberHtml = feedHtml ?? ( await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ) ).body.toString( 'utf8' );
-					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...( feedHtml ? { contentSlotSelector } : {} ) } );
+					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
 					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } ).equal ) ) {
 						feedVerified = false;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: 'feed template verification mismatch; using governed page acquisition for this cluster' } );
@@ -1230,7 +1230,7 @@ export async function deriveTemplateClusterMembers( input: {
 				for ( const url of members ) {
 					if ( clusterFailed || derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
 					const memberFeed = feedEntries.get( normalizedUrl( url ) );
-					const feedHtml = feedVerified && repFeed && memberFeed ? feedMemberDocument( repServerHtml, repFeed, memberFeed ) : undefined;
+					const feedHtml = feedVerified && repFeed && memberFeed ? await feedMemberDocument( repServerHtml, repFeed, memberFeed ) : undefined;
 					const response = feedHtml ? { status: 200, body: Buffer.from( feedHtml ) } : await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ).catch( ( error: unknown ) => {
 						record.unavailable.push( { url, reason: String( ( error as Error ).message ?? error ) } );
 						unavailableCount++;
@@ -1245,7 +1245,7 @@ export async function deriveTemplateClusterMembers( input: {
 					const memberServerHtml = response.body.toString( 'utf8' );
 					// A synthesized member is the representative's template by
 					// construction: its key is compared outside the content slot.
-					const slotSelector = feedHtml ? { contentSlotSelector } : {};
+					const slotSelector = feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {};
 					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...slotSelector } );
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
 						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, styleNormalization: input.styleNormalization, ...slotSelector } )
