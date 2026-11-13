@@ -5,6 +5,17 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+it('ignores an inline style a runtime probe injected into one capture only', () => {
+	const page = (...styles: string[]) => `<html><head>${styles.map(text => `<style>${text}</style>`).join('')}</head><body><p>Same member</p></body></html>`;
+	const context = { baseUrl: 'https://fixture.example/post', repServerHtml: page('body { color: black }'), memberServerHtml: page('body { color: black }') };
+	const compare = (derived: string[], real: string[]) => compareDerivedWithCapture({ ...context, derivedHtml: page(...derived), realHtml: page(...real) }).checks.headStyles;
+	expect(compare(['body { color: black }', '.widget { opacity: .7 }'], ['body { color: black }'])).toBe(true);
+	// A runtime style that differs on both sides, or a server style, still counts.
+	expect(compare([':root { --a: 1 }'], [':root { --a: 2 }'])).toBe(false);
+	expect(compare(['body { color: black }'], [])).toBe(false);
+	expect(compareDerivedWithCapture({ baseUrl: context.baseUrl, derivedHtml: page('.widget { opacity: .7 }'), realHtml: page() }).checks.headStyles).toBe(false);
+});
+
 it('ignores only stylesheet links absent from both server documents', () => {
 	const page = (links: string[], inline = 'body { color: black }') => `<html><head>${links.map(href => `<link rel="stylesheet" href="${href}">`).join('')}<style>${inline}</style></head><body><p>Same member</p></body></html>`;
 	const context = { baseUrl: 'https://fixture.example/post', repServerHtml: page(['/template.css']), memberServerHtml: page(['/template.css', '/member.css']) };
