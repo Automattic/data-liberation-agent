@@ -135,6 +135,31 @@ export function canonicalLinkHref( html: string, baseUrl: string ): string | und
 	return undefined;
 }
 
+/** Only an entrypoint self-canonical can authorize a different HTTP(S) host. */
+export function entrypointCanonicalHost( sourceUrl: string, html: string, openGraph?: unknown ): string | undefined {
+	const source = new URL( sourceUrl );
+	const og = readDocument( html )( 'meta[property="og:url"]' ).first().attr( 'content' );
+	for ( const value of [ canonicalLinkHref( html, sourceUrl ), openGraph ?? og ] ) {
+		if ( typeof value !== 'string' ) continue;
+		try {
+			const target = new URL( value, sourceUrl );
+			if ( [ 'http:', 'https:' ].includes( target.protocol ) && target.host !== source.host &&
+				target.pathname === source.pathname && target.search === source.search ) return target.host;
+		} catch { /* Malformed metadata is not proof. */ }
+	}
+	return undefined;
+}
+
+/** Rebase only metadata on the proven host; ordinary links are not origin aliases. */
+export function rebaseCanonicalUrl( target: URL, sourceUrl: string, aliasHost?: string ): URL {
+	if ( aliasHost && target.host === aliasHost && [ 'http:', 'https:' ].includes( target.protocol ) ) {
+		const source = new URL( sourceUrl );
+		target.protocol = source.protocol;
+		target.host = source.host;
+	}
+	return target;
+}
+
 /**
  * Drop inventory routes whose server-HTML `rel=canonical` resolves to another
  * route in the same inventory. Bounded and advisory: any fetch, status, parse,
@@ -156,6 +181,23 @@ export async function probeCanonicalRouteAliases(
 	const kept: Array< { url: string; reason: RouteAliasKept } > = [];
 	const aliases: CanonicalRouteAlias[] = [];
 	let probes = 0;
+	// Fetch proof only when a candidate actually names a different host. Share
+	// that bounded request across concurrent candidates; uncertainty keeps them.
+	let aliasHost: Promise< string | undefined > | undefined;
+	const entrypointHost = () => aliasHost ??= ( async () => {
+		try {
+			const response = await dependencies.fetch( input.sourceUrl, {
+				timeoutMs: limits.requestTimeoutMs, maxBytes: limits.maxDocumentBytes,
+				authorizeUrl: ( target: string ) => {
+					if ( ! routeInScope( target, input.routeScope ) ) throw new Error( 'Canonical proof request is outside the adapter route scope' ); // failure-class: operational
+				},
+			} );
+			if ( response.status < 200 || response.status >= 300 ||
+				! /^text\/html(?:;|$)/i.test( response.headers.get( 'content-type' ) ?? '' ) ||
+				isRouteDrift( response.finalUrl, input.sourceUrl ) ) return undefined;
+			return entrypointCanonicalHost( input.sourceUrl, response.body.toString( 'utf8' ) );
+		} catch { return undefined; }
+	} )();
 	const probe = async ( url: string ): Promise< unknown > => {
 		if ( identity( url ) === sourceIdentity || ! routeInScope( url, input.routeScope ) ) return;
 		probes++;
@@ -183,6 +225,13 @@ export async function probeCanonicalRouteAliases(
 			return kept.push( { url, reason: 'no_canonical' } );
 		}
 		if ( ! canonical ) return kept.push( { url, reason: 'no_canonical' } );
+		const targetUrl = new URL( canonical );
+		if ( targetUrl.host !== new URL( input.sourceUrl ).host && input.urls.some( candidate => {
+			const route = new URL( candidate );
+			return route.pathname === targetUrl.pathname && route.search === targetUrl.search;
+		} ) ) {
+			canonical = rebaseCanonicalUrl( targetUrl, input.sourceUrl, await entrypointHost() ).href;
+		}
 		const canonicalIdentity = identity( canonical );
 		if ( ! canonicalIdentity || ! routeInScope( canonical, input.routeScope ) ) return kept.push( { url, reason: 'canonical_not_in_inventory' } );
 		if ( canonicalIdentity === identity( url ) ) return kept.push( { url, reason: 'canonical_self' } );
