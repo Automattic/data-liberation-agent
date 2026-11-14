@@ -44,6 +44,7 @@ interface AssetEvidenceEntry {
 	evidenceDocuments: Array< { state: 'desktop' | 'mobile'; html: string } >;
 }
 export interface CaptureEvidenceInput {
+	inventory?: import('./website-inventory.js').WebsiteInventory;
 	locations: { captureRoot: string; stageRoot: string };
 	source: {
 		sourceUrl: string;
@@ -686,7 +687,10 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			}
 		} catch { /* An invalid policy URL remains source evidence. */ }
 	}
-	if (consentBanner) writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(consentBanner, null, 2)}\n`);
+	if (consentBanner) {
+		writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(consentBanner, null, 2)}\n`);
+		input.inventory?.add( 'consent-banner.json' );
+	}
 
 	const receiptPath = join( stageDir, 'capture-receipt.json' );
 	// The entrypoint's self-declared generator: source evidence kept apart from the capturing platform.

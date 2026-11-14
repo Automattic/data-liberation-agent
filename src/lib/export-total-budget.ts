@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { WebsiteInventory } from './website-inventory.js';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { extname, join, posix } from 'node:path';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { imageSetSites, isSrcsetShaped, srcsetCandidates } from './srcset.js';
@@ -125,23 +126,8 @@ export interface WebsiteFile {
 }
 
 /** Every file under `websiteDir`, sorted by path. */
-export function measureWebsite( websiteDir: string ): { files: WebsiteFile[]; totalBytes: number } {
-	const files: WebsiteFile[] = [];
-	const walk = ( directory: string, prefix: string ): void => {
-		let entries;
-		try {
-			entries = readdirSync( directory, { withFileTypes: true } );
-		} catch {
-			return;
-		}
-		for ( const entry of entries ) {
-			const path = prefix ? `${ prefix }/${ entry.name }` : entry.name;
-			if ( entry.isDirectory() ) walk( join( directory, entry.name ), path );
-			else if ( entry.isFile() ) files.push( { path, bytes: statSync( join( directory, entry.name ) ).size } );
-		}
-	};
-	walk( websiteDir, '' );
-	files.sort( ( a, b ) => compare( a.path, b.path ) );
+export function measureWebsite( websiteDir: string, inventory = new WebsiteInventory( websiteDir ) ): { files: WebsiteFile[]; totalBytes: number } {
+	const files = inventory.files.filter( file => ! file.isSymlink ).map( ( { path, bytes } ) => ( { path, bytes } ) );
 	return { files, totalBytes: files.reduce( ( sum, file ) => sum + file.bytes, 0 ) };
 }
 
@@ -152,6 +138,7 @@ export interface DroppableAsset {
 }
 
 export interface ExportBudgetPlanInput {
+	inventory?: WebsiteInventory;
 	websiteDir: string;
 	budget: ExportTotalBudget;
 	/** The entry document, relative to the website root. */
@@ -390,7 +377,7 @@ function decodeURIComponentSafe( value: string ): string {
  */
 export function planExportBudget( input: ExportBudgetPlanInput ): ExportBudgetPlan {
 	const { budget, websiteDir } = input;
-	const measured = measureWebsite( websiteDir );
+	const measured = measureWebsite( websiteDir, input.inventory );
 	const byteLimit = Math.max( 0, budget.maxTotalBytes - budget.reservedBytes );
 	const fileLimit = Math.max( 0, budget.maxFiles - budget.reservedFiles );
 	let excessBytes = measured.totalBytes - byteLimit;

@@ -1,3 +1,4 @@
+import { WebsiteInventory } from './website-inventory.js';
 import { createHash } from 'node:crypto';
 import { structuredContentIndex } from './content-index.js';
 import { deferredMediaReferences, linkDeferredMedia, recordMediaLedger } from './media-queue.js';
@@ -167,6 +168,7 @@ export interface ExportLimits {
 
 /** What one build of the export generation produced, for the total budget. */
 interface ExportBuild {
+	inventory: WebsiteInventory;
 	entrypointPath: string;
 	routes: Array< { url: string; path: string } >;
 	assets: DroppableAsset[];
@@ -691,34 +693,6 @@ export function renameIdTokens( text: string, ids: ReadonlyMap< string, string >
 	if ( ! ids.size ) return text;
 	const pattern = new RegExp( `${ RUNTIME_ID_TOKEN.source }`, 'g' );
 	return text.replace( pattern, ( token ) => ids.get( token ) ?? token );
-}
-
-/** An incomplete reference audit cannot prove an ID is safe to canonicalize. */
-function portableTextReferences( websiteDir: string ): Array< { path: string; text: string } > | null {
-	const texts: Array< { path: string; text: string } > = [];
-	let totalBytes = 0;
-	const pending = [ websiteDir ];
-	try {
-		while ( pending.length ) {
-			const directory = pending.pop()!;
-			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
-				const path = join( directory, entry.name );
-				if ( entry.isDirectory() ) {
-					pending.push( path );
-					continue;
-				}
-				if ( entry.isSymbolicLink() ) return null;
-				if ( ! entry.isFile() || ! /\.(?:css|js|mjs|json|svg|xml|txt|html)$/i.test( entry.name ) ) continue;
-				const bytes = statSync( path ).size;
-				totalBytes += bytes;
-				if ( bytes > 32 * 1024 * 1024 || totalBytes > 128 * 1024 * 1024 ) return null;
-				texts.push( { path, text: readFileSync( path, 'utf8' ) } );
-			}
-		}
-	} catch {
-		return null;
-	}
-	return texts;
 }
 
 const DESKTOP_CAPTURE_WIDTH = 1440;
@@ -2294,33 +2268,32 @@ function buildExportCapture(
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
-	selfContainWebsite( websiteDir );
+	const inventory = new WebsiteInventory( websiteDir );
+	selfContainWebsite( websiteDir, inventory );
 	// Author identity selectors can live in linked/imported stylesheets, not
 	// only inline <style>. Project the localized copies with the same primitive.
 	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases || responsiveIdentities.svgIds.size || responsiveBodyClassProjections.size || collapsedBodyClassProjections.size ) {
-		const projectStylesheets = ( directory: string ): void => {
-			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
-				const path = join( directory, entry.name );
-				if ( entry.isDirectory() ) projectStylesheets( path );
-				else if ( entry.isFile() && entry.name.endsWith( '.css' ) ) {
-					const original = readFileSync( path, 'utf8' );
-					const projected = projectStylesheet(
-						() => {
-							let css = projectResponsiveIdentityCss( projectResponsiveSvgCss( original, responsiveIdentities.svgIds ), responsiveIdentities.ids, responsiveIdentities.namedAliases );
-							for ( const { moved, documentClasses } of responsiveBodyClassProjections.values() ) css = projectResponsiveBodyClassCss( css, moved, true, documentClasses );
-							for ( const { moved, aliases, width } of collapsedBodyClassProjections.values() ) css = projectCollapsedBodyClassCss( css, moved, aliases, width );
-							return css;
-						},
-						reason => routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url: options.sourceUrl, reason, unit: 'stylesheet', severity: 'warning', path: relative( stageDir, path ).replace( /\\/g, '/' ) } )
-					);
-					if ( projected !== undefined && original !== projected ) writeFileSync( path, projected );
-				}
+		for ( const file of inventory.traversalFiles ) {
+			if ( file.isSymlink || ! file.path.endsWith( '.css' ) ) continue;
+			const path = join( websiteDir, file.path );
+			const original = readFileSync( path, 'utf8' );
+			const projected = projectStylesheet(
+				() => {
+					let css = projectResponsiveIdentityCss( projectResponsiveSvgCss( original, responsiveIdentities.svgIds ), responsiveIdentities.ids, responsiveIdentities.namedAliases );
+					for ( const { moved, documentClasses } of responsiveBodyClassProjections.values() ) css = projectResponsiveBodyClassCss( css, moved, true, documentClasses );
+					for ( const { moved, aliases, width } of collapsedBodyClassProjections.values() ) css = projectCollapsedBodyClassCss( css, moved, aliases, width );
+					return css;
+				},
+				reason => routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url: options.sourceUrl, reason, unit: 'stylesheet', severity: 'warning', path: relative( stageDir, path ).replace( /\\/g, '/' ) } )
+			);
+			if ( projected !== undefined && original !== projected ) {
+				writeFileSync( path, projected );
+				inventory.add( file.path );
 			}
-		};
-		projectStylesheets( websiteDir );
+		}
 	}
-	projectPortableResourceIntegrity( websiteDir, resourceStage.sourceHashesByPortablePath );
-	const portableTexts = portableTextReferences( websiteDir );
+	projectPortableResourceIntegrity( websiteDir, resourceStage.sourceHashesByPortablePath, inventory );
+	const portableTexts = inventory.textReferences();
 	const externallyReferenced = portableTexts && indexRuntimeIdReferences( portableTexts );
 	if ( portableTexts && externallyReferenced ) for ( const entry of retainedEntries ) {
 		const path = join( websiteDir, routePathOf( entry.url ) );
@@ -2328,6 +2301,7 @@ function buildExportCapture(
 		const stable = canonicalizeUnreferencedRuntimeIds( html, id => externallyReferenced( id, path ) );
 		if ( ! stable.ids.size ) continue;
 		writeFileSync( path, stable.html );
+		inventory.add( routePathOf( entry.url ) );
 		// Interaction evidence names the same elements; keep it in step.
 		const interactions = interactionPages.indexOf( entry.interactions! );
 		if ( interactions >= 0 ) interactionPages[ interactions ] = JSON.parse( renameIdTokens( JSON.stringify( interactionPages[ interactions ] ), stable.ids ) );
@@ -2350,19 +2324,25 @@ function buildExportCapture(
 			if ( existsSync( file ) ) continue; // Never replace a captured resource.
 			mkdirSync( dirname( file ), { recursive: true } );
 			writeFileSync( file, page.html() );
+			inventory.add( relative( websiteDir, file ).replace( /\\/g, '/' ) );
 			routes.push( { url: term.sourceUrl, path: `website${ term.path }` } );
 		}
 		writeFileSync( join( websiteDir, 'content-index.json' ), JSON.stringify( content, null, 2 ) );
+		inventory.add( 'content-index.json' );
 		for ( const redirect of content.redirects ) {
 			const from = new URL( redirect.from ).pathname;
 			if ( from !== redirect.to && ! portableRedirects.some( rule => rule.from === from ) ) portableRedirects.push( { from, to: redirect.to } );
 		}
 	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
-	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
+	if ( redirectsFile ) {
+		writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
+		inventory.add( '_redirects' );
+	}
 	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.afterHtml );
 
 	writeCaptureEvidence( {
+		inventory,
 		locations: { captureRoot: outputDir, stageRoot: stageDir },
 		source: options,
 		capture: {
@@ -2389,7 +2369,7 @@ function buildExportCapture(
 		},
 	} );
 	// Evidence describes expanded bytes. Compact afterwards in the same publication.
-	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ) );
+	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ), inventory );
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets and sidecars only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();
@@ -2399,6 +2379,7 @@ function buildExportCapture(
 	}
 	const websiteRelative = ( path: string ) => path.replace( /^website\//, '' );
 	return {
+		inventory,
 		entrypointPath: routePathOf( entrypointUrl ).replace( /\\/g, '/' ),
 		routes: routes.map( route => ( { url: route.url, path: websiteRelative( route.path ) } ) ),
 		assets: [ ...droppable ].map( ( [ path, sourceUrls ] ) => ( { path: websiteRelative( path ), sourceUrls: sourceUrls.sort() } ) ).sort( ( a, b ) => ( a.path < b.path ? -1 : a.path > b.path ? 1 : 0 ) ),
