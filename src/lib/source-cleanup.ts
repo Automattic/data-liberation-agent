@@ -28,6 +28,8 @@ export interface CleanupRule {
    *  it reserved is reclaimed with it rather than frozen at the captured value. */
   reclaimVariables?: string[];
   hosts?: string[];
+  /** Match the referenced URL's pathname, in addition to any host restriction. */
+  pathPrefixes?: string[];
   /** The provider may withhold this route's content behind this element (a
    *  members-only page). Its removal marks the route as gated only when the
    *  page kept no content root; the same element can also wrap a login opened
@@ -159,6 +161,7 @@ export function validateCleanupPolicy(value: unknown): asserts value is CleanupP
       (rule.creditText !== undefined && (typeof rule.creditText !== 'string' || rule.creditText.length > 100)) ||
       (rule.reclaimVariables !== undefined && (!Array.isArray(rule.reclaimVariables) || rule.reclaimVariables.length > 20 ||
         rule.reclaimVariables.some((name) => typeof name !== 'string' || !/^--[\w-]{1,100}$/.test(name)))) ||
+      (rule.pathPrefixes !== undefined && (!Array.isArray(rule.pathPrefixes) || rule.pathPrefixes.some((prefix) => typeof prefix !== 'string' || !prefix.startsWith('/')))) ||
       (rule.hosts !== undefined && (!Array.isArray(rule.hosts) || rule.hosts.some((host) => typeof host !== 'string'))))) {
     throw new Error('Unsupported or invalid source cleanup policy; recapture with a supported policy');
   }
@@ -363,11 +366,12 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
       const rect = image.getBoundingClientRect();
       return (rect.width <= 1 && rect.height <= 1) || !image.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
     }
-    if (rule.hosts) {
-      let host: string;
-      try { host = new URL(node.getAttribute('href') ?? node.getAttribute('src') ?? '', location.href).hostname; }
+    if (rule.hosts || rule.pathPrefixes) {
+      let url: URL;
+      try { url = new URL(node.getAttribute('href') ?? node.getAttribute('src') ?? '', location.href); }
       catch { return false; }
-      if (!rule.hosts.some((domain) => host === domain || host.endsWith(`.${domain}`))) return false;
+      if (rule.hosts && !rule.hosts.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) return false;
+      if (rule.pathPrefixes && !rule.pathPrefixes.some((prefix) => url.pathname.startsWith(prefix))) return false;
     }
     if (rule.promotion) {
       const text = node.textContent ?? '';
