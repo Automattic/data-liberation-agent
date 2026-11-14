@@ -664,6 +664,13 @@ export async function observePage(
 						}
 						if ( bottom <= top || ( collapsedWhitespace ? right < left : right <= left ) ) return false;
 					}
+					// The viewport cannot scroll before the document's scroll origin,
+					// so text wholly above it, or wholly before its inline start
+					// (left in LTR, right in RTL), is never painted on screen: the
+					// classic `left:-999px` skip link.
+					const rtl = getComputedStyle( document.scrollingElement ?? document.documentElement ).direction === 'rtl';
+					if ( bottom + scrollY <= 0 ) return false;
+					if ( rtl ? left + scrollX >= document.documentElement.clientWidth : right + scrollX <= 0 ) return false;
 					return true;
 				} );
 			};
