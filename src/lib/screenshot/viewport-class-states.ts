@@ -26,7 +26,7 @@ export const VIEWPORT_CLASS_PREFIX = 'data-blocks-engine-capture-width-class-';
 const STATE_KEY = 'data-liberation.viewport-class-states';
 
 /**
- * `[token, alias]` pairs an element wears as aliases in the serialized copy;
+ * `[token, alias, captureWidthPresence]` tuples an element wears as aliases in the serialized copy;
  * the initial-document projection applies them.
  */
 export const WIDTH_CLASSES_ATTRIBUTE = 'data-blocks-engine-capture-width-classes';
@@ -359,10 +359,10 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 			const state = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!;
 			// The source script may rewrite the class attribute on any later
 			// resize, and only capture attributes reach the initial document.
-			for ( const { index, token, alias } of aliases ) {
+			for ( const { index, token, alias, base } of aliases ) {
 				const element = state.elements[ index ]!;
-				const pairs = JSON.parse( element.getAttribute( marker ) ?? '[]' ) as string[][];
-				element.setAttribute( marker, JSON.stringify( [ ...pairs, [ token, alias ] ] ) );
+				const pairs = JSON.parse( element.getAttribute( marker ) ?? '[]' ) as Array<[string, string, boolean]>;
+				element.setAttribute( marker, JSON.stringify( [ ...pairs, [ token, alias, base ] ] ) );
 			}
 			document.body.setAttribute( contractsAttribute, JSON.stringify( aliases ) );
 		}, { key: STATE_KEY, aliases, marker: WIDTH_CLASSES_ATTRIBUTE, contractsAttribute: CONTRACTS_ATTRIBUTE } );
