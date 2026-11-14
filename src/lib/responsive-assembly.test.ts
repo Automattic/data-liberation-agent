@@ -20,6 +20,7 @@ import {
 } from './responsive-assembly.js';
 import { scopeCss } from './replicate/css-scope.js';
 import { middleLayoutSampleWidth } from './screenshot/device-mode.js';
+import { projectViewportClassRules, VIEWPORT_CLASS_RULES_ATTRIBUTE } from './screenshot/viewport-class-states.js';
 
 const dirs: string[] = [];
 
@@ -103,6 +104,36 @@ it( 'projects viewport-dependent pagination classes through equivalent and corre
 	} finally {
 		await browser.close();
 	}
+} );
+
+it( 'keeps swept pagination sheets active with inline or linked phone sheets (#1825)', async () => {
+	const alias = 'data-blocks-engine-capture-width-class-0123456789ab';
+	const base = '.cell{display:inline-block;width:80px;height:40px}.cell.is-hidden{display:none}';
+	const sheets = {
+		inline: `<style>${ base }</style>`,
+		linked: `<link rel="stylesheet" href="data:text/css,${ encodeURIComponent( base ) }">`,
+	};
+	const cells = ( classes: string[] ) => `<h1>Gallery</h1><div class="grid">${ classes.map( ( token, index ) => `<div class="cell ${ token }"><img src="cover-${ index }.png" alt="Cover ${ index + 1 }"></div>` ).join( '' ) }</div><p>More covers</p>`;
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		for ( const desktopSheet of Object.values( sheets ) ) {
+			const $ = cheerio.load( `<html><head>${ desktopSheet }</head><body>${ cells( [ '', alias, 'is-hidden', 'is-hidden' ] ) }</body></html>` );
+			$( 'body' ).attr( 'data-blocks-engine-capture-width-class-contracts', JSON.stringify( [ { token: 'is-hidden', alias, media: '(max-width:767px)' } ] ) );
+			const desktop = projectViewportClassRules( $.html(), () => ( { css: base, url: 'https://example.test/site.css' } ) );
+			expect( cheerio.load( desktop )( `style[${ VIEWPORT_CLASS_RULES_ATTRIBUTE }]` ) ).toHaveLength( 1 );
+			for ( const [ kind, phoneSheet ] of Object.entries( sheets ) ) {
+				const mobile = `<html><head>${ phoneSheet }</head><body>${ cells( [ '', 'is-hidden', 'is-hidden', 'is-hidden' ] ) }</body></html>`;
+				const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+				expect( cheerio.load( assembly.html )( '.cell' ) ).toHaveLength( 4 );
+				for ( const [ width, visible ] of [ [ 1440, [ 'Cover 1', 'Cover 2' ] ], [ 390, [ 'Cover 1' ] ] ] as const ) {
+					await tab.setViewportSize( { width, height: 800 } );
+					await tab.setContent( assembly.html );
+					expect( await tab.$$eval( 'img', images => images.filter( image => image.getClientRects().length > 0 ).map( image => image.alt ) ), `${ kind } at ${ width }px` ).toEqual( visible );
+				}
+			}
+		}
+	} finally { await browser.close(); }
 } );
 
 it( 'retains native roots for profile-specific root classes with disclosure state', () => {
