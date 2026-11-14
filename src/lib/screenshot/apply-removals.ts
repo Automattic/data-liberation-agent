@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { LiberationContext } from '../../adapters/page-actions.js';
+import { orElse } from '../failure-class.js';
 
 export interface ApplyRemovalsOpts {
   removeSelectors?: string[];
@@ -18,7 +19,7 @@ export async function applyCaptureRemovals(page: Page, opts: ApplyRemovalsOpts):
   if (removeSelectors && removeSelectors.length > 0) {
     await page.evaluate((sels: string[]) => {
       for (const sel of sels) for (const el of Array.from(document.querySelectorAll(sel))) el.remove();
-    }, removeSelectors).catch(() => { /* best-effort */ });
+    }, removeSelectors).catch(orElse( undefined ));
   }
-  if (prepare) await prepare(page, ctx).catch(() => { /* best-effort */ });
+  if (prepare) await prepare(page, ctx).catch(orElse( undefined ));
 }

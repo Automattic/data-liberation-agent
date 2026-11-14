@@ -1,5 +1,5 @@
 import { baselineSteps, createBaselineState, type CapturePerViewportArgs } from './baseline-steps.js';
-import { isIntegrityError } from '../failure-class.js';
+import { orElse, isIntegrityError } from '../failure-class.js';
 import { loadSourceBaseline, renderedQueryAlias } from './load-baseline.js';
 import { runSteps } from './capture-steps.js';
 import { createPostBaselineState, postBaselineSteps, retainPartialPostBaseline } from './post-baseline-steps.js';
@@ -1100,7 +1100,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		sendLog( server, message );
 		process.stderr.write( `${ message }
 ` );
-		for ( const context of routeContexts.get( url ) ?? [] ) void context.close().catch( () => {} );
+		for ( const context of routeContexts.get( url ) ?? [] ) void context.close().catch( orElse( undefined ) );
 		routeContexts.delete( url );
 	} );
 	// The phase a still-running route entered last, from the per-profile phase
@@ -1187,7 +1187,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			if ( crashRelaunches >= MAX_CRASH_RELAUNCHES ) return Promise.resolve( false );
 			crashRelaunches++;
 			sendLog( server, '[restart] browser disconnected mid-segment; relaunching' );
-			void crashed.close().catch( () => {} );
+			void crashed.close().catch( orElse( undefined ) );
 			crashRelaunch = connectBrowser( {} )
 				.then(
 					( next ) => {
@@ -1361,7 +1361,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			let target: string | undefined;
 			try {
 				const page = await context.newPage();
-				await opts.initScript?.( page ).catch( () => undefined );
+				await opts.initScript?.( page ).catch( orElse( undefined ) );
 				const navigation = await navigateSourceDocument( page, url, { publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope, timeoutMs: SOURCE_NAVIGATION_LIMITS.timeoutMs } );
 				if ( ! navigation.boundary && ! navigation.redirectedTo && ( navigation.response?.status() ?? 0 ) < 400 ) {
 					target = await renderedQueryAlias( page, url, opts.routeScope );
@@ -1369,7 +1369,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			} catch {
 				// An inconclusive early visit leaves the normal capture/retry path in charge.
 			} finally {
-				await context.close().catch( () => undefined );
+				await context.close().catch( orElse( undefined ) );
 				untrackRouteContext( url, context );
 			}
 			if ( target ) {
@@ -1603,7 +1603,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeRuntimeStyleWrites );
 					await context.addInitScript( observeViewportWork );
 					const page = await context.newPage();
-					await opts.initScript?.( page ).catch( () => undefined );
+					await opts.initScript?.( page ).catch( orElse( undefined ) );
 					errorGuard = guardPageErrors( page, reason => {
 						profileDiagnostics.push( { code: PAGE_ERROR_STORM, reason } );
 						profileFailures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `${ PAGE_ERROR_STORM }: ${ reason }`, timestamp: new Date().toISOString(), attempt: 1 } );
@@ -1630,7 +1630,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 									if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
 									return undefined;
 								} finally {
-									await probe?.close().catch( () => {} );
+									await probe?.close().catch( orElse( undefined ) );
 								}
 							} ),
 							routeDeadlineMs,
@@ -1775,7 +1775,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const builtInPending = builtInProfiles.length > 1 && memoryAdmission && ! admission.roomForParallelProfiles( admission.kind( url ) )
 			? undefined
 			: builtInProfiles.map( viewport => captureProfile( viewport ) );
-		for ( const pending of builtInPending ?? [] ) pending.catch( () => {} );
+		for ( const pending of builtInPending ?? [] ) pending.catch( orElse( undefined ) );
 		for ( let index = 0; index < builtInProfiles.length; index++ ) {
 			const viewport = builtInProfiles[ index ]!;
 			const result = builtInPending ? await builtInPending[ index ] : await captureProfile( viewport );
@@ -1942,7 +1942,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			while ( segStart < waveEnd && ! routeBudget?.closed() ) {
 				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
-					await browser.close().catch( () => {} );
+					await browser.close().catch( orElse( undefined ) );
 					browser = ( await connectBrowser( {} ) ) as unknown as Browser;
 					browserRestarts++;
 					urlsSinceRestart = 0;
@@ -1989,7 +1989,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						if ( ! routeBudget ) await Promise.race( running );
 						else {
 							await routeBudget.wait( running );
-							if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( () => {} ) ) ) break;
+							if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( orElse( undefined ) ) ) ) break;
 						}
 					}
 				} finally {
@@ -2062,7 +2062,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				} catch {
 					// Inspection is evidence-only; a browser/session failure leaves links unresolved.
 				} finally {
-					await context?.close().catch( () => {} );
+					await context?.close().catch( orElse( undefined ) );
 				}
 			}
 		}

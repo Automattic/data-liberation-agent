@@ -9,6 +9,7 @@ import type { Element as DomElement } from 'domhandler';
 import type { Page } from 'playwright';
 import { normalizeCaptureState, normalizeGeneratedIds } from './capture-state.js';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { orElse } from '../failure-class.js';
 
 /**
  * Shared site chrome — the header, navigation and footer every route repeats —
@@ -605,7 +606,7 @@ export async function anchorChromeStates( page: Page, landmarks: readonly Chrome
 export async function clearChromeMarks( page: Page ): Promise< void > {
 	await page.evaluate( ( names ) => {
 		for ( const name of names ) for ( const element of Array.from( document.querySelectorAll( `[${ name }]` ) ) ) element.removeAttribute( name );
-	}, [ CHROME_ROOT_ATTRIBUTE, CHROME_REUSED_ATTRIBUTE ] ).catch( () => undefined );
+	}, [ CHROME_ROOT_ATTRIBUTE, CHROME_REUSED_ATTRIBUTE ] ).catch( orElse( undefined ) );
 }
 
 export interface ChromeReuse {
@@ -797,6 +798,6 @@ export async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desk
 			return probeChromeOnPage( page, target, {} );
 		} );
 	} finally {
-		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+		await Promise.all( contexts.map( context => context.close().catch( orElse( undefined ) ) ) );
 	}
 }

@@ -3,6 +3,7 @@ import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import { documentsDiffer } from '../responsive-assembly.js';
 import { CONSENT_OVERLAY_DIALOG_SELECTOR, CONSENT_VENDOR_RE, isConsentOverlayRoot, type ConsentOverlayElement } from '../consent-overlay.js';
+import { orElse } from '../failure-class.js';
 
 /**
  * Whether a capture renders the phone profile as its own document.
@@ -108,8 +109,8 @@ export async function resampleSiteServerHtml(
 	if ( first !== 'different' ) return { serverHtml: first };
 	// Start both requests together. A failed re-sample cannot disprove the first difference.
 	const [ desktop, phone ] = await Promise.all( [
-		fetchDesktop().catch( () => undefined ),
-		fetchPhone().catch( () => undefined ),
+		fetchDesktop().catch( orElse( undefined ) ),
+		fetchPhone().catch( orElse( undefined ) ),
 	] );
 	return {
 		serverHtml: desktop === undefined || phone === undefined ? first : compareServerHtml( desktop, phone ),

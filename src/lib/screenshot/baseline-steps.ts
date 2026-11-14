@@ -48,6 +48,7 @@ import {
 
 
 import type { CaptureStep } from './capture-steps.js';
+import { orElse } from '../failure-class.js';
 
 export interface CapturePerViewportArgs {
 	page: Page;
@@ -341,7 +342,7 @@ export function baselineSteps(
 	const serializeDocument = async ( frozen: boolean ): Promise<{ html: string; documentUrl: { url: string; baseUrl: string } }> => {
 		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
-		await preserveStreamedVideoPosters( page, resourceStore, url ).catch ( () => undefined );
+		await preserveStreamedVideoPosters( page, resourceStore, url ).catch ( orElse( undefined ) );
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 		const learned = await capturePageHtml( page, args.diagnostics );
@@ -420,16 +421,16 @@ export function baselineSteps(
 				// Initial component states are immutable evidence, read before exploration.
 				args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 				args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
-				if ( args.beforeSerialize ) await args.beforeSerialize( page, { url, viewport: viewport.id, serverHtml } ).catch ( () => undefined );
-				const snapshot = await snapshotComponents( page ).catch ( () => undefined );
+				if ( args.beforeSerialize ) await args.beforeSerialize( page, { url, viewport: viewport.id, serverHtml } ).catch ( orElse( undefined ) );
+				const snapshot = await snapshotComponents( page ).catch ( orElse( undefined ) );
 				state.componentBaseline = snapshot && Array.isArray( snapshot.components ) ? snapshot : { components: [], controls: [] };
-				await markGalleryRoots( page ).catch ( () => undefined );
+				await markGalleryRoots( page ).catch ( orElse( undefined ) );
 				// Scripted links are numbered in the serialized document; their destinations
 				// are observed after the baseline, with the other interaction probes.
 				state.scriptedLinkSignatures = plan.captureHtml || plan.captureMobileHtml ? await stampScriptedLinkCandidates( page, evaluateTimeoutMs ) : [];
 				await markInitialDocument( page );
 				// Probes above resized the page; serialize source sheets as loaded at this width.
-				await restoreLoadTimeSheets( page ).catch ( () => 0 );
+				await restoreLoadTimeSheets( page ).catch ( orElse( 0 ) );
 				state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml );
 				if ( await args.absentDocument?.( state.initialDocument ) ) {
 					fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
@@ -438,7 +439,7 @@ export function baselineSteps(
 				}
 				// The serialized head is the initial one, so it is named by the title the
 				// browser reported for it, before exploration could retitle the page.
-				state.initialTitle = await page.evaluate( () => document.title ).catch ( () => undefined );
+				state.initialTitle = await page.evaluate( () => document.title ).catch ( orElse( undefined ) );
 
 			}
 		},
@@ -492,11 +493,9 @@ export function baselineSteps(
 					settleMs: Math.max( args.settleMs, 800 ),
 					...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
 					...( args.classMemo ? { memo: args.classMemo } : {} ),
-				} ).catch ( () => undefined ) : undefined;
+				} ).catch ( orElse( undefined ) ) : undefined;
 				try {
-					await args.beforeFluid?.( page, { url, viewport: viewport.id, serverHtml } ).catch ( () => {
-						/* best-effort — the sweep learns whatever the hook left in place */
-					} );
+					await args.beforeFluid?.( page, { url, viewport: viewport.id, serverHtml } ).catch ( orElse( undefined ) );
 					const learned = await learnAndApplyFluidGeometry( page, {
 						// The middle layout's learned rules name its own geometry ids, never the phone document's.
 						document: isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile',

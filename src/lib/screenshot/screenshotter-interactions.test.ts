@@ -52,7 +52,7 @@ function makePage() {
 		off: vi.fn(),
 		goto: vi.fn().mockImplementation( async ( url: string ) => {
 			currentUrl = url;
-			return { status: () => 200 };
+			return { status: () => 200, text: async () => '<html><body></body></html>' };
 		} ),
 		url: () => currentUrl,
 		viewportSize: () => null,

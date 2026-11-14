@@ -7,6 +7,7 @@ import type { Page } from 'playwright';
 import { COARSE_SWEEP_WIDTHS } from './fluid-capture.js';
 import { RUNTIME_STYLE_WRITES_KEY } from './runtime-style-writes.js';
 import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
+import { orElse } from '../failure-class.js';
 
 /**
  * Script-written class state that follows the viewport.
@@ -80,7 +81,7 @@ async function stylesheetTexts( page: Page ): Promise< string[] | null > {
 			continue;
 		}
 		if ( ! sheet.href ) return null;
-		const response = await page.request.get( sheet.href ).catch( () => null );
+		const response = await page.request.get( sheet.href ).catch( orElse( null ) );
 		if ( ! response?.ok() ) return null;
 		texts.push( await response.text() );
 	}

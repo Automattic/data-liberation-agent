@@ -57,7 +57,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 				};
 				await next();
 			}
-			return { status: () => 200 };
+			return { status: () => 200, text: async () => '<html><body></body></html>' };
 		} ),
 		url: () => currentUrl,
 		viewportSize: () => null,

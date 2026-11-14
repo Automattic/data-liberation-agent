@@ -25,6 +25,7 @@ import {
 import type { Page } from 'playwright';
 import { captureFluidBaseline, FLUID_RELEASE_ATTRIBUTE } from './fluid-baseline.js';
 import { applyRuntimeSheetRules, bindRuntimeSheets, observeRuntimeSheets, offsetSegments, runtimeSheetSeries, runtimeSheetsObserved } from './fluid-runtime-sheets.js';
+import { orElse } from '../failure-class.js';
 
 /** Fit paired translations only inside shared regimes, never across a wrap. */
 function translationSegments( x: GeometrySample[], y: GeometrySample[], cuts: number[] ): FluidModelSegment[] {
@@ -298,7 +299,7 @@ export async function learnAndApplyFluidGeometry(
 	// Rest after a resize ends on the delayed work it scheduled (see waitForRestGeometry).
 	await withEvaluateTimeout( page.evaluate( observeViewportWork ), 8000 );
 	// Observe source inline lengths before width learning removes segmented ones.
-	const lifted = await liftViewportHeights( page, options.settleMs ?? 1200 ).catch( () => 0 );
+	const lifted = await liftViewportHeights( page, options.settleMs ?? 1200 ).catch( orElse( 0 ) );
 	const heightLengths = lifted > 0 ? await page.evaluateHandle( attribute => [ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ].flatMap( element => {
 		const properties = element.getAttribute( attribute )!.split( ' ' );
 		element.removeAttribute( attribute );

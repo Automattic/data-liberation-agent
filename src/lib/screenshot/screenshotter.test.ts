@@ -84,7 +84,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     off: vi.fn(),
     goto: vi.fn().mockImplementation(async (url: string) => {
       currentUrl = url;
-      return { status: () => statusOf(currentUrl) };
+      return { status: () => statusOf(currentUrl), text: async () => '<html><body>hello</body></html>' };
     }),
     url: vi.fn().mockImplementation(() => currentUrl),
     addStyleTag: vi.fn().mockResolvedValue({ evaluate: vi.fn().mockResolvedValue(undefined), dispose: vi.fn().mockResolvedValue(undefined) }),
@@ -97,6 +97,8 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
       const s = String(fn);
+      // DOM-free fixture: no runtime viewport writes.
+      if (s.includes('viewportReactive')) return false;
       // DOM-free fixture: there are no icon glyphs.
       if (s.includes('glyphs.push')) return [];
       if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };
@@ -323,6 +325,7 @@ describe('captureScreenshots', () => {
 				await goto( url );
 				return {
 					status: () => 200,
+					text: async () => '<html><body>hello</body></html>',
 					url: () => navigation === 'client' ? requested : landed,
 					request: () => ( { redirectedFrom: () => navigation === 'client' ? null : {} } ),
 				};
@@ -839,7 +842,7 @@ describe('captureScreenshots', () => {
     page.goto.mockImplementation(async (url: string) => {
       await goto(url);
       if (probed) reloads++;
-      return { status: () => probed ? 403 : 200 };
+      return { status: () => probed ? 403 : 200, text: async () => '<html><body>hello</body></html>' };
     });
     (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => page));
     try {
