@@ -469,7 +469,7 @@ async function runCaptureWebsite(
 	};
 
 	const response = await fetchEntryDocument( await resolveEntryUrl( options.url ), sourceGovernors, { session: options.acquisition !== 'http' } );
-	const sourceUrl = response.finalUrl;
+	let sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
 		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )
 		: '';
@@ -490,6 +490,7 @@ async function runCaptureWebsite(
 	if ( routeScope ) {
 		validateRouteScope( routeScope );
 		if ( !routeInScope( sourceUrl, routeScope ) ) throw new Error( 'Source URL is outside its adapter route scope' );
+		sourceUrl = scopedRouteKey( sourceUrl, routeScope );
 	}
 	if ( options.acquisition === 'http' && ! adapter.acquisition ) throw new UnsupportedCapturePlatformError( `Platform ${ adapter.id } has no HTTP acquisition profile` );
 
@@ -526,7 +527,7 @@ async function runCaptureWebsite(
 				if ( action ) excludedActions.set( action.url, action );
 				return ! action;
 			} ),
-	] );
+	].map( url => scopedRouteKey( url, routeScope ) ) );
 	// Structured content already declares each entry's canonical permalink. Do
 	// not fetch every entry merely to rediscover that identity before derivation.
 	const feedPermalinks = new Set( contentEntries.map( entry => entry.permalink ) );
