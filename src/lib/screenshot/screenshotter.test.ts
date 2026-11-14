@@ -88,7 +88,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     }),
     url: vi.fn().mockImplementation(() => currentUrl),
     addStyleTag: vi.fn().mockResolvedValue({ evaluate: vi.fn().mockResolvedValue(undefined), dispose: vi.fn().mockResolvedValue(undefined) }),
-    locator: vi.fn().mockReturnValue({ evaluateAll: vi.fn().mockResolvedValue([]) }),
+    locator: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0), evaluateAll: vi.fn().mockResolvedValue([]) }),
     viewportSize: vi.fn().mockReturnValue({ width: 1440, height: 900 }),
     setViewportSize: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
@@ -97,6 +97,8 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
       const s = String(fn);
+      // DOM-free fixture: there are no icon glyphs.
+      if (s.includes('glyphs.push')) return [];
       if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };
       // This transport fixture has no native animations; browser behavior is
       // exercised by native-view-timelines.test.ts with real Chromium.
@@ -729,6 +731,7 @@ describe('captureScreenshots', () => {
         const p = makeGoodPage();
         p.evaluate = vi.fn().mockImplementation(async (fn: unknown) => {
           const s = String(fn);
+          if (s.includes('glyphs.push')) return [];
           if (s.includes('DOCTYPE')) return { html: '<html><body>hello</body></html>', findings: [] };
           if (s.includes('__dlaCleanup')) return { url: 'https://example.com/short', viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
           if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };

@@ -228,6 +228,11 @@
 		"src/lib/screenshot/aggregator.ts": {
 			"throw err": 1
 		},
+		"src/lib/screenshot/baseline-steps.ts": {
+			"reject(new Error( `screenshot timeout after ${ ms }ms` ))": 1,
+			"throw new Error( `no answer to an evaluate within ${ evaluateTimeoutMs }ms` )": 1,
+			"throw new Error('Source cleanup incomplete; see cleanup evidence')": 1
+		},
 		"src/lib/screenshot/capture-profiles.ts": {
 			"throw new Error( 'Invalid source capture profile' )": 1
 		},
@@ -289,14 +294,11 @@
 			"throw new Error( `Capture memory admission: no available memory at the one-route floor (limit=${ memoryLimit }, observedWorkingSet=${ observedWorkingSet })` )": 1
 		},
 		"src/lib/screenshot/screenshotter.ts": {
-			"reject(new Error( `screenshot timeout after ${ ms }ms` ))": 1,
 			"throw new Error( 'Duplicate source capture profile' )": 1,
 			"throw new Error( `Duplicate source capture profile: ${ profile.id }` )": 1,
 			"throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` )": 1,
 			"throw new Error( `Unknown source device profile: ${ viewport.device }` )": 1,
-			"throw new Error( `no answer to an evaluate within ${ evaluateTimeoutMs }ms` )": 1,
-			"throw new Error('Source URL is outside its adapter route scope')": 1,
-			"throw new Error('Source cleanup incomplete; see cleanup evidence')": 1
+			"throw new Error('Source URL is outside its adapter route scope')": 1
 		},
 		"src/lib/screenshot/site-analysis.ts": {
 			"throw new Error('analyzePage: bad shape')": 1,
