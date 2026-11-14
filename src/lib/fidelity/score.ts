@@ -108,6 +108,8 @@ export interface LayoutObservation {
 	overflow: boolean;
 	/** Hosts the page requested that are not the local copy. */
 	externalHosts: string[];
+	/** Hosts of cross-origin <iframe> documents the page embeds. Absent in older evidence. */
+	embeddedFrames?: string[];
 	/** Same-page hash targets found on this document. */
 	hashTargets: HashTarget[];
 	/** Bounded candidate-local HTTP outcomes. Empty on the source. */
@@ -422,9 +424,13 @@ export function scoreViewport(
 		failures.push( `horizontal overflow at ${ liberated.docWidth }px in a ${ liberated.viewport }px viewport` );
 	}
 
-	if ( liberated.externalHosts.length > 0 ) {
+	// An embed the source carries too (the same map or video provider) is
+	// faithful, not an unlocalized dependency of the copy.
+	const sourceFrames = new Set( source.embeddedFrames ?? [] );
+	const externalHosts = liberated.externalHosts.filter( host => ! ( sourceFrames.has( host ) && liberated.embeddedFrames?.includes( host ) ) );
+	if ( externalHosts.length > 0 ) {
 		failures.push(
-			`copy requested ${ liberated.externalHosts.length } external host(s): ${ liberated.externalHosts
+			`copy requested ${ externalHosts.length } external host(s): ${ externalHosts
 				.slice( 0, 3 )
 				.join( ', ' ) }`
 		);
