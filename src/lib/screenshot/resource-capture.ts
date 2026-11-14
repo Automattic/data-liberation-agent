@@ -10,7 +10,7 @@ import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetCandidates } from '../srcset.js';
 import { portableSrcsetRepresentative } from '../portable-media-limits.js';
-import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
+import { BROWSER_IMAGE_ACCEPT } from '../browser-kit/source-identity.js';
 import { MAX_REDIRECTS, assertPublicHttpUrl, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
 import type { BrowserContext, Page, Request, Response } from 'playwright';
@@ -1324,6 +1324,7 @@ export async function installResourceReplay( target: Page | BrowserContext, stor
 			return;
 		}
 		const requestHeaders = request.headers();
+		if ( request.resourceType() === 'image' ) requestHeaders.accept = BROWSER_IMAGE_ACCEPT;
 		// No cookie guard: a cookie-dependent response must declare `Vary: Cookie`, which the store already refuses.
 		if (
 			request.method() === 'GET' &&
@@ -1345,6 +1346,6 @@ export async function installResourceReplay( target: Page | BrowserContext, stor
 				return;
 			}
 		} else if (request.resourceType() !== 'document') attributeSourceReplay(context, request, 'miss:uncacheable');
-		await route.fallback();
+		await route.fallback( request.resourceType() === 'image' ? { headers: requestHeaders } : undefined );
 	} );
 }

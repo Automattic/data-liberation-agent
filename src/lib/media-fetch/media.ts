@@ -10,7 +10,7 @@ import {
   MAX_REDIRECTS,
 } from './safe-fetch.js';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
-import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
+import { BROWSER_IMAGE_ACCEPT, SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 import { Transform } from 'stream';
 import { isRiskySvg, rasterizeSvg } from './svg-raster.js';
 import { openExclusive } from './exclusive-file.js';
@@ -252,15 +252,6 @@ export function extensionFromContentType(contentType: string): string {
     default: return '';
   }
 }
-
-/**
- * The Accept header Chromium sends for image requests. Format-negotiating CDNs
- * (Wix, Squarespace, Cloudinary f_auto, imgix auto=format, Photon) choose the
- * served encoding from it; without it they fall back to the legacy/original
- * format, which can be 100x larger than what a visitor's browser receives.
- */
-export const BROWSER_IMAGE_ACCEPT =
-  'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8';
 
 /** Whether two image extensions name the same format (`.jpeg` and `.JPG` do). */
 function sameImageFormat(a: string, b: string): boolean {
