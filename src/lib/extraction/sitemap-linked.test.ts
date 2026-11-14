@@ -64,7 +64,7 @@ describe('bounded linked-page fallback', () => {
       const result = await fetchSitemapWithDiagnostics(`${origin}/`);
       // Platform-looking path names are candidates; responses decide their outcome.
       expect(result.urls).toEqual(['/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/', '/post/deeper'].map(path => origin + path));
-      expect(f.requests.slice(3)).toEqual(['/', '/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/post/deeper']);
+      expect(f.requests.slice(3).filter(path => !['/feed', '/feed/', '/atom.xml', '/rss.xml'].includes(path))).toEqual(['/', '/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/post/deeper']);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({ code: 'sitemap_absent', reason: expect.stringContaining('HTTP 404') }),
         expect.objectContaining({ code: 'fallback_link_closure', reason: expect.stringContaining('10/100 HTTP requests') }),
@@ -123,7 +123,7 @@ describe('bounded linked-page fallback', () => {
     try {
       const result = await fetchSitemapWithDiagnostics(origin);
       expect(result.urls).toHaveLength(103);
-      expect(f.requests.slice(3)).toHaveLength(100);
+      expect(f.requests.slice(3).filter(path => !['/feed', '/feed/', '/atom.xml', '/rss.xml'].includes(path))).toHaveLength(100);
       expect(result.diagnostics.filter(row => row.code === 'fallback_budget_omitted')).toEqual([99, 100, 101].map(i => ({ code: 'fallback_budget_omitted', url: `${origin}/page-${i}`, reason: 'request budget exhausted (100)' })));
       expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'fallback_link_coverage', reason: expect.stringContaining('3 queued documents unvisited') }));
     } finally { await f.close(); }

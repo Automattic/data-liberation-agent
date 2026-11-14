@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { gunzipSync } from 'node:zlib';
 import { sourceFetch } from '../media-fetch/capture-requests.js';
 import { SOURCE_USER_AGENT } from '../browser-kit/source-identity.js';
 import { createSourcePage, launchChromium, sourceContextOptions } from '../browser-kit/browser-kit.js';
@@ -137,7 +138,7 @@ export function isAttachmentViewerUrl(url: string): boolean {
  * page. A child sitemap that merely carries the word in a path segment, or a
  * longer name containing it, is not one and is still followed.
  */
-const ATTACHMENT_SITEMAP_BASENAME = /^(?:attachment-sitemap(?:-?\d+)?|(?:image|video)-sitemap(?:-?\d+)?|wp-sitemap-posts-attachment-\d+)\.xml$/i;
+const ATTACHMENT_SITEMAP_BASENAME = /^(?:attachment-sitemap(?:-?\d+)?|(?:image|video)-sitemap(?:-?\d+)?|wp-sitemap-posts-attachment-\d+)\.xml(?:\.gz)?$/i;
 
 export function isAttachmentSitemapUrl(url: string): boolean {
   try {
@@ -225,23 +226,31 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
   return (await fetchSitemapWithDiagnostics(baseUrl)).urls;
 }
 
+export interface SitemapDiscoveryOptions {
+  /** A bounded, governor-backed transport; inspection supplies its own deadline. */
+  fetchDocument?: (url: string) => Promise<{ status: number; body: Buffer; headers?: Headers; finalUrl?: string }>;
+  entryHtml?: string;
+  /** Platform sitemap paths probed in addition to robots.txt and the well-known locations. */
+  extraSitemaps?: readonly string[];
+}
+
 /**
  * Fetch sitemap routes scoped to the entry URL's origin. `fetchSitemap` keeps
  * the array-only contract used by existing adapters; callers that surface
  * discovery diagnostics can opt into this richer result.
  *
- * Candidates are probed in preference order: `Sitemap:` directives in
- * `/robots.txt`, then `/sitemap-index.xml`, then `/sitemap.xml`. The first
- * document that parses as a sitemap wins; a `sitemapindex`'s children are
+ * Every `Sitemap:` directive in `/robots.txt` contributes to the union. If
+ * none succeeds, probe `/sitemap-index.xml`, then `/sitemap.xml`. Index children are
  * followed by document kind whatever their filename — except one whose
  * basename names an attachment sitemap, which is not fetched and whose media
  * entries stay out of the inventory — while a urlset entry recurses only when
- * its path ends in `.xml`.
- * Thin inventories traverse same-origin HTML with at most 100 raw requests,
+ * its path ends in `.xml` or `.xml.gz`. Feeds supplement the inventory.
+ * Thin inventories or inventories missing entry links traverse same-origin HTML with at most 100 raw requests,
  * 60 seconds, 2 MiB per document and 1000 retained routes. Diagnostics describe
  * linked-frontier closure, not unlinked pages or arbitrary runtime navigation.
  */
-export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps: readonly string[] = []): Promise<SitemapFetchResult> {
+export async function fetchSitemapWithDiagnostics(baseUrl: string, options: SitemapDiscoveryOptions = {}): Promise<SitemapFetchResult> {
+  const extraSitemaps = options.extraSitemaps ?? [];
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
   let baseOrigin: string;
   try {
@@ -249,6 +258,19 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps
   } catch {
     return { urls: [], diagnostics: [] };
   }
+  const readDocument = options.fetchDocument ?? (async (url: string) => {
+    const response = await sourceFetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': SOURCE_USER_AGENT } });
+    return { status: response.status, body: Buffer.from(await response.arrayBuffer()), headers: response.headers };
+  });
+  const readText = async (url: string) => {
+    const response = await readDocument(url);
+    // Fetch normally decodes Content-Encoding itself. Bare .gz downloads do
+    // not have that header; inspect the bytes to avoid double decompression.
+    const body = response.body;
+    const decoded = body[0] === 0x1f && body[1] === 0x8b
+      ? gunzipSync(body, { maxOutputLength: 25 * 1024 * 1024 }) : body;
+    return { status: response.status, text: decoded.toString('utf8'), headers: response.headers };
+  };
   const allUrls: string[] = [];
   const seenUrls = new Set<string>();
   const diagnostics: SitemapDiagnostic[] = [];
@@ -309,12 +331,12 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps
     }
 
     try {
-      const response = await sourceFetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': SOURCE_USER_AGENT } });
-      if (!response.ok) {
+      const response = await readText(url);
+      if (response.status < 200 || response.status >= 300) {
         noteMiss({ code: 'sitemap_not_found', url, reason: `HTTP ${response.status}` }, misses);
         return false;
       }
-      const xml = await response.text();
+      const xml = response.text;
       const document = parseSitemapDocument(xml);
       if (document.kind === 'unknown' && document.locs.length === 0) {
         noteMiss({ code: 'sitemap_not_found', url, reason: 'response is not a sitemap document' }, misses);
@@ -337,7 +359,7 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps
           // route-budget slot.
           attachmentSitemapsSkipped++;
           firstAttachmentSitemapSkipped ||= entryUrl.href;
-        } else if (document.kind === 'index' || pathPart.endsWith('.xml')) {
+        } else if (document.kind === 'index' || /\.xml(?:\.gz)?$/i.test(pathPart)) {
           await fetchAndParse(entryUrl.href, depth + 1);
         } else if (isAttachmentViewerUrl(entryUrl.href)) {
           // An attachment viewer is a media view, not one of the source's
@@ -369,9 +391,9 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps
   const declaredSeen = new Set<string>();
   try {
     const robotsUrl = new URL('/robots.txt', baseOrigin).href;
-    const response = await sourceFetch(robotsUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': SOURCE_USER_AGENT } });
-    if (response.ok) {
-      for (const loc of parseRobotsSitemapDirectives(await response.text())) {
+    const response = await readText(robotsUrl);
+    if (response.status >= 200 && response.status < 300) {
+      for (const loc of parseRobotsSitemapDirectives(response.text)) {
         let absolute: string;
         try {
           absolute = new URL(loc, normalizedBase).href;
@@ -398,7 +420,6 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps
   for (const candidate of declared) {
     if (await fetchAndParse(candidate, 0)) {
       foundSitemap = true;
-      break;
     }
   }
   const fallbackMisses: SitemapDiagnostic[] = [];
@@ -437,10 +458,59 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string, extraSitemaps
     });
   }
 
-  // A normal sitemap keeps its inexpensive path; thin inventories close a
-  // bounded frontier of linked HTML instead of stopping at the entry document.
+  let entryHtml = options.entryHtml;
+  if (entryHtml === undefined) {
+    try {
+      const entry = await readText(normalizedBase);
+      if (entry.status >= 200 && entry.status < 300 && (!entry.headers?.get('content-type') || /^(?:text\/html|application\/xhtml\+xml)(?:;|$)/i.test(entry.headers.get('content-type')!))) entryHtml = entry.text;
+    } catch { /* The bounded crawl reports an entry failure if needed. */ }
+  }
+  const feeds = new Set<string>();
+  const $ = cheerio.load(entryHtml ?? '');
+  $('link[href]').each((_, element) => {
+    const link = $(element);
+    if (!link.attr('rel')?.toLowerCase().split(/\s+/).includes('alternate')) return;
+    if (!/^application\/(?:rss|atom)\+xml(?:;|$)/i.test(link.attr('type') ?? '')) return;
+    try {
+      const url = new URL(link.attr('href')!, normalizedBase);
+      if (url.origin === baseOrigin) feeds.add(url.href);
+    } catch { /* Invalid authored feed URL. */ }
+  });
+  // Probe conventional feed paths only when the entry document declares none.
+  if (feeds.size === 0) for (const path of ['/feed', '/feed/', '/atom.xml', '/rss.xml']) feeds.add(new URL(path, baseOrigin).href);
+  for (const url of feeds) {
+    try {
+      const response = await readText(url);
+      if (response.status < 200 || response.status >= 300) continue;
+      const feed = cheerio.load(response.text, { xml: true });
+      if (!feed('rss, feed').length) continue;
+      let added = 0;
+      feed('item > link, entry > link').each((_, element) => {
+        const link = feed(element);
+        if (element.tagName === 'link' && link.attr('rel') && link.attr('rel') !== 'alternate') return;
+        const raw = link.attr('href') ?? link.text().trim();
+        if (!raw) return;
+        let resolved: URL;
+        try { resolved = new URL(raw, url); } catch { return; }
+        if (resolved.origin !== baseOrigin || isNonDocumentUrl(resolved.href)) return;
+        resolved.hash = '';
+        const key = normalizedUrl(resolved.href);
+        if (seenUrls.has(key) || allUrls.length >= MAX_URLS) return;
+        seenUrls.add(key);
+        allUrls.push(resolved.href);
+        added++;
+      });
+      diagnostics.push({ code: 'feed_discovered', url, reason: `${added} new same-origin routes from feed` });
+    } catch (error) {
+      diagnostics.push({ code: 'feed_fetch_failed', url, reason: error instanceof Error ? error.message : 'Feed fetch failed' });
+    }
+  }
+
+  // Only a thin inventory pays for the linked-page crawl. Generic discovery already
+  // merges the entry document's own links; crawling past them on every healthy
+  // sitemap cost 15-65 s per site and admitted unverified deep links (#1693).
   if (allUrls.length < 5) {
-    const fallback = await crawlLinkedPages(normalizedBase, baseOrigin, allUrls);
+    const fallback = await crawlLinkedPages(normalizedBase, baseOrigin, allUrls, options.fetchDocument, entryHtml);
     allUrls.splice(0, allUrls.length, ...fallback.urls);
     if (fallback.closed) {
       for (let i = diagnostics.length - 1; i >= 0; i--) {
@@ -461,7 +531,7 @@ const LINKED_PAGE_BODY_LIMIT = 2 * 1024 * 1024;
 const LINKED_PAGE_ROUTE_LIMIT = 1000;
 
 /** Sequential breadth-first traversal keeps request and frontier order stable. */
-async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: string[]): Promise<SitemapFetchResult & { closed: boolean }> {
+async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: string[], fetchDocument?: SitemapDiscoveryOptions['fetchDocument'], entryHtml?: string): Promise<SitemapFetchResult & { closed: boolean }> {
   const urls = [...seeds];
   const routes = new Set(urls.map(normalizedUrl));
   const queue: string[] = [];
@@ -475,7 +545,10 @@ async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: stri
   const alreadyParsed = new Error('Linked document already parsed');
   const diagnostics: SitemapDiagnostic[] = [];
   const deadline = AbortSignal.timeout(LINKED_PAGE_TIME_LIMIT_MS);
-  let requests = 0;
+  // The entry preflight is part of the linked-page request budget, even when
+  // inspection supplied the already-fetched document.
+  let requests = entryHtml === undefined ? 0 : 1;
+  if (entryHtml !== undefined) requested.add(new URL(baseUrl).href);
   let parsed = 0;
   let position = 0;
   let dropped = 0;
@@ -519,13 +592,22 @@ async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: stri
 
   for (; position < queue.length; position++) {
     const url = queue[position];
-    if (requested.has(url)) continue;
+    if (requested.has(url) && !(position === 0 && entryHtml !== undefined)) continue;
     if (requests >= LINKED_PAGE_REQUEST_LIMIT || deadline.aborted) break;
     try {
-      const response = await safeFetch(url, {
-        fetchImpl: boundedFetch, signal: deadline, timeoutMs: 15_000,
-        maxBytes: LINKED_PAGE_BODY_LIMIT,
-      });
+      const response = position === 0 && entryHtml !== undefined
+        ? { status: 200, body: Buffer.from(entryHtml), headers: new Headers({ 'content-type': 'text/html' }), finalUrl: url }
+        : fetchDocument
+        ? await (async () => {
+          requests++;
+          requested.add(url);
+          const document = await fetchDocument(url);
+          return { ...document, headers: document.headers ?? new Headers(), finalUrl: document.finalUrl ?? url };
+        })()
+        : await safeFetch(url, {
+          fetchImpl: boundedFetch, signal: deadline, timeoutMs: 15_000,
+          maxBytes: LINKED_PAGE_BODY_LIMIT,
+        });
       if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
       const contentType = response.headers.get('content-type');
       if (contentType && !/^(?:text\/html|application\/xhtml\+xml)(?:;|$)/i.test(contentType)) throw new Error(`non-HTML response (${contentType})`);
@@ -552,7 +634,7 @@ async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: stri
     }
     // Rendering supplements a successfully fetched HTML shell, never a rejected
     // request, oversized body or non-document response.
-    if (position === 0 && entryParsed && entryLinks === 0 && !deadline.aborted) {
+    if (!fetchDocument && position === 0 && entryParsed && entryLinks === 0 && !deadline.aborted) {
       rendered = true;
       const result = await crawlRenderedNavLinks(baseUrl, baseOrigin, deadline);
       retain(result.urls);

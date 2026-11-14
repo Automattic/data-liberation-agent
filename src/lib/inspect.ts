@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { classifyUrl, isNonDocumentUrl } from './extraction/sitemap.js';
-import { parseSitemapDocument } from './extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics } from './extraction/sitemap.js';
 import { extractNavLinks } from './html-extract/index.js';
 import { BodyTooLargeError, safeFetch } from './media-fetch/safe-fetch.js';
 import { detectFromDocument } from './detect-platform/index.js';
@@ -202,17 +202,10 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
 
   options.log?.('Discovering a bounded route inventory');
   try {
-    const sitemap = await fetchBounded(new URL('/sitemap.xml', origin).href);
-    if (sitemap.status >= 200 && sitemap.status < 300) {
-      const document = parseSitemapDocument(sitemap.body.toString('utf8'));
-      if (document.kind === 'index') {
-        discoveryTruncated = true;
-        issues.push({ code: 'nested-sitemap-unvisited', message: `Sitemap index contains ${document.locs.length} child sitemap URL(s); nested sitemaps are outside this inspection bound.`, url: sitemap.finalUrl });
-      } else {
-        for (const sitemapUrl of document.locs) addRoute(sitemapUrl);
-      }
-    } else {
-      issues.push({ code: 'sitemap-unavailable', message: `Sitemap returned HTTP ${sitemap.status}`, url: sitemap.finalUrl });
+    const inventory = await fetchSitemapWithDiagnostics(finalUrl, { fetchDocument: fetchBounded, entryHtml });
+    for (const discovered of inventory.urls) addRoute(discovered);
+    for (const diagnostic of inventory.diagnostics) {
+      issues.push({ code: diagnostic.code, message: diagnostic.reason, url: diagnostic.url });
     }
   } catch (error) {
     issues.push({ code: 'sitemap-unavailable', message: error instanceof Error ? error.message : String(error) });
