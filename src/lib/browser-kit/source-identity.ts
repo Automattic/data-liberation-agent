@@ -22,16 +22,7 @@ export const BROWSER_IMAGE_ACCEPT =
  */
 export async function installSourceIdentity(context: BrowserContext, options: BrowserContextOptions): Promise<void> {
   const userAgent = options.userAgent;
-  if (!userAgent) {
-    await context.route('**/*', async route => {
-      const headers = await route.request().allHeaders();
-      if (route.request().resourceType() === 'image') {
-        headers.accept = BROWSER_IMAGE_ACCEPT;
-        await route.fallback({ headers });
-      } else await route.fallback();
-    });
-    return;
-  }
+  if (!userAgent) return;
   const chrome = userAgent.match(/(?:Chrome|Chromium)\/([\d.]+)/);
   const mobile = /Mobile|Android|iPhone|iPad/.test(userAgent);
   const platform = /iPhone|iPad/.test(userAgent) ? 'iOS' : /Android/.test(userAgent) ? 'Android' : /Windows/.test(userAgent) ? 'Windows' : /Macintosh/.test(userAgent) ? 'macOS' : 'Linux';

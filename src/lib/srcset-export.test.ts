@@ -15,6 +15,15 @@ import { normalizeImageKey } from './fidelity/score.js';
 import { CapturedResourceStore } from './screenshot/resource-capture.js';
 import { capture as adapterCapture } from '../adapters/wix/capture.js';
 
+// Export consumes verified inventory records, not unchecked resource-manifest bytes.
+function verifiedRendition( source: string, path: string, bytes: Buffer ) {
+	const { width, height } = imageSize( bytes );
+	return {
+		kind: 'image', source_urls: [ source ], resolved_original: source, local_path: path, references: [],
+		original: { source_url: source, content_type: 'image/png', width, height, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) },
+	};
+}
+
 describe( 'selected same-path srcset export', () => {
 	it( 'keeps profile renditions when the per-media-id map names only the phone image', async () => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-mapped-renditions-' ) );
@@ -91,6 +100,7 @@ describe( 'selected same-path srcset export', () => {
 			writeFileSync( join( directory, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources: Object.fromEntries( profiles.map( profile => [ profile.url, { path: profile.path, contentType: 'image/png' } ] ) ), failures: [] } ) );
 			writeFileSync( join( directory, 'image-assets.json' ), JSON.stringify( { images: [ {
 				kind: 'image', source_urls: profiles.map( profile => profile.url ), resolved_original: representative.url, local_path: file,
+				renditions: profiles.filter( profile => profile !== representative ).map( profile => verifiedRendition( profile.url, profile.path, profile.bytes ) ),
 				references: profiles.map( profile => ( { kind: 'content', document_url: source, location: 'image:0:src', source_url: profile.url } ) ),
 				original: { source_url: representative.url, content_type: 'image/png', width: representative.width, height: representative.height, sha256: createHash( 'sha256' ).update( representative.bytes ).digest( 'hex' ) },
 			} ] } ) );
@@ -137,6 +147,7 @@ describe( 'selected same-path srcset export', () => {
 			media.flush();
 			writeFileSync( join( directory, 'image-assets.json' ), JSON.stringify( { images: [ {
 				kind: 'image', source_urls: [ original, ...urls ], resolved_original: original, local_path: file,
+				renditions: urls.map( ( url, index ) => verifiedRendition( url, resources[ url ].path, bytes[ index ] ) ),
 				references: urls.map( source_url => ( { kind: 'content', document_url: source, location: 'image:0:srcset', source_url } ) ),
 				rendition_widths: Object.fromEntries( urls.map( ( url, index ) => [ url, widths[ index ] ] ) ),
 				original: { source_url: original, content_type: 'image/png', width: 800, height: 1200, sha256: createHash( 'sha256' ).update( originalBytes ).digest( 'hex' ) },
@@ -183,9 +194,10 @@ describe( 'selected same-path srcset export', () => {
 			for ( const url of urls ) media.markSuccess( url, file );
 			media.flush();
 			// Capture's identity inventory groups the URLs under the verified
-			// representative, while the resource manifest retains selected bytes.
+			// representative and verifies each captured alias independently.
 			writeFileSync( join( directory, 'image-assets.json' ), JSON.stringify( { images: [ {
 				kind: 'image', source_urls: urls, resolved_original: original, local_path: file,
+				renditions: selected.filter( index => urls[ index ] !== original ).map( index => verifiedRendition( urls[ index ], resources[ urls[ index ] ].path, bytes[ index ] ) ),
 				references: urls.map( source_url => ( { kind: 'content', document_url: source, location: 'image:0:srcset', source_url } ) ),
 				rendition_widths: Object.fromEntries( urls.map( ( url, index ) => [ url, widths[ index ] ] ) ),
 				original: { source_url: original, content_type: 'image/png', width: 1280, height: 10, sha256: createHash( 'sha256' ).update( bytes.at( -1 )! ).digest( 'hex' ) },

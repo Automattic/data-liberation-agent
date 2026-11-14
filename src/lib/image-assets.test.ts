@@ -195,9 +195,12 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     const stubs = MediaStubStore.load(root);
     for (const source of ['photo.svg', 'photo.svg?w=100', 'photo.svg?w=300', 'photo.svg?w=1800']) stubs.markSuccess(`${url}${source}`, originalPath);
     stubs.flush();
-    const documents = [{ url, html: '<picture><source srcset="photo.svg?w=100 100w, photo.svg?w=300 300w, photo.svg?w=1800 1800w"><img style="width:250px" src="photo.svg"></picture>' }];
+    // An uncaptured alias without a width must not become an acquisition job;
+    // uncaptured width alternatives still use nearest-adequate/fallback ordering.
+    const documents = [{ url, html: '<picture><source srcset="photo.svg?w=100 100w, photo.svg?w=300 300w, photo.svg?w=1800 1800w"><img style="width:250px" src="photo.svg"></picture><img src="photo.svg?alias=uncaptured">' }];
     const [record] = await captureAssets(root, documents, Date.now() + 30000, source => source.split('?')[0]);
     const small = record.renditions!.find(child => child.original);
+    expect(record.source_urls).toContain(`${url}photo.svg?alias=uncaptured`);
     // Only the nearest adequate rendition is fetched when it succeeds.
     expect(hits).toEqual(['/photo.svg?w=300']);
     expect(record.renditions).toHaveLength(1);
