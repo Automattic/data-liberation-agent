@@ -33,7 +33,7 @@ export async function markInitialDocument(page: Page): Promise<void> {
 }
 
 /** The element wears each width-dependent token as its width-scoped alias. */
-function applyWidthClasses(target: cheerio.Cheerio<Element>): void {
+export function applyWidthClasses(target: cheerio.Cheerio<Element>): void {
 	const marked = target.attr(WIDTH_CLASSES_ATTRIBUTE);
 	if (marked === undefined) return;
 	target.removeAttr(WIDTH_CLASSES_ATTRIBUTE);

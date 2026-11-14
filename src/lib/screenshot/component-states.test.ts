@@ -1,8 +1,26 @@
+import * as cheerio from 'cheerio';
 import { expect, it } from 'vitest';
 import { popupComponents, routeComponents } from './component-states.js';
 import type { CapturedDialogInteraction, InteractionStatesReport } from './interaction-capture.js';
 import { wireCapturedComponents } from '../static-components.js';
 import { projectInitialDocument } from './initial-document.js';
+import { WIDTH_CLASSES_ATTRIBUTE } from './viewport-class-states.js';
+
+it('projects width-scoped class aliases in every materialized tab panel', () => {
+	const alias = 'data-blocks-engine-capture-width-class-0123456789ab';
+	const marker = JSON.stringify([['is-hidden', alias]]).replace(/"/g, '&quot;');
+	const panel = (id: string) => `<div role="tabpanel" id="${id}"><div class="cell is-hidden" ${WIDTH_CLASSES_ATTRIBUTE}="${marker}">Cell</div></div>`;
+	const page = `<html><body><div id="tabs" role="tablist"><button role="tab" aria-selected="true">All</button><button role="tab" aria-selected="false">Romance</button></div><div id="grid" role="tabpanel"><div class="cell ${alias}">Cell</div></div></body></html>`;
+	const html = wireCapturedComponents(page, [{
+		selector: '#tabs', kind: 'tabs', initial: 'tab-0', panel: '#grid', status: 'captured', transitions: [],
+		states: [{ id: 'tab-0', html: panel('grid') }, { id: 'tab-1', html: panel('grid-tab-1') }],
+	}]);
+	const $ = cheerio.load(html);
+	expect($('[role="tabpanel"]')).toHaveLength(2);
+	expect($(`[role="tabpanel"] .cell.${alias}`)).toHaveLength(2);
+	expect($('.is-hidden')).toHaveLength(0);
+	expect(html).not.toContain(WIDTH_CLASSES_ATTRIBUTE);
+});
 
 it('records an unclassified surface as unsupported and never materializes it', () => {
 	const state: CapturedDialogInteraction = {
