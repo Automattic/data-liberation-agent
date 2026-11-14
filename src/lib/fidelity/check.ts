@@ -525,7 +525,7 @@ export async function observePage(
 			// start pose. Measure its terminal keyframe instead. Keep decorative
 			// infinite/view motion at authored rest, without changing play state,
 			// timeline bindings or the motion evidence collected below.
-			const { images, backgrounds, widestImage, typography, paintedTextRects } = await ( async () => {
+			const { images, backgrounds, widestImage, typography, textNodes } = await ( async () => {
 			const effects = document.getAnimations().flatMap( animation =>
 				animation.effect instanceof KeyframeEffect ? [ { animation, effect: animation.effect, frames: animation.effect.getKeyframes() } ] : [] );
 			try {
@@ -808,7 +808,45 @@ export async function observePage(
 			};
 			visit( document.body );
 			flush();
-			return { images, backgrounds, widestImage, typography, paintedTextRects };
+			// Painted text is read in the same rest pose as typography: a running
+			// marquee would otherwise clip a different item on each side.
+			const textNodes: Array< { text: string; clipped: boolean; replacement?: string; caseless?: boolean } > = [];
+			const closedSelect = ( element: Element ): element is HTMLSelectElement =>
+				element instanceof HTMLSelectElement && ! element.multiple && element.size <= 1;
+			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT );
+			let candidateText: Node | null;
+			while ( ( candidateText = textWalker.nextNode() ) ) {
+				// Chromium includes every option in innerText even though a closed
+				// select paints only its selected label. Treat it as one stream entry
+				// on both sides, without mutating the control or its live selection.
+				if ( candidateText instanceof Element ) {
+					if ( closedSelect( candidateText ) && candidateText.getClientRects().length && getComputedStyle( candidateText ).visibility !== 'hidden' ) {
+						textNodes.push( { text: candidateText.innerText, clipped: false, replacement: candidateText.selectedOptions[ 0 ]?.label ?? '' } );
+					}
+					continue;
+				}
+				const select = candidateText.parentElement?.closest( 'select' );
+				if ( select && closedSelect( select ) ) continue;
+				const value = candidateText.textContent ?? '';
+				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
+				const range = document.createRange(); range.selectNodeContents( candidateText );
+				const rects = [ ...range.getClientRects() ];
+				if ( ! rects.length ) continue;
+				const parent = candidateText.parentElement;
+				if ( ! parent ) continue;
+				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
+				const painted = paintedTextRects( range, parent ).length > 0;
+				// innerText reports the case text-transform renders, so a node
+				// must be found in that case, or an unpainted uppercase label
+				// would instead delete a later visible run of the same word.
+				const transform = getComputedStyle( parent ).textTransform;
+				const rendered = transform === 'uppercase' ? value.toLocaleUpperCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined )
+					: transform === 'lowercase' ? value.toLocaleLowerCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined ) : value;
+				// Capitalization follows the browser's own word boundaries, so a
+				// capitalized node is found in the stream without regard to case.
+				textNodes.push( { text: rendered.length === value.length ? rendered : value, clipped: ! painted, caseless: transform === 'capitalize' } );
+			}
+			return { images, backgrounds, widestImage, typography, paintedTextRects, textNodes };
 			} finally {
 				for ( const { effect, frames } of effects ) effect.setKeyframes( frames );
 			}
@@ -937,42 +975,6 @@ export async function observePage(
 			// ancestor clip; any partly painted run remains counted. Do not use
 			// carousel selectors, aria-hidden, or viewport position.
 			bodyText = bodyText.replace( /\s+/g, ' ' ).trim();
-			const textNodes: Array< { text: string; clipped: boolean; replacement?: string; caseless?: boolean } > = [];
-			const closedSelect = ( element: Element ): element is HTMLSelectElement =>
-				element instanceof HTMLSelectElement && ! element.multiple && element.size <= 1;
-			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT );
-			let candidateText: Node | null;
-			while ( ( candidateText = textWalker.nextNode() ) ) {
-				// Chromium includes every option in innerText even though a closed
-				// select paints only its selected label. Treat it as one stream entry
-				// on both sides, without mutating the control or its live selection.
-				if ( candidateText instanceof Element ) {
-					if ( closedSelect( candidateText ) && candidateText.getClientRects().length && getComputedStyle( candidateText ).visibility !== 'hidden' ) {
-						textNodes.push( { text: candidateText.innerText, clipped: false, replacement: candidateText.selectedOptions[ 0 ]?.label ?? '' } );
-					}
-					continue;
-				}
-				const select = candidateText.parentElement?.closest( 'select' );
-				if ( select && closedSelect( select ) ) continue;
-				const value = candidateText.textContent ?? '';
-				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
-				const range = document.createRange(); range.selectNodeContents( candidateText );
-				const rects = [ ...range.getClientRects() ];
-				if ( ! rects.length ) continue;
-				const parent = candidateText.parentElement;
-				if ( ! parent ) continue;
-				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
-				const painted = paintedTextRects( range, parent ).length > 0;
-				// innerText reports the case text-transform renders, so a node
-				// must be found in that case, or an unpainted uppercase label
-				// would instead delete a later visible run of the same word.
-				const transform = getComputedStyle( parent ).textTransform;
-				const rendered = transform === 'uppercase' ? value.toLocaleUpperCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined )
-					: transform === 'lowercase' ? value.toLocaleLowerCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined ) : value;
-				// Capitalization follows the browser's own word boundaries, so a
-				// capitalized node is found in the stream without regard to case.
-				textNodes.push( { text: rendered.length === value.length ? rendered : value, clipped: ! painted, caseless: transform === 'capitalize' } );
-			}
 			let textSearchFrom = 0;
 			for ( const { text, clipped, replacement, caseless } of textNodes ) {
 				// Map each DOM text node in document order to the normalized

@@ -128,6 +128,23 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 		} finally { await browser.close(); }
 	}, 30_000 );
 
+	it( 'counts marquee text in its rest pose, whatever phase the loop is in', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
+			// A negative delay parks the infinite loop mid-cycle, where the first
+			// item has scrolled out of the ribbon and the rest pose would show it.
+			const ribbon = ( animation: string ) => `<style>@keyframes slide{to{transform:translateX(-100%)}}
+				.ribbon{overflow:hidden;width:390px}.track{display:flex;width:max-content;animation:${ animation }}
+				.track span{flex:none;width:300px}</style><div class="ribbon"><div class="track"><span>First item</span><span>Second item</span><span>Third item with a much longer label</span></div></div>`;
+			await page.setContent( ribbon( 'none' ) );
+			const rest = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
+			await page.setContent( ribbon( 'slide 100s linear -40s infinite' ) );
+			const running = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
+			expect( running.textChars ).toBe( rest.textChars );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it( 'keeps visible descendants through hidden ancestors and conservative nonrectangular clips', async () => {
 		const browser = await chromium.launch();
 		const page = await browser.newPage();
