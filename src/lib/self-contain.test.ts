@@ -162,6 +162,13 @@ describe( 'self-contain', () => {
 		);
 	} );
 
+	it.each( [ [ 'woff2', 'woff2' ], [ 'woff', 'woff' ], [ 'ttf', 'truetype' ], [ 'otf', 'opentype' ] ] )(
+		'aligns local font format hints with the verified .%s extension', ( extension, format ) => {
+			expect( stripRemoteCssUrls( `@font-face{src:url("/media/brand.${ extension }") format('stale')}` ) )
+				.toBe( `@font-face{src:url("/media/brand.${ extension }") format("${ format }")}` );
+		}
+	);
+
 	it( 'omits empty @font-face src sentinels so later woff/ttf sources remain usable', () => {
 		expect(
 			stripRemoteCssUrls(

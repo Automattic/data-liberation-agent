@@ -405,11 +405,6 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					const bytes = readFileSync( result.localPath );
 					const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind!, source );
 					if ( ! contentType ) throw new Error( 'unverified resource bytes or placeholder' ); // failure-class: operational
-					if ( record.kind === 'font' && record.references.some( ref => {
-						const format = ref.font_face?.format?.toLowerCase();
-						const expected = { woff: 'font/woff', woff2: 'font/woff2', truetype: 'font/ttf', opentype: 'font/otf' }[ format ?? '' ];
-						return expected && expected !== contentType;
-					} ) ) throw new Error( 'font bytes do not match declared format' ); // failure-class: operational
 					if ( record.kind === 'image' && ! page ) {
 						browser ??= await launchChromium( { timeout: 30000 } );
 						page = await browser.newPage();
