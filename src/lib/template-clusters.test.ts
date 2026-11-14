@@ -30,6 +30,23 @@ it('ignores only stylesheet links absent from both server documents', () => {
 	expect(compareDerivedWithCapture({ derivedHtml, realHtml, baseUrl: context.baseUrl }).checks.headStyles).toBe(false);
 });
 
+it('fails verification when a runtime-painted background differs from the real capture (#1813)', () => {
+	const page = (hero: string) => `<html><head></head><body><div class="banner" style="background-position: 50% 4%; background-image: url(&quot;${hero}&quot;)"></div><h1>Paint colors</h1></body></html>`;
+	const compare = (derived: string, real: string) => compareDerivedWithCapture({ baseUrl: 'https://fixture.example/blog/paint', derivedHtml: page(derived), realHtml: page(real) }).checks.images;
+	expect(compare('/media/representative.webp', '/media/member.webp')).toBe(false);
+	expect(compare('/media/member.webp', '/media/member.webp')).toBe(true);
+});
+
+it('derives the member\'s own images where a runtime or the server painted them into styles (#1813)', () => {
+	const cdn = 'https://images.example/content/v1';
+	const thumb = (image: string) => `<a href="/blog/next"><div class="pagination-img" style="background-image:url(${cdn}/${image}?format=150w);"></div>Next</a>`;
+	const server = (neighbor: string) => `<html><head></head><body><div class="banner"></div><h1>Post</h1>${thumb(neighbor)}<script>item.assetUrl = "x"</script></body></html>`;
+	const painted = (image: string, neighbor: string) => `<html><head></head><body><div class="banner" style="background-image: url(&quot;${image}?format=1500w&quot;)"></div><h1>Post</h1>${thumb(neighbor)}<script>item.assetUrl = JSON.parse(decodeURIComponent("%22${encodeURIComponent(image)}%22"))</script><img src="${cdn}/rep/banner.jpg2"></body></html>`;
+	const derived = deriveMemberDocument({ repServerHtml: server('rep-next.jpg'), repProcessedHtml: painted(`${cdn}/rep/banner.jpg`, 'rep-next.jpg'), memberServerHtml: server('member-next.jpg'), baseUrl: 'https://fixture.example/blog/rep', featuredImages: { representative: `${cdn}/rep/banner.jpg`, member: `${cdn}/member/part-1.jpg` } });
+	const expected = painted(`${cdn}/member/part-1.jpg`, 'member-next.jpg').replace(`${cdn}/member/banner.jpg2`, `${cdn}/rep/banner.jpg2`);
+	expect(derived.ok && compareDerivedWithCapture({ derivedHtml: derived.html, realHtml: expected, baseUrl: 'https://fixture.example/blog/member' }).equal).toBe(true);
+});
+
 /**
  * The #784 phase-1 fixture, reduced from the 24-route acceptance fixture: a
  * home page and six posts sharing one template, one post with a two-column

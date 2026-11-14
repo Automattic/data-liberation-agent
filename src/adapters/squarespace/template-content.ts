@@ -169,7 +169,7 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 					seenEntries.add(permalink.href);
 					let slug = permalink.pathname.split('/').filter(Boolean).at(-1) ?? '';
 					try { slug = decodeURIComponent(slug); } catch { /* Preserve source escapes. */ }
-					const entry: StructuredContentEntry = { permalink: permalink.href, slug, kind: 'post', title: item.title, contentHtml: item.body, published, updated, author: item.author?.displayName ?? '', terms: [...new Set([...(item.categories ?? []), ...(item.tags ?? [])].filter(term => typeof term === 'string' && term.trim()))] };
+					const entry: StructuredContentEntry = { permalink: permalink.href, slug, kind: 'post', title: item.title, contentHtml: item.body, published, updated, author: item.author?.displayName ?? '', terms: [...new Set([...(item.categories ?? []), ...(item.tags ?? [])].filter(term => typeof term === 'string' && term.trim()))], ...(typeof item.assetUrl === 'string' ? { image: item.assetUrl } : {}) };
 					result.entries.push(entry);
 					collectionEntries.push(entry);
 					details.set(entry, { id: item.id, image: typeof item.assetUrl === 'string' ? item.assetUrl : undefined, categories: (item.categories ?? []).filter(category => typeof category === 'string'), date: itemDate(item.publishOn!, { dateStyle: 'long' }, json.website?.timeZone), shortDate: itemDate(item.publishOn!, { month: 'short', day: 'numeric' }, json.website?.timeZone), dateOnly: itemDate(item.publishOn!, { year: 'numeric', month: '2-digit', day: '2-digit' }, json.website?.timeZone, 'en-CA') });

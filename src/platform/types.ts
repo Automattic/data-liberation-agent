@@ -140,6 +140,8 @@ export interface StructuredContentEntry {
 	author: string;
 	/** Source taxonomy terms (Blogger labels, tags, categories). */
 	terms: string[];
+	/** The item's featured image URL, when the source declares one. */
+	image?: string;
 }
 
 export interface StructuredContentEnumeration {
