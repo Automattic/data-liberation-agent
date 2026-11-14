@@ -68,6 +68,9 @@ describe( 'checkSelfConsistency', () => {
 		const report = checkSelfConsistency( dir, files( [ '/', 'index.html' ] ) );
 		expect( report.findings[ 0 ] ).toMatchObject( { kind: 'anchor-ambiguous' } );
 		expect( report.findings[ 0 ]?.detail ).toContain( '2 targets' );
+		// A builder repeating the section id on its inner region is one jump target.
+		writeFileSync( join( dir, 'index.html' ), '<a href="/index.html#team">Team</a><div id="team"><div id="team"></div></div>' );
+		expect( checkSelfConsistency( dir, files( [ '/', 'index.html' ] ) ).findings ).toEqual( [] );
 	} );
 
 	it( 'catches an internal link with no page behind it', () => {
