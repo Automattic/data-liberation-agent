@@ -269,6 +269,15 @@ function findServerSlots( repElement: Element, memberElement: Element, slots: Sl
 			attributeBytes += memberValue.length;
 		}
 	}
+	// Per-member images a server paints into inline style (a pagination
+	// thumbnail's background) are slots too; the rest of the style is
+	// capture-owned and stays.
+	const repStyleUrls = styleUrls( repElement.attribs.style );
+	const memberStyleUrls = styleUrls( memberElement.attribs.style );
+	if ( repStyleUrls.join( '\n' ) !== memberStyleUrls.join( '\n' ) ) {
+		attributeDiffs.push( { attribute: 'style', value: memberElement.attribs.style ?? '' } );
+		attributeBytes += memberStyleUrls.join( '' ).length;
+	}
 	if ( attributeDiffs.length ) slots.push( { ...at, kind: 'attribute', replacement: attributeDiffs, bytes: attributeBytes } );
 	const repChildren = slotChildren( repElement );
 	const memberChildren = slotChildren( memberElement );
@@ -346,6 +355,11 @@ function hydratedMounts( serverBody: Element, processedBody: Element, counts: Ma
 	return mounts;
 }
 
+/** The `url()` values of an inline style, in order. */
+function styleUrls( style: string | undefined ): string[] {
+	return [ ...( style ?? '' ).matchAll( /url\(\s*["']?([^"')]+)/g ) ].map( match => match[ 1 ]!.trim() );
+}
+
 /** Apply one slot to its anchor in the processed document; false when the anchor cannot take it. */
 function applySlot( $: cheerio.CheerioAPI, node: Element, slot: Slot ): boolean {
 	if ( slot.kind === 'text' ) {
@@ -367,6 +381,16 @@ function applySlot( $: cheerio.CheerioAPI, node: Element, slot: Slot ): boolean 
 				const merged = [ ...kept, ...memberTokens.filter( token => ! kept.includes( token ) ) ];
 				if ( merged.length ) node.attribs.class = merged.join( ' ' );
 				else delete node.attribs.class;
+				continue;
+			}
+			if ( attribute === 'style' ) {
+				// Swap the representative's style URLs for the member's, in place.
+				const from = styleUrls( slot.repNode.attribs.style );
+				const to = styleUrls( value );
+				let style = node.attribs.style ?? '';
+				if ( from.length !== to.length || from.some( url => ! style.includes( url ) ) ) return false;
+				from.forEach( ( url, index ) => { style = style.split( url ).join( to[ index ]! ); } );
+				node.attribs.style = style;
 				continue;
 			}
 			if ( value === '' ) delete node.attribs[ attribute ];
