@@ -4,6 +4,7 @@ import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureFiniteBootstrap, snapshotCollectionItems } from './finite-bootstrap.js';
 import type { FiniteBootstrapContract } from './finite-bootstrap.js';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { orElse } from '../failure-class.js';
 
 /** A replayable predicate is inferred only when real source transitions agree. */
 export interface CapturedCollectionFilter {
@@ -213,7 +214,7 @@ export async function captureTypedSearchStates(
 	if ( ! results.length ) results.push({ status: 'no-dialog', kind: 'typed-search', trigger: { selector: 'body', tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'No complete, unambiguous selectable collection relationship was established' });
 	for ( const opened of initiallyOpen ) {
 		const trigger = page.locator( opened.selector ).locator( '[aria-expanded="false"]' ).filter( { hasText: opened.label } ).first();
-		if ( await trigger.count() ) await trigger.evaluate( element => ( element as HTMLElement ).click() ).catch( () => undefined );
+		if ( await trigger.count() ) await trigger.evaluate( element => ( element as HTMLElement ).click() ).catch( orElse( undefined ) );
 	}
 	return results;
 }

@@ -24,6 +24,7 @@
 import * as cheerio from 'cheerio';
 import type { Page } from 'playwright';
 import { withEvaluateTimeout } from './page-helpers.js';
+import { orElse } from '../failure-class.js';
 
 /** Stamp naming a candidate in the captured document; on a lowered anchor, its original tag. */
 export const SCRIPTED_LINK_ATTRIBUTE = 'data-blocks-engine-capture-scripted-link';
@@ -263,7 +264,7 @@ export async function probeScriptedLinks( page: Page, signatures: readonly strin
 	}, {
 		attribute: SCRIPTED_LINK_ATTRIBUTE, tags: LOWERABLE_TAGS, candidatesSource: CANDIDATES_SOURCE, signatureSource: SIGNATURE_SOURCE,
 		signatures: [ ...signatures ], budgetMs, navigationWaitMs: NAVIGATION_WAIT_MS, restoreWaitMs: RESTORE_WAIT_MS,
-	} ), budgetMs + NAVIGATION_WAIT_MS + RESTORE_WAIT_MS + 5_000 ).catch( () => undefined );
+	} ), budgetMs + NAVIGATION_WAIT_MS + RESTORE_WAIT_MS + 5_000 ).catch( orElse( undefined ) );
 	if ( ! observed ) return empty( 'budget' );
 	const resolved = Object.keys( observed.links ).length;
 	return {

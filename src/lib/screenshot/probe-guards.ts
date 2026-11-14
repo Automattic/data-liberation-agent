@@ -1,6 +1,7 @@
 import { replaySourceReload, SOURCE_NAVIGATION_LIMITS } from '../source-navigation.js';
 import { type ProfileDiagnostic } from './manifest-queue.js';
 import type { Page, Route } from 'playwright';
+import { orElse } from '../failure-class.js';
 
 const READ_ONLY_METHODS = new Set( [ 'GET', 'HEAD', 'OPTIONS' ] );
 const readOnlyProbePages = new WeakMap< Page, { active: number } >();
@@ -62,7 +63,7 @@ export async function lockMainFrameNavigation( page: Page, onAttempt?: ( destina
 	};
 	await page.route( '**/*', guard );
 	return async () => {
-		await page.unroute( '**/*', guard ).catch( () => {} );
+		await page.unroute( '**/*', guard ).catch( orElse( undefined ) );
 	};
 }
 

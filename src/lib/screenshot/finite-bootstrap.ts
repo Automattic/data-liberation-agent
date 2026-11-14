@@ -3,6 +3,7 @@ import * as cheerio from 'cheerio';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { dismissOverlays } from './page-helpers.js';
 import type { CapturedCollectionFilter } from './typed-search-capture.js';
+import { orElse } from '../failure-class.js';
 
 export const FINITE_BOOTSTRAP_SCHEMA = 'blocks-engine-capture/finite-bootstrap/v1' as const;
 export const COLLECTION_STATUS_SCHEMA = 'blocks-engine-capture/collection-status/v1' as const;
@@ -320,7 +321,7 @@ async function visible( page: Page, selector: string ): Promise<boolean> {
 		const style = getComputedStyle( element );
 		const rect = element.getBoundingClientRect();
 		return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && ! element.closest( '[hidden]' );
-	} ).catch( () => false );
+	} ).catch( orElse( false ) );
 }
 
 async function readCollectionStatus( page: Page, targetSelector: string, fieldSelector: string, controlSelectors: string[] ): Promise<StatusObservation[ 'nodes' ]> {
@@ -356,7 +357,7 @@ async function readCollectionStatus( page: Page, targetSelector: string, fieldSe
 			nodes.push( { signature, text: ( unit.textContent ?? '' ).replace( /\s+/g, ' ' ).trim(), html: unit.outerHTML, before: Boolean( target.compareDocumentPosition( unit ) & Node.DOCUMENT_POSITION_PRECEDING ) } );
 		}
 		return nodes;
-	}, { targetSelector, fieldSelector, controlSelectors } ).catch( () => [] );
+	}, { targetSelector, fieldSelector, controlSelectors } ).catch( orElse( [] ) );
 }
 
 async function controlsVisible( page: Page, selectors: string[] ): Promise<boolean> {
@@ -385,7 +386,7 @@ export async function captureFiniteBootstrap(
 	const pendingResponses = new Set<Promise<void>>();
 	const onResponse = ( response: import('playwright').Response ) => {
 		// A response that cannot be read is not evidence; never an unhandled rejection.
-		const handled: Promise<void> = recordResponse( response ).catch( () => undefined ).finally( () => { pendingResponses.delete( handled ); } );
+		const handled: Promise<void> = recordResponse( response ).catch( orElse( undefined ) ).finally( () => { pendingResponses.delete( handled ); } );
 		pendingResponses.add( handled );
 	};
 	const drainResponses = async () => {
@@ -396,7 +397,7 @@ export async function captureFiniteBootstrap(
 		if ( ! [ 'fetch', 'xhr' ].includes( request.resourceType() ) ) return;
 		const postData = request.postData() ?? '';
 		const responsePhase = phase;
-		const body = await response.text().catch( () => '' );
+		const body = await response.text().catch( orElse( '' ) );
 		const classified = classifyCollectionResponse( body );
 		observed.push( {
 			method: request.method(), url: request.url(), postData, status: response.status(),
@@ -419,7 +420,7 @@ export async function captureFiniteBootstrap(
 	};
 	const drive = async ( action: () => Promise<void> ) => {
 		if ( Date.now() >= options.deadline ) throw new Error( 'Finite bootstrap drive budget exceeded' );
-		const pending = page.waitForResponse( response => [ 'fetch', 'xhr' ].includes( response.request().resourceType() ), { timeout: Math.max( options.settleMs * 8, 1_000 ) } ).catch( () => null );
+		const pending = page.waitForResponse( response => [ 'fetch', 'xhr' ].includes( response.request().resourceType() ), { timeout: Math.max( options.settleMs * 8, 1_000 ) } ).catch( orElse( null ) );
 		await action();
 		await pending;
 		await settle();
@@ -616,24 +617,24 @@ export async function captureFiniteBootstrap(
 		evidence.replay = 'unsupported';
 		evidence.finiteBootstrap = undefined;
 	} finally {
-		await page.unroute( '**/*', replay ).catch( () => undefined );
-		await input.fill( '' ).catch( () => undefined );
-		await activateControl( triggers[ initialCategory ]! ).catch( () => undefined );
+		await page.unroute( '**/*', replay ).catch( orElse( undefined ) );
+		await input.fill( '' ).catch( orElse( undefined ) );
+		await activateControl( triggers[ initialCategory ]! ).catch( orElse( undefined ) );
 		await settle();
 		await hydrateDisclosureContent( page, targetSelector );
-		evidence.target.html = await target.evaluate( element => element.outerHTML ).catch( () => '' );
+		evidence.target.html = await target.evaluate( element => element.outerHTML ).catch( orElse( '' ) );
 		const restored = snapshotItems( evidence.target.html ).map( item => item.text );
 		const expected = evidence.items.filter( item => item.categories.includes( initialCategory ) ).map( item => item.text );
 		if ( expected.length > 0 && restored.length === expected.length && restored.every( text => expected.includes( text ) ) ) evidence.restoration = 'verified';
-		for ( const category of evidence.categories ) if ( category.index !== initialCategory ) category.inactiveHtml = await page.locator( category.selector ).evaluate( element => element.outerHTML ).catch( () => '' );
+		for ( const category of evidence.categories ) if ( category.index !== initialCategory ) category.inactiveHtml = await page.locator( category.selector ).evaluate( element => element.outerHTML ).catch( orElse( '' ) );
 		if ( evidence.categories.length === triggers.length ) {
-			await activateControl( triggers[ ( initialCategory + 1 ) % triggers.length ]! ).catch( () => undefined );
+			await activateControl( triggers[ ( initialCategory + 1 ) % triggers.length ]! ).catch( orElse( undefined ) );
 			await settle();
-			evidence.categories[ initialCategory ]!.inactiveHtml = await page.locator( triggers[ initialCategory ]! ).evaluate( element => element.outerHTML ).catch( () => '' );
-		await activateControl( triggers[ initialCategory ]! ).catch( () => undefined );
+			evidence.categories[ initialCategory ]!.inactiveHtml = await page.locator( triggers[ initialCategory ]! ).evaluate( element => element.outerHTML ).catch( orElse( '' ) );
+		await activateControl( triggers[ initialCategory ]! ).catch( orElse( undefined ) );
 			await settle();
 			await hydrateDisclosureContent( page, targetSelector );
-			evidence.target.html = await target.evaluate( element => element.outerHTML ).catch( () => '' );
+			evidence.target.html = await target.evaluate( element => element.outerHTML ).catch( orElse( '' ) );
 			const finalItems = snapshotItems( evidence.target.html ).map( item => item.text );
 			if ( expected.length === 0 || finalItems.length !== expected.length || finalItems.some( text => ! expected.includes( text ) ) ) evidence.restoration = 'unverified';
 		}

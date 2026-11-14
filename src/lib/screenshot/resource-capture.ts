@@ -14,6 +14,7 @@ import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
 import { MAX_REDIRECTS, assertPublicHttpUrl, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
 import type { BrowserContext, Page, Request, Response } from 'playwright';
+import { orElse } from '../failure-class.js';
 
 const CAPTURED_RESOURCE_TYPES = new Set( [
 	'script',
@@ -642,7 +643,7 @@ export class CapturedResourceStore {
 				this.observe( probe );
 				await probe.setContent( `<base href="${ base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ pending.join( '' ) }` );
 				for ( const image of await probe.locator( 'img' ).all() ) {
-					await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
+					await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( orElse( undefined ) );
 					await image.evaluate( image => Promise.race( [
 						( image as HTMLImageElement ).decode().catch( () => undefined ),
 						new Promise<void>( resolve => setTimeout( resolve, 2000 ) ),
@@ -1060,9 +1061,7 @@ export class CapturedResourceStore {
 				contentType: canonicalContentType( headers[ 'content-type' ] ?? '' ),
 			} );
 			this.replayMetadata.set( url, metadata );
-		} )().catch( () => {
-			// Ephemeral cache misses must not become portable artifact failures.
-		} );
+		} )().catch( orElse( undefined ) );
 		this.replayCaptures.set( url, capture );
 		return capture;
 	}
