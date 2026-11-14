@@ -15,6 +15,22 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.7] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+- declare the baseline capture as one step list
+
+### Fixed
+- emit one canonical term archive per term
+- ignore one-sided runtime-injected inline styles in cluster verification
+- transplant differing body style text into derived members
+- collect painted text in the measurement rest pose
+- score a shared cross-origin embed by its document host
+- treat text before the document scroll origin as unpainted
+- block adapter-declared source telemetry
+- preserve viewport-specific state classes in responsive assembly
+
 ## [0.35.6] - 2026-11-13
 
 ### Changed
