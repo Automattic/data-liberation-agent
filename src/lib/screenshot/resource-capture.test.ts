@@ -354,7 +354,7 @@ describe( 'CapturedResourceStore', () => {
 				status: () => 200,
 				headers: () => ( { 'cache-control': 'public, max-age=3600', vary } ),
 				body: async () => Buffer.from( path ),
-				request: () => ( { resourceType: () => resourceType, headers: () => requestHeaders } ),
+				request: () => ( { resourceType: () => resourceType, allHeaders: async () => requestHeaders } ),
 			} );
 		}
 		await store.settle( firstRoute as never );
@@ -417,7 +417,7 @@ describe( 'CapturedResourceStore', () => {
 					...extra,
 				} ),
 				body: vi.fn().mockResolvedValue( Buffer.from( url ) ),
-				request: () => ( { resourceType: () => resourceType } ),
+				request: () => ( { resourceType: () => resourceType, allHeaders: async () => ( {} ) } ),
 			} );
 		}
 

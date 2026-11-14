@@ -223,6 +223,17 @@ function cacheControlSeconds( cacheControl: string, directive: string ): number 
 }
 
 /**
+ * The request headers a Vary secondary key is recorded from. `headers()` omits
+ * headers the network stack adds (for example the `Accept` Chromium sends for
+ * images), while replay matches the routed request's full headers; record the
+ * same view, or nothing when it is unavailable so Vary'd responses fail closed.
+ */
+async function replayRequestHeaders( response: Response, headers: Record< string, string > ): Promise< Record< string, string > | undefined > {
+	if ( ! headers.vary ) return {};
+	return response.request().allHeaders().catch( orElse< Record< string, string > | undefined >( undefined ) );
+}
+
+/**
  * Whether a response may be replayed from a shared cache across routes, and
  * until when (RFC 9111 §3 storability, §4.2.1 freshness lifetime).
  */
@@ -1038,7 +1049,7 @@ export class CapturedResourceStore {
 		if ( existing ) return existing;
 		const capture = ( async () => {
 			const headers = response.headers();
-			const metadata = replayableResponseMetadata( response.status(), headers, response.request().headers?.() ?? {} );
+			const metadata = replayableResponseMetadata( response.status(), headers, await replayRequestHeaders( response, headers ) );
 			if ( ! metadata ) { this.markUncacheableReplay(url); return; }
 			const declaredBytes = Number( headers[ 'content-length' ] );
 			if (
@@ -1201,7 +1212,7 @@ export class CapturedResourceStore {
 		}
 		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType, renderCritical );
 		this.browserLoadedResources.add( requestedUrl.href );
-		const replayMetadata = replayableResponseMetadata( status, headers, fetched ? undefined : response.request().headers?.() ?? {} );
+		const replayMetadata = replayableResponseMetadata( status, headers, fetched ? undefined : await replayRequestHeaders( response, headers ) );
 		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
 	}
 
