@@ -82,6 +82,9 @@ export interface Platform {
 	routeScope?( sourceUrl: string ): SiteRouteScope;
 	/** Segment-bounded path prefixes on the source origin that are runtime, never site documents. */
 	runtimePaths?: string[];
+	/** Source-origin telemetry to abort before network admission. Strings are pathname prefixes;
+	 * regular expressions match the pathname only (not query or origin). */
+	sourceTelemetry?: Array<string | RegExp>;
 	/** Automatic-detection signals owned by this platform. */
 	detection?: PlatformDetection;
 	/** Resolves a link this platform owns but does not serve the site from (an

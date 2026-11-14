@@ -23,6 +23,7 @@ export const SCREENSHOT_DEVICE_SCALE_FACTOR = 1;
 export interface ScreenshotOpts {
 	maxTotalBytes?: number;
 	governors?: import('../source-request-governor.js').SourceRequestGovernors;
+	sourceTelemetry?: import('../../platform/types.js').Platform['sourceTelemetry'];
 	urls: string[];
 	outputDir: string;
 	primaryUrl?: string; // reference for same-origin enforcement

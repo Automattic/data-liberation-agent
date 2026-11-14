@@ -121,17 +121,18 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
 }
 
 /** Source contexts must use this factory, not just spread identity options. */
-export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}, traffic?: { governors?: SourceRequestGovernors; sourceUrl: string }): Promise<BrowserContext> {
+export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}, traffic?: { governors?: SourceRequestGovernors; sourceUrl: string; sourceTelemetry?: import('../../platform/types.js').Platform['sourceTelemetry'] }): Promise<BrowserContext> {
   const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
   try {
     const governors = traffic?.governors;
     const sourceUrl = traffic?.sourceUrl ?? options.baseURL;
-    if (governors && sourceUrl) {
-      governSourceContext(context, governors, sourceUrl);
-      attributeSourceDevice(context, options.isMobile ? 'mobile' : 'desktop');
-    }
     await installProbeIntrinsics(context);
     await installSourceIdentity(context, options);
+    // Last registered runs first: block telemetry before identity routing can continue it.
+    if (governors && sourceUrl) {
+      await governSourceContext(context, governors, sourceUrl, traffic?.sourceTelemetry);
+      attributeSourceDevice(context, options.isMobile ? 'mobile' : 'desktop');
+    }
     return context;
   } catch (error) {
     await context.close().catch(() => {});

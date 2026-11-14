@@ -1224,6 +1224,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } );
 		const requested = opts.deviceMode ?? 'dual';
 		const comparison = {
+			sourceTelemetry: opts.sourceTelemetry,
 			resourceStore,
 			deviceEvidence: new RouteDeviceEvidence(),
 			identityHeaders: {},
@@ -1270,6 +1271,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
 				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
+				sourceTelemetry: opts.sourceTelemetry,
 				governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, initScript: opts.initScript,
 				telemetryRequest: opts.telemetryRequest,
@@ -1354,7 +1356,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// reader and alias ownership path as baseline capture (#1077).
 		if ( reflowViewports && routeComparison && ! reuseOnly && ( force || ! existing?.deviceMode ) &&
 			new URL( url ).search && ( ! primaryRef || documentRequestUrl( url ) !== documentRequestUrl( primaryRef ) ) ) {
-			const context = await createSourceContext( browser, profileContextOptions( desktopProfile!, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) ), { governors: opts.governors, sourceUrl: entryUrl } );
+			const context = await createSourceContext( browser, profileContextOptions( desktopProfile!, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) ), { governors: opts.governors, sourceUrl: entryUrl, sourceTelemetry: opts.sourceTelemetry } );
 			trackRouteContext( url, context );
 			let target: string | undefined;
 			try {
@@ -1585,7 +1587,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					// once per run — every worker and viewport for every route reuses it.
 					contextOptions = profileContextOptions( viewport, await sourceContextOptions( attemptBrowser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) );
 					identity = replayBrowserIdentity( contextOptions );
-					context = await createSourceContext( attemptBrowser, contextOptions, { governors: opts.governors, sourceUrl: entryUrl } );
+					context = await createSourceContext( attemptBrowser, contextOptions, { governors: opts.governors, sourceUrl: entryUrl, sourceTelemetry: opts.sourceTelemetry } );
 					trackRouteContext( url, context );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
@@ -2039,7 +2041,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			} else if ( candidates.size ) {
 				let context: BrowserContext | undefined;
 				try {
-					context = await createSourceContext( browser, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ), { governors: opts.governors, sourceUrl: entryUrl } );
+					context = await createSourceContext( browser, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ), { governors: opts.governors, sourceUrl: entryUrl, sourceTelemetry: opts.sourceTelemetry } );
 					// Inspecting an action URL performs the action; export names it instead.
 					for ( const url of [ ...candidates ].filter( url => ! stateChangingAction( url ) ).slice(0, 32) ) {
 						try {
