@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanupPolicy, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
 import { registerHost, unregisterHost } from '../platform/host.js';
 import { capture as wixCapture } from '../adapters/wix/capture.js';
+import { bloggerAdapter } from '../adapters/blogger/index.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { checkFidelity as checkLiveFidelity } from './fidelity/check.js';
@@ -834,6 +835,30 @@ describe('captcha widget cleanup', () => {
       } finally { await page.close(); }
     }, 20_000);
   }
+
+  it('removes Blogger hosted runtime elements with provider-service evidence, retaining content and other frames', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('**/*', (route) => route.abort());
+      await page.setContent(`<!doctype html><html><body>
+        <section id="comments"><h4>Comments</h4>
+          <iframe id="comment-frame" src="https://www.blogger.com/comment/frame/123?po=456"></iframe>
+          <a id="comment-editor-src" href="https://www.blogger.com/comment/frame/123?po=456">Comment</a>
+        </section>
+        <iframe id="followers-frame" src="https://www.blogger.com/followers/frame/123#rpctoken=random"></iframe>
+        <iframe id="youtube" src="https://www.youtube.com/embed/video"></iframe>
+        <iframe id="other-blogger" src="https://www.blogger.com/other/frame/123"></iframe>
+        <iframe id="other-host" src="https://example.com/comment/frame/123"></iframe>
+      </body></html>`);
+      const report = await applySourceCleanup(page, cleanupPolicy(bloggerAdapter.liberation?.cleanupRules));
+      expect(await page.locator('#comment-frame,#comment-editor-src,#followers-frame').count()).toBe(0);
+      expect(report.records).toHaveLength(3);
+      expect(report.records.every((record) => record.category === 'provider-service' && record.action === 'remove')).toBe(true);
+      expect(await page.locator('#comments > h4').textContent()).toBe('Comments');
+      expect(await page.locator('#youtube,#other-blogger,#other-host').count()).toBe(3);
+      expect(report.failures).toEqual([]);
+    } finally { await page.close(); }
+  }, 20_000);
 
   it('leaves a page without captcha byte-identical', async () => {
     const page = await browser.newPage();
