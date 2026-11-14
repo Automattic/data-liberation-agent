@@ -1040,7 +1040,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	if (opts.routeScope) validateRouteScope(opts.routeScope);
 	if (opts.primaryUrl && !routeInScope(opts.primaryUrl, opts.routeScope)) throw new Error('Source URL is outside its adapter route scope');
 	const offOriginRoutes = new Set( offOrigin.violations );
-	let urls = opts.urls.filter(url => ! offOriginRoutes.has( url ) && routeInScope(url, opts.routeScope));
+	let urls = [...new Set(opts.urls.filter(url => ! offOriginRoutes.has( url ) && routeInScope(url, opts.routeScope))
+		.map(url => scopedRouteKey(url, opts.routeScope)))];
 	if ( opts.types && opts.types.length > 0 ) {
 		const allowed = new Set( opts.types );
 		urls = urls.filter( ( u ) => allowed.has( classifyUrl( u ) ) );

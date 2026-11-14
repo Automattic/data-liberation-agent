@@ -11,6 +11,11 @@ export const bloggerAdapter: PlatformAdapter = {
 	id: 'blogger',
 	detection,
 	discover,
+	routeScope: sourceUrl => ( {
+		origin: new URL( sourceUrl ).origin,
+		pathPrefixes: [ '/' ],
+		ignoredQueryParams: [ 'updated-max', 'updated-min', 'max-results', 'start', 'by-date', 'reverse-paginate' ],
+	} ),
 	acquisition: bloggerAcquisition,
 	structuredContent: bloggerStructuredContent,
 	resolveImageOriginal: bloggerImageOriginal,
