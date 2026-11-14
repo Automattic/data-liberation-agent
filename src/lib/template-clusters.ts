@@ -678,10 +678,20 @@ export function compareDerivedWithCapture( input: {
 }
 
 export interface TemplateClusterRecord {
-	/** Group id from template-groups.json. */
+	/** Group id from template-groups.json, or `<group id>.<n>` for a member-shape sub-cluster. */
 	id: string;
 	key: string;
 	representative: string;
+	/** Group id this member-shape sub-cluster belongs to (#1805). */
+	parent?: string;
+	/** Adapter-declared member shape shared by the sub-cluster's members. */
+	shape?: string;
+	/**
+	 * Set on a group partitioned by member shape: its sub-clusters, each with
+	 * the representative chosen for that shape. The group's own `escalated`
+	 * rows are its unclustered (singleton-shape or unshaped) members.
+	 */
+	subClusters?: Array< { id: string; shape: string; representative: string; size: number } >;
 	/** Members offered for derivation, and their outcomes. */
 	derived: Array< { url: string; slots: number; subtreeSlots: number } >;
 	escalated: Array< { url: string; gate: string; reason: string; fallback?: { acquired: boolean; reason?: string } } >;

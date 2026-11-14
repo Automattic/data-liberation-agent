@@ -146,11 +146,18 @@ export function productMemberDocument(html: string, representative: StructuredCo
 	return $.html();
 }
 
+/** The gallery cardinality and price shape `productMemberDocument` requires a representative to share. */
+export function productMemberShape(entry: StructuredContentEntry): string {
+	const product = entry as Partial<ProductEntry>;
+	return `images=${product.images?.length ?? 0};price=${product.price ? 'single' : 'none'}`;
+}
+
 export const shopifyStructuredContent: StructuredContentSource = {
 	enumerate: enumerateShopifyProducts,
 	contentSlotSelector: BODY,
 	bodyEquivalent: productBodyEquivalent,
 	memberDocument: productMemberDocument,
+	memberShape: productMemberShape,
 	termArchiveUrl: (term, source) => new URL(term.startsWith('collection:') ? `/collections/${encodeURIComponent(term.slice(11))}` : `/collections/all/${encodeURIComponent(term)}`, source).href,
 	termName(url) {
 		try {

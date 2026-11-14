@@ -549,6 +549,10 @@ async function runCaptureWebsite(
 		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
 	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
+	// Shape sub-clusters (#1805) seed their own representative and verifier.
+	const clusterRankingGroups = templateGrouping?.report
+		? ( await import( './template-groups.js' ) ).templateClusterRankingGroups( templateGrouping.report.groups, structuredMemberShape( contentSource, contentEntries ) )
+		: [];
 	// Explicit count budgets select before capture observes the entry DOM. Only
 	// pay for an early render when server chrome cannot supply that priority.
 	if ( routeLimit !== undefined && prunedInventoryUrls.length > routeLimit && navigationTargets.size === 0 && options.acquisition !== 'http' ) {
@@ -559,7 +563,7 @@ async function runCaptureWebsite(
 	// Cluster seeds unlock whole collections before navigation spends the window.
 	// Without clusters, preserve navigation-first selection and inventory spread.
 	const preferred = templateClusters
-		? rankTemplateClusterRoutes( prunedInventoryUrls, sourceUrl, templateGrouping?.report?.groups ?? [], navigationTargets, contentSource?.termName.bind( contentSource ) )
+		? rankTemplateClusterRoutes( prunedInventoryUrls, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) )
 		: [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ) ];
 	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, preferred, timeBudget?.projectAdmission && ! options.checkpoint );
 	let templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
@@ -649,7 +653,7 @@ async function runCaptureWebsite(
 		// menu before subsequent admissions, without opening another browser page.
 		...( timeBudget?.projectAdmission ? {
 			prioritizePendingRoutes: ( pending: string[] ) => {
-				if ( templateClusters ) return rankTemplateClusterRoutes( pending, sourceUrl, templateGrouping?.report?.groups ?? [], navigationTargets, contentSource?.termName.bind( contentSource ) );
+				if ( templateClusters ) return rankTemplateClusterRoutes( pending, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) );
 				const pendingRoutes = new Set( pending );
 				const promoted = prunedInventoryUrls.filter( url => pendingRoutes.has( url ) && navigationTargets.has( normalizedUrl( url ) ) );
 				const promotedRoutes = new Set( promoted );
@@ -980,6 +984,16 @@ export async function groupInventoryTemplates( input: { contentEntries?: import(
 	}
 }
 
+/** An adapter's member shape keyed by route, when it declares one (#1805). */
+function structuredMemberShape( contentSource: import('../platform/types.js').StructuredContentSource | undefined, entries: readonly import('../platform/types.js').StructuredContentEntry[] | undefined ): ( ( url: string ) => string | undefined ) | undefined {
+	if ( ! contentSource?.memberShape || ! entries?.length ) return undefined;
+	const byUrl = new Map( entries.map( entry => [ normalizedUrl( entry.permalink ), entry ] ) );
+	return url => {
+		const entry = byUrl.get( normalizedUrl( url ) );
+		return entry ? contentSource.memberShape!( entry ) : undefined;
+	};
+}
+
 /**
  * Grouping bounds for a capture. Whole-inventory capture (`routeLimit: 'all'`,
  * or `templateClusters`, which can derive only fingerprinted members) makes
@@ -1073,6 +1087,8 @@ export async function deriveTemplateClusterMembers( input: {
 } ): Promise< TemplateClusterDerivation > {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
+	const { templateClusterUnits } = await import( './template-groups.js' );
+	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
 	const { safeFetch } = await import( './media-fetch/safe-fetch.js' );
 	const { CapturedResourceStore } = await import( './screenshot/resource-capture.js' );
 	const { ManifestQueue } = await import( './screenshot/manifest-queue.js' );
@@ -1164,8 +1180,32 @@ export async function deriveTemplateClusterMembers( input: {
 	}
 	if ( round === maxRounds ) break;
 	try {
-		for ( const group of input.report.groups ) {
-			if ( group.size < 2 ) continue;
+		// A group whose members span several adapter-declared shapes derives
+		// one sub-cluster per shape (#1805): an outlier representative must not
+		// fail members its synthesized documents can never match.
+		const units = input.report.groups.flatMap( group => {
+			if ( group.size < 2 ) return [];
+			const { units, unclustered } = templateClusterUnits( group, memberShape );
+			if ( units.length === 1 && units[ 0 ]!.id === group.id ) return units;
+			let record = clusters.find( cluster => cluster.id === group.id );
+			if ( ! record ) {
+				record = { id: group.id, key: group.key, representative: group.representative, subClusters: units.map( unit => ( { id: unit.id, shape: unit.shape!, representative: unit.representative, size: unit.size } ) ), derived: [], escalated: [], unavailable: [] };
+				clusters.push( record );
+			}
+			// No sub-cluster can derive a singleton-shape or unshaped member: it
+			// takes ordinary acquisition (browser capture, else the HTTP fallback).
+			const attempted = new Set( record.escalated.map( member => member.url ) );
+			for ( const url of unclustered ) {
+				if ( isCaptured( url ) || attempted.has( url ) ) continue;
+				const gate = 'member_shape_unclustered';
+				const reason = 'member shape has no other member to derive it from';
+				record.escalated.push( { url, gate, reason } );
+				escalations.push( { url, gate, reason, slug: feedEntries.get( normalizedUrl( url ) )?.slug, clusterSize: group.size, record } );
+				escalated++;
+			}
+			return units;
+		} );
+		for ( const group of units ) {
 			const repEntry = capturedEntry( group.representative );
 			if ( ! repEntry?.html || repEntry.redirectedTo ) continue;
 			const repHtmlPath = resolve( input.outputDir, repEntry.html );
@@ -1173,7 +1213,7 @@ export async function deriveTemplateClusterMembers( input: {
 			let record = clusters.find( cluster => cluster.id === group.id );
 			if ( record?.verification && ! record.verification.equal ) continue;
 			if ( ! record ) {
-				record = { id: group.id, key: group.key, representative: group.representative, derived: [], escalated: [], unavailable: [] };
+				record = { id: group.id, key: group.key, representative: group.representative, ...( group.parent ? { parent: group.parent, shape: group.shape } : {} ), derived: [], escalated: [], unavailable: [] };
 				clusters.push( record );
 			}
 			const startedAt = Date.now();
