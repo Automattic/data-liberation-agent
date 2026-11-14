@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { srcsetCandidates } from './srcset.js';
-import { elementDescriptor, styleBlocks, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION, type TemplateStyleNormalization } from './template-groups.js';
+import { elementDescriptor, styleBlocks, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION, type TemplateStyleBlock, type TemplateStyleNormalization } from './template-groups.js';
 
 /**
  * Template-clustered capture, phase 1 (#784).
@@ -634,8 +634,26 @@ export function compareDerivedWithCapture( input: {
 	const serverStyles = input.repServerHtml !== undefined && input.memberServerHtml !== undefined
 		? new Set( [ input.repServerHtml, input.memberServerHtml ].flatMap( html => collect( cheerio.load( html ), 'link[rel~="stylesheet"]', 'href' ) ) )
 		: undefined;
-	const styles = ( $: cheerio.CheerioAPI ): string[] =>
-		[ ...styleBlocks( $ ).map( block => normalizedWhitespace( input.styleNormalization?.pageStyles( [ block ] ) ?? block.text ) ),
+	const styleText = ( block: TemplateStyleBlock ): string => normalizedWhitespace( input.styleNormalization?.pageStyles( [ block ] ) ?? block.text );
+	const serverStyleTexts = serverStyles && new Set( [ input.repServerHtml!, input.memberServerHtml! ].flatMap( html => styleBlocks( cheerio.load( html ) ).map( styleText ) ) );
+	// Inline styles a runtime probe injected into one capture only (for
+	// example a comments widget's sheet): absent from both server documents,
+	// not written by the capture, and with nothing differing on the other side.
+	const runtimeOnly = ( block: TemplateStyleBlock ): boolean => !! serverStyleTexts &&
+		! serverStyleTexts.has( styleText( block ) ) && ! Object.keys( block.attributes ).some( name => name.startsWith( 'data-blocks-engine-capture' ) );
+	const inlineStyles = ( $: cheerio.CheerioAPI ) => styleBlocks( $ ).map( block => ( { text: styleText( block ), runtimeOnly: runtimeOnly( block ) } ) );
+	const [ derivedInline, realInline ] = [ inlineStyles( derived ), inlineStyles( real ) ];
+	const unmatched = ( side: typeof derivedInline, other: typeof derivedInline ) => {
+		const texts = new Set( other.map( style => style.text ) );
+		return side.filter( style => ! texts.has( style.text ) );
+	};
+	const derivedOnly = unmatched( derivedInline, realInline );
+	const realOnly = unmatched( realInline, derivedInline );
+	const ignored = new Set( derivedOnly.length === 0 || realOnly.length === 0
+		? [ ...derivedOnly, ...realOnly ].filter( style => style.runtimeOnly ).map( style => style.text )
+		: [] );
+	const styles = ( $: cheerio.CheerioAPI, inline: typeof derivedInline ): string[] =>
+		[ ...inline.map( style => style.text ).filter( text => ! ignored.has( text ) ),
 			...collect( $, 'link[rel~="stylesheet"]', 'href' ).filter( href => ! serverStyles || serverStyles.has( href ) ) ].filter( value => value !== '' ).sort();
 	const fluidSheets = ( $: cheerio.CheerioAPI ): string[] =>
 		$( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).toArray()
@@ -653,7 +671,7 @@ export function compareDerivedWithCapture( input: {
 		links: collect( derived, 'a[href]', 'href' ).join( '\n' ) === collect( real, 'a[href]', 'href' ).join( '\n' ),
 		images: images( derived ) === images( real ),
 		skeleton: skeleton( derived ) === skeleton( real ),
-		headStyles: styles( derived ).join( '\n' ) === styles( real ).join( '\n' ),
+		headStyles: styles( derived, derivedInline ).join( '\n' ) === styles( real, realInline ).join( '\n' ),
 		fluidRules: fluidSheets( derived ).join( '\n' ) === fluidSheets( real ).join( '\n' ),
 	};
 	return { equal: Object.values( checks ).every( value => value ), checks };
