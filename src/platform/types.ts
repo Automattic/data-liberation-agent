@@ -165,6 +165,14 @@ export interface StructuredContentSource {
 	memberDocument( representativeHtml: string, representative: StructuredContentEntry, member: StructuredContentEntry, options?: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors } ): string | undefined | Promise<string | undefined>;
 	/** Per-member head elements, fetched by the adapter and transplanted by identity. */
 	memberHeadSlotSelector?: string;
+	/**
+	 * The entry's member shape: the content cardinalities `memberDocument`
+	 * requires a representative to share (e.g. gallery size, price shape).
+	 * When declared, a template cluster whose members span several shapes is
+	 * derived as one sub-cluster per shape, each with a representative of that
+	 * shape; members of a singleton shape use ordinary acquisition.
+	 */
+	memberShape?( entry: StructuredContentEntry ): string | undefined;
 	/** The source URL of a term's archive. */
 	termArchiveUrl( term: string, sourceUrl: string ): string;
 	/** The term named by a term-archive URL, or undefined for other routes. */
