@@ -238,13 +238,13 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 
 	const sampledWidths: number[] = [];
 	const memo = new Map< number, Record< number, { added: string[]; removed: string[] } > >();
-	const probe = async ( width: number ) => {
+	const probe = async ( width: number, repeat = false ) => {
 		const known = memo.get( width );
-		if ( known ) return known;
-		sampledWidths.push( width );
+		if ( known && ! repeat ) return known;
+		if ( ! repeat ) sampledWidths.push( width );
 		await resize( { width, height: original.height } );
 		const diff = await page.evaluate( key => ( window as unknown as Record< symbol, { diff(): Record< number, { added: string[]; removed: string[] } > } > )[ Symbol.for( key ) ]!.diff(), STATE_KEY );
-		memo.set( width, diff );
+		if ( ! repeat ) memo.set( width, diff );
 		return diff;
 	};
 	const present = ( diff: Record< number, { added: string[]; removed: string[] } >, toggle: Toggle ) => {
@@ -332,7 +332,6 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 					else low = middle;
 				}
 				series.push( { width: high, present: wide } );
-				options.breakpoints?.add( high );
 			}
 		}
 
@@ -340,14 +339,42 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		// with it: a token that stays changed follows time, not the viewport.
 		await resize( original );
 		const restored = await page.evaluate( key => ( window as unknown as Record< symbol, { diff(): Record< number, { added: string[]; removed: string[] } > } > )[ Symbol.for( key ) ]!.diff(), STATE_KEY );
+		// A return to the original state alone can coincide with a carousel's
+		// next cycle. Revisit the ladder and both sides of each learned flip
+		// without the probe cache, rejecting tokens that do not reproduce their
+		// states. Bisection's intermediate search steps need not be replayed.
+		// This also validates contracts borrowed from another route's memo.
+		const repeatWidths = new Set( ladder.filter( width => memo.has( width ) ) );
+		for ( const series of presence.values() ) {
+			const ordered = [ ...series ].sort( ( a, b ) => a.width - b.width );
+			for ( let i = 1; i < ordered.length; i++ ) {
+				if ( ordered[ i ]!.present === ordered[ i - 1 ]!.present ) continue;
+				for ( const width of [ ordered[ i ]!.width - 1, ordered[ i ]!.width ] ) {
+					if ( memo.has( width ) ) repeatWidths.add( width );
+				}
+			}
+		}
+		const unstable = new Set< string >();
+		for ( const width of [ ...repeatWidths ].reverse() ) {
+			const previous = memo.get( width )!;
+			const repeated = await probe( width, true );
+			for ( const [ key, toggle ] of toggles ) {
+				if ( present( previous, toggle ) !== present( repeated, toggle ) ) unstable.add( key );
+			}
+		}
+		await resize( original );
 		const aliases: Array< { index: number; token: string; base: boolean; alias: string; media: string } > = [];
 		for ( const [ key, toggle ] of toggles ) {
 			const change = restored[ toggle.index ];
-			if ( change?.added.includes( toggle.token ) || change?.removed.includes( toggle.token ) ) continue;
+			if ( unstable.has( key ) || change?.added.includes( toggle.token ) || change?.removed.includes( toggle.token ) ) continue;
 			const series = presence.get( key )!;
 			if ( ! reused.has( `${ signatures[toggle.index] }|${ toggle.token }` ) ) options.memo?.set( `${ signatures[toggle.index] }|${ toggle.token }`, series );
 			const media = presenceMedia( series );
 			if ( media === '' || media === 'all' ) continue;
+			const ordered = [ ...series ].sort( ( a, b ) => a.width - b.width );
+			for ( let i = 1; i < ordered.length; i++ ) {
+				if ( ordered[ i ]!.present !== ordered[ i - 1 ]!.present ) options.breakpoints?.add( ordered[ i ]!.width );
+			}
 			const alias = `${ VIEWPORT_CLASS_PREFIX }${ createHash( 'sha256' ).update( `${ toggle.token }\n${ media }` ).digest( 'hex' ).slice( 0, 12 ) }`;
 			aliases.push( { ...toggle, alias, media } );
 		}
