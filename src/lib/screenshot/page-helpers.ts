@@ -116,7 +116,9 @@ export async function settleDocument(
                 }
                 const box = layoutBox(element);
                 let candidate = candidates.get(element);
-                if (!candidate || candidate.box !== box || now - candidate.last > 100) {
+                // A proven loop keeps its standing through main-thread stalls; an
+                // unproven one must show an unbroken second of frame cadence.
+                if (!candidate || candidate.box !== box || (!candidate.excluded && now - candidate.last > 100)) {
                   if (candidates.size >= 64) candidates.clear();
                   candidate = { start: now, last: now, frames: 0, box, excluded: false };
                   candidates.set(element, candidate);
