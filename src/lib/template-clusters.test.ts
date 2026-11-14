@@ -231,6 +231,20 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		} );
 	} );
 
+	it.each( [ '<input onclick="this.select();">', '<iframe src="/shared"></iframe>' ] )( 'reuses a byte-identical runtime element in a structurally different slot (#1842): %s', shared => {
+		const page = ( content: string ) => `<html><head><title>Example</title></head><body><main id="info">${ shared }${ content }</main></body></html>`;
+		const rep = page( '<p>Representative</p>' );
+		const input = { repServerHtml: rep, repProcessedHtml: rep, memberServerHtml: page( '<p>Member</p><p>More</p>' ), baseUrl: BASE };
+		const result = deriveMemberDocument( input );
+		expect( result.ok ).toBe( true );
+		if ( result.ok ) {
+			expect( result.html ).toContain( shared );
+			expect( result.html ).toContain( '<p>More</p>' );
+		}
+		expect( deriveMemberDocument( { ...input, memberServerHtml: input.memberServerHtml.replace( shared, shared.replace( 'this.select();', 'other();' ).replace( '/shared', '/different' ) ) } ) )
+			.toMatchObject( { ok: false, gate: { code: 'runtime_slot_content' } } );
+	} );
+
 	it( 'escalates a subtree slot carrying an unobserved event handler', () => {
 		// A repeated sibling collapses in the skeleton, so the key still matches;
 		// the slot's member HTML carries an onclick handler the capture never ran.
