@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { orElse } from '../failure-class.js';
 
 export const DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN = /^(?:class|style|hidden|aria-[a-z0-9-]+|data-(?!lib-|dla-)[a-z0-9_.:-]+)$/;
 
@@ -75,7 +76,7 @@ export async function rememberDropdownAncestors( page: Page, triggerSelector: st
 			if ( node === document.body ) break;
 		}
 	}, DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN.source, { timeout: 1000 } ).catch( async () => {
-		await page.evaluate( () => { ( globalThis as CaptureGlobals ).__dlaDropdownAncestors = { rows: [], reason: 'trigger-snapshot-unavailable' }; } ).catch( () => undefined );
+		await page.evaluate( () => { ( globalThis as CaptureGlobals ).__dlaDropdownAncestors = { rows: [], reason: 'trigger-snapshot-unavailable' }; } ).catch( orElse( undefined ) );
 	} );
 }
 
@@ -149,7 +150,7 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 		result.placement = { parentSelector: parent.selector, parentDepth: parent.depth, beforeSelector: beforeSelector ?? null, position: getComputedStyle( panel ).position };
 		if ( new TextEncoder().encode( JSON.stringify( result ) ).length > 32768 ) return { status: 'unverified' as const, ancestors: [], reason: 'ancestor-state-byte-limit' };
 		return result;
-	}, { pattern: DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN.source, requirePlacement }, { timeout: 1000 } ).catch( () => ( { status: 'unverified' as const, ancestors: [], reason: 'panel-snapshot-unavailable' } ) );
+	}, { pattern: DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN.source, requirePlacement }, { timeout: 1000 } ).catch( orElse( ( { status: 'unverified' as const, ancestors: [], reason: 'panel-snapshot-unavailable' } ) ) );
 }
 
 /** A captured transition is replayable only when source actions restore its owner. */

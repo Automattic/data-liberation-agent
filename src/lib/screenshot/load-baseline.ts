@@ -19,9 +19,10 @@ import { rejectedNavigationReason } from './navigation-rejection.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout } from './page-helpers.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { ROUTE_ALIAS_CANONICAL, queryOnlyCanonicalTarget } from '../route-aliases.js';
+import { orElse } from '../failure-class.js';
 
 export async function renderedQueryAlias( page: Page, url: string, scope: ScreenshotOpts['routeScope'] ): Promise< string | undefined > {
-	const canonical = await page.evaluate( () => ( document.querySelector( 'link[rel~="canonical" i][href]' ) as HTMLLinkElement | null )?.href ).catch( () => undefined );
+	const canonical = await page.evaluate( () => ( document.querySelector( 'link[rel~="canonical" i][href]' ) as HTMLLinkElement | null )?.href ).catch( orElse( undefined ) );
 	return queryOnlyCanonicalTarget( url, canonical, scope );
 }
 /** Pause before retrying a navigation that failed for a reason the origin governor does not pace. */
@@ -120,7 +121,7 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 			if ( status >= 400 ) {
 				if ( RETRYABLE_STATUS.has( status ) && mayRetry() ) continue;
 				// Evidence only: a body that cannot be read leaves the plain status.
-				const rejectedBody = status === 403 ? await Promise.resolve().then( () => response?.text() ).catch( () => undefined ) : undefined;
+				const rejectedBody = status === 403 ? await Promise.resolve().then( () => response?.text() ).catch( orElse( undefined ) ) : undefined;
 				fail( 'goto', rejectedNavigationReason( status, response?.headers?.(), rejectedBody ), attempt );
 				return undefined;
 			}
@@ -136,7 +137,7 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 			if ( navigation.subresourceLoss ) args.diagnostics?.push( { code: 'source_subresource_loss', reason: 'Reset or throttled subresource loads remained after bounded document recovery' } );
 			if ( timedOut ) args.diagnostics?.push( { code: SOURCE_NAVIGATION_SLOW, reason: `document did not arrive within the ${ timedOut.budgetMs }ms navigation budget (${ timedOut.error }); the single slow-source retry, attempt ${ attempt }, used a ${ budgetMs }ms budget and delivered it in ${ answeredMs }ms` } );
 			// Evidence only: a body that cannot be read leaves adapters on their live-DOM path.
-			serverHtml = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
+			serverHtml = await Promise.resolve().then( () => response?.text() ).catch( orElse( undefined ) );
 			sourcePolicy = cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), response, serverHtml ?? '');
 			if ( serverHtml ) for ( const link of sameOriginPageAnchors( resolveDocumentReferences( serverHtml, navigationUrl ), navigationUrl ) ) args.serverLinks.add( link );
 			navigated = true;
@@ -175,7 +176,7 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	// child route with its parent. Only an adapter-confirmed target is an alias;
 	// all other post-load navigation remains a route-drift failure.
 	if ( args.resolveClientRedirect ) {
-		const target = await args.resolveClientRedirect( page, url ).catch( () => undefined );
+		const target = await args.resolveClientRedirect( page, url ).catch( orElse( undefined ) );
 		if ( target && serverRedirectTarget( url, target ) === target ) {
 			entry.redirectedTo = target;
 			return undefined;
@@ -215,7 +216,7 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	await waitForStable( page );
 	// The shorter phone pass must not freeze a load-delayed iframe reveal.
 	// No hidden frames means no timer or observer; permanent hides are bounded.
-	if ( isMobile ) await withEvaluateTimeout( page.evaluate( waitForHiddenEmbeds, 5_000 ), evaluateTimeoutMs ).catch( () => undefined );
+	if ( isMobile ) await withEvaluateTimeout( page.evaluate( waitForHiddenEmbeds, 5_000 ), evaluateTimeoutMs ).catch( orElse( undefined ) );
 	// A provider login withholding the whole route (a members-only page) was
 	// removed by the policy, leaving nothing of the page. Capture it as a
 	// placeholder inside the site's public shell instead (see access-gate.ts).
@@ -234,7 +235,7 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	try {
 		const gateRemoval = accessGateRemoval( await withEvaluateTimeout( readSourceCleanup( page, sourcePolicy ), evaluateTimeoutMs ), sourcePolicy );
 		gate = gateRemoval && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ? gateRemoval : undefined;
-		if ( gate ) gateTitle = ( await withEvaluateTimeout( page.title().catch( () => '' ), evaluateTimeoutMs ) ).trim();
+		if ( gate ) gateTitle = ( await withEvaluateTimeout( page.title().catch( orElse( '' ) ), evaluateTimeoutMs ) ).trim();
 	} catch ( error ) {
 		return stoppedResponding( error, 'source cleanup / access gate' );
 	}

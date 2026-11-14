@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import { dialogDismissalBinding, type CapturedDialogInteraction } from './interaction-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
+import { orElse } from '../failure-class.js';
 
 export const SELECTABLE_SET_KIND = 'selectable-set' as const;
 export const CHOICE_GROUP_KIND = 'choice-group' as const;
@@ -1162,9 +1163,9 @@ export async function captureSelectableSetStates(
 				const questions = [...record.region.html.matchAll(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/g)].map(match => match[1].replace(/<[^>]+>/g, '').trim()).filter(Boolean).slice(0, 3);
 				await page.locator(record.trigger.selector).first().evaluate((element: HTMLElement) => element.click());
 				await page.waitForTimeout(settleMs);
-				const selected = await page.locator(record.trigger.selector).first().evaluate(element => element.getAttribute('aria-selected') ?? element.getAttribute('aria-pressed')).catch(() => null);
+				const selected = await page.locator(record.trigger.selector).first().evaluate(element => element.getAttribute('aria-selected') ?? element.getAttribute('aria-pressed')).catch(orElse( null ));
 				const local = page.locator(record.region.selector).first();
-				const regionText = await local.innerText().catch(() => '');
+				const regionText = await local.innerText().catch(orElse( '' ));
 				if (selected === 'false' || (questions.length && !questions.some(question => regionText.includes(question)))) continue;
 				if (!await local.locator('[aria-expanded="false"]:not([aria-haspopup])').count()) continue;
 				await hydrateDisclosureContent(page, record.region.selector);
@@ -1182,7 +1183,7 @@ export async function captureSelectableSetStates(
 		}
 	} finally {
 		for (const selector of restores) {
-			await page.locator(selector).first().evaluate((element: HTMLElement) => element.click()).catch(() => undefined);
+			await page.locator(selector).first().evaluate((element: HTMLElement) => element.click()).catch(orElse( undefined ));
 			await page.waitForTimeout(settleMs);
 		}
 	}

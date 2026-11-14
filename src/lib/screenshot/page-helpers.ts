@@ -4,6 +4,7 @@ import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js'
 import { isSourcePromotion } from '../source-cleanup.js';
 import { isConsentNotice } from '../consent-overlay.js';
 import { VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
+import { orElse } from '../failure-class.js';
 
 /** Slack given to an in-page step beyond its own budget before Node gives up on it. */
 const EVALUATE_GRACE_MS = 5_000;
@@ -164,9 +165,7 @@ export async function waitForStable(
 ): Promise<void> {
   // Navigation already awaited `load` within its own budget; a subresource
   // that is still pending must not fail the route here either.
-  await page.waitForLoadState('load', { timeout: 5_000 }).catch(() => {
-    /* best-effort — a held image or script never fires load */
-  });
+  await page.waitForLoadState('load', { timeout: 5_000 }).catch(orElse( undefined ));
   await Promise.all([
     waitForNetworkQuiet(page, 'network-quiet'),
     settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs }),
@@ -855,7 +854,7 @@ export async function withEvaluateTimeout<T>(p: Promise<T>, ms: number): Promise
  * width never has. Hand the capture-width root classes back unchanged.
  */
 export async function withRootClassesRestored<T>(page: Page, probe: () => Promise<T>): Promise<T> {
-  const before = await withEvaluateTimeout(page.evaluate(() => [[...document.documentElement.classList], [...document.body.classList]]), 1500).catch(() => undefined);
+  const before = await withEvaluateTimeout(page.evaluate(() => [[...document.documentElement.classList], [...document.body.classList]]), 1500).catch(orElse( undefined ));
   try {
     return await probe();
   } finally {
@@ -863,7 +862,7 @@ export async function withRootClassesRestored<T>(page: Page, probe: () => Promis
       for (const [element, tokens] of [[document.documentElement, html], [document.body, body]] as const) {
         if ([...element.classList].sort().join(' ') !== [...tokens].sort().join(' ')) element.className = tokens.join(' ');
       }
-    }, before), 1500).catch(() => undefined);
+    }, before), 1500).catch(orElse( undefined ));
   }
 }
 
@@ -1658,7 +1657,7 @@ export async function dismissOverlays(
       let acted = 0;
       for (const t of targets) {
         const consentBanner = t.kind === 'consent'
-          ? await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(() => undefined) : undefined;
+          ? await withEvaluateTimeout(readConsentBanner(page, t), 4000).catch(orElse( undefined )) : undefined;
         const presentation = consentBanner?.presentation;
         const consentViewports = opts.consentViewports;
         if (presentation && consentViewports?.length) await withRootClassesRestored(page, async () => {

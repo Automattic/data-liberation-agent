@@ -1,6 +1,7 @@
 import { installResourceReplay, type CapturedResourceStore } from './resource-capture.js';
 import type { Page } from 'playwright';
 import type { CapturedComponent } from './component-states.js';
+import { orElse } from '../failure-class.js';
 
 export interface CollectionMember { key: string; url?: string; text: string; html: string }
 export interface CollectionEvidence {
@@ -172,7 +173,7 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 						evidence.coverage = 'partial';
 						// Playwright acts only on a visible target. One that stayed hidden
 						// through the timed-out action was never clicked, filled or scrolled to.
-						reset = !untouched || await target.isVisible().catch(() => true);
+						reset = !untouched || await target.isVisible().catch(orElse( true ));
 					}
 				}
 			}

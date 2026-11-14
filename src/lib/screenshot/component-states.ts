@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import { snapshotCarousels, exploreCarousel, type Slideshow } from './carousel-components.js';
 import { captureControlledDisclosure, type CapturedDialogInteraction, type InteractionStatesReport } from './interaction-capture.js';
+import { orElse } from '../failure-class.js';
 
 /** A route's stateful surfaces, not an inventory of individual trigger clicks. */
 export interface CapturedComponent {
@@ -134,7 +135,7 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 		let current = component.initial;
 		const controls = baseline.controls.filter(control => control.component === index);
 		if (!controls.length && !component.slideshow) continue;
-		if (skip && await page.locator(component.selector).first().evaluate((root, excluded) => root.matches(excluded), skip).catch(() => true)) {
+		if (skip && await page.locator(component.selector).first().evaluate((root, excluded) => root.matches(excluded), skip).catch(orElse( true ))) {
 			component.status = 'unsupported'; component.reason = 'interaction probe region excluded'; continue;
 		}
 		// Visibility, unlike click actionability, is a layout fact. Do not spend a
@@ -148,7 +149,7 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 				const box = element.getBoundingClientRect();
 				const style = getComputedStyle(element);
 				return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.display !== 'none';
-			}).catch(() => false);
+			}).catch(orElse( false ));
 			if (rendered) { component.viewport = { ...viewport }; break; }
 		}
 		if (!rendered) {
@@ -193,7 +194,7 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 				if (component.kind === 'tabs') await page.waitForFunction(selector => {
 					const tab = document.querySelector(selector)?.querySelector('[role="tab"][aria-selected="true"]');
 					return tab && !tab.hasAttribute('aria-controls') || document.getElementById(tab?.getAttribute('aria-controls') ?? '')?.getAttribute('role') === 'tabpanel';
-				}, component.selector, { timeout: 2_000 }).catch(() => undefined);
+				}, component.selector, { timeout: 2_000 }).catch(orElse( undefined ));
 				let observed = await page.evaluate(({ selector, kind, state }) => {
 					const root = document.querySelector(selector);
 					if (!root) return null;
