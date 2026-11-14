@@ -230,7 +230,7 @@ function cacheControlSeconds( cacheControl: string, directive: string ): number 
  */
 async function replayRequestHeaders( response: Response, headers: Record< string, string > ): Promise< Record< string, string > | undefined > {
 	if ( ! headers.vary ) return {};
-	return response.request().allHeaders().catch( () => undefined );
+	return response.request().allHeaders().catch( orElse< Record< string, string > | undefined >( undefined ) );
 }
 
 /**
