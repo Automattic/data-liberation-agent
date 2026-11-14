@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { WebsiteInventory } from './website-inventory.js';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
 import { isInlineUrl } from './self-contain.js';
@@ -77,36 +78,35 @@ export interface PortableResourceResult {
  * Run after self-containment and stylesheet projection, before evidence and shared parts.
  * Keeping unchanged metadata verbatim also preserves authored multi-digest semantics.
  */
-export function projectPortableResourceIntegrity( websiteDir: string, sourceHashes: ReadonlyMap< string, string > ): void {
+export function projectPortableResourceIntegrity( websiteDir: string, sourceHashes: ReadonlyMap< string, string >, inventory = new WebsiteInventory( websiteDir ) ): void {
 	const changedPaths = new Set< string >();
 	for ( const [ url, sourceHash ] of sourceHashes ) {
 		const path = resolve( websiteDir, `.${ decodeURIComponent( url ) }` );
 		if ( pathWithin( websiteDir, path ) && existsSync( path ) && fileHash( path ) !== sourceHash ) changedPaths.add( url );
 	}
 	if ( ! changedPaths.size ) return;
-	const visit = ( directory: string ): void => {
-		for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
-			const path = join( directory, entry.name );
-			if ( entry.isDirectory() ) { visit( path ); continue; }
-			if ( ! entry.isFile() || ! entry.name.endsWith( '.html' ) ) continue;
-			const html = readFileSync( path, 'utf8' );
-			const $ = cheerio.load( html, { sourceCodeLocationInfo: true } );
-			const ranges: Array< { startOffset: number; endOffset: number } > = [];
-			$( 'link[integrity],script[integrity]' ).each( ( _, element ) => {
-				const node = $( element );
-				const reference = node.attr( element.tagName === 'link' ? 'href' : 'src' );
-				if ( ! reference || ! changedPaths.has( reference ) ) return;
-				const location = ( element.sourceCodeLocation as { attrs?: Record< string, { startOffset: number; endOffset: number } > } | undefined )?.attrs?.integrity;
-				if ( location ) ranges.push( location );
-			} );
-			let projected = html;
-			for ( const range of ranges.sort( ( a, b ) => b.startOffset - a.startOffset ) ) {
-				projected = projected.slice( 0, range.startOffset ) + projected.slice( range.endOffset );
-			}
-			if ( projected !== html ) writeFileSync( path, projected );
+	for ( const file of inventory.traversalFiles ) {
+		if ( file.isSymlink || ! file.path.endsWith( '.html' ) ) continue;
+		const path = join( websiteDir, file.path );
+		const html = readFileSync( path, 'utf8' );
+		const $ = cheerio.load( html, { sourceCodeLocationInfo: true } );
+		const ranges: Array< { startOffset: number; endOffset: number } > = [];
+		$( 'link[integrity],script[integrity]' ).each( ( _, element ) => {
+			const node = $( element );
+			const reference = node.attr( element.tagName === 'link' ? 'href' : 'src' );
+			if ( ! reference || ! changedPaths.has( reference ) ) return;
+			const location = ( element.sourceCodeLocation as { attrs?: Record< string, { startOffset: number; endOffset: number } > } | undefined )?.attrs?.integrity;
+			if ( location ) ranges.push( location );
+		} );
+		let projected = html;
+		for ( const range of ranges.sort( ( a, b ) => b.startOffset - a.startOffset ) ) {
+			projected = projected.slice( 0, range.startOffset ) + projected.slice( range.endOffset );
 		}
-	};
-	visit( websiteDir );
+		if ( projected !== html ) {
+			writeFileSync( path, projected );
+			inventory.add( file.path );
+		}
+	}
 }
 
 /** Materialize captured dependencies into the private portable generation.

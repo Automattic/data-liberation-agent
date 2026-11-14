@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { WebsiteInventory } from './website-inventory.js';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { rewriteSrcset, srcsetReferences } from './srcset.js';
@@ -206,20 +207,15 @@ export function stripRemoteAssetRequests( html: string ): string {
 	return $.html();
 }
 
-export function selfContainWebsite( websiteDir: string ): void {
-	const visit = ( directory: string ): void => {
-		for ( const name of readdirSync( directory ) ) {
-			const path = join( directory, name );
-			if ( statSync( path ).isDirectory() ) {
-				visit( path );
-				continue;
-			}
-			if ( name.endsWith( '.html' ) ) {
-				writeFileSync( path, stripRemoteAssetRequests( readFileSync( path, 'utf8' ) ) );
-			} else if ( name.endsWith( '.css' ) ) {
-				writeFileSync( path, stripRemoteCssUrls( readFileSync( path, 'utf8' ) ) );
-			}
+export function selfContainWebsite( websiteDir: string, inventory = new WebsiteInventory( websiteDir ) ): void {
+	for ( const file of inventory.traversalFiles ) {
+		const path = join( websiteDir, file.path );
+		if ( file.path.endsWith( '.html' ) ) {
+			writeFileSync( path, stripRemoteAssetRequests( readFileSync( path, 'utf8' ) ) );
+			inventory.add( file.path );
+		} else if ( file.path.endsWith( '.css' ) ) {
+			writeFileSync( path, stripRemoteCssUrls( readFileSync( path, 'utf8' ) ) );
+			inventory.add( file.path );
 		}
-	};
-	visit( websiteDir );
+	}
 }

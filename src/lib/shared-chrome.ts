@@ -1,3 +1,4 @@
+import type { WebsiteInventory } from './website-inventory.js';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -5,20 +6,20 @@ import type { AnyNode, Element } from 'domhandler';
 import { includeReferences, parseLocatedStructure, sourceRange, type HtmlRange } from './site-includes.js';
 
 /** Only exact, site-level semantic landmarks are shared; authored bytes survive. */
-export function extractSharedChrome( root: string, routePaths: string[] ): void {
-	const sources = new Set( [ ...routePaths, ...shareChrome( root, routePaths, false ) ] );
+export function extractSharedChrome( root: string, routePaths: string[], inventory?: WebsiteInventory ): void {
+	const sources = new Set( [ ...routePaths, ...shareChrome( root, routePaths, false, inventory ) ] );
 	// Route-current links can vary while the brand, menus and footer content
 	// remain identical. Factor common subtrees from the actual source owners,
 	// including the parts just created, rather than freezing or stripping state.
 	for ( let pass = 0; pass < 16; pass++ ) {
 		for ( const path of sources ) for ( const reference of includeReferences( readFileSync( join( root, path ), 'utf8' ) ) ) sources.add( reference.path.slice( 1 ) );
-		const added = shareChrome( root, [ ...sources ], true );
+		const added = shareChrome( root, [ ...sources ], true, inventory );
 		if ( ! added.length ) break;
 		for ( const path of added ) sources.add( path );
 	}
 }
 
-function shareChrome( root: string, paths: string[], descendants: boolean ): string[] {
+function shareChrome( root: string, paths: string[], descendants: boolean, inventory?: WebsiteInventory ): string[] {
 	const partsDir = join( root, 'parts' );
 	if ( existsSync( partsDir ) && ( lstatSync( partsDir ).isSymbolicLink() || ! lstatSync( partsDir ).isDirectory() ) ) return [];
 	// Candidate landmarks overlap, often deeply. Retaining every candidate's
@@ -83,6 +84,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 		if ( existsSync( destination ) ) continue;
 		mkdirSync( partsDir, { recursive: true } );
 		writeFileSync( destination, fragment, { flag: 'wx' } );
+		inventory?.add( `parts/${ id }.html` );
 		created.push( `parts/${ id }.html` );
 		for ( const occurrence of occurrences ) {
 			const list = replacements.get( occurrence.path ) ?? [];
@@ -94,6 +96,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 		let html = readFileSync( join( root, path ), 'utf8' );
 		for ( const range of ranges.sort( ( a, b ) => b.start - a.start ) ) html = html.slice( 0, range.start ) + range.include + html.slice( range.end );
 		writeFileSync( join( root, path ), html );
+		inventory?.add( path );
 	}
 	return created;
 }
