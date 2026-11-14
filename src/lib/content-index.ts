@@ -25,10 +25,15 @@ export interface ContentIndex {
  */
 export function structuredContentIndex( entries: StructuredContentEntry[], routes: Array< { url: string; path: string } >, source: Pick< StructuredContentSource, 'termArchiveUrl' | 'termName' >, sourceUrl: string ): ContentIndex {
 	const paths = new Map( routes.map( route => [ route.url, `/${ route.path.replace( /^website\//, '' ) }` ] ) );
-	const terms: ContentIndexTerm[] = routes.flatMap( route => {
+	const capturedTerms = new Map< string, ContentIndexTerm >();
+	for ( const route of routes ) {
 		const name = source.termName( route.url );
-		return name === undefined ? [] : [ { name, kind: 'term-archive' as const, sourceUrl: route.url, path: paths.get( route.url )! } ];
-	} );
+		if ( name === undefined ) continue;
+		if ( ! capturedTerms.has( name ) || route.url === source.termArchiveUrl( name, sourceUrl ) ) {
+			capturedTerms.set( name, { name, kind: 'term-archive', sourceUrl: route.url, path: paths.get( route.url )! } );
+		}
+	}
+	const terms = [ ...capturedTerms.values() ];
 	for ( const name of new Set( entries.flatMap( entry => entry.terms ) ) ) {
 		if ( terms.some( term => term.name === name ) ) continue;
 		terms.push( { name, kind: 'term-archive', sourceUrl: source.termArchiveUrl( name, sourceUrl ), path: `/terms/${ createHash( 'sha256' ).update( name ).digest( 'hex' ) }.html` } );
