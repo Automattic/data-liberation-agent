@@ -433,6 +433,12 @@ export function deriveMemberDocument( input: {
 	/** The adapter's template normalization, the same one that grouped the cluster. */
 	styleNormalization?: TemplateStyleNormalization;
 	templateIdentity?: import('./template-groups.js').TemplateIdentity;
+	/**
+	 * The two documents' featured images from structured content. A runtime
+	 * paints the representative's (a hero background, say) from per-item data
+	 * the server diff never sees; the member shows its own there (#1813).
+	 */
+	featuredImages?: { representative?: string; member?: string };
 } ): MemberDerivation {
 	const keyOf = ( html: string ): string => {
 		let normalized = input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html;
@@ -470,7 +476,7 @@ export function deriveMemberDocument( input: {
 	if ( ! slots.length ) {
 		// Nothing to transplant: the member is the representative byte for byte
 		// in content. That is a legitimate derived member with zero slots.
-		return { ok: true, html: input.repProcessedHtml, stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
+		return { ok: true, html: withMemberFeaturedImage( input.repProcessedHtml, input.featuredImages ), stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
 	}
 	const anchorCounts = anchorValueCounts( repBody );
 	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
@@ -560,7 +566,22 @@ export function deriveMemberDocument( input: {
 		else repProcessed( 'head' ).append( replacements.map( node => member.html( node ) ).join( '' ) );
 		originals.remove();
 	}
-	return { ok: true, html: repProcessed.html(), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
+	return { ok: true, html: withMemberFeaturedImage( repProcessed.html(), input.featuredImages ), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
+}
+
+/**
+ * Every rendering of the representative's featured image, as a URL (any
+ * rendition query kept) or URL-encoded in inline data, becomes the member's.
+ */
+export function withMemberFeaturedImage( html: string, images: { representative?: string; member?: string } | undefined ): string {
+	const from = images?.representative?.split( '?' )[ 0 ];
+	const to = images?.member?.split( '?' )[ 0 ];
+	if ( ! from || ! to || from === to ) return html;
+	const escape = ( value: string ) => value.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+	// A URL ends where its path ends: `banner.jpg` must not match `banner.jpg2`.
+	// Encoded, it ends at an escape (`%22`, `%3F`) instead of a raw delimiter.
+	const replaced = ( text: string, a: string, b: string, pathCharacters: string ) => text.replace( new RegExp( `${ escape( a ) }(?![${ pathCharacters }])`, 'g' ), b );
+	return replaced( replaced( html, from, to, '\\w.~/%-' ), encodeURIComponent( from ), encodeURIComponent( to ), '\\w.~-' );
 }
 
 /** The document with every element matching the content slot emptied. */
@@ -621,14 +642,19 @@ export function compareDerivedWithCapture( input: {
 			.map( element => resolveUrl( ( element as Element ).attribs[ attribute ] ?? '', input.baseUrl ) )
 			.filter( value => value !== '' )
 			.sort();
-	const images = ( $: cheerio.CheerioAPI ): string => JSON.stringify(
-		$( 'img, picture > source[srcset]' ).toArray().map( element => {
+	// Images include inline-style backgrounds: a hero a runtime paints from
+	// per-member data lives there, and the server diff never sees it (#1813).
+	const images = ( $: cheerio.CheerioAPI ): string => JSON.stringify( [
+		...$( 'img, picture > source[srcset]' ).toArray().map( element => {
 			const node = element as Element;
 			return [ node.name, resolveUrl( node.attribs.src ?? '', input.baseUrl ),
 				srcsetCandidates( node.attribs.srcset ?? '' ).map( candidate =>
 					[ resolveUrl( candidate.url, input.baseUrl ), candidate.size, candidate.density ] ) ];
-		} ).map( image => JSON.stringify( image ) ).sort(),
-	);
+		} ),
+		...$( 'body [style*="url("]' ).toArray().flatMap( element =>
+			[ ...( ( element as Element ).attribs.style ?? '' ).matchAll( /url\(\s*(?:&quot;|["'])?([^"')&]+)/g ) ]
+				.map( match => [ 'background', resolveUrl( match[ 1 ]!, input.baseUrl ) ] ) ),
+	].map( image => JSON.stringify( image ) ).sort() );
 	const serverStyles = input.repServerHtml !== undefined && input.memberServerHtml !== undefined
 		? new Set( [ input.repServerHtml, input.memberServerHtml ].flatMap( html => collect( cheerio.load( html ), 'link[rel~="stylesheet"]', 'href' ) ) )
 		: undefined;

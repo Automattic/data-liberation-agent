@@ -9,7 +9,7 @@ import type { StructuredContentEntry } from '../../platform/types.js';
 
 const origin = 'https://fixture.squarespace.com';
 const post = (id: string) => ({ id: `id-${id}`, fullUrl: `/journal/${id}`, title: `Post ${id}`, body: `<p>Body ${id} <a href="/about">About</a><img src="/photo.jpg" srcset="/photo.jpg 1x"></p>`, publishOn: 1704067200000, updatedOn: 1704153600000, author: { displayName: 'Writer' }, categories: ['Real Estate'], tags: ['Local', 'Real Estate'], assetUrl: `${origin}/featured.jpg` });
-const entry = (id: string): StructuredContentEntry => ({ permalink: `${origin}/journal/${id}`, slug: id, kind: 'post', title: `Post ${id}`, contentHtml: post(id).body, published: '2024-01-01T00:00:00.000Z', updated: '2024-01-02T00:00:00.000Z', author: 'Writer', terms: ['Real Estate', 'Local'] });
+const entry = (id: string): StructuredContentEntry => ({ permalink: `${origin}/journal/${id}`, slug: id, kind: 'post', title: `Post ${id}`, contentHtml: post(id).body, published: '2024-01-01T00:00:00.000Z', updated: '2024-01-02T00:00:00.000Z', author: 'Writer', terms: ['Real Estate', 'Local'], image: `${origin}/featured.jpg` });
 const document = (e: StructuredContentEntry, slot = 'blog-item-content') => `<html><head><title>${e.title} | Site</title><link rel="canonical" href="${e.permalink}"></head><body><nav>Keep me</nav><h1 class="blog-item-title">${e.title}</h1><time datetime="${e.published}"></time><div class="${slot}">${e.contentHtml}</div></body></html>`;
 
 afterEach(() => vi.restoreAllMocks());

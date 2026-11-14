@@ -19,6 +19,21 @@ it('ignores only stylesheet links absent from both server documents', () => {
 	expect(compareDerivedWithCapture({ derivedHtml, realHtml, baseUrl: context.baseUrl }).checks.headStyles).toBe(false);
 });
 
+it('fails verification when a runtime-painted background differs from the real capture (#1813)', () => {
+	const page = (hero: string) => `<html><head></head><body><div class="banner" style="background-position: 50% 4%; background-image: url(&quot;${hero}&quot;)"></div><h1>Paint colors</h1></body></html>`;
+	const compare = (derived: string, real: string) => compareDerivedWithCapture({ baseUrl: 'https://fixture.example/blog/paint', derivedHtml: page(derived), realHtml: page(real) }).checks.images;
+	expect(compare('/media/representative.webp', '/media/member.webp')).toBe(false);
+	expect(compare('/media/member.webp', '/media/member.webp')).toBe(true);
+});
+
+it('derives the member\'s own featured image wherever a runtime painted the representative\'s (#1813)', () => {
+	const cdn = 'https://images.example/content/v1';
+	const server = '<html><head></head><body><div class="banner"></div><h1>Post</h1><script>item.assetUrl = "x"</script></body></html>';
+	const painted = (image: string) => `<html><head></head><body><div class="banner" style="background-image: url(&quot;${image}?format=1500w&quot;)"></div><h1>Post</h1><script>item.assetUrl = JSON.parse(decodeURIComponent("%22${encodeURIComponent(image)}%22"))</script><img src="${cdn}/rep/banner.jpg2"></body></html>`;
+	const derived = deriveMemberDocument({ repServerHtml: server, repProcessedHtml: painted(`${cdn}/rep/banner.jpg`), memberServerHtml: server, baseUrl: 'https://fixture.example/blog/rep', featuredImages: { representative: `${cdn}/rep/banner.jpg`, member: `${cdn}/member/part-1.jpg` } });
+	expect(derived.ok && derived.html).toBe(painted(`${cdn}/member/part-1.jpg`).replace(`${cdn}/member/banner.jpg2`, `${cdn}/rep/banner.jpg2`));
+});
+
 /**
  * The #784 phase-1 fixture, reduced from the 24-route acceptance fixture: a
  * home page and six posts sharing one template, one post with a two-column
