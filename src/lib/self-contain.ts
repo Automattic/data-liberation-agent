@@ -104,7 +104,17 @@ function omitEmptyFontFaceSrc( css: string ): string {
 					if ( ! urlMatch ) return true;
 					return ! isUnavailableCssAssetUrl( ( urlMatch[ 1 ] ?? urlMatch[ 2 ] ?? '' ).trim() );
 				} );
-				return kept.length === 0 ? '' : `${ prefix[ 0 ] }${ kept.join( ',' ) }`;
+				// Local font extensions follow verified bytes, not the source's format hint.
+				const normalized = kept.map( part => part.replace(
+					/(url\(\s*(?:["']([^"']*)["']|([^\s)]+))\s*\))\s*format\([^)]*\)/gi,
+					( match, url, quoted, bare ) => {
+						const reference: string = quoted ?? bare;
+						const extension = reference.startsWith( '/' ) && /\.(woff2?|ttf|otf)(?:[?#]|$)/i.exec( reference );
+						const format = extension && { woff: 'woff', woff2: 'woff2', ttf: 'truetype', otf: 'opentype' }[ extension[ 1 ].toLowerCase() ];
+						return format ? `${ url } format("${ format }")` : match;
+					}
+				) );
+				return normalized.length === 0 ? '' : `${ prefix[ 0 ] }${ normalized.join( ',' ) }`;
 			} )
 			.filter( ( declaration ) => declaration.trim() !== '' );
 		return `${ open }${ declarations.join( ';' ) }}`;
