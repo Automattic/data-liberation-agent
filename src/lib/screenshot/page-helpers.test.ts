@@ -107,7 +107,7 @@ describe('waitForFonts', () => {
 describe('settleDocument', () => {
   it('asks the page to observe mutations with the given quiet/timeout budget', async () => {
     const page = makePage();
-    page.evaluate = vi.fn().mockResolvedValue('quiet');
+    page.evaluate = vi.fn().mockResolvedValue({ reason: 'quiet' });
     await expect(settleDocument(page as never, 'dom', { quietMs: 250, timeoutMs: 2_000 })).resolves.toMatchObject({ reason: 'quiet' });
     expect(page.evaluate).toHaveBeenCalledWith(expect.any(Function), { quietMs: 250, timeoutMs: 2_000, animations: false });
   });
@@ -152,6 +152,22 @@ describe('settleDocument', () => {
         await forever.setContent(`<main id="m"></main><script>let n = 0; setInterval(() => { m.textContent = String(++n); }, 40);</script>`);
         expect((await settleDocument(forever, 'forever', { quietMs: 150, timeoutMs: 600 })).reason).toBe('deadline');
       } finally { await forever.close(); }
+    });
+
+    it('does not excuse layout changes or hydration alongside frame-cadence decorative motion', async () => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(`<div id="dot" style="width:12px;height:12px"></div><main id="content"></main>
+          <script>let n=0; (function f(){dot.style.transform='scale('+(1+Math.abs(Math.sin(n++/20)))+')';
+          dot.style.width=(12+n%5)+'px'; requestAnimationFrame(f)})();</script>`);
+        const layout = await settleDocument(page, 'layout', { quietMs: 150, timeoutMs: 1_800 });
+        expect(layout.reason).toBe('deadline');
+        expect(layout.excludedMotion).toBeUndefined();
+        await page.setContent(`<div id="dot" style="width:12px;height:12px"></div><main></main>
+          <script>(function f(t){dot.style.transform='scale('+(1+Math.abs(Math.sin(t/400)))+')';requestAnimationFrame(f)})(0);
+          setInterval(() => document.querySelector('main').append(document.createElement('span')), 50);</script>`);
+        expect((await settleDocument(page, 'hydration', { quietMs: 150, timeoutMs: 1_800 })).reason).toBe('deadline');
+      } finally { await page.close(); }
     });
 
     it('scopes quiet to a selector so unrelated document churn does not hold the wait', async () => {

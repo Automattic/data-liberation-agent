@@ -16,6 +16,8 @@ export interface SettleOutcome {
   /** `quiet`: the document met every requested condition; `deadline`: the bound fired first. */
   reason: 'quiet' | 'deadline';
   ms: number;
+  /** Proven recurring, layout-neutral scripted motion ignored by this wait. */
+  excludedMotion?: string[];
 }
 
 const readinessSinks = new WeakMap<Page, (wait: string, outcome: SettleOutcome) => void>();
@@ -52,7 +54,8 @@ export function observePageTraffic( page: Page, telemetry?: TelemetryRequest ): 
 /**
  * The one document readiness primitive: resolve once the document is quiet.
  *
- * Quiet means no DOM mutation for `quietMs` within `selector` (default: the
+ * Quiet means no DOM mutation (except proven recurring transform/opacity/will-change
+ * motion on elements with stable layout boxes) for `quietMs` within `selector` (default: the
  * whole document; the window starts at the call, so
  * an already-idle page costs one window) and, with `animations`, no in-flight
  * finite animation on the document timeline. Scroll- and view-timeline effects
@@ -72,24 +75,84 @@ export async function settleDocument(
   { quietMs, timeoutMs, animations = false, selector }: { quietMs: number; timeoutMs: number; animations?: boolean; selector?: string },
 ): Promise<SettleOutcome> {
   const started = Date.now();
-  let reason: SettleOutcome['reason'] = 'deadline';
+  let result: Pick<SettleOutcome, 'reason' | 'excludedMotion'> = { reason: 'deadline' };
   try {
-    reason = await withEvaluateTimeout(
+    result = await withEvaluateTimeout(
       page.evaluate(
         ({ quietMs, timeoutMs, animations, selector }) =>
-          new Promise<'quiet' | 'deadline'>((resolve) => {
+          new Promise<Pick<SettleOutcome, 'reason' | 'excludedMotion'>>((resolve) => {
             const started = performance.now();
             const deadline = started + timeoutMs;
             let lastMutation = started;
-            const observer = new MutationObserver(() => { lastMutation = performance.now(); });
+            // Transform, opacity and compositor hints never move a layout box; the
+            // box check below still rejects any candidate whose geometry changes.
+            const candidates = new Map<HTMLElement, { start: number; last: number; frames: number; box: string; excluded: boolean }>();
+            const layoutBox = (element: HTMLElement) => {
+              const parent = element.parentElement?.getBoundingClientRect();
+              return [element.offsetLeft, element.offsetTop, element.offsetWidth, element.offsetHeight,
+                parent?.x, parent?.y, parent?.width, parent?.height,
+                document.documentElement.scrollWidth, document.documentElement.scrollHeight].join(',');
+            };
+            const withoutMotion = (css: string) => {
+              const style = document.createElement('span').style;
+              style.cssText = css;
+              style.removeProperty('transform');
+              style.removeProperty('opacity');
+              style.removeProperty('will-change');
+              return style.cssText;
+            };
+            const observer = new MutationObserver((records) => {
+              const now = performance.now();
+              for (const record of records) {
+                const element = record.target;
+                if (record.type !== 'attributes' || record.attributeName !== 'style' ||
+                  !(element instanceof HTMLElement) ||
+                  withoutMotion(record.oldValue ?? '') !== withoutMotion(element.style.cssText)) {
+                  // Unrelated work still holds the window; only the changed
+                  // element loses its standing as decorative motion.
+                  if (element instanceof HTMLElement) candidates.delete(element);
+                  lastMutation = now;
+                  continue;
+                }
+                const box = layoutBox(element);
+                let candidate = candidates.get(element);
+                if (!candidate || candidate.box !== box || now - candidate.last > 100) {
+                  if (candidates.size >= 64) candidates.clear();
+                  candidate = { start: now, last: now, frames: 0, box, excluded: false };
+                  candidates.set(element, candidate);
+                }
+                if (now > candidate.last) candidate.frames++;
+                candidate.last = now;
+                // Observe a full second of frame-cadence changes before allowing
+                // a normal quiet window. Sparse timers and hydration do not qualify.
+                candidate.excluded = now - candidate.start >= 1_000 && candidate.frames >= 20;
+                if (!candidate.excluded) lastMutation = now;
+              }
+            });
             const root = (selector ? document.querySelector(selector) : null) ?? document.documentElement;
-            observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+            observer.observe(root, { childList: true, subtree: true, attributes: true, attributeOldValue: true, characterData: true });
             const animating = () => animations && document.getAnimations().some((animation) =>
               animation.playState === 'running' && animation.timeline === document.timeline &&
               animation.effect?.getComputedTiming().iterations !== Infinity);
             const settled = () => performance.now() - lastMutation >= quietMs && !animating();
-            const finish = (outcome: 'quiet' | 'deadline') => { observer.disconnect(); resolve(outcome); };
+            const finish = (reason: 'quiet' | 'deadline') => {
+              observer.disconnect();
+              const excludedMotion = [...candidates].filter(([, candidate]) => candidate.excluded).map(([element]) => {
+                const path: string[] = [];
+                for (let node: Element | null = element; node; node = node.parentElement) {
+                  path.unshift(`${node.localName}:nth-child(${node.parentElement ? [...node.parentElement.children].indexOf(node) + 1 : 1})`);
+                }
+                return path.join(' > ');
+              });
+              resolve({ reason, ...(excludedMotion.length ? { excludedMotion } : {}) });
+            };
             const check = () => {
+              for (const [element, candidate] of candidates) {
+                if (!element.isConnected || layoutBox(element) !== candidate.box) {
+                  candidates.delete(element);
+                  lastMutation = performance.now();
+                }
+              }
               if (performance.now() >= deadline) return finish('deadline');
               if (!settled()) return void setTimeout(check, 25);
               requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -107,7 +170,7 @@ export async function settleDocument(
   } catch {
     /* best-effort: a blocked or crashed page falls through as a spent bound */
   }
-  const outcome = { reason, ms: Date.now() - started };
+  const outcome = { ...result, ms: Date.now() - started };
   readinessSinks.get(page)?.(wait, outcome);
   return outcome;
 }

@@ -7,13 +7,13 @@ import { captureWebsite } from '../../index.js';
 import { checkFidelity } from './check.js';
 import { createReferenceCollector, readFrozenObservation, type FidelityReference } from './reference.js';
 
-// One public capture/compare plus two rejected references (~30s). No framework
+// One public capture/compare plus two rejected references (~45s idle). No framework
 // names or error-message allowlist: admission depends on the rendered document.
 it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'proves settled after-load runtime faults but rejects unsettled documents and client error shells', async () => {
 	mkdirSync( '.tmp-test', { recursive: true } );
 	const root = mkdtempSync( join( process.cwd(), '.tmp-test/reference-runtime-' ) );
 	const message = 'Neutral recoverable runtime fault';
-	const html = `<!doctype html><html><head><title>Stable document</title></head><body><main><h1>Stable content</h1><p>The runtime recovered.</p></main><script>addEventListener('load', () => { throw new Error('${ message }'); });</script></body></html>`;
+	const html = `<!doctype html><html><head><title>Perpetual scripted pulse</title><style>.dot{width:12px;height:12px;border-radius:50%;background:#e85a1c}</style></head><body><main><h1>Stable content</h1><p>Static content.</p><div class="dot"><span>Logo</span></div></main><script>const d=document.querySelector('.dot');(function f(t){d.style.transform=\`scale(\${1+0.5*Math.abs(Math.sin(t/400))})\`;d.style.willChange=Math.floor(t/200)%2?'transform':'';requestAnimationFrame(f)})(0);addEventListener('load', () => { throw new Error('${ message }'); });</script></body></html>`;
 	const server = createServer( ( request, response ) => {
 		if ( request.url === '/robots.txt' ) { response.end( '' ); return; }
 		if ( request.url?.includes( 'sitemap' ) ) { response.writeHead( 404 ).end(); return; }
@@ -30,13 +30,14 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 		expect( result.summary.routesFailed ).toBe( 0 );
 		const reference = JSON.parse( readFileSync( join( root, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
 		expect( reference.entries.length ).toBeGreaterThan( 0 );
+		const report = await checkFidelity( { directory: root, settleMs: 0 } );
 		for ( const entry of reference.entries ) {
 			expect( entry.readiness.ready ).toBe( true );
 			expect( entry.readiness.reasons ).toEqual( [] );
+			expect( entry.readiness.diagnostics?.some( diagnostic => diagnostic.startsWith( 'source perpetual motion excluded: html:nth-child(1) > body:nth-child(2) > main:nth-child(1) > div:nth-child(3)' ) ) ).toBe( true );
 			expect( entry.readiness.diagnostics ).toContain( `source runtime error: ${ message }` );
 			expect( () => readFrozenObservation( root, entry ) ).not.toThrow();
 		}
-		const report = await checkFidelity( { directory: root, settleMs: 0 } );
 		expect( report.pending ).toEqual( [] );
 		expect( report.pass ).toBe( true );
 
@@ -70,4 +71,4 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 		await new Promise<void>( resolve => server.close( () => resolve() ) );
 		rmSync( root, { recursive: true, force: true } );
 	}
-}, 120_000 );
+}, 240_000 );

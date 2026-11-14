@@ -308,6 +308,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
 						const stability = await settleDocument( referencePage, 'reference-admission', { quietMs: 500, timeoutMs: 5_000, animations: true } );
 						if ( stability.reason !== 'quiet' ) entry.readiness.reasons.push( 'source document did not settle' );
+						if ( stability.excludedMotion?.length ) entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...stability.excludedMotion.map( selector => `source perpetual motion excluded: ${ selector }` ) ];
 						const html = await referencePage.content();
 						const shell = matchClientErrorShell( html, options.clientErrorShellSelectors );
 						if ( shell ) entry.readiness.reasons.push( `source client error shell: ${ shell }` );
