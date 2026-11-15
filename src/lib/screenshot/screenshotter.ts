@@ -43,7 +43,7 @@ import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagn
 import { createPhaseLedger, routePhaseBreakdown } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
-import { waitForStable, dismissOverlays, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
+import { waitForStable, dismissOverlays, reportReadiness, restoreTopScrollState, settleDocument, waitForFonts } from './page-helpers.js';
 import { CapturedResourceStore, installResourceReplay } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -142,6 +142,9 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
 
 export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string ): Promise< string > {
+	// Screenshots and probes can leave scroll-driven chrome in its scrolled pose.
+	// Serialize only after the source has restored its initial, top-of-page state.
+	await restoreTopScrollState( page );
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',

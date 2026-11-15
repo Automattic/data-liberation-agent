@@ -391,14 +391,14 @@ describe('captureScreenshots', () => {
 		};
 
 		await expect(capturePageHtml(page as never)).resolves.toContain('<video autoplay muted>');
-		expect(page.evaluate).toHaveBeenCalledTimes(4);
-		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.setAttribute(property');
-		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.currentSrc || source.src');
-		expect(String(page.evaluate.mock.calls[0][0])).toContain('frame.getBoundingClientRect()');
-		expect(String(page.evaluate.mock.calls[1][0])).toContain('adoptedStyleSheets');
-		expect(String(page.evaluate.mock.calls[2][0])).toContain('document.documentElement.cloneNode');
-		expect(String(page.evaluate.mock.calls[2][0])).toContain('snapshot.outerHTML');
-		expect(String(page.evaluate.mock.calls[3][0])).toContain('frame.removeAttribute(attribute)');
+		const mediaCalls = page.evaluate.mock.calls.slice(-4);
+		expect(String(mediaCalls[0][0])).toContain('source.setAttribute(property');
+		expect(String(mediaCalls[0][0])).toContain('source.currentSrc || source.src');
+		expect(String(mediaCalls[0][0])).toContain('frame.getBoundingClientRect()');
+		expect(String(mediaCalls[1][0])).toContain('adoptedStyleSheets');
+		expect(String(mediaCalls[2][0])).toContain('document.documentElement.cloneNode');
+		expect(String(mediaCalls[2][0])).toContain('snapshot.outerHTML');
+		expect(String(mediaCalls[3][0])).toContain('frame.removeAttribute(attribute)');
 	});
 
 	it('synchronizes stylesheets once, after media settling rather than per retry', async () => {
@@ -418,12 +418,18 @@ describe('captureScreenshots', () => {
 	});
 
 	it('waits only while source-less video elements are pending runtime hydration', async () => {
+		let pending = true;
 		const page = {
-			evaluate: vi
-				.fn()
-				.mockResolvedValueOnce(true)
-				.mockResolvedValueOnce(false)
-				.mockResolvedValue({ html: '<html><video src="https://cdn.example.test/video.mp4"></video></html>', findings: [] }),
+			evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
+				const s = String(fn);
+				if (s.includes('DOCTYPE')) return { html: '<html><video src="https://cdn.example.test/video.mp4"></video></html>', findings: [] };
+				if (s.includes('source.setAttribute(property')) {
+					const result = pending;
+					pending = false;
+					return result;
+				}
+				return false;
+			}),
 			waitForTimeout: vi.fn().mockResolvedValue(undefined),
 		};
 

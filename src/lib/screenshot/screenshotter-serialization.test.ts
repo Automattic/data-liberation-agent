@@ -15,6 +15,42 @@ describe('capturePageHtml stylesheet serialization', () => {
     await browser.close();
   });
 
+  // Two routes in one browser pass; expected wall time is about a second.
+  it('serializes the same initial classes for fixed chrome after a route was scrolled', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('https://scroll.test/**', route => route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><style>
+          body { min-height: 3000px }
+          .totop { position: fixed; right: 10px; bottom: 10px }
+          .totop.hide { right: -100px !important }
+        </style><a class="totop hide" href="#">Top</a><script>
+          let timer;
+          addEventListener('scroll', () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => document.querySelector('.totop').classList.toggle('hide', scrollY === 0), 80);
+          });
+        </script>`,
+      }));
+      const classes: string[] = [];
+      for (const route of ['initial', 'scrolled']) {
+        await page.goto(`https://scroll.test/${route}`);
+        if (route === 'scrolled') {
+          await page.evaluate(() => window.scrollTo({ top: 600, behavior: 'instant' }));
+          await page.waitForFunction(() => !document.querySelector('.totop')!.classList.contains('hide'));
+          await page.screenshot();
+        }
+        const html = load(await capturePageHtml(page));
+        classes.push(html('.totop').attr('class')!);
+      }
+      expect(classes).toEqual(['totop hide', 'totop hide']);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
   // One browser pass, two serializations; expected wall time is a few seconds.
   it('keeps unchanged font sheets intact and settles runtime measurements after CSSOM rewrites', async () => {
     const page = await browser.newPage();
