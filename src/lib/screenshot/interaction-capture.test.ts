@@ -132,6 +132,28 @@ it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into na
 }, 30_000 );
 
 describe( 'captureTriggeredDialogs', () => {
+	it.skipIf( skipBrowserTests )( 'does not attribute autoplay slides to an unrelated dialog trigger', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		const page = await browser.newPage();
+		try {
+			await page.setContent( `<!doctype html><body>
+				<section><div class="slide" style="display:flex"><p>First review</p><a href="/p/1">Product one</a></div>
+				<div class="slide" style="display:none"><p>Second review</p><a href="/p/2">Product two</a></div></section>
+				<form method="post" action="/cart/add"><input type="hidden" name="id" value="1">
+				<button type="submit" name="add" aria-haspopup="dialog">Add to cart</button></form>
+				<script>
+					document.querySelector('form').addEventListener('submit', e => e.preventDefault());
+					const slides = [...document.querySelectorAll('.slide')]; let i = 0;
+					setInterval(() => { slides[i].style.display = 'none'; i = (i + 1) % slides.length; slides[i].style.display = 'flex'; }, 150);
+				</script>
+			</body>` );
+			const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+			expect( report.states.some( state => state.status === 'captured' ) ).toBe( false );
+			expect( report.states.find( state => state.trigger?.label === 'Add to cart' )?.status ).toBe( 'no-dialog' );
+		} finally {
+			await browser.close();
+		}
+	} );
 	it.skipIf( skipBrowserTests )(
 		'restores a language toggle that a probe click switched so later states stay in the source language',
 		async () => {
