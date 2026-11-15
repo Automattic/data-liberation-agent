@@ -120,7 +120,7 @@ export function runtimeRenderBudgetMs( timeBudgetMs: number | undefined ): numbe
 }
 
 /**
- * Render each runtime-gated member in Chromium and transplant only its filled
+ * Render each member whose empty server mount the runtime fills in Chromium and transplant only its filled
  * mount into the prepared HTTP document. The budget starts with this stage, so
  * earlier derivation rounds cannot spend it. Returns the transplanted documents.
  */
@@ -129,7 +129,7 @@ async function renderRuntimeMembers(
 	sourcePath: ( url: string ) => string | undefined,
 	runtime: EscalationFallback[ 'runtime' ]
 ): Promise< Map< string, string > > {
-	const members = input.members.filter( member => ( member.gate === 'runtime_mount_member_keyed' || member.gate === 'runtime_slot_content' ) && sourcePath( member.url ) );
+	const members = input.members.filter( member => member.gate === 'runtime_mount_member_keyed' && sourcePath( member.url ) );
 	const rendered = new Map< string, string >();
 	if ( ! members.length ) return rendered;
 	const { connectBrowser, createSourceContext, sourceContextOptions } = await import( './browser-kit/index.js' );

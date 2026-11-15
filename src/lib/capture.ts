@@ -1471,7 +1471,7 @@ export async function deriveTemplateClusterMembers( input: {
 	}
 	const acquiredSet = new Set( httpAcquiredUrls );
 	for ( const member of escalations ) {
-		const isRuntimeGate = member.gate === 'runtime_mount_member_keyed' || member.gate === 'runtime_slot_content';
+		const isRuntimeGate = member.gate === 'runtime_mount_member_keyed';
 		const runtime = runtimeResults.get( member.url ) ?? ( isRuntimeGate ? { observed: false, reason: `unobserved runtime mount: ${ member.reason }; runtime render unavailable` } : undefined );
 		const gate = `failed the ${ member.gate } gate: ${ member.reason }${ runtime && ! runtime.observed ? `; ${ runtime.reason }` : '' }`;
 		const entry = member.record.escalated.find( row => row.url === member.url );
