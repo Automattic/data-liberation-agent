@@ -170,6 +170,19 @@ describe('settleDocument', () => {
       } finally { await page.close(); }
     });
 
+    it('keeps proven decorative motion excluded through main-thread stalls', async () => {
+      const page = await browser.newPage();
+      try {
+        // An unbroken second of frame-cadence motion, then the loop keeps
+        // running with 300 ms pauses, like a busy main thread.
+        await page.setContent(`<div id="dot" style="width:12px;height:12px"></div>
+          <script>const s=performance.now();(function f(t){if(t-s<1200||(t-s)%700<400)dot.style.transform='scale('+(1+Math.abs(Math.sin(t/400)))+')';requestAnimationFrame(f)})(s);</script>`);
+        const outcome = await settleDocument(page, 'stalls', { quietMs: 500, timeoutMs: 3_000 });
+        expect(outcome.reason).toBe('quiet');
+        expect(outcome.excludedMotion).toHaveLength(1);
+      } finally { await page.close(); }
+    });
+
     it('scopes quiet to a selector so unrelated document churn does not hold the wait', async () => {
       const page = await browser.newPage();
       try {
