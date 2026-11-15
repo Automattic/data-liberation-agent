@@ -1206,10 +1206,16 @@ export async function deriveTemplateClusterMembers( input: {
 			}
 			return units;
 		} );
-		for ( const group of units ) {
-			const repEntry = capturedEntry( group.representative );
-			if ( ! repEntry?.html || repEntry.redirectedTo ) continue;
-			const repHtmlPath = resolve( input.outputDir, repEntry.html );
+		for ( const unit of units ) {
+			// A representative that failed capture (a timeout under throttling, a
+			// redirect) must not drop its cluster: a captured member stands in.
+			const usable = ( url: string ) => { const entry = capturedEntry( url ); return Boolean( entry?.html && ! entry.redirectedTo ) && ! derivedUrls.includes( url ); };
+			const representative = usable( unit.representative ) ? unit.representative
+				: unit.members.filter( url => url !== unit.representative && usable( url ) ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ];
+			if ( ! representative ) continue;
+			const group = { ...unit, representative };
+			const repEntry = capturedEntry( representative )!;
+			const repHtmlPath = resolve( input.outputDir, repEntry.html! );
 			if ( ! pathWithin( input.outputDir, repHtmlPath ) || ! existsSync( repHtmlPath ) ) continue;
 			let record = clusters.find( cluster => cluster.id === group.id );
 			if ( record?.verification && ! record.verification.equal ) continue;
