@@ -187,6 +187,51 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
+  // One browser page for all cases; expected wall time is a few seconds.
+  it('freezes authored image ratios but not width/height attribute hints', async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const cases = [
+      { name: 'attribute hint', rule: '', expected: undefined },
+      { name: 'authored auto ratio via custom property', rule: '--ratio: auto 4 / 3; aspect-ratio: var(--ratio);', expected: 'rendered' },
+      { name: 'authored fixed ratio', rule: 'aspect-ratio: 16 / 9;', expected: '16 / 9' },
+    ] as const;
+    try {
+      for (const { name, rule, expected } of cases) {
+        await page.setContent(`<!doctype html><style>
+          .grid{display:grid;grid-template-columns:1.1fr .9fr;grid-template-rows:repeat(2,minmax(150px,1fr));gap:18px}
+          .card{position:relative;display:block;overflow:hidden;min-height:250px}
+          .card:first-child{grid-row:span 2}
+          .card img{width:100%;height:100%;min-height:310px;object-fit:cover;display:block;${rule}}
+          @media (max-width:700px){.grid{grid-template-columns:1fr;grid-template-rows:auto}.card:first-child{grid-row:auto}.card,.card img{min-height:280px}}
+        </style><div class="grid">
+          <a class="card" href="/a/"><img width="960" height="600" alt=""></a>
+          <a class="card" href="/b/"><img width="960" height="600" alt=""></a>
+          <a class="card" href="/c/"><img width="960" height="600" alt=""></a>
+        </div>`);
+        const before = await page.locator('img').evaluateAll(images => images.map(image => ({
+          inline: image.style.getPropertyValue('aspect-ratio'),
+          width: image.getBoundingClientRect().width,
+          height: image.getBoundingClientRect().height,
+        })));
+        const captured = load(await capturePageHtml(page));
+        captured('img').each((index, image) => {
+          const ratio = captured(image).css('aspect-ratio');
+          if (expected === 'rendered') {
+            expect.soft(ratio, name).toMatch(/^\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?$/);
+            const [width, height] = (ratio ?? '').split('/').map(Number);
+            expect.soft(width / height, name).toBeCloseTo(before[index].width / before[index].height, 5);
+          } else {
+            expect.soft(ratio, name).toBe(expected);
+          }
+        });
+        expect(await page.locator('img').evaluateAll(images => images.map(image => image.style.getPropertyValue('aspect-ratio'))), `${name}: live styles restored`)
+          .toEqual(before.map(image => image.inline));
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
   it('preserves rendered image geometry when localization changes intrinsic dimensions', async () => {
     const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
