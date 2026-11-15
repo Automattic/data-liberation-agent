@@ -517,6 +517,9 @@ export async function captureTriggeredDialogs(
 		} );
 	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES, skip, runtimeRoots: PORTABLE_WIDGET_OWNERSHIP_SOURCE } ) ) as TriggerDescriptor[];
 
+	// Observe one equivalent wait window without activation, not once per button.
+	// Autoplay and other independent changes are not evidence of a popup opening.
+	if ( triggers.length ) await observeSpontaneousPanelChanges( page );
 	const states: CapturedDialogInteraction[] = [];
 	const restingPanels: Array< { candidate: number; settle: ( inline: boolean ) => void } > = [];
 	// Keep navigation defaults suppressed for the complete popup probe transaction,
@@ -1063,6 +1066,42 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 	} ).catch( orElse( undefined ) );
 }
 
+/** Keep idle evidence out of the DOM and bound the added wait to one probe window. */
+async function observeSpontaneousPanelChanges( page: Page ): Promise< void > {
+	await page.evaluate( async ( waitMs ) => {
+		const changed = new WeakSet< Element >();
+		( globalThis as typeof globalThis & { __dlaSpontaneousPanels?: WeakSet< Element > } ).__dlaSpontaneousPanels = changed;
+		const previous = new Map< Element, { visible: boolean; left: number; top: number } >();
+		const sample = ( baseline = false ) => {
+			for ( const element of Array.from( document.body.querySelectorAll( '*' ) ) ) {
+				const rect = element.getBoundingClientRect();
+				const style = getComputedStyle( element );
+				let opacity = Number.parseFloat( style.opacity || '1' );
+				for ( let ancestor = element.parentElement; ancestor && opacity > 0.1; ancestor = ancestor.parentElement ) {
+					opacity *= Number.parseFloat( getComputedStyle( ancestor ).opacity || '1' );
+				}
+				const state = {
+					visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && opacity > 0.1,
+					left: rect.left + window.scrollX,
+					top: rect.top + window.scrollY,
+				};
+				const before = previous.get( element );
+				if ( ! baseline && ( before ? before.visible !== state.visible || before.visible && state.visible &&
+					( Math.abs( before.left - state.left ) > 48 || Math.abs( before.top - state.top ) > 48 ) : state.visible ) ) {
+					changed.add( element );
+				}
+				previous.set( element, state );
+			}
+		};
+		sample( true );
+		const deadline = Date.now() + waitMs;
+		do {
+			await new Promise< void >( resolve => setTimeout( resolve, 100 ) );
+			sample();
+		} while ( Date.now() < deadline );
+	}, DIALOG_WAIT_MS );
+}
+
 async function firstNewVisibleDialog(
 	page: Page,
 	before: string[],
@@ -1097,6 +1136,13 @@ async function firstNewVisibleDialog(
 			}
 			return `dialog-candidate:${ index }`;
 		};
+		const spontaneous = ( globalThis as typeof globalThis & { __dlaSpontaneousPanels?: WeakSet< Element > } ).__dlaSpontaneousPanels;
+		const changesWithoutActivation = ( element: Element ): boolean => {
+			for ( let node: Element | null = element; node; node = node.parentElement ) {
+				if ( spontaneous?.has( node ) ) return true;
+			}
+			return false;
+		};
 		const candidates = Array.from( document.querySelectorAll( surfaceSelector ) );
 		const trigger = document.querySelector( triggerSelector );
 		if ( trigger?.getAttribute( 'aria-expanded' ) === 'false' ) return undefined;
@@ -1120,6 +1166,7 @@ async function firstNewVisibleDialog(
 		const surface = owned ?? candidates.find( ( element, index ) => {
 			if ( ! visible( element ) || wasVisible( element, index ) ) return false;
 			if ( element.matches( semanticSelector ) ) return true;
+			if ( changesWithoutActivation( element ) ) return false;
 			const rect = element.getBoundingClientRect();
 			return rect.width * rect.height > 40_000;
 		} );
@@ -1127,6 +1174,7 @@ async function firstNewVisibleDialog(
 		// interactive content: an in-flow menu panel is often a plain <div>.
 		const revealed = surface ?? ( marked ? Array.from( document.body.querySelectorAll( '*' ) ).find( ( element ) =>
 			! element.hasAttribute( 'data-lib-visible-before' ) &&
+			! changesWithoutActivation( element ) &&
 			visible( element ) &&
 			( element.parentElement === null || element.parentElement.hasAttribute( 'data-lib-visible-before' ) ) &&
 			element.querySelector( 'a[href],button' ) !== null
@@ -1137,6 +1185,7 @@ async function firstNewVisibleDialog(
 			return Math.max( 0, width ) * Math.max( 0, height );
 		};
 		const slidIntoView = ( element: Element ): boolean => {
+			if ( ! controlled.includes( element as HTMLElement ) && ! element.matches( semanticSelector ) && changesWithoutActivation( element ) ) return false;
 			const pos = element.getAttribute( 'data-lib-offscreen-pos' );
 			if ( ! pos || element.hasAttribute( 'data-lib-interaction-trigger' ) || element.closest( '[data-lib-interaction-trigger]' ) ) return false;
 			if ( ! visible( element ) ) return false;
