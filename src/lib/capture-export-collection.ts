@@ -271,7 +271,7 @@ export interface CapturedRoutes {
 export interface MediaCandidates {
  mediaFamilies: Map<string, MediaCandidate[]>; failedMedia: FailedPortableMedia[]; mixedSrcsetReferences: Map<string, Set<string>>; diagnostics: RouteDiagnostic[];
  interactionMediaFamilies: Set<string>; interactionMediaReferences: Map<string, Set<string>>; probeReferences: string[]; retainedMediaFamilies: Map<string, string[]>;
- imageAssets: AssetRecord[]; imageByUrl: Map<string, AssetRecord>;
+ imageAssets: AssetRecord[]; referencedImageAssets: Set<AssetRecord>; imageByUrl: Map<string, AssetRecord>;
 }
 export interface RouteLinks {
  routes: Array<{ url: string; path: string; accessGate?: AccessGateEvidence }>; sourceRouteLinks: Map<string, string>; portableServedPaths: Set<string>;
@@ -622,6 +622,7 @@ export function collectMediaCandidates( { retainedEntries, outputDir, sourceUrl:
 	// their existing collapse behavior. Values identify the selected source URLs.
 	const mixedSrcsetReferences = new Map< string, Set< string > >();
 	const failedMedia: FailedPortableMedia[] = [];
+	const referencedImageAssets = new Set<AssetRecord>();
 	const capturedPages = new Set(
 		[ siteUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {
 			try {
@@ -678,12 +679,19 @@ export function collectMediaCandidates( { retainedEntries, outputDir, sourceUrl:
 		// A stylesheet reference counts like a page reference: theme CSS paints the image.
 		const isReferenced = ( imageAsset?.kind === 'font' && imageAsset.references.length > 0 ) || imageAsset?.references.some( reference => reference.kind === 'CSS' ) || retainedMediaFamilies.has( family ) || interactionMediaFamilies.has( family ) || exactReferences.length > 0;
 		if ( imageAsset && seenImageAssets.has( imageAsset ) ) continue;
-		if ( imageAsset && isReferenced ) seenImageAssets.add( imageAsset );
+		if ( imageAsset && isReferenced ) {
+			seenImageAssets.add( imageAsset );
+			referencedImageAssets.add( imageAsset );
+		}
 		if ( ( stub.status === 'error' || ( imageAsset && ! imageAsset.original ) ) && isReferenced ) {
 			failedMedia.push( { family, sourceUrl, nonImage: imageAsset?.kind !== undefined && imageAsset.kind !== 'image', error: stub.error ?? 'media download failed', references } );
 			continue;
 		}
 		const localPath = imageAsset?.local_path ?? stub.localPath;
+		if ( isReferenced && stub.status === 'success' && ( ! localPath || ! existsSync( localPath ) ) ) {
+			failedMedia.push( { family, sourceUrl, nonImage: imageAsset?.kind !== undefined && imageAsset.kind !== 'image', error: localPath ? 'verified resource file is missing from disk' : 'verified resource has no local file path', references } );
+			continue;
+		}
 		if (
 			stub.status !== 'success' ||
 			! localPath ||
@@ -777,7 +785,7 @@ export function collectMediaCandidates( { retainedEntries, outputDir, sourceUrl:
 		} );
 		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate, ...capturedRenditions, ...smaller ] );
 	}
-	return { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaFamilies, interactionMediaReferences, probeReferences, retainedMediaFamilies, imageAssets, imageByUrl, diagnostics: routeCaptureDiagnostics };
+	return { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaFamilies, interactionMediaReferences, probeReferences, retainedMediaFamilies, imageAssets, referencedImageAssets, imageByUrl, diagnostics: routeCaptureDiagnostics };
 }
 
 export function collectRouteLinks( { retainedEntries, routePathOf, structuredContent, sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, stylesheetServedPaths, entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics, unresolvedDependencies }: {

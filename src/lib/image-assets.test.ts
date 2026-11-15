@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
+import { defaultAdapter } from '../adapters/default/index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { getPlaywright } from './browser-kit/index.js';
 import { captureAssets, collectAssets as collectImageAssets, imageContentType, resourceContentType, resolvedImageOriginal, svgDeclaredSize } from './image-assets.js';
@@ -41,6 +42,17 @@ it('chooses the largest srcset candidate and delegates optimizer resolution to t
  expect(records[0].resolved_original).toBe('https://example.com/large.webp');
  expect(records[0].source_urls).toEqual(expect.arrayContaining(['https://example.com/small.webp', 'https://example.com/large.webp']));
  expect(resolvedImageOriginal('https://example.com/_next/image?url=%2Flogo.webp&w=640&q=75', nextjsAdapter.resolveImageOriginal)).toBe('https://example.com/logo.webp');
+});
+
+it('maps Base44 public renditions to originals without changing unrelated hosts or API originals', () => {
+ const original = 'https://media.base44.com/images/public/app/photo.jpeg';
+ const rendition = `${original}/v1/fill/w_379,h_237,enc_webp/photo.webp`;
+ const records = collectImageAssets([{ url: 'https://example.com/', html: `<img src="${rendition}"><img src="${original}">` }], defaultAdapter.resolveImageOriginal);
+ expect(records).toHaveLength(1);
+ expect(records[0].resolved_original).toBe(original);
+ expect(records[0].source_urls).toEqual(expect.arrayContaining([original, rendition]));
+ for (const url of ['https://base44.app/api/apps/app/files/mp/public/app/photo.jpg', rendition.replace('media.base44.com', 'other.example')])
+  expect(resolvedImageOriginal(url, defaultAdapter.resolveImageOriginal)).toBe(url);
 });
 
 it('keeps generic optimizer-shaped URLs opaque and bounds adapter resolution to HTTP(S) targets', () => {
@@ -90,6 +102,30 @@ it('joins overlapping srcsets without losing the largest original when another d
 });
 
 describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public capture fixture (~15s)', () => {
+ it('verifies a redirected Base44-shaped API original (~1s)', async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10"/></svg>';
+  const hits: string[] = [];
+  const server = createServer((request, response) => {
+   hits.push(request.url!);
+   if (request.url!.startsWith('/api/')) { response.writeHead(302, { location: '/original.svg' }); response.end(); }
+   else { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'redirected-original-'));
+  try {
+   const source = `${url}/api/apps/app/files/mp/public/app/photo.svg`;
+   const records = await runWithTrustedOrigins([url], () => captureAssets(root, [{ url, html: `<img src="${source}">` }], undefined, defaultAdapter.resolveImageOriginal));
+   expect(records[0].original).toMatchObject({ source_url: source, content_type: 'image/svg+xml', width: 20, height: 10 });
+   expect(readFileSync(records[0].local_path!, 'utf8')).toBe(svg);
+   expect(hits).toEqual(['/api/apps/app/files/mp/public/app/photo.svg', '/original.svg']);
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
  it('admits locally captured bytes after the deadline but records new downloads as deadline-skipped', async () => {
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'image-deadline-'));
