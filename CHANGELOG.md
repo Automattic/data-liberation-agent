@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.17] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+- Keep proven perpetual motion excluded through main-thread stalls
+
+### Fixed
+- let a captured member stand in for a template-cluster representative that failed capture
+- admit server-rendered Dawn-family products
+- exclude spontaneous carousel changes from dialog probes
+- preserve source identity for srcset width probes
+
 ## [0.35.16] - 2026-11-15
 
 ### Changed
