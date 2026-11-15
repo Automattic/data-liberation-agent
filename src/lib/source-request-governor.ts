@@ -24,6 +24,7 @@
  * transport resets are first confirmed by escalating probes.
  */
 
+import './source-network.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /** Discovery adapters include URL-only helpers without capture options. Keep their
