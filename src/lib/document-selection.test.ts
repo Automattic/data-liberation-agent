@@ -90,7 +90,7 @@ it.each( [ false, true ] )( 'normalizes each distinct captured document once for
 		const coverage = await session.post( 'Profiler.takePreciseCoverage' );
 		await session.post( 'Profiler.stopPreciseCoverage' );
 		const normalization = coverage.result
-			.filter( script => script.url.endsWith( '/src/lib/capture-export.ts' ) )
+			.filter( script => script.url.endsWith( '/src/lib/captured-page-html.ts' ) )
 			.flatMap( script => script.functions )
 			.find( fn => fn.functionName === 'renderedHtml' );
 		expect( normalization ).toBeDefined();
