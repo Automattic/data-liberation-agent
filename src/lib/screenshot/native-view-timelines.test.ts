@@ -33,6 +33,14 @@ function update(){animations.forEach(a=>a.rangeEnd='cover calc(0% + '+(subject.c
 new ResizeObserver(update).observe(subject);addEventListener('resize',update);update();
 })();</script>`;
 
+// Scroll timelines are sampled during rendering, not synchronously by scrollTo.
+// Synchronize each page with its own rendering updates: a timer on the source
+// alone does not prove that the copy's compositor has consumed the scroll.
+const scrollAndRender = ( page: Page, y: number ) => page.evaluate( async y => {
+	scrollTo( 0, y );
+	await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) ) );
+}, y );
+
 const pose = async ( page: Page ) => page.evaluate( () => Object.fromEntries( [ 'translate', 'perspective', 'fixed', 'percent' ].map( id => {
 	const node = document.getElementById( id )!;
 	const rect = node.getBoundingClientRect();
@@ -79,9 +87,7 @@ it( 'exports native motion with real scroll/resize parity and authored CSS, reta
 			await source.setViewportSize( size );
 			await copy.setViewportSize( size );
 			for ( const y of [ 0, 350, 650, 900, 0 ] ) {
-				await source.evaluate( y => scrollTo( 0, y ), y );
-				await copy.evaluate( y => scrollTo( 0, y ), y );
-				await source.waitForTimeout( 150 );
+				await Promise.all( [ scrollAndRender( source, y ), scrollAndRender( copy, y ) ] );
 				const expected = await pose( source ), actual = await pose( copy );
 				comparisons.push( { size, y, expected, actual } );
 				writeFileSync( join( artifact, 'comparisons.json' ), JSON.stringify( comparisons, null, 2 ) );

@@ -64,8 +64,11 @@ it( 'retains each device document’s observed CSS entrance startup contexts thr
 				await copy.waitForTimeout( 100 );
 				expect( await copy.locator( '[data-blocks-engine-capture-viewport-entrance-loss]' ).evaluateAll( elements => elements.map( element => element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ) ), `${ key } at ${ width }` ).toEqual( [] );
 				await copy.evaluate( () => scrollTo( 0, 1100 ) );
-				await copy.waitForTimeout( 1000 );
-				expect( await pose( copy ), `${ key } at ${ width }` ).toMatchObject( { state: 'complete', opacity: '1', effects: [] } );
+				// Mobile layout and IntersectionObserver delivery can be delayed under
+				// parallel browser load. Wait for the lifecycle, not a wall-clock guess
+				// only 200 ms longer than the authored animation.
+				await expect.poll( () => pose( copy ), { timeout: 5000, message: `${ key } at ${ width }` } )
+					.toMatchObject( { state: 'complete', opacity: '1', effects: [] } );
 			}
 			await copy.close();
 		}
