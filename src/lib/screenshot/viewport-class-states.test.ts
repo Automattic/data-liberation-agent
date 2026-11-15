@@ -7,7 +7,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { aliasRules, captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
+import { aliasRules, captureViewportClassStates, projectViewportClassRules, type ViewportClassMemo } from './viewport-class-states.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
@@ -54,6 +54,46 @@ it( 'serves script-toggled class state at the widths the source applied it', asy
 		await browser.close();
 	}
 }, 60_000 );
+
+// Controlled timer ticks put the same timer rotator in opposite phases without
+// wall-clock races. Returning to the initial width also returns to its phase,
+// so checking only the restored class would incorrectly accept both captures.
+it( 'does not project timer-rotated classes as width contracts in either phase', async () => {
+	const browser = await chromium.launch();
+	try {
+		const heads: string[] = [];
+		const css = '@media(min-width:600px){.rotating{opacity:0}}';
+		for ( const active of [ false, true ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( `<!doctype html><html><head><link rel="stylesheet" media="all" href="data:text/css,${ encodeURIComponent( css ) }"></head><body>
+				<div class="slide${ active ? ' rotating' : '' }">Announcement</div><script>
+				window.tick=0;window.rotated=0;
+				setInterval(()=>{if(window.rotated<window.tick){
+					document.querySelector('.slide').classList.toggle('rotating');window.rotated++;
+				}},10);
+				</script></body></html>` );
+			const resize = page.setViewportSize.bind( page );
+			page.setViewportSize = async size => {
+				await resize( size );
+				await page.evaluate( () => { ( window as unknown as { tick: number } ).tick++; } );
+				await page.waitForFunction( () => {
+					const state = window as unknown as { tick: number; rotated: number };
+					return state.tick === state.rotated;
+				} );
+			};
+			const result = await captureViewportClassStates( page, { widths: [ 1439, 1440 ], settleMs: 0 } );
+			const html = projectViewportClassRules( await page.content(), () => ( { css, url: 'https://fixture.test/base.css' } ) );
+			expect( result.aliased ).toBe( 0 );
+			expect( html ).not.toContain( 'capture-width-class' );
+			heads.push( html.match( /<head>[\s\S]*?<\/head>/ )![ 0 ] );
+			await page.close();
+		}
+		expect( heads[ 0 ] ).toBe( heads[ 1 ] );
+		expect( heads[ 0 ] ).toContain( '<link' );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
 
 // One real capture/export (~20s): both sweeps run against a resize-driven runtime.
 it( 'keeps learned transforms through the viewport class sweep', async () => {
