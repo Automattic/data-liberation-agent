@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchSitemapWithDiagnostics } from './sitemap.js';
 import { discoverWebflow } from '../../adapters/webflow/discover.js';
+import { sourceRequestContext, SourceRequestGovernors } from '../source-request-governor.js';
 
 // Transport real bodies/statuses locally without disabling the URL guard.
 const origin = 'http://fixture.test';
@@ -26,6 +27,23 @@ async function fixture(handler: (request: IncomingMessage, response: ServerRespo
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('bounded linked-page fallback', () => {
+  it('settles a capture-governed crawl at concurrency one instead of acquiring a second slot', async () => {
+    const f = await fixture((req, res) => {
+      res.statusCode = req.url === '/' || req.url === '/child' ? 200 : 404;
+      res.setHeader('content-type', 'text/html');
+      res.end(req.url === '/' ? '<a href="/child">Child</a>' : 'done');
+    });
+    try {
+      const governors = new SourceRequestGovernors({ concurrency: 1 });
+      const result = await sourceRequestContext.run(governors, () => fetchSitemapWithDiagnostics(`${origin}/`, {
+        entryHtml: '<a href="/child">Child</a>',
+      }));
+      expect(result.urls).toContain(`${origin}/child`);
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'fallback_link_closure' }));
+      expect(f.requests.filter(path => path === '/child')).toHaveLength(1);
+    } finally { await f.close(); }
+  }, 3000);
+
   it('merges sitemap slash variants with page links, preferring only a same-route canonical', async () => {
     const f = await fixture((req, res) => {
       if (req.url === '/sitemap.xml') {
