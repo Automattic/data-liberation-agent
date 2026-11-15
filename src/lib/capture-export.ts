@@ -1,68 +1,33 @@
+import { normalizedDeclarativeFormEmbeds, renderedHtml, safeCapturedPageHtml } from './captured-page-html.js';
+import { collectCapturedRoutes, collectMediaCandidates, collectRouteLinks, mediaFamily, mediaDimension, type ScreenshotManifest } from './capture-export-collection.js';
 import { WebsiteInventory } from './website-inventory.js';
 import { createHash } from 'node:crypto';
 import { structuredContentIndex } from './content-index.js';
 import { deferredMediaReferences, linkDeferredMedia, recordMediaLedger } from './media-queue.js';
-import { canonicalLinkHref, entrypointCanonicalHost, rebaseCanonicalUrl } from './route-aliases.js';
-import { ownDocument, readDocument, withParsedDocuments } from './parsed-documents.js';
+import { ownDocument, withParsedDocuments } from './parsed-documents.js';
 import { imageSize } from 'image-size';
-import { readAssets, type AssetRecord } from './image-assets.js';
-import { withoutPlatformDefaultIcons } from './platform-default-icons.js';
-import { assembleDeviceDocuments, installDeviceSelection, type DocumentSelection } from './document-selection.js';
-import type { AccessGateEvidence } from './access-gate.js';
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { type DocumentSelection } from './document-selection.js';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
-import { capturedStyleHoistContext, materializeSharedStylesheets, type StyleHoistContext } from './shared-stylesheets.js';
+import { materializeSharedStylesheets } from './shared-stylesheets.js';
 export { portableInlineStyle } from './shared-stylesheets.js';
 import { allocateCaptureRoutes, type RouteDiagnostic } from './capture-export-routes.js';
 import { projectStylesheet } from './replicate/css-scope.js';
-import { IntegrityError, isIntegrityError } from './failure-class.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
-import { onSiteOrigin, sameHttpSite } from './screenshot/same-origin.js';
+import { onSiteOrigin } from './screenshot/same-origin.js';
 import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
-import { budgetOmittedRoutes } from './capture-usability.js';
 import { OMITTED_ROUTE_REASON } from './route-budget.js';
 import { ACTION_URL_REASON, stateChangingAction } from './url/action-url.js';
 import { portableFormAction } from './url/form-action.js';
 import { routeInScope, scopedRouteKey, validateRouteScope } from './url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
-import {
-	indexPortableMediaReferences,
-	mediaReferenceMatched,
-	planPortableMediaFamilies,
-	type PortableMediaCandidate,
-} from './portable-media-plan.js';
+import { planPortableMediaFamilies } from './portable-media-plan.js';
 import { isElementNode, isYuiRuntimeId, RUNTIME_ID_TOKEN, YUI_RUNTIME_ID } from './html-nodes.js';
-import {
-	assembleResponsiveCapture,
-	DEFAULT_SWITCH_WIDTH,
-	DESKTOP_DOCUMENT_CLASS,
-	MOBILE_DOCUMENT_CLASS,
-	projectResponsiveIdentityCss,
-	projectResponsiveSvgCss,
-	projectResponsiveBodyClassCss,
-	projectCollapsedBodyClassCss,
-	responsiveMovedBodyClasses,
-	routePhoneDocumentFragments,
-	type ResponsiveVariantEvidence,
-} from './responsive-assembly.js';
+import { projectResponsiveIdentityCss, projectResponsiveSvgCss, projectResponsiveBodyClassCss, projectCollapsedBodyClassCss, routePhoneDocumentFragments } from './responsive-assembly.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
-import {
-	failuresAreAbsentDocument,
-	isAbsentDocumentRender,
-	isEmptyDocumentRender,
-	isSourceCaptureUrl,
-} from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
 import { COARSE_SWEEP_WIDTHS } from './screenshot/fluid-capture.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
@@ -72,12 +37,6 @@ import { wireNativeViewTimelines } from './native-view-timelines.js';
 import { wireNativeControlState } from './native-control-state.js';
 import { indexRuntimeIdReferences } from './runtime-id-references.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
-import {
-	INTERACTION_STATES_SCHEMA,
-	LEGACY_INTERACTION_STATES_SCHEMA,
-	type InteractionStatesReport,
-} from './screenshot/interaction-capture.js';
-import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import { withViewportEntrances } from './viewport-entrances.js';
 import {
 	type CapturedResourceManifest,
@@ -85,69 +44,28 @@ import {
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
-import { isSrcsetShaped, srcsetCandidates, srcsetReferences } from './srcset.js';
-import { resolveDocumentReferences } from './document-resource-base.js';
+import { isSrcsetShaped, srcsetCandidates } from './srcset.js';
 import { pathWithin } from './portable-assets.js';
-import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
-import { elementSrcReferences, localizeMetadataImageReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
+import { materializePortableMedia } from './portable-media.js';
+import { localizeMetadataImageReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources, projectPortableResourceIntegrity } from './portable-resources.js';
-import { assertPageWithinFileLimit, assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
-import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, routeExceedsTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
-import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
+import { assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
+import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
+import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
-import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
-import { loadEmbeddedDocuments, projectEmbeddedRegions, projectRuntimePresentation, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
+import { loadEmbeddedDocuments, projectEmbeddedRegions } from './embedded-documents.js';
 import {
 	EXPORT_PUBLICATION_BOUNDARIES,
 	exportPublicationBoundary,
 	publishExportGeneration,
 } from './export-publication.js';
-
 import { extractSharedChrome } from './shared-chrome.js';
-import { lowerScriptedLinks } from './screenshot/scripted-links.js';
-import { MIDDLE_PROFILE_ID, type MiddleLayout } from './screenshot/device-mode.js';
 import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
 
 /** Strip correspondence used only during capture, before HTML is encoded as replay state. */
 function withoutCaptureBookkeeping( html: string ): string {
 	return html.replace( /\sdata-blocks-engine-capture-(?:geometry-id|initial-node)=(?:"[^"]*"|'[^']*')/g, '' );
-}
-
-interface CaptureManifestEntry {
-	documents?: import('./screenshot/manifest-queue.js').ManifestEntry['documents'];
-	profiles?: import('./screenshot/manifest-queue.js').ManifestEntry['profiles'];
-	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
-	scriptedLinks?: import('./screenshot/manifest-queue.js').ManifestEntry['scriptedLinks'];
-	blockLosses?: import('./screenshot/manifest-queue.js').ManifestEntry['blockLosses'];
-	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
-	accessGate?: AccessGateEvidence;
-	slug?: string;
-	html?: string;
-	mobileHtml?: string;
-	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
-	redirectedTo?: string;
-	/** The phone identity was sent to this same-site route; the route ships its desktop document only. */
-	phoneSentTo?: string;
-	/** Bounded source inspection of a linked route absent from the capture schedule. */
-	externalRedirect?: boolean;
-	sourceOutcomes?: import('./source-navigation.js').ExternalBoundary[];
-	sourceAbsentStatus?: 404 | 410;
-	sections?: string;
-	interactions?: InteractionStatesReport;
-	scrollStates?: ScrollStatesReport;
-	/** Responsive learning outcome recorded during capture. */
-	fluid?: CaptureFluidEvidence;
-	fluidMobile?: CaptureFluidEvidence;
-	deviceMode?: import('./screenshot/device-mode.js').RouteDeviceDecision;
-	metadata?: {
-		openGraph?: Record< string, string >;
-	};
-}
-
-interface ScreenshotManifest {
-	version: 1;
-	entries: Record< string, CaptureManifestEntry >;
 }
 
 export interface ExportLimits {
@@ -201,32 +119,6 @@ interface ExportCaptureOptions {
 	limits?: ExportLimits;
 }
 
-type MediaCandidate = PortableMediaCandidate;
-
-interface CaptureEntry {
-	slug: string;
-	url: string;
-	htmlPath: string;
-	evidenceDocuments: Array< { state: 'desktop' | 'mobile'; html: string } >;
-	/** The source served a structurally distinct document under mobile emulation. */
-	hasMobileDocument?: boolean;
-	/** Receipt evidence for how many responsive variants this route ships and why. */
-	responsiveVariants?: ResponsiveVariantEvidence;
-	documentSelection?: { kind: 'device'; id: string; documents: string[]; missing: string[]; evidence: string } | { kind: 'width'; switchWidth: number; evidence: string };
-	fluidGeometry?: CaptureDocumentFluidEvidence;
-	/** Captured as a placeholder for a provider-gated route (see access-gate.ts). */
-	accessGate?: AccessGateEvidence;
-	identityHtmlPath?: string;
-	sections?: string;
-	canonicalUrl?: string;
-	canonicalLinkUrl?: string;
-	sourceData: SourceDataScript[];
-	interactions?: InteractionStatesReport;
-	scrollStates?: ScrollStatesReport;
-	styleHoistContext: StyleHoistContext;
-	sourceInteractivity: SourceInteractivityPage;
-}
-
 function isUsableSectionEvidence( sections: unknown ): sections is Record< string, unknown >[] {
 	return (
 		Array.isArray( sections ) &&
@@ -255,32 +147,6 @@ function semanticSectionEvidence(
 }
 
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
-const MAX_DECLARATIVE_FORM_EMBEDS = 32;
-const MAX_JSON_LD_SCRIPTS = 16;
-const MAX_JSON_LD_SCRIPT_BYTES = 64 * 1024;
-const MAX_JSON_LD_TOTAL_BYTES = 256 * 1024;
-const VISUAL_IFRAME_EVIDENCE_ATTRIBUTES = {
-	src: 'data-blocks-engine-capture-visual-iframe-src',
-	width: 'data-blocks-engine-capture-visual-iframe-width',
-	height: 'data-blocks-engine-capture-visual-iframe-height',
-};
-const VISUAL_IFRAME_ATTRIBUTES = new Set( [
-	'allow',
-	'allowfullscreen',
-	'class',
-	'height',
-	'loading',
-	'referrerpolicy',
-	'sandbox',
-	'src',
-	'style',
-	'title',
-	'width',
-] );
-const HUBSPOT_FORM_HOSTS = new Map( [
-	[ 'na1', 'js.hsforms.net' ],
-	[ 'eu1', 'js-eu1.hsforms.net' ],
-] );
 
 function portableRedirectsFile( rules: Array< { from: string; to: string } > ): string {
 	const lines = [ ...rules ]
@@ -473,168 +339,7 @@ function rewriteRouteLinksIn(
 	} );
 }
 
-function renderedHtml( html: string ): string {
-	const $ = ownDocument( html.replace( /<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '' ) );
-	$( 'img[src],img[srcset]' ).each( ( _index, element ) => {
-		const node = $( element );
-		const source = `${ node.attr( 'src' ) ?? '' },${ node.attr( 'srcset' ) ?? '' }`;
-		const alignment = /(?:^|[,/])al_(tl|tc|tr|bl|bc|br|t|b|l|c|r)(?=[,/]|$)/i
-			.exec( source )?.[ 1 ]
-			?.toLowerCase();
-		if ( ! alignment ) return;
-		const positions: Record< string, string > = {
-			tl: 'left top',
-			tc: 'center top',
-			tr: 'right top',
-			bl: 'left bottom',
-			bc: 'center bottom',
-			br: 'right bottom',
-			t: 'center top',
-			b: 'center bottom',
-			l: 'left center',
-			c: 'center center',
-			r: 'right center',
-		};
-		const style = node.attr( 'style' ) ?? '';
-		if ( /(?:^|;)\s*object-position\s*:/i.test( style ) ) return;
-		const prefix = style.trim() ? style.trim().replace( /;?$/, ';' ) : '';
-		node.attr( 'style', `${ prefix }object-position:${ positions[ alignment ] }` );
-	} );
-	$( '*' ).each( ( _index, element ) => {
-		const node = $( element );
-		const style = node.attr( 'style' ) ?? '';
-		if ( ! /(?:^|;)\s*position\s*:\s*fixed\s*!important/i.test( style ) ) return;
-		const text = node.text().replace( /\s+/g, ' ' ).trim();
-		const links = node
-			.find( 'a[href]' )
-			.map( ( _i, link ) => $( link ).attr( 'href' ) ?? '' )
-			.get()
-			.join( ' ' );
-		if (!isSourcePromotion(`${text} ${links}`))
-			return;
-		const height = /(?:^|;)\s*height\s*:\s*(\d+(?:\.\d+)?)px\s*!important/i.exec( style )?.[ 1 ];
-		const bodyStyle = $( 'body' ).attr( 'style' ) ?? '';
-		if (
-			height &&
-			new RegExp( `(?:^|;)\\s*padding-bottom\\s*:\\s*${ height }px\\s*!important`, 'i' ).test(
-				bodyStyle
-			)
-		) {
-			$( 'body' ).attr(
-				'style',
-				bodyStyle
-					.replace(
-						new RegExp( `(?:^|;)\\s*padding-bottom\\s*:\\s*${ height }px\\s*!important`, 'i' ),
-						''
-					)
-					.replace( /^\s*;|;\s*$/g, '' )
-					.trim()
-			);
-		}
-		node.remove();
-	} );
-	$( 'div,section,aside,footer' ).each( ( _index, element ) => {
-		const node = $( element );
-		const rendered = node.clone();
-		rendered.find( 'script,style,noscript' ).remove();
-		if (
-			rendered.find( 'img,video,audio,iframe,form,input,button,a[href]' ).length > 0 ||
-			rendered.text().trim() !== ''
-		)
-			return;
-		if ( node.parents( 'main,article' ).length > 0 ) return;
-		const style = node.attr( 'style' ) ?? '';
-		const idAndClass = `${ node.attr( 'id' ) ?? '' } ${ node.attr( 'class' ) ?? '' }`;
-		// A site footer is authored page structure, not runtime scaffolding, and
-		// it is routinely built from empty boxes that carry their band's height
-		// and background in CSS. Matching the name `footer` alone deleted that
-		// landmark and collapsed the band it reserved. Judge a landmark by where
-		// it sits instead: a detached overlay still matches the style test below.
-		const isContentInfoLandmark =
-			node.is( 'footer' ) ||
-			/(?:^|\s)contentinfo(?:\s|$)/i.test( node.attr( 'role' ) ?? '' );
-		// A token names an overlay role (`ReactModalPortal`, `site-footer`);
-		// a state or behavior token (`has-popup`, `is-modal-open`) does not.
-		const namesScaffoldingRole = idAndClass
-			.split( /\s+/ )
-			.some(
-				( token ) =>
-					! /^(?:has|is)-/i.test( token ) &&
-					/(?:account.*app|app.*account|footer|modal|mount|portal|popup|toast)/i.test( token )
-			);
-		if (
-			/(?:^|;)\s*(?:position\s*:\s*(?:fixed|absolute)|bottom\s*:)/i.test( style ) ||
-			( ! isContentInfoLandmark && namesScaffoldingRole )
-		) {
-			node.remove();
-		}
-	} );
-	const allLinks = $( 'body a[href]' )
-		.map( ( _index, link ) => $( link ).attr( 'href' ) ?? '' )
-		.get();
-	$( 'body > div,body > nav' ).each( ( _index, element ) => {
-		const node = $( element );
-		const style = `${ node.attr( 'style' ) ?? '' };${
-			node.children().first().attr( 'style' ) ?? ''
-		}`;
-		const links = node
-			.find( 'a[href]' )
-			.map( ( _i, link ) => $( link ).attr( 'href' ) ?? '' )
-			.get();
-		if ( links.length === 0 || ! /(?:^|;)\s*display\s*:\s*none/i.test( style ) ) return;
-		if (
-			links.every( ( href ) => allLinks.filter( ( candidate ) => candidate === href ).length > 1 )
-		)
-			node.remove();
-	} );
-	return $.html();
-}
 
-function normalizedDeclarativeFormEmbeds( html: string ): string {
-	// Most documents have no frame marker. Check that necessary condition
-	// before scanning and backtracking through every div's attributes.
-	if ( ! /hs-form-frame/i.test( html ) || ! /<div\b[^>]*\bhs-form-frame\b/i.test( html ) ) return html;
-	const $ = cheerio.load( html );
-	let retained = 0;
-	$( 'div.hs-form-frame' ).each( ( _index, element ) => {
-		const frame = $( element );
-		frame.find( 'iframe' ).remove();
-		if ( retained >= MAX_DECLARATIVE_FORM_EMBEDS ) return;
-
-		const portalId = frame.attr( 'data-portal-id' ) ?? '';
-		const formId = ( frame.attr( 'data-form-id' ) ?? '' ).toLowerCase();
-		const region = ( frame.attr( 'data-region' ) ?? '' ).toLowerCase();
-		const host = HUBSPOT_FORM_HOSTS.get( region );
-		if (
-			! host ||
-			! /^\d{1,20}$/.test( portalId ) ||
-			! /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test( formId )
-		)
-			return;
-
-		frame.append(
-			`<iframe src="https://${ host }/forms/embed/v2/?portalId=${ portalId }&amp;formId=${ formId }&amp;region=${ region }" title="HubSpot form" loading="lazy"></iframe>`
-		);
-		retained++;
-	} );
-	return $.html();
-}
-
-function openGraphUrl( html: string ): string | undefined {
-	return readDocument( html )( 'meta[property="og:url"]' ).first().attr( 'content' );
-}
-
-function canonicalMetadataUrl( value: unknown, documentUrl: string, routeScope?: SiteRouteScope, sourceUrl = documentUrl, aliasHost?: string ): string | undefined {
-	if ( typeof value !== 'string' || value.trim() === '' ) return undefined;
-	try {
-		const resolved = rebaseCanonicalUrl( new URL( value, documentUrl ), sourceUrl, aliasHost );
-		if ( resolved.protocol !== 'http:' && resolved.protocol !== 'https:' ) return undefined;
-		if ( !routeInScope( resolved.href, routeScope ) ) return undefined;
-		return resolved.href;
-	} catch {
-		return undefined;
-	}
-}
 
 /**
  * Builder runtimes write hydration IDs (`yui_3_17_2_1_<load time>_<n>`) that
@@ -721,25 +426,6 @@ function fallbackResponsiveSwitchWidth( outputDir: string, belowWidth = DESKTOP_
 
 
 /** A fixed phone document has no evidence supporting a tablet-width fallback. */
-function phoneResponsiveSwitchWidth( entry: CaptureManifestEntry, stylesheetWidth: number | undefined ): number | undefined {
-	const width = entry.profiles?.mobile?.viewport.width;
-	if ( ! width ) return stylesheetWidth;
-	const fluid = entry.fluidMobile;
-	const responsive = fluid && fluid.applied > 0 &&
-		fluid.sampledWidths?.some( sampled => sampled > width ) &&
-		Object.entries( fluid.byKind ).some( ( [ kind, count ] ) =>
-			count > 0 && ! [ 'constant', 'breakpoint', 'viewport-height' ].includes( kind ) );
-	return responsive ? stylesheetWidth : Math.min( width, stylesheetWidth ?? width );
-}
-
-function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
-	const media = new URL( sourceUrl );
-	const site = new URL( siteUrl );
-	if ( media.origin !== site.origin ) return [ sourceUrl ];
-	if ( media.pathname === '/' ) return [ sourceUrl ];
-	return [ sourceUrl, `${ media.pathname }${ media.search }` ];
-}
-
 function isLocalImageSrc( url: string ): boolean {
 	return Boolean( url ) && ! url.startsWith( 'data:' ) && ! /^(?:https?:)?\/\//i.test( url );
 }
@@ -768,107 +454,6 @@ function bindSrcsetShapedImageSrc( html: string ): string {
 		if ( ! bound ) return tag;
 		return tag.replace( match[ 0 ], ` src=${ match[ 1 ] }${ bound }${ match[ 1 ] }` );
 	} );
-}
-
-function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
-	rendered: Map< string, Set< string > >;
-	retained: Map< string, string[] >;
-	dimensions: Map< string, number >;
-} {
-	const pages = new Set(
-		entries.flatMap( ( entry ) => {
-			try {
-				return [ normalizedUrl( entry.url ) ];
-			} catch {
-				return [];
-			}
-		} )
-	);
-	const dimensions = new Map< string, number >();
-	const rendered = new Map< string, Set< string > >();
-	const retained = new Map< string, string[] >();
-	for ( const entry of entries ) {
-		const html = readFileSync( entry.htmlPath, 'utf8' );
-		// Both projections classify through one document-local identity map, but
-		// preserve their distinct raw spelling and DOM occurrence order.
-		const identities = new Map< string, string | undefined >();
-		const familyOf = ( reference: string ): string | undefined => {
-			const normalized = reference.trim().replace( /&amp;/g, '&' );
-			if ( ! normalized ) return undefined;
-			if ( ! identities.has( normalized ) ) {
-				let family: string | undefined;
-				try {
-					const resolved = new URL( normalized, entry.url ).href;
-					if ( ! pages.has( normalizedUrl( resolved ) ) ) family = mediaFamily( resolved );
-				} catch {
-					// Malformed browser values have no media family.
-				}
-				identities.set( normalized, family );
-			}
-			return identities.get( normalized );
-		};
-		const references: string[] = [];
-		for ( const match of html.matchAll(
-			/<(img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi
-		) ) {
-			references.push( ...elementSrcReferences( match[ 1 ].toLowerCase(), match[ 3 ] ) );
-		}
-		for ( const match of html.matchAll(
-			/<(?:img|source)\b[^>]*\ssrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
-		) ) {
-			references.push( ...srcsetReferences( match[ 2 ] ) );
-		}
-		for ( const reference of references ) {
-			const family = familyOf( reference );
-			if ( family === undefined ) continue;
-			const bindings = rendered.get( family ) ?? new Set< string >();
-			bindings.add( reference );
-			rendered.set( family, bindings );
-		}
-		const add = ( reference: string ) => {
-			const family = familyOf( reference );
-			if ( family === undefined ) return;
-			const occurrences = retained.get( family ) ?? [];
-			occurrences.push( reference.trim().replace( /&amp;/g, '&' ) );
-			retained.set( family, occurrences );
-		};
-		const $ = readDocument( html );
-		$( 'img,source,video,audio' ).each( ( _index, element ) => {
-			const node = $( element );
-			const src = node.attr( 'src' );
-			// Use authored/serialized pixel geometry when present; never infer
-			// rendered size from the CDN rendition's intrinsic dimensions.
-			const edge = ( name: string ): number => {
-				const inline = new RegExp( `(?:^|;)\\s*${ name }\\s*:\\s*([\\d.]+)px(?:\\s*!important)?\\s*(?:;|$)`, 'i' ).exec( node.attr( 'style' ) ?? '' );
-				const value = inline?.[ 1 ] ?? node.attr( name ) ?? '';
-				return /^\d+(?:\.\d+)?$/.test( value ) ? Number( value ) : 0;
-			};
-			const dimension = Math.max( edge( 'width' ), edge( 'height' ) );
-			const family = src && familyOf( src );
-			if ( family && dimension > 0 ) dimensions.set( family, Math.max( dimensions.get( family ) ?? 0, dimension ) );
-			const tag = String( node.prop( 'tagName' ) ?? '' ).toLowerCase();
-			if ( src ) {
-				for ( const reference of elementSrcReferences( tag, src ) ) add( reference );
-			}
-			const srcset = node.attr( 'srcset' );
-			if ( ! srcset ) return;
-			for ( const candidate of srcsetReferences( srcset ) ) add( candidate );
-		} );
-	}
-	return { rendered, retained, dimensions };
-}
-
-function mediaFamily( sourceUrl: string ): string {
-	const url = new URL( sourceUrl );
-	const transformedPath = /^(.*?)\/v1\/(?:fill|fit|crop)\//i.exec( url.pathname )?.[ 1 ];
-	if ( transformedPath ) return `${ url.origin }${ transformedPath }`;
-	// WordPress rendition suffixes describe the same uploaded photograph.
-	const photoPath = url.pathname.replace( /(?:-(?:\d+x\d+|scaled(?:-\d+)?))+(?=\.[^.\/]+$)/i, '' );
-	if ( photoPath !== url.pathname && ! url.search ) return `${ url.origin }${ photoPath }`;
-	const parameters = [ ...url.searchParams.keys() ];
-	return parameters.length > 0 && parameters.every( ( key ) => key === 'w' || key === 'h' )
-		? `${ url.origin }${ url.pathname }`
-		: sourceUrl;
 }
 
 // A captured interaction state carries the HTML of a revealed panel. That HTML
@@ -932,25 +517,6 @@ function localizeStringsInPlace( value: unknown, localize: ( text: string ) => s
 		record.htmlBytes = Buffer.byteLength( record.html );
 }
 
-function mediaDimension( sourceUrl: string ): number {
-	const url = new URL( sourceUrl );
-	const finalTransformation = [
-		...url.pathname.matchAll( /\/v1\/(?:fill|fit|crop)\/([^/]+)/gi ),
-	].at( -1 )?.[ 1 ];
-	const pathDimensions = [
-		...( finalTransformation ?? url.pathname ).matchAll( /(?:^|[,/])(?:w|h)_(\d+)/gi ),
-	].map( ( match ) => Number( match[ 1 ] ) || 0 );
-	return Math.max(
-		Number( url.searchParams.get( 'w' ) ) || 0,
-		Number( url.searchParams.get( 'h' ) ) || 0,
-		...pathDimensions
-	);
-}
-
-function routeMatchesSourceOrigin( url: string, sourceUrl: string ): boolean {
-	return sameHttpSite( url, sourceUrl );
-}
-
 function capturedResources( outputDir: string ): CapturedResourceManifest {
 	const manifestPath = join( outputDir, 'resources', 'manifest.json' );
 	if ( ! existsSync( manifestPath ) ) return { version: 1, resources: {}, failures: [] };
@@ -968,153 +534,8 @@ function capturedResources( outputDir: string ): CapturedResourceManifest {
 	}
 }
 
-function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set(), pageUrl?: string ): { html: string; sourceData: SourceDataScript[]; diagnostics: Array<{ code: string; reason: string }> } {
-	const $ = cheerio.load( html );
-	// Relative form actions resolve against the document base, which is removed below.
-	const baseUrl = documentBaseUrl( $( 'base[href]' ).first().attr( 'href' ), pageUrl );
-	const sourceData: SourceDataScript[] = [];
-	const diagnostics: Array<{ code: string; reason: string }> = [];
-	let sourceEvidenceScriptCount = 0;
-	let jsonLdScriptCount = 0;
-	let jsonLdSourceBytes = 0;
-	// Preserve rendered structure and author CSS, but never ship executable provider runtime.
-	$( 'script,noscript,object,embed,base' ).each( ( _index, element ) => {
-		const node = $( element );
-		if ( element.name === 'script' && /^application\/ld\+json(?:\s*;|\s*$)/i.test( node.attr( 'type' ) ?? '' ) ) {
-			const source = node.text();
-			const bytes = Buffer.byteLength( source );
-			if (
-				jsonLdScriptCount < MAX_JSON_LD_SCRIPTS &&
-				bytes <= MAX_JSON_LD_SCRIPT_BYTES &&
-				jsonLdSourceBytes + bytes <= MAX_JSON_LD_TOTAL_BYTES
-			) {
-				jsonLdSourceBytes += bytes;
-				try {
-					const value: unknown = JSON.parse( source );
-					if ( value !== null && typeof value === 'object' ) {
-						// Keep JSON-LD inert even when a source string contains an escaped end tag.
-						sourceData.push( { type: 'application/ld+json', json: JSON.stringify( value ).replace( /<\/script(?=[\t\n\f\r />])/gi, '<\\/script' ) } );
-					}
-				} catch {
-					// Invalid JSON-LD is discarded with the source script.
-				}
-			}
-			jsonLdScriptCount++;
-		}
-		if ( element.name === 'script' && /^application\/json(?:\s*;|\s*$)/i.test( node.attr( 'type' ) ?? '' ) && node.attr( 'data-blocks-engine-capture-source-evidence' ) !== undefined ) {
-			const evidence = sourceEvidenceScript( node.text(), node.attr( 'data-blocks-engine-capture-source-evidence' ) ?? '' );
-			if ( evidence && sourceEvidenceScriptCount < MAX_SOURCE_EVIDENCE_SCRIPTS ) sourceData.push( evidence );
-			else diagnostics.push( { code: 'source_evidence_unproven', reason: 'An inert source evidence script was invalid or exceeded its bounded retention contract.' } );
-			sourceEvidenceScriptCount++;
-		}
-		node.remove();
-	} );
-	if ( sourceData.length > 0 ) {
-		$( 'head' ).append( renderSourceData( sourceData ) );
-	}
-	$( 'iframe' ).each( ( _index, element ) => {
-		const node = $( element );
-		const embeddedSource = node.attr( 'data-blocks-engine-capture-embedded-document' );
-		if ( embeddedSource && embeddedSources.has( embeddedSource ) ) {
-			const height = Number( node.attr( 'height' ) );
-			if ( ! Number.isFinite( height ) || height <= 0 ) { node.remove(); return; }
-			for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
-				if ( ! VISUAL_IFRAME_ATTRIBUTES.has( attribute.toLowerCase() ) && ! [ 'id', 'aria-label', 'frameborder', 'scrolling', 'allowtransparency' ].includes( attribute.toLowerCase() ) ) node.removeAttr( attribute );
-			}
-			node.attr( 'src', embeddedSource );
-			node.attr( 'sandbox', 'allow-same-origin' );
-			node.empty();
-			return;
-		}
-		const source = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.src ) ?? '';
-		const width = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.width ) ?? '';
-		const height = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.height ) ?? '';
-		let safeSource = false;
-		try {
-			const url = new URL( source );
-			safeSource = url.protocol === 'https:' && url.hostname !== '';
-		} catch {
-			// Unattested and malformed iframe sources are not portable.
-		}
-		if ( ! safeSource || ! /^[1-9]\d*$/.test( width ) || ! /^[1-9]\d*$/.test( height ) ) {
-			node.remove();
-			return;
-		}
 
-		for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
-			if ( ! VISUAL_IFRAME_ATTRIBUTES.has( attribute.toLowerCase() ) ) {
-				node.removeAttr( attribute );
-			}
-		}
-		node.attr( 'src', source );
-		node.attr( 'width', portableVisualIframeWidth( node.attr( 'width' ), width ) );
-		node.attr( 'height', height );
-		node.empty();
-	} );
-	$( 'meta[http-equiv]' ).each( ( _index, element ) => {
-		if ( ( $( element ).attr( 'http-equiv' ) ?? '' ).toLowerCase() === 'refresh' ) {
-			$( element ).remove();
-		}
-	} );
-	const formActionDiagnostics = new Map< string, { code: string; reason: string } >();
-	$( '*' ).each( ( _index, element ) => {
-		const node = $( element );
-		for ( const [ attribute, rawValue ] of Object.entries(
-			'attribs' in element ? element.attribs : {}
-		) ) {
-			const value = [ ...rawValue ]
-				.filter( ( character ) => character.charCodeAt( 0 ) > 0x20 )
-				.join( '' )
-				.toLowerCase();
-			if ( 'name' in element && submissionUrlAttribute( element.name, attribute ) ) {
-				const portable = portableFormAction( attribute.toLowerCase(), rawValue, baseUrl, pageUrl );
-				if ( portable.value === undefined ) node.removeAttr( attribute );
-				else node.attr( attribute, portable.value );
-				if ( portable.diagnostic ) formActionDiagnostics.set( `${ portable.diagnostic.code }\0${ portable.diagnostic.reason }`, portable.diagnostic );
-				continue;
-			}
-			if (
-				/^on/i.test( attribute ) ||
-				attribute.toLowerCase() === 'srcdoc' ||
-				( [ 'href', 'src', 'xlink:href', 'action', 'formaction' ].includes( attribute.toLowerCase() ) &&
-					/^(?:javascript|vbscript|data:text\/html)/.test( value ) ) ||
-				( attribute.toLowerCase() === 'style' &&
-					/(?:expression\s*\(|-moz-binding|url\s*\(\s*["']?\s*(?:javascript|vbscript|data:text\/html))/i.test(
-						rawValue
-					) )
-			) {
-				node.removeAttr( attribute );
-			}
-		}
-	} );
-	$( 'link' ).each( ( _index, element ) => {
-		const node = $( element );
-		const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
-		const as = ( node.attr( 'as' ) ?? '' ).toLowerCase();
-		if (
-			rel.includes( 'modulepreload' ) ||
-			( rel.includes( 'preload' ) && [ 'script', 'fetch' ].includes( as ) )
-		)
-			node.remove();
-	} );
-	diagnostics.push( ...formActionDiagnostics.values() );
-	return { html: normalizedDeclarativeFormEmbeds( $.html() ), sourceData, diagnostics };
-}
 
-/** `action` on a form and `formaction` on a submitter; elsewhere they are inert, like a widget's `action="like"`. */
-function submissionUrlAttribute( element: string, attribute: string ): boolean {
-	const name = attribute.toLowerCase();
-	return ( name === 'action' && element.toLowerCase() === 'form' ) || ( name === 'formaction' && [ 'button', 'input' ].includes( element.toLowerCase() ) );
-}
-
-function documentBaseUrl( href: string | undefined, pageUrl: string | undefined ): string | undefined {
-	if ( href === undefined ) return pageUrl;
-	try {
-		return new URL( href.trim(), pageUrl ).href;
-	} catch {
-		return pageUrl;
-	}
-}
 
 function appendSourceData( html: string, sourceData: SourceDataScript[] ): string {
 	if ( sourceData.length === 0 ) return html;
@@ -1423,21 +844,13 @@ function buildExportCapture(
 	);
 	validateMaxFileBytes( options.limits?.maxFileBytes );
 	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-	const switchWidths: number[] = [];
-	const deviceSelections: Array<{ url: string; id: string; documents: string[]; missing: string[]; evidence: string }> = [];
-	const widthSelections: Array<{ url: string; kind: 'width'; switchWidth: number; evidence: string }> = [];
-	const fluidReports: CaptureFluidEvidence[] = [];
 	const websiteDir = join( stageDir, 'website' );
 	const stagedHtmlDir = join( stageDir, '.capture-export-html' );
 	mkdirSync( websiteDir, { recursive: true } );
 	mkdirSync( stagedHtmlDir, { recursive: true } );
 
-	const capturedEntries: CaptureEntry[] = [];
 	const resourceManifest = capturedResources( outputDir );
 	if ( embedded ) Object.assign( resourceManifest.resources, embedded.resources );
-	const interactionPages: InteractionStatesReport[] = [];
-	const scrollStatesPages: ScrollStatesReport[] = [];
-	const excludedRoutes: string[] = [];
 	// A route that was discovered and attempted must never disappear from the
 	// receipt without a reason. Every screenshot-stage failure (goto timeouts,
 	// nested-document rejections, etc.) is grouped by URL here so that a route
@@ -1446,316 +859,8 @@ function buildExportCapture(
 	// rejected leaves through, rather than a parallel reporting mechanism.
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
 	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
-	const redirectAliases: Array< { url: string; target: string } > = [];
-	let canonicalHost: string | undefined;
-	const homepage = Object.entries( capture.entries ).find( ( [ url ] ) => isSourceCaptureUrl( url, options.sourceUrl ) )?.[ 1 ];
-	if ( homepage?.html ) {
-		const path = resolve( outputDir, homepage.html );
-		if ( pathWithin( outputDir, path ) && existsSync( path ) ) {
-			canonicalHost = entrypointCanonicalHost( options.sourceUrl, readFileSync( path, 'utf8' ), homepage.metadata?.openGraph?.[ 'og:url' ] );
-		}
-	}
-	const responsiveBodyClassProjections = new Map<string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] }>();
-	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
-	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
-		// One route's non-integrity failure drops that route, not the capture. Integrity
-		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
-		const rollback = { diagnostics: routeCaptureDiagnostics.length, switchWidths: switchWidths.length, deviceSelections: deviceSelections.length, widthSelections: widthSelections.length, fluidReports: fluidReports.length };
-		// The total budget only ever drops a route an earlier build exported, never the entrypoint.
-		const budgetDropped = exclusions.routes.get( url );
-		if ( budgetDropped !== undefined && ! isSourceCaptureUrl( url, options.sourceUrl ) ) {
-			routeCaptureDiagnostics.push( routeExceedsTotalBudget( url, budgetDropped, budget ) );
-			continue;
-		}
-		try {
-			if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) || !routeInScope( url, options.routeScope ) ) {
-				excludedRoutes.push( url );
-				continue;
-			}
-			// Capture treats a redirect as an alias, and schedules its target, only
-			// when the route recorded no failure. A route whose passes disagreed
-			// (one saved the page, another was redirected) is a failed capture:
-			// it is reported with its recorded reasons below, like any route
-			// without HTML, not as a redirect to a target nobody scheduled.
-			if ( entry.redirectedTo && ! routeFailureReasons.has( url ) ) {
-				if ( !routeInScope( entry.redirectedTo, options.routeScope ) ) {
-					excludedRoutes.push( url );
-					routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source redirect outside the adapter-owned site route scope' } );
-					continue;
-				}
-				redirectAliases.push( { url, target: entry.redirectedTo } );
-				continue;
-			}
-			if ( entry.externalRedirect ) {
-				// The source sends this link outside the site. Retain only the fact of the
-				// redirect; neither its destination nor its query belongs in the copy.
-				excludedRoutes.push( url );
-				const tenantBoundary = entry.sourceOutcomes?.some( outcome => outcome.routeScope && outcome.target.origin === new URL(url).origin );
-				routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: tenantBoundary
-					? 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)'
-					: 'source initial-document redirect to an external origin (destination not fetched)' } );
-				continue;
-			}
-			if ( entry.sourceAbsentStatus ) {
-				excludedRoutes.push( url );
-				routeCaptureDiagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
-				continue;
-			}
-			if ( ! entry.html || entry.redirectedTo ) {
-				const reason = routeFailureReasons.get( url )?.map( failure => failure.reason ).join( '; ' )
-					?? 'capture completed without producing page HTML';
-				if ( failuresAreAbsentDocument( options.failures, url ) ) {
-					excludedRoutes.push( url );
-					routeCaptureDiagnostics.push( {
-						code: 'route_not_found',
-						url,
-						reason,
-					} );
-				} else {
-					routeCaptureDiagnostics.push( {
-						code: 'route_capture_failed',
-						url,
-						reason,
-					} );
-				}
-				continue;
-			}
-			const capturedHtmlPath = resolve( outputDir, entry.html );
-			if ( ! pathWithin( outputDir, capturedHtmlPath ) || ! existsSync( capturedHtmlPath ) ) {
-				routeCaptureDiagnostics.push( {
-					code: 'route_capture_failed',
-					url,
-					reason: `captured HTML file is missing or outside the output directory: ${ entry.html }`,
-				} );
-				continue;
-			}
-			for ( const profile of Object.values( entry.profiles ?? {} ) ) {
-				for ( const diagnostic of profile.diagnostics ?? [] ) {
-					if ( diagnostic.code === 'device_document_incomplete' ) routeCaptureDiagnostics.push( { ...diagnostic, url } );
-				}
-			}
-			const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
-			const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
-			let rawDesktopHtml = embedded && options.input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, options.input.desktopVariant, desktopHash, embedded.receipt.regions), url, options.input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
-			rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
-			// A builder's own logo is not the site's icon; owner-uploaded icons stay.
-			rawDesktopHtml = withoutPlatformDefaultIcons(rawDesktopHtml, entry.documents?.desktop?.url ?? url);
-			// Each profile's scripted links take the destinations observed in that profile.
-			rawDesktopHtml = lowerScriptedLinks(rawDesktopHtml, entry.scriptedLinks?.desktop);
-			const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
-			// A client-routed SPA answers every route with HTTP 200 and renders its
-			// own not-found screen in JavaScript, so the HTTP-status check above
-			// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
-			// succeeded, there is no failure to inspect. Never applied to the source
-			// URL itself -- it is known good regardless of what it renders.
-			if ( ! isSourceCaptureUrl( url, options.sourceUrl ) ) {
-				// An empty rendered body (no text, no content-bearing element) is
-				// the same signal in its barest form: the app answered the route
-				// with nothing at all.
-				const absentRenderReason = isAbsentDocumentRender( rawDesktopHtml )
-					? 'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page'
-					: isEmptyDocumentRender( rawDesktopHtml )
-						? 'rendered document is empty'
-						: undefined;
-				if ( absentRenderReason ) {
-					excludedRoutes.push( url );
-					routeCaptureDiagnostics.push( {
-						code: 'route_not_found',
-						url,
-						reason: absentRenderReason,
-					} );
-					continue;
-				}
-			}
-			if ( entry.phoneSentTo ) routeCaptureDiagnostics.push( { code: 'phone_redirect_desktop_only', url, unit: 'profile', profile: 'mobile', severity: 'warning', reason: `The phone identity is sent to ${ entry.phoneSentTo } while desktop renders this route; the route ships its desktop document, reflowed at phone widths` } );
-			const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
-			// A route whose phone identity was sent elsewhere has no phone document,
-			// even if an earlier run left one at the conventional path.
-			const acquiredMobileHtml =
-				! entry.phoneSentTo && ( options.deviceMode === 'reflow-only' || httpInput ? Boolean( entry.mobileHtml ) : true ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
-					? readFileSync( mobileHtmlPath, 'utf8' )
-					: undefined;
-			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
-			let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
-			if (rawMobileHtml !== undefined) rawMobileHtml = withoutPlatformDefaultIcons(resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl), entry.documents?.mobile?.url ?? url);
-			if (rawMobileHtml !== undefined) rawMobileHtml = lowerScriptedLinks(rawMobileHtml, entry.scriptedLinks?.mobile);
-			const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
-			for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
-				if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
-				const path = resolve( outputDir, profile.html );
-				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new IntegrityError( `Device document is missing or outside capture: ${ key }` );
-				const documentUrl = entry.documents?.[ key ];
-				sourceDocuments[ key ] = lowerScriptedLinks( withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl ), documentUrl?.url ?? url ), entry.scriptedLinks?.[ key ] );
-			}
-			const selection = options.resolveDocumentSelection?.( sourceDocuments );
-			if ( selection?.kind === 'width' ) {
-				if ( ! Number.isInteger( selection.switchWidth ) || selection.switchWidth <= 0 || ! selection.evidence ) throw new IntegrityError( 'Invalid observed document switch' );
-				widthSelections.push( { url, ...selection } );
-			}
-			const deviceMode = entry.deviceMode;
-			const detectedFloor =
-				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : entry.deviceMode?.switchWidth !== undefined ? entry.deviceMode.switchWidth : deviceMode?.mode === 'dual' && deviceMode.serverHtml === 'different'
-					? phoneSwitchWidth ?? entry.profiles?.mobile?.viewport.width
-					: typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
-					? Math.round( entry.fluid.canvasFloor )
-					: phoneResponsiveSwitchWidth( entry, siteSwitchWidth );
-			if ( detectedFloor ) switchWidths.push( detectedFloor );
-			// A source that selects a third layout by width (#1379): a bounded range
-			// with its captured document ships as the middle document; otherwise
-			// the copy serves the desktop document there and says so.
-			const middle = entry.deviceMode?.switchWidth === detectedFloor
-				? entry.deviceMode?.middleLayout ?? ( entry.deviceMode as { uncapturedLayout?: MiddleLayout } | undefined )?.uncapturedLayout
-				: undefined;
-			const rawMiddleHtml = middle?.maxWidth !== undefined && selection?.kind !== 'device' && rawMobileHtml !== undefined
-				? sourceDocuments[ MIDDLE_PROFILE_ID ]
-				: undefined;
-			if ( middle && rawMiddleHtml === undefined ) routeCaptureDiagnostics.push( {
-				code: 'responsive_layout_uncaptured', url, unit: 'profile', severity: 'warning',
-				reason: `source renders a third layout, neither the phone nor the desktop document, from ${ middle.minWidth }px${ middle.maxWidth === undefined ? '' : ` to ${ middle.maxWidth }px` }; the copy serves the desktop document there`,
-				metrics: { minWidth: middle.minWidth, ...( middle.maxWidth === undefined ? {} : { maxWidth: middle.maxWidth } ) },
-			} );
-			if ( entry.fluid ) fluidReports.push( entry.fluid );
-			if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
-			if ( selection?.kind !== 'device' && embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
-				const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
-				rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
-			}
-			// Evidence and assembly normalize the same source documents. Keep one
-			// result per exact input within this route, without retaining parser trees
-			// or carrying document state into the next route.
-			const normalizedDocuments = new Map< string, string >();
-			const portableDocument = ( html: string ): string => {
-				let normalized = normalizedDocuments.get( html );
-				if ( normalized === undefined ) {
-					normalized = normalizedDeclarativeFormEmbeds( renderedHtml( html ) );
-					normalizedDocuments.set( html, normalized );
-				}
-				return normalized;
-			};
-			const desktopHtml = portableDocument( rawDesktopHtml );
-			const mobileHtml =
-				rawMobileHtml === undefined
-					? undefined
-					: portableDocument( rawMobileHtml );
-			const readCapturedStylesheet = ( href: string ): string | undefined => {
-				let resource;
-				try { resource = resourceManifest.resources[ new URL( href, url ).href ]; } catch { return undefined; }
-				if ( ! resource?.contentType.startsWith( 'text/css' ) ) return undefined;
-				const path = resolve( outputDir, resource.path );
-				return pathWithin( outputDir, path ) && existsSync( path ) ? readFileSync( path, 'utf8' ) : undefined;
-			};
-			const onUnparseableStylesheet = ( reason: string ): void => {
-				routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url, reason, unit: 'stylesheet', severity: 'warning' } );
-			};
-			const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
-				Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection, onUnparseableStylesheet, readCapturedStylesheet
-			) : undefined;
-			if ( deviceAssembly ) {
-				deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
-				for ( const key of deviceAssembly.missing ) routeCaptureDiagnostics.push( { code: 'device_document_uncaptured', url, reason: `Source identity ${ key } has no captured document; portable runtime reports unavailable instead of selecting another identity` } );
-			}
-			const assembly = deviceAssembly ? {
-				html: deviceAssembly.html, hasMobileDocument: 'mobile' in sourceDocuments, portableNormalization: 'applied' as const,
-				evidence: { variants: Object.keys( deviceAssembly.viewports ).length, ...deviceAssembly.evidence! },
-			} : assembleResponsiveCapture( {
-				rawDesktopHtml,
-				rawMobileHtml,
-				portableDesktopHtml: desktopHtml,
-				portableMobileHtml: mobileHtml,
-				switchWidth: detectedFloor,
-				...( rawMiddleHtml === undefined || middle?.maxWidth === undefined ? {} : {
-					portableMiddleHtml: [ { html: portableDocument( rawMiddleHtml ), minWidth: middle.minWidth, maxWidth: middle.maxWidth } ],
-				} ),
-				onUnparseableStylesheet,
-			} );
-			if ( assembly.hasMobileDocument && ! deviceAssembly ) {
-				const $ = cheerio.load( assembly.html );
-				const classes = ( scope: string ) => ( $( `.${ scope }` ).first().attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== scope );
-				// Middle width-range documents (#1379) are further wrappers whose
-				// tokens move the same way; linked styles must reach every wrapper.
-				const middleClasses = $( '[data-blocks-engine-capture-document-scope]' ).toArray()
-					.flatMap( node => ( $( node ).attr( 'class' ) ?? '' ).split( /\s+/ ) )
-					.filter( token => /^data-blocks-engine-capture-middle(?:-\d+)?-document$/.test( token ) );
-				const documentClasses = middleClasses.length ? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, ...middleClasses ] : undefined;
-				const tokenSets = ( documentClasses ?? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] ).map( scope => ( { scope, tokens: classes( scope ) } ) );
-				const moved = documentClasses
-					? new Map( tokenSets.flatMap( ( { scope, tokens } ) => tokens.filter( token => ! tokenSets.every( other => other.tokens.includes( token ) ) ).map( token => [ token, scope ] as const ) ).reverse() )
-					: responsiveMovedBodyClasses( classes( DESKTOP_DOCUMENT_CLASS ), classes( MOBILE_DOCUMENT_CLASS ) );
-				if ( moved.size ) responsiveBodyClassProjections.set( JSON.stringify( [ [ ...moved ], documentClasses ] ), { moved, documentClasses } );
-			}
-			if ( !assembly.hasMobileDocument && assembly.evidence?.outcome === 'collapsed-identity-subset' && rawMobileHtml ) {
-				const classes = ( html: string ) => ( cheerio.load( html )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-				const moved = responsiveMovedBodyClasses( classes( rawDesktopHtml ), classes( rawMobileHtml ) );
-				const aliases = new Map( [ ...moved ].filter( ( [ , scope ] ) => scope === MOBILE_DOCUMENT_CLASS ).map( ( [ token ] ) => [ token, `data-blocks-engine-capture-responsive-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` ] ) );
-				if ( moved.size ) collapsedBodyClassProjections.set( JSON.stringify( [ ...moved ] ), { moved, aliases, width: detectedFloor ?? DEFAULT_SWITCH_WIDTH } );
-			}
-			const capturedHtml = assembly.portableNormalization === 'pending'
-				? portableDocument( assembly.html )
-				: assembly.html;
-			normalizedDocuments.clear();
-			// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
-			const styleHoistContext = capturedStyleHoistContext( capturedHtml );
-			const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources, url );
-	        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
-	        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
-			assertPageWithinFileLimit( html, maxFileBytes );
-			// A route whose HTML was saved is captured even when a stage failed on it.
-			// A declared capture profile (a manifest profile record, or a viewport a
-			// stage failed in) without its document stays a profile-level loss; the
-			// remaining stage failures only degrade the route.
-			const stageFailures = routeFailureReasons.get( url ) ?? [];
-			const uncapturedProfiles = [ ...new Set( [ ...Object.keys( entry.profiles ?? {} ), ...stageFailures.map( failure => failure.profile ) ] ) ]
-				.filter( profile => profile !== 'all' && profile !== 'unknown' && ! ( profile in sourceDocuments ) );
-			for ( const profile of uncapturedProfiles ) {
-				const reasons = stageFailures.filter( failure => failure.profile === profile ).map( failure => failure.reason );
-				routeCaptureDiagnostics.push( { code: 'route_profile_uncaptured', url, reason: reasons.join( '; ' ) || `declared capture profile ${ profile } produced no document`, unit: 'profile', severity: 'error', profile } );
-			}
-			const degraded = stageFailures.filter( failure => ! uncapturedProfiles.includes( failure.profile ) );
-			if ( degraded.length ) routeCaptureDiagnostics.push( { code: 'route_capture_degraded', url, reason: degraded.map( failure => failure.reason ).join( '; ' ), unit: 'route', severity: 'warning', metrics: { failedStages: degraded.length } } );
-			// Evidence blocks capture lost while it still saved the page.
-			for ( const loss of entry.blockLosses ?? [] ) routeCaptureDiagnostics.push( { ...loss, url } );
-			const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
-			writeFileSync( stagedHtmlPath, html );
-			capturedEntries.push( {
-				slug: options.structuredContent?.entries.find( feed => normalizedUrl( feed.permalink ) === normalizedUrl( url ) )?.slug ?? entry.slug ?? basename( entry.html, '.html' ),
-				url,
-				htmlPath: stagedHtmlPath,
-				evidenceDocuments: [
-					{ state: 'desktop', html: desktopHtml },
-					...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
-				],
-				hasMobileDocument: assembly.hasMobileDocument,
-				responsiveVariants: assembly.evidence,
-				documentSelection: deviceAssembly ? { kind: 'device', id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } : selection?.kind === 'width' ? selection : undefined,
-				...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
-				...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
-				sections: entry.sections,
-				canonicalLinkUrl: canonicalMetadataUrl( canonicalLinkHref( desktopHtml, url ), url, options.routeScope, options.sourceUrl, canonicalHost ),
-				canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, options.routeScope, options.sourceUrl, canonicalHost ),
-				sourceData: sanitized.sourceData,
-				interactions: entry.interactions,
-				scrollStates: entry.scrollStates,
-				styleHoistContext,
-				sourceInteractivity,
-			} );
-			if (
-				entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
-				entry.interactions?.schema === LEGACY_INTERACTION_STATES_SCHEMA
-			) {
-				interactionPages.push( entry.interactions );
-			}
-			if ( entry.scrollStates?.schema === SCROLL_STATES_SCHEMA && entry.scrollStates.toggles.length > 0 ) {
-				scrollStatesPages.push( entry.scrollStates );
-			}
-		} catch ( error ) {
-			if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
-			// The dropped route keeps only its route_export_failed row.
-			routeCaptureDiagnostics.length = rollback.diagnostics;
-			switchWidths.length = rollback.switchWidths; deviceSelections.length = rollback.deviceSelections;
-			widthSelections.length = rollback.widthSelections; fluidReports.length = rollback.fluidReports;
-			routeCaptureDiagnostics.push( { code: 'route_export_failed', url, reason: ( error as Error ).message, unit: 'route', severity: 'error' } );
-		}
-	}
+	const { capturedEntries, interactionPages, scrollStatesPages, excludedRoutes, redirectAliases, switchWidths, deviceSelections, widthSelections, fluidReports, responsiveBodyClassProjections, collapsedBodyClassProjections, diagnostics: capturedRouteDiagnostics } = collectCapturedRoutes( { entries: capture.entries, sourceUrl: options.sourceUrl, routeScope: options.routeScope, failures: options.failures, structuredEntries: options.structuredContent?.entries, deviceMode: options.deviceMode, input: options.input, resolveDocumentSelection: options.resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput: Boolean( httpInput ), siteSwitchWidth, phoneSwitchWidth, stagedHtmlDir, resourceManifest, routeFailureReasons, maxFileBytes, budget, exclusions } );
+	routeCaptureDiagnostics.push( ...capturedRouteDiagnostics );
 
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
@@ -1813,171 +918,8 @@ function buildExportCapture(
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
-	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies, dimensions: renderedMediaDimensions } =
-		retainedMediaReferenceInventory( retainedEntries );
-	const imageAssets = readAssets( outputDir );
-	const imageByUrl = new Map( imageAssets.flatMap( record => record.source_urls.map( url => [ url, record ] as const ) ) );
-	const seenImageAssets = new Set<AssetRecord>();
-	const mediaFamilies = new Map< string, MediaCandidate[] >();
-	// Only mixed families need descriptor pruning; original-only families keep
-	// their existing collapse behavior. Values identify the selected source URLs.
-	const mixedSrcsetReferences = new Map< string, Set< string > >();
-	const failedMedia: FailedPortableMedia[] = [];
-	const capturedPages = new Set(
-		[ options.sourceUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {
-			try {
-				return [ normalizedUrl( url ) ];
-			} catch {
-				return [];
-			}
-		} )
-	);
-	const interactionMediaFamilies = new Set< string >();
-	const interactionMediaReferences = new Map< string, Set< string > >();
-	for ( const entry of retainedEntries ) {
-		for ( const reference of galleryFrameMediaUrls( entry.interactions?.states ?? [], entry.url, entry.interactions?.components ) ) {
-			const family = mediaFamily( reference );
-			interactionMediaFamilies.add( family );
-			const references = interactionMediaReferences.get( family ) ?? new Set< string >();
-			references.add( reference );
-			interactionMediaReferences.set( family, references );
-		}
-	}
-	const probeReferences: string[] = [];
-	const seenProbeReferences = new Set< string >();
-	for ( const [ sourceUrl ] of mediaStubs.list() ) {
-		try {
-			if ( capturedPages.has( normalizedUrl( sourceUrl ) ) ) continue;
-		} catch {
-			// Invalid media URLs still flow through mediaReferences().
-		}
-		for ( const reference of mediaReferences( sourceUrl, options.sourceUrl ) ) {
-			if ( seenProbeReferences.has( reference ) ) continue;
-			seenProbeReferences.add( reference );
-			probeReferences.push( reference );
-		}
-	}
-	const referenceIndex = indexPortableMediaReferences(
-		retainedEntries.map( ( entry ) => entry.htmlPath ),
-		probeReferences,
-	);
-	for ( const [ sourceUrl, stub ] of mediaStubs.list() ) {
-		try {
-			if ( capturedPages.has( normalizedUrl( sourceUrl ) ) ) continue;
-		} catch {
-			// Invalid media URLs still flow through mediaReferences().
-		}
-		// A rendition the budget dropped is skipped: build stripped it from every
-		// srcset that retains another candidate, so nothing references it here.
-		if ( exclusions.renditions.has( sourceUrl ) ) continue;
-		const imageAsset = imageByUrl.get( sourceUrl );
-		const references = imageAsset ? [ ...new Set( imageAsset.source_urls.flatMap( url => mediaReferences( url, options.sourceUrl ) ) ) ] : mediaReferences( sourceUrl, options.sourceUrl );
-		const family = imageAsset && imageAsset.kind !== 'image' ? imageAsset.resolved_original : mediaFamily( imageAsset?.original?.source_url ?? sourceUrl );
-		const exactReferences = references.filter( ( reference ) =>
-			referenceIndex.indexed.has( reference ) && mediaReferenceMatched( referenceIndex, reference )
-		);
-		// A stylesheet reference counts like a page reference: theme CSS paints the image.
-		const isReferenced = ( imageAsset?.kind === 'font' && imageAsset.references.length > 0 ) || imageAsset?.references.some( reference => reference.kind === 'CSS' ) || retainedMediaFamilies.has( family ) || interactionMediaFamilies.has( family ) || exactReferences.length > 0;
-		if ( imageAsset && seenImageAssets.has( imageAsset ) ) continue;
-		if ( imageAsset && isReferenced ) seenImageAssets.add( imageAsset );
-		if ( ( stub.status === 'error' || ( imageAsset && ! imageAsset.original ) ) && isReferenced ) {
-			failedMedia.push( { family, sourceUrl, nonImage: imageAsset?.kind !== undefined && imageAsset.kind !== 'image', error: stub.error ?? 'media download failed', references } );
-			continue;
-		}
-		const localPath = imageAsset?.local_path ?? stub.localPath;
-		if (
-			stub.status !== 'success' ||
-			! localPath ||
-			! existsSync( localPath ) ||
-			! isReferenced
-		)
-			continue;
-		const bytes = statSync( localPath ).size;
-		if ( exclusions.assets.has( sourceUrl ) ) {
-			failedMedia.push( { family, sourceUrl, nonImage: imageAsset?.kind !== undefined && imageAsset.kind !== 'image', error: 'removed because the website exceeds the total export budget', references } );
-			continue;
-		}
-		if ( bytes > maxFileBytes ) {
-			routeCaptureDiagnostics.push( assetExceedsFileLimit( sourceUrl, bytes, maxFileBytes ) );
-			failedMedia.push( { family, sourceUrl, nonImage: imageAsset?.kind !== undefined && imageAsset.kind !== 'image', error: 'removed because media exceeds the per-file export limit', references } );
-			continue;
-		}
-		const candidate: MediaCandidate = {
-			sourceUrl: imageAsset?.original?.source_url ?? sourceUrl,
-			...( imageAsset ? { imageAsset } : {} ),
-			localPath,
-			references: [
-				...new Set( [ ...references, ...( renderedMediaReferences.get( family ) ?? [] ) ] ),
-			],
-			exactReferences: [ ...exactReferences, ...( interactionMediaReferences.get( family ) ?? [] ) ],
-			...( interactionMediaReferences.has( family ) ? { galleryFrame: true } : {} ),
-			bytes,
-			renderedDimension: Math.max( renderedMediaDimensions.get( family ) ?? 0,
-				...( imageAsset?.source_urls ?? [] ).map( url => renderedMediaDimensions.get( mediaFamily( url ) ) ?? 0 ) ),
-			dimension: imageAsset?.original ? Math.max( imageAsset.original.width ?? 0, imageAsset.original.height ?? 0 ) : mediaDimension( sourceUrl ),
-		};
-		// Inventory aliases describe one picture, not necessarily one file. Keep
-		// independently captured srcset bytes instead of rewriting every alias to
-		// the verified representative (notably same-path ?width=N CDN URLs).
-		// The URL serialized by each profile owns its captured bytes, even for
-		// same-aspect resizes: natural dimensions can be part of the layout.
-		const capturedRenditions: MediaCandidate[] = [];
-		const selectedReferences = new Set( mediaReferences( candidate.sourceUrl, options.sourceUrl ) );
-		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) && imageAsset.original ) {
-			for ( const url of imageAsset.source_urls ) {
-				if ( url === candidate.sourceUrl || exclusions.renditions.has( url ) || exclusions.assets.has( url ) ) continue;
-				const rendition = imageAsset.renditions?.find( record => record.original?.source_url === url );
-				if ( ! rendition?.original || ! rendition.local_path ) continue;
-				const path = resolve( outputDir, rendition.local_path );
-				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) continue;
-				const renditionContent = readFileSync( path );
-				const hash = createHash( 'sha256' ).update( renditionContent ).digest( 'hex' );
-				if ( hash === imageAsset.original.sha256 ) {
-					for ( const reference of mediaReferences( url, options.sourceUrl ) ) selectedReferences.add( reference );
-					continue;
-				}
-				// A same-size re-encode can still use the verified original (for
-				// example, an opaque proxy of an alpha-preserving original).
-				try {
-					const { width, height } = imageSize( renditionContent );
-					if ( width === imageAsset.original.width && height === imageAsset.original.height ) {
-						for ( const reference of mediaReferences( url, options.sourceUrl ) ) selectedReferences.add( reference );
-						continue;
-					}
-				} catch {
-					// Unknown dimensions cannot prove a same-size substitution.
-				}
-				const renditionReferences = mediaReferences( url, options.sourceUrl );
-				const exact = renditionReferences.filter( reference => referenceIndex.indexed.has( reference ) && mediaReferenceMatched( referenceIndex, reference ) );
-				if ( ! exact.length ) continue;
-				const renditionBytes = statSync( path ).size;
-				if ( renditionBytes > maxFileBytes ) continue;
-				candidate.references = candidate.references.filter( reference => ! renditionReferences.includes( reference ) );
-				candidate.exactReferences = candidate.exactReferences.filter( reference => ! renditionReferences.includes( reference ) );
-				for ( const reference of renditionReferences ) selectedReferences.add( reference );
-				capturedRenditions.push( {
-					sourceUrl: url, localPath: path, imageAsset: rendition, references: renditionReferences, exactReferences: exact,
-					bytes: renditionBytes, dimension: imageAsset.rendition_widths?.[ url ] ?? mediaDimension( url ),
-					renderedDimension: candidate.renderedDimension,
-				} );
-			}
-		}
-		if ( capturedRenditions.some( rendition => ! rendition.budgetFallback ) ) {
-			for ( const reference of references ) mixedSrcsetReferences.set( reference, selectedReferences );
-		}
-		const smaller: MediaCandidate[] = ( imageAsset?.renditions ?? [] ).flatMap( rendition => {
-			if ( ! rendition.original || ! rendition.local_path || ! existsSync( rendition.local_path ) ) return [];
-			const renditionBytes = statSync( rendition.local_path ).size;
-			const dimension = Math.max( rendition.original.width ?? 0, rendition.original.height ?? 0 );
-			if ( renditionBytes >= bytes || renditionBytes > maxFileBytes || dimension >= candidate.dimension ) return [];
-			return [ { ...candidate, sourceUrl: rendition.original.source_url, localPath: rendition.local_path,
-				bytes: renditionBytes, dimension,
-				references: rendition.source_urls.flatMap( url => mediaReferences( url, options.sourceUrl ) ),
-				imageAsset: rendition,
-			} ];
-		} );
-		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate, ...capturedRenditions, ...smaller ] );
-	}
+	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, imageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes } );
+	routeCaptureDiagnostics.push( ...mediaCandidateDiagnostics );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
 		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates } ) ),
@@ -2036,111 +978,7 @@ function buildExportCapture(
 	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 
-	const routes: Array< { url: string; path: string; accessGate?: AccessGateEvidence } > = [];
-	const portableRouteLinks = new Map< string, string >();
-	for ( const entry of retainedEntries ) {
-		const { url } = entry;
-		const routePath = routePathOf( url );
-		const portablePath = `/${ routePath }`;
-		portableRouteLinks.set( documentRequestUrl( url ), portablePath );
-		routes.push( {
-			url,
-			path: `website/${ routePath }`,
-			...( entry.responsiveVariants ? { responsiveVariants: entry.responsiveVariants } : {} ),
-			...( entry.documentSelection ? { documentSelection: entry.documentSelection } : {} ),
-			...( entry.fluidGeometry ? { fluidGeometry: entry.fluidGeometry } : {} ),
-			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
-		} );
-	}
-	if ( options.structuredContent?.entries.length ) {
-		const { source, entries } = options.structuredContent;
-		for ( const term of structuredContentIndex( entries, routes, source, options.sourceUrl ).terms ) {
-			portableRouteLinks.set( documentRequestUrl( term.sourceUrl ), term.path );
-		}
-	}
-	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {
-		if ( portableRouteLinks.has( aliasKey ) ) continue;
-		portableRouteLinks.set( aliasKey, `/${ routePath }` );
-	}
-	for ( const { url, canonicalUrl } of retainedEntries ) {
-		if ( ! canonicalUrl ) continue;
-		const canonicalKey = documentRequestUrl( canonicalUrl );
-		if ( portableRouteLinks.has( canonicalKey ) ) continue;
-		const routePath = routePathOf( url );
-		portableRouteLinks.set( canonicalKey, `/${ routePath }` );
-	}
-	// Exact request addresses take precedence; link rewriting also resolves
-	// uncaptured slash spellings through the shared discovery identity.
-	const sourceRouteLinks = portableRouteLinks;
-
-	const portableServedPaths = new Set< string >();
-	for ( const path of [
-		...portableRouteLinks.values(),
-		...mediaReplacements.values(),
-		...resourceReplacements.values(),
-		...stylesheetStage.servedPaths,
-	] ) {
-		if ( ! path.startsWith( '/' ) ) continue;
-		try {
-			const pathname = new URL( path, PORTABLE_LINK_BASE ).pathname;
-			portableServedPaths.add( pathname );
-			if ( pathname.endsWith( '/index.html' ) ) {
-				portableServedPaths.add( pathname.slice( 0, -'index.html'.length ) );
-				portableServedPaths.add( pathname.slice( 0, -'/index.html'.length ) || '/' );
-			}
-		} catch {
-			// A replacement that is not a URL path serves nothing a link could name.
-		}
-	}
-
-	const unresolvedAnchors: Array< {
-		sourceUrl: string;
-		reason: string;
-		fragment?: string;
-		targetCount?: number;
-		url?: string;
-	} > = [];
-	const boundaryRoutes = new Set<string>();
-	const capturedRouteKeys = new Set( sourceRouteLinks.keys() );
-	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
-		if ( entry.externalRedirect ) {
-			capturedRouteKeys.add( documentRequestUrl( url ) );
-			boundaryRoutes.add( documentRequestUrl( url ) );
-		}
-	}
-	const absentRoutes = new Set( routeCaptureDiagnostics
-		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
-		.map( ( diagnostic ) => diagnostic.url ) );
-	const absentRouteKeys = new Set( [ ...absentRoutes ].map( documentRequestUrl ) );
-	// Budget omissions arrive from the caller's initial selection and from the
-	// linked frontier once the same budget was spent.
-	const linkedCoveragePath = join( outputDir, 'linked-page-coverage.json' );
-	const linkedCoverageDiagnostics = existsSync( linkedCoveragePath )
-		? ( JSON.parse( readFileSync( linkedCoveragePath, 'utf8' ) ) as { diagnostics?: Array< { code?: unknown; url?: unknown } > } ).diagnostics ?? []
-		: [];
-	const omittedRouteKeys = new Set( budgetOmittedRoutes( [ ...( options.discoveryDiagnostics ?? [] ), ...linkedCoverageDiagnostics ] ).map( documentRequestUrl ) );
-	const resourceInputKeys = new Set([
-		...resourceReplacements.keys(), ...mediaReplacements.keys(),
-		...unresolvedDependencies.map(row => row.url),
-	].flatMap(url => {
-		try { return [documentRequestUrl(url)]; }
-		catch { return []; } // Raw replacement strings can be relative references.
-	}));
-	// A tab for the current route cannot demonstrate a URL change on that page.
-	// Reuse only an unambiguous observation of the same navigation group on
-	// another captured route (for example Home observed from Services).
-	const routeObservations = retainedEntries.flatMap( entry => entry.interactions?.routeNavigation ?? [] );
-	const routeDestinations = new Map< string, Set< string > >();
-	for ( const route of routeObservations ) {
-		const key = JSON.stringify( [ route.siblings, route.label ] );
-		const destinations = routeDestinations.get( key ) ?? new Set< string >();
-		destinations.add( route.url );
-		routeDestinations.set( key, destinations );
-	}
-	const verifiedRouteObservations = routeObservations.filter( route =>
-		portableRouteLinks.has( documentRequestUrl( route.url ) ) &&
-		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
-	);
+	const { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations } = collectRouteLinks( { retainedEntries, routePathOf, structuredContent: options.structuredContent, sourceUrl: options.sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, stylesheetServedPaths: stylesheetStage.servedPaths, entries: capture.entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics: options.discoveryDiagnostics, unresolvedDependencies } );
 	const responsiveIdentities = { ids: new Map<string, string | string[]>(), namedAliases: false, svgIds: new Set<string>() };
 	// An image captured as a page resource, not as a media stub, still names one
 	// picture at several sizes. Let the largest captured size stand for the
