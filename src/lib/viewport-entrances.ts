@@ -61,7 +61,11 @@ export function observeViewportEntrances(): void {
 		loss?: string;
 		confirmed: boolean;
 		supported: boolean;
+		scrollDriven?: boolean;
 	}>();
+	// Attribute delivery precedes transitionrun. Keep candidates separate from
+	// entrance state: an exit or unrelated mutation must never acquire an after pose.
+	const scrollCandidates = new WeakMap<Element, { before: Record<string, string>; at: number }>();
 	const transitions = new Map<Element, Map<string, string>>();
 	// Scroll-scrubbed inline styles (#1158): a style written in the frame after a
 	// scroll, which later returns to a value it held before, is a function of scroll
@@ -215,7 +219,7 @@ export function observeViewportEntrances(): void {
 			if ( ! unfinished && Object.keys( changed ).length ) { target.state.attributes = changed; target.cssComplete = true; target.confirmed = true; }
 			return;
 		}
-		if ( ! target.entered ) {
+		if ( ! target.entered || target.scrollDriven && target.confirmed ) {
 			if ( target.confirmed && Object.keys( target.state.attributes ).every( key =>
 				( after[ key ] ?? null ) === target.state.attributes[ key ].before
 			) ) target.state.repeat = true;
@@ -229,16 +233,56 @@ export function observeViewportEntrances(): void {
 		}
 	};
 	new MutationObserver( mutations => {
-		for ( const mutation of mutations ) if ( mutation.target instanceof Element ) captureState( mutation.target );
-	} ).observe( document, { subtree: true, attributes: true } );
+		const before = new Map<Element, Record<string, string>>();
+		for ( const mutation of mutations ) {
+			const element = mutation.target;
+			const name = mutation.attributeName;
+			if ( ! ( element instanceof Element ) || ! name || ! /^(class|style|data-.+)$/.test( name ) || name.startsWith( 'data-blocks-engine-capture-' ) ) continue;
+			if ( targets.has( element ) ) { captureState( element ); continue; }
+			if ( performance.now() - scrolledAt > 150 ) continue;
+			if ( ! before.has( element ) ) before.set( element, attributes( element ) );
+		}
+		// Reconstruct the first old value, including attributes written more than
+		// once in a callback. No layout reads for unrelated scroll-time mutations.
+		for ( const mutation of [ ...mutations ].reverse() ) {
+			const pose = before.get( mutation.target as Element );
+			if ( ! pose || ! mutation.attributeName ) continue;
+			if ( mutation.oldValue === null ) delete pose[ mutation.attributeName ];
+			else pose[ mutation.attributeName ] = mutation.oldValue;
+		}
+		for ( const [ element, pose ] of before ) scrollCandidates.set( element, { before: pose, at: performance.now() } );
+	} ).observe( document, { subtree: true, attributes: true, attributeOldValue: true } );
 	document.addEventListener( 'animationend', event => {
 		if ( event.target instanceof Element && ! event.pseudoElement ) queueMicrotask( () => captureState( event.target as Element ) );
 	} );
 	document.addEventListener( 'transitionrun', event => {
 		const element = event.target;
 		if ( ! ( element instanceof Element ) || event.pseudoElement ) return;
-		const target = targets.get( element );
-		if ( ! target?.entered || target.cssStarted ) return;
+		let target = targets.get( element );
+		if ( ! target ) {
+			const candidate = scrollCandidates.get( element );
+			if ( ! candidate || performance.now() - candidate.at > 150 || performance.now() - scrolledAt > 150 ) return;
+			// The source's own keyframes, not class names or the scroll alone,
+			// must prove a hidden-to-visible transition. In particular, never
+			// promote a visible-at-load element's scroll-out exit into an entrance.
+			const reveal = element.getAnimations().some( effect => {
+				if ( ! ( effect instanceof CSSTransition ) || ! ( effect.effect instanceof KeyframeEffect ) ) return false;
+				const frames = effect.effect.getKeyframes();
+				const first = frames[ 0 ], last = frames[ frames.length - 1 ];
+				return effect.transitionProperty === 'opacity' && Number( first?.opacity ) === 0 && Number( last?.opacity ) === 1 ||
+					effect.transitionProperty === 'transform' && typeof first?.transform === 'string' && first.transform !== 'none' && last?.transform === 'none';
+			} );
+			if ( ! reveal ) { scrollCandidates.delete( element ); return; }
+			const box = element.getBoundingClientRect();
+			if ( ! ( box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth ) ) { scrollCandidates.delete( element ); return; }
+			target = { before: candidate.before, entered: true, ratio: 0, qualified: true, cssStarted: false, cssComplete: false, cssCandidate: false,
+				effects: new Set(), finished: new Set(), startup: false, confirmed: false, supported: true, scrollDriven: true,
+				state: { attributes: {}, rootMargin: '0px', threshold: [ 0 ], repeat: false } };
+			targets.set( element, target );
+			scrollCandidates.delete( element );
+			noteMotion();
+		}
+		if ( ! target.entered || target.cssStarted ) return;
 		captureState( element );
 		if ( Object.keys( target.state.attributes ).length === 0 ) return;
 		for ( const effect of element.getAnimations() ) {
