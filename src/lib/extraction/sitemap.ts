@@ -587,7 +587,9 @@ async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: stri
     deadline.throwIfAborted();
     requests++;
     requested.add(url);
-    return sourceFetch(url, init);
+    // safeFetch owns governor admission and retries; entering sourceFetch here
+    // holds two slots and deadlocks after a throttle reduces concurrency to one.
+    return fetch(url, init);
   };
 
   for (; position < queue.length; position++) {

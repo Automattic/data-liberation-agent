@@ -468,6 +468,7 @@ async function runCaptureWebsite(
 		onProgress?.( timedEvent );
 	};
 
+	if ( options.acquisition !== 'http' ) await ( await import( './browser-kit/ensure-capture-browser.js' ) ).ensureCaptureBrowser();
 	const response = await fetchEntryDocument( await resolveEntryUrl( options.url ), sourceGovernors, { session: options.acquisition !== 'http' } );
 	let sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
