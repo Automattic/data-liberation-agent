@@ -6,7 +6,7 @@ import type {
 	RuntimeRegionRequirement,
 } from '../../platform/acquisition.js';
 
-/** Brooklyn route HTML remains authoritative; observation supplies declared runtime surfaces. */
+/** Server HTML remains authoritative; observation supplies declared runtime surfaces. */
 export function prepareShopifyDocument(html: string, context: HttpDocumentContext): PreparedHttpDocument | undefined {
 	const $ = cheerio.load(html);
 	const runtime = $('script:not([src])')
@@ -15,17 +15,21 @@ export function prepareShopifyDocument(html: string, context: HttpDocumentContex
 		.join('\n');
 	if (!/\bShopify\.shop\s*=\s*["'][^"']+\.myshopify\.com["']/.test(runtime)) return undefined;
 	const theme = /\bShopify\.theme\s*=\s*(\{[^;]*?\})\s*;/.exec(runtime)?.[1];
+	let brooklyn = false;
 	try {
-		if (!theme || JSON.parse(theme).schema_name !== 'Brooklyn') return undefined;
+		brooklyn = !!theme && JSON.parse(theme).schema_name === 'Brooklyn';
 	} catch {
-		return undefined;
+		/* Dawn-family admission uses server markup, not theme metadata. */
 	}
+	const dawn = !brooklyn && hasDawnProductContent($);
+	if (!brooklyn && !dawn) return undefined;
+	const family = dawn ? 'Dawn' : 'Brooklyn';
 	const classes = ($('body').attr('class') ?? '').split(/\s+/);
-	const kind = ['page', 'index', 'collection', 'product'].find((kind) => classes.includes(`template-${kind}`));
+	const kind = dawn ? 'product' : ['page', 'index', 'collection', 'product'].find((kind) => classes.includes(`template-${kind}`));
 	if (!kind) return undefined;
 	if (kind === 'index' && !mainSection($, '[data-section-type="slideshow-section"]')) return undefined;
 	if (kind === 'collection' && !mainSection($, '#CollectionSection')) return undefined;
-	if (kind === 'product' && (!mainSection($, '.product-single__photos') || !mainSection($, '.product-single__meta')))
+	if (brooklyn && kind === 'product' && (!mainSection($, '.product-single__photos') || !mainSection($, '.product-single__meta')))
 		return undefined;
 	if (!$('[id^="shopify-section-"]').length || $('main').length !== 1) return undefined;
 	const main = $('main');
@@ -99,15 +103,15 @@ export function prepareShopifyDocument(html: string, context: HttpDocumentContex
 			for (const name of Object.keys(element.attribs)) if (/^on/i.test(name)) $(element).removeAttr(name);
 	});
 	const regions: RuntimeRegionRequirement[] = [
-		{ selector: 'html', projection: 'attributes', reason: 'Brooklyn JS/no-JS document presentation state.' },
-		{ selector: 'body', projection: 'attributes', reason: 'Brooklyn route and drawer baseline state.' },
+		{ selector: 'html', projection: 'attributes', reason: `${family} JS/no-JS document presentation state.` },
+		{ selector: 'body', projection: 'attributes', reason: `${family} route and drawer baseline state.` },
 	];
 	const add = (selector: string, reason: string) => {
 		if ($(selector).length) regions.push({ selector, reason, projection: 'subtree' });
 	};
 	add(
-		'#shopify-section-header',
-		'Brooklyn header initial presentation, mobile drawer, search and cart baseline; backend interactions remain unverified.'
+		dawn ? 'header' : '#shopify-section-header',
+		`${family} header initial presentation, mobile drawer, search and cart baseline; backend interactions remain unverified.`
 	);
 	if (kind === 'index')
 		$('main .shopify-section').each((_, element) => {
@@ -125,8 +129,8 @@ export function prepareShopifyDocument(html: string, context: HttpDocumentContex
 		add('#sort-by', 'Actual initial collection sort selection; sort navigation is unverified.');
 	}
 	if (kind === 'product') {
-		add('.product-single__photos', 'Brooklyn initial gallery structure and observed image renditions.');
-		add('.product-single__meta', 'Brooklyn initial variant/price/app presentation; purchasing backend is unverified.');
+		add(dawn ? 'product-info media-gallery' : '.product-single__photos', `${family} initial gallery structure and observed image renditions.`);
+		add(dawn ? 'product-info .product__info-container' : '.product-single__meta', `${family} initial variant/price/app presentation; purchasing backend is unverified.`);
 		add('#judgeme_product_reviews', 'Route-owned Judge.me initial review display; review submission is unverified.');
 		add(
 			'#shopify-section-product-recommendations',
@@ -142,7 +146,7 @@ export function prepareShopifyDocument(html: string, context: HttpDocumentContex
 		html: $.html(),
 		browserRegions: regions,
 		metadata: {
-			document: 'shopify-brooklyn-server-rendered',
+			document: dawn ? 'shopify-dawn-server-rendered' : 'shopify-brooklyn-server-rendered',
 			kind,
 			title: $('head > title').first().text().trim(),
 			canonical,
@@ -190,6 +194,18 @@ export const shopifyAcquisition: HttpAcquisitionProfile = {
 	prepare: prepareShopifyDocument,
 };
 
+/** Dawn's sections/main-product.liquid and snippets/product-media-gallery.liquid:
+ * https://github.com/Shopify/dawn/tree/main
+ * Require populated server content in the same product, not just custom-element shells.
+ */
+function hasDawnProductContent($: cheerio.CheerioAPI): boolean {
+	const product = $('main product-info');
+	if (product.length !== 1) return false;
+	const content = product.clone().find('script,style,template,noscript').remove().end();
+	return content.find('.product__info-container h1').toArray().some((node) => $(node).text().trim()) &&
+		content.find('media-gallery .product__media-list img[src]').toArray().some((node) => $(node).attr('src')?.trim());
+}
+
 function mainSection($: cheerio.CheerioAPI, selector: string): boolean {
 	return $('main').find(selector).length > 0;
 }
@@ -231,7 +247,8 @@ async function prepareShopifyRuntime(page: import('playwright').Page): Promise<v
 	const { triggerLazyLoad, waitForFonts, settleDocument, dismissOverlays } = await import(
 		'../../lib/screenshot/page-helpers.js'
 	);
-	await page.waitForFunction(() => document.documentElement.classList.contains('supports-js'), undefined, {
+	await page.waitForFunction(() => document.documentElement.classList.contains('supports-js') ||
+		(document.documentElement.classList.contains('js') && !!document.querySelector('main product-info .product__info-container')), undefined, {
 		timeout: 10000,
 	});
 	await page.waitForFunction(
