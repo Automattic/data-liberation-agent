@@ -376,7 +376,19 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// not be present when the localized image is laid out again.
 				const imageStyle = getComputedStyle( image );
 				const rendered = image.getBoundingClientRect();
-				if ( imageStyle.aspectRatio !== 'auto' && rendered.width > 0 && rendered.height > 0 ) {
+				// width/height attributes supply a browser hint of `auto W / H`.
+				// They already survive serialization; freezing their rendered box would
+				// turn a viewport-specific layout into a fixed authored ratio.
+				const autoRatio = /^auto\s+([\d.e+-]+)(?:\s*\/\s*([\d.e+-]+))?$/i.exec( imageStyle.aspectRatio );
+				const attributeWidth = Number( image.getAttribute( 'width' ) );
+				const attributeHeight = Number( image.getAttribute( 'height' ) );
+				const computedRatio = autoRatio ? Number( autoRatio[ 1 ] ) / Number( autoRatio[ 2 ] ?? 1 ) : NaN;
+				const attributeRatio = attributeWidth / attributeHeight;
+				const attributeMappedRatio = attributeWidth > 0 && attributeHeight > 0 &&
+					Number.isFinite( attributeRatio ) && Number.isFinite( computedRatio ) &&
+					// Computed CSS numbers may be rounded during serialization.
+					Math.abs( computedRatio - attributeRatio ) <= attributeRatio * 1e-5;
+				if ( imageStyle.aspectRatio !== 'auto' && ! attributeMappedRatio && rendered.width > 0 && rendered.height > 0 ) {
 					restoredAspectRatios.push( {
 						image,
 						previous: image.style.getPropertyValue( 'aspect-ratio' ),
