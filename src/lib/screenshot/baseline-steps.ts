@@ -52,6 +52,8 @@ import { orElse } from '../failure-class.js';
 
 export interface CapturePerViewportArgs {
 	page: Page;
+	sourceContextOptions?: Parameters<CapturedResourceStore['captureSelectedSrcsets']>[1];
+	sourceTraffic?: Parameters<CapturedResourceStore['captureSelectedSrcsets']>[2];
 	absentDocument?: ( html: string ) => Promise<boolean>;
 	rootClassEvidence: RootClassEvidence;
 	routeDeadlineMs: number;
@@ -525,7 +527,7 @@ export function baselineSteps(
 		},
 		{
 			id: 'srcset-selection', continuePhase: true, when: () => plan.captureHtml || plan.captureMobileHtml, onFailure: 'best-effort', run: async () => {
-				await resourceStore.captureSelectedSrcsets( page );
+				await resourceStore.captureSelectedSrcsets( page, args.sourceContextOptions, args.sourceTraffic );
 			}
 		},
 		{

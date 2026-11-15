@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BROWSER_IMAGE_ACCEPT, createSourceContext } from '../browser-kit/source-identity.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import {
 	CAPTURED_RESOURCE_TIMEOUT_CEILING_MS,
@@ -1752,8 +1753,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );
 			const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64' );
+			const imageHeaders: { userAgent?: string; accept?: string }[] = [];
 			const server = createServer( ( req, res ) => {
 				if ( req.url?.endsWith( '.png' ) ) {
+					imageHeaders.push( { userAgent: req.headers['user-agent'], accept: req.headers.accept } );
 					res.setHeader( 'content-type', 'image/png' );
 					res.setHeader( 'cache-control', 'max-age=3600' );
 					return res.end( png );
@@ -1769,19 +1772,29 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const browser = await chromium.launch();
 			try {
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
-				const page = await browser.newPage();
+				const contextOptions = { userAgent: 'Mozilla/5.0 Chrome/130.0.0.0 srcset-probe-test', viewport: { width: 1440, height: 900 } };
+				const traffic = { sourceUrl: `${ origin }/` };
+				const context = await createSourceContext( browser, contextOptions, traffic );
+				const page = await context.newPage();
 				const newContext = vi.spyOn( browser, 'newContext' );
 				const probes = [];
 				for ( const route of [ '/', '/second' ] ) {
 					await page.goto( `${ origin }${ route }` );
 					const before = newContext.mock.calls.length;
-					await store.captureSelectedSrcsets( page );
+					await store.captureSelectedSrcsets( page, contextOptions, traffic );
 					probes.push( newContext.mock.calls.length - before );
 				}
 				// The second route has no unseen image and opens no probe; an unset
 				// source stays unset rather than naming its page.
 				expect( probes[ 0 ] ).toBeGreaterThan( 0 );
 				expect( probes[ 1 ] ).toBe( 0 );
+				// The native image Accept can equal ours: the distinctive source UA
+				// proves fresh width contexts did not bypass the source identity path.
+				expect( imageHeaders.length ).toBeGreaterThan( 0 );
+				expect( imageHeaders.every( headers => headers.userAgent === contextOptions.userAgent && headers.accept === BROWSER_IMAGE_ACCEPT ) ).toBe( true );
+				for ( const [ options ] of newContext.mock.calls ) {
+					expect( options ).toMatchObject( { userAgent: contextOptions.userAgent, deviceScaleFactor: 1, serviceWorkers: 'block', storageState: { cookies: [], origins: [] } } );
+				}
 				await store.settle( page );
 				await store.flush();
 				const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
