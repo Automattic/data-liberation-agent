@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
-import { observeViewportWork } from './viewport-work.js';
+import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 
 const ORIGIN = 'https://viewport-work.test';
 
@@ -23,6 +23,27 @@ describe( 'fluid rest ends on viewport work evidence', () => {
 	let browser: Browser;
 	beforeAll( async () => { browser = await chromium.launch( { headless: true } ); } );
 	afterAll( async () => { await browser.close(); } );
+
+	it( 'tracks viewport-created intervals until either cancellation API clears them', async () => {
+		const page = await browser.newPage();
+		await page.evaluate( observeViewportWork );
+		expect( await page.evaluate( async key => {
+			const work = ( window as unknown as Record<symbol, ViewportWork> )[ Symbol.for( key ) ]!;
+			const unrelated = setInterval( () => {}, 150 );
+			work.arm();
+			const first = setInterval( () => {}, 150 );
+			const second = setInterval( () => {}, 150 );
+			await work.release();
+			const counts = [ work.pending() ];
+			clearTimeout( first );
+			counts.push( work.pending() );
+			clearInterval( second );
+			counts.push( work.pending() );
+			clearInterval( unrelated );
+			return counts;
+		}, VIEWPORT_WORK_KEY ) ).toEqual( [ 2, 1, 0 ] );
+		await page.close();
+	} );
 
 	it( 'waits for a 400 ms debounced resize handler before sampling', async () => {
 		// Like a bundled debounce utility, the source keeps its own timer reference.

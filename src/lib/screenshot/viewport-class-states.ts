@@ -216,7 +216,8 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 			const deadline = Date.now() + timeoutMs;
 			let previous = JSON.stringify( state.diff() );
 			do {
-				await work.sleep( 50 );
+				// Class switches are rendered work; keep a fallback for stopped frames.
+				await Promise.race( [ new Promise<void>( resolve => requestAnimationFrame( () => resolve() ) ), work.sleep( 100 ) ] );
 				const current = JSON.stringify( state.diff() );
 				if ( current === previous && work.pending() === 0 ) return;
 				previous = current;

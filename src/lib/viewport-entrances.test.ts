@@ -22,29 +22,45 @@ setTimeout(()=>{const observer=new IntersectionObserver(entries=>{for(const entr
 </script></body></html>`;
 
 async function pose( page: Page ) {
-	return page.locator( '.entrance' ).evaluate( element => {
+	return page.locator( 'section.entrance' ).evaluate( element => {
 		const style = getComputedStyle( element );
 		return { opacity: style.opacity, transform: style.transform, active: element.getAttribute( 'data-active' ) };
 	} );
 }
 
 describe( 'source-observed viewport transition entrances', () => {
-	for ( const repeat of [ false, true ] ) it.skipIf( process.env.SKIP_BROWSER_TESTS )(
-		`captures and exports real timed viewport transitions (${ repeat ? 'repeating' : 'one-shot' })`, async () => {
+	for ( const { repeat, scroll } of [ { repeat: false, scroll: false }, { repeat: true, scroll: false }, { repeat: true, scroll: true } ] ) it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		`captures and exports real timed viewport transitions (${ scroll ? 'scroll listener' : 'IO' }, ${ repeat ? 'repeating' : 'one-shot' })`, async () => {
 		const browser = await chromium.launch( { headless: true } );
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-viewport-entrances-' ) );
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
 			const source = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
 			await source.addInitScript( observeViewportEntrances );
-			await source.goto( `data:text/html,${ encodeURIComponent( fixture( repeat ) ) }` );
+			const htmlFixture = scroll ? fixture( repeat )
+				.replace( '.entrance[data-active="true"]', '.entrance.arrived' )
+				.replace( '<button>Hover</button>', '<h1 class="entrance arrived" id="hero">Visible at load</h1><button>Hover</button>' )
+				.replace( /setTimeout\(\(\)=>\{const observer=[\s\S]*?\},100\);/, `setTimeout(()=>{
+					function update(){for(const element of document.querySelectorAll('.entrance')){
+						const r=element.getBoundingClientRect();element.classList.toggle('arrived',r.top<innerHeight-60&&r.bottom>0);
+					}}
+					addEventListener('scroll',update,{passive:true});update();window.fixtureReady=true;
+				},100);` ) : fixture( repeat );
+			await source.goto( `data:text/html,${ encodeURIComponent( htmlFixture ) }` );
+			// The hero is already revealed before any scroll; let its initial pose settle.
+			if ( scroll ) await source.locator( '#hero' ).evaluate( async element => { await Promise.all( element.getAnimations().map( effect => effect.finished ) ); } );
 			await source.waitForFunction( () => ( window as typeof window & { fixtureReady?: boolean } ).fixtureReady );
 			expect( ( await pose( source ) ).opacity ).toBe( '0' );
 			await triggerLazyLoad( source );
 			await stampViewportEntrances( source );
-			const evidence = await source.locator( '.entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
-			expect( JSON.parse( evidence! ) ).toMatchObject( { repeat, rootMargin: '0px 0px -10% 0px', attributes: { 'data-active': { before: 'false', after: 'true' } } } );
-			expect( JSON.parse( evidence! ).threshold[ 0 ] ).toBeCloseTo( 0.2 );
+			const evidence = await source.locator( 'section.entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
+			expect( JSON.parse( evidence! ) ).toMatchObject( { repeat, rootMargin: scroll ? '0px' : '0px 0px -10% 0px', attributes: scroll ? { class: { before: 'entrance', after: 'entrance arrived' } } : { 'data-active': { before: 'false', after: 'true' } } } );
+			expect( JSON.parse( evidence! ).threshold[ 0 ] ).toBeCloseTo( scroll ? 0 : 0.2 );
+			if ( scroll ) {
+				expect( await source.locator( '#hero' ).getAttribute( 'class' ) ).toBe( 'entrance arrived' );
+				const heroEvidence = await source.locator( '#hero' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
+				if ( heroEvidence ) expect( JSON.parse( heroEvidence ).attributes.class ).toEqual( { before: 'entrance', after: 'entrance arrived' } );
+			}
 			for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( directory, path ) );
 			writeFileSync( join( directory, 'html/home.html' ), await source.content() );
 			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://fixture.test/': { html: 'html/home.html' } } } ) );
@@ -56,19 +72,20 @@ describe( 'source-observed viewport transition entrances', () => {
 			const candidate = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
 			await candidate.goto( server.url );
 			expect( await pose( candidate ) ).toMatchObject( { opacity: '0', active: 'false' } );
-			await candidate.locator( '.entrance' ).scrollIntoViewIfNeeded();
-			await candidate.waitForFunction( () => document.querySelector( '.entrance' )?.getAttribute( 'data-active' ) === 'true' );
-			const effects = await candidate.locator( '.entrance' ).evaluate( element => element.getAnimations().map( animation => ( {
+			if ( scroll ) await expect.poll( () => candidate.locator( '#hero' ).evaluate( element => ( { opacity: getComputedStyle( element ).opacity, transform: getComputedStyle( element ).transform } ) ), { timeout: 3_000 } ).toEqual( { opacity: '1', transform: 'none' } );
+			await candidate.locator( 'section.entrance' ).scrollIntoViewIfNeeded();
+			await candidate.waitForFunction( scroll => scroll ? document.querySelector( 'section.entrance' )?.classList.contains( 'arrived' ) : document.querySelector( 'section.entrance' )?.getAttribute( 'data-active' ) === 'true', scroll );
+			const effects = await candidate.locator( 'section.entrance' ).evaluate( element => element.getAnimations().map( animation => ( {
 				property: ( animation as CSSTransition ).transitionProperty,
 				...animation.effect?.getTiming(),
 			} ) ) );
 			expect( effects ).toEqual( expect.arrayContaining( [ expect.objectContaining( { property: 'opacity', duration: 900, delay: 180, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' } ), expect.objectContaining( { property: 'transform', duration: 900 } ) ] ) );
-			await candidate.locator( '.entrance' ).evaluate( async element => { await Promise.all( element.getAnimations().map( effect => effect.finished ) ); } );
+			await candidate.locator( 'section.entrance' ).evaluate( async element => { await Promise.all( element.getAnimations().map( effect => effect.finished ) ); } );
 			expect( await pose( candidate ) ).toMatchObject( { opacity: '1', transform: 'none' } );
 			expect( await candidate.locator( '.ambient' ).evaluate( element => element.getAnimations()[ 0 ]?.effect?.getTiming().iterations ) ).toBe( Infinity );
 			await candidate.locator( 'button' ).hover();
 			expect( await candidate.locator( 'button' ).evaluate( element => element.getAnimations().some( effect => effect instanceof CSSTransition ) ) ).toBe( true );
-			if ( repeat ) await candidate.waitForFunction( () => document.querySelector( '.entrance' )?.getAttribute( 'data-active' ) === 'false' );
+			if ( repeat ) await candidate.waitForFunction( scroll => scroll ? ! document.querySelector( 'section.entrance' )?.classList.contains( 'arrived' ) : document.querySelector( 'section.entrance' )?.getAttribute( 'data-active' ) === 'false', scroll );
 			else expect( ( await pose( candidate ) ).active ).toBe( 'true' );
 			const reduced = await browser.newPage( { reducedMotion: 'reduce' } );
 			await reduced.goto( server.url );
