@@ -1,28 +1,29 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { capture, squarespaceVideoPoster } from './capture.js';
 
 const TEMPLATE = 'https://video.squarespace-cdn.com/content/v1/lib-id/asset-id/{variant}';
 const THUMBNAIL = 'https://video.squarespace-cdn.com/content/v1/lib-id/asset-id/thumbnail';
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace header capture', () => {
-	it( 'annotates runtime padding owned by the closed overlay menu', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'annotates runtime padding owned by the closed overlay menu', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
 			await page.setContent( '<div data-test="header-menu" style="padding-top:178px"></div><div style="padding-top:30px"></div>' );
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
 			expect( await page.locator( '[data-test="header-menu"]' ).getAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' ) ).toBe( '' );
 			expect( await page.locator( 'body > div:not([data-test])' ).getAttribute( 'data-blocks-engine-capture-fluid-ignore-padding' ) ).toBeNull();
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 
-	it( 'keeps the top-of-page header visible when static tablet CSS hides it', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 768, height: 900 } } );
+	it( 'keeps the top-of-page header visible when static tablet CSS hides it', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 768, height: 900 } } );
 			await page.setContent( `<style>
 				header { position:fixed; top:0; height:120px; }
 				@media (min-width:768px) and (max-width:799px) { body #header { transform:translateY(-100%); } }
@@ -31,28 +32,32 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace heade
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
 			expect( await page.locator( 'style[data-blocks-engine-capture-squarespace-header-style]' ).textContent() ).toContain( ':is(#data-blocks-engine-capture-squarespace-header-visible,header[data-test="header"]){transition:none!important;transform:none!important}' );
 			expect( ( await page.locator( 'header' ).boundingBox() )?.y ).toBe( 0 );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 
-	it( 'normalizes the scroll-latched shrink class before recording the top pose', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 768, height: 900 } } );
+	it( 'normalizes the scroll-latched shrink class before recording the top pose', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 768, height: 900 } } );
 			await page.setContent( `<header data-test="header" class="bright-inverse header shrink"><img alt="site logo" width="80" height="80"></header><main><img id="hero" width="768" height="297" style="height:297px"></main><script>
 				addEventListener('resize', () => { if ( innerWidth >= 1440 ) document.querySelector('#hero').style.height = '333px'; });
 			</script>` );
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
 			expect( await page.locator( 'header' ).getAttribute( 'class' ) ).toBe( 'bright-inverse header' );
 			expect( ( await page.locator( '#hero' ).boundingBox() )?.height ).toBe( 333 );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace autoplay galleries', () => {
-	it( 'stops autoplay and returns to the first slide once the current one settles', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'stops autoplay and returns to the first slide once the current one settles', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			// The gallery attribute contract the Squarespace runtime exposes:
 			// autoplay advances on a timer; index changes are refused mid-motion.
 			await page.setContent( `<script>
@@ -67,15 +72,17 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace autop
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
 			await page.waitForTimeout( 300 );
 			expect( await page.evaluate( () => [ 'autoplay', 'currentIndex' ].map( name => ( window as any ).Y.Squarespace.GalleryManager._galleries[ 0 ].get( name ) ) ) ).toEqual( [ false, 0 ] );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace slideshow', () => {
-	it( 'restates script-written caption and image geometry relative to its slide', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'restates script-written caption and image geometry relative to its slide', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			// Inline px as the runtime writes them at 1440 (slide 576x288).
 			await page.setContent( `<style>.slide,.content-fill{position:absolute;inset:0}.content-fill{overflow:hidden}.meta{position:absolute;bottom:0;overflow:auto}</style>
 				<div class="sqs-gallery sqs-gallery-design-stacked" style="position:relative;width:40vw;height:20vw">
@@ -105,6 +112,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace slide
 			const poster = await page.locator( '#poster' ).boundingBox();
 			expect( poster!.width ).toBeCloseTo( wrapper!.width, 0 );
 			expect( poster!.y - wrapper!.y ).toBeCloseTo( ( wrapper!.height - poster!.height ) / 2, 0 );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 } );
@@ -126,10 +135,10 @@ describe( 'squarespaceVideoPoster', () => {
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace video capture', () => {
-	it( 'gives a stream-backed hosted video its published poster', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'gives a stream-backed hosted video its published poster', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
 			const config = JSON.stringify( { structuredContent: { alexandriaUrl: TEMPLATE } } ).replace( /"/g, '&quot;' );
 			await page.route( 'https://squarespace-video.test/**', ( route ) =>
 				route.fulfill( {
@@ -161,6 +170,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Squarespace video
 				[ 'declared', null, false ],
 				[ 'unrelated', null, false ],
 			] );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 } );

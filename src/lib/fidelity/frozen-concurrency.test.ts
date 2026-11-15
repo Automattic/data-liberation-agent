@@ -2,8 +2,7 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { chromium, type BrowserContext } from 'playwright';
-import { describe, expect, vi } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it, vi } from 'vitest';
 import * as staticServer from '../replicate/local-site/static-server.js';
 import { checkFidelity, type FidelityReport } from './check.js';
 import { createReferenceCollector, digest, type FidelityReference } from './reference.js';
@@ -23,7 +22,7 @@ it.each( [ 0, -1, 1.5, 5, Infinity, NaN ] )( 'rejects a non-finite or out-of-ran
 } );
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'bounded frozen cells', () => {
-	it.for( [ 'capture', 'materialization' ] as const )( '%s drains isolated cells in stable order, including unready and HTTP-failing cells', { timeout: 120_000 }, async ( stage, { newPage } ) => {
+	it.each( [ 'capture', 'materialization' ] as const )( '%s drains isolated cells in stable order, including unready and HTTP-failing cells', async stage => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'frozen-pool-' ) );
 		const routes = [ '/', '/fast/', '/broken/' ];
@@ -35,13 +34,14 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const candidate = createServer( ( _req, res ) => { res.setHeader( 'content-type', 'text/html' ); res.end( html ); } );
 		await new Promise<void>( resolve => candidate.listen( 0, '127.0.0.1', resolve ) );
 		const candidateUrl = `http://127.0.0.1:${ ( candidate.address() as { port: number } ).port }`;
+		const captureBrowser = await chromium.launch();
 		try {
 			const urls = routes.map( route => new URL( route, sourceUrl ).href );
 			const collector = createReferenceCollector( directory, sourceUrl, urls );
 			for ( const url of urls ) {
 				for ( const device of [ 'mobile', 'desktop' ] ) {
 					const mobile = device === 'mobile';
-					const page = await newPage( { isMobile: mobile, hasTouch: mobile } );
+					const page = await captureBrowser.newPage( { isMobile: mobile, hasTouch: mobile } );
 					await collector.observe( page, url, device, [], { isMobile: mobile, hasTouch: mobile } );
 					await page.context().close();
 				}
@@ -49,6 +49,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				mkdirSync( dirname( path ), { recursive: true } );
 				writeFileSync( path, html );
 			}
+			await captureBrowser.close();
 			// A real preview HTTP 500 and one unready frozen cell are distinct pending outcomes.
 			writeFileSync( join( directory, 'website/broken/index.html' ), '<!--#include virtual="/parts/missing.html" -->' );
 			const receipt = join( directory, 'capture-receipt.json' );
@@ -60,7 +61,6 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			writeFileSync( manifestPath, JSON.stringify( manifest ) );
 			const input = { receipt: digest( readFileSync( receipt ) ), manifest: digest( readFileSync( manifestPath ) ), reference: files( join( directory, 'reference' ) ), website: files( join( directory, 'website' ) ) };
 			const beforeRequests = sourceRequests;
-			// Keep production launch: assert browser acquisition counts and teardown under concurrency.
 			const launch = chromium.launch.bind( chromium );
 			const start = staticServer.startStaticServer;
 			let active = 0, peak = 0, launches = 0, serverStarts = 0;
@@ -152,9 +152,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			}
 			expect( { receipt: digest( readFileSync( receipt ) ), manifest: digest( readFileSync( manifestPath ) ), reference: files( join( directory, 'reference' ) ), website: files( join( directory, 'website' ) ) } ).toEqual( input );
 		} finally {
-			vi.restoreAllMocks(); source.closeAllConnections(); candidate.closeAllConnections();
+			vi.restoreAllMocks(); await captureBrowser.close(); source.closeAllConnections(); candidate.closeAllConnections();
 			await Promise.all( [ new Promise<void>( resolve => source.close( () => resolve() ) ), new Promise<void>( resolve => candidate.close( () => resolve() ) ) ] );
 			rmSync( directory, { recursive: true, force: true } );
 		}
-	} );
+	}, 120_000 );
 } );

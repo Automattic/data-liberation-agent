@@ -30,7 +30,6 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
   const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
   // The public API rejects literal loopback URLs. Disable Chromium's local
   // network permission gate only in this loopback-backed fixture.
-  // Keep production launch: the spy adds resolver args to exercise reset/replay acquisition.
   const launch = chromium.launch.bind(chromium);
   const launchSpy = vi.spyOn(chromium, 'launch').mockImplementation(options => launch({
     ...options, args: [...(options?.args ?? []), '--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessRespectPreflightResults,PrivateNetworkAccessSendPreflights'],

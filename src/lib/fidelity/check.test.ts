@@ -5,8 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
-import { describe, expect, afterEach } from 'vitest';
-import { it, test } from '../../../test/browser.js';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
 	canonicalRoutePath,
 	checkFidelity as checkLiveFidelity,
@@ -151,16 +150,18 @@ describe( 'checkWidthsFor', () => {
 } );
 
 describe( 'observePage typography', () => {
-	it.skipIf( skipBrowserTests )( 'does not compare line metrics for a clipped accessible-only label', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 390, height: 900 } } );
-		{
+	it.skipIf( skipBrowserTests )( 'does not compare line metrics for a clipped accessible-only label', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
 			await page.setContent( `<!doctype html><style>
 				.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(1px,1px,1px,1px); white-space:nowrap; line-height:normal; }
 			</style><header><span class="visually-hidden">Open Menu</span><p>Visible navigation label</p></header>` );
 			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true );
 			expect( observation.typography?.map( ( item ) => item.key ) ).toContain( 'Visible navigation label' );
 			expect( observation.typography?.map( ( item ) => item.key ) ).not.toContain( 'Open Menu' );
+		} finally {
+			await browser.close();
 		}
 	} );
 } );
@@ -649,11 +650,11 @@ describe.skipIf( skipBrowserTests )( 'comparison screenshot transaction', () => 
 } );
 
 describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', () => {
-	it.for( [
+	it.each( [
 		{ declared: true, extraRequest: false },
 		{ declared: false, extraRequest: false },
 		{ declared: true, extraRequest: true },
-	] )( 'source declaration: $declared, unrelated request: $extraRequest', { timeout: 90_000 }, async ( { declared, extraRequest }, { newPage } ) => {
+	] )( 'source declaration: $declared, unrelated request: $extraRequest', async ( { declared, extraRequest } ) => {
 		const html = ( body: string, declaration = '' ) => `<!doctype html><html ${ declaration }><head><meta charset="utf-8"><title>Emoji</title></head><body><main>${ body }</main></body></html>`;
 		const sourceHtml = html( `Hello 😉${ declared ? '<script>window._wpemojiSettings = {};</script>' : '' }` );
 		// Simulate core's runtime replacing the authored text, rather than
@@ -687,9 +688,9 @@ describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', (
 		} ) );
 		// The candidate declares support too: only the captured website may authorize it.
 		// Build that document through capture's runtime normalization, not authored markup.
-
+		const browser = await chromium.launch();
 		try {
-			const page = await newPage();
+			const page = await browser.newPage();
 			await page.goto( `${ origin }/` );
 			expect( await page.getAttribute( 'html', 'data-blocks-engine-capture-runtime-emoji' ) ).toBeNull();
 			await restoreRuntimeEmoji( page );
@@ -723,13 +724,13 @@ describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', (
 				}
 			}
 		} finally {
-
+			await browser.close();
 			candidate.closeAllConnections();
 			await new Promise<void>( resolve => candidate.close( () => resolve() ) );
 			server.closeAllConnections();
 			await new Promise<void>( resolve => server.close( () => resolve() ) );
 		}
-	} );
+	}, 90_000 );
 } );
 
 describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on exit', () => {

@@ -10,7 +10,7 @@ import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetCandidates } from '../srcset.js';
 import { portableSrcsetRepresentative } from '../portable-media-limits.js';
-import { BROWSER_IMAGE_ACCEPT } from '../browser-kit/source-identity.js';
+import { BROWSER_IMAGE_ACCEPT, createSourceContext } from '../browser-kit/source-identity.js';
 import { MAX_REDIRECTS, assertPublicHttpUrl, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
 import type { BrowserContext, Page, Request, Response } from 'playwright';
@@ -562,7 +562,7 @@ export class CapturedResourceStore {
 	}
 
 	/** Probe responsive slots at fidelity widths without Chromium's larger-image cache reuse. */
-	async captureSelectedSrcsets( page: Page ): Promise< void > {
+	async captureSelectedSrcsets( page: Page, contextOptions: Parameters<typeof createSourceContext>[1] = {}, traffic?: Parameters<typeof createSourceContext>[2] ): Promise< void > {
 		if ( ! await page.locator( 'img[srcset],picture img' ).count() ) return;
 		const original = page.viewportSize();
 		const browser = page.context().browser();
@@ -648,7 +648,7 @@ export class CapturedResourceStore {
 		const settled = await Promise.allSettled( probes.map( async ( { width, base, pending } ) => {
 			// A fresh context per width: a shared memory cache would serve the
 			// next width's renditions without the network responses capture records.
-			const context = await browser.newContext( { viewport: { width, height: original.height }, deviceScaleFactor: 1, storageState } );
+			const context = await createSourceContext( browser, { ...contextOptions, viewport: { width, height: original.height }, deviceScaleFactor: 1, storageState }, traffic );
 			try {
 				const probe = await context.newPage();
 				this.observe( probe );

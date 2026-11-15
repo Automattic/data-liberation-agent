@@ -14,8 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
-import { describe, expect, vi, afterEach } from 'vitest';
-import { it, test } from '../../../test/browser.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BROWSER_IMAGE_ACCEPT, createSourceContext } from '../browser-kit/source-identity.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import {
 	CAPTURED_RESOURCE_TIMEOUT_CEILING_MS,
@@ -1749,12 +1749,14 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
-		it( 'probes each responsive image once per capture and keeps every rendition', async ({ newPage, browser }) => {
+		it( 'probes each responsive image once per capture and keeps every rendition', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );
 			const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64' );
+			const imageHeaders: { userAgent?: string; accept?: string }[] = [];
 			const server = createServer( ( req, res ) => {
 				if ( req.url?.endsWith( '.png' ) ) {
+					imageHeaders.push( { userAgent: req.headers['user-agent'], accept: req.headers.accept } );
 					res.setHeader( 'content-type', 'image/png' );
 					res.setHeader( 'cache-control', 'max-age=3600' );
 					return res.end( png );
@@ -1767,34 +1769,44 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			} );
 			await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-
+			const browser = await chromium.launch();
 			try {
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
-				const page = await newPage();
+				const contextOptions = { userAgent: 'Mozilla/5.0 Chrome/130.0.0.0 srcset-probe-test', viewport: { width: 1440, height: 900 } };
+				const traffic = { sourceUrl: `${ origin }/` };
+				const context = await createSourceContext( browser, contextOptions, traffic );
+				const page = await context.newPage();
 				const newContext = vi.spyOn( browser, 'newContext' );
 				const probes = [];
 				for ( const route of [ '/', '/second' ] ) {
 					await page.goto( `${ origin }${ route }` );
 					const before = newContext.mock.calls.length;
-					await store.captureSelectedSrcsets( page );
+					await store.captureSelectedSrcsets( page, contextOptions, traffic );
 					probes.push( newContext.mock.calls.length - before );
 				}
 				// The second route has no unseen image and opens no probe; an unset
 				// source stays unset rather than naming its page.
 				expect( probes[ 0 ] ).toBeGreaterThan( 0 );
 				expect( probes[ 1 ] ).toBe( 0 );
+				// The native image Accept can equal ours: the distinctive source UA
+				// proves fresh width contexts did not bypass the source identity path.
+				expect( imageHeaders.length ).toBeGreaterThan( 0 );
+				expect( imageHeaders.every( headers => headers.userAgent === contextOptions.userAgent && headers.accept === BROWSER_IMAGE_ACCEPT ) ).toBe( true );
+				for ( const [ options ] of newContext.mock.calls ) {
+					expect( options ).toMatchObject( { userAgent: contextOptions.userAgent, deviceScaleFactor: 1, serviceWorkers: 'block', storageState: { cookies: [], origins: [] } } );
+				}
 				await store.settle( page );
 				await store.flush();
 				const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
 				expect( Object.keys( manifest.resources ).filter( url => /\/(?:small|large|full)\.png$/.test( url ) ).sort() )
 					.toEqual( [ `${ origin }/full.png`, `${ origin }/large.png`, `${ origin }/small.png` ].sort() );
 			} finally {
-
+				await browser.close();
 				await new Promise( done => server.close( done ) );
 			}
 		}, 30_000 );
 
-		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async ({ newPage }) => {
+		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-browser-' ) );
 			dirs.push( outputDir );
 			const sourceUrl = 'https://mixed-content.example/';
@@ -1806,9 +1818,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ),
 				body: Buffer.from( url === imported ? `@font-face{font-family:Mixed;src:url(${ font })}` : css ),
 			} ) );
-
+			const browser = await chromium.launch();
 			try {
-				const page = await newPage();
+				const page = await browser.newPage();
 				const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
 				store.observe( page );
 				const insecureRequests: string[] = [];
@@ -1841,10 +1853,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( await advance() ).toBe( liveAdvance );
 				expect( await page.evaluate( () => document.fonts.size ) ).toBe( 0 );
 			} finally {
-
+				await browser.close();
 			}
 		}, 30_000 );
-		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async ({ newPage }) => {
+		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-beacon-' ) );
 			dirs.push( outputDir );
 			const server = createServer( ( req, res ) => {
@@ -1868,9 +1880,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			} );
 			await new Promise< void >( ( done ) => server.listen( 0, '127.0.0.1', done ) );
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-
+			const browser = await chromium.launch();
 			try {
-				const page = await newPage();
+				const page = await browser.newPage();
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
 				store.observe( page );
 				await page.goto( `${ origin }/`, { waitUntil: 'networkidle' } );
@@ -1885,7 +1897,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( existsSync( join( outputDir, 'resources', '__beacon' ) ) ).toBe( false );
 				expect( existsSync( join( outputDir, 'resources', 'analytics' ) ) ).toBe( false );
 			} finally {
-
+				await browser.close();
 				await new Promise( ( done ) => server.close( done ) );
 			}
 		}, 30_000 );

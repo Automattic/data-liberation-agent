@@ -1614,6 +1614,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					try {
 						await capturePerViewport( {
 							page,
+							sourceContextOptions: contextOptions,
+							sourceTraffic: { governors: opts.governors, sourceUrl: entryUrl, sourceTelemetry: opts.sourceTelemetry },
 							rootClassEvidence,
 							absentDocument: isSourceCaptureUrl( url, opts.primaryUrl ?? urls[ 0 ] ) ? undefined : html => absentDocumentProbes.matches( url, html, async sibling => {
 								// Same identity and source-governed context, but never navigate the

@@ -1,9 +1,8 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium } from 'playwright';
+import { expect, it } from 'vitest';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { learnClipPath, parseClipPath } from './fluid-clip-path.js';
@@ -43,7 +42,7 @@ it( 'fits signed clip offsets across decorative layout regimes without holding u
 } );
 
 // One real capture/export (~15s); verifies the computed-style/export boundary.
-it( 'exports a runtime polygon that follows the media frame without covering outside content', async ({ newPage }) => {
+it( 'exports a runtime polygon that follows the media frame without covering outside content', async () => {
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'fluid-clip-' ) );
@@ -65,7 +64,7 @@ it( 'exports a runtime polygon that follows the media frame without covering out
 	} );
 	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 	const sourceUrl = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
-
+	const browser = await chromium.launch();
 	try {
 		const capture = await captureScreenshots( {
 			urls: [ sourceUrl ], outputDir, concurrency: 1, settleMs: 0, deviceMode: 'auto',
@@ -74,7 +73,7 @@ it( 'exports a runtime polygon that follows the media frame without covering out
 		expect( capture.failed ).toBe( 0 );
 		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
 		portable = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const copy = await newPage( { viewport: { width: 768, height: 900 } } );
+		const copy = await browser.newPage( { viewport: { width: 768, height: 900 } } );
 		await copy.goto( `${ sourceUrl }copy/` );
 		const geometry = await copy.evaluate( () => {
 			const frame = document.querySelector( '#frame' )!;
@@ -101,7 +100,7 @@ it( 'exports a runtime polygon that follows the media frame without covering out
 		const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) );
 		expect( manifest.entries[ sourceUrl ].fluid.unmodelled ).toBeGreaterThanOrEqual( 1 );
 	} finally {
-
+		await browser.close();
 		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
 		rmSync( outputDir, { recursive: true, force: true } );
 	}

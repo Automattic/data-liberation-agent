@@ -1,9 +1,8 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Page } from 'playwright';
-import { expect } from 'vitest';
-import { it, test } from '../../../test/browser.js';
+import { chromium, type Page } from 'playwright';
+import { expect, it } from 'vitest';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { exportWebsiteCapture } from '../capture-export.js';
@@ -66,10 +65,10 @@ function sourceDefaults(page: Page) {
   }));
 }
 
-it('records unrendered native controls without adding a rendered key to visible controls', async ({ newPage }) => {
-
+it('records unrendered native controls without adding a rendered key to visible controls', async () => {
+  const browser = await chromium.launch();
   try {
-    const page = await newPage();
+    const page = await browser.newPage();
     const cases = [
       {id: 'decoy', markup: '<textarea id="decoy" class="d-none"></textarea>', rendered: false},
       {id: 'visible', markup: '<input id="visible" type="text">', rendered: undefined},
@@ -86,14 +85,14 @@ it('records unrendered native controls without adding a rendered key to visible 
       if (test.rendered === false) expect(state, test.id).toHaveProperty('rendered', false);
       else expect(state, test.id).not.toHaveProperty('rendered');
     }
-  } finally {  }
+  } finally { await browser.close(); }
 });
 
-it('replays observed native control properties and CSS without mutating source attributes, defaults or radio peers', async ({ newPage }) => {
-
+it('replays observed native control properties and CSS without mutating source attributes, defaults or radio peers', async () => {
+  const browser = await chromium.launch();
   try {
-    const source = await newPage();
-    const copy = await newPage();
+    const source = await browser.newPage();
+    const copy = await browser.newPage();
     await source.setContent(fixture);
     const baseline = await state(source);
     const defaults = await sourceDefaults(source);
@@ -168,19 +167,19 @@ it('replays observed native control properties and CSS without mutating source a
     await copy.evaluate(() => document.querySelector<HTMLFormElement>('#first')!.reset());
     expect(await state(copy)).toEqual(reset);
     expect(await sourceDefaults(source)).toEqual(defaults);
-  } finally {  }
+  } finally { await browser.close(); }
 }, 30_000);
 
-it('preserves the native baseline through screenshot capture, export and capture-session frozen verification', async ({ newPage }) => {
+it('preserves the native baseline through screenshot capture, export and capture-session frozen verification', async () => {
   const server = createServer((_request, response) => { response.writeHead(200, {'content-type': 'text/html'}); response.end(fixture); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as {port: number}).port}/`;
   mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
   const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'native-control-state-618-'));
   let closed = false;
-
+  const browser = await chromium.launch();
   try {
-    const source = await newPage();
+    const source = await browser.newPage();
     await source.goto(url);
     const baseline = await state(source);
     await source.evaluate(() => document.querySelector<HTMLFormElement>('#first')!.reset());
@@ -197,7 +196,7 @@ it('preserves the native baseline through screenshot capture, export and capture
     const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures: []});
     const reference = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));
     expect(reference.scope.sourceUrls).toEqual([url]);
-    const copy = await newPage();
+    const copy = await browser.newPage();
     const exportedHtml = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
     expect(exportedHtml).not.toContain("document.querySelector('#on')");
     expect(exportedHtml).toContain(NATIVE_CONTROL_STATE_RUNTIME);
@@ -211,15 +210,15 @@ it('preserves the native baseline through screenshot capture, export and capture
     expect(report.pass, JSON.stringify(report)).toBe(true);
     expect(report.pending).toHaveLength(0);
   } finally {
-
+    await browser.close();
     if (!closed) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   }
 }, 180_000);
 
-it('reconstructs only owned code after stripping forged scripts and rejects invalid typed property payloads', async ({ newPage }) => {
-
+it('reconstructs only owned code after stripping forged scripts and rejects invalid typed property payloads', async () => {
+  const browser = await chromium.launch();
   try {
-    const page = await newPage();
+    const page = await browser.newPage();
     const malicious = `<input type="checkbox" ${NATIVE_CONTROL_STATE_ATTRIBUTE}='{"version":1,"kind":"input","type":"checkbox","value":"on","defaultValue":"","checked":"true","defaultChecked":false,"indeterminate":false}'>
       <script data-blocks-engine-capture-native-control-runtime>window.sourceExecuted=true</script><script>window.sourceExecuted=true</script>`;
     const clean = sanitizeFrozenHtml(malicious);
@@ -230,7 +229,7 @@ it('reconstructs only owned code after stripping forged scripts and rejects inva
     expect(await page.locator('input').isChecked()).toBe(false);
     expect(sanitizeFrozenHtml(clean)).toBe(clean);
     expect(sanitizeSourceHtml(clean)).not.toContain('<script');
-  } finally {  }
+  } finally { await browser.close(); }
 });
 
 it('installs the runtime before the real </body>, not inside a source script that writes one', () => {

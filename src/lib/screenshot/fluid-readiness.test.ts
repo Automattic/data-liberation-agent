@@ -1,17 +1,19 @@
-import { describe, expect } from 'vitest';
-import { it, type BrowserFixtures } from '../../../test/browser.js';
-
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium, type Browser } from 'playwright';
 import { COARSE_SWEEP_WIDTHS, DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { waitForImages } from './page-helpers.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 
 describe( 'responsive readiness contract', () => {
+	let browser: Browser;
+	beforeAll( async () => { browser = await chromium.launch( { headless: true } ); } );
+	afterAll( async () => { await browser.close(); } );
 
 	// One browser pass per fixture; expected wall time: about two seconds total.
-	it( 'checks still geometry frequently and waits for a 150 ms resize debounce', async ({ newPage }) => {
+	it( 'checks still geometry frequently and waits for a 150 ms resize debounce', async () => {
 		for ( const debounce of [ false, true ] ) {
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			try {
 				await page.setContent( `<style>body{margin:0}</style><div id="box" style="width:720px;height:40px">Text</div>
 					<script>
@@ -68,8 +70,8 @@ describe( 'responsive readiness contract', () => {
 		}
 	}, 15_000 );
 
-	it( 'observes opt-in relative slide offsets before source preparation and sampling', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'observes opt-in relative slide offsets before source preparation and sampling', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<style>body { margin: 0; }</style><div id="slide" style="position:relative;left:144px">Slide text</div>
 				<script>
@@ -100,8 +102,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 20_000 );
 
-	it.for( [ 'source', 'node' ] )( 'revisits a pending native-lazy image after a delayed %s replacement', { timeout: 20_000 }, async (replacement, { newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 500 } } );
+	it.each( [ 'source', 'node' ] )( 'revisits a pending native-lazy image after a delayed %s replacement', async replacement => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 500 } } );
 		try {
 			let revisited!: () => void;
 			const secondSweep = new Promise<void>( resolve => { revisited = resolve; } );
@@ -156,10 +158,10 @@ describe( 'responsive readiness contract', () => {
 			} );
 			expect( await page.locator( '#image' ).getAttribute( 'src' ) ).toBe( 'https://neutral.test/replacement.svg' );
 		} finally { await page.close(); }
-	} );
+	}, 20_000 );
 
-	it( 'ignores perpetual paint-only writes without spending the rest deadline', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'ignores perpetual paint-only writes without spending the rest deadline', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<div id="box" style="width:720px;height:40px">Neutral text</div>
 				<div hidden><img loading="lazy" src="https://neutral.test/hidden.svg"></div>
@@ -181,8 +183,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'retains delayed resize-created lazy content and delayed top-of-page geometry', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 700 } } );
+	it( 'retains delayed resize-created lazy content and delayed top-of-page geometry', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 700 } } );
 		try {
 			await page.route( 'https://neutral.test/*.svg', async route => {
 				await new Promise( resolve => setTimeout( resolve, 500 ) );
@@ -219,8 +221,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'does not repeat a completed sweep solely because an existing image finished changing rendition', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 500 } } );
+	it( 'does not repeat a completed sweep solely because an existing image finished changing rendition', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 500 } } );
 		try {
 			await page.setContent( `<style>body{margin:0}</style>
 				<div id="box" style="width:720px;height:40px">Neutral text <a href="#tail">Tail</a></div>
@@ -261,8 +263,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 20_000 );
 
-	it( 'waits for genuine delayed transform changes and validates the restored matrix', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'waits for genuine delayed transform changes and validates the restored matrix', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<div id="box" style="width:100px;transform:matrix(1,0,0,1,144,0)">Transform text</div>
 				<script>
@@ -299,8 +301,8 @@ describe( 'responsive readiness contract', () => {
 		} );
 	};
 
-	it( 'does not wait for native-lazy images clipped out of view by an overflow rail', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'does not wait for native-lazy images clipped out of view by an overflow rail', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await routeImages( page, 0 );
 			await page.setContent( railFixture( null ) );
@@ -322,8 +324,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'still waits for a reachable pending native-lazy image', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'still waits for a reachable pending native-lazy image', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await routeImages( page, 1500 );
 			await page.setContent( railFixture( 1500 ) );
@@ -333,8 +335,8 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.locator( '#reachable' ).evaluate( image => ( image as HTMLImageElement ).complete ) ).toBe( true );
 		} finally { await page.close(); }
 	}, 30_000 );
-	it( 'does not resweep when scroll-linked chrome restores the at-top height it had before the sweep', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'does not resweep when scroll-linked chrome restores the at-top height it had before the sweep', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<style>body{margin:0}</style>
 				<header id="header" style="height:120px">Neutral header</header>
@@ -366,8 +368,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 40_000 );
 
-	it( 'sweeps one document extent for the whole learning when every later width sits inside it', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'sweeps one document extent for the whole learning when every later width sits inside it', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<style>body{margin:0}</style>
 				<div id="box" style="width:720px;height:40px">Neutral text</div><div style="height:3000px"></div>
@@ -391,8 +393,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'sweeps a later width that grows the document past the extent earlier widths visited', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'sweeps a later width that grows the document past the extent earlier widths visited', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<style>body{margin:0}</style>
 				<div id="box" style="width:720px;height:40px">Neutral text</div><div id="tail"></div>
@@ -417,8 +419,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'sweeps a later width that reveals a new pending image inside the swept extent', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'sweeps a later width that reveals a new pending image inside the swept extent', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.route( 'https://neutral.test/late.svg', async route => {
 				await new Promise( resolve => setTimeout( resolve, 400 ) );
@@ -459,8 +461,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'does not resweep for a perpetual rotator that toggles already-loaded images within the swept extent', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'does not resweep for a perpetual rotator that toggles already-loaded images within the swept extent', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.route( 'https://neutral.test/*.svg', route => route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"/>' } ) );
 			await page.setContent( `<style>body{margin:0}.slot img{width:40px;height:40px}</style>
@@ -491,8 +493,8 @@ describe( 'responsive readiness contract', () => {
 	const writer = ( rule: string ) => `<style>body{margin:0}</style><div id="box" style="width:720px;height:40px">Neutral text</div>
 		<script>const box = document.querySelector('#box'); function resize() { box.style.width = (${ rule }) + 'px'; } addEventListener('resize', resize); resize();</script>`;
 
-	it( 'samples coarse and narrow-phone widths when every series is one line across them', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'samples coarse and narrow-phone widths when every series is one line across them', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( writer( 'innerWidth / 2' ) );
 			const widths: number[] = [];
@@ -504,8 +506,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 60_000 );
 
-	it( 'stops after the probe widths when script-written geometry is the same at each', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'stops after the probe widths when script-written geometry is the same at each', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( writer( '640' ) );
 			const widths: number[] = [];
@@ -516,8 +518,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 60_000 );
 
-	it( 'bisects toward a switch inside the tablet band and learns it at the full ladder\'s width', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'bisects toward a switch inside the tablet band and learns it at the full ladder\'s width', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( writer( 'innerWidth >= 783 ? 600 : 300' ) );
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 0 } );
@@ -528,8 +530,8 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 60_000 );
 
-	it( 'samples the exact widths it is given', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'samples the exact widths it is given', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( writer( 'innerWidth >= 783 ? 600 : 300' ) );
 			const widths: number[] = [];
@@ -560,10 +562,10 @@ describe( 'responsive readiness contract', () => {
 		addEventListener( 'resize', resize ); resize();
 		</script>`;
 
-	it( 'learns the same copy from the adaptive and full ladders', async ({ newPage }) => {
-		const copyGeometry = async ( { newPage }: Pick<BrowserFixtures, 'newPage'>, widths?: number[] ) => {
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
-			const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'learns the same copy from the adaptive and full ladders', async () => {
+		const copyGeometry = async ( widths?: number[] ) => {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			try {
 				await page.setContent( shapesSource );
 				const result = await learnAndApplyFluidGeometry( page, { settleMs: 0, ...( widths ? { widths } : {} ) } );
@@ -579,8 +581,8 @@ describe( 'responsive readiness contract', () => {
 				return { result, geometry, css: await copy.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).allTextContents() };
 			} finally { await page.close(); await copy.close(); }
 		};
-		const full = await copyGeometry({ newPage },  DEFAULT_SWEEP_WIDTHS );
-		const adaptive = await copyGeometry({ newPage });
+		const full = await copyGeometry( DEFAULT_SWEEP_WIDTHS );
+		const adaptive = await copyGeometry();
 		// Every rule kind the issue names is learned by the full ladder.
 		for ( const kind of [ 'segmented', 'capped', 'container', 'breakpoint' ] ) expect( full.result.byKind[ kind ], kind ).toBeGreaterThan( 0 );
 		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
@@ -632,11 +634,11 @@ describe( 'responsive readiness contract', () => {
 		</script>`;
 	const revealed = 'linear-gradient(90deg, rgb(200, 160, 80) 100%, rgba(0, 0, 0, 0) 100%)';
 
-	it.for< [ string, string, { widths?: number[] } ] >( [
+	it.each< [ string, string, { widths?: number[] } ] >( [
 		[ 'learned', "function resize() { box.style.width = innerWidth / 2 + 'px'; } addEventListener('resize', resize); resize();", { widths: [ 1440, 768 ] } ],
 		[ 'constant', "addEventListener('resize', () => {});", {} ],
-	] )( 'leaves a text reveal remounted by the return to the capture width revealed (%s geometry)', { timeout: 60_000 }, async ( [ _, box, options ], { newPage } ) => {
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	] )( 'leaves a text reveal remounted by the return to the capture width revealed (%s geometry)', async ( _, box, options ) => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.addInitScript( observeRuntimeStyleWrites );
 			await page.route( 'https://reveal.test/**', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><body>${ revealSource( box ) }</body></html>` } ) );
@@ -652,5 +654,5 @@ describe( 'responsive readiness contract', () => {
 			expect( await page.evaluate( () => window.scrollY ) ).toBe( 0 );
 			expect( await reveal.evaluate( element => ( element as HTMLElement ).style.backgroundImage ) ).toBe( revealed );
 		} finally { await page.close(); }
-	} );
+	}, 60_000 );
 } );

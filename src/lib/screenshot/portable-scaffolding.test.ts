@@ -2,16 +2,15 @@ import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { load } from 'cheerio';
-
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium } from 'playwright';
+import { expect, it } from 'vitest';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
 import { dismissOverlays } from './page-helpers.js';
 import type { ProfileDiagnostic } from './manifest-queue.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 
 // One real pipeline pass, expected wall time approximately 10 seconds.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI, neutral roots or hidden targetless navigation', async ({ newPage }) => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI, neutral roots or hidden targetless navigation', async () => {
   const fixture = `<!doctype html><html><head><title>Portable scaffolding</title><style>
     body { margin:0 } main { padding:24px } h1 { margin:0 }
     .consent { position:fixed; bottom:0; left:0; width:100%; background:white; z-index:2000 }
@@ -36,7 +35,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test/scaffolding-'));
-
+  const browser = await chromium.launch();
   try {
     const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'reflow-only' });
     expect(result.failed).toBe(0);
@@ -63,7 +62,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     for (const id of ['click-banner', 'hide-banner', '__next', 'root', 'app', 'hidden-top']) expect(evidence).toContain(id);
     // Exercise scored consent, explicit backdrop,
     // genuine promo retention, selector dependencies and live-node identity.
-    const probe = await newPage();
+    const probe = await browser.newPage();
     await probe.setContent(`<!doctype html><style>
       #root p, #app p { color: rgb(10,20,30) }
       .modal {position:fixed;inset:20%;z-index:1000;background:white}
@@ -82,11 +81,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     expect(diagnostics.filter(item => item.code === 'dismissed_overlay_removed')).toHaveLength(2);
     expect(await probe.locator('#root').evaluate((node, original) => node === original, rootIdentity)).toBe(true);
     expect(await probe.locator('#root > #app').count()).toBe(1);
-    const selectorCopy = await newPage({ javaScriptEnabled: false });
+    const selectorCopy = await browser.newPage({ javaScriptEnabled: false });
     await selectorCopy.setContent(projected);
     expect(await selectorCopy.locator('main p').evaluate(node => getComputedStyle(node).color)).toBe('rgb(10, 20, 30)');
-    const source = await newPage();
-    const copy = await newPage({ javaScriptEnabled: false });
+    const source = await browser.newPage();
+    const copy = await browser.newPage({ javaScriptEnabled: false });
     for (const width of [390, 768, 1440]) {
       await source.setViewportSize({ width, height: 900 });
       await copy.setViewportSize({ width, height: 900 });
@@ -98,7 +97,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
       }
     }
   } finally {
-
+    await browser.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(outputDir, { recursive: true, force: true });
   }

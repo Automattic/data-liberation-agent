@@ -1,6 +1,5 @@
-import { type Page } from 'playwright';
-import { describe, expect, beforeAll } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium, type Browser, type Page } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { installReadOnlyProbeGuard, lockMainFrameNavigation, withReadOnlyProbes } from './probe-guards.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../source-cleanup.js';
@@ -199,14 +198,19 @@ const CLOSURE_ABSOLUTE_PAGE = `<!doctype html><html><body>
 </body></html>`;
 
 describe( 'captureSelectableSetStates', () => {
+	let browser: Browser;
 
 	beforeAll( async () => {
 		if ( skipBrowser ) return;
-
+		browser = await chromium.launch( { headless: true } );
 	} );
 
-	it.skipIf( skipBrowser )( 'does not record Wix grid icons or slideshow navigation as choice groups', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+	afterAll( async () => {
+		await browser?.close();
+	} );
+
+	it.skipIf( skipBrowser )( 'does not record Wix grid icons or slideshow navigation as choice groups', async () => {
+		const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 		try {
 			await page.setContent( `<!doctype html><html><body>
 				<main><div class="mesh-grid"><div><div><div><div>
@@ -225,8 +229,8 @@ describe( 'captureSelectableSetStates', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it.skipIf( skipBrowser )( 'never classifies document roots as selectable triggers', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'never classifies document roots as selectable triggers', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, '<!doctype html><html role="button" tabindex="0"><body role="button" tabindex="0"><p>Static content</p></body></html>' );
 			await page.evaluate( () => {
@@ -245,8 +249,8 @@ describe( 'captureSelectableSetStates', () => {
 		} finally { await page.close(); }
 	} );
 
-	it.skipIf( skipBrowser )( 'blocks probe POSTs without reaching the source and records evidence', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'blocks probe POSTs without reaching the source and records evidence', async () => {
+		const page = await browser.newPage();
 		const posts: string[] = [];
 		const diagnostics: { code: string; reason: string }[] = [];
 		try {
@@ -271,8 +275,8 @@ describe( 'captureSelectableSetStates', () => {
 		} finally { await page.close(); }
 	} );
 
-	it.skipIf( skipBrowser )( 'blocks unsafe form navigation without drift and releases the guard after a failed probe', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'blocks unsafe form navigation without drift and releases the guard after a failed probe', async () => {
+		const page = await browser.newPage();
 		const posts: string[] = [];
 		const diagnostics: { code: string; reason: string }[] = [];
 		let drift = false;
@@ -300,8 +304,8 @@ describe( 'captureSelectableSetStates', () => {
 		} finally { await page.close(); }
 	} );
 
-	it.skipIf( skipBrowser )( 'dismisses member-opened modals and releases their focus trap', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'dismisses member-opened modals and releases their focus trap', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, `<div class="thumbs"><button>A</button><button>B</button><button>C</button></div>
 				<div class="box" tabindex="-1" role="dialog" aria-modal="true" style="position:fixed;inset:0;display:none"><p></p><button class="close">Close</button></div>
@@ -321,8 +325,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'captures every panel of a roving-focus tablist that selects on mousedown and mounts only the active panel', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'captures every panel of a roving-focus tablist that selects on mousedown and mounts only the active panel', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, `<main><section>
 				<div id="tabs">
@@ -364,8 +368,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'stamps viewport entrances inside panels a tab click mounts below the fold', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 800, height: 600 } } );
+	it.skipIf( skipBrowser )( 'stamps viewport entrances inside panels a tab click mounts below the fold', async () => {
+		const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
 		try {
 			await page.addInitScript( observeViewportEntrances );
 			await serve( page, `<style>
@@ -427,8 +431,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'keeps a visible https iframe (even inside a faded-in wrapper) in a panel snapshot and drops unsafe ones', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'keeps a visible https iframe (even inside a faded-in wrapper) in a panel snapshot and drops unsafe ones', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, `<main><section>
 				<div id="tabs">
@@ -490,8 +494,8 @@ describe( 'captureSelectableSetStates', () => {
 		render();
 	</script>`;
 
-	it.skipIf( skipBrowser )( 'captures the region of an exclusive aria-pressed segmented control', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'captures the region of an exclusive aria-pressed segmented control', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, pressedGroupPage( [ true, false ], true ) );
 			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
@@ -505,8 +509,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'keeps independent aria-pressed toggles as a choice group even when a region changes', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'keeps independent aria-pressed toggles as a choice group even when a region changes', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, pressedGroupPage( [ false, false ], false ) );
 			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
@@ -517,8 +521,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'leaves native summaries and passive link wrappers to their owning controls', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'leaves native summaries and passive link wrappers to their owning controls', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, `<main><div id="links">
 				<div style="cursor:pointer"><a href="/one"><span>Read one</span></a></div>
@@ -539,8 +543,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'retains semantic and mixed-content pickers that contain navigation links', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'retains semantic and mixed-content pickers that contain navigation links', async () => {
+		const page = await browser.newPage();
 		try {
 			await page.setContent( `<div id="layout"><div id="picker">
 				<div id="a" role="tab" style="cursor:pointer"><a href="/a">Alpha</a></div>
@@ -559,8 +563,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'does not drive pointer descendants of popup and disclosure controls', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'does not drive pointer descendants of popup and disclosure controls', async () => {
+		const page = await browser.newPage();
 		try {
 			await page.setContent( `<!doctype html><html><body>
 				<div id="controls">
@@ -581,8 +585,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	} );
 
-	it.skipIf( skipBrowser )( 'captures class-toggled pre-rendered tab panels as a shared region', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'captures class-toggled pre-rendered tab panels as a shared region', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, `<style>.hidden{display:none}</style><main>
 				<div id="tabs"><button type="button" onclick="show(0)">One</button><button type="button" onclick="show(1)">Two</button><button type="button" onclick="show(2)">Three</button></div>
@@ -600,8 +604,8 @@ describe( 'captureSelectableSetStates', () => {
 		} finally { await page.close(); }
 	} );
 
-	it.skipIf( skipBrowser )( 'captures hidden-attribute-toggled pre-rendered panels as a shared region', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'captures hidden-attribute-toggled pre-rendered panels as a shared region', async () => {
+		const page = await browser.newPage();
 		try {
 			await serve( page, `<main>
 				<div id="tabs"><button type="button" onclick="show(0)">One</button><button type="button" onclick="show(1)">Two</button><button type="button" onclick="show(2)">Three</button></div>
@@ -614,8 +618,8 @@ describe( 'captureSelectableSetStates', () => {
 		} finally { await page.close(); }
 	} );
 
-	it.skipIf( skipBrowser )( 'ignores rendered whitespace when ranking pre-rendered panel regions', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'ignores rendered whitespace when ranking pre-rendered panel regions', async () => {
+		const page = await browser.newPage();
 		try {
 			// #layout only reflows the same words between paragraphs and one line, so its
 			// innerText gains newline runs but no content; #panels changes content.
@@ -640,8 +644,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'captures distinct shared-region content for each member',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( PICKER_PAGE );
 				const states = await captureSelectableSetStates( page );
@@ -690,8 +694,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'settles each activation once the document is quiet instead of a fixed window',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( pickerOf( 12, 0 ) );
 				const started = performance.now();
@@ -711,8 +715,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'still captures a region that updates after an immediate selection mutation',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( pickerOf( 4, 400 ) );
 				const states = await captureSelectableSetStates( page );
@@ -727,8 +731,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'orders states deterministically across repeated captures',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( PICKER_PAGE );
 				const first = await captureSelectableSetStates( page );
@@ -744,8 +748,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'bounds the number of members driven',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div id="layout">
@@ -787,8 +791,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'does not drive a recognised set once the time budget is spent',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div role="tablist">
@@ -822,8 +826,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'records click-failed when a recognised member cannot be driven',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div id="layout">
@@ -864,8 +868,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'records no-dialog when a recognised set does not mutate a shared region',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div role="tablist">
@@ -893,8 +897,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'does not treat a list of navigation links as a selectable set',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<main>
@@ -916,8 +920,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'records no-dialog for a member that does not change the confirmed region',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div id="layout">
@@ -952,8 +956,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'picks the shared region with the largest content range, not the first small mutation',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div id="layout">
@@ -998,8 +1002,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'captures pointer-only SVG zones that have no role or tabindex',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div id="layout">
@@ -1046,8 +1050,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'captures sibling filter chips that drive a shared card grid',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<div id="layout">
@@ -1099,8 +1103,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'captures icon-only choice transitions that mutate styles inside their labeled group',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( ICON_CHOICE_PAGE );
 				const states = await captureSelectableSetStates( page );
@@ -1130,8 +1134,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'keeps independent toggles explicit and restores them through source actions',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( INDEPENDENT_TOGGLE_PAGE );
 				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
@@ -1155,8 +1159,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'restores closure-backed activation-determined choices through the source lifecycle',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( CLOSURE_ABSOLUTE_PAGE );
 				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
@@ -1176,8 +1180,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'waits for delayed thumbnail selection before verifying choice replay and restoration',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body>
 					<section>
@@ -1217,8 +1221,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'stops re-driving a choice group once a full pass proved no activation restores it',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				// Each poster becomes a player on first activation and never returns.
 				await page.setContent( `<!doctype html><html><body>
@@ -1260,8 +1264,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'does not probe embedded frames as selectable members',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( `<!doctype html><html><body><main><section>
 					<div id="embeds">
@@ -1282,8 +1286,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'rejects replay for a history-dependent group instead of exporting a wrong transition',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( HISTORY_DEPENDENT_PAGE );
 				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 10_000 } );
@@ -1306,10 +1310,10 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'records no-dialog with a reason when a weak button set does not mutate a region',
-		async ({ newPage }) => {
+		async () => {
 			// Plain chips get two inert probes; share buttons stop after the first one opens a window, which never opens.
 			for ( const [ handler, activations ] of [ [ '', 2 ], [ "window.open('https://share.example/?u=1')", 1 ] ] as const ) {
-				const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+				const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 				try {
 					await page.setContent( `<!doctype html><html><body>
 						<div id="layout">
@@ -1342,8 +1346,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'does not drive a pointer-cursor tile that a real link wraps',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			const navigations: string[] = [];
 			page.on( 'framenavigated', ( frame ) => navigations.push( frame.url() ) );
 			try {
@@ -1359,8 +1363,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'leaves the page and its cleanup evidence intact while driving a set beside link-wrapped cards',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			const navigations: string[] = [];
 			page.on( 'framenavigated', ( frame ) => navigations.push( frame.url() ) );
 			try {
@@ -1383,8 +1387,8 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'keeps the page when a member has no href and its own handler follows a link',
-		async ({ newPage }) => {
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			const navigations: string[] = [];
 			page.on( 'framenavigated', ( frame ) => navigations.push( frame.url() ) );
 			try {
@@ -1408,11 +1412,11 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'still drives a set whose members change the region through a default action',
-		async ({ newPage }) => {
+		async () => {
 			// Only the follow-through that navigates may be cancelled. A label
 			// checking its own radio is a default action too, and here it is the
 			// only thing that changes the region.
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await serve( page, LABEL_FILTER_PAGE );
 				const states = await captureSelectableSetStates( page );
@@ -1431,12 +1435,12 @@ describe( 'captureSelectableSetStates', () => {
 
 	it.skipIf( skipBrowser )(
 		'reports a scripted navigation rather than claiming the member was captured',
-		async ({ newPage }) => {
+		async () => {
 			// `location.assign` is not a default action, so no listener can cancel
 			// it. What must hold is that the loss is reported: a route that lost its
 			// page is evidence of a gap, and silently recording `captured` for a
 			// member whose region was never observed would hide one.
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await serve( page, SCRIPTED_ASSIGN_TILES_PAGE );
 				const states = await captureSelectableSetStates( page );
@@ -1450,8 +1454,8 @@ describe( 'captureSelectableSetStates', () => {
 		30_000
 	);
 
-	it.skipIf( skipBrowser )( 'returns bounded partial evidence for product-like choice-only groups', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'returns bounded partial evidence for product-like choice-only groups', async () => {
+		const page = await browser.newPage();
 		try {
 			await page.setContent( `<!doctype html><body>${ Array.from( { length: 9 }, ( _, group ) =>
 				`<div role="group" aria-label="Product choices ${ group }">${ Array.from( { length: 8 }, ( _, index ) => `<button aria-pressed="${ index === 0 }">Choice ${ index }</button>` ).join( '' ) }</div>` ).join( '' ) }
@@ -1466,8 +1470,8 @@ describe( 'captureSelectableSetStates', () => {
 		}
 	}, 30_000 );
 
-	it.skipIf( skipBrowser )( 'bounds entrance scrolling in a tall product detail region', async ({ newPage }) => {
-		const page = await newPage();
+	it.skipIf( skipBrowser )( 'bounds entrance scrolling in a tall product detail region', async () => {
+		const page = await browser.newPage();
 		try {
 			await page.setContent( pickerOf( 3, 0 ) );
 			await page.evaluate( () => {

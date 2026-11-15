@@ -1,6 +1,5 @@
-import { describe, expect } from 'vitest';
-import { it, type BrowserFixtures } from '../../../test/browser.js';
-
+import { describe, it, expect } from 'vitest';
+import { chromium } from 'playwright';
 import {
   extractFull,
   extractSignature,
@@ -810,19 +809,21 @@ describe('extractFull on a page whose library replaced Array.from', () => {
     </main>
     <footer><p>Footer text</p></footer></body></html>`;
 
-  it('finds the same sections with and without the patched Array.from', async ({ newPage }) => {
-
-    {
-      const run = async ({ newPage }: Pick<BrowserFixtures, 'newPage'>, html: string) => {
-        const page = await newPage({ viewport: { width: 1440, height: 900 } });
+  it('finds the same sections with and without the patched Array.from', async () => {
+    const browser = await chromium.launch();
+    try {
+      const run = async (html: string) => {
+        const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
         await page.setContent(html);
         const { specs } = await extractFull(page, {});
         await page.close();
         return specs.map(({ top, height, headings }) => ({ top, height, headings }));
       };
-      const pristine = await run({ newPage }, fixture());
+      const pristine = await run(fixture());
       expect(pristine.length).toBeGreaterThanOrEqual(4);
-      expect(await run({ newPage }, fixture(LEGACY_ARRAY_FROM))).toEqual(pristine);
+      expect(await run(fixture(LEGACY_ARRAY_FROM))).toEqual(pristine);
+    } finally {
+      await browser.close();
     }
   }, 60_000);
 });

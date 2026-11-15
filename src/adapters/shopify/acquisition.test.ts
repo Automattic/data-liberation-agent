@@ -1,12 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, afterEach } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { afterEach, describe, expect, it } from 'vitest';
 import * as cheerio from 'cheerio';
 import { shopifyAdapter } from './index.js';
 import { acquireHttpDocuments } from '../../lib/http-acquisition.js';
 import { materializeHttpDocuments } from '../../lib/http-materialization.js';
-
+import { chromium } from 'playwright';
 import { preserveShopifyWalletPresentation, pauseShopifySlides } from './acquisition.js';
 
 const source = 'https://shop.example/';
@@ -22,10 +21,10 @@ afterEach(() => {
 });
 
 describe('Shopify declarative page HTTP profile', () => {
-	it('learns a nonzero observed slide phase without freezing slide width or relative offsets at intermediate viewports', async ({ newPage }) => {
-
-		{
-			const source = await newPage({ viewport: { width: 1440, height: 900 } }), copy = await newPage();
+	it('learns a nonzero observed slide phase without freezing slide width or relative offsets at intermediate viewports', async () => {
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage({ viewport: { width: 1440, height: 900 } }), copy = await browser.newPage();
 			await source.setContent(`<style>body{margin:0}.hero-slideshow{overflow:hidden}.slick-track{height:100px}.slick-slide{float:left;position:relative;height:100px;opacity:0}.slick-active{opacity:1}.small-caption{display:none}@media(max-width:768px){.wide-caption{display:none}.small-caption{display:block}}</style><body class="template-index"><div class="hero-slideshow slick-initialized"><div class="slick-track">${[0,1,2].map(index => `<div class="slick-slide ${index === 2 ? 'slick-active' : ''}"><span class="wide-caption">Phase ${index} wide</span><span class="small-caption">Phase ${index} narrow</span></div>`).join('')}</div></div><script>
 		const hero=document.querySelector('.hero-slideshow');hero.slick={currentSlide:2,paused:false};window.jQuery=()=>({slickPause:()=>{hero.slick.paused=true}});
 		const size=()=>{document.querySelector('.slick-track').style.width=(innerWidth*3)+'px';document.querySelectorAll('.slick-slide').forEach((node,index)=>{node.style.width=innerWidth+'px';node.style.left=(-index*innerWidth)+'px'})};size();addEventListener('resize',size);
@@ -42,12 +41,12 @@ describe('Shopify declarative page HTTP profile', () => {
 				expect(await copy.locator('.slick-active').boundingBox(), `observed slide at ${width}px`).toEqual(await source.locator('.slick-active').boundingBox());
 				expect(await copy.locator('.slick-active').innerText()).toBe(width <= 768 ? 'Phase 2 narrow' : 'Phase 2 wide');
 			}
-		}
+		} finally { await browser.close(); }
 	});
-	it('pauses Brooklyn slides through its native API without selecting a different caption phase', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it('pauses Brooklyn slides through its native API without selecting a different caption phase', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
 			await page.setContent('<style>.phone-caption{display:none}@media(max-width:767px){.desktop-caption{display:none}.phone-caption{display:block}}</style><div class="hero-slideshow slick-initialized" data-slide-index="2"><p class="desktop-caption">Observed caption phase</p><p class="phone-caption">Observed phone caption phase</p></div>');
 			await page.evaluate(() => {
 				const slider = document.querySelector('.hero-slideshow')! as HTMLElement & { slick: { paused: boolean; currentSlide: number; timer: ReturnType<typeof setInterval> } };
@@ -60,7 +59,7 @@ describe('Shopify declarative page HTTP profile', () => {
 			await pauseShopifySlides(page);
 			await page.waitForTimeout(120);
 			expect(await page.locator('.hero-slideshow').evaluate(node => (node as HTMLElement & { slick: { paused: boolean; currentSlide: number } }).slick)).toMatchObject({ paused: true, currentSlide: 2 });
-			const copy = await newPage();
+			const copy = await browser.newPage();
 			await copy.setContent(await page.content());
 			for (const width of [390, 768, 1440]) {
 				await page.setViewportSize({ width, height: 900 });
@@ -69,13 +68,13 @@ describe('Shopify declarative page HTTP profile', () => {
 				expect(await page.locator('.hero-slideshow').innerText()).toBe(expected);
 				expect(await copy.locator('.hero-slideshow').innerText()).toBe(expected);
 			}
-		}
+		} finally { await browser.close(); }
 	});
-	it('preserves the source wallet box after its closed shadow slot is removed from a projected subtree', async ({ newPage }) => {
-
-		{
-			const source = await newPage();
-			const copy = await newPage();
+	it('preserves the source wallet box after its closed shadow slot is removed from a projected subtree', async () => {
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage();
+			const copy = await browser.newPage();
 			for (const width of [390, 768, 1440]) {
 				await source.setViewportSize({ width, height: 900 });
 				await copy.setViewportSize({ width, height: 900 });
@@ -93,7 +92,7 @@ describe('Shopify declarative page HTTP profile', () => {
 				await copy.setContent(await source.content());
 				expect(await copy.locator('shopify-paypal-button > div').evaluate(node => node.getBoundingClientRect().height)).toBe(44);
 			}
-		}
+		} finally { await browser.close(); }
 	});
 	it('prepares declared Shopify renditions and declares bounded gallery/app/header projection rather than rejecting an authored product', async () => {
 		const url = `${source}products/neutral-blanket`;
@@ -115,7 +114,7 @@ describe('Shopify declarative page HTTP profile', () => {
 			])
 		);
 	});
-	it('retains native informational text, decoded images and authored reflow in a real browser at all proof widths', async ({ newPage }) => {
+	it('retains native informational text, decoded images and authored reflow in a real browser at all proof widths', async () => {
 		const image =
 			'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ZkAAAAASUVORK5CYII=';
 		const raw = fixture()
@@ -131,10 +130,10 @@ describe('Shopify declarative page HTTP profile', () => {
 			variant: 'desktop',
 		});
 		expect(prepared).toBeDefined();
-
-		{
+		const browser = await chromium.launch({ headless: true });
+		try {
 			for (const width of [390, 768, 1440]) {
-				const page = await newPage({ viewport: { width, height: 900 } });
+				const page = await browser.newPage({ viewport: { width, height: 900 } });
 				const observation = async (html: string) => {
 					await page.setContent(html, { waitUntil: 'load' });
 					return page
@@ -152,6 +151,8 @@ describe('Shopify declarative page HTTP profile', () => {
 				expect(await observation(prepared!.html)).toEqual(source);
 				await page.close();
 			}
+		} finally {
+			await browser.close();
 		}
 	});
 

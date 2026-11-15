@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { capture } from './capture.js';
 
 /** Where a visitor following the captured target lands: its scroll position once scrolled into view. */
@@ -11,15 +10,15 @@ const landing = ( node: Element ): number => {
 };
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime anchor capture', () => {
-	it.for( [
+	it.each( [
 		{ delay: 0, position: 'fixed' },
 		{ delay: 600, position: 'fixed' },
 		{ delay: -1, position: 'fixed' },
 		{ delay: 1000, position: 'static' },
-	] )( 'observes scroll from a trusted click with delay $delay and $position trigger', { timeout: 20_000 }, async ( { delay, position }, { newPage } ) => {
-
-		{
-			const page = await newPage();
+	] )( 'observes scroll from a trusted click with delay $delay and $position trigger', async ( { delay, position } ) => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>body{margin:0}nav{position:${ position };top:0;z-index:5;height:20px}section{height:1000px}</style>
@@ -47,13 +46,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				expect( await page.locator( '#section-source > #runtime-section' ).count() ).toBe( 1 );
 				expect( await page.locator( 'a' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
 			}
+		} finally {
+			await browser.close();
 		}
-	} );
+	}, 20_000 );
 
-	it( 'resolves a short final section when the runtime scroll clamps at the document bottom', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 1024, height: 800 } } );
+	it( 'resolves a short final section when the runtime scroll clamps at the document bottom', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1024, height: 800 } } );
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>body{margin:0}nav{position:fixed;top:0;z-index:5}section{height:1000px}#final-source{height:200px}</style>
@@ -69,13 +70,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			expect( await page.locator( '#final-source > #final-runtime[data-blocks-engine-capture-anchor-target="final-runtime"]' ).count() ).toBe( 1 );
 			expect( await page.locator( 'a' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
 			expect( await page.locator( '#final-runtime' ).evaluate( landing ) ).toBe( 400 );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 
-	it.for( [ false, true ] )( 'resolves a fixed header fragment already at its top landing without changing a mid-page fragment (hide on scroll-down: %s)', { timeout: 20_000 }, async ( hideOnScrollDown, { newPage } ) => {
-
-		{
-			const page = await newPage();
+	it.each( [ false, true ] )( 'resolves a fixed header fragment already at its top landing without changing a mid-page fragment (hide on scroll-down: %s)', async ( hideOnScrollDown ) => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>body{margin:0}header{position:fixed;top:0;z-index:5}section{height:1000px}</style>
@@ -100,13 +103,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				expect( await page.locator( `#${ fragment }` ).evaluate( landing ) ).toBe( top );
 				expect( await page.locator( `a[href="#${ fragment }"],a[href="/#${ fragment }"]` ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
 			}
+		} finally {
+			await browser.close();
 		}
-	} );
+	}, 20_000 );
 
-	it( 'keeps the runtime landing offset and follows its section when content above it changes height', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'keeps the runtime landing offset and follows its section when content above it changes height', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>body{margin:0}header{position:fixed;top:0;z-index:5;height:60px}section{height:1000px}</style>
@@ -127,13 +132,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				( document.querySelector( 'section' ) as HTMLElement ).style.height = '1300px';
 			} );
 			expect( await page.locator( '#team' ).evaluate( landing ) ).toBe( 1300 - 16 );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 
-	it( 'resolves every section link when the header hides after the first runtime scroll', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'resolves every section link when the header hides after the first runtime scroll', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			// A header that slides away once the page has scrolled, as many site
 			// headers do: each link is only clickable from the top of the page.
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
@@ -156,6 +163,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				expect( await page.locator( `#${ fragment }` ).count(), fragment ).toBe( 1 );
 				expect( await page.locator( `#${ fragment }` ).evaluate( landing ), fragment ).toBe( top );
 			}
+		} finally {
+			await browser.close();
 		}
 	}, 60_000 );
 
@@ -163,10 +172,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 	// per fragment (#839): every drawer link on a wide mobile document paid
 	// 3s of nothing. Once the document holds its scroll and height past the
 	// no-move beat, the landing is not coming and the wait ends.
-	it( 'gives up on a scroll that never starts without paying the whole bound per fragment', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'gives up on a scroll that never starts without paying the whole bound per fragment', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>body{margin:0}header{position:fixed;top:0;z-index:5}section{height:800px}</style>
@@ -180,6 +189,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			expect( await page.locator( 'a[href$="#dead-two"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'did not move' );
 			// Timer bounds are checked with virtual time in anchor-scroll.test.ts;
 			// browser scheduling and the preparation sweep are not part of that bound.
+		} finally {
+			await browser.close();
 		}
 	}, 30_000 );
 
@@ -187,10 +198,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 	// landing with the drawer still up pays the full scroll bound on every
 	// fragment and ships unresolved anchors that resolve in milliseconds once
 	// the drawer is gone first.
-	it( 'closes an opened menu before waiting for the runtime scroll behind its link', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'closes an opened menu before waiting for the runtime scroll behind its link', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>body{margin:0}button{position:fixed;top:0;z-index:9}section{height:1000px}
@@ -222,13 +233,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			expect( await page.locator( 'a[href$="#team"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
 			// The capture records the closed page.
 			expect( await page.locator( '#drawer' ).evaluate( ( drawer ) => getComputedStyle( drawer as HTMLElement ).display ) ).toBe( 'none' );
+		} finally {
+			await browser.close();
 		}
 	}, 60_000 );
 
-	it.for( [ 'popup', 'controls', 'label', 'none', 'unrelated', 'rerender', 'expanded' ] )( 'resolves collapsed phone navigation with a %s opener', { timeout: 30_000 }, async ( kind, { newPage } ) => {
-
-		{
-			const page = await newPage( { viewport: { width: 390, height: 768 } } );
+	it.each( [ 'popup', 'controls', 'label', 'none', 'unrelated', 'rerender', 'expanded' ] )( 'resolves collapsed phone navigation with a %s opener', async ( kind ) => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 768 } } );
 			const button = kind === 'none' ? '' : `<button ${ kind === 'label' ? 'aria-label="Menu"' : `aria-expanded="false" ${ kind === 'controls' ? 'aria-controls="site-nav"' : 'aria-haspopup="true"' }` }>Open</button>`;
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
@@ -276,13 +289,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			if ( kind !== 'none' && kind !== 'unrelated' ) {
 				expect( await page.locator( 'button' ).getAttribute( 'aria-expanded' ) ).toBe( 'false' );
 			}
+		} finally {
+			await browser.close();
 		}
-	} );
+	}, 30_000 );
 
-	it( 'closes an opened menu when it contains no rendered fragment trigger', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'closes an opened menu when it contains no rendered fragment trigger', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>nav{display:none}#drawer{display:none;position:fixed;inset:0;background:#fff}</style>
@@ -299,13 +314,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				expect( await page.locator( `nav a[href="#${ fragment }"]` ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBe( 'no rendered fragment trigger' );
 			}
 			expect( await page.locator( '#drawer' ).evaluate( ( drawer ) => getComputedStyle( drawer ).display ) ).toBe( 'none' );
+		} finally {
+			await browser.close();
 		}
 	}, 30_000 );
 
-	it( 'marks a link whose trigger cannot be clicked instead of abandoning the remaining links', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'marks a link whose trigger cannot be clicked instead of abandoning the remaining links', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
 				contentType: 'text/html',
 				body: `<style>body{margin:0}header{position:fixed;top:0;z-index:5;background:#fff}section{height:1000px}
@@ -323,13 +340,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			expect( await page.locator( 'a[href$="#blocked-runtime"]' ).getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toContain( 'click' );
 			expect( await page.locator( '#open-runtime' ).count() ).toBe( 1 );
 			expect( await page.locator( '#open-runtime' ).evaluate( landing ) ).toBe( 2000 );
+		} finally {
+			await browser.close();
 		}
 	}, 60_000 );
 
-	it( 'keeps a cross-page data-anchor intent in the href instead of dropping it', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'keeps a cross-page data-anchor intent in the href instead of dropping it', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
 			await page.route( 'https://anchor.test/**', ( route ) => {
 				const url = new URL( route.request().url() );
 				if ( url.pathname !== '/project' )
@@ -359,6 +378,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			expect( await page.locator( '[data-blocks-engine-capture-anchor-target]' ).count() ).toBe( 0 );
 			expect( await link.getAttribute( 'data-blocks-engine-capture-anchor-unresolved' ) ).toBeNull();
 			expect( page.url() ).toBe( 'https://anchor.test/project' );
+		} finally {
+			await browser.close();
 		}
 	}, 20_000 );
 } );

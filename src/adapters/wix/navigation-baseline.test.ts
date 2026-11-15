@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices, type Page } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { capture } from './capture.js';
 import { createReferenceCollector, readFrozenObservation, type FidelityReference } from '../../lib/fidelity/reference.js';
 import { captureTriggeredDialogs } from '../../lib/screenshot/interaction-capture.js';
@@ -56,10 +55,10 @@ async function geometry( page: Page ) {
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'Wix resting overflow navigation', () => {
 	for ( const width of [ 768, 1440, 390 ] ) {
-		it( `preserves source runtime, frozen readiness and offline overflow at ${ width }px`, async ({ newContext }) => {
-
+		it( `preserves source runtime, frozen readiness and offline overflow at ${ width }px`, async () => {
+			const browser = await chromium.launch();
 			const { defaultBrowserType: _browserType, ...mobile } = devices[ 'iPhone 17' ];
-			const context = await newContext( { ...( width === 390 ? mobile : {} ), viewport: { width, height: 900 } } );
+			const context = await browser.newContext( { ...( width === 390 ? mobile : {} ), viewport: { width, height: 900 } } );
 			await context.addInitScript( "globalThis.__name=function(fn){return fn;}" );
 			const url = 'https://navigation.test/';
 			await context.route( `${ url }**`, route => route.fulfill( { contentType: 'text/html', body: fixture } ) );
@@ -119,13 +118,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( await panel.isVisible() ).toBe( false );
 				expect( await geometry( page ) ).toEqual( before );
 				expect( errors ).toEqual( [] );
-			} finally {  rmSync( directory, { recursive: true, force: true } ); }
+			} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
 		}, 60_000 );
 	}
 
-	it( 'keeps genuine errors from a fresh reference page unready', async ({ newContext }) => {
-
-		const context = await newContext();
+	it( 'keeps genuine errors from a fresh reference page unready', async () => {
+		const browser = await chromium.launch();
+		const context = await browser.newContext();
 		await context.addInitScript( "globalThis.__name=function(fn){return fn;}" );
 		let navigations = 0;
 		const url = 'https://navigation.test/';
@@ -146,6 +145,6 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( entry.readiness.reasons.join( ', ' ) ).toContain( 'reference-only failure' );
 				expect( () => readFrozenObservation( directory, entry ) ).toThrow( /reference-only failure/ );
 			}
-		} finally {  rmSync( directory, { recursive: true, force: true } ); }
+		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
 } );
