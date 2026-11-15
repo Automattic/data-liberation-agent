@@ -17,8 +17,8 @@ import { orElse } from '../failure-class.js';
  * DOM at one width, so every other width would receive that width's class
  * state. Sweep the coarse widths, find each token whose presence changes with
  * width, locate its breakpoint, and carry the token as a width-scoped alias:
- * the element wears the alias instead, and every readable rule naming the
- * token is projected in place into presence/absence media arms. In the
+ * the element wears the alias instead, and each readable rule that can reach
+ * that element through the token is projected in place into presence/absence media arms. In the
  * presence arm the alias also satisfies the token, including under :not();
  * in the absence arm only the original token does.
  */
@@ -95,7 +95,7 @@ type WidthClassAlias = { token: string; alias: string; media: string };
 const CONTRACTS_ATTRIBUTE = 'data-blocks-engine-capture-width-class-contracts';
 
 /** Project each affected rule into both states, retaining specificity and context. */
-export function aliasRules( sheets: readonly string[], aliases: readonly WidthClassAlias[] ): string[] {
+export function aliasRules( sheets: readonly string[], aliases: readonly WidthClassAlias[], canMatch: ( selector: string, contract: WidthClassAlias ) => boolean = () => true ): string[] {
 	const copies: string[] = [];
 	// Many elements can share one token contract; project it only once.
 	const contracts = [ ...new Map( aliases.map( alias => [ `${ alias.token }|${ alias.alias }|${ alias.media }`, alias ] ) ).values() ];
@@ -110,7 +110,8 @@ export function aliasRules( sheets: readonly string[], aliases: readonly WidthCl
 			if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( ( rule.parent as postcss.AtRule ).name ) ) return;
 			let projected = postcss.root().append( rule.clone() );
 			let affected = false;
-			for ( const { token, alias, media } of contracts ) {
+			for ( const contract of contracts ) {
+				const { token, alias, media } = contract;
 				let named = false;
 				try {
 					selectorParser( selectors => selectors.walkClasses( node => {
@@ -119,7 +120,7 @@ export function aliasRules( sheets: readonly string[], aliases: readonly WidthCl
 				} catch {
 					continue;
 				}
-				if ( ! named ) continue;
+				if ( ! named || ! canMatch( rule.selector, contract ) ) continue;
 				const active = postcss.atRule( { name: 'media', params: media } );
 				const inactive = postcss.atRule( { name: 'media', params: `not (${ media.split( ',' ).map( query => `(${ query })` ).join( ' or ' ) })` } );
 				// Compose contracts, so a selector naming several toggled tokens
@@ -150,6 +151,35 @@ export function aliasRules( sheets: readonly string[], aliases: readonly WidthCl
 	return copies;
 }
 
+/**
+ * Test the structural path to each token, not the rule's subject: the token
+ * may belong to an ancestor, or be absent under :not(). Ignore state pseudos
+ * so the capture width's hover/negation state cannot hide an affected rule.
+ */
+function aliasCanMatch( selector: string, { token, alias }: WidthClassAlias, matches: ( selector: string ) => boolean ): boolean {
+	let possible = false;
+	selectorParser( selectors => selectors.walkClasses( node => {
+		if ( possible || node.value !== token ) return;
+		let target: selectorParser.Node = node;
+		while ( target.parent?.type !== 'selector' || target.parent.parent?.type === 'pseudo' ) {
+			if ( ! target.parent ) { possible = true; return; }
+			target = target.parent as selectorParser.Node;
+			// Relational pseudos need their own subject; retain them conservatively.
+			if ( target.type === 'pseudo' && target.value === ':has' ) { possible = true; return; }
+		}
+		const path = target.parent!.clone();
+		const index = target.parent!.nodes.indexOf( target );
+		path.nodes[ index ]!.replaceWith( selectorParser.className( { value: alias } ) );
+		// Only the compound containing the token and its ancestors constrain
+		// the alias wearer. Descendants may themselves change with width.
+		const end = path.nodes.findIndex( ( child, i ) => i > index && child.type === 'combinator' );
+		if ( end !== -1 ) path.nodes.slice( end ).forEach( child => child.remove() );
+		path.walkPseudos( pseudo => { pseudo.remove(); } );
+		possible = matches( path.toString() );
+	} ) ).processSync( selector );
+	return possible;
+}
+
 /** Rewrite the portable document only; never change source rules during learning. */
 export function projectViewportClassRules( html: string, linkedSheet: ( href: string ) => { css: string; url: string } | undefined = () => undefined ): string {
 	const $ = cheerio.load( html );
@@ -164,7 +194,14 @@ export function projectViewportClassRules( html: string, linkedSheet: ( href: st
 		root.walkRules( rule => { rules.push( rule ); } );
 		for ( const rule of rules ) {
 			if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( rule.parent.name ) ) continue;
-			const copies = aliasRules( [ rule.toString() ], aliases );
+			const copies = aliasRules( [ rule.toString() ], aliases, ( selector, contract ) => {
+				try {
+					return aliasCanMatch( selector, contract, path => $( path ).length > 0 );
+				} catch {
+					// Unsupported selectors must not lose their width contract.
+					return true;
+				}
+			} );
 			if ( copies.length ) rule.replaceWith( ...postcss.parse( copies.join( '\n' ) ).nodes );
 		}
 		return root.toString();

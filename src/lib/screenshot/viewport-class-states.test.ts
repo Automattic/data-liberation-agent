@@ -7,7 +7,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { aliasRules, captureViewportClassStates, projectViewportClassRules, type ViewportClassMemo } from './viewport-class-states.js';
+import { captureViewportClassStates, projectViewportClassRules, type ViewportClassMemo } from './viewport-class-states.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
@@ -54,6 +54,40 @@ it( 'serves script-toggled class state at the widths the source applied it', asy
 		await browser.close();
 	}
 }, 60_000 );
+
+// Two routes (~2s) load the same CSS; only the first has resize-driven dots.
+it( 'serializes shared header rules identically when only one route has width-toggled dots', async () => {
+	const browser = await chromium.launch();
+	const css = '.nav>li.active>a{color:red}.dots>li.active{color:blue}';
+	try {
+		const headers: string[] = [];
+		for ( const dots of [ true, false ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.route( 'https://fixture.test/shared.css', route => route.fulfill( { contentType: 'text/css', body: css } ) );
+			await page.route( 'https://fixture.test/route', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><head><link rel="stylesheet" href="https://fixture.test/shared.css"></head><body>
+				<ul class="nav"><li class="active"><a>Shared header</a></li></ul>
+				${ dots ? `<ul class="dots"><li>Dot</li></ul><script>
+				const sync=()=>document.querySelector('.dots>li').classList.toggle('active',innerWidth>=1280);
+				addEventListener('resize',sync);sync();</script>` : '' }</body></html>` } ) );
+			await page.goto( 'https://fixture.test/route' );
+			await markInitialDocument( page );
+			const initial = await page.content();
+			const result = await captureViewportClassStates( page, { widths: [ 390, 1440 ], settleMs: 0 } );
+			expect( result.aliased ).toBe( dots ? 1 : 0 );
+			const portable = projectInitialDocument( initial, await page.content(), () => ( { css, url: 'https://fixture.test/shared.css' } ) );
+			// Resolve a still-linked sheet as the serializer would, without
+			// confusing a retained link with a missing header rule.
+			const serializedCss = portable.includes( '<link' ) ? css : portable.match( /<style[^>]*>([\s\S]*?)<\/style>/ )![ 1 ]!;
+			headers.push( serializedCss.match( /\.nav[^{}]*\{[^{}]*\}/ )![ 0 ] );
+			expect( serializedCss ).not.toContain( '.nav>li:is(' );
+			if ( dots ) expect( serializedCss ).toContain( '.dots>li:is(.active,.data-blocks-engine-capture-width-class-' );
+			await page.close();
+		}
+		expect( headers ).toEqual( [ '.nav>li.active>a{color:red}', '.nav>li.active>a{color:red}' ] );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
 
 // Controlled timer ticks put the same timer rotator in opposite phases without
 // wall-clock races. Returning to the initial width also returns to its phase,

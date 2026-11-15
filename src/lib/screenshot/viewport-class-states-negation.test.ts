@@ -31,7 +31,7 @@ it( 'projects the reduced page rules in their cascade slots, including linked sh
 	expect( rules[0] ).toContain( '.card:not(:is(.narrow,.width-state))' );
 	expect( rules[1] ).toContain( '.card:not(:is(.narrow,.width-state)) > *' );
 	expect( rules[2] ).toContain( '.card:is(.narrow,.width-state) .text' );
-	const html = `<html><head><link rel="stylesheet" href="card.css" media="screen"><style>.card{display:grid}</style></head><body data-blocks-engine-capture-width-class-contracts='${ JSON.stringify( aliases ) }'></body></html>`;
+	const html = `<html><head><link rel="stylesheet" href="card.css" media="screen"><style>.card{display:grid}</style></head><body data-blocks-engine-capture-width-class-contracts='${ JSON.stringify( aliases ) }'><div class="card width-state"><div class="media"></div><div class="text"></div></div></body></html>`;
 	const projected = projectViewportClassRules( html, () => ( { css: `${css}.media{background:url(image.png)}`, url: 'https://example.test/assets/card.css' } ) );
 	expect( projected ).not.toContain( '<link' );
 	expect( projected ).toContain( `<style ${ VIEWPORT_CLASS_RULES_ATTRIBUTE }="" media="screen">` );
