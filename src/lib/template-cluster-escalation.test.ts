@@ -30,6 +30,8 @@ describe( 'failed template cluster HTTP fallback', () => {
 		await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
 		const origin = `http://localtest.me:${ ( server.address() as import('node:net').AddressInfo ).port }`;
 		const urls = [ 'representative', 'verification', 'member-a', 'member-b', 'structural' ].map( id => `${ origin }/${ id }` );
+		// The profile's preparation must survive: the live DOM never carries this marker.
+		const prepared = ( id: string ) => page( id ).replace( '<title>Product</title>', '<title>Product</title><meta name="prepared">' );
 		const browser = await connectBrowser( {} );
 		try {
 			const governors = new SourceRequestGovernors();
@@ -46,7 +48,7 @@ describe( 'failed template cluster HTTP fallback', () => {
 			writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
 			const input: Parameters< typeof deriveTemplateClusterMembers >[ 0 ] = {
 				sourceUrl: urls[ 0 ]!, outputDir, frontierUrls: [], governors,
-				acquisition: { id: 'neutral-server', variants: [ { id: 'desktop' } ], prepare: ( html: string ) => ( { html } ) },
+				acquisition: { id: 'neutral-server', variants: [ { id: 'desktop' } ], prepare: ( html: string ) => ( { html: html.replace( '<title>Product</title>', '<title>Product</title><meta name="prepared">' ) } ) },
 				report: {
 					schema: TEMPLATE_GROUPS_SCHEMA, sourceUrl: urls[ 0 ]!, fingerprint: { version: 1, maxSkeletonDepth: 8 },
 					limits: { ...TEMPLATE_GROUPING_LIMITS }, throttle: { events: 0 }, unfingerprinted: [],
@@ -54,12 +56,15 @@ describe( 'failed template cluster HTTP fallback', () => {
 					groups: [ { id: 't1', ...templateFingerprint( page( 'representative' ), urls[ 0 ]! ), representative: urls[ 0 ]!, size: 5, members: urls } ],
 				},
 			};
-			const result = await deriveTemplateClusterMembers( input );
+			// The late derivation rounds spend their whole 1ms budget; renders keep their own.
+			const result = await deriveTemplateClusterMembers( { ...input, timeBudgetMs: 1, runtimeRenderBudgetMs: 20_000 } );
 			expect( result.summary.httpAcquired ).toBe( 3 );
 			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots/manifest.json' ), 'utf8' ) );
 			for ( const url of urls.slice( 2, 4 ) ) {
 				const id = new URL( url ).pathname.slice( 1 );
-				expect( readFileSync( join( outputDir, manifest.entries[ url ].html ), 'utf8' ) ).toContain( `<p>Recommendations for ${ id }</p>` );
+				// Only the mount carries the live render; the rest is the prepared HTTP document.
+				const shipped = readFileSync( join( outputDir, manifest.entries[ url ].html ), 'utf8' );
+				expect( shipped ).toBe( prepared( id ).replace( `<x-recs data-product-id="${ id }"></x-recs>`, `<x-recs data-product-id="${ id }"><p>Recommendations for ${ id }</p></x-recs>` ) );
 				expect( requests ).toContain( `/recs?id=${ id }` );
 				expect( result.receipt.clusters[ 0 ]!.escalated ).toContainEqual( expect.objectContaining( { url, gate: 'runtime_mount_member_keyed', fallback: { acquired: true, reason: 'runtime mount observed through bounded browser render' } } ) );
 			}
@@ -69,7 +74,7 @@ describe( 'failed template cluster HTTP fallback', () => {
 
 			// A spent budget preserves HTTP, but explicitly names the unobserved mount.
 			writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
-			const exhausted = await deriveTemplateClusterMembers( { ...input, timeBudgetMs: 1 } );
+			const exhausted = await deriveTemplateClusterMembers( { ...input, timeBudgetMs: 1, runtimeRenderBudgetMs: 1 } );
 			const row = exhausted.receipt.clusters[ 0 ]!.escalated.find( member => member.url === urls[ 2 ] )!;
 			expect( row.fallback?.reason ).toContain( 'unobserved runtime mount: runtime-filled mount at' );
 			expect( exhausted.diagnostics ).toContainEqual( expect.objectContaining( { url: urls[ 2 ], reason: expect.stringContaining( row.fallback!.reason! ) } ) );

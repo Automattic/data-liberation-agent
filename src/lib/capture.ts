@@ -1076,6 +1076,8 @@ export async function deriveTemplateClusterMembers( input: {
 	report: import('./template-groups.js').TemplateGroupsReport;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	timeBudgetMs?: number;
+	/** Runtime-render stage budget; defaults to `runtimeRenderBudgetMs( timeBudgetMs )`. */
+	runtimeRenderBudgetMs?: number;
 	frontierUrls: string[];
 	governors: SourceRequestGovernors;
 	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
@@ -1448,13 +1450,14 @@ export async function deriveTemplateClusterMembers( input: {
 	const fallbackFailures = new Map< string, string >();
 	const runtimeResults = new Map< string, { observed: boolean; reason?: string } >();
 	if ( escalations.length && input.acquisition && ! input.governors.forOrigin( input.sourceUrl ).blockedClient ) {
-		const { acquireEscalatedMembers } = await import( './template-cluster-fallback.js' );
+		const { acquireEscalatedMembers, runtimeRenderBudgetMs } = await import( './template-cluster-fallback.js' );
 		const fallbackQueue = new ManifestQueue( manifestPath );
 		await fallbackQueue.init();
 		try {
 			const fallback = await acquireEscalatedMembers( {
 				outputDir: input.outputDir, sourceUrl: input.sourceUrl, routeScope: input.routeScope, profile: input.acquisition,
-				governors: input.governors, members: escalations, queue: fallbackQueue, maxTotalBytes: input.maxTotalBytes, deadline: lateDeadline,
+				governors: input.governors, members: escalations, queue: fallbackQueue, maxTotalBytes: input.maxTotalBytes,
+				runtimeRenderBudgetMs: input.runtimeRenderBudgetMs ?? runtimeRenderBudgetMs( input.timeBudgetMs ),
 			} );
 			httpAcquiredUrls.push( ...fallback.acquired );
 			for ( const [ url, result ] of fallback.runtime ) runtimeResults.set( url, result );

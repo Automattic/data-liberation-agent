@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { withTimeout } from './concurrency.js';
+import { mapPool, withTimeout } from './concurrency.js';
 import type { HttpAcquisitionProfile } from '../platform/acquisition.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
@@ -45,8 +45,8 @@ export async function acquireEscalatedMembers( input: {
 	members: readonly EscalatedMember[];
 	queue: ManifestQueue;
 	maxTotalBytes?: number;
-	/** Shared deadline for the post-capture stage. */
-	deadline?: number;
+	/** Budget for runtime renders, measured from the start of that stage. */
+	runtimeRenderBudgetMs?: number;
 } ): Promise< EscalationFallback > {
 	const { acquireHttpDocuments } = await import( './http-acquisition.js' );
 	const { CapturedResourceStore } = await import( './screenshot/resource-capture.js' );
@@ -70,9 +70,13 @@ export async function acquireEscalatedMembers( input: {
 	} catch ( error ) {
 		return failAll( error instanceof Error ? error.message : String( error ) );
 	}
-	let browser: import('playwright').Browser | undefined;
 	const byUrl = new Map( documents.map( document => [ document.url, document ] ) );
 	const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
+	const sourcePath = ( url: string ): string | undefined => {
+		const document = byUrl.get( url );
+		return document?.status === 'acquired' && document.documentPath ? resolve( fallbackDir, document.documentPath ) : undefined;
+	};
+	const rendered = await renderRuntimeMembers( input, sourcePath, result.runtime );
 	try {
 		for ( const member of input.members ) {
 			const document = byUrl.get( member.url );
@@ -85,43 +89,7 @@ export async function acquireEscalatedMembers( input: {
 				continue;
 			}
 			try {
-				const source = resolve( fallbackDir, document.documentPath );
-				let html = readFileSync( source, 'utf8' );
-				if ( member.gate === 'runtime_mount_member_keyed' || member.gate === 'runtime_slot_content' ) {
-					let context: import('playwright').BrowserContext | undefined;
-					let timer: ReturnType< typeof setTimeout > | undefined;
-					try {
-						const remaining = Math.min( 15_000, ( input.deadline ?? Date.now() + 15_000 ) - Date.now() );
-						if ( remaining <= 0 ) throw new Error( 'runtime render budget exhausted' ); // failure-class: operational
-						const { connectBrowser, createSourceContext, sourceContextOptions } = await import( './browser-kit/index.js' );
-						const { runtimeMountObserved, runtimeMountSelector } = await import( './template-clusters.js' );
-						const deadline = Date.now() + remaining;
-						browser ??= await withTimeout( connectBrowser( {} ), Math.max( 1, deadline - Date.now() ), 'runtime render browser startup', late => late.close() );
-						if ( Date.now() >= deadline ) throw new Error( 'runtime render budget exhausted during browser startup' ); // failure-class: operational
-						const options = await withTimeout( sourceContextOptions( browser, input.sourceUrl, { governors: input.governors } ), Math.max( 1, deadline - Date.now() ), 'runtime render source identity' );
-						context = await withTimeout( createSourceContext( browser, { ...options, viewport: { width: 1440, height: 900 } }, { governors: input.governors, sourceUrl: input.sourceUrl } ), Math.max( 1, deadline - Date.now() ), 'runtime render context', late => late.close() );
-						timer = setTimeout( () => { void context?.close().catch( () => {} ); }, Math.max( 1, deadline - Date.now() ) );
-						const page = await context.newPage();
-						await page.goto( member.url, { waitUntil: 'domcontentloaded', timeout: Math.max( 1, deadline - Date.now() ) } );
-						// Lazy recommendations often start only when their mount enters view.
-						const selector = member.runtimeAnchor ? runtimeMountSelector( html, member.runtimeAnchor ) : undefined;
-						if ( selector ) await page.locator( selector ).scrollIntoViewIfNeeded( { timeout: Math.max( 1, deadline - Date.now() ) } );
-						await page.waitForLoadState( 'networkidle', { timeout: Math.max( 1, Math.min( 1000, deadline - Date.now() ) ) } ).catch( () => {} );
-						let rendered = await page.content();
-						while ( member.runtimeAnchor && ! runtimeMountObserved( rendered, member.runtimeAnchor ) && Date.now() < deadline ) {
-							await page.waitForTimeout( Math.min( 100, deadline - Date.now() ) );
-							rendered = await page.content();
-						}
-						if ( member.runtimeAnchor && ! runtimeMountObserved( rendered, member.runtimeAnchor ) ) throw new Error( 'runtime mount remained empty' ); // failure-class: operational
-						html = rendered;
-						result.runtime.set( member.url, { observed: true } );
-					} catch ( error ) {
-						result.runtime.set( member.url, { observed: false, reason: `unobserved runtime mount: ${ member.reason }; ${ error instanceof Error ? error.message : String( error ) }` } );
-					} finally {
-						clearTimeout( timer );
-						await context?.close().catch( () => {} );
-					}
-				}
+				const html = rendered.get( member.url ) ?? readFileSync( sourcePath( member.url )!, 'utf8' );
 				await store.captureDomDependencies( html, document.finalUrl ?? member.url );
 				const slug = await input.queue.claimSlug( member.slug ?? slugify( member.url ) );
 				const htmlPath = `screenshots/http/${ slug }.html`;
@@ -138,8 +106,77 @@ export async function acquireEscalatedMembers( input: {
 			}
 		}
 	} finally {
-		await browser?.close().catch( () => {} );
 		await store.flush();
 	}
 	return result;
+}
+
+/** Runtime renders: their own budget, bounded concurrency, one browser. */
+export const RUNTIME_RENDER_LIMITS = { budgetMs: 300_000, perMemberMs: 15_000, concurrency: 3 };
+
+/** The render budget scales with an explicit capture budget, like the other stage limits. */
+export function runtimeRenderBudgetMs( timeBudgetMs: number | undefined ): number {
+	return timeBudgetMs === undefined ? RUNTIME_RENDER_LIMITS.budgetMs : Math.min( RUNTIME_RENDER_LIMITS.budgetMs, Math.max( 1, Math.floor( timeBudgetMs / 5 ) ) );
+}
+
+/**
+ * Render each runtime-gated member in Chromium and transplant only its filled
+ * mount into the prepared HTTP document. The budget starts with this stage, so
+ * earlier derivation rounds cannot spend it. Returns the transplanted documents.
+ */
+async function renderRuntimeMembers(
+	input: Parameters< typeof acquireEscalatedMembers >[ 0 ],
+	sourcePath: ( url: string ) => string | undefined,
+	runtime: EscalationFallback[ 'runtime' ]
+): Promise< Map< string, string > > {
+	const members = input.members.filter( member => ( member.gate === 'runtime_mount_member_keyed' || member.gate === 'runtime_slot_content' ) && sourcePath( member.url ) );
+	const rendered = new Map< string, string >();
+	if ( ! members.length ) return rendered;
+	const { connectBrowser, createSourceContext, sourceContextOptions } = await import( './browser-kit/index.js' );
+	const { runtimeMountObserved, runtimeMountSelector, transplantRuntimeMount } = await import( './template-clusters.js' );
+	const stageDeadline = Date.now() + ( input.runtimeRenderBudgetMs ?? RUNTIME_RENDER_LIMITS.budgetMs );
+	let browser: Promise< import('playwright').Browser > | undefined;
+	try {
+		await mapPool( members, RUNTIME_RENDER_LIMITS.concurrency, async member => {
+			let context: import('playwright').BrowserContext | undefined;
+			let timer: ReturnType< typeof setTimeout > | undefined;
+			try {
+				const deadline = Math.min( stageDeadline, Date.now() + RUNTIME_RENDER_LIMITS.perMemberMs );
+				if ( deadline <= Date.now() ) throw new Error( 'runtime render budget exhausted' ); // failure-class: operational
+				const html = readFileSync( sourcePath( member.url )!, 'utf8' );
+				const anchor = member.runtimeAnchor;
+				const selector = anchor ? runtimeMountSelector( html, anchor ) : undefined;
+				if ( ! anchor || ! selector ) throw new Error( 'runtime mount anchor does not resolve in the HTTP document' ); // failure-class: operational
+				const left = () => Math.max( 1, deadline - Date.now() );
+				browser ??= connectBrowser( {} );
+				const shared = await withTimeout( browser, left(), 'runtime render browser startup' );
+				const options = await withTimeout( sourceContextOptions( shared, input.sourceUrl, { governors: input.governors } ), left(), 'runtime render source identity' );
+				context = await withTimeout( createSourceContext( shared, { ...options, viewport: { width: 1440, height: 900 } }, { governors: input.governors, sourceUrl: input.sourceUrl } ), left(), 'runtime render context', late => late.close() );
+				timer = setTimeout( () => { void context?.close().catch( () => {} ); }, left() );
+				const page = await context.newPage();
+				await page.goto( member.url, { waitUntil: 'domcontentloaded', timeout: left() } );
+				// Lazy recommendations often start only when their mount enters view.
+				const liveSelector = runtimeMountSelector( await page.content(), anchor );
+				if ( liveSelector ) await page.locator( liveSelector ).scrollIntoViewIfNeeded( { timeout: left() } ).catch( () => {} );
+				await page.waitForLoadState( 'networkidle', { timeout: Math.min( 1000, left() ) } ).catch( () => {} );
+				let live = await page.content();
+				while ( ! runtimeMountObserved( live, anchor ) && Date.now() < deadline ) {
+					await page.waitForTimeout( Math.min( 100, left() ) );
+					live = await page.content();
+				}
+				const transplanted = runtimeMountObserved( live, anchor ) ? transplantRuntimeMount( html, live, anchor ) : undefined;
+				if ( ! transplanted || ! runtimeMountObserved( transplanted, anchor ) ) throw new Error( 'runtime mount remained empty' ); // failure-class: operational
+				rendered.set( member.url, transplanted );
+				runtime.set( member.url, { observed: true } );
+			} catch ( error ) {
+				runtime.set( member.url, { observed: false, reason: `unobserved runtime mount: ${ member.reason }; ${ error instanceof Error ? error.message : String( error ) }` } );
+			} finally {
+				clearTimeout( timer );
+				await context?.close().catch( () => {} );
+			}
+		} );
+	} finally {
+		void browser?.then( shared => shared.close(), () => {} ).catch( () => {} );
+	}
+	return rendered;
 }

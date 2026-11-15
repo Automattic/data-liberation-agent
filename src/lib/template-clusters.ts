@@ -168,6 +168,23 @@ export function runtimeMountSelector( html: string, anchor: SlotAnchor ): string
 	return [ 'body', ...path ].join( ' > ' );
 }
 
+/**
+ * Splice the live mount's children into the server document's mount, resolved
+ * through the same anchor. Every byte outside the mount's element content is
+ * the server document's own, so preparation and identity stay intact.
+ */
+export function transplantRuntimeMount( serverHtml: string, liveHtml: string, anchor: SlotAnchor ): string | undefined {
+	const live = cheerio.load( liveHtml );
+	const liveBody = live( 'body' )[ 0 ];
+	const liveMount = liveBody && resolveAnchor( liveBody, anchor, () => true );
+	const server = cheerio.load( serverHtml, { sourceCodeLocationInfo: true } );
+	const serverBody = server( 'body' )[ 0 ];
+	const serverMount = serverBody && resolveAnchor( serverBody, anchor, () => true );
+	const location = serverMount?.sourceCodeLocation;
+	if ( ! liveMount || ! location?.startTag || ! location.endTag ) return undefined;
+	return serverHtml.slice( 0, location.startTag.endOffset ) + ( live( liveMount ).html() ?? '' ) + serverHtml.slice( location.endTag.startOffset );
+}
+
 /** A script tag alone is not a filled mount; text, images and other markup are. */
 export function runtimeMountObserved( html: string, anchor: SlotAnchor ): boolean {
 	const selector = runtimeMountSelector( html, anchor );
