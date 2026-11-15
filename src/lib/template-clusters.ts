@@ -40,7 +40,8 @@ export const TEMPLATE_CLUSTER_LIMITS = {
 export type GateCode =
 	| 'cluster_key_mismatch' /** H_M's fingerprint is not the cluster's key. */
 	| 'slot_anchor_unmapped' /** a slot has no matching anchor in `D_R`. */
-	| 'runtime_slot_content' /** a slot carries scripts, handlers or embeds capture never observed. */;
+	| 'runtime_slot_content' /** a slot carries scripts, handlers or embeds capture never observed. */
+	| 'runtime_mount_member_keyed' /** a runtime-filled mount has different member attributes. */;
 
 export interface SlotStats {
 	/** Total mapped slots (subtree + text + attribute + head). */
@@ -357,6 +358,40 @@ function hydratedMounts( serverBody: Element, processedBody: Element, counts: Ma
 	return mounts;
 }
 
+/**
+ * Empty server mounts filled in capture cannot be reused with a different key
+ * or replaced by a member's pre-hydration content. Check even when the slot
+ * walk sees no differences: runtime keys can live in any attribute.
+ */
+function runtimeMountGate( serverBody: Element, memberBody: Element, processedBody: Element, counts: Map< string, number > ): MemberGate | undefined {
+	const hasContent = ( node: Element ): boolean => node.children.some( child => isElement( child ) || ( child.type === 'text' && normalizedWhitespace( child.data ) !== '' ) );
+	const walk = ( representative: Element, member: Element ): MemberGate | undefined => {
+		if ( ! hasContent( representative ) ) {
+			const anchor = slotAnchor( representative, serverBody, counts );
+			const matches = ( candidate: Element ) => describes( candidate, representative.name, classTokens( representative ) );
+			const captured = resolveAnchor( processedBody, anchor, matches );
+			if ( captured && matches( captured ) && hasContent( captured ) ) {
+				const attributes = new Set( [ ...Object.keys( representative.attribs ), ...Object.keys( member.attribs ) ] );
+				if ( [ ...attributes ].some( attribute => representative.attribs[ attribute ] !== member.attribs[ attribute ] ) ) {
+					return { code: 'runtime_mount_member_keyed', reason: `runtime-filled mount at ${ describeAnchor( anchor ) } has different member attributes` };
+				}
+				if ( hasContent( member ) ) {
+					return { code: 'runtime_slot_content', reason: `member content at ${ describeAnchor( anchor ) } replaces a runtime-filled mount capture never observed for this member` };
+				}
+			}
+		}
+		// Follow the server slot walk only while children still correspond.
+		if ( elementDescriptor( representative ) !== elementDescriptor( member ) ) return;
+		const repChildren = slotChildren( representative ), memberChildren = slotChildren( member );
+		if ( repChildren.length !== memberChildren.length ) return;
+		for ( let index = 0; index < repChildren.length; index++ ) {
+			const gate = walk( repChildren[ index ]!, memberChildren[ index ]! );
+			if ( gate ) return gate;
+		}
+	};
+	return walk( serverBody, memberBody );
+}
+
 /** The `url()` values of an inline style, in order. */
 function styleUrls( style: string | undefined ): string[] {
 	return [ ...( style ?? '' ).matchAll( /url\(\s*["']?([^"')]+)/g ) ].map( match => match[ 1 ]!.trim() );
@@ -497,6 +532,9 @@ export function deriveMemberDocument( input: {
 	if ( ! repBody || ! memberBody || ! processedBody ) {
 		return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: 'the representative or member document has no body element' } };
 	}
+	const anchorCounts = anchorValueCounts( repBody );
+	const mountGate = runtimeMountGate( repBody, memberBody, processedBody, anchorCounts );
+	if ( mountGate ) return { ok: false, gate: mountGate };
 	const slots: Slot[] = [];
 	findServerSlots( repBody, memberBody, slots );
 	if ( ! slots.length ) {
@@ -504,7 +542,6 @@ export function deriveMemberDocument( input: {
 		// in content. That is a legitimate derived member with zero slots.
 		return { ok: true, html: withMemberFeaturedImage( input.repProcessedHtml, input.featuredImages ), stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
 	}
-	const anchorCounts = anchorValueCounts( repBody );
 	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
 	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
 	// Content gate before any mapping: one runtime-only slot escalates the member.

@@ -291,6 +291,40 @@ describe( 'server-empty hydration mounts (#1775)', () => {
 	} );
 } );
 
+describe( 'runtime-filled mount member gates (#1840)', () => {
+	const page = ( mount: string ) => `<html><head><title>Page</title></head><body><main class="entry-content">${ mount }</main></body></html>`;
+	const derive = ( representative: string, captured: string, member: string ) => deriveMemberDocument( {
+		repServerHtml: page( representative ), repProcessedHtml: page( captured ),
+		memberServerHtml: page( member ), baseUrl: BASE,
+	} );
+
+	it.each( [
+		[ 'changed', ' data-id="1"', ' data-id="2"' ],
+		[ 'added', '', ' data-id="2"' ],
+		[ 'removed', ' data-id="1"', '' ],
+	] )( 'escalates a filled mount with a %s member attribute even without slots', ( _label, repAttributes, memberAttributes ) => {
+		const result = derive( `<x-recs${ repAttributes }></x-recs>`, `<x-recs${ repAttributes }><p>Recommendations</p></x-recs>`, `<x-recs${ memberAttributes }></x-recs>` );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'runtime_mount_member_keyed' } } );
+	} );
+
+	it( 'escalates static member content replacing a hydrated mount', () => {
+		const result = derive( '<div id="w"></div>', '<div id="w"><p>Runtime reviews</p></div>', '<div id="w"><p>static</p></div>' );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'runtime_slot_content' } } );
+	} );
+
+	it( 'keeps an identically keyed empty member mount hydrated', () => {
+		const mount = '<x-recs data-id="1"></x-recs>';
+		const captured = '<x-recs data-id="1"><p>Recommendations</p></x-recs>';
+		const result = derive( mount, captured, mount );
+		expect( result ).toMatchObject( { ok: true, html: page( captured ) } );
+	} );
+
+	it( 'keeps ordinary empty elements outside the runtime gate', () => {
+		const result = derive( '<x-recs data-id="1"></x-recs>', '<x-recs data-id="1"></x-recs>', '<x-recs data-id="2"></x-recs>' );
+		expect( result ).toMatchObject( { ok: true } );
+	} );
+} );
+
 describe( 'head slots pair head elements only (#784)', () => {
 	it( 'keeps body titles a malformed template emits after </html>, and titles the head from the first one', () => {
 		// Blogger templates can write `<title>` elements after `</html>`. The
