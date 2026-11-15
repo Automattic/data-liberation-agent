@@ -803,7 +803,9 @@ async function runCaptureWebsite(
 		};
 		writeFileSync( captureReceiptPath, `${ JSON.stringify( result, null, 2 ) }\n` );
 		progress( { phase: 'complete', current: screenshotResult.captured + screenshotResult.skipped, total: screenshotResult.urls.length } );
-		if ( blockedClient ) throw blockedClient; // failure-class: operational
+		// A refusal after the entrypoint truncates the capture like a spent
+		// budget: the receipt carries the evidence and the partial site ships.
+		if ( blockedClient && ! entrypointCaptured ) throw blockedClient; // failure-class: operational
 		return result;
 	}
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
@@ -871,6 +873,7 @@ async function runCaptureWebsite(
 	process.stderr.write( `[timing] behavior-discovery ${ Date.now() - behaviorStartedAt }ms\n` );
 	const finalSummary = withExportDroppedRoutes( summary, receipt.discoveryDiagnostics );
 	const complete =
+		! blockedClient &&
 		finalSummary.routesFailed === 0 &&
 		! hasUncapturedProfiles( receipt.discoveryDiagnostics ) &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
@@ -902,7 +905,6 @@ async function runCaptureWebsite(
 	reference.finalize( captureReceiptPath );
 	process.stderr.write( `[timing] reference-finalize ${ Date.now() - referenceStartedAt }ms\n` );
 	progress( { phase: 'complete', current: urls.length, total: urls.length } );
-	if ( blockedClient ) throw blockedClient; // failure-class: operational
 
 	if ( options.strict && ! complete ) throw new IncompleteCaptureError( result );
 	return result;

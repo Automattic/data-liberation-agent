@@ -440,7 +440,7 @@ describe( 'captureWebsite completeness', () => {
 		expect( isUsableCapture( result ) ).toBe( true );
 	} );
 
-	it( 'publishes refusal evidence then surfaces the specific failure to callers', async () => {
+	it( 'ships a capture the source refused after its entrypoint as a partial site with the refusal evidence', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		const { SourceBlockedClientError } = await import( './source-request-governor.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
@@ -453,9 +453,10 @@ describe( 'captureWebsite completeness', () => {
 		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
 		writeFileSync( join( root, 'html', 'home.html' ), '<main><h1>Fixture</h1></main>' );
 		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
-		await expect( captureWebsite( { url: sourceUrl, outputDir: root }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
 			findAdapter: () => ( { id: 'generic', discover: async () => ( { urls: [] } ) } ),
-		} ) ).rejects.toBe( blocked );
+		} );
+		expect( result ).toMatchObject( { complete: false, entrypointCaptured: true } );
 		const receipt = JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'source_blocked_client', requestsBeforeFirstRefusal: 10, firstRefusalAt: blocked.evidence.firstRefusalAt } ) );
 	} );
