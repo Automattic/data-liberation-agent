@@ -54,4 +54,45 @@ describe( 'failed template cluster HTTP fallback', () => {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	} );
+
+	it( 'derives each member from every document the representative ships (#1814)', async () => {
+		const parent = join( process.cwd(), '.tmp-test' );
+		mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'cluster-documents-' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const urls = [ 'representative', 'verification', 'member' ].map( slug => `https://fixture.example/${ slug }/` );
+		const page = ( url: string, layout = '' ) => `<html><head><title>Fixture</title></head><body><nav>${ layout }</nav><article id="post"><h1>${ new URL( url ).pathname }</h1><p>Complete post content.</p></article></body></html>`;
+		const layouts = { desktop: '', mobile: 'phone', middle: 'tablet' } as const;
+		const document = ( i: number, key: keyof typeof layouts ) => {
+			writeFileSync( join( outputDir, `screenshots/${ i }.${ key }.html` ), page( urls[ i ]!, layouts[ key ] ) );
+			return `screenshots/${ i }.${ key }.html`;
+		};
+		const profile = { viewport: { width: 1440, height: 900 } };
+		const entries = {
+			[ urls[ 0 ]! ]: { slug: 'post-0', html: document( 0, 'desktop' ), mobileHtml: document( 0, 'mobile' ), capturedAt: new Date().toISOString(), profiles: Object.fromEntries( ( [ 'desktop', 'mobile', 'middle' ] as const ).map( key => [ key, { ...profile, html: document( 0, key ) } ] ) ) },
+			[ urls[ 1 ]! ]: { slug: 'post-1', html: document( 1, 'desktop' ), capturedAt: new Date().toISOString() },
+		};
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const fetch = vi.spyOn( fetching, 'safeFetch' ).mockImplementation( async url => ( {
+			body: Buffer.from( page( String( url ) ) ), status: 200, finalUrl: String( url ), headers: new Headers( { 'content-type': 'text/html' } ),
+		} ) );
+		try {
+			const result = await deriveTemplateClusterMembers( {
+				sourceUrl: urls[ 0 ]!, outputDir, frontierUrls: [], governors: new SourceRequestGovernors(),
+				report: {
+					schema: TEMPLATE_GROUPS_SCHEMA, sourceUrl: urls[ 0 ]!, fingerprint: { version: 1, maxSkeletonDepth: 8 },
+					limits: { ...TEMPLATE_GROUPING_LIMITS }, throttle: { events: 0 }, unfingerprinted: [],
+					coverage: { routes: 3, fingerprinted: 3, unfingerprinted: 0, groups: 1, singletons: 0 },
+					groups: [ { id: 't1', ...templateFingerprint( page( urls[ 0 ]! ), urls[ 0 ]! ), representative: urls[ 0 ]!, size: 3, members: urls } ],
+				},
+			} );
+			expect( result.summary ).toMatchObject( { derived: 1, escalated: 0 } );
+			const member = JSON.parse( readFileSync( join( outputDir, 'screenshots/manifest.json' ), 'utf8' ) ).entries[ urls[ 2 ]! ];
+			const shipped = Object.fromEntries( Object.entries( member.profiles as Record< string, { html: string } > ).map( ( [ key, { html } ] ) => [ key, readFileSync( join( outputDir, html ), 'utf8' ) ] ) );
+			expect( shipped ).toEqual( { desktop: page( urls[ 2 ]!, layouts.desktop ), mobile: page( urls[ 2 ]!, layouts.mobile ), middle: page( urls[ 2 ]!, layouts.middle ) } );
+		} finally {
+			fetch.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 } );

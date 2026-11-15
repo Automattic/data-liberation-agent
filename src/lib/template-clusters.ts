@@ -701,11 +701,15 @@ export function compareDerivedWithCapture( input: {
 	const derived = cheerio.load( input.derivedHtml );
 	const real = cheerio.load( input.realHtml );
 	// Rendered text only: inline script and style bodies carry per-request
-	// values (render timestamps, nonces) that no two documents share.
+	// values (render timestamps, nonces) that no two documents share. So does
+	// a clock a runtime prints at capture time ("Last refreshed at: <Date>"):
+	// the two documents were captured at different moments, not derived wrong.
 	const documentText = ( $: cheerio.CheerioAPI ): string => {
 		const body = $( 'body' ).clone();
 		body.find( 'script, style, noscript, template' ).remove();
-		return normalizedWhitespace( body.text() );
+		return normalizedWhitespace( body.text() )
+			.replace( /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{2} \d{4} \d{2}:\d{2}:\d{2} GMT[+-]\d{4}(?: \([^)]*\))?/g, '<clock>' )
+			.replace( /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})\b/g, '<clock>' );
 	};
 	// Relative URLs in the member's server HTML resolve like a browser would:
 	// the real capture carries absolute, localized URLs.

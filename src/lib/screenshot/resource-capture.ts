@@ -799,6 +799,12 @@ export class CapturedResourceStore {
 					else if ( url && ! this.manifest.resources[ url ] ) deferMedia( url );
 				}
 			} );
+			if ( deferMedia && ! cssOnly ) $( '[style]' ).each( ( _, element ) => {
+				for ( const match of ( $( element ).attr( 'style' ) ?? '' ).matchAll( /url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)/gi ) ) {
+					const url = absolute( decodeCssUrl( match[ 1 ] ?? match[ 2 ] ?? '' ), baseUrl );
+					if ( url && ! this.manifest.resources[ url ] ) deferMedia( url );
+				}
+			} );
 			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl, true );
 			$( 'link[href]' ).each( ( _, element ) => {
 				const node = $( element );
@@ -819,9 +825,11 @@ export class CapturedResourceStore {
 						...$( 'style' )
 							.map( ( _, element ) => $( element ).html() ?? '' )
 							.get(),
-						...$( '[style]' )
+						// Deferred mode: inline-style images (a per-member hero or
+						// thumbnail background) are media, queued like <img>.
+						...( deferMedia ? [] : $( '[style]' )
 							.map( ( _, element ) => $( element ).attr( 'style' ) ?? '' )
-							.get(),
+							.get() ),
 				  ].join( '\n' );
 			// A catalog declaration is not evidence that a face is used. Fonts
 			// already requested by the browser are stored by the response listener;
