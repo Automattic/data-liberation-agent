@@ -7,14 +7,15 @@ import { SourceRequestGovernors } from './source-request-governor.js';
 import { templateFingerprint, TEMPLATE_GROUPING_LIMITS, TEMPLATE_GROUPS_SCHEMA } from './template-groups.js';
 
 describe( 'failed template cluster HTTP fallback', () => {
-	it.each( [ 'gate', 'comparison', 'missing' ] )( 'acquires every uncaptured member after %s verification failure', async failure => {
+	it.each( [ 'gate', 'comparison', 'missing', 'representative' ] )( 'acquires every uncaptured member after %s verification failure', async failure => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );
 		const outputDir = mkdtempSync( join( parent, 'cluster-escalation-' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
 		const urls = [ 'representative', 'verification', 'member-a', 'member-b' ].map( slug => `https://fixture.example/${ slug }/` );
 		const page = ( url: string ) => `<html><head><title>Fixture</title></head><body><article id="post"><h1>${ new URL( url ).pathname }</h1><p>Complete post content.</p></article></body></html>`;
-		const captured = failure === 'missing' ? urls.slice( 0, 1 ) : urls.slice( 0, 2 );
+		// `representative`: its capture failed, so the captured member stands in (#1868).
+		const captured = failure === 'missing' ? urls.slice( 0, 1 ) : failure === 'representative' ? urls.slice( 1, 2 ) : urls.slice( 0, 2 );
 		const entries = Object.fromEntries( captured.map( ( url, i ) => {
 			// No mapped article anchor is left in the representative, or the
 			// verification capture has different text from its server document.
@@ -41,7 +42,7 @@ describe( 'failed template cluster HTTP fallback', () => {
 			const omitted = urls.filter( url => ! captured.includes( url ) ).sort( ( a, b ) => a.localeCompare( b ) );
 			expect( result.summary ).toMatchObject( { derived: 0, escalated: omitted.length, httpAcquired: omitted.length, unavailable: 0 } );
 			expect( result.summary.httpAcquiredUrls ).toEqual( omitted );
-			const gate = failure === 'missing' ? 'cluster_verification_missing' : failure === 'comparison' ? 'cluster_verification_mismatch' : 'slot_anchor_unmapped';
+			const gate = failure === 'missing' || failure === 'representative' ? 'cluster_verification_missing' : failure === 'comparison' ? 'cluster_verification_mismatch' : 'slot_anchor_unmapped';
 			expect( result.receipt.clusters[ 0 ]!.escalated ).toEqual( omitted.map( url => expect.objectContaining( { url, gate, fallback: { acquired: true } } ) ) );
 			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots/manifest.json' ), 'utf8' ) );
 			for ( const url of omitted ) {
