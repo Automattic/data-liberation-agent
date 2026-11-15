@@ -10,4 +10,13 @@ export type { DefaultInventory } from './types.js';
 export const defaultAdapter: PlatformAdapter = {
   id: 'default',
   discover: discoverDefault,
+  resolveImageOriginal(value) {
+    const url = new URL(value);
+    // Base44's public CDN encodes transformations after the original filename.
+    if (url.hostname !== 'media.base44.com') return undefined;
+    const original = /^(\/images\/public\/[^/]+\/[^/]+)\/v1\/(?:fill|fit|crop)\//i.exec(url.pathname)?.[1];
+    if (!original) return undefined;
+    url.pathname = original;
+    return url.href;
+  },
 };

@@ -4669,6 +4669,27 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'website', 'media', 'prefix.png' ) ) ).toBe( false );
 	} );
 
+	it( 'reports only retained image failures and names missing verified files', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		const retained = 'https://media.base44.com/images/public/app/retained.jpg';
+		const discarded = 'https://media.base44.com/images/public/app/discarded.jpg';
+		capture.file( 'html/homepage.html', `<main><img src="${ retained }"></main>` );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
+		const stubs = MediaStubStore.load( outputDir );
+		const images = [ retained, discarded ].map( ( url, index ) => {
+			const localPath = join( outputDir, 'media', `${ index }.jpg` );
+			stubs.markSuccess( url, localPath );
+			return { kind: 'image', source_urls: [ url ], references: [], resolved_original: url, local_path: localPath,
+				original: { source_url: url, content_type: 'image/jpeg', width: 20, height: 10, sha256: 'missing' } };
+		} );
+		stubs.flush();
+		capture.json( 'image-assets.json', { version: 1, images } );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.discoveryDiagnostics.filter( ( item: { code: string } ) => item.code === 'image_resource_unresolved' ) ).toEqual( [ expect.objectContaining( { url: retained, reason: 'verified resource file is missing from disk' } ) ] );
+	} );
+
 	it( 'keeps original and hard-crop references with their own pictures in one media family', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
 		const outputDir = capture.build();

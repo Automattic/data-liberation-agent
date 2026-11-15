@@ -918,7 +918,7 @@ function buildExportCapture(
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
-	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, imageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes } );
+	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, referencedImageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes } );
 	routeCaptureDiagnostics.push( ...mediaCandidateDiagnostics );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
@@ -964,8 +964,10 @@ function buildExportCapture(
 	mediaReplacements = resourceStage.mediaReplacements;
 	portablePathsBySource = resourceStage.portablePathsBySource;
 	const unresolvedMediaReasons = new Map( unresolvedMedia.map( ( { url, error } ) => [ url, error ] ) );
-	for ( const record of imageAssets ) {
-		if ( ! record.original || ! portablePathsBySource.has( record.original.source_url ) ) routeCaptureDiagnostics.push( { code: ! record.kind || record.kind === 'image' ? 'image_resource_unresolved' : 'asset_resource_unresolved', url: record.source_urls[ 0 ], reason: unresolvedMediaReasons.get( record.original?.source_url ?? record.resolved_original ) ?? record.error ?? 'Verified resource original could not be exported within the portable limits', unit: 'asset', severity: 'error' } );
+	// Acquisition inventories every captured document, including discarded route
+	// aliases. Only uses retained by candidate collection can be export failures.
+	for ( const record of referencedImageAssets ) {
+		if ( ! record.original || ! portablePathsBySource.has( record.original.source_url ) ) routeCaptureDiagnostics.push( { code: ! record.kind || record.kind === 'image' ? 'image_resource_unresolved' : 'asset_resource_unresolved', url: record.source_urls[ 0 ], reason: unresolvedMediaReasons.get( record.original?.source_url ?? record.resolved_original ) ?? record.source_urls.map( url => unresolvedMediaReasons.get( url ) ).find( Boolean ) ?? record.error ?? 'Verified resource original could not be exported within the portable limits', unit: 'asset', severity: 'error' } );
 	}
 	assets.push( ...resourceStage.assets );
 	const { resourceReplacements, unresolvedDependencies, rejectedReplacementKeys } = resourceStage;
