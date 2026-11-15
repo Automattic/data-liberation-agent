@@ -2,12 +2,13 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { navigateSourceDocument, SOURCE_NAVIGATION_LIMITS } from '../source-navigation.js';
 
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('same-document refresh capture', () => {
-	it.each(['meta', 'header'] as const)('retains a normal 200 heading with a 60-second %s refresh and no destination', async mechanism => {
+	it.for(['meta', 'header'] as const)('retains a normal 200 heading with a 60-second %s refresh and no destination', { timeout: 60_000 }, async (mechanism, { newPage }) => {
 		const source = createServer((_request, response) => {
 			response.setHeader('content-type', 'text/html');
 			if (mechanism === 'header') response.setHeader('refresh', '60');
@@ -17,9 +18,9 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const url = `http://127.0.0.1:${(source.address() as {port:number}).port}/`;
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, {recursive: true});
 		const directory = mkdtempSync(join(parent, 'refresh-baseline-'));
-		const browser = await chromium.launch();
+
 		try {
-			const page = await browser.newPage(); const requests: string[] = [];
+			const page = await newPage(); const requests: string[] = [];
 			page.on('request', request => requests.push(request.url()));
 			// Browser baseline: this declaration loads the source document normally.
 			expect((await page.goto(url))!.status()).toBe(200);
@@ -34,10 +35,10 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const entry = JSON.parse(readFileSync(join(directory,'screenshots/manifest.json'),'utf8')).entries[url];
 			expect(entry.externalRedirect).not.toBe(true); expect(entry.redirectedTo).toBeUndefined();
 			expect(readFileSync(join(directory,entry.html),'utf8')).toContain('Ordinary refresh heading');
-		} finally { await browser.close(); source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); rmSync(directory,{recursive:true,force:true}); }
-	}, 60_000);
+		} finally {  source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); rmSync(directory,{recursive:true,force:true}); }
+	});
 
-	it.each(['meta', 'header'] as const)('settles a finite immediate %s reload and bounds immediate/delayed reload loops', async mechanism => {
+	it.for(['meta', 'header'] as const)('settles a finite immediate %s reload and bounds immediate/delayed reload loops', { timeout: 60_000 }, async (mechanism, { newPage }) => {
 		const counts = new Map<string, number>();
 		const source = createServer((request, response) => {
 			const path = request.url!; const count = (counts.get(path) ?? 0) + 1; counts.set(path,count);
@@ -49,9 +50,9 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		});
 		await new Promise<void>(resolve => source.listen(0,'127.0.0.1',resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port:number}).port}`;
-		const browser = await chromium.launch();
+
 		try {
-			const page = await browser.newPage(); const requests: string[] = [];
+			const page = await newPage(); const requests: string[] = [];
 			page.on('request', request => requests.push(request.url()));
 			const once = await navigateSourceDocument(page,`${origin}/once`);
 			expect(once.boundary).toBeUndefined(); expect(once.redirectedTo).toBeUndefined();
@@ -63,6 +64,6 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 				expect(counts.get(path)).toBeLessThanOrEqual(SOURCE_NAVIGATION_LIMITS.hops + 1);
 			}
 			expect(requests.every(request => new URL(request).origin === origin)).toBe(true);
-		} finally { await browser.close(); source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); }
-	}, 60_000);
+		} finally {  source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); }
+	});
 });

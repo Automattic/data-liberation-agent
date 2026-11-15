@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it, type BrowserFixtures } from '../../../test/browser.js';
+
 import { detectFromResponse } from '../../lib/detect-platform/detect-platform.js';
 import { resolvePlatform } from '../../index.js';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
@@ -36,12 +37,9 @@ function gammaPage( videoNodes: object[], renderedVideos = videoNodes.length ): 
 }
 
 describe( 'gamma platform', () => {
-	let browser: Browser;
-	beforeAll( async () => { browser = await chromium.launch(); } );
-	afterAll( async () => { await browser.close(); } );
 
-	async function prepared( html: string ) {
-		const page = await browser.newPage( { viewport: { width: 1280, height: 800 } } );
+	async function prepared( { newPage }: Pick<BrowserFixtures, 'newPage'>, html: string ) {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
 		await page.setContent( html );
 		await gammaAdapter.liberation!.prepare!( page, { url: 'https://fixture.test/', viewport: 'desktop' } );
 		return page;
@@ -62,8 +60,8 @@ describe( 'gamma platform', () => {
 		expect( gammaAdapter.resolveImageOriginal?.( 'https://site.test/_next/image?url=%2Fphoto.jpg&w=640' ) ).toBe( 'https://site.test/photo.jpg' );
 	} );
 
-	it( 'removes the nested Gamma badge wrapper and editor chrome, retaining card content', async () => {
-		const page = await prepared( gammaPage( [] ) );
+	it( 'removes the nested Gamma badge wrapper and editor chrome, retaining card content', async ({ newPage }) => {
+		const page = await prepared({ newPage },  gammaPage( [] ) );
 		try {
 			await applyCaptureRemovals( page, { removeSelectors: gammaAdapter.liberation?.removeSelectors, ctx: { url: 'https://fixture.test/', viewport: 'desktop' } } );
 			const report = await applySourceCleanup( page, cleanupPolicy( gammaAdapter.liberation?.cleanupRules ) );
@@ -75,8 +73,8 @@ describe( 'gamma platform', () => {
 		} finally { await page.close(); }
 	} );
 
-	it( 'gives each linked card the id its section links name, so they scroll without Gamma', async () => {
-		const page = await prepared( gammaPage( [] ) );
+	it( 'gives each linked card the id its section links name, so they scroll without Gamma', async ({ newPage }) => {
+		const page = await prepared({ newPage },  gammaPage( [] ) );
 		try {
 			expect( await page.locator( '#card-beta' ).getAttribute( 'data-card-id' ) ).toBe( 'beta' );
 			expect( await page.locator( '[data-card-id="unlinked"]' ).getAttribute( 'id' ) ).toBeNull();
@@ -85,11 +83,11 @@ describe( 'gamma platform', () => {
 		} finally { await page.close(); }
 	} );
 
-	it( 'keeps an id the card already has and never duplicates an existing target', async () => {
+	it( 'keeps an id the card already has and never duplicates an existing target', async ({ newPage }) => {
 		const html = gammaPage( [] )
 			.replace( 'data-card-id="alpha"', 'id="owner-id" data-card-id="alpha"' )
 			.replace( '<nav>', '<nav><span id="card-beta"></span>' );
-		const page = await prepared( html );
+		const page = await prepared({ newPage },  html );
 		try {
 			expect( await page.locator( '[data-card-id="alpha"]' ).getAttribute( 'id' ) ).toBe( 'owner-id' );
 			expect( await page.locator( '[data-card-id="beta"]' ).getAttribute( 'id' ) ).toBeNull();
@@ -97,8 +95,8 @@ describe( 'gamma platform', () => {
 		} finally { await page.close(); }
 	} );
 
-	it( 'replaces a loading video node with the embed from the published document', async () => {
-		const page = await prepared( gammaPage( [ video( 'https://www.youtube.com/embed/abc123?rel=0' ) ] ) );
+	it( 'replaces a loading video node with the embed from the published document', async ({ newPage }) => {
+		const page = await prepared({ newPage },  gammaPage( [ video( 'https://www.youtube.com/embed/abc123?rel=0' ) ] ) );
 		try {
 			const frame = page.locator( '.node-video iframe' );
 			expect( await frame.getAttribute( 'src' ) ).toBe( 'https://www.youtube.com/embed/abc123?rel=0' );
@@ -109,7 +107,7 @@ describe( 'gamma platform', () => {
 		} finally { await page.close(); }
 	} );
 
-	it( 'turns toggles, nested ones included, into native details that open without Gamma', async () => {
+	it( 'turns toggles, nested ones included, into native details that open without Gamma', async ({ newPage }) => {
 		const toggle = ( open: boolean, title: string, body: string ) =>
 			`<div class="react-renderer node-toggle block block-toggle"><div data-node-view-wrapper=""><div class="toggle box-style" data-open="${ open }"><div data-node-view-content=""><div data-node-view-content-inner="toggle">` +
 			`<div class="react-renderer node-toggleSummary" contenteditable="false" draggable="true"><div data-node-view-wrapper="" style="white-space:normal"><div class="chakra-text css-18qvlmk" style="display:flex;flex-direction:column;align-items:var(--flex-align)"><button type="button" contenteditable="false" draggable="true" class="chakra-button css-o7zlpc" data-testid="toggle-button"><p class="chakra-text css-c9cz2g"><svg class="svg-inline--fa fa-play"></svg></p></button><div dir="auto" class="themed-heading" style="white-space:pre-wrap;min-width:min(100%, 10em)"><div data-node-view-content-inner="toggleSummary">${ title }</div></div></div></div></div>` +
@@ -117,7 +115,7 @@ describe( 'gamma platform', () => {
 		const html = gammaPage( [] )
 			.replace( '<style>', '<style>body{font-size:18px;line-height:28.8px}.themed-heading{font-size:14px;line-height:20px}.block-toggle [data-open="false"] [data-node-view-content-inner="toggle"] > :not(:first-child){display:none}.animatable-on-load-content-parent:not(.animate-has-animated){opacity:0}' )
 			.replace( '<p>First</p>', toggle( false, 'Archive <strong>2025</strong>', `<div class="node-smartLayout animatable-on-load-content-parent"><p class="body">Outer body</p></div>${ toggle( false, 'More', '<p class="body">Inner body</p>' ) }` ) + toggle( true, 'Open one', '<p>Shown</p>' ) );
-		const page = await prepared( html );
+		const page = await prepared({ newPage },  html );
 		try {
 			expect( await page.locator( '[data-open]' ).count() ).toBe( 0 );
 			expect( await page.locator( 'details' ).count() ).toBe( 3 );
@@ -144,12 +142,12 @@ describe( 'gamma platform', () => {
 		} finally { await page.close(); }
 	} );
 
-	it( 'leaves video nodes alone when they cannot be paired with a safe embed', async () => {
+	it( 'leaves video nodes alone when they cannot be paired with a safe embed', async ({ newPage }) => {
 		for ( const html of [
 			gammaPage( [ video( 'https://www.youtube.com/embed/abc123' ) ], 2 ),
 			gammaPage( [ video( 'javascript:alert(1)' ) ] ),
 		] ) {
-			const page = await prepared( html );
+			const page = await prepared({ newPage },  html );
 			try {
 				expect( await page.locator( '.node-video iframe' ).count() ).toBe( 0 );
 				expect( await page.locator( '.node-video .chakra-spinner' ).count() ).toBeGreaterThan( 0 );

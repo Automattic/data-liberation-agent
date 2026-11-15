@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 import { load } from 'cheerio';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 
@@ -10,7 +11,7 @@ const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chrom
 
 // One real capture (~5 seconds): a desktop list is a phone drawer, not a
 // permanently closed dialog. Its external runtime must not leak opened classes.
-it.skipIf(skipBrowser)('exports an aria-controls list with resting attributes and preserves phone replay', async () => {
+it.skipIf(skipBrowser)('exports an aria-controls list with resting attributes and preserves phone replay', async ({ newPage }) => {
   const server = createServer((request, response) => {
     if (request.url === '/app.js') {
       response.setHeader('content-type', 'application/javascript');
@@ -33,9 +34,9 @@ it.skipIf(skipBrowser)('exports an aria-controls list with resting attributes an
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-  const browser = await chromium.launch({ headless: true });
+
   try {
-    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const source = await newPage({ viewport: { width: 1440, height: 900 } });
     await source.goto(url);
     const captured = await source.content();
     await source.setViewportSize({ width: 390, height: 900 });
@@ -52,7 +53,7 @@ it.skipIf(skipBrowser)('exports an aria-controls list with resting attributes an
     expect(panel.hasClass('is-open')).toBe(false);
     expect(panel.attr('style')).toBeUndefined();
     $('script[src]').remove();
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent($.html());
     expect(await page.locator('#nav-list').isVisible()).toBe(true);
     await page.setViewportSize({ width: 390, height: 900 });
@@ -64,7 +65,7 @@ it.skipIf(skipBrowser)('exports an aria-controls list with resting attributes an
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect.poll(() => page.locator('#nav-list').isVisible()).toBe(true);
   } finally {
-    await browser.close();
+
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 }, 30000);

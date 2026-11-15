@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { mkdtempSync, mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer, type Server as HttpServer } from 'node:http';
@@ -15,10 +16,6 @@ import {
   type ScrollLockState,
   type OverlayDetection,
 } from './page-helpers.js';
-
-let browser: Browser;
-beforeAll(async () => { browser = await chromium.launch(); });
-afterAll(async () => { await browser.close(); });
 
 // A fully benign fixed/sticky element (e.g. a sticky site header).
 const benign = (over: Partial<OverlayCandidate> = {}): OverlayCandidate => ({
@@ -260,8 +257,8 @@ const MODAL_CLOSE_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
-  it('clicks the modal close button, restoring scroll and leaving chrome + no stamps', async () => {
-    const page = await browser.newPage();
+  it('clicks the modal close button, restoring scroll and leaving chrome + no stamps', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(MODAL_CLOSE_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);
@@ -283,8 +280,8 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
     }
   });
 
-  it('returns [] (never throws) on a page with no overlays', async () => {
-    const page = await browser.newPage();
+  it('returns [] (never throws) on a page with no overlays', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent('<!doctype html><body><main style="height:2000px">plain</main></body>');
     try {
       expect(await dismissOverlays(page)).toEqual([]);
@@ -293,8 +290,8 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
     }
   });
 
-  it('preserves pointer-inert decorative fixed layers instead of dismissing them', async () => {
-    const page = await browser.newPage();
+  it('preserves pointer-inert decorative fixed layers instead of dismissing them', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><style>
       body { margin: 0; overflow: hidden; }
       #wall, #shade { position: fixed; inset: 0; pointer-events: none; }
@@ -308,8 +305,8 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
     } finally { await page.close(); }
   });
 
-  it('preserves a full-viewport application canvas on a scroll-locked page', async () => {
-    const page = await browser.newPage();
+  it('preserves a full-viewport application canvas on a scroll-locked page', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><style>
       body { margin: 0; overflow: hidden; }
       #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
@@ -324,8 +321,8 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
 });
 
 describe('dismissOverlays — a layer holding the page content (Playwright)', () => {
-  it('leaves a full-viewport, high-z root that contains the page content in place', async () => {
-    const page = await browser.newPage();
+  it('leaves a full-viewport, high-z root that contains the page content in place', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><style>
       body { margin: 0; }
       #root { position: fixed; inset: 0; z-index: 100000; background: #fff; }
@@ -361,8 +358,8 @@ const MODAL_ESCAPE_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — Tier 2 Escape (Playwright)', () => {
-  it('falls back to Escape when there is no close control', async () => {
-    const page = await browser.newPage();
+  it('falls back to Escape when there is no close control', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(MODAL_ESCAPE_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);
@@ -395,8 +392,8 @@ const CONSENT_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — consent banner (Playwright)', () => {
-  it('preserves ordinary in-flow cookie preference content with an action control', async () => {
-    const page = await browser.newPage();
+  it('preserves ordinary in-flow cookie preference content with an action control', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><body><main>
       <section class="cookie-preferences"><h2>Cookie preferences</h2><p>Edit cookie preferences for this account.</p><button>Save preferences</button></section>
       <p>${'Useful account content. '.repeat(50)}</p>
@@ -409,8 +406,8 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
     }
   });
 
-  it('preserves business chrome when a static consent notice is nested inside its header', async () => {
-    const page = await browser.newPage();
+  it('preserves business chrome when a static consent notice is nested inside its header', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><style>
       body { margin: 0; }
       header { position: fixed; top: 0; width: 100%; height: 180px; z-index: 1000; }
@@ -431,8 +428,8 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
     }
   });
 
-  it('keeps a script-pinned header inside a placeholder wrapper with its menu links', async () => {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  it('keeps a script-pinned header inside a placeholder wrapper with its menu links', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 1280, height: 800 } });
     // A jQuery-sticky style plugin: wraps the header in a placeholder that keeps
     // its height, then pins the header (fixed) even at the top of the page. The
     // menu links to a privacy policy page, which is navigation, not consent.
@@ -477,8 +474,8 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
     }
   });
 
-  it('dismisses a shadow consent host by its action control', async () => {
-    const page = await browser.newPage();
+  it('dismisses a shadow consent host by its action control', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><body><aside id="usercentrics-cmp-ui"></aside><main style="height:2000px">Page content stays.</main>
       <script>
         const host = document.querySelector('#usercentrics-cmp-ui');
@@ -498,8 +495,8 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
     }
   });
 
-  it('dismisses a cookie banner, preferring reject', async () => {
-    const page = await browser.newPage();
+  it('dismisses a cookie banner, preferring reject', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(CONSENT_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);
@@ -513,8 +510,8 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
     }
   });
 
-  it('dismisses consent nested in a semantic header without removing logo or navigation', async () => {
-    const page = await browser.newPage();
+  it('dismisses consent nested in a semantic header without removing logo or navigation', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><style>
       header { position: fixed; inset: 0 0 auto; height: 150px; background: #111; color: white; }
       #nested-cookie { height: 80px; background: #222; }
@@ -544,8 +541,8 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
     }
   });
 
-  it('still dismisses an explicit modal dialog landmark', async () => {
-    const page = await browser.newPage();
+  it('still dismisses an explicit modal dialog landmark', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><body>
       <header id="modal-header" role="dialog" aria-modal="true" style="position:fixed;inset:0;background:white">
         <button aria-label="Close">×</button><p>Welcome to this site</p>
@@ -590,8 +587,8 @@ const STACKED_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — stacked overlays (Playwright)', () => {
-  it('clears a second overlay that only appears after the first is dismissed', async () => {
-    const page = await browser.newPage();
+  it('clears a second overlay that only appears after the first is dismissed', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(STACKED_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);
@@ -603,8 +600,8 @@ describe('dismissOverlays — stacked overlays (Playwright)', () => {
     }
   });
 
-  it('respects maxRounds: a single round leaves the late overlay', async () => {
-    const page = await browser.newPage();
+  it('respects maxRounds: a single round leaves the late overlay', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(STACKED_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page, { maxRounds: 1 });
@@ -628,8 +625,8 @@ const MODAL_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — Tier 3 hide in place (Playwright)', () => {
-  it('hides the overlay + backdrop and force-unlocks scroll as a last resort', async () => {
-    const page = await browser.newPage();
+  it('hides the overlay + backdrop and force-unlocks scroll as a last resort', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(MODAL_STUBBORN_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);
@@ -666,8 +663,8 @@ const CONSENT_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — consent reaching Tier 3 does not neutralize a full-screen sibling (Playwright)', () => {
-  it('hides only the consent strip, preserving an unrelated full-viewport fixed element', async () => {
-    const page = await browser.newPage();
+  it('hides only the consent strip, preserving an unrelated full-viewport fixed element', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(CONSENT_STUBBORN_FIXTURE);
     try {
       const dismissed = await dismissOverlays(page);

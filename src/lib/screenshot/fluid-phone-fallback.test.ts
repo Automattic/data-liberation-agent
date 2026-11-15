@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it, test } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 
@@ -18,7 +19,7 @@ function fixture( phone: boolean ) {
 	${ phone ? '<script>const update=()=>document.querySelector("main").style.width=innerWidth+"px";addEventListener("resize",update);update();</script>' : '' }</body></html>`;
 }
 
-it( 'keeps a fluid server-selected phone document below the evidenced tablet boundary', async () => {
+it( 'keeps a fluid server-selected phone document below the evidenced tablet boundary', async ({ newPage }) => {
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'fluid-phone-' ) );
@@ -29,7 +30,7 @@ it( 'keeps a fluid server-selected phone document below the evidenced tablet bou
 	} );
 	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 	const sourceUrl = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
-	const browser = await chromium.launch();
+
 	try {
 		const capture = await captureScreenshots( {
 			urls: [ sourceUrl ], outputDir, concurrency: 1, settleMs: 0, deviceMode: 'auto',
@@ -45,14 +46,14 @@ it( 'keeps a fluid server-selected phone document below the evidenced tablet bou
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( { switchWidth: 767, switchWidthSource: 'detected' } );
 		portable = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const copy = await browser.newPage();
+		const copy = await newPage();
 		await copy.goto( `${ sourceUrl }copy/` );
 		for ( const width of [ 390, 768, 1024, 1440 ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
 			await expect.poll( () => copy.locator( 'h1:visible' ).allTextContents() ).toEqual( [ width === 390 ? 'Phone document' : 'Desktop document' ] );
 		}
 	} finally {
-		await browser.close();
+
 		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
 		rmSync( outputDir, { recursive: true, force: true } );
 	}

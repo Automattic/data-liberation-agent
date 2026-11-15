@@ -1,13 +1,14 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureWebsite } from '../../index.js';
 
 // One browser capture (~20s): the image follows a definite CSS container whose
 // mobile rule is affine, while its desktop rule is proportional (#1215).
-it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'exports runtime image sizes across container breakpoints without the runtime', async () => {
+it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'exports runtime image sizes across container breakpoints without the runtime', async ({ newPage }) => {
 	const html = `<!doctype html><html><head><title>Responsive image</title><style>
 		body{margin:0}.owner{width:100%;height:35.9vw}img{display:block;object-fit:cover}
 		@media(max-width:999px){.owner{height:calc(67.2vw + 57px)}}
@@ -23,9 +24,9 @@ it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'exports runtime image sizes across
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'fluid-image-' ) );
-	const browser = await chromium.launch();
-	const source = await browser.newPage();
-	const copy = await browser.newPage( { javaScriptEnabled: false } );
+
+	const source = await newPage();
+	const copy = await newPage( { javaScriptEnabled: false } );
 	try {
 		await captureWebsite( { url, outputDir, trustedOrigins: [ url ], routeLimit: 1, deviceMode: 'reflow-only', learnFluid: true } );
 		await source.goto( url );
@@ -38,7 +39,7 @@ it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'exports runtime image sizes across
 			expect( await copy.locator( 'img' ).evaluate( node => node.getBoundingClientRect().height ), `${ width }px` ).toBeCloseTo( expected, 0 );
 		}
 	} finally {
-		await browser.close();
+
 		await new Promise( resolve => server.close( resolve ) );
 		rmSync( outputDir, { recursive: true, force: true } );
 	}

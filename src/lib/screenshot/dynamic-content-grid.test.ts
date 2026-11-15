@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium, type Page } from 'playwright';
-import { expect, it } from 'vitest';
+import { type Page } from 'playwright';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer, type StaticServer } from '../replicate/local-site/static-server.js';
@@ -37,16 +38,16 @@ async function cards(page: Page) {
   })));
 }
 
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps filterable grid disclosures closed through capture and replays open/close offline', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps filterable grid disclosures closed through capture and replays open/close offline', async ({ newPage }) => {
   const server = createServer((_request, response) => { response.writeHead(200, {'content-type': 'text/html'}); response.end(fixture); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as {port: number}).port}/`;
   mkdirSync('.tmp-test', {recursive:true});
   const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'grid-disclosures-'));
-  const browser = await chromium.launch();
+
   let preview: StaticServer | undefined;
   try {
-    const source = await browser.newPage();
+    const source = await newPage();
     await source.goto(url);
     expect(await cards(source)).toEqual(Array(4).fill({expanded:'false', height:0}));
     const capture = await captureScreenshots({urls:[url], primaryUrl:url, outputDir:directory, concurrency:1, settleMs:0, learnFluid:false,
@@ -56,7 +57,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps filterable grid disclosures clo
     });
     expect(capture.failed).toBe(0);
     exportWebsiteCapture({outputDir:directory, sourceUrl:url, platform:'default', summary:{routesFailed:capture.failed}, failures:[]});
-    const copy = await browser.newPage();
+    const copy = await newPage();
     preview = await startStaticServer(join(directory, 'website'));
     await copy.goto(`${preview.url}/`);
     expect(await cards(copy)).toEqual(Array(4).fill({expanded:'false', height:0}));
@@ -76,7 +77,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps filterable grid disclosures clo
     }
   } finally {
     await preview?.close();
-    await browser.close();
+
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(directory, {recursive:true, force:true});

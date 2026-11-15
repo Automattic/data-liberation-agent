@@ -1,5 +1,6 @@
-import { it, expect } from 'vitest';
-import { chromium } from 'playwright';
+import { expect } from 'vitest';
+import { it } from '../../test/browser.js';
+
 import * as cheerio from 'cheerio';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { captureTriggeredDialogs } from './screenshot/interaction-capture.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 
 // ~2 seconds per case: real WP render, source probing, portable replay.
-it.each( [ false, true ] )( 'preserves core-navigation resting state and phone replay (synthesized=%s)', async ( synthesized ) => {
+it.for( [ false, true ] )( 'preserves core-navigation resting state and phone replay (synthesized=%s)', { timeout: 30_000 }, async ( synthesized, { newPage } ) => {
 	const root = new URL( '../../test/fixtures/core-navigation/', import.meta.url );
 	const server = createServer( async ( request, response ) => {
 		const name = request.url === '/' ? 'index.html' : request.url!.slice( 1 );
@@ -20,9 +21,9 @@ it.each( [ false, true ] )( 'preserves core-navigation resting state and phone r
 	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 	const address = server.address() as { port: number };
 	const url = `http://127.0.0.1:${ address.port }/`;
-	const browser = await chromium.launch( { headless: true } );
+
 	try {
-		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		const page = await newPage( { viewport: { width: 390, height: 900 } } );
 		await page.goto( url );
 		await page.waitForFunction( () => !!document.querySelector( '.wp-block-navigation__responsive-dialog' ) );
 		// Let the actual core Interactivity API hydrate before source probing.
@@ -91,7 +92,7 @@ it.each( [ false, true ] )( 'preserves core-navigation resting state and phone r
 			}
 		}
 	} finally {
-		await browser.close();
+
 		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
 	}
-}, 30_000 );
+} );

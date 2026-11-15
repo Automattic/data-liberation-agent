@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { chromium as playwrightChromium } from 'playwright';
-import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it, test } from '../../../test/browser.js';
 import { captureGalleries, markGalleryRoots } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedGalleries } from '../static-galleries.js';
@@ -16,8 +17,8 @@ const pageWrapperFixture = `<!doctype html><html><body><div class="page-content"
 <section><h2>Stories</h2><div class="slider"><span class="prev" style="display:inline-block;width:20px;height:20px"></span><span class="next" style="display:inline-block;width:20px;height:20px"></span></div></section>
 </div></body></html>`;
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('bounds gallery roots and restores authored identity after failed capture', async () => {
-	const page = await sharedBrowser.newPage();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('bounds gallery roots and restores authored identity after failed capture', async ({ newPage }) => {
+	const page = await newPage();
 	await page.setContent(pageWrapperFixture);
 	expect(await markGalleryRoots(page)).toEqual([]);
 	expect(await page.locator('.page-content').getAttribute('id')).toBeNull();
@@ -54,8 +55,8 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChrom
 }, 90_000);
 
 // One browser page, no probing or navigation; expected wall time under a second.
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('wires phone gallery frames only into the document marked at the phone capture width', async () => {
-	const page = await sharedBrowser.newPage();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('wires phone gallery frames only into the document marked at the phone capture width', async ({ newPage }) => {
+	const page = await newPage();
 	const documents: string[] = [];
 	for (const width of [1440, 402]) {
 		await page.setViewportSize({ width, height: 900 });
@@ -81,22 +82,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChrom
 	await page.close();
 });
 
-let sharedBrowser: import('playwright').Browser;
-const chromium = {
-	executablePath: () => playwrightChromium.executablePath(),
-	launch: async () => new Proxy(sharedBrowser, {
-		get(target, property) {
-			if (property === 'close') return async () => {};
-			const value = Reflect.get(target, property, target);
-			return typeof value === 'function' ? value.bind(target) : value;
-		},
-	}),
-};
-beforeAll(async () => {
-	if (!process.env.SKIP_BROWSER_TESTS && existsSync(playwrightChromium.executablePath())) sharedBrowser = await playwrightChromium.launch();
-});
-afterEach(async () => { for (const context of sharedBrowser?.contexts() ?? []) await context.close(); });
-afterAll(async () => { await sharedBrowser?.close(); });
+
 
 const image = (index: number, full = false) =>
 	'data:image/svg+xml,' +
@@ -113,9 +99,9 @@ document.querySelector('[aria-label="Next image"]').onclick=()=>{current=(curren
 document.querySelectorAll('#stage [role=img]').forEach((node,i)=>node.onclick=()=>{large=i;show(document.getElementById('large'),large,'large-count');document.getElementById('overlay').classList.add('visible');});
 document.querySelector('[aria-label="Next slide"]').onclick=()=>{large=(large+1)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Previous slide"]').onclick=()=>{large=(large+2)%3;show(document.getElementById('large'),large,'large-count');};document.querySelector('[aria-label="Close gallery"]').onclick=()=>document.getElementById('overlay').classList.remove('visible');</script></body></html>`;
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'restores the same source nodes and nested scrollport pose after an offscreen gallery drive', async () => {
-		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'restores the same source nodes and nested scrollport pose after an offscreen gallery drive', async ({ newPage }) => {
+		const page = await newPage({viewport:{width:1440,height:900}});
 		await page.setContent(fixture.replace('<section id="gallery">','<div id="scrollport" style="height:450px;overflow:auto"><div style="height:900px"></div><section id="gallery">').replace('</section>','</section></div>'));
 		const scrollport = await page.locator('#scrollport').elementHandle();
 		const before = await scrollport!.evaluate(node=>({x:node.scrollLeft,y:node.scrollTop,style:node.getAttribute('style')}));
@@ -128,9 +114,9 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}, 20_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'waits for an initialized lightbox stage to materialize before proving its complete cycle', async () => {
-		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'waits for an initialized lightbox stage to materialize before proving its complete cycle', async ({ newPage }) => {
+		const page = await newPage({viewport:{width:1440,height:900}});
 		await page.setContent(fixture
 			.replace('<script>', '<script>const deferred=[...document.querySelectorAll("#large .frame")].slice(1);deferred.forEach(node=>node.remove());')
 			.replace("document.getElementById('overlay').classList.add('visible');", "document.getElementById('overlay').classList.add('visible');setTimeout(()=>{deferred.forEach(node=>document.getElementById('large').append(node));show(document.getElementById('large'),large,'large-count')},600);")
@@ -144,9 +130,9 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}, 20_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'keeps a decoded mobile modal without directional controls as observed incomplete evidence', async () => {
-		const page = await sharedBrowser.newPage({hasTouch:true,isMobile:true,viewport:{width:402,height:681}});
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'keeps a decoded mobile modal without directional controls as observed incomplete evidence', async ({ newPage }) => {
+		const page = await newPage({hasTouch:true,isMobile:true,viewport:{width:402,height:681}});
 		await page.setContent(fixture.replace('<div id="overlay">','<div id="overlay" role="dialog" aria-modal="true">')
 			.replace('aria-label="Next slide"','data-mobile-direction="next" style="display:none"')
 			.replace('aria-label="Previous slide"','data-mobile-direction="previous" style="display:none"')
@@ -163,9 +149,9 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}, 20_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'retains a decoded lightbox cycle when its inverse control starts outside the viewport', async () => {
-		const page = await sharedBrowser.newPage({viewport:{width:1440,height:900}});
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'retains a decoded lightbox cycle when its inverse control starts outside the viewport', async ({ newPage }) => {
+		const page = await newPage({viewport:{width:1440,height:900}});
 		await page.setContent(fixture.replace("large=(large+1)%3;show", "document.querySelector('[aria-label=\"Previous slide\"]').style.cssText='position:fixed;top:-200vh';large=(large+1)%3;show"));
 		const states = await captureGalleries(page);
 		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete',restoration:'verified'},closed:true},dialog:{htmlTruncated:false}});
@@ -173,23 +159,22 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}, 20_000,
 );
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('captures a bounded src-swap cycle in order', async ({ newPage }) => {
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('captures a bounded src-swap cycle in order', async () => {
-	const browser = await chromium.launch();
 	try {
-		const page = await browser.newPage();
+		const page = await newPage();
 		const colors = ['red', 'green', 'blue'];
 		await page.setContent(`<!doctype html><section id="swap"><div aria-label="Image gallery carousel"><div id="stage">${colors.slice(0, 3).map((_, i) => `<img src="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"><rect width="30" height="30" fill="${colors[i]}"/></svg>`)}">`).join('')}</div></div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>let n=0;const urls=[...document.querySelectorAll('#stage img')].map(x=>x.src);function update(){document.querySelectorAll('#stage img').forEach((x,i)=>x.src=urls[(n+i)%3])}document.querySelector('[aria-label="Next picture"]').onclick=()=>{n=(n+1)%3;update()};document.querySelector('[aria-label="Previous picture"]').onclick=()=>{n=(n+2)%3;update()}</script>`);
 		const states = await captureGalleries(page);
 		expect(states[0]?.gallery?.inline.coverage).toBe('complete');
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
-	} finally { await browser.close(); }
+	} finally {  }
 }, 60_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('rejects a src-swap cycle that skips the same frame in both directions', async () => {
-	const browser = await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('rejects a src-swap cycle that skips the same frame in both directions', async ({ newPage }) => {
+
 	try {
-		const page = await browser.newPage();
+		const page = await newPage();
 		const colors = ['red', 'green', 'blue', 'yellow'];
 		await page.setContent(`<!doctype html><section id="swap"><div aria-label="Image gallery carousel"><div id="stage">${colors.map((color, i) => `<img src="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"><rect width="30" height="30" fill="${color}"/></svg>`)}">`).join('')}</div></div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
 		let n=0;const urls=[...document.querySelectorAll('#stage img')].map(x=>x.src);function update(){document.querySelectorAll('#stage img').forEach((x,i)=>x.src=urls[(n+i)%4])}
@@ -197,13 +182,13 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		const gallery = (await captureGalleries(page))[0]?.gallery?.inline;
 		expect(gallery).toMatchObject({ coverage: 'partial', restoration: 'unverified', failure: 'Adjacent src-swap frames do not preserve overlapping slot continuity' });
 		expect(gallery?.frames).toHaveLength(2);
-	} finally { await browser.close(); }
+	} finally {  }
 }, 60_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('retries gallery actions ignored during the source transition lock', async () => {
-	const browser = await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('retries gallery actions ignored during the source transition lock', async ({ newPage }) => {
+
 	try {
-		const page = await browser.newPage();
+		const page = await newPage();
 		await page.setContent(`<!doctype html><section id="locked"><div id="stage">${[0,1,2,3,4].map(i => `<img width="80" height="80" src="${image(i)}">`).join('')}</div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
 		let index=0,locked=false;const urls=Array.from(document.querySelectorAll('#stage img'),img=>img.src);
 		function change(dir){if(locked)return;locked=true;index=(index+dir+5)%5;setTimeout(()=>{document.querySelectorAll('#stage img').forEach((img,slot)=>img.src=urls[(index+slot)%5]);setTimeout(()=>locked=false,300);},150);}
@@ -212,13 +197,13 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		const states = await captureGalleries(page);
 		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(5);
-	} finally { await browser.close(); }
+	} finally {  }
 }, 90_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('does not retry a click whose gallery mutation is delayed', async () => {
-	const browser = await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('does not retry a click whose gallery mutation is delayed', async ({ newPage }) => {
+
 	try {
-		const page = await browser.newPage();
+		const page = await newPage();
 		await page.setContent(`<!doctype html><section id="delayed"><div id="stage">${[0,1,2].map(i => `<img width="80" height="80" src="${image(i)}">`).join('')}</div><button aria-label="Previous picture">Previous</button><button aria-label="Next picture">Next</button></section><script>
 		let index=0;const urls=Array.from(document.querySelectorAll('#stage img'),img=>img.src);
 		function change(dir){setTimeout(()=>{index=(index+dir+3)%3;document.querySelectorAll('#stage img').forEach((img,slot)=>img.src=urls[(index+slot)%3])},600)}
@@ -227,14 +212,14 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		const states = await captureGalleries(page);
 		expect(states[0]?.gallery?.inline).toMatchObject({ coverage: 'complete', restoration: 'verified' });
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
-	} finally { await browser.close(); }
+	} finally {  }
 }, 90_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'proves a three-frame directional cycle in at most 2N+1 clicks', async () => {
-		const browser = await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'proves a three-frame directional cycle in at most 2N+1 clicks', async ({ newPage }) => {
+
 		try {
-			const page = await browser.newPage();
+			const page = await newPage();
 			await page.setContent(fixture.replace("document.getElementById('overlay').classList.add('visible');", ''));
 			await page.evaluate(() => {
 				(globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks = 0;
@@ -249,18 +234,18 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
 			expect(await page.evaluate(() => (globalThis as typeof globalThis & { galleryClicks?: number }).galleryClicks)).toBeLessThanOrEqual(7);
 		} finally {
-			await browser.close();
+
 		}
 	}, 30_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
 	'replays observed cycles and image-opened galleries offline at phone, tablet and desktop widths',
-	async () => {
-		const browser = await chromium.launch();
+	async ({ newPage }) => {
+
 		try {
 			for (const width of [390, 768, 1440]) {
-				const page = await browser.newPage({ viewport: { width, height: 900 } });
+				const page = await newPage({ viewport: { width, height: 900 } });
 				await page.setContent(fixture);
 				const baseline = await page.content();
 				const states = await captureGalleries(page);
@@ -278,7 +263,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 					baseline.replace(/<script>[\s\S]*?<\/script>/g, ''),
 					states,
 				);
-				const offline = await browser.newPage({ viewport: { width, height: 900 } });
+				const offline = await newPage({ viewport: { width, height: 900 } });
 				await offline.route('**/*', (route) => route.abort());
 				await offline.setContent(portable);
 				expect(await offline.locator('#stage img').count()).toBe(3);
@@ -308,18 +293,18 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				await offline.close();
 			}
 		} finally {
-			await browser.close();
+
 		}
 	},
 	60_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
 	'keeps a non-invertible directional action as partial evidence and emits no gallery runtime',
-	async () => {
-		const browser = await chromium.launch();
+	async ({ newPage }) => {
+
 		try {
-			const page = await browser.newPage();
+			const page = await newPage();
 			await page.setContent(fixture.replace('current=(current+2)%3', 'current=(current+1)%3'));
 			const baseline = await page.content();
 			const states = await captureGalleries(page);
@@ -331,29 +316,29 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				wireCapturedDialogs(baseline.replace(/<script>[\s\S]*?<\/script>/g, ''), states),
 			).not.toContain('data-blocks-engine-capture-gallery-runtime');
 		} finally {
-			await browser.close();
+
 		}
 	},
 	30_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('waits for a delayed rendered initial frame without inventing its identity',async()=>{
-	const browser=await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('waits for a delayed rendered initial frame without inventing its identity',async({ newPage })=>{
+
 	try{
-		const page=await browser.newPage();
+		const page=await newPage();
 		await page.setContent(fixture.replace('<script>','<script>document.querySelector("#stage .chosen").classList.remove("chosen");setTimeout(()=>document.querySelector("#stage .frame").classList.add("chosen"),350);'));
 		const states=await captureGalleries(page);
 		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{initial:0,coverage:'complete',restoration:'verified'}}});
-	}finally{await browser.close();}
+	}finally{}
 },15_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executablePath()))('retains gallery evidence through real dual-viewport capture, export and offline replay',async()=>{
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(playwrightChromium.executablePath()))('retains gallery evidence through real dual-viewport capture, export and offline replay',async({ newPage })=>{
 	const parent=join(process.cwd(),'.tmp-test');mkdirSync(parent,{recursive:true});
 	const outputDir=mkdtempSync(join(parent,'gallery-pipeline-'));
 	const server=createServer((_,response)=>{response.writeHead(200,{'Content-Type':'text/html'});response.end(fixture);});
 	await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
 	const url=`http://127.0.0.1:${(server.address() as {port:number}).port}/`;
-	const browser=await chromium.launch();
+
 	try{
 		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,beforeSerialize:async page=>{await page.evaluate(()=>{(document.querySelector('[aria-label="Next image"]') as HTMLElement).click();});},viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
 		const manifest=JSON.parse(readFileSync(join(outputDir,'screenshots','manifest.json'),'utf8'));
@@ -363,7 +348,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 		exportWebsiteCapture({outputDir,sourceUrl:url,platform:'default',summary:{},failures:[]});
 		const portable=readFileSync(join(outputDir,'website','index.html'),'utf8');
 		for(const width of [390,768,1440]){
-			const page=await browser.newPage({viewport:{width,height:900}});
+			const page=await newPage({viewport:{width,height:900}});
 			await page.route('**/*',route=>route.abort());await page.setContent(portable);
 			await page.getByRole('button',{name:'Next image',exact:true}).click();
 			expect(await page.locator('#count').textContent()).toBe('3 / 3');
@@ -375,14 +360,14 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 			expect(await page.locator('[data-blocks-engine-capture-dialog-panel]').isVisible()).toBe(false);
 			await page.close();
 		}
-	}finally{await browser.close();await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
+	}finally{await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
 },180_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'retains decoded responsive inline cycles when no lightbox opens', async () => {
-		const browser = await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'retains decoded responsive inline cycles when no lightbox opens', async ({ newPage }) => {
+
 		try {
-			const page = await browser.newPage({viewport:{width:390,height:900}});
+			const page = await newPage({viewport:{width:390,height:900}});
 			const responsive = fixture.replace(/<img src="([^"]+)"/g, '<img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" srcset="$1 1x"')
 				.replace("document.getElementById('overlay').classList.add('visible');", '');
 			await page.setContent(responsive);
@@ -397,15 +382,15 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				expect(await page.locator('#stage img:visible').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(200);
 			}
 			expect(wireCapturedDialogs(html,states).match(/data-blocks-engine-capture-gallery-runtime/g)).toHaveLength(1);
-		} finally { await browser.close(); }
+		} finally {  }
 	}, 20_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'does not follow slide links to other documents while probing for a lightbox', async () => {
-		const browser = await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'does not follow slide links to other documents while probing for a lightbox', async ({ newPage }) => {
+
 		try {
-			const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+			const page = await newPage({ viewport: { width: 1440, height: 900 } });
 			// Each slide image sits inside a plain link to another document, the
 			// album-carousel markup; the page handles no click of its own.
 			await page.setContent(`<!doctype html><html><head><base href="https://albums.test/"><style>
@@ -423,25 +408,25 @@ document.querySelector('[aria-label="Next image"]').onclick=()=>{current=(curren
 			expect(states[0]?.gallery?.inline.frames).toHaveLength(3);
 			expect(states[0]?.dialog).toBeUndefined();
 			expect(navigations, JSON.stringify(navigations)).toEqual([]);
-		} finally { await browser.close(); }
+		} finally {  }
 	}, 30_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('activates an image-opened lightbox through the source touch contract',async()=>{
-	const browser=await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('activates an image-opened lightbox through the source touch contract',async({ newPage })=>{
+
 	try{
-		const page=await browser.newPage({hasTouch:true,isMobile:true,viewport:{width:390,height:900}});
+		const page=await newPage({hasTouch:true,isMobile:true,viewport:{width:390,height:900}});
 		await page.setContent(fixture.replace('node.onclick=()=>{large=i;', "node.addEventListener('touchend',()=>{large=i;").replace("document.getElementById('overlay').classList.add('visible');});", "document.getElementById('overlay').classList.add('visible');}));"));
 		expect(await captureGalleries(page)).toMatchObject([{status:'captured',gallery:{closed:true,selection:[0,1,2]}}]);
-	}finally{await browser.close();}
+	}finally{}
 },20_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
 	'takes the popup baseline after activation scrolls a nested contact container',
-	async () => {
-		const browser = await chromium.launch();
+	async ({ newPage }) => {
+
 		try {
-			const page = await browser.newPage();
+			const page = await newPage();
 			await page.setContent(
 				'<div style="height:180px;overflow:auto"><div style="height:1000px"></div><section id="contact" style="height:200px"><h2>Contact</h2><button id="send" type="button">Submit</button></section></div>',
 			);
@@ -453,16 +438,16 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				}),
 			]);
 		} finally {
-			await browser.close();
+
 		}
 	},
 	10_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('captures a crossfading slideshow driven by unnamed hover-revealed icon controls', async () => {
-	const browser = await chromium.launch();
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('captures a crossfading slideshow driven by unnamed hover-revealed icon controls', async ({ newPage }) => {
+
 	try {
-		const page = await browser.newPage({viewport:{width:1024,height:768}});
+		const page = await newPage({viewport:{width:1024,height:768}});
 		const colors = ['red', 'green', 'blue', 'orange', 'purple', 'teal'];
 		const slide = (i: number) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="100%" height="100%" fill="${colors[i]}"/></svg>`);
 		const thumbs = colors.map((_, i) => `<a class="thumb"><img width="40" height="30" src="${slide(i)}"></a>`).join('');
@@ -486,7 +471,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(gallery.frames.map(frame => frame.key)).toEqual(colors.map((_, i) => slide(i)));
 		expect(gallery.frames.every(frame => /opacity:\s*1\b/.test(frame.html))).toBe(true);
 		expect(wireCapturedGalleries(await page.content(), states)).toContain('data-blocks-engine-capture-gallery-stage');
-	} finally { await browser.close(); }
+	} finally {  }
 }, 90_000);
 
 // Arrows the source stops rendering at narrow widths; the stage, its thumbnail
@@ -511,9 +496,9 @@ const narrowArrowsFixture = (() => {
 	</script></body></html>`;
 })();
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
-	'proves a slideshow at a narrow viewport whose arrows the source stops rendering', async () => {
-		const page = await sharedBrowser.newPage({hasTouch:true,isMobile:true,viewport:{width:402,height:800}});
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))(
+	'proves a slideshow at a narrow viewport whose arrows the source stops rendering', async ({ newPage }) => {
+		const page = await newPage({hasTouch:true,isMobile:true,viewport:{width:402,height:800}});
 		await page.setContent(narrowArrowsFixture);
 		const states = await captureGalleries(page);
 		const gallery = states[0]?.gallery?.inline;
@@ -530,7 +515,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}, 60_000,
 );
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executablePath()))('records and wires each viewport\'s inline cycle through real dual-viewport capture',async()=>{
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(playwrightChromium.executablePath()))('records and wires each viewport\'s inline cycle through real dual-viewport capture',async()=>{
 	const parent=join(process.cwd(),'.tmp-test');mkdirSync(parent,{recursive:true});
 	const outputDir=mkdtempSync(join(parent,'gallery-narrow-'));
 	const server=createServer((_,response)=>{response.writeHead(200,{'Content-Type':'text/html'});response.end(narrowArrowsFixture);});
@@ -549,8 +534,8 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 	}finally{await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
 },180_000);
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('does not mistake a CSS transition between script writes for the script write cadence', async () => {
-	const page = await sharedBrowser.newPage({viewport:{width:800,height:600}});
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(playwrightChromium.executablePath()))('does not mistake a CSS transition between script writes for the script write cadence', async ({ newPage }) => {
+	const page = await newPage({viewport:{width:800,height:600}});
 	const colors = ['red', 'green', 'blue', 'orange'];
 	const slide = (i: number) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="100%" height="100%" fill="${colors[i]}"/></svg>`);
 	// The script writes, waits for its CSS transition, then writes again: the

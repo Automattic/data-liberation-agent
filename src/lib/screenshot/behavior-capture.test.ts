@@ -1,12 +1,13 @@
 import { createServer } from 'node:http';
-import { chromium, type Browser } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { describe, expect, beforeAll, afterAll } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureSourceBehavior } from './behavior-capture.js';
 import { timeDependentTargets } from '../behavior-model.js';
 import { learnClockBindings } from '../clock-behavior.js';
 
 describe( 'automatic source behavior evidence', () => {
-	let browser: Browser;
+
 	let origin: string;
 	const server = createServer( ( request, response ) => {
 		const variant = request.url?.includes( 'second' );
@@ -25,15 +26,15 @@ describe( 'automatic source behavior evidence', () => {
 	beforeAll( async () => {
 		await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-		browser = await chromium.launch();
+
 	} );
 	afterAll( async () => {
-		await browser.close(); server.closeAllConnections();
+		 server.closeAllConnections();
 		await new Promise< void >( resolve => server.close( () => resolve() ) );
 	} );
 	for ( const variant of [ false, true ] ) {
-		it( `discovers renamed text/click and a ${ variant ? 'line' : 'circle' } canvas without a recipe`, async () => {
-			const page = await browser.newPage( { viewport: { width: 768, height: 900 } } );
+		it( `discovers renamed text/click and a ${ variant ? 'line' : 'circle' } canvas without a recipe`, async ({ newPage }) => {
+			const page = await newPage( { viewport: { width: 768, height: 900 } } );
 			try {
 				const result = await captureSourceBehavior( page, `${ origin }/${ variant ? 'second' : '' }`, { startupMs: 500, replayMs: 500 } );
 				const field = variant ? '#renamed-message' : '#editorial';
@@ -48,9 +49,9 @@ describe( 'automatic source behavior evidence', () => {
 			} finally { await page.close(); }
 		} );
 	}
-	it( 'proves time-dependent content under controlled Date without mistaking editorial text for a clock', async () => {
-		const firstPage = await browser.newPage();
-		const secondPage = await browser.newPage();
+	it( 'proves time-dependent content under controlled Date without mistaking editorial text for a clock', async ({ newPage }) => {
+		const firstPage = await newPage();
+		const secondPage = await newPage();
 		try {
 			const first = await captureSourceBehavior( firstPage, `${ origin }/`, { startupMs: 500, maxClicks: 0, fixedTime: '2031-02-03T04:17:00Z' } );
 			const second = await captureSourceBehavior( secondPage, `${ origin }/`, { startupMs: 500, maxClicks: 0, fixedTime: '2032-08-14T19:43:00Z' } );

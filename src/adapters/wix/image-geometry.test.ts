@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { learnAndApplyFluidGeometry } from '../../lib/screenshot/fluid-capture.js';
 import { wixAdapter } from './index.js';
 import { wixImageGeometry } from './image-geometry.js';
@@ -43,12 +44,9 @@ const page = ( displayMode: string ) => `<style>body{margin:0}section{width:100%
 	</script>`;
 
 describe( 'wix beforeFluid image geometry', () => {
-	let browser: Browser;
-	beforeAll( async () => { browser = await chromium.launch(); } );
-	afterAll( async () => { await browser.close(); } );
 
-	it( 'carries a declared fill image as container-relative CSS the width sweep has nothing to learn from', async () => {
-		const tab = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'carries a declared fill image as container-relative CSS the width sweep has nothing to learn from', async ({ newPage }) => {
+		const tab = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await tab.setContent( page( 'fill' ) );
 			await tab.waitForFunction( () => document.querySelector( 'img' )?.style.width === `${ innerWidth }px` );
@@ -70,8 +68,8 @@ describe( 'wix beforeFluid image geometry', () => {
 		}
 	}, 30_000 );
 
-	it( 'restores missing Wix image sources without changing hydrated images', async () => {
-		const tab = await browser.newPage();
+	it( 'restores missing Wix image sources without changing hydrated images', async ({ newPage }) => {
+		const tab = await newPage();
 		try {
 			await tab.setContent('<!doctype html><html><body><main><a href="/post/"><div><wow-image data-image-info="{&quot;displayMode&quot;:&quot;fill&quot;,&quot;targetWidth&quot;:450,&quot;targetHeight&quot;:253,&quot;imageData&quot;:{&quot;width&quot;:1200,&quot;height&quot;:750,&quot;uri&quot;:&quot;9820c7_ead8a9bee4d04fc7bd3ef3a50ff53949~mv2.png&quot;,&quot;displayMode&quot;:&quot;fill&quot;}}"><img alt="Thumb"></wow-image></div></a><wow-image data-image-info="{}"><img src="kept.png"></wow-image></main></body></html>');
 			await wixAdapter.liberation!.beforeFluid!( tab, { url: 'https://example.com/', viewport: 'desktop' } );
@@ -81,8 +79,8 @@ describe( 'wix beforeFluid image geometry', () => {
 		} finally { await tab.close(); }
 	}, 30_000 );
 
-	it( 'replaces a slide still on its blurred placeholder with its declared source before serialization', async () => {
-		const tab = await browser.newPage();
+	it( 'replaces a slide still on its blurred placeholder with its declared source before serialization', async ({ newPage }) => {
+		const tab = await newPage();
 		try {
 			const media = 'a1b2c3_0123456789abcdef0123456789abcdef~mv2.jpg';
 			const blur = `https://static.wixstatic.com/media/${ media }/v1/fill/w_78,h_52,al_c,q_80,usm_0.66_1.00_0.01,blur_2,enc_avif,quality_auto/${ media }`;
@@ -95,8 +93,8 @@ describe( 'wix beforeFluid image geometry', () => {
 		} finally { await tab.close(); }
 	}, 30_000 );
 
-	it( 'leaves an image whose declared mode is not provably container-relative to the sweep', async () => {
-		const tab = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'leaves an image whose declared mode is not provably container-relative to the sweep', async ({ newPage }) => {
+		const tab = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await tab.setContent( page( 'tile' ) );
 			await tab.waitForFunction( () => document.querySelector( 'img' )?.style.width === `${ innerWidth }px` );
