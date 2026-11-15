@@ -1,10 +1,9 @@
-import { it } from '../../../test/browser.js';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices, type BrowserContext, type Page } from 'playwright';
 import { PNG } from 'pngjs';
-import { describe, expect, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { applySourceCleanup, cleanupPolicy } from '../source-cleanup.js';
@@ -16,10 +15,11 @@ import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
-
-
+	let sharedBrowser: Awaited< ReturnType< typeof chromium.launch > >;
+	beforeAll( async () => { sharedBrowser = await chromium.launch(); } );
+	afterAll( async () => { await sharedBrowser?.close(); }, 30_000 );
 	// About 5 seconds: one reference cell and one offline replay.
-	it( 'proves a settled HTTP-broken source image and reports its URL and status', async ({ newContext }) => {
+	it( 'proves a settled HTTP-broken source image and reports its URL and status', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-source-broken-' ) );
 		const html = '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><main><h1>Community notice</h1><p>Normal content alongside an unavailable photograph.</p><img src="/missing.png" style="display:block;width:200px;height:200px" alt="Unavailable photograph"></main>';
@@ -29,7 +29,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const context = await newContext();
+		const context = await sharedBrowser.newContext();
 		try {
 			mkdirSync( join( directory, 'website' ) );
 			writeFileSync( join( directory, 'website', 'index.html' ), html );
@@ -48,7 +48,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 45_000 );
-	it( 'ignores unreachable lazy marquee images and src-less tiles but rejects and names a visible broken image', async ({ newPage }) => {
+	it( 'ignores unreachable lazy marquee images and src-less tiles but rejects and names a visible broken image', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-clipped-images-' ) );
 		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
@@ -64,7 +64,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const page = await newPage();
+		const page = await sharedBrowser.newPage();
 		try {
 			const collect = async ( broken: boolean ) => {
 				const collector = createReferenceCollector( directory, url, [ url ], { prepareCapture: async cell => {
@@ -91,7 +91,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		}
 	}, 60_000 );
 	// About 50 seconds: quick/slow swaps settle; network, retryable and stalled cells reach the readiness bound.
-	it( 'settles scripted image rendition swaps, including ones slower than the capture wait, without accepting failed or stalled images', async ({ newContext }) => {
+	it( 'settles scripted image rendition swaps, including ones slower than the capture wait, without accepting failed or stalled images', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-image-swap-' ) );
 		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
@@ -114,7 +114,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const context = await newContext();
+		const context = await sharedBrowser.newContext();
 		const page = await context.newPage();
 		try {
 			for ( const rendition of [ 'rendition', 'slow', 'failed', 'retry', 'stalled' ] ) {
@@ -143,7 +143,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 90_000 );
-	it.for( [ 'inline rejection', 'cross-origin classic script' ] )( 'records a cross-origin subframe runtime error (%s) as a diagnostic but blocks on a top-level one', { timeout: 60_000 }, async (mode, { newContext }) => {
+	it.each( [ 'inline rejection', 'cross-origin classic script' ] )( 'records a cross-origin subframe runtime error (%s) as a diagnostic but blocks on a top-level one', async mode => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-subframe-error-' ) );
 		const script = createServer( ( _request, response ) => {
@@ -172,7 +172,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const context = await newContext();
+		const context = await sharedBrowser.newContext();
 		const page = await context.newPage();
 		try {
 			const collect = async ( target: string ) => {
@@ -205,7 +205,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			for ( const server of [ source, frame, script ] ) { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); }
 			rmSync( directory, { recursive: true, force: true } );
 		}
-	} );
+	}, 60_000 );
 	it.each( [ 'profile', 'sibling', 'borrowed', 'persistent' ] as const )( 'releases only owned %s resources on success and navigation failure', async mode => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, `reference-lifetime-${ mode }-` ) );
@@ -220,7 +220,6 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		// Own launch: spies on context acquisition and verifies borrowed/persistent resource ownership.
 		const browser = await chromium.launch();
 		const identity = { screen: { width: 1920, height: 1080 }, userAgent: 'NeutralReference/1', deviceScaleFactor: 1 };
 		const persistent = mode === 'persistent' ? await chromium.launchPersistentContext( join( directory, 'browser' ), { headless: true } ) : undefined;
@@ -296,7 +295,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
-	it( 'accepts candidate-local canonical redirects using frozen evidence with the source stopped', async ({ newPage }) => {
+	it( 'accepts candidate-local canonical redirects using frozen evidence with the source stopped', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'frozen-canonical-redirects-' ) );
 		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Canonical navigation</title><h1>Canonical navigation</h1><a href="/category">Category</a>';
@@ -313,12 +312,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => candidate.listen( 0, '127.0.0.1', resolve ) );
 		const candidateUrl = `http://127.0.0.1:${ ( candidate.address() as { port: number } ).port }`;
-
+		const browser = sharedBrowser;
 		try {
 			mkdirSync( join( directory, 'website', 'category' ), { recursive: true } );
 			writeFileSync( join( directory, 'website', 'index.html' ), html );
 			writeFileSync( join( directory, 'website', 'category', 'index.html' ), html );
-			const page = await newPage();
+			const page = await browser.newPage();
 			const collector = createReferenceCollector( directory, url, [ url ] );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );
 			await collector.observe( page, url, 'mobile', [], { isMobile: false, hasTouch: false } );
@@ -361,10 +360,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await new Promise<void>( resolve => candidate.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 90_000 );
-	it( 'counts painted text through boxless wrappers while honoring real ancestor clipping', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 390, height: 900 } } );
+	it( 'counts painted text through boxless wrappers while honoring real ancestor clipping', async () => {
+		const browser = sharedBrowser;
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
 			const text = 'Painted editorial text survives a boxless wrapper.';
 			await page.setContent( `<div style="display:contents;overflow:hidden"><h1>${ text }</h1></div>` );
 			const painted = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
@@ -372,9 +371,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await page.setContent( `<div style="position:relative;width:100px;height:100px;overflow:hidden"><div style="display:contents;overflow:hidden"><p style="position:absolute;left:200px;width:200px">${ text }</p></div></div>` );
 			const clipped = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
 			expect( clipped.textChars ).toBe( 0 );
-		}
+		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000 );
-	it( 'replays fixed-width mobile emulation and complete compositor frames', async ({ newContext }) => {
+	it( 'replays fixed-width mobile emulation and complete compositor frames', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-mobile-profile-' ) );
 		const html = '<meta name="viewport" content="width=320,user-scalable=yes"><style>body{margin:0}h1{font:20px Arial}@media(pointer:coarse){h1{font-size:30px}}</style><h1>Mobile viewport heading</h1><div style="height:2000px"></div><img loading="lazy" src="/media.png" width="120" height="120">';
@@ -382,10 +381,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		writeFileSync( join( directory, 'website', 'index.html' ), html );
 		const media = PNG.sync.write( new PNG( { width: 120, height: 120 } ) );
 		writeFileSync( join( directory, 'website', 'media.png' ), media );
-
+		const browser = sharedBrowser;
 		try {
 			const { defaultBrowserType: _browserType, ...iphone } = devices[ 'iPhone 17' ];
-			const context = await newContext( iphone );
+			const context = await browser.newContext( iphone );
 			const page = await context.newPage();
 			const url = 'http://fixture.invalid/';
 			await context.route( url, route => route.fulfill( { contentType: 'text/html', body: html } ) );
@@ -407,14 +406,14 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( legacy.pending?.[ 0 ]!.reason ).toMatch( /browser profile unproven/ );
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'replays source pixel density when measuring resolution-dependent content', async ({ newPage }) => {
+	it( 'replays source pixel density when measuring resolution-dependent content', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-pixel-density-' ) );
 		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><style>h1{font-size:20px}@media(min-resolution:2dppx){h1{font-size:30px}}</style><h1>Density-dependent heading</h1>';
 		mkdirSync( join( directory, 'website' ) );
 		writeFileSync( join( directory, 'website', 'index.html' ), html );
-
-		const page = await newPage( { viewport: { width: 390, height: 900 }, deviceScaleFactor: 3 } );
+		const browser = sharedBrowser;
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 }, deviceScaleFactor: 3 } );
 		const url = 'http://fixture.invalid/';
 		try {
 			await page.route( url, route => route.fulfill( { contentType: 'text/html', body: html } ) );
@@ -430,11 +429,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( report.pass ).toBe( true );
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'uses capture route identity for query/hash renditions while refusing path drift', async ({ newPage }) => {
+	it( 'uses capture route identity for query/hash renditions while refusing path drift', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-route-identity-' ) );
-
-		const page = await newPage();
+		const browser = sharedBrowser;
+		const page = await browser.newPage();
 		const url = 'http://fixture.invalid/article/';
 		try {
 			for ( const [ destination, drift ] of [ [ '/article/?view=phone#content', false ], [ '/different/', true ] ] as const ) {
@@ -452,11 +451,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			}
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'freezes a protocol-changing server redirect while rejecting subsequent client drift', async ({ newContext }) => {
+	it( 'freezes a protocol-changing server redirect while rejecting subsequent client drift', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-protocol-redirect-' ) );
-
-		const context = await newContext();
+		const browser = sharedBrowser;
+		const context = await browser.newContext();
 		const page = await context.newPage();
 		let drift = false;
 		const server = createServer( ( _request, response ) => {
@@ -489,10 +488,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 30_000 );
-	it( 'settles unused local fallback stacks at each frozen viewport', async ({ newPage }) => {
+	it( 'settles unused local fallback stacks at each frozen viewport', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 		const directory = mkdtempSync(join(parent, 'reference-fonts-'));
-		 const page = await newPage({ viewport: { width: 1440, height: 900 } });
+		const browser = sharedBrowser; const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 		const url = 'http://fixture.invalid/';
 		try {
 			await page.route(url, route => route.fulfill({ contentType: 'text/html', body: `<style>
@@ -524,8 +523,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { rmSync(directory, { recursive: true, force: true }); }
 	}, 60_000);
 
-	it( 'records primary-face readiness from each document independently of fallbacks', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'records primary-face readiness from each document independently of fallbacks', async () => {
+		const page = await sharedBrowser.newPage();
 		try {
 			await page.route('http://fixture.invalid/primary.ttf', route => route.fulfill({ contentType: 'font/ttf', body: squareFont }));
 			await page.route('http://fixture.invalid/failed.ttf', route => route.fulfill({ status: 404, body: '' }));
@@ -551,10 +550,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { await page.close(); }
 	}, 30_000);
 
-	it( 'waits for a delayed declared stack before baseline screenshot and measurement', async ({ newPage }) => {
-		 const page = await newPage();
+	it( 'waits for a delayed declared stack before baseline screenshot and measurement', async () => {
+		const browser = sharedBrowser; const page = await browser.newPage();
 		let requests = 0;
-		{
+		try {
 			await page.route('http://fixture.invalid/delayed.ttf', async route => {
 				requests++; await new Promise(resolve => setTimeout(resolve, 200));
 				await route.fulfill({ contentType: 'font/ttf', body: squareFont });
@@ -573,12 +572,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await page.setViewportSize({ width: 390, height: 900 });
 			const mobile = await observePage(page, 'about:blank', 390, 0, null, undefined, undefined, true);
 			expect(mobile.typography![0]).toMatchObject({ loaded: true, advance: 160 });
-		}
+		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000);
 
-	it( 'settles a stack introduced by scroll restoration before baseline screenshot', async ({ newPage }) => {
-		 const page = await newPage();
-		{
+	it( 'settles a stack introduced by scroll restoration before baseline screenshot', async () => {
+		const browser = sharedBrowser; const page = await browser.newPage();
+		try {
 			await page.setContent(`<style>@font-face{font-family:Restored;src:local("Arial"),local("Liberation Sans"),local("DejaVu Sans")}p{font:20px sans-serif}</style>
 				<p>Restored painted text</p><script>addEventListener('scroll',()=>{document.querySelector('p').style.fontFamily='sans-serif,Restored';},{once:true});</script>`);
 			const observation = await observePage(page, 'about:blank', 1280, 0, null, undefined, async () => {
@@ -586,11 +585,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await page.screenshot();
 			}, true);
 			expect(observation.typography![0]).toMatchObject({ fontFamily: 'sans-serif, Restored', loaded: true });
-		}
+		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000);
-	it( 'keeps frozen baseline pose untouched while retaining the explicit scroll probe for drift', async ({ newPage }) => {
-		 const page = await newPage( { viewport: { width: 768, height: 700 } } );
-		{
+	it( 'keeps frozen baseline pose untouched while retaining the explicit scroll probe for drift', async () => {
+		const browser = sharedBrowser; const page = await browser.newPage( { viewport: { width: 768, height: 700 } } );
+		try {
 			await page.setContent( `<style>header{height:100px}header.compact{height:60px}</style><header>Header</header><main style="height:2400px">Baseline content</main>
 				<script>addEventListener('scroll',()=>document.querySelector('header').classList.add('compact'),{once:true})</script>` );
 			await observePage( page, 'about:blank', 768, 0, 'http://fixture.invalid', undefined, undefined, true, true );
@@ -598,13 +597,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await observePage( page, 'about:blank', 768, 0, 'http://fixture.invalid', undefined, undefined, true );
 			expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
 			expect( await page.locator( 'header' ).evaluate( element => getComputedStyle( element ).height ) ).toBe( '60px' );
-		}
+		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000 );
 
-	it( 'keeps failed and unavailable fonts unready and bounds a pending font', async ({ newPage }) => {
+	it( 'keeps failed and unavailable fonts unready and bounds a pending font', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 		const directory = mkdtempSync(join(parent, 'reference-failed-fonts-'));
-		 const page = await newPage();
+		const browser = sharedBrowser; const page = await browser.newPage();
 		try {
 			await page.route('http://fixture.invalid/failed.ttf', route => route.fulfill({ status: 404, body: '' }));
 			await page.setContent('<style>@font-face{font-family:Failed;src:url("http://fixture.invalid/failed.ttf")}@font-face{font-family:Unavailable;src:local("No Such Neutral Font 505")}p{font:20px Failed,Unavailable,sans-serif}</style><p>Still painted with fallback</p>');
@@ -625,23 +624,23 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect(await page.evaluate(() => document.fonts.check('20px sans-serif,Pending'))).toBe(false);
 		} finally { rmSync(directory, { recursive: true, force: true }); }
 	}, 30_000);
-	it( 'measures the declared resting disclosure state without expanding it during frozen observation', async ({ newPage }) => {
-
-		const page = await newPage();
-		{
+	it( 'measures the declared resting disclosure state without expanding it during frozen observation', async () => {
+		const browser = sharedBrowser;
+		const page = await browser.newPage();
+		try {
 			await page.setContent('<button aria-expanded="false" aria-controls="answer">Neutral baseline question</button><div id="answer" hidden>Only visible after activation</div><script>const button=document.querySelector("button");button.onclick=()=>{const open=button.getAttribute("aria-expanded")==="false";button.setAttribute("aria-expanded",String(open));document.getElementById("answer").hidden=!open;};</script>');
 			const observation = await observePage(page, 'http://fixture.invalid/', 390, 0, null, undefined, undefined, true);
 			expect(await page.locator('button').getAttribute('aria-expanded')).toBe('false');
 			expect(observation.textChars).toBe('Neutral baseline question'.length);
-		}
+		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000);
-	it( 'counts painted labels without a zero-font decorative glyph, retaining visible plus signs', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'counts painted labels without a zero-font decorative glyph, retaining visible plus signs', async () => {
+		const browser = await chromium.launch(); const page = await browser.newPage();
 		try {
 			await page.setContent('<p>Visible + sum</p><button>Neutral + question<span aria-hidden="true" style="font-size:0;display:inline-block;width:18px;height:18px;background:blue">+</span></button>');
 			const observation = await observePage(page, 'http://fixture.invalid/', 390, 0, null, undefined, undefined, true);
 			expect(observation.textChars).toBe('Visible + sum Neutral + question'.length);
-		} finally { await Promise.resolve(); }
+		} finally { await browser.close(); }
 	}, 30_000);
 	it( 'freezes a mutating neutral source, attributes geometry to each stage, and refuses incomplete evidence', async () => {
 		const parent = join( process.cwd(), '.tmp-test' );
@@ -803,10 +802,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		}
 	}, 300_000 );
 
-	it( 'observes normal/zoom roles and scores document-order partners after roles are lost', async ({ newPage }) => {
-
-		const page = await newPage();
-		{
+	it( 'observes normal/zoom roles and scores document-order partners after roles are lost', async () => {
+		const browser = sharedBrowser;
+		const page = await browser.newPage();
+		try {
 			const src = 'data:image/svg+xml,' + encodeURIComponent( '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="blue"/></svg>' );
 			const normal = `<figure aria-label="normal"><img alt="product" src="${ src }" width="200" height="200"></figure>`;
 			const zoom = `<section role="region" aria-label="zoom"><img alt="product" src="${ src }" width="400" height="400"></section>`;
@@ -821,11 +820,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const ambiguous = await observePage( page, 'about:blank', 1280, 0, null, undefined, undefined, true );
 			expect( matchRenderedImages( source.images, ambiguous.images ).map( pair => pair.candidate ) ).toEqual( ambiguous.images );
 			expect( checkImageGeometry( source, ambiguous ).failures?.[ 0 ] ).toContain( 'image geometry differs' );
-		}
+		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000 );
-	it( 'excludes overflow-clipped offstage copy while retaining repeated and below-fold text', async ({ newPage }) => {
-		 const page = await newPage( { viewport: { width: 390, height: 700 } } );
-		{
+	it( 'excludes overflow-clipped offstage copy while retaining repeated and below-fold text', async () => {
+		const browser = sharedBrowser; const page = await browser.newPage( { viewport: { width: 390, height: 700 } } );
+		try {
 			const quote = 'The migration from Google Workspace to Microsoft 365 and Exchange Online went very well. Shaun did a wonderful job making it happen. We also moved from an on-prem phone system to Teams Phone and it is working out quite well.';
 			const attribution = 'Luke Ervin - IT Director';
 			const shared = '<p>Shared visible label</p><p>Shared visible label</p><div style="margin-top:1200px">Lower-page editorial content</div>';
@@ -853,7 +852,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await page.setContent( `<style>article{width:220px;height:40px;overflow-x:hidden;overflow-y:auto}p{margin:0}</style><article><p>Article introduction.</p><p style="margin-top:90px">${ scrollCopy }</p></article>` );
 			const scrollText = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
 			expect( scrollText.textChars ).toBe( 'Article introduction.'.length + 1 + scrollCopy.length );
-		}
+		} finally { /* shared browser is closed after the suite */ }
 	}, 30_000 );
 
 	it( 'keeps a source ready when its own media playback interrupts play()', async () => {
@@ -876,7 +875,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( manifest.entries.flatMap( entry => entry.readiness.reasons ).filter( reason => reason.startsWith( 'source runtime error' ) ) ).toEqual( [] );
 		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 90_000 );
-	it( 'freezes each width from a fresh navigation instead of resize-history state', async ({ newContext }) => {
+	it( 'freezes each width from a fresh navigation instead of resize-history state', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-fresh-viewport-' ) );
 		const server = createServer( ( _request, response ) => {
@@ -888,7 +887,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
-		 const context = await newContext( { viewport: { width: 1440, height: 900 } } );
+		const browser = sharedBrowser; const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
 		try {
 			const page = await context.newPage(); await page.goto( url ); await page.setViewportSize( { width: 768, height: 900 } );
 			await page.waitForFunction( () => document.documentElement.dataset.pose === 'resized' );
@@ -905,7 +904,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
 		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 60_000 );
-	it( 'observes declared reference widths concurrently and preserves ordered artifacts', async ({ newContext }) => {
+	it( 'observes declared reference widths concurrently and preserves ordered artifacts', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-concurrent-widths-' ) );
 		let arrivals = 0;
@@ -920,8 +919,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		const browser = await chromium.launch();
 		try {
-			const context = await newContext();
+			const context = await browser.newContext();
 			const page = await context.newPage();
 			const collector = createReferenceCollector( directory, url, [ url ] );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 768, 1440 ] } );
@@ -936,7 +936,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( entry.document?.path ).toMatch( new RegExp( `-${ entry.viewport }\\.html$` ) );
 				expect( PNG.sync.read( readFileSync( join( directory, entry.screenshot!.path ) ) ).width ).toBe( entry.viewport );
 			}
-		} finally { await Promise.resolve(); source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+		} finally { await browser.close(); source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
 } );
 

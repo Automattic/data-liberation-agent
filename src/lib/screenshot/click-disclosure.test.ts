@@ -1,6 +1,5 @@
-import { type Page } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium, type Browser, type Page } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { choiceGroupInteractionLosses, wireCapturedDialogs } from '../static-dialogs.js';
@@ -53,9 +52,12 @@ async function slideClickCounts( page: Page ): Promise< Record< string, number >
 }
 
 describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
+	let browser: Browser;
+	beforeAll( async () => { browser = await chromium.launch(); } );
+	afterAll( async () => { await browser?.close(); } );
 
-	it( 'marks dead pointer hooks without changing the baseline or disclosure capture (#979)', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'marks dead pointer hooks without changing the baseline or disclosure capture (#979)', async () => {
+		const page = await browser.newPage();
 		await page.setContent( FAQ.replace( '<main>', '<main><section id="terminal"><div style="cursor:pointer" data-action="minimize">−</div><div data-target="terminal">×</div></section>' ) );
 		const baseline = await page.locator( '#terminal' ).evaluate( node => node.outerHTML );
 		const records = await hydrateDisclosureContent( page );
@@ -72,8 +74,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it.for( [ false, true ] )( 'proves all 40 remainder controls across 20 components (local effect: %s)', async ( effect, { newPage } ) => {
-		const page = await newPage();
+	it.each( [ false, true ] )( 'proves all 40 remainder controls across 20 components (local effect: %s)', async ( effect ) => {
+		const page = await browser.newPage();
 		await page.setContent( `<!doctype html><body><main>${ Array.from( { length: 20 }, ( _, index ) =>
 			`<section class=""><div data-action="first" ${ effect && index === 0 ? 'id="live" onclick="this.parentElement.classList.toggle(\'changed\')"' : '' }>Minimize</div><div data-action="second">Close</div><p>Component ${ index }</p></section>`
 		).join( '' ) }</main></body>` );
@@ -86,8 +88,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'keeps capturing when a control sits in a component that changes on its own', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'keeps capturing when a control sits in a component that changes on its own', async () => {
+		const page = await browser.newPage();
 		await page.setContent( `<!doctype html><body><main>
 			<section id="carousel"><span data-slide="0">Slide</span><div data-action="next" onclick="this.previousElementSibling.dataset.slide++">Next</div></section>
 			<section><div data-action="inert">Dead control</div></section>
@@ -99,8 +101,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'falls back to solo proof for an unattributable shared-window effect', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'falls back to solo proof for an unattributable shared-window effect', async () => {
+		const page = await browser.newPage();
 		await page.setContent( `<!doctype html><body><main>
 			<section><div data-action="global" onclick="document.body.title='changed';document.body.removeAttribute('title')">Global transient effect</div></section>
 			<section><div data-action="inert">Dead control</div></section>
@@ -112,8 +114,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'probes disclosures on a page whose window.open is frozen (#998)', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 390, height: 800 } } );
+	it( 'probes disclosures on a page whose window.open is frozen (#998)', async () => {
+		const page = await browser.newPage( { viewport: { width: 390, height: 800 } } );
 		await page.setContent( `<!doctype html><html><head><style>#menu{display:none}#menu.open{display:block}button{cursor:pointer}.h{display:none}</style>
 <script>Object.defineProperty(window,'open',{value:window.open,writable:false,configurable:false});</script></head><body>
 <header><button type="button" aria-expanded="false" aria-controls="menu" onclick="var m=document.getElementById('menu'),o=m.classList.toggle('open');this.setAttribute('aria-expanded',String(o))">Menu</button>
@@ -126,8 +128,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'captures items that toggle their own hidden answer as independent local disclosures', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'captures items that toggle their own hidden answer as independent local disclosures', async () => {
+		const page = await browser.newPage();
 		await page.setContent( FAQ );
 		const records = await hydrateDisclosureContent( page );
 		expect( records.filter( ( record ) => record.status === 'captured' ) ).toHaveLength( 3 );
@@ -161,8 +163,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'does not call delayed, transient, history or popup effects inert', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'does not call delayed, transient, history or popup effects inert', async () => {
+		const page = await browser.newPage();
 		await page.setContent( `<!doctype html><body>
 			<div data-action="delayed" onclick="setTimeout(()=>{this.title='changed';this.removeAttribute('title')},250)">Delayed</div>
 			<div data-action="transient" onclick="this.title='changed';this.removeAttribute('title')">Transient</div>
@@ -176,8 +178,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'keeps an item whose icon flips its glyph as a local disclosure with the closed glyph', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'keeps an item whose icon flips its glyph as a local disclosure with the closed glyph', async () => {
+		const page = await browser.newPage();
 		await page.setContent( FAQ_ICON );
 		const records = await hydrateDisclosureContent( page );
 		expect( records.filter( ( record ) => record.status === 'captured' ) ).toHaveLength( 2 );
@@ -193,8 +195,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'indexes choice-group members, not their same-tag descendants, and reports an unreplayable group', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'indexes choice-group members, not their same-tag descendants, and reports an unreplayable group', async () => {
+		const page = await browser.newPage();
 		await page.setContent( FAQ );
 		// Without disclosure hydration the items are still probed as a choice group.
 		const states = await captureSelectableSetStates( page );
@@ -222,8 +224,8 @@ describe.skipIf( skipBrowser )( 'non-ARIA click disclosures (#901)', () => {
 		await page.close();
 	} );
 
-	it( 'restores the route after a member click pushes a new one, without re-clicking the group (#919)', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'restores the route after a member click pushes a new one, without re-clicking the group (#919)', async () => {
+		const page = await browser.newPage();
 		await page.addInitScript( () => {
 			const counts: Record< string, number > = {};
 			( window as unknown as { __slideClickCounts: Record< string, number > } ).__slideClickCounts = counts;

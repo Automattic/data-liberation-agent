@@ -14,8 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
-import { describe, expect, vi, afterEach } from 'vitest';
-import { it, test } from '../../../test/browser.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exportWebsiteCapture } from '../capture-export.js';
 import {
 	CAPTURED_RESOURCE_TIMEOUT_CEILING_MS,
@@ -1749,7 +1748,7 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
-		it( 'probes each responsive image once per capture and keeps every rendition', async ({ newPage, browser }) => {
+		it( 'probes each responsive image once per capture and keeps every rendition', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );
 			const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64' );
@@ -1767,10 +1766,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			} );
 			await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-
+			const browser = await chromium.launch();
 			try {
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
-				const page = await newPage();
+				const page = await browser.newPage();
 				const newContext = vi.spyOn( browser, 'newContext' );
 				const probes = [];
 				for ( const route of [ '/', '/second' ] ) {
@@ -1789,12 +1788,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( Object.keys( manifest.resources ).filter( url => /\/(?:small|large|full)\.png$/.test( url ) ).sort() )
 					.toEqual( [ `${ origin }/full.png`, `${ origin }/large.png`, `${ origin }/small.png` ].sort() );
 			} finally {
-
+				await browser.close();
 				await new Promise( done => server.close( done ) );
 			}
 		}, 30_000 );
 
-		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async ({ newPage }) => {
+		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-browser-' ) );
 			dirs.push( outputDir );
 			const sourceUrl = 'https://mixed-content.example/';
@@ -1806,9 +1805,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ),
 				body: Buffer.from( url === imported ? `@font-face{font-family:Mixed;src:url(${ font })}` : css ),
 			} ) );
-
+			const browser = await chromium.launch();
 			try {
-				const page = await newPage();
+				const page = await browser.newPage();
 				const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
 				store.observe( page );
 				const insecureRequests: string[] = [];
@@ -1841,10 +1840,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( await advance() ).toBe( liveAdvance );
 				expect( await page.evaluate( () => document.fonts.size ) ).toBe( 0 );
 			} finally {
-
+				await browser.close();
 			}
 		}, 30_000 );
-		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async ({ newPage }) => {
+		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async () => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-beacon-' ) );
 			dirs.push( outputDir );
 			const server = createServer( ( req, res ) => {
@@ -1868,9 +1867,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			} );
 			await new Promise< void >( ( done ) => server.listen( 0, '127.0.0.1', done ) );
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-
+			const browser = await chromium.launch();
 			try {
-				const page = await newPage();
+				const page = await browser.newPage();
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
 				store.observe( page );
 				await page.goto( `${ origin }/`, { waitUntil: 'networkidle' } );
@@ -1885,7 +1884,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( existsSync( join( outputDir, 'resources', '__beacon' ) ) ).toBe( false );
 				expect( existsSync( join( outputDir, 'resources', 'analytics' ) ) ).toBe( false );
 			} finally {
-
+				await browser.close();
 				await new Promise( ( done ) => server.close( done ) );
 			}
 		}, 30_000 );

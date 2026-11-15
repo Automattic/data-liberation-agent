@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-
-import { describe, expect, beforeAll, afterEach } from 'vitest';
-import { it, type BrowserFixtures } from '../../test/browser.js';
+import { chromium, type Browser } from 'playwright';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { observeRuntimeRegions } from './runtime-regions.js';
 import { projectRuntimePresentation, stageRuntimeRegions } from './embedded-documents.js';
 import { materializeHttpDocuments } from './http-materialization.js';
@@ -12,20 +11,23 @@ import { acquireHttpDocuments } from './http-acquisition.js';
 import { stripRemoteAssetRequests } from './self-contain.js';
 import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 
+let browser: Browser;
 const dirs: string[] = [];
 const tempRoot = join(process.cwd(), '.tmp-test');
 const sourceUrl = 'https://parent.test/article/';
 const sha = (html: string) => createHash('sha256').update(html).digest('hex');
 beforeAll(async () => {
 	mkdirSync(tempRoot, { recursive: true });
-
+	browser = await chromium.launch();
 });
-
+afterAll(async () => {
+	await browser?.close();
+});
 afterEach(() => {
 	for (const path of dirs.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-async function fixture({ newPage }: Pick<BrowserFixtures, 'newPage'>, border = '0', width = 768, partial = false, projection?: 'subtree', failedOnly = false) {
+async function fixture(border = '0', width = 768, partial = false, projection?: 'subtree', failedOnly = false) {
 	const outputDir = mkdtempSync(join(tempRoot, 'liberation-embedded-'));
 	dirs.push(outputDir);
 	mkdirSync(join(outputDir, 'source-documents'));
@@ -51,7 +53,7 @@ async function fixture({ newPage }: Pick<BrowserFixtures, 'newPage'>, border = '
 			],
 		})
 	);
-	const page = await newPage({ viewport: { width, height: 900 } });
+	const page = await browser.newPage({ viewport: { width, height: 900 } });
 	await page.route('**/*', (route) =>
 		route.fulfill({
 			contentType: 'text/html',
@@ -82,7 +84,7 @@ async function fixture({ newPage }: Pick<BrowserFixtures, 'newPage'>, border = '
 }
 
 describe('observed embedded document export', () => {
-	it.for([undefined, 'color:rgb(9,8,7)'])('projects runtime child state while retaining authored root geometry across fresh visitors and a stale resize (%s)', async (authoredStyle, { newPage }) => {
+	it.each([undefined, 'color:rgb(9,8,7)'])('projects runtime child state while retaining authored root geometry across fresh visitors and a stale resize (%s)', async authoredStyle => {
 		const outputDir = mkdtempSync(join(tempRoot, 'runtime-authored-geometry-'));
 		dirs.push(outputDir);
 		const raw = `<html><head><style>body{margin:0}#host{width:calc(100vw - 40px);aspect-ratio:1;position:relative}.label{position:absolute}</style></head><body><div id="host"${authoredStyle ? ` style="${authoredStyle}"` : ''}><img alt="Owned image"></div><script>const host=document.querySelector("#host");host.style.height=Math.round(host.getBoundingClientRect().width)+"px";host.querySelector("img").src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ZkAAAAASUVORK5CYII=";host.insertAdjacentHTML("beforeend","<span class=label>Mounted label</span>")</script></body></html>`;
@@ -90,7 +92,7 @@ describe('observed embedded document export', () => {
 		const fetch = async (url: string) => ({ finalUrl: url, status: 200, headers: new Headers({ 'content-type': 'text/html' }), body: Buffer.from(raw) });
 		await acquireHttpDocuments({ url: sourceUrl, urls: [sourceUrl], outputDir, collectAssets: true,
 			profile: { id: 'neutral', variants: [{ id: 'desktop' }], prepare: html => ({ html: html.replace(/<script>[\s\S]*?<\/script>/g, ''), browserRegions: requirements }) } }, { fetch });
-		const source = await newPage({ viewport: { width: 1440, height: 900 } });
+		const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 		try {
 			await source.route('**/*', route => route.fulfill({ body: raw, contentType: 'text/html' }));
 			await source.goto(sourceUrl, { waitUntil: 'load' });
@@ -99,7 +101,7 @@ describe('observed embedded document export', () => {
 			const observation = await observeRuntimeRegions(source, sourceUrl, requirements);
 			await stageRuntimeRegions({ outputDir, attachments: [{ variant: 'desktop', observation }] }, { fetch });
 			materializeHttpDocuments({ outputDir, sourceUrl, platform: 'neutral', desktopVariant: 'desktop', embeddedDocuments: true });
-			const server = await serveCapture(outputDir), copy = await newPage();
+			const server = await serveCapture(outputDir), copy = await browser.newPage();
 			try {
 				await copy.route('**/*', route => new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort());
 				for (const width of [390, 601, 768, 1024, 1440]) {
@@ -115,7 +117,7 @@ describe('observed embedded document export', () => {
 			} finally { await copy.close(); await server.close(); }
 		} finally { await source.close(); }
 	});
-	it('preserves print and narrow linked media through two-variant runtime staging and offline assembly', async ({ newPage }) => {
+	it('preserves print and narrow linked media through two-variant runtime staging and offline assembly', async () => {
 		const outputDir = mkdtempSync(join(tempRoot, 'runtime-dual-media-'));
 		dirs.push(outputDir);
 		const raw = `<html><head><title>Conditional widget</title><style>body{margin:0}#host{height:40px;color:rgb(1,2,3)}</style></head><body><main id="owner"><div id="host">Widget</div></main><script>
@@ -138,7 +140,7 @@ describe('observed embedded document export', () => {
 			profile: { id: 'neutral', variants: [{ id: 'desktop' }, { id: 'mobile' }], prepare: html => ({
 				html: html.replace(/<script>[\s\S]*?<\/script>/g, ''), browserRegions: requirements,
 			}) } }, { fetch });
-		const source = await newPage();
+		const source = await browser.newPage();
 		const attachments = [];
 		const measure = (page: typeof source) => page.locator('#host:visible, [data-blocks-engine-capture-responsive-source="host"]:visible').first().evaluate(node => {
 			const box = node.getBoundingClientRect(), style = getComputedStyle(node);
@@ -157,7 +159,7 @@ describe('observed embedded document export', () => {
 			await stageRuntimeRegions({ outputDir, attachments }, { fetch });
 			materializeHttpDocuments({ outputDir, sourceUrl, platform: 'neutral', desktopVariant: 'desktop', mobileVariant: 'mobile', embeddedDocuments: true });
 			const server = await serveCapture(outputDir);
-			const copy = await newPage();
+			const copy = await browser.newPage();
 			try {
 				await copy.route('**/*', route => new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort());
 				for (const media of ['screen', 'print'] as const) for (const width of [390, 700, 768, 1440]) {
@@ -174,7 +176,7 @@ describe('observed embedded document export', () => {
 			} finally { await copy.close(); await server.close(); }
 		} finally { await source.close(); }
 	});
-	it('keeps implicit scope at its authored widget location and diagnoses unhoistable presentation', async ({ newPage }) => {
+	it('keeps implicit scope at its authored widget location and diagnoses unhoistable presentation', async () => {
 		const outputDir = mkdtempSync(join(tempRoot, 'runtime-implicit-scope-'));
 		dirs.push(outputDir);
 		const raw = '<html><head><title>Scoped widget</title><style>body{margin:0}.caption{color:rgb(1,2,3);padding:0}</style></head><body><div id="host"><style id="widget-scope">@scope{.caption{color:rgb(9,8,7);padding:12px}}</style><p class="caption">Inside widget</p></div><p id="outside" class="caption">Outside widget</p></body></html>';
@@ -182,7 +184,7 @@ describe('observed embedded document export', () => {
 		const fetch = async (url: string) => ({ finalUrl: url, status: 200, headers: new Headers({ 'content-type': 'text/html' }), body: Buffer.from(raw) });
 		await acquireHttpDocuments({ url: sourceUrl, urls: [sourceUrl], outputDir, collectAssets: true,
 			profile: { id: 'neutral', variants: [{ id: 'desktop' }], prepare: html => ({ html, browserRegions: requirements }) } }, { fetch });
-		const source = await newPage();
+		const source = await browser.newPage();
 		const measure = (page: typeof source) => page.locator('.caption').evaluateAll(nodes => nodes.map(node => {
 			const box = node.getBoundingClientRect(), style = getComputedStyle(node);
 			return { color: style.color, padding: style.padding, height: box.height, y: box.y };
@@ -194,7 +196,7 @@ describe('observed embedded document export', () => {
 			await stageRuntimeRegions({ outputDir, attachments: [{ variant: 'desktop', observation }] }, { fetch });
 			const receipt = JSON.parse(readFileSync(materializeHttpDocuments({ outputDir, sourceUrl, platform: 'neutral', desktopVariant: 'desktop', embeddedDocuments: true }), 'utf8'));
 			const server = await serveCapture(outputDir);
-			const copy = await newPage();
+			const copy = await browser.newPage();
 			try {
 				await copy.route('**/*', route => new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort());
 				for (const width of [390, 768, 1440]) {
@@ -214,7 +216,7 @@ describe('observed embedded document export', () => {
 			} finally { await copy.close(); await server.close(); }
 		} finally { await source.close(); }
 	});
-	it('replaces body-only style originals once while preserving title, metadata and base identities', async ({ newPage }) => {
+	it('replaces body-only style originals once while preserving title, metadata and base identities', async () => {
 		const html = '<html><head><title id="title">Owned</title><meta id="meta" name="description" content="Owned"><base id="base" target="_self" href="https://parent.test/old/"></head><body><div id="host"><style id="old">#host{color:red}</style>Owned</div><link rel="stylesheet" href="old.css"></body></html>';
 		const styles = '<style id="new">#host{color:green}</style><style id="last">#host{color:rgb(1,2,3)}</style>';
 		const projected = projectRuntimePresentation(html, sourceUrl, 'desktop', sha(html), {
@@ -223,7 +225,7 @@ describe('observed embedded document export', () => {
 			presentation: [{ url: sourceUrl, variant: 'desktop', documentSha256: sha(html), baseUrl: 'https://parent.test/assets/',
 				styles, sha256: sha(styles), viewport: { width: 390, height: 900 }, userAgent: 'neutral', deviceScaleFactor: 1 }],
 		});
-		const page = await newPage();
+		const page = await browser.newPage();
 		try {
 			await page.setContent(projected);
 			expect(await page.locator('#old,link[rel="stylesheet"]').count()).toBe(0);
@@ -237,7 +239,7 @@ describe('observed embedded document export', () => {
 			await page.close();
 		}
 	});
-	it('exports active dynamically inserted body styles in source order with scoped selectors and media at every width', async ({ newPage }) => {
+	it('exports active dynamically inserted body styles in source order with scoped selectors and media at every width', async () => {
 		const outputDir = mkdtempSync(join(tempRoot, 'runtime-body-css-'));
 		dirs.push(outputDir);
 		const raw = `<html><head><base href="https://parent.test/assets/"><title>Body cascade</title><meta name="description" content="Source metadata"><style id="head-rule">#host{height:12px;color:red}body{margin:0}</style></head><body><div id="host"><style id="widget-rule">#host{height:20px;color:green}</style>Widget</div><p id="outside">Outside</p><style id="body-rule">#host{height:30px;color:blue}</style><script>
@@ -266,7 +268,7 @@ describe('observed embedded document export', () => {
 				html: html.replace(/<script>[\s\S]*?<\/script>/g, ''), browserRegions: requirements,
 			}) },
 		}, { fetch });
-		const source = await newPage();
+		const source = await browser.newPage();
 		const expected = new Map<number, unknown>();
 		const measure = () => source.locator('#host').evaluate((node) => {
 			const box = node.getBoundingClientRect(), css = getComputedStyle(node);
@@ -295,7 +297,7 @@ describe('observed embedded document export', () => {
 			expect(manifest.resources[`https://parent.test/assets/${name}`]).toBeDefined();
 		materializeHttpDocuments({ outputDir, sourceUrl, platform: 'neutral', desktopVariant: 'desktop', embeddedDocuments: true });
 		const server = await serveCapture(outputDir);
-		const page = await newPage();
+		const page = await browser.newPage();
 		const external: string[] = [];
 		try {
 			await page.route('**/*', (route) => {
@@ -321,7 +323,7 @@ describe('observed embedded document export', () => {
 			await server.close();
 		}
 	});
-	it('retains the observed style and linked-sheet cascade order instead of appending a mutated early rule last', async ({ newPage }) => {
+	it('retains the observed style and linked-sheet cascade order instead of appending a mutated early rule last', async () => {
 		const outputDir = mkdtempSync(join(tempRoot, 'runtime-cascade-'));
 		dirs.push(outputDir);
 		const raw =
@@ -348,7 +350,7 @@ describe('observed embedded document export', () => {
 			},
 			{ fetch }
 		);
-		const source = await newPage();
+		const source = await browser.newPage();
 		await source.route('**/*', (route) =>
 			route.fulfill({
 				contentType: route.request().url().endsWith('.css') ? 'text/css' : 'text/html',
@@ -368,7 +370,7 @@ describe('observed embedded document export', () => {
 			embeddedDocuments: true,
 		});
 		const server = await serveCapture(outputDir);
-		const page = await newPage();
+		const page = await browser.newPage();
 		try {
 			await page.route('**/*', (route) =>
 				new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort()
@@ -382,10 +384,10 @@ describe('observed embedded document export', () => {
 			await server.close();
 		}
 	});
-	it.for([undefined, 'subtree'] as const)(
+	it.each([undefined, 'subtree'] as const)(
 		'keeps a valid parent and complete child while diagnosing a failed sibling (%s)',
-		async (projection, { newPage }) => {
-			const { outputDir, observation, stage, run } = await fixture({ newPage }, '0', 768, true, projection);
+		async (projection) => {
+			const { outputDir, observation, stage, run } = await fixture('0', 768, true, projection);
 			expect(observation.regions[0]!.status).toBe('partial');
 			await stage();
 			const staged = JSON.parse(readFileSync(join(outputDir, 'embedded-documents.json'), 'utf8'));
@@ -403,7 +405,7 @@ describe('observed embedded document export', () => {
 				expect.arrayContaining([expect.objectContaining({ code: 'http_runtime_projection_unresolved' })])
 			);
 			const server = await serveCapture(outputDir);
-			const page = await newPage();
+			const page = await browser.newPage();
 			const external: string[] = [];
 			try {
 				await page.route('**/*', (route) => {
@@ -425,10 +427,10 @@ describe('observed embedded document export', () => {
 		}
 	);
 
-	it.for([undefined, 'subtree'] as const)(
+	it.each([undefined, 'subtree'] as const)(
 		'accounts for a parent whose only child is incomplete (%s)',
-		async (projection, { newPage }) => {
-			const { outputDir, stage, run } = await fixture({ newPage }, '0', 768, true, projection, true);
+		async (projection) => {
+			const { outputDir, stage, run } = await fixture('0', 768, true, projection, true);
 			await stage();
 			const staged = JSON.parse(readFileSync(join(outputDir, 'embedded-documents.json'), 'utf8'));
 			expect(staged.regions).toHaveLength(projection ? 1 : 0);
@@ -439,9 +441,9 @@ describe('observed embedded document export', () => {
 			expect(html).not.toContain('<iframe');
 		}
 	);
-	it('does not turn a failed video poster into a successfully loaded square placeholder that changes source geometry', async ({ newPage }) => {
-		const source = await newPage(),
-			copy = await newPage();
+	it('does not turn a failed video poster into a successfully loaded square placeholder that changes source geometry', async () => {
+		const source = await browser.newPage(),
+			copy = await browser.newPage();
 		const failedPoster = 'https://poster.test/missing.jpg';
 		const raw = `<video style="width:320px;height:auto" poster="${failedPoster}"></video>`;
 		await source.route('**/*', (route) => route.fulfill({ status: 404, body: '' }));
@@ -458,7 +460,7 @@ describe('observed embedded document export', () => {
 			await copy.close();
 		}
 	});
-	it('carries linked source CSS into responsive subtree reconciliation rather than losing viewport-only classes', async ({ newPage }) => {
+	it('carries linked source CSS into responsive subtree reconciliation rather than losing viewport-only classes', async () => {
 		const outputDir = mkdtempSync(join(tempRoot, 'runtime-css-'));
 		dirs.push(outputDir);
 		const raw =
@@ -488,7 +490,7 @@ describe('observed embedded document export', () => {
 			['desktop', 1440],
 			['mobile', 390],
 		] as const) {
-			const page = await newPage({ viewport: { width, height: 900 } });
+			const page = await browser.newPage({ viewport: { width, height: 900 } });
 			await page.route('**/*', (route) =>
 				route.fulfill({
 					contentType: route.request().url().endsWith('.css') ? 'text/css' : 'text/html',
@@ -511,7 +513,7 @@ describe('observed embedded document export', () => {
 		const server = await serveCapture(outputDir);
 		try {
 			for (const width of [390, 768, 1440]) {
-				const page = await newPage({ viewport: { width, height: 900 } });
+				const page = await browser.newPage({ viewport: { width, height: 900 } });
 				await page.route('**/*', (route) =>
 					new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort()
 				);
@@ -528,8 +530,8 @@ describe('observed embedded document export', () => {
 			await server.close();
 		}
 	});
-	it('localizes a runtime-mounted cross-origin child and its base-relative CSS through shared export', async ({ newPage }) => {
-		const { outputDir, stage, run } = await fixture({ newPage });
+	it('localizes a runtime-mounted cross-origin child and its base-relative CSS through shared export', async () => {
+		const { outputDir, stage, run } = await fixture();
 		await stage();
 		const receipt = JSON.parse(readFileSync(run(), 'utf8'));
 		expect(receipt.summary.complete).toBe(false);
@@ -539,7 +541,7 @@ describe('observed embedded document export', () => {
 		expect(html).toContain('width="100%"');
 		expect(html).not.toContain('https://child.test/');
 		const server = await serveCapture(outputDir);
-		const page = await newPage({ viewport: { width: 390, height: 900 } });
+		const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
 		const external: string[] = [];
 		try {
 			await page.route('**/*', (route) => {
@@ -563,8 +565,8 @@ describe('observed embedded document export', () => {
 		}
 	});
 
-	it('rejects modified child bytes and stale parent identities before replacing the candidate', async ({ newPage }) => {
-		const { outputDir, stage, run } = await fixture({ newPage });
+	it('rejects modified child bytes and stale parent identities before replacing the candidate', async () => {
+		const { outputDir, stage, run } = await fixture();
 		await stage();
 		mkdirSync(join(outputDir, 'website'));
 		writeFileSync(join(outputDir, 'website/index.html'), 'Preserve candidate');
@@ -581,12 +583,12 @@ describe('observed embedded document export', () => {
 		expect(readFileSync(join(outputDir, 'website/index.html'), 'utf8')).toBe('Preserve candidate');
 	});
 
-	it('preserves authored border geometry without adding border thickness twice', async ({ newPage }) => {
-		const { outputDir, observation, stage, run } = await fixture({ newPage }, '1');
+	it('preserves authored border geometry without adding border thickness twice', async () => {
+		const { outputDir, observation, stage, run } = await fixture('1');
 		await stage();
 		run();
 		const server = await serveCapture(outputDir);
-		const page = await newPage();
+		const page = await browser.newPage();
 		try {
 			await page.goto(server.url, { waitUntil: 'load' });
 			expect((await page.locator('iframe').boundingBox())!.height).toBe(
@@ -598,8 +600,8 @@ describe('observed embedded document export', () => {
 		}
 	});
 
-	it('rejects ambiguous viewport selection and child file symlinks', async ({ newPage }) => {
-		const { outputDir, observation, stage, run } = await fixture({ newPage });
+	it('rejects ambiguous viewport selection and child file symlinks', async () => {
+		const { outputDir, observation, stage, run } = await fixture();
 		await expect(
 			stageRuntimeRegions({
 				outputDir,
@@ -622,9 +624,9 @@ describe('observed embedded document export', () => {
 		expect(run).toThrow('containment mismatch');
 	});
 
-	it('preserves child presentation variants when parent documents are structurally equivalent', async ({ newPage }) => {
-		const desktop = await fixture({ newPage });
-		const mobile = await fixture({ newPage }, '0', 390);
+	it('preserves child presentation variants when parent documents are structurally equivalent', async () => {
+		const desktop = await fixture();
+		const mobile = await fixture('0', 390);
 		const acquisitionPath = join(desktop.outputDir, 'http-acquisition.json');
 		const acquisition = JSON.parse(readFileSync(acquisitionPath, 'utf8'));
 		acquisition.documents.push({ ...acquisition.documents[0], variant: 'mobile' });
@@ -661,7 +663,7 @@ describe('observed embedded document export', () => {
 				[768, 86],
 				[1440, 86],
 			]) {
-				const page = await newPage({ viewport: { width: width!, height: 900 } });
+				const page = await browser.newPage({ viewport: { width: width!, height: 900 } });
 				try {
 					await page.goto(server.url, { waitUntil: 'load' });
 					expect(await page.locator('iframe:visible').count()).toBe(1);

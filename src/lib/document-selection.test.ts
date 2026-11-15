@@ -1,5 +1,4 @@
-import { afterAll, describe, expect } from 'vitest';
-import { it, test } from '../../test/browser.js';
+import { afterAll, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -188,15 +187,15 @@ it( 'does not merge sheets with different media even when body classes do not af
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-owned document selection', () => {
-	it( 'activates shared and device-only styles once for each selected identity', async ({ newPage }) => {
+	it( 'activates shared and device-only styles once for each selected identity', async () => {
 		const assembly = assembleDeviceDocuments( {
 			desktop: sharedDocument( '.card{border-top:1px solid blue}' ), mobile: sharedDocument( '.card{border-top:2px solid blue}' ), tablet: sharedDocument( '.card{border-top:3px solid blue}' ),
 		}, selection );
 		const html = installDeviceSelection( assembly.html, assembly );
-
-		{
+		const browser = await chromium.launch();
+		try {
 			for ( const [ key, userAgent, border ] of [ [ 'desktop', 'NeutralDesktop', '1px' ], [ 'mobile', 'iPhone', '2px' ], [ 'tablet', 'iPad', '3px' ] ] ) {
-				const page = await newPage( { userAgent } );
+				const page = await browser.newPage( { userAgent } );
 				await page.setContent( html );
 				const actual = await page.evaluate( () => {
 					const key = document.documentElement.getAttribute( 'data-blocks-engine-capture-selected-document' );
@@ -208,9 +207,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 				expect( actual ).toEqual( { key, color: 'rgb(255, 0, 0)', padding: '4px', border, margin: '7px', active: 2 } );
 				await page.close();
 			}
-		}
+		} finally { await browser.close(); }
 	} );
-	it( 'preserves class-only body box styling on the real selected body', async ({ newPage }) => {
+	it( 'preserves class-only body box styling on the real selected body', async () => {
 		const decorate = ( html: string, key: string ) => {
 			const $ = cheerio.load( html );
 			const index = [ 'desktop', 'mobile', 'tablet' ].indexOf( key );
@@ -220,10 +219,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 		};
 		const dir = directory(); exported( dir, true, decorate );
 		const site = await startStaticServer( join( dir, 'website' ) );
-
+		const browser = await chromium.launch();
 		try {
 			for ( const [ key, userAgent ] of [ [ 'desktop', 'NeutralDesktop' ], [ 'mobile', 'Neutral iPhone' ], [ 'tablet', 'Neutral iPad' ] ] ) {
-				const page = await newPage( { userAgent, viewport: { width: 1440, height: 900 } } );
+				const page = await browser.newPage( { userAgent, viewport: { width: 1440, height: 900 } } );
 				const read = () => page.evaluate( () => {
 					const style = getComputedStyle( document.body );
 					const canvas = Array.from( document.querySelectorAll<HTMLElement>( '.canvas' ) ).find( node => node.getClientRects().length )!;
@@ -236,20 +235,20 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 				expect.soft( await read(), key ).toEqual( expected );
 				await page.context().close();
 			}
-		} finally {  await site.close(); }
+		} finally { await browser.close(); await site.close(); }
 	}, 60_000 );
 
-	it( 'renders the default document where the selection runtime never runs', async ({ newContext }) => {
+	it( 'renders the default document where the selection runtime never runs', async () => {
 		const dir = directory(); const html = exported( dir );
 		const visibility = cheerio.load( html )( 'style[data-blocks-engine-capture-device-visibility]' ).text();
 		expect( visibility ).toContain( `html:not([data-blocks-engine-capture-selected-document]) [data-blocks-engine-capture-device-document="${ selection.defaultDocument }"]{display:contents!important}` );
 		const site = await startStaticServer( join( dir, 'website' ) );
-
+		const browser = await chromium.launch();
 		try {
 			// The block editor canvas renders this markup without the selection
 			// runtime, so nothing ever sets data-blocks-engine-capture-selected-document. Disabling
 			// scripts reproduces that consumer without depending on WordPress.
-			const context = await newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
+			const context = await browser.newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
 			const page = await context.newPage();
 			await page.goto( site.url );
 			const seen = await page.evaluate( () => ( {
@@ -265,10 +264,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 			expect( seen.canvas ).toBe( selection.defaultDocument );
 			expect( seen.painted ).toBeGreaterThan( 0 );
 			await context.close();
-		} finally {  await site.close(); }
+		} finally { await browser.close(); await site.close(); }
 	}, 60_000 );
 
-	it( 'selects three request identities on static hosting before paint and keeps identity through resize', async ({ newContext }) => {
+	it( 'selects three request identities on static hosting before paint and keeps identity through resize', async () => {
 		const dir = directory(); const html = exported( dir );
 		const serialized = cheerio.load( html );
 		expect( serialized( 'meta[name="viewport"]' ) ).toHaveLength( 1 );
@@ -291,7 +290,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
-
+		const browser = await chromium.launch();
 		const { defaultBrowserType: _iphoneType, ...iphone } = devices['iPhone 17'];
 		const { defaultBrowserType: _ipadType, ...ipad } = devices['iPad (gen 7)'];
 		const cases = [
@@ -303,7 +302,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 		const rows = [];
 		try {
 			for ( const test of cases ) for ( const width of test.widths ) {
-				const context = await newContext( { ...test.options, viewport: { width, height: 900 } } );
+				const context = await browser.newContext( { ...test.options, viewport: { width, height: 900 } } );
 				await context.addInitScript( () => {
 					const frames: unknown[] = []; ( window as unknown as { framesProof: unknown[] } ).framesProof = frames;
 					function observeFrame() {
@@ -335,15 +334,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-o
 			writeFileSync( join( dir, 'browser-proof.json' ), JSON.stringify( rows, null, 2 ) );
 			// A host such as WordPress prints its own viewport meta in place of the exported one.
 			writeFileSync( join( dir, 'website', 'host.html' ), html.replace( /<meta name="viewport"[^>]*>/, '<meta name="viewport" content="width=device-width, initial-scale=1" />' ) );
-			const hosted = await newContext( iphone );
+			const hosted = await browser.newContext( iphone );
 			const hostPage = await hosted.newPage();
 			await hostPage.goto( new URL( 'host.html', staticSite.url ).href, { waitUntil: 'load' } );
 			expect( await observation( hostPage ) ).toMatchObject( { selected: 'mobile', innerWidth: 320 } );
 			await hosted.close();
-		} finally {  await staticSite.close(); await new Promise<void>( resolve => source.close( () => resolve() ) ); }
+		} finally { await browser.close(); await staticSite.close(); await new Promise<void>( resolve => source.close( () => resolve() ) ); }
 	}, 60_000 );
 
-	it( 'overlays source root ownership in a host document before paint and retains authored media provenance', async ({ newPage }) => {
+	it( 'overlays source root ownership in a host document before paint and retains authored media provenance', async () => {
 		const dir = directory();
 		const keys = [ 'desktop', 'mobile', 'tablet' ];
 		const html = exported( dir, true, ( document, key ) => {
@@ -374,13 +373,13 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		// it neither supplies nor repairs selection/viewport/host state.
 		$( 'body' ).append( snapshot );
 		writeFileSync( join( dir, 'website/index.html' ), $.html() );
-		const site = await startStaticServer( join( dir, 'website' ) );
+		const site = await startStaticServer( join( dir, 'website' ) ); const browser = await chromium.launch();
 		const { defaultBrowserType: _iphone, ...iphone } = devices['iPhone 17'];
 		const { defaultBrowserType: _ipad, ...ipad } = devices['iPad (gen 7)'];
 		const rows = [];
 		try {
 			for ( const item of [ { key: 'desktop', options: { userAgent: 'NeutralDesktop', hasTouch: true } }, { key: 'mobile', options: iphone }, { key: 'tablet', options: ipad } ] ) {
-				const page = await newPage( { ...item.options, viewport: { width: 1440, height: 900 } } );
+				const page = await browser.newPage( { ...item.options, viewport: { width: 1440, height: 900 } } );
 				await page.goto( site.url );
 				await page.waitForFunction( () => ( window as unknown as { embeddingFrames: unknown[] } ).embeddingFrames.length === 3 );
 				const proof = await page.evaluate( () => {
@@ -409,7 +408,7 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 				await page.context().close();
 			}
 			writeFileSync( join( dir, 'embedding-proof.json' ), JSON.stringify( rows, null, 2 ) );
-		} finally {  await site.close(); }
+		} finally { await browser.close(); await site.close(); }
 	}, 60_000 );
 
 	it( 'marks a single device document boundary without manufacturing another identity', async () => {
@@ -423,15 +422,15 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		expect( $( '[data-blocks-engine-capture-device-unavailable]' ) ).toHaveLength( 0 );
 	} );
 
-	it( 'emits the relocated declared stylesheet without constructing another asset reference', async ({ newPage }) => {
+	it( 'emits the relocated declared stylesheet without constructing another asset reference', async () => {
 		const dir = directory(); const html = exported( dir ); const $ = cheerio.load( html );
 		mkdirSync( join( dir, 'website/relocated' ) );
 		writeFileSync( join( dir, 'website/relocated/source.css' ), linkedCss );
 		$( 'link[data-blocks-engine-capture-device-style]' ).attr( 'href', '/relocated/source.css' );
 		writeFileSync( join( dir, 'website/index.html' ), $.html() );
-		const site = await startStaticServer( join( dir, 'website' ) );
+		const site = await startStaticServer( join( dir, 'website' ) ); const browser = await chromium.launch();
 		try {
-			const page = await newPage( { userAgent: 'NeutralDesktop', viewport: { width: 768, height: 900 } } );
+			const page = await browser.newPage( { userAgent: 'NeutralDesktop', viewport: { width: 768, height: 900 } } );
 			await page.goto( site.url );
 			expect( ( await observation( page ) ).letterSpacing ).toBe( '3px' );
 			const active = page.locator( 'link[data-blocks-engine-capture-source-media]:not([data-blocks-engine-capture-device-style])' );
@@ -439,25 +438,25 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 			expect( await active.getAttribute( 'href' ) ).toBe( '/relocated/source.css' );
 			expect( await active.getAttribute( 'media' ) ).toBe( 'all' );
 			expect( await active.getAttribute( 'data-blocks-engine-capture-source-media' ) ).toBe( 'all' );
-		} finally {  await site.close(); }
+		} finally { await browser.close(); await site.close(); }
 	} );
 
-	it( 'exposes an uncaptured tablet without substituting a phone or desktop tree', async ({ newPage }) => {
+	it( 'exposes an uncaptured tablet without substituting a phone or desktop tree', async () => {
 		const dir = directory(); exported( dir, false );
 		const receipt = JSON.parse( readFileSync( join( dir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.sourceProfile.documentSelection.routes[ 0 ].missing ).toEqual( [ 'tablet' ] );
-		const site = await startStaticServer( join( dir, 'website' ) );
+		const site = await startStaticServer( join( dir, 'website' ) ); const browser = await chromium.launch();
 		try {
-			const page = await newPage( { userAgent: 'Neutral iPad' } ); await page.goto( site.url );
+			const page = await browser.newPage( { userAgent: 'Neutral iPad' } ); await page.goto( site.url );
 			expect( ( await observation( page ) ).selected ).toBeUndefined();
 			expect( await page.locator( '[data-blocks-engine-capture-device-unavailable]' ).isVisible() ).toBe( true );
 			expect( await page.locator( 'html' ).getAttribute( 'data-blocks-engine-capture-document-unavailable' ) ).toBe( 'tablet' );
 			expect( await page.locator( 'meta[name="viewport"]' ).count() ).toBe( 1 );
 			expect( await page.locator( 'meta[name="viewport"]' ).getAttribute( 'content' ) ).toBeNull();
-		} finally {  await site.close(); }
+		} finally { await browser.close(); await site.close(); }
 	} );
 
-	it( 'activates every route\'s ordered device styles from one document runtime before paint', async ({ newContext }) => {
+	it( 'activates every route\'s ordered device styles from one document runtime before paint', async () => {
 		// Neutral multi-route, multi-style source: equal-specificity inline rules and
 		// linked sheets only resolve correctly in document order, and media-scoped
 		// styles keep their authored conditions.
@@ -504,14 +503,14 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		await new Promise<void>( resolve => origin.listen( 0, '127.0.0.1', resolve ) );
 		const originUrl = `http://127.0.0.1:${ ( origin.address() as { port: number } ).port }/`;
 		const site = await startStaticServer( join( dir, 'website' ) ); const siteUrl = site.url.replace( /\/?$/, '/' );
-
+		const browser = await chromium.launch();
 		const { defaultBrowserType: _phoneType, ...phone } = devices['iPhone 17'];
 		const { defaultBrowserType: _tabletType, ...tablet } = devices['iPad (gen 7)'];
 		const profiles = [ { key: 'desktop', options: { userAgent: 'NeutralDesktop' }, widths: [ 390, 1440 ] }, { key: 'mobile', options: phone, widths: [ 390 ] }, { key: 'tablet', options: tablet, widths: [ 768 ] } ];
 		const rows = [];
 		try {
 			for ( const profile of profiles ) for ( const width of profile.widths ) for ( const route of routes ) {
-				const context = await newContext( { ...profile.options, viewport: { width, height: 900 } } );
+				const context = await browser.newContext( { ...profile.options, viewport: { width, height: 900 } } );
 				// Slow stylesheets prove the selected sheets block first paint.
 				await context.route( '**/*', async request => {
 					if ( request.request().resourceType() === 'stylesheet' ) await new Promise( resolve => setTimeout( resolve, 300 ) );
@@ -549,7 +548,7 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 				rows.push( { profile: profile.key, width, route: route.file, actual } );
 				await context.close();
 			}
-			const context = await newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
+			const context = await browser.newContext( { javaScriptEnabled: false, viewport: { width: 1440, height: 900 } } );
 			const page = await context.newPage();
 			for ( const route of routes ) {
 				await page.goto( siteUrl + route.path );
@@ -561,10 +560,10 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 			}
 			await context.close();
 			writeFileSync( join( dir, 'device-style-proof.json' ), JSON.stringify( rows, null, 2 ) );
-		} finally {  await site.close(); await new Promise<void>( resolve => origin.close( () => resolve() ) ); }
+		} finally { await browser.close(); await site.close(); await new Promise<void>( resolve => origin.close( () => resolve() ) ); }
 	}, 120_000 );
 
-	it( 'retains a source-declared width transition at 800 despite a 980 geometry floor', async ({ newPage }) => {
+	it( 'retains a source-declared width transition at 800 despite a 980 geometry floor', async () => {
 		const dir = directory();
 		const widthDocument = ( key: string ) => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}.canvas{width:max(980px,100vw);height:200px}@media(max-width:980px){h1{color:blue}}</style></head><body><${ key === 'narrow' ? 'article' : 'main' } class="canvas" data-fixture-document="${ key }"><h1>${ key }</h1>${ key === 'narrow' ? '<aside>Narrow navigation</aside>' : '' }</${ key === 'narrow' ? 'article' : 'main' }></body></html>`;
 		writeFileSync( join( dir, 'html/home.html' ), widthDocument( 'wide' ) ); writeFileSync( join( dir, 'html-mobile/home.html' ), widthDocument( 'narrow' ) );
@@ -578,9 +577,9 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
-		const site = await startStaticServer( join( dir, 'website' ) );
+		const site = await startStaticServer( join( dir, 'website' ) ); const browser = await chromium.launch();
 		try {
-			const page = await newPage( { userAgent: 'NeutralDesktop', viewport: { width: 800, height: 900 } } );
+			const page = await browser.newPage( { userAgent: 'NeutralDesktop', viewport: { width: 800, height: 900 } } );
 			for ( const url of [ origin, site.url ] ) {
 				await page.setViewportSize( { width: 800, height: 900 } );
 				await page.goto( url ); expect( ( await observation( page ) ).selected ).toBe( 'narrow' );
@@ -589,15 +588,16 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 				expect( ( await observation( page ) ).selected ).toBe( 'wide' );
 				await page.setViewportSize( { width: 900, height: 900 } ); expect( ( await observation( page ) ).selected ).toBe( 'wide' );
 			}
-			const phoneUA = await newPage( { userAgent: devices['iPhone 17'].userAgent, viewport: { width: 900, height: 900 } } );
+			const phoneUA = await browser.newPage( { userAgent: devices['iPhone 17'].userAgent, viewport: { width: 900, height: 900 } } );
 			await phoneUA.goto( site.url );
 			expect( ( await observation( phoneUA ) ).selected ).toBe( 'wide' );
 			expect( await phoneUA.locator( 'html' ).getAttribute( 'data-blocks-engine-capture-selected-document' ) ).toBeNull();
-		} finally {  await site.close(); await new Promise<void>( resolve => source.close( () => resolve() ) ); }
+		} finally { await browser.close(); await site.close(); await new Promise<void>( resolve => source.close( () => resolve() ) ); }
 	} );
 } );
 
-it( 'reconciles three request identities with rendered text and native cascade parity', async ({ newContext }) => {
+
+it( 'reconciles three request identities with rendered text and native cascade parity', async () => {
 	const documents = Object.fromEntries( selection.documents.map( key => [ key, `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>
 	body:not(.phone) .gated{color:rgb(180, 0, 0)}body.phone .gated{color:rgb(0, 0, 180)}
 	.important{color:rgb(0, 120, 0)!important}.left,.right{display:block}#article{font-size:23px}[id="article"]{letter-spacing:2px}
@@ -607,10 +607,10 @@ it( 'reconciles three request identities with rendered text and native cascade p
 	<main id="content"><div class="left">${ key === 'desktop' ? '<article id="article"><p>Article content</p></article>' : '' }</div><div class="center">${ key === 'tablet' ? '<article id="article"><p>Article content</p></article>' : '' }</div><div class="right">${ key === 'mobile' ? '<article id="article"><p>Article content</p></article>' : '' }</div></main>
 	<aside id="${ key }-only">${ key } only</aside></body></html>` ] ) );
 	const assembly = assembleDeviceDocuments( documents, selection );
-
-	{
+	const browser = await chromium.launch( { headless: true } );
+	try {
 		for ( const key of selection.documents ) {
-			const context = await newContext( { userAgent: key === 'tablet' ? 'iPad' : key === 'mobile' ? 'iPhone' : 'Desktop' } );
+			const context = await browser.newContext( { userAgent: key === 'tablet' ? 'iPad' : key === 'mobile' ? 'iPhone' : 'Desktop' } );
 			try {
 				const page = await context.newPage();
 				const observe = () => page.evaluate( () => ( {
@@ -628,7 +628,7 @@ it( 'reconciles three request identities with rendered text and native cascade p
 				expect( await page.locator( '#shared' ).count() ).toBe( 1 );
 			} finally { await context.close(); }
 		}
-	}
+	} finally { await browser.close(); }
 	expect( assembly.evidence?.outcome ).toBe( 'collapsed-identity-subset' );
 	expect( assembly.evidence?.devices.mobile.divergedComponents ).toBeGreaterThan( 0 );
 	// Prior assembly emitted every source element plus one wrapper per device.
@@ -644,7 +644,7 @@ it( 'reconciles three request identities with rendered text and native cascade p
 	expect( mixedDom( '[data-blocks-engine-capture-device-document="mobile"]' ) ).toHaveLength( 0 );
 } );
 
-it( 'reconciles a phone-only wrapper that has no desktop counterpart', async ({ newContext }) => {
+it( 'reconciles a phone-only wrapper that has no desktop counterpart', async () => {
 	// A phone layout shows a hover overlay at rest and one more gallery item;
 	// neither wrapper exists on desktop, and neither holds a shared component.
 	const item = ( key: string ) => `<div id="item-a" class="item"><div class="content"><p>Shared item</p></div>${ key === 'mobile' ? '<div class="overlay"><button id="like-a">Like</button></div>' : '' }</div>`;
@@ -655,10 +655,10 @@ it( 'reconciles a phone-only wrapper that has no desktop counterpart', async ({ 
 	const assembly = assembleDeviceDocuments( documents, pair );
 	expect( assembly.evidence?.devices.mobile.outcome ).toBe( 'collapsed-identity-subset' );
 	expect( cheerio.load( assembly.html )( '#gallery' ) ).toHaveLength( 1 );
-
-	{
+	const browser = await chromium.launch( { headless: true } );
+	try {
 		for ( const key of pair.documents ) {
-			const context = await newContext( { userAgent: key === 'mobile' ? 'iPhone' : 'Desktop' } );
+			const context = await browser.newContext( { userAgent: key === 'mobile' ? 'iPhone' : 'Desktop' } );
 			try {
 				const page = await context.newPage();
 				const observe = () => page.evaluate( () => ( {
@@ -671,19 +671,19 @@ it( 'reconciles a phone-only wrapper that has no desktop counterpart', async ({ 
 				expect( await observe(), key ).toEqual( expected );
 			} finally { await context.close(); }
 		}
-	}
+	} finally { await browser.close(); }
 } );
 
-it( 'reconciles a component whose ancestor differs only by a class token into one copy (#1605)', async ({ newContext }) => {
+it( 'reconciles a component whose ancestor differs only by a class token into one copy (#1605)', async () => {
 	const documents = Object.fromEntries( [ 'desktop', 'mobile' ].map( key => [ key, `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>.extra h2{color:rgb(0, 0, 180)}</style></head><body><div id="root" class="root${ key === 'mobile' ? ' extra' : '' }"><section id="sec"><h2 style="font-size:${ key === 'mobile' ? 18 : 40 }px">Recent work</h2><p>Shared paragraph.</p></section></div></body></html>` ] ) );
 	const pair: DeviceDocumentSelection = { ...selection, documents: [ 'desktop', 'mobile' ], rules: selection.rules.filter( rule => rule.document !== 'tablet' ) };
 	const assembly = assembleDeviceDocuments( documents, pair );
 	expect( assembly.evidence?.devices.mobile ).toMatchObject( { outcome: 'collapsed-identity-subset', divergedComponents: 0 } );
 	expect( cheerio.load( assembly.html )( 'h2' ) ).toHaveLength( 1 );
-
-	{
+	const browser = await chromium.launch( { headless: true } );
+	try {
 		for ( const key of pair.documents ) {
-			const context = await newContext( { userAgent: key === 'mobile' ? 'iPhone' : 'Desktop' } );
+			const context = await browser.newContext( { userAgent: key === 'mobile' ? 'iPhone' : 'Desktop' } );
 			try {
 				const page = await context.newPage();
 				const observe = () => page.evaluate( () => [ ...document.querySelectorAll<HTMLElement>( 'h2' ) ].filter( node => node.getClientRects().length ).map( node => [ node.closest( '[class~="root"]' )!.className, getComputedStyle( node ).fontSize, getComputedStyle( node ).color ] ) );
@@ -693,5 +693,5 @@ it( 'reconciles a component whose ancestor differs only by a class token into on
 				expect( await observe(), key ).toEqual( expected );
 			} finally { await context.close(); }
 		}
-	}
+	} finally { await browser.close(); }
 } );

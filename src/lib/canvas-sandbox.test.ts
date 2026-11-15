@@ -1,6 +1,5 @@
-
-import { describe, expect } from 'vitest';
-import { it } from '../../test/browser.js';
+import { chromium, type Browser } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildCanvasSandbox, drawsOnCanvas } from './canvas-sandbox.js';
 
 // Neutral source code: overwrites copy, hides and restyles elements, rebuilds
@@ -33,14 +32,17 @@ window.__strokes = () => strokes;
 `;
 
 describe( 'source canvas sandbox', () => {
+	let browser: Browser;
+	beforeAll( async () => { browser = await chromium.launch(); } );
+	afterAll( async () => { await browser.close(); } );
 
 	it( 'selects only drawing code', () => {
 		expect( drawsOnCanvas( SOURCE ) ).toBe( true );
 		expect( drawsOnCanvas( 'navigator.sendBeacon("/rum")' ) ).toBe( false );
 	} );
 
-	it( 'runs source drawing and listeners while every content write is discarded', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 800, height: 600 } } );
+	it( 'runs source drawing and listeners while every content write is discarded', async () => {
+		const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
 		const errors: string[] = [];
 		page.on( 'pageerror', ( error ) => errors.push( error.message ) );
 		page.on( 'console', ( message ) => { if ( message.type() === 'error' ) errors.push( message.text() ); } );

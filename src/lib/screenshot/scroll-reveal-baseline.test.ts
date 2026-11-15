@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { expect, it } from 'vitest';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 
 const skipBrowser = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
@@ -25,24 +24,24 @@ const observer = `new IntersectionObserver( entries => entries.forEach( entry =>
 	if ( entry.isIntersecting ) entry.target.classList.add( 'in' );
 } ) ).observe( reviews );`;
 
-it.skipIf( skipBrowser )( 'keeps a scroll-reveal section in the baseline of a plain action button probe', async ({ newPage }) => {
-
+it.skipIf( skipBrowser )( 'keeps a scroll-reveal section in the baseline of a plain action button probe', async () => {
+	const browser = await chromium.launch( { headless: true } );
 	try {
-		const tab = await newPage( { viewport: { width: 1280, height: 800 } } );
+		const tab = await browser.newPage( { viewport: { width: 1280, height: 800 } } );
 		await tab.setContent( page( observer, '' ) );
 		const report = await captureTriggeredDialogs( tab, 'https://fixture.test/' );
 		const send = report.states.find( state => state.trigger.label === 'Send' );
 		expect( send?.status ).not.toBe( 'captured' );
 		expect( send?.dialog?.html ?? '' ).not.toContain( 'Customer review' );
 	} finally {
-
+		await browser.close();
 	}
 }, 30000 );
 
-it.skipIf( skipBrowser )( 'records an unclassified plain-action surface as unsupported rather than a hidden dialog', async ({ newPage }) => {
-
+it.skipIf( skipBrowser )( 'records an unclassified plain-action surface as unsupported rather than a hidden dialog', async () => {
+	const browser = await chromium.launch( { headless: true } );
 	try {
-		const tab = await newPage( { viewport: { width: 1280, height: 800 } } );
+		const tab = await browser.newPage( { viewport: { width: 1280, height: 800 } } );
 		await tab.setContent( page( observer, `extra.classList.add( 'open' );` ) );
 		const report = await captureTriggeredDialogs( tab, 'https://fixture.test/' );
 		const send = report.states.find( state => state.trigger.label === 'Send' );
@@ -50,6 +49,6 @@ it.skipIf( skipBrowser )( 'records an unclassified plain-action surface as unsup
 		expect( send?.dialog?.html ).toContain( 'Thanks' );
 		expect( send?.dialog?.html ).not.toContain( 'Customer review' );
 	} finally {
-
+		await browser.close();
 	}
 }, 30000 );

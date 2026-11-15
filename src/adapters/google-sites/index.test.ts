@@ -1,8 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { load } from 'cheerio';
 import { chromium } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it, test } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { findAdapter } from '../index.js';
 import { applyCaptureRemovals } from '../../lib/screenshot/apply-removals.js';
 import { googleSitesAdapter, canonicalizeGoogleSitesHtml, authoredEmbedDocument } from './index.js';
@@ -60,10 +59,10 @@ describe('Google Sites adapter', () => {
 
 // One browser pass (~1 second): exercise the actual pre-probe removal seam.
 describe.skipIf(!existsSync(chromium.executablePath()))('Google Sites browser cleanup', () => {
-  it('removes viewer controls before capture without disabling the live runtime', async ({ newPage }) => {
-
-    {
-      const page = await newPage();
+  it('removes viewer controls before capture without disabling the live runtime', async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
       await page.setContent(fixture);
       await applyCaptureRemovals(page, {
         removeSelectors: googleSitesAdapter.liberation!.removeSelectors,
@@ -71,6 +70,8 @@ describe.skipIf(!existsSync(chromium.executablePath()))('Google Sites browser cl
       });
       expect(await page.locator('nav').getAttribute('jsname')).toBe('Nav');
       assertPortable(canonicalizeGoogleSitesHtml(await page.content()));
+    } finally {
+      await browser.close();
     }
   });
 });

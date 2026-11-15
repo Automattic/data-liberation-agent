@@ -2,15 +2,14 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type BrowserContext } from 'playwright';
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { expect, it } from 'vitest';
 import { CapturedResourceStore, installResourceReplay } from './resource-capture.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 
 // About 3 seconds: a CDN image negotiated on Accept is recorded once and replayed to a later page.
-it.skipIf(skipBrowser)('records the browser Accept header for Vary: Accept responses so later loads replay', async ({ newContext }) => {
+it.skipIf(skipBrowser)('records the browser Accept header for Vary: Accept responses so later loads replay', async () => {
   const hits = new Map<string, number>();
   const server = createServer((req, res) => {
     hits.set(req.url!, (hits.get(req.url!) ?? 0) + 1);
@@ -29,11 +28,11 @@ it.skipIf(skipBrowser)('records the browser Accept header for Vary: Accept respo
   mkdirSync('.tmp-test', { recursive: true });
   const dir = mkdtempSync(join(process.cwd(), '.tmp-test', 'vary-accept-'));
   const store = new CapturedResourceStore(dir, origin);
-
+  const browser = await chromium.launch({ headless: true });
   const contexts: BrowserContext[] = [];
   try {
     for (const replay of [false, true]) {
-      const context = await newContext();
+      const context = await browser.newContext();
       contexts.push(context);
       const page = await context.newPage();
       if (replay) await installResourceReplay(page, store);
@@ -50,7 +49,7 @@ it.skipIf(skipBrowser)('records the browser Accept header for Vary: Accept respo
     expect(reasons).toEqual(['miss:vary_mismatch']);
   } finally {
     await Promise.all(contexts.map(context => context.close()));
-
+    await browser.close();
     rmSync(dir, { recursive: true, force: true });
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

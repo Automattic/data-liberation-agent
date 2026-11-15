@@ -1,6 +1,5 @@
-
-import { afterEach, describe, expect, vi } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium } from 'playwright';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { detectFromHttp, detectPlatform } from '../../index.js';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { framerAdapter } from './index.js';
@@ -35,10 +34,10 @@ describe( 'framer platform', () => {
 		expect( result.signals ).toContain( 'Framer generator meta tag in page source' );
 	} );
 
-	it( 'removes the "Made in Framer" badge overlay without touching owner content', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'removes the "Made in Framer" badge overlay without touching owner content', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			await page.setContent( `<!doctype html><html><head><style>body{margin:0}
 				#__framer-badge-container{pointer-events:none;width:100%;justify-content:flex-end;padding:20px;display:flex;position:fixed;bottom:0}</style></head><body>
 				<main><h1>Owner site</h1><a href="https://www.framer.com/features/">Owner link about our tools</a></main>
@@ -47,6 +46,8 @@ describe( 'framer platform', () => {
 			await applySourceCleanup( page, cleanupPolicy( framerAdapter.liberation?.cleanupRules ) );
 			expect( await page.locator( '#__framer-badge-container' ).count() ).toBe( 0 );
 			expect( await page.locator( 'main h1' ).innerText() ).toBe( 'Owner site' );
+		} finally {
+			await browser.close();
 		}
 	} );
 } );

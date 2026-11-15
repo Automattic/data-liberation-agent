@@ -1,18 +1,17 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { observePage } from './check.js';
 import { scoreViewport } from './score.js';
 
 const skipped = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 describe.skipIf( skipped )( 'rendered text range visibility', () => {
-	it( 'excludes zero-font and empty rectangular clips while preserving prose, duplicates and styled descendants', async ({ newPage }) => {
-
-		{
+	it( 'excludes zero-font and empty rectangular clips while preserving prose, duplicates and styled descendants', async () => {
+		const browser = await chromium.launch();
+		try {
 			for ( const width of [ 390, 768, 1440 ] ) {
-				const page = await newPage( { viewport: { width, height: 900 } } );
+				const page = await browser.newPage( { viewport: { width, height: 900 } } );
 				const visible = '<p>Ordinary hero copy.</p><p>Repeated label</p><p>Repeated label</p><p>Contact paragraph stays.</p><p>Visible descendant</p>';
 				await page.setContent( visible );
 				const source = await observePage( page, page.url(), width, 0, null, undefined, undefined, true, true );
@@ -37,13 +36,13 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 				expect( keys ).not.toContain( 'Off-canvas skip link' );
 				await page.close();
 			}
-		}
+		} finally { await browser.close(); }
 	}, 60_000 );
 
-	it( 'counts text below the fold inside a pinned device-document wrapper', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 390, height: 900 } } );
-		{
+	it( 'counts text below the fold inside a pinned device-document wrapper', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
 			const paragraphs = Array.from( { length: 40 }, ( _, index ) => `Paragraph ${ index + 1 } contains ordinary text for a long scrolling document.` );
 			await page.setContent( `<style>
 				html, body, .body { position:fixed; overflow:hidden; height:100%; width:100%; margin:0 }
@@ -53,13 +52,13 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 			expect( await page.locator( 'p' ).last().evaluate( element => element.getBoundingClientRect().top ) ).toBeGreaterThan( 900 );
 			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
 			expect( observation.textChars ).toBe( paragraphs.join( ' ' ).length );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 
-	it( 'counts partly painted text and focused links, including visible aria-hidden editorial labels', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 390, height: 900 } } );
-		{
+	it( 'counts partly painted text and focused links, including visible aria-hidden editorial labels', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
 			await page.setContent( `<style>body{margin:0;background:white;color:black}
 				.partial{position:absolute;top:120px;left:20px;width:200px;height:24px;font:20px monospace;clip-path:inset(0 95% 0 0)}
 				.focus{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
@@ -73,24 +72,24 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 			await page.locator( '.focus' ).focus();
 			const focused = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
 			expect( focused.textChars ).toBe( 'Focused link Repeated label Repeated label MMMM partial text'.length );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 
-	it( 'excludes clipped capitalized labels that innerText reports in their rendered case', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
-		{
+	it( 'excludes clipped capitalized labels that innerText reports in their rendered case', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
 			await page.setContent( `<style>.sub{position:absolute;height:0;overflow:hidden;text-transform:capitalize}</style>
 				<nav><a href="#">Services</a><div class="sub"><a href="/a">Business continuity</a><a href="/b">*NEW* submit a ticket</a></div></nav><p>Visible prose.</p>` );
 			const observation = await observePage( page, page.url(), 1440, 0, null, undefined, undefined, true, true );
 			expect( observation.textChars ).toBe( 'Services Visible prose.'.length );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 
-	it( 'counts only the selected label of a closed select on either side without forgiving missing prose', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 390, height: 900 } } );
-		{
+	it( 'counts only the selected label of a closed select on either side without forgiving missing prose', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
 			const prose = '<p>Essential visible page content.</p>';
 			await page.setContent( `${ prose }<select><option>Other destination</option><option selected label="Current page">Internal value</option><option>Another destination</option></select>` );
 			const source = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
@@ -102,13 +101,13 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 			await page.setContent( '<button>Current page</button>' );
 			const missing = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
 			expect( scoreViewport( source, missing ).failures ).toContain( `text ${ missing.textChars } chars !== source ${ source.textChars }` );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 
-	it( 'removes a clipped label in the case its text-transform renders', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 390, height: 900 } } );
-		{
+	it( 'removes a clipped label in the case its text-transform renders', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
 			const css = '<style>header{text-transform:uppercase}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style>';
 			// Without a later visible run of the word, a case-blind lookup keeps the label.
 			await page.setContent( `${ css }<header><a href="/"><span class="sr">Brand</span>Home</a></header><p>Animals matter.</p>` );
@@ -116,23 +115,23 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 			// With one, it must not delete that visible run instead.
 			await page.setContent( `${ css }<header><a href="/"><span class="sr">Brand</span>Home</a></header><p>Brand cares.</p>` );
 			expect( ( await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true ) ).textChars ).toBe( 'HOME Brand cares.'.length );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 
-	it( 'does not insert phantom separators when unpainted inline text is removed', async ({ newPage }) => {
-
-		const page = await newPage();
-		{
+	it( 'does not insert phantom separators when unpainted inline text is removed', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		try {
 			await page.setContent( '<p>prefix<span style="font-size:0">Hidden label</span>suffix</p>' );
 			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
 			expect( observation.textChars ).toBe( 'prefixsuffix'.length );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 
-	it( 'counts marquee text in its rest pose, whatever phase the loop is in', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 390, height: 900 } } );
-		{
+	it( 'counts marquee text in its rest pose, whatever phase the loop is in', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
 			// A negative delay parks the infinite loop mid-cycle, where the first
 			// item has scrolled out of the ribbon and the rest pose would show it.
 			const ribbon = ( animation: string ) => `<style>@keyframes slide{to{transform:translateX(-100%)}}
@@ -143,17 +142,17 @@ describe.skipIf( skipped )( 'rendered text range visibility', () => {
 			await page.setContent( ribbon( 'slide 100s linear -40s infinite' ) );
 			const running = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
 			expect( running.textChars ).toBe( rest.textChars );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 
-	it( 'keeps visible descendants through hidden ancestors and conservative nonrectangular clips', async ({ newPage }) => {
-
-		const page = await newPage();
-		{
+	it( 'keeps visible descendants through hidden ancestors and conservative nonrectangular clips', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		try {
 			await page.setContent( '<div style="visibility:hidden">Unpainted ancestor<span style="visibility:visible">Visible child</span></div><p style="clip-path:polygon(0 0,100% 0,100% 100%,0 100%)">Ordinary polygon content</p>' );
 			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true, true );
 			expect( observation.textChars ).toBe( 'Visible child Ordinary polygon content'.length );
 			expect( observation.typography?.map( run => run.key ) ).toContain( 'Visible child' );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 } );

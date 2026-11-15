@@ -55,7 +55,6 @@ it( 'SDK capture preserves replacement clone roles with patched main-world Array
 	await new Promise<void>( resolve => server.listen( 0, resolve ) );
 	const port = ( server.address() as { port: number } ).port;
 	const url = `http://localtest.me:${ port }/`;
-	// Own launch: host resolver maps localtest.me to the loopback fixture.
 	const browser = await chromium.launch( { args: [ '--host-resolver-rules=MAP localtest.me 127.0.0.1' ] } );
 	try {
 		const outputDir = join( root, 'images-on' );

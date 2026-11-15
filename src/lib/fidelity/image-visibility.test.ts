@@ -1,16 +1,15 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { observePage } from './check.js';
 import { scoreViewport } from './score.js';
 
 const skipped = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 describe.skipIf( skipped )( 'image visibility', () => {
-	it( 'compares CSS hero backgrounds with native cover images and detects a dropped or shrunken hero', async ({ newPage }) => {
-
-		const page = await newPage();
-		{
+	it( 'compares CSS hero backgrounds with native cover images and detects a dropped or shrunken hero', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		try {
 			const asset = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1440' height='300'%3E%3Crect width='1440' height='300' fill='blue'/%3E%3C/svg%3E";
 			const fixture = ( hero: string ) => `<style>body{margin:0}.hero{height:300px;width:100%}.hero img{width:100%;height:100%;object-fit:cover}.logo{width:min(440px,calc(100% - 48px));height:80px}</style>${ hero }<img class="logo" src="${ asset }">`;
 			const observe = ( width: number ) => observePage( page, page.url(), width, 0, null, undefined, undefined, true, true );
@@ -28,12 +27,12 @@ describe.skipIf( skipped )( 'image visibility', () => {
 				await page.locator( '.hero' ).evaluate( element => element.remove() );
 				expect( widestFailures( await observe( width ) ) ).not.toEqual( [] );
 			}
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
-	it( 'ignores parked cards, including cards clipped inside the viewport, but detects a visible decode regression', async ({ newPage }) => {
-
-		const page = await newPage( { viewport: { width: 390, height: 900 } } );
-		{
+	it( 'ignores parked cards, including cards clipped inside the viewport, but detects a visible decode regression', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
 			await page.route( 'https://fixture.test/**', route => route.fulfill( { status: 404, body: '' } ) );
 			const card = ( name: string, sized: boolean ) => `<img loading="lazy" src="https://fixture.test/${ name }.png" ${ sized ? 'width="100" height="100"' : '' }>`;
 			await page.setContent( `<style>
@@ -59,6 +58,6 @@ describe.skipIf( skipped )( 'image visibility', () => {
 			expect( broken.images ).toHaveLength( 1 );
 			expect( scoreViewport( source, broken ).failures ).toContain( 'images 1 visible image(s) pending or failed decoding' );
 			expect( scoreViewport( broken, broken ).pass ).toBe( true );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 } );

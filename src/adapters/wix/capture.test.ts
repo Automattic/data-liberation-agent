@@ -2,8 +2,7 @@ import { existsSync } from 'node:fs';
 import { load } from 'cheerio';
 import { JSDOM } from 'jsdom';
 import { chromium } from 'playwright';
-import { afterEach, describe, expect, vi } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	capture,
 	collectWixSlideshowSlides,
@@ -569,10 +568,10 @@ describe( 'Wix telemetry declaration', () => {
 afterEach( () => vi.unstubAllGlobals() );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix slideshow capture in a browser', () => {
-	it( 'captures template slides that differ only by component and bounds a control the viewport never lays out', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'captures template slides that differ only by component and bounds a control the viewport never lays out', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			// Wix template slides share their placeholder text and carry no <img>;
 			// each is its own component, swapped in by the arrows and dots. The
 			// previous arrow is hidden, as at phone widths.
@@ -602,15 +601,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix slideshow cap
 			// Three observed changes and one bounded unactionable control, not a
 			// ten-second settle bound per control or a thirty-second click wait.
 			expect( elapsed ).toBeLessThan( 8_000 );
-		}
+		} finally { await browser.close(); }
 	}, 60_000 );
 } );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'scroll-reactive Wix header', () => {
-	it( 'freezes the load-time header class after capture-time scrolling', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'freezes the load-time header class after capture-time scrolling', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			// Wix's handler hides the header on scroll down and leaves "returning"
 			// classes on scroll back up instead of restoring the resting state.
 			await page.route( 'https://wix.test/**', ( route ) => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">
@@ -624,6 +623,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'scroll-reactive W
 			await page.waitForFunction( () => document.getElementById( 'SITE_HEADER' )?.classList.contains( 'K5KBGW' ) );
 			await settleScrollReactiveChrome( page );
 			expect( await page.getAttribute( '#SITE_HEADER', 'class' ) ).toBe( 'MLzr0a SITE_HEADER wixui-header' );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 } );

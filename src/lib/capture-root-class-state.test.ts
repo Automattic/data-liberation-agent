@@ -1,14 +1,13 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-
-import { expect } from 'vitest';
-import { it, test } from '../../test/browser.js';
+import { chromium } from 'playwright';
+import { expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import { readResolvedPage } from './site-includes.js';
 
 // One public capture, then portable replay at phone and desktop widths (~15s).
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('replays root-gated drawers through public capture and export', async ({ newPage }) => {
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('replays root-gated drawers through public capture and export', async () => {
 	mkdirSync('.tmp-test', { recursive: true });
 	const root = mkdtempSync(join(process.cwd(), '.tmp-test/root-drawer-'));
 	const source = readFileSync(new URL('../../test/fixtures/root-class-drawer.html', import.meta.url), 'utf8');
@@ -22,14 +21,14 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('replays root-gated drawers t
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-
+	const browser = await chromium.launch();
 	try {
 		const result = await captureWebsite({ url, outputDir: root, captureImages: false, trustedOrigins: [url], learnFluid: false }, {
 			findAdapter: () => ({ id: 'neutral-drawer', detect: () => true, discover: async () => ({ urls: [{ url }] }) }),
 		});
 		expect(result.summary.routesFailed).toBe(0);
 		copy = readResolvedPage(join(root, 'website'), join(root, 'website/index.html'));
-		const page = await newPage({ viewport: { width: 390, height: 900 } });
+		const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
 		await page.goto(`${url}copy/`);
 		expect(copy).toContain('data-blocks-engine-capture-mobile-document');
 		let widthIsPhone = true;
@@ -55,7 +54,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('replays root-gated drawers t
 			expect(await page.locator('.persistent').count()).toBeGreaterThan(0);
 		}
 	} finally {
-
+		await browser.close();
 		await new Promise<void>(resolve => server.close(() => resolve()));
 		rmSync(root, { recursive: true, force: true });
 	}

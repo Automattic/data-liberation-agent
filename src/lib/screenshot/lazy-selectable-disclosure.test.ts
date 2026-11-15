@@ -1,13 +1,12 @@
-
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import {chromium} from 'playwright';
+import {expect, it} from 'vitest';
 import {hydrateDisclosureContent} from './dynamic-content.js';
 import {captureSelectableSetStates} from './selectable-set-capture.js';
 import {wireCapturedDialogs} from '../static-dialogs.js';
 
-it('captures rebuilt category answers by observation, including different answers with duplicate labels', async ({ newPage }) => {
-
-  const page = await newPage();
+it('captures rebuilt category answers by observation, including different answers with duplicate labels', async () => {
+  const browser = await chromium.launch({headless: true});
+  const page = await browser.newPage();
   try {
     await page.setContent(`<main><div id="picker">
       <button type="button" aria-selected="true">All</button>
@@ -49,12 +48,12 @@ it('captures rebuilt category answers by observation, including different answer
     expect(await page.locator('#items article').count()).toBe(4);
     expect(await page.locator('#items button[aria-expanded="true"]').count()).toBe(0);
   } finally {
-
+    await browser.close();
   }
 });
 
-it('preserves an observed disclosure icon state without replacing the editable label', async ({ newPage }) => {
-  const page=await newPage();
+it('preserves an observed disclosure icon state without replacing the editable label', async () => {
+  const browser=await chromium.launch({headless:true});const page=await browser.newPage();
   try {
     await page.setContent(`<style>.resting{rotate:0deg}.expanded{rotate:180deg}</style><article><button type="button" aria-expanded="false"><span>Editable question</span><svg class="resting" width="18" height="18" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></article><script>const button=document.querySelector('button');button.onclick=()=>{const open=button.getAttribute('aria-expanded')==='false';button.setAttribute('aria-expanded',String(open));button.querySelector('svg').setAttribute('class',open?'expanded':'resting');button.nextElementSibling?.remove();if(open)button.insertAdjacentHTML('afterend','<div><p>Real answer</p></div>');};</script>`);
     const states=await hydrateDisclosureContent(page);
@@ -66,5 +65,5 @@ it('preserves an observed disclosure icon state without replacing the editable l
     expect(await page.locator('svg').evaluate(element=>getComputedStyle(element).rotate)).toBe('180deg');
     expect(await page.locator('button span').innerText()).toBe('Owner edited question');
     await page.locator('button').click();expect(await page.locator('svg').getAttribute('class')).toBe('resting');
-  } finally {  }
+  } finally { await browser.close(); }
 });

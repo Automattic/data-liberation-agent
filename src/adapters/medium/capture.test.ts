@@ -1,6 +1,5 @@
-import { type Page } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it, type BrowserFixtures } from '../../../test/browser.js';
+import { chromium, type Browser, type Page } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { probeExclusionSkip } from '../../lib/screenshot/probe-exclusions.js';
 import { applyOwnerIdentity, removeFollowButtons } from './capture.js';
@@ -63,17 +62,20 @@ const STORY = `<div class="am"><div class="col">
 const text = async ( page: Page ) => ( await page.locator( 'body' ).innerText() ).replace( /\s+/g, ' ' ).trim();
 
 describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'Medium capture cleanup', () => {
+	let browser: Browser;
+	beforeAll( async () => { browser = await chromium.launch(); } );
+	afterAll( async () => { await browser.close(); } );
 
-	const clean = async ( { newPage }: Pick<BrowserFixtures, 'newPage'>, body: string ) => {
-		const page = await newPage();
+	const clean = async ( body: string ) => {
+		const page = await browser.newPage();
 		await page.setContent( `<!doctype html><html><body><div class="a">${ body }</div></body></html>` );
 		const report = await applySourceCleanup( page, cleanupPolicy( mediumAdapter.liberation?.cleanupRules ) );
 		const follow = await removeFollowButtons( page );
 		return { page, report, follow };
 	};
 
-	it( 'removes the global header, account controls and platform footer from a profile, keeping the owner', async ({ newPage }) => {
-		const { page, report, follow } = await clean({ newPage },  HEADER + PROFILE );
+	it( 'removes the global header, account controls and platform footer from a profile, keeping the owner', async () => {
+		const { page, report, follow } = await clean( HEADER + PROFILE );
 		try {
 			expect( report.failures ).toEqual( [] );
 			expect( follow ).toBe( 1 );
@@ -87,8 +89,8 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'Medium capture cleanup', () 
 		}
 	} );
 
-	it( 'removes story action bars, sign-up prompts, recommendation placeholders and the footer, keeping the story', async ({ newPage }) => {
-		const { page, report, follow } = await clean({ newPage },  HEADER + STORY );
+	it( 'removes story action bars, sign-up prompts, recommendation placeholders and the footer, keeping the story', async () => {
+		const { page, report, follow } = await clean( HEADER + STORY );
 		try {
 			expect( report.failures ).toEqual( [] );
 			expect( follow ).toBe( 3 );
@@ -102,8 +104,8 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'Medium capture cleanup', () 
 		}
 	} );
 
-	it( 'excludes tag hover cards from interaction probing', async ({ newPage }) => {
-		const page = await newPage();
+	it( 'excludes tag hover cards from interaction probing', async () => {
+		const page = await browser.newPage();
 		try {
 			await page.setContent( `<!doctype html><html><body>${ STORY }</body></html>` );
 			const skip = probeExclusionSkip( mediumAdapter.liberation?.probeExclusions ?? [] )!;
@@ -113,14 +115,14 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'Medium capture cleanup', () 
 			await page.close();
 		}
 	} );
-	it( "names the copy after its owner instead of Medium", async ({ newPage }) => {
+	it( "names the copy after its owner instead of Medium", async () => {
 		const apollo = ( owner: Record< string, string > ) => `<script>window.__APOLLO_STATE__ = ${ JSON.stringify( {
 			'User:a': { username: 'someone-else', name: 'Followed Writer', bio: 'Not the owner' },
 			'User:b': { username: 'owner', name: 'Example Author', bio: 'Writes about gardens.', ...owner },
 			'Collection:c': { slug: 'garden-notes', name: 'Garden Notes', description: 'A gardening publication.' },
 		} ) };</script>`;
-		const identity = async ( { newPage }: Pick<BrowserFixtures, 'newPage'>, url: string, title: string, serverHtml = apollo( {} ) ) => {
-			const page = await newPage();
+		const identity = async ( url: string, title: string, serverHtml = apollo( {} ) ) => {
+			const page = await browser.newPage();
 			try {
 				await page.setContent( `<!doctype html><html><head><title>${ title }</title><meta property="og:title" content="${ title }"></head><body></body></html>` );
 				await applyOwnerIdentity( page, url, serverHtml );
@@ -135,11 +137,11 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'Medium capture cleanup', () 
 		};
 		const site = ( name: string, slogan?: string, url = 'https://medium.com/@owner/' ) =>
 			[ { '@context': 'https://schema.org', '@type': 'WebSite', name, url, ...( slogan ? { slogan } : {} ) } ];
-		expect( await identity({ newPage },  'https://medium.com/@owner/', 'Example Author – Medium' ) ).toEqual( { title: 'Example Author', ogTitle: 'Example Author', website: site( 'Example Author', 'Writes about gardens.' ) } );
-		expect( ( await identity({ newPage },  'https://medium.com/@owner', 'Example Author – Medium', apollo( { bio: '' } ) ) ).website, 'no bio, no slogan' ).toEqual( site( 'Example Author', undefined, 'https://medium.com/@owner' ) );
-		expect( ( await identity({ newPage },  'https://medium.com/garden-notes', 'Garden Notes – Medium' ) ).website, 'publication' ).toEqual( site( 'Garden Notes', 'A gardening publication.', 'https://medium.com/garden-notes' ) );
-		expect( await identity({ newPage },  'https://medium.com/@owner/about', 'About – Example Author – Medium' ), 'other pages only lose the suffix' ).toEqual( { title: 'About – Example Author', ogTitle: 'About – Example Author', website: [] } );
-		expect( ( await identity({ newPage },  'https://medium.com/@owner/', 'Example Author – Medium', '<html></html>' ) ).website, 'no Apollo state' ).toEqual( [] );
+		expect( await identity( 'https://medium.com/@owner/', 'Example Author – Medium' ) ).toEqual( { title: 'Example Author', ogTitle: 'Example Author', website: site( 'Example Author', 'Writes about gardens.' ) } );
+		expect( ( await identity( 'https://medium.com/@owner', 'Example Author – Medium', apollo( { bio: '' } ) ) ).website, 'no bio, no slogan' ).toEqual( site( 'Example Author', undefined, 'https://medium.com/@owner' ) );
+		expect( ( await identity( 'https://medium.com/garden-notes', 'Garden Notes – Medium' ) ).website, 'publication' ).toEqual( site( 'Garden Notes', 'A gardening publication.', 'https://medium.com/garden-notes' ) );
+		expect( await identity( 'https://medium.com/@owner/about', 'About – Example Author – Medium' ), 'other pages only lose the suffix' ).toEqual( { title: 'About – Example Author', ogTitle: 'About – Example Author', website: [] } );
+		expect( ( await identity( 'https://medium.com/@owner/', 'Example Author – Medium', '<html></html>' ) ).website, 'no Apollo state' ).toEqual( [] );
 	} );
 
 	it( 'recognizes Medium\'s error view as an error shell, not page content', () => {

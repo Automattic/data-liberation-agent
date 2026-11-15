@@ -1,12 +1,11 @@
-
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium } from 'playwright';
+import { expect, it } from 'vitest';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
-it.for( [ true, false ] )( 'restores slide geometry after a post-learning resize (keep nodes: %s)', { timeout: 20_000 }, async (keepNodes, { newPage }) => {
-
+it.each( [ true, false ] )( 'restores slide geometry after a post-learning resize (keep nodes: %s)', async keepNodes => {
+	const browser = await chromium.launch();
 	try {
-		const page = await newPage( { viewport: { width: 1000, height: 700 } } );
+		const page = await browser.newPage( { viewport: { width: 1000, height: 700 } } );
 		await page.setContent( `
 			<style>body{margin:0}#strip{position:relative;width:50vw;height:100px;overflow:auto}.slide{position:absolute;height:100px}</style>
 			<div id="gallery" class="wide"><div id="strip"></div></div>
@@ -47,5 +46,5 @@ it.for( [ true, false ] )( 'restores slide geometry after a post-learning resize
 		expect( returned.scroll ).toBeGreaterThan( returned.client );
 		expect( returned.slides.map( slide => [ slide.width, slide.left ] ) ).toEqual( [ [ 500, 0 ], [ 500, 500 ] ] );
 		for ( const slide of returned.slides ) expect( Boolean( slide.segment || slide.inlineWidth ) ).toBe( true );
-	} finally {  }
-} );
+	} finally { await browser.close(); }
+}, 20_000 );

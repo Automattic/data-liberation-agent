@@ -1,7 +1,6 @@
 import { createServer } from 'node:http';
-import { describe, expect, beforeAll, afterAll } from 'vitest';
-import { it } from '../../../test/browser.js';
-
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium, type Browser } from 'playwright';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract } from './candidate-motion.js';
 
 const contract: MotionContract = {
@@ -12,7 +11,7 @@ const contract: MotionContract = {
 const signals = [ 'canvas-2d', 'pointer-input', 'animation-frame', 'timed-dom-update', 'click-input' ];
 
 describe( 'independent source/candidate interaction', () => {
-
+	let browser: Browser;
 	const server = createServer( ( request, response ) => {
 		response.setHeader( 'content-type', 'text/html' );
 		response.end( `<!doctype html><html><body class="loading"><button id="control">Replay</button><p id="message">Initializing</p><canvas id="drawing" width="390" height="200"></canvas>
@@ -37,10 +36,10 @@ describe( 'independent source/candidate interaction', () => {
 	beforeAll( async () => {
 		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
 		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
-
+		browser = await chromium.launch();
 	} );
 	afterAll( async () => {
-
+		await browser?.close();
 		server.closeAllConnections();
 		await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
 	} );
@@ -50,12 +49,12 @@ describe( 'independent source/candidate interaction', () => {
 		expect( () => validateMotionContract( { ...contract, widths: [] } ) ).toThrow( /widths/ );
 	} );
 
-	it( 'proves a neutral live candidate while recording that its portable capture is still static', async ({ browser }) => {
+	it( 'proves a neutral live candidate while recording that its portable capture is still static', async () => {
 		const evidence = await verifyCandidateMotion( browser, '/', 390, origin, origin, contract.routes[ '/' ], signals );
 		expect( evidence ).toMatchObject( { capture: 'unreproduced', pass: true, failures: [] } );
 	} );
 
-	it( 'rejects a static candidate with identical settled text and markup', async ({ browser }) => {
+	it( 'rejects a static candidate with identical settled text and markup', async () => {
 		const evidence = await verifyCandidateMotion( browser, '/', 390, origin, `${ origin }?static=1`, contract.routes[ '/' ], signals );
 		expect( evidence.pass ).toBe( false );
 		expect( evidence.failures ).toContain( 'startup text does not transition: #message' );
@@ -63,13 +62,13 @@ describe( 'independent source/candidate interaction', () => {
 		expect( evidence.failures ).toContain( 'candidate click replay missing: #control' );
 	}, 30_000 );
 
-	it( 'rejects a live candidate that skips the source pending phase at startup and on click', async ({ browser }) => {
+	it( 'rejects a live candidate that skips the source pending phase at startup and on click', async () => {
 		const evidence = await verifyCandidateMotion( browser, '/', 390, origin, `${ origin }?no-pending=1`, contract.routes[ '/' ], signals );
 		expect( evidence.failures ).toContain( 'startup text phase differs: #message' );
 		expect( evidence.failures ).toContain( 'click replay text phase differs: #control' );
 	}, 30_000 );
 
-	it( 'waits for a finite startup canvas ripple before checking the pointer control', async ({ browser }) => {
+	it( 'waits for a finite startup canvas ripple before checking the pointer control', async () => {
 		const url = `${ origin }?startup-ripple=1`;
 		const evidence = await verifyCandidateMotion( browser, '/', 390, url, url, contract.routes[ '/' ], signals );
 		expect( evidence ).toMatchObject( { pass: true, failures: [] } );

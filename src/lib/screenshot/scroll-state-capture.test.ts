@@ -1,6 +1,5 @@
-
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium } from 'playwright';
+import { describe, expect, it } from 'vitest';
 import { captureScrollStates, SCROLL_STATES_SCHEMA } from './scroll-state-capture.js';
 
 const STICKY_HEADER_FIXTURE = `<!doctype html><html><head><style>
@@ -89,9 +88,9 @@ const SHRINKING_STICKY_HEADER_FIXTURE = `<!doctype html><html><head><style>
 describe( 'captureScrollStates', () => {
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'holds each probe offset while a toggle resizes in-flow chrome',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( SHRINKING_STICKY_HEADER_FIXTURE );
 				// Scroll somewhere first so the browser has an anchor to adjust against.
@@ -103,7 +102,7 @@ describe( 'captureScrollStates', () => {
 				expect( reports ).toEqual( Array( 3 ).fill( [ [ 100, [ 'compact' ] ] ] ) );
 				expect( await page.evaluate( () => getComputedStyle( document.documentElement ).overflowAnchor ) ).toBe( 'auto' );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
@@ -111,9 +110,9 @@ describe( 'captureScrollStates', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'leaves geometry the toggled class already produces to that class',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( CLASS_DERIVED_HEIGHT_FIXTURE );
 				const report = await captureScrollStates( page, 'https://example.test/' );
@@ -123,7 +122,7 @@ describe( 'captureScrollStates', () => {
 				expect( report.toggles[ 0 ]!.styleTargets ).toEqual( [] );
 				expect( await page.evaluate( () => document.querySelector( 'header' )!.className ) ).toBe( '' );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
@@ -131,9 +130,9 @@ describe( 'captureScrollStates', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'returns the empty report without scrolling when the document fits the viewport',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( '<header id="header">Static header</header>' );
 				await page.evaluate( () => {
@@ -149,7 +148,7 @@ describe( 'captureScrollStates', () => {
 				expect( report.toggles ).toHaveLength( 0 );
 				expect( await page.evaluate( () => (window as Window & { attemptedScrolls?: number }).attemptedScrolls ) ).toBe( 0 );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
@@ -157,9 +156,9 @@ describe( 'captureScrollStates', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'captures a scroll-driven class toggle and inline-style shrink, with a reproducible threshold',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( STICKY_HEADER_FIXTURE );
 				const report = await captureScrollStates( page, 'https://example.test/' );
@@ -181,7 +180,7 @@ describe( 'captureScrollStates', () => {
 				// subsequent baseline captures — screenshots, geometry, etc.).
 				expect( await page.evaluate( () => window.scrollY ) ).toBe( 0 );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
@@ -189,9 +188,9 @@ describe( 'captureScrollStates', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'probes exact scroll positions on a page with smooth scrolling',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				// The header sticks just short of the 200px probe, which a smooth scroll reaches last.
 				await page.setContent( STICKY_HEADER_FIXTURE.replace( '<style>', '<style>html { scroll-behavior: smooth; }' ).replace( 'window.scrollY > 50', 'window.scrollY > 196' ) );
@@ -199,7 +198,7 @@ describe( 'captureScrollStates', () => {
 				expect( report.toggles.map( ( toggle ) => toggle.thresholdPx ) ).toEqual( [ 200 ] );
 				expect( await page.evaluate( () => window.scrollY ) ).toBe( 0 );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
@@ -207,15 +206,15 @@ describe( 'captureScrollStates', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'reports no toggles for a static header that never changes on scroll',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( STATIC_HEADER_FIXTURE );
 				const report = await captureScrollStates( page, 'https://example.test/' );
 				expect( report.toggles ).toHaveLength( 0 );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
@@ -223,15 +222,15 @@ describe( 'captureScrollStates', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'ignores a one-way (irreversible) class mutation — that is not scroll-linked chrome',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( IRREVERSIBLE_FIXTURE );
 				const report = await captureScrollStates( page, 'https://example.test/' );
 				expect( report.toggles ).toHaveLength( 0 );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
@@ -239,9 +238,9 @@ describe( 'captureScrollStates', () => {
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'captures computed restyle of a nested header bar driven by a body scroll class',
-		async ({ newPage }) => {
-
-			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
 			try {
 				await page.setContent( BODY_AFFIX_INNER_BAR_FIXTURE );
 				const report = await captureScrollStates( page, 'https://example.test/' );
@@ -252,7 +251,7 @@ describe( 'captureScrollStates', () => {
 				expect( self?.properties[ 'background-color' ]?.scrolled ).toContain( '43' );
 				expect( self?.properties.position ).toEqual( { rest: 'absolute', scrolled: 'fixed' } );
 			} finally {
-
+				await browser.close();
 			}
 		},
 		30_000
