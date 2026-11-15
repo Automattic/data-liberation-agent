@@ -299,13 +299,22 @@ function findServerSlots( repElement: Element, memberElement: Element, slots: Sl
 }
 
 /** Does the member's slot subtree hold behaviour capture never observed in the browser? */
-function slotRuntimeObservation( element: Element ): { runtime: boolean; unobserved: boolean } {
+function slotRuntimeObservation( element: Element, representative: Element ): { runtime: boolean; unobserved: boolean } {
+	// Exact server elements share capture's observation. Changed handlers and
+	// embeds still need a browser pass; lazy media and hydration stay guarded.
+	const observed = new Set< string >();
+	const collect = ( node: Element ): void => {
+		observed.add( serializeNode( node ) );
+		for ( const child of node.children ) if ( isElement( child ) ) collect( child );
+	};
+	collect( representative );
 	let runtime = false;
 	let unobserved = false;
 	const walk = ( node: Element ): void => {
-		if ( [ 'iframe', 'video', 'canvas', 'object', 'embed' ].includes( node.name ) ) runtime = true;
+		const shared = observed.has( serializeNode( node ) );
+		if ( ! shared && [ 'iframe', 'video', 'canvas', 'object', 'embed' ].includes( node.name ) ) runtime = true;
 		for ( const attribute of Object.keys( node.attribs ) ) {
-			if ( /^on[a-z]+$/i.test( attribute ) ) runtime = true;
+			if ( ! shared && /^on[a-z]+$/i.test( attribute ) ) runtime = true;
 			// Media swapped by a runtime (lazy loaders, background rotators): the
 			// rendered URL was never observed for this member, so the transplant
 			// would ship the placeholder instead of the asset.
@@ -552,7 +561,7 @@ export function deriveMemberDocument( input: {
 			if ( element.name === 'script' ) {
 				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries a script element capture never observed` } };
 			}
-			const runtime = slotRuntimeObservation( element );
+			const runtime = slotRuntimeObservation( element, slot.repNode );
 			if ( runtime.runtime ) {
 				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 			}
@@ -578,7 +587,7 @@ export function deriveMemberDocument( input: {
 			subtreeSlots++;
 			const parsed = html$( `<body>${ serializeNode( slot.memberNode as unknown as AnyNode ) }</body>` )( 'body' ).children().toArray() as Element[];
 			for ( const element of parsed ) {
-				const runtime = slotRuntimeObservation( element );
+				const runtime = slotRuntimeObservation( element, slot.repNode );
 				if ( runtime.runtime ) {
 					return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 				}

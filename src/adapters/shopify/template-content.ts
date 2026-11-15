@@ -9,6 +9,7 @@ const GALLERY = '.product__media img, .product-single__photos img, [data-product
 interface ProductEntry extends StructuredContentEntry {
 	images: string[];
 	price?: string;
+	optionCount?: number;
 }
 
 /** Catalog requests share capture's origin governor, including pagination and failures. */
@@ -45,6 +46,9 @@ export async function enumerateShopifyProducts(sourceUrl: string, options: Param
 					terms: (typeof product.tags === 'string' ? product.tags.split(',') : product.tags).map((tag: string) => tag.trim()).filter(Boolean),
 					images: Array.isArray(product.images) ? product.images.flatMap((image: { src?: unknown }) => typeof image?.src === 'string' && /^https?:\/\//.test(image.src) ? [image.src] : []) : [],
 					...(prices.size === 1 ? { price: [...prices][0] } : {}),
+					...(Array.isArray(product.options) && product.options.length ? { optionCount: product.options.length === 1 &&
+						product.options[0]?.name === 'Title' && Array.isArray(product.options[0]?.values) &&
+						product.options[0].values.length === 1 && product.options[0].values[0] === 'Default Title' ? 0 : product.options.length } : {}),
 				});
 			}
 			if (!fresh) {
@@ -114,7 +118,9 @@ export function productMemberDocument(html: string, representative: StructuredCo
 	const next = member as Partial<ProductEntry>;
 	const $ = cheerio.load(html);
 	const title = $('h1, .product__title, .product-single__title').filter((_, node) => !$(node).find('h1').length);
-	if (title.length !== 1 || title.text().trim() !== representative.title || $('title').length !== 1 || !$('title').text().includes(representative.title)) return undefined;
+	const documentTitle = $('head > title');
+	if (!title.length || title.toArray().some(node => $(node).text().trim() !== representative.title) ||
+		documentTitle.length !== 1 || !documentTitle.text().includes(representative.title)) return undefined;
 	const images = $(GALLERY);
 	// Keep the source gallery structure. Different cardinality needs ordinary acquisition.
 	if (!images.length || !rep.images?.length || !next.images?.length ||
@@ -125,13 +131,15 @@ export function productMemberDocument(html: string, representative: StructuredCo
 	};
 	if (images.toArray().some((node, index) => !sameImage($(node).attr('src') ?? '', rep.images![index]!))) return undefined;
 	const prices = $('[itemprop="price"], .price-item--regular, .product-single__price');
-	if (prices.length !== 1 || !rep.price || !next.price || prices.children().length) return undefined;
-	const priceText = prices.text();
-	// Preserve the source's currency decoration only when its numeric formatting is explicit.
-	if ((priceText.match(/\d[\d.,]*/g) ?? []).length !== 1 || !priceText.includes(rep.price)) return undefined;
+	if (!prices.length || !rep.price || !next.price || prices.children().length) return undefined;
+	// Preserve each copy's currency decoration only when its numeric formatting is explicit.
+	if (prices.toArray().some(node => {
+		const text = $(node).text();
+		return (text.match(/\d[\d.,]*/g) ?? []).length !== 1 || !text.includes(rep.price!);
+	})) return undefined;
 	$(BODY).html(member.contentHtml);
 	title.text(member.title);
-	$('title').text($('title').text().replace(representative.title, member.title));
+	documentTitle.text(documentTitle.text().replace(representative.title, member.title));
 	$('a[href], link[href]').each((_, node) => {
 		try { if (new URL($(node).attr('href')!, representative.permalink).href === representative.permalink) $(node).attr('href', member.permalink); } catch { /* Not a URL. */ }
 	});
@@ -141,15 +149,19 @@ export function productMemberDocument(html: string, representative: StructuredCo
 		if (image.attr('srcset')) image.attr('srcset', next.images![index]!);
 		image.removeAttr('width height data-src data-srcset');
 	});
-	prices.text(priceText.replace(rep.price, next.price));
-	if (prices.attr('content')) prices.attr('content', next.price);
+	prices.each((_, node) => {
+		const price = $(node);
+		price.text(price.text().replace(rep.price!, next.price!));
+		if (price.attr('content')) price.attr('content', next.price!);
+	});
 	return $.html();
 }
 
-/** The gallery cardinality and price shape `productMemberDocument` requires a representative to share. */
+/** Gallery, price and variant-picker state a representative must share. */
 export function productMemberShape(entry: StructuredContentEntry): string {
 	const product = entry as Partial<ProductEntry>;
-	return `images=${product.images?.length ?? 0};price=${product.price ? 'single' : 'none'}`;
+	return `images=${product.images?.length ?? 0};price=${product.price ? 'single' : 'none'}` +
+		(product.optionCount === undefined ? '' : `;options=${product.optionCount === 0 ? 'default' : product.optionCount}`);
 }
 
 export const shopifyStructuredContent: StructuredContentSource = {

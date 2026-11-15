@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import { SourceRequestGovernors } from '../../lib/source-request-governor.js';
 import { templateFingerprint } from '../../lib/template-groups.js';
 import { shopifyAdapter } from './index.js';
-import { enumerateShopifyProducts, productBodyEquivalent, productMemberDocument, shopifyStructuredContent } from './template-content.js';
+import { enumerateShopifyProducts, productBodyEquivalent, productMemberDocument, productMemberShape, shopifyStructuredContent } from './template-content.js';
 
 const product = (handle: string) => ({ handle, title: `Product ${handle}`, body_html: '<p>Neutral <a href="/pages/details">description</a><img src="/body.png"></p>', vendor: 'Example vendor', tags: ['Sample'], published_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-02T00:00:00Z', images: [{ src: `https://example.com/${handle}.png` }], variants: [{ price: handle === 'one' ? '10.00' : '20.00' }] });
 const entry = (handle: string) => ({ permalink: `https://example.com/products/${handle}`, slug: handle, kind: 'page' as const, title: `Product ${handle}`, contentHtml: product(handle).body_html, published: product(handle).published_at, updated: product(handle).updated_at, author: 'Example vendor', terms: ['Sample'], images: [`https://example.com/${handle}.png`], price: handle === 'one' ? '10.00' : '20.00' });
@@ -32,6 +32,22 @@ describe('Shopify structured catalog', () => {
 		expect(requests.filter(url => url === 'https://example.com/products.json?limit=250&page=1')).toHaveLength(2);
 		expect(admission).toHaveBeenCalledTimes(5);
 		expect(shopifyAdapter.structuredContent).toBe(shopifyStructuredContent);
+	});
+
+	it('separates default variants from named option pickers with the same gallery and price (#1842)', async () => {
+		const products = [
+			{ ...product('one'), options: [{ name: 'Title', values: ['Default Title'] }] },
+			{ ...product('one'), handle: 'named', options: [{ name: 'Selection', values: ['Complete'] }] },
+		];
+		vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(String(input));
+			return new Response(JSON.stringify(url.pathname === '/products.json' ?
+				{ products: url.searchParams.get('page') === '1' ? products : [] } : { collections: [] }));
+		}));
+		const result = await enumerateShopifyProducts('https://example.com/', { governors: new SourceRequestGovernors() });
+		expect(result.entries.map(productMemberShape)).toEqual([
+			'images=1;price=single;options=default', 'images=1;price=single;options=1',
+		]);
 	});
 
 	it('reports unavailable catalog pages instead of silently dropping them', async () => {
@@ -80,10 +96,22 @@ describe('Shopify structured catalog', () => {
 		expect($('.price-item--regular').text()).toBe('$20.00');
 	});
 
+	it('updates consistent title and price copies without touching SVG titles (#1842)', () => {
+		const html = document.replace('</main>', '<div class="product__title"><h2>Product one</h2></div><span itemprop="price" content="10.00">$10.00</span><svg><title>Payment icon</title></svg></main>');
+		const result = productMemberDocument(html, entry('one'), entry('two'));
+		expect(result).toBeDefined();
+		const $ = cheerio.load(result!);
+		expect($('head > title').text()).toBe('Product two — Example store');
+		expect($('svg title').text()).toBe('Payment icon');
+		expect($('h1, .product__title').map((_, node) => $(node).text()).get()).toEqual(['Product two', 'Product two']);
+		expect($('.price-item--regular, [itemprop="price"]').map((_, node) => $(node).text()).get()).toEqual(['$20.00', '$20.00']);
+		expect($('[itemprop="price"]').attr('content')).toBe('20.00');
+	});
+
 	it.each([
 		document.replace('<h1>', '<h1>Other</h1><h1>'),
 		document.replace('class="product__media"', 'class="unrecognized-gallery"'),
-		document.replace('</main>', '<span class="price-item--regular">$10.00</span></main>'),
+		document.replace('</main>', '<span class="price-item--regular">$11.00</span></main>'),
 		document.replace('/one.png" srcset', '/unknown.png" srcset'),
 		document.replace('$10.00', '$10,00'),
 	])('fails closed for ambiguous or unknown slots', html => {
