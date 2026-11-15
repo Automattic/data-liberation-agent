@@ -2,15 +2,14 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { expect, it } from 'vitest';
 import { captureWebsite } from '../../index.js';
 import { checkFidelity } from './check.js';
 import { createReferenceCollector, readFrozenObservation, type FidelityReference } from './reference.js';
 
 // One public capture/compare plus two rejected references (~45s idle). No framework
 // names or error-message allowlist: admission depends on the rendered document.
-it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'proves settled after-load runtime faults but rejects unsettled documents and client error shells', async ({ newPage }) => {
+it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'proves settled after-load runtime faults but rejects unsettled documents and client error shells', async () => {
 	mkdirSync( '.tmp-test', { recursive: true } );
 	const root = mkdtempSync( join( process.cwd(), '.tmp-test/reference-runtime-' ) );
 	const message = 'Neutral recoverable runtime fault';
@@ -44,9 +43,9 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 
 		// The same captured fault cannot excuse a reference that became an
 		// error shell. Use the same selector matcher capture's adapter declares.
-
-		{
-			const page = await newPage();
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
 			const target = `${ url }shell`;
 			const collector = createReferenceCollector( root, target, [ target ], { clientErrorShellSelectors: [ '#client-error-shell' ] } );
 			await collector.observe( page, target, 'desktop', [ `source runtime error: ${ message }` ], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
@@ -66,7 +65,7 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 			expect( unsettled.readiness.reasons ).toContain( 'source document did not settle' );
 			expect( unsettled.readiness.diagnostics ).toContain( `source runtime error: ${ message }` );
 			expect( () => readFrozenObservation( root, unsettled ) ).toThrow( 'Source evidence unready' );
-		}
+		} finally { await browser.close(); }
 	} finally {
 		server.closeAllConnections();
 		await new Promise<void>( resolve => server.close( () => resolve() ) );

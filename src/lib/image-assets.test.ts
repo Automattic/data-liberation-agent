@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect } from 'vitest';
-import { it } from '../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
+import { getPlaywright } from './browser-kit/index.js';
 import { captureAssets, collectAssets as collectImageAssets, imageContentType, resourceContentType, resolvedImageOriginal, svgDeclaredSize } from './image-assets.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
@@ -291,14 +291,15 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
   }
  });
 
- it('exports one alpha-preserving original with every srcset/proxy/CSS URL and flags unresolved images', async ({ newPage }) => {
-  const page = await newPage();
+ it('exports one alpha-preserving original with every srcset/proxy/CSS URL and flags unresolved images', async () => {
+  const pw = await getPlaywright(), browser = await pw.chromium.launch({ headless: true });
+  const page = await browser.newPage();
   const data = await page.evaluate(() => {
    const c = document.createElement('canvas'); c.width = 203; c.height = 90;
    c.getContext('2d')!.fillRect(0, 0, 100, 90);
    return { webp: c.toDataURL('image/webp').split(',')[1], jpeg: c.toDataURL('image/jpeg').split(',')[1] };
   });
-  await page.context().close();
+  await browser.close();
   const webp = Buffer.from(data.webp, 'base64'), jpeg = Buffer.from(data.jpeg, 'base64');
   const proxy = (w: number) => `/_next/image?url=%2Fpreview.webp&w=${w}&q=75`;
   const server = createServer((request, response) => {

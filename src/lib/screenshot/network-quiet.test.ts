@@ -1,8 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { existsSync } from 'node:fs';
-import { chromium, type Page } from 'playwright';
-import { describe, expect, beforeAll, afterAll } from 'vitest';
-import { it, type BrowserFixtures } from '../../../test/browser.js';
+import { chromium, type Browser, type Page } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { reportReadiness, triggerLazyLoad, waitForStable, type SettleOutcome, type TelemetryRequest } from './page-helpers.js';
 
 // A source whose analytics beacon never stops: a cross-origin fetch every
@@ -119,13 +118,13 @@ async function close( server: Server ): Promise< void > {
 }
 
 describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.executablePath() ) )( 'network quiet readiness (real Chromium)', () => {
-
+	let browser: Browser;
 	let beacons: Server;
 	let main: Server;
 	let origin: string;
 
 	beforeAll( async () => {
-
+		browser = await chromium.launch();
 		beacons = beaconOrigin();
 		const beaconPort = await listen( beacons );
 		main = chattyOrigin( beaconPort );
@@ -134,13 +133,13 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 	} );
 
 	afterAll( async () => {
-
+		await browser.close();
 		await close( main );
 		await close( beacons );
 	} );
 
-	async function settledPage( { newPage }: Pick<BrowserFixtures, 'newPage'>, telemetry?: TelemetryRequest ): Promise< { page: Page; waits: Array< { wait: string } & SettleOutcome > } > {
-		const page = await newPage();
+	async function settledPage( telemetry?: TelemetryRequest ): Promise< { page: Page; waits: Array< { wait: string } & SettleOutcome > } > {
+		const page = await browser.newPage();
 		const waits: Array< { wait: string } & SettleOutcome > = [];
 		reportReadiness( page, ( wait, outcome ) => waits.push( { wait, ...outcome } ), telemetry );
 		return { page, waits };
@@ -150,8 +149,8 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		return waits.find( ( w ) => w.wait === name );
 	}
 
-	it( 'resolves the stable wait at the first quiet gap while analytics beacons never stop', async ({ newPage }) => {
-		const { page, waits } = await settledPage({ newPage });
+	it( 'resolves the stable wait at the first quiet gap while analytics beacons never stop', async () => {
+		const { page, waits } = await settledPage();
 		await page.goto( `${ origin }/`, { waitUntil: 'load', timeout: 15_000 } );
 		const started = Date.now();
 		await waitForStable( page );
@@ -164,8 +163,8 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		await page.close();
 	}, 30_000 );
 
-	it( 'holds the stable wait for a pending same-origin hydration response and its render', async ({ newPage }) => {
-		const { page, waits } = await settledPage({ newPage });
+	it( 'holds the stable wait for a pending same-origin hydration response and its render', async () => {
+		const { page, waits } = await settledPage();
 		await page.goto( `${ origin }/hydration`, { waitUntil: 'load', timeout: 15_000 } );
 		await waitForStable( page );
 		const network = recorded( waits, 'network-quiet' );
@@ -178,8 +177,8 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		await page.close();
 	}, 30_000 );
 
-	it( 'holds the stable wait for a pending cross-origin data response', async ({ newPage }) => {
-		const { page, waits } = await settledPage({ newPage });
+	it( 'holds the stable wait for a pending cross-origin data response', async () => {
+		const { page, waits } = await settledPage();
 		await page.goto( `${ origin }/cross-data`, { waitUntil: 'load', timeout: 15_000 } );
 		await waitForStable( page );
 		const network = recorded( waits, 'network-quiet' );
@@ -192,8 +191,8 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 
 	// An orphaned data request holds quiet only for the readiness bound from
 	// its start, not for every later wait on the page.
-	it( 'stops holding quiet for a data request once it has outlived the readiness bound', async ({ newPage }) => {
-		const { page, waits } = await settledPage({ newPage });
+	it( 'stops holding quiet for a data request once it has outlived the readiness bound', async () => {
+		const { page, waits } = await settledPage();
 		await page.goto( `${ origin }/orphan-data`, { waitUntil: 'load', timeout: 15_000 } );
 		await waitForStable( page );
 		expect( waits.find( ( w ) => w.wait === 'network-quiet' )?.ms ).toBeGreaterThanOrEqual( 4_000 );
@@ -211,9 +210,9 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 	// The source declares its telemetry endpoint (as a platform adapter does);
 	// nothing about the request itself is guessed. The declaration releases the
 	// beacon only: the undeclared cross-origin response still holds the wait.
-	it( 'does not hold for a declared telemetry beacon that never lands, but waits for a late cross-origin hydration response', async ({ newPage }) => {
+	it( 'does not hold for a declared telemetry beacon that never lands, but waits for a late cross-origin hydration response', async () => {
 		const isTelemetry = ( url: string ) => new URL( url ).pathname === '/telemetry';
-		const { page, waits } = await settledPage({ newPage },  isTelemetry );
+		const { page, waits } = await settledPage( isTelemetry );
 		await page.goto( `${ origin }/telemetry-beacon`, { waitUntil: 'load', timeout: 15_000 } );
 		await waitForStable( page );
 		const network = recorded( waits, 'network-quiet' );
@@ -225,8 +224,8 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		await page.close();
 	}, 30_000 );
 
-	it( 'still spends the bound when render-affecting requests never stop', async ({ newPage }) => {
-		const { page, waits } = await settledPage({ newPage });
+	it( 'still spends the bound when render-affecting requests never stop', async () => {
+		const { page, waits } = await settledPage();
 		await page.goto( `${ origin }/same-origin-chatter`, { waitUntil: 'load', timeout: 15_000 } );
 		const started = Date.now();
 		await waitForStable( page );
@@ -238,8 +237,8 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		await page.close();
 	}, 30_000 );
 
-	it( 'bounds the lazy-load hydration window by quiet, not by raw networkidle', async ({ newPage }) => {
-		const { page, waits } = await settledPage({ newPage });
+	it( 'bounds the lazy-load hydration window by quiet, not by raw networkidle', async () => {
+		const { page, waits } = await settledPage();
 		await page.goto( `${ origin }/`, { waitUntil: 'load', timeout: 15_000 } );
 		const started = Date.now();
 		const interruption = await triggerLazyLoad( page, true );

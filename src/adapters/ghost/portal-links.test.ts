@@ -1,6 +1,5 @@
-
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium, type Browser } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { neutralizePortalLinks } from './portal-links.js';
 
 // Link shapes from live Ghost themes (2026-09): Casper nav (demo.ghost.io),
@@ -23,9 +22,12 @@ const HTML = `<!doctype html><html><body>
 </body></html>`;
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('neutralizePortalLinks', () => {
+	let browser: Browser;
+	beforeAll(async () => { browser = await chromium.launch(); });
+	afterAll(async () => { await browser.close(); });
 
-	it('makes same-site Portal and Share links inert and leaves everything else', async ({ newPage }) => {
-		const page = await newPage();
+	it('makes same-site Portal and Share links inert and leaves everything else', async () => {
+		const page = await browser.newPage();
 		try {
 			await page.route('https://ghost.example/**', (route) => route.fulfill({ contentType: 'text/html', body: HTML }));
 			await page.goto('https://ghost.example/');

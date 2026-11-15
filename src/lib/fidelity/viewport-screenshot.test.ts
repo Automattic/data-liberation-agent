@@ -1,16 +1,15 @@
 import { existsSync } from 'node:fs';
 import { chromium, devices } from 'playwright';
 import { PNG } from 'pngjs';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'compositor viewport evidence', () => {
-	it( 'captures the complete fixed-width mobile frame without changing its viewport or raster', async ({ newContext }) => {
-
-		{
+	it( 'captures the complete fixed-width mobile frame without changing its viewport or raster', async () => {
+		const browser = await chromium.launch();
+		try {
 			const { defaultBrowserType: _browserType, ...iphone } = devices[ 'iPhone 17' ];
-			const context = await newContext( iphone );
+			const context = await browser.newContext( iphone );
 			const page = await context.newPage();
 			await page.setViewportSize( { width: 390, height: 900 } );
 			await page.setContent( '<meta name="viewport" content="width=320,user-scalable=yes"><style>body{margin:0;background:rgb(11,22,33)}main{height:2000px}</style><main>Neutral mobile frame</main>' );
@@ -23,18 +22,18 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( await page.evaluate( () => ( { width: innerWidth, height: innerHeight, scale: visualViewport!.scale } ) ) ).toEqual( before );
 			expect( before.width ).toBe( 320 );
 			expect( before.scale ).toBe( 1.21875 );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
-	it( 'captures desktop CSS dimensions with the fractional capture DPR', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 0.7 } );
+	it( 'captures desktop CSS dimensions with the fractional capture DPR', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 0.7 } );
 			await page.setContent( '<main>Neutral desktop frame</main>' );
 			// Raw CDP capture does not wait for the initial compositor frame like
 			// Playwright's screenshot API does. Let the new page paint first.
 			await page.evaluate( () => new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) ) );
 			const raster = PNG.sync.read( await captureViewportScreenshot( page ) );
 			expect( [ raster.width, raster.height ] ).toEqual( [ 1440, 900 ] );
-		}
+		} finally { await browser.close(); }
 	}, 30_000 );
 } );

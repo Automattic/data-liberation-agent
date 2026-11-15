@@ -3,9 +3,8 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect } from 'vitest';
-import { it } from '../../test/browser.js';
-
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium } from 'playwright';
 import { exportWebsiteCapture } from './capture-export.js';
 import { checkFidelity as checkLiveFidelity } from './fidelity/check.js';
 const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
@@ -62,7 +61,7 @@ describe( 'authored portable motion after capture', () => {
 		expect( existsSync( join( directory, 'portable-motion.json' ) ) ).toBe( false );
 	} );
 
-	it( 'proves independent behavior and rechecks a portable artifact without a candidate flag', async ({ newPage }) => {
+	it( 'proves independent behavior and rechecks a portable artifact without a candidate flag', async () => {
 		const { directory, recipe } = capture();
 		const unchanged = readFileSync( join( directory, 'website/index.html' ), 'utf8' );
 		delete recipe.routes[ '/' ].busyHidden;
@@ -77,16 +76,16 @@ describe( 'authored portable motion after capture', () => {
 		const htmlPath = join( directory, 'website/index.html' );
 		writeFileSync( htmlPath, readFileSync( htmlPath, 'utf8' ).replace( '<p id="status" data-motion-target="true">Ready</p>', '<p id="status" data-motion-target="true">Edited</p>' ) );
 		const preview = await startStaticServer( join( directory, 'website' ) );
-
+		const browser = await chromium.launch();
 		try {
-			const page = await newPage();
+			const page = await browser.newPage();
 			await page.goto( preview.url, { waitUntil: 'domcontentloaded' } );
 			await page.waitForSelector( 'body:not([aria-busy])' );
 			expect( await page.locator( '#status' ).textContent() ).toBe( 'Edited' );
 			await page.locator( '#replay' ).click();
 			await page.waitForFunction( () => document.querySelector( '#status' )?.textContent === 'Edited' );
 			expect( await page.locator( '#status' ).textContent() ).toBe( 'Edited' );
-		} finally {  await preview.close(); }
+		} finally { await browser.close(); await preview.close(); }
 		const runtime = JSON.parse( readFileSync( join( directory, 'portable-motion.json' ), 'utf8' ) );
 		const script = join( directory, 'website', runtime.routes[ '/' ].scripts[ 0 ].path );
 		writeFileSync( script, '/* tampered */' );

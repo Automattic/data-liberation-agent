@@ -1,9 +1,8 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Page } from 'playwright';
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium, type Page } from 'playwright';
+import { expect, it } from 'vitest';
 import { captureScreenshots } from './screenshotter.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { exportWebsiteCapture } from '../capture-export.js';
@@ -46,7 +45,7 @@ async function geometry( page: Page ) {
 	} );
 }
 
-it( 'learns each responsive document through tablet widths without freezing phone geometry or sharing segment rules', async ({ newPage }) => {
+it( 'learns each responsive document through tablet widths without freezing phone geometry or sharing segment rules', async () => {
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'issue-375-' ) );
@@ -58,7 +57,7 @@ it( 'learns each responsive document through tablet widths without freezing phon
 	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 	const address = server.address() as { port: number };
 	const sourceUrl = `http://127.0.0.1:${ address.port }/`;
-
+	const browser = await chromium.launch();
 	try {
 		const capture = await captureScreenshots( {
 			urls: [ sourceUrl ], outputDir, concurrency: 1, settleMs: 0,
@@ -67,9 +66,9 @@ it( 'learns each responsive document through tablet widths without freezing phon
 		expect( capture.failed ).toBe( 0 );
 		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
 		portable = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const source = await newPage( { viewport: { width: 1440, height: 900 } } );
-		const phone = await newPage( { viewport: { width: 402, height: 900 }, isMobile: true, userAgent: 'iPhone' } );
-		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const phone = await browser.newPage( { viewport: { width: 402, height: 900 }, isMobile: true, userAgent: 'iPhone' } );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await source.goto( sourceUrl, { waitUntil: 'domcontentloaded' } );
 		await phone.goto( sourceUrl, { waitUntil: 'domcontentloaded' } );
 		await copy.goto( `${ sourceUrl }copy/`, { waitUntil: 'domcontentloaded' } );
@@ -98,13 +97,13 @@ it( 'learns each responsive document through tablet widths without freezing phon
 		expect( receipt.routes[ 0 ].fluidGeometry.desktop.applied ).toBeGreaterThan( 0 );
 		expect( receipt.routes[ 0 ].fluidGeometry.mobile.applied ).toBeGreaterThan( 0 );
 	} finally {
-
+		await browser.close();
 		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 90_000 );
 
-it( 'restores baseline geometry on a cloned menu first mutated at a wide sweep width', async ({ newPage }) => {
+it( 'restores baseline geometry on a cloned menu first mutated at a wide sweep width', async () => {
 	const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 	<style>body{margin:0}header{position:fixed;top:0;left:0;height:80px;background:white}
 	.logo{margin:20px;width:100px;height:40px;background:teal}.spacer{visibility:hidden;height:80px;position:relative}
@@ -115,16 +114,16 @@ it( 'restores baseline geometry on a cloned menu first mutated at a wide sweep w
 	<script>function update(){document.querySelector('header').style.width=document.documentElement.clientWidth+'px';
 	if(innerWidth>=768){const menu=document.querySelector('.menu');menu.style.width=innerWidth+'px';menu.style.left='30px';menu.style.setProperty('--menu-width',innerWidth+'px');}}
 	addEventListener('resize',update);update();</script>`;
-
+	const browser = await chromium.launch();
 	try {
-		const source = await newPage( { viewport: { width: 402, height: 900 } } );
+		const source = await browser.newPage( { viewport: { width: 402, height: 900 } } );
 		await source.setContent( html );
 		await learnAndApplyFluidGeometry( source, { document: 'mobile', widths: [ 390, 768, 1440, 1920 ], settleMs: 30 } );
 		const captured = await source.evaluate( () => {
 			document.querySelectorAll( 'script' ).forEach( script => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await newPage( { viewport: { width: 390, height: 900 } } );
+		const copy = await browser.newPage( { viewport: { width: 390, height: 900 } } );
 		await copy.setContent( captured );
 		for ( const width of [ 390, 768, 1440, 390 ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -136,6 +135,6 @@ it( 'restores baseline geometry on a cloned menu first mutated at a wide sweep w
 		}
 		expect( await copy.locator( '.menu' ).getAttribute( 'style' ) ).toBeFalsy();
 	} finally {
-
+		await browser.close();
 	}
 }, 15_000 );

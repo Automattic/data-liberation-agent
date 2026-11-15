@@ -28,7 +28,6 @@ it.skipIf( skipBrowser )( 'replays trigger class deltas when a captured menu ope
 	} );
 	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 	const url = `http://localtest.me:${ ( server.address() as { port: number } ).port }/`;
-	// Own launch: host resolver maps localtest.me to the loopback fixture.
 	const browser = await chromium.launch( { args: [ '--host-resolver-rules=MAP localtest.me 127.0.0.1' ] } );
 	try {
 		const result = await captureWebsite( { url, outputDir: root }, {

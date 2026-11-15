@@ -8,10 +8,9 @@
 // skipped; anything that still participates must settle under the existing
 // bounded-wait contract.
 import { createServer, type Server } from 'node:http';
-
-import { describe, expect, beforeAll, afterAll } from 'vitest';
-import { it } from '../../../test/browser.js';
-import { type Page } from 'playwright';
+import type { AddressInfo } from 'node:net';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright';
 import { triggerLazyLoad, waitForImages } from './page-helpers.js';
 
 // An image response that resolves only after `delay` ms, so readiness waits can
@@ -38,27 +37,27 @@ const imageState = (page: Page, selector = 'img') =>
   })));
 
 describe('waitForImages layout participation', () => {
-
+  let browser: Browser;
   let server: Server;
   let origin: string;
 
   beforeAll(async () => {
-
+    browser = await chromium.launch();
     server = imageServer(700);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   });
 
   afterAll(async () => {
-
+    await browser.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it('still waits for a visible image with delayed decoding, however slow', async ({ newPage }) => {
+  it('still waits for a visible image with delayed decoding, however slow', async () => {
     // Generic never-settling budget: baseline behavior awaited every image in
     // the document; a visible image must keep that contract, regardless of how
     // late it decodes.
-    const page = await newPage();
+    const page = await browser.newPage();
     await page.setContent(`<img src="${origin}/slow.svg" width="24" height="24">`, { waitUntil: 'domcontentloaded' });
     expect(await imageState(page)).toEqual([{ complete: false, naturalWidth: 0 }]);
     await waitForImages(page, 4_000);
@@ -66,12 +65,12 @@ describe('waitForImages layout participation', () => {
     await page.close();
   }, 15_000);
 
-  it('does not exhaust the readiness timer on inactive native-lazy alternatives', async ({ newPage }) => {
+  it('does not exhaust the readiness timer on inactive native-lazy alternatives', async () => {
     // display:none removes the image from layout entirely: an inactive
     // responsive alternative whose pending bytes cannot affect the captured
     // state. Its wait must not consume the timer — the elapsed time is the
     // observable; a blanket filter-free evaluate spends the full timeout here.
-    const page = await newPage();
+    const page = await browser.newPage();
     // Start src-less so the document's load event does not already hold the
     // bytes; the fetch is injected afterwards and held pending by the server.
     await page.setContent('<img id="inactive" style="display:none" width="24" height="24">');
@@ -87,11 +86,11 @@ describe('waitForImages layout participation', () => {
     await page.close();
   }, 15_000);
 
-  it('waits for a visibility-hidden image that still occupies layout', async ({ newPage }) => {
+  it('waits for a visibility-hidden image that still occupies layout', async () => {
     // visibility:hidden keeps the box and the space it fills, so the element
     // remains a layout participant: whenever a class flip or resize reveals it,
     // a half-decoded alternative would land in the capture. It must settle.
-    const page = await newPage();
+    const page = await browser.newPage();
     await page.setContent(
       `<img src="${origin}/hidden.svg" style="visibility:hidden" width="24" height="24">`,
       { waitUntil: 'domcontentloaded' },
@@ -102,12 +101,12 @@ describe('waitForImages layout participation', () => {
     await page.close();
   }, 15_000);
 
-  it('waits for an image revealed by a later viewport resize', async ({ newPage }) => {
+  it('waits for an image revealed by a later viewport resize', async () => {
     // A media query may hold an alternative display:none at the captured
     // width and reveal it after a resize; the wait for the resized state has
     // to re-evaluate participation at the new viewport instead of trusting an
     // earlier snapshot.
-    const page = await newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<style>
       #alt { display: none; }
       @media (max-width: 800px) { #alt { display: block; } }
@@ -118,12 +117,12 @@ describe('waitForImages layout participation', () => {
     await page.close();
   }, 15_000);
 
-  it('settles scroll-grown content that grows a zero-size image into layout', async ({ newPage }) => {
+  it('settles scroll-grown content that grows a zero-size image into layout', async () => {
     // The sweep's repeat-until-stable rounds: an image starts un-reserved
     // (zero-height) and only gains layout when its reveal class lands as the
     // document grows. Every active image in the last layout must be decoded
     // before the sweep stops.
-    const page = await newPage({ viewport: { width: 800, height: 600 } });
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     await page.setContent(`<!doctype html><style>
       body { margin: 0; }
       figure { margin: 0; height: 0; }
@@ -145,12 +144,12 @@ describe('waitForImages layout participation', () => {
     await page.close();
   }, 30_000);
 
-  it('settles every active image without exhausting the budget across rounds', async ({ newPage }) => {
+  it('settles every active image without exhausting the budget across rounds', async () => {
     // End-to-end bound from the route profile: inactive alternatives must not
     // cost the settle rounds their whole image budget — several display:none
     // lazies plus one active image, and the whole triggerLazyLoad returns on
     // the scale of the active image, not 10 rounds × the timer.
-    const page = await newPage({ viewport: { width: 390, height: 844 } });
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.setContent(`<!doctype html><main style="height:1500px">
       ${Array.from({ length: 10 }, () =>
         `<img class="alt" src="${origin}/b.svg" style="display:none" width="24" height="24">`,

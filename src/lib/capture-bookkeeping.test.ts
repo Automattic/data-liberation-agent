@@ -1,9 +1,8 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-
-import { expect } from 'vitest';
-import { it } from '../../test/browser.js';
+import { chromium } from 'playwright';
+import { expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import { readResolvedPage } from './site-includes.js';
 
@@ -14,7 +13,7 @@ body{margin:0}button{padding:20px}#drawer{position:fixed;inset:60px 0 0;backgrou
 <script>const drawer=document.querySelector('#drawer'),menu=document.querySelector('#menu');menu.onclick=()=>{drawer.hidden=false;menu.setAttribute('aria-expanded','true')};document.querySelector('#close').onclick=()=>{drawer.hidden=true;menu.setAttribute('aria-expanded','false')};</script></body></html>`;
 
 // One public capture and replay (~15 seconds); no synthetic capture attributes.
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports an interactive drawer without capture bookkeeping in any HTML', async ({ newPage }) => {
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports an interactive drawer without capture bookkeeping in any HTML', async () => {
 	const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 	const root = mkdtempSync(join(parent, 'bookkeeping-'));
 	let copy: string | undefined;
@@ -25,7 +24,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports an interactive drawe
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-
+	const browser = await chromium.launch();
 	try {
 		const result = await captureWebsite({ url, outputDir: root, captureImages: false, trustedOrigins: [url], learnFluid: false }, {
 			findAdapter: () => ({ id: 'garden-fixture', detect: () => true, discover: async () => ({ urls: [{ url }] }) }),
@@ -41,7 +40,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports an interactive drawe
 		}
 		copy = readResolvedPage(website, join(website, 'index.html'));
 		expect(copy).toContain('data-blocks-engine-capture-dialog-trigger');
-		const page = await newPage(); await page.goto(url);
+		const page = await browser.newPage(); await page.goto(url);
 		await page.locator('#menu').click();
 		const link = page.getByRole('link', { name: 'Garden home' });
 		await expect.poll(() => link.isVisible()).toBe(true);
@@ -49,6 +48,6 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports an interactive drawe
 		await page.keyboard.press('Escape');
 		await expect.poll(() => link.isVisible()).toBe(false);
 	} finally {
-		 await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true });
+		await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true });
 	}
 }, 180_000);

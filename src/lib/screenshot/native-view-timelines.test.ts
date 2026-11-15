@@ -1,9 +1,8 @@
 import { mkdirSync, writeFileSync, readFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { type Page } from 'playwright';
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium, type Page } from 'playwright';
+import { expect, it } from 'vitest';
 import { captureNativeViewTimelines, observedRange } from './native-view-timelines.js';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -48,10 +47,10 @@ it( 'keeps fixed and percent ranges fixed and rejects an unproven changing range
 	expect( observedRange( [ { rangeName: 'cover', offset: '700.005px' }, { rangeName: 'cover', offset: '700.005px' } ], [ 900, 964 ] ) ).toEqual( { value: 'cover 700.005px' } );
 } );
 
-it( 'exports native motion with real scroll/resize parity and authored CSS, retaining source traces', async ({ newPage }) => {
-
-	const source = await newPage( { viewport: { width: 1000, height: 900 } } );
-	const copy = await newPage( { viewport: { width: 1000, height: 900 } } );
+it( 'exports native motion with real scroll/resize parity and authored CSS, retaining source traces', async () => {
+	const browser = await chromium.launch();
+	const source = await browser.newPage( { viewport: { width: 1000, height: 900 } } );
+	const copy = await browser.newPage( { viewport: { width: 1000, height: 900 } } );
 	const artifact = join( process.cwd(), '.tmp-test', 'native-view-timelines-551' );
 	mkdirSync( join( artifact, 'html' ), { recursive: true } );
 	mkdirSync( join( artifact, 'screenshots' ), { recursive: true } );
@@ -120,7 +119,7 @@ it( 'exports native motion with real scroll/resize parity and authored CSS, reta
 			expect( await copy.locator( `${ scope } [id="translate"]` ).evaluate( node => node.getAnimations().length ) ).toBe( 1 );
 		}
 	} finally {
-
+		await browser.close();
 	}
 }, 45_000 );
 
@@ -234,10 +233,10 @@ it( 'keeps the page when native timeline restoration is unproven on a page that 
 	} finally { await new Promise<void>( resolve => server.close( () => resolve() ) ); }
 }, 60_000 );
 
-it( 'binds duplicate node tokens within generic device document scopes and reports missing local subjects', async ({ newPage }) => {
-
+it( 'binds duplicate node tokens within generic device document scopes and reports missing local subjects', async () => {
+	const browser = await chromium.launch();
 	try {
-		const page = await newPage( { viewport: { width: 1000, height: 900 } } );
+		const page = await browser.newPage( { viewport: { width: 1000, height: 900 } } );
 		const config = ( subject: string ) => JSON.stringify( [ { subject, source: 'root', axis: 'block', inset: 'auto', frames: [ { transform: 'translateX(0px)' }, { transform: 'translateX(80px)' } ], timing: { duration: 'auto', fill: 'both' }, composite: 'replace', rangeStart: { value: 'cover 0%' }, rangeEnd: { value: 'cover 100%' } } ] ).replace( /"/g, '&quot;' );
 		const device = ( profile: string, subject = 'n1' ) => `<div data-blocks-engine-capture-device-document="${ profile }" data-blocks-engine-capture-document-scope><section data-blocks-engine-capture-native-node="n1" style="height:400px"><div data-blocks-engine-capture-native-node="n2" data-blocks-engine-capture-native-profile="${ profile }" data-blocks-engine-capture-native-effects="${ config( subject ) }" style="height:30px;width:200px"></div></section></div>`;
 		const desktop = device( 'desktop' ).replace( '</section>', '<span data-blocks-engine-capture-native-node="foreign" hidden></span></section>' );
@@ -251,5 +250,5 @@ it( 'binds duplicate node tokens within generic device document scopes and repor
 			expect( facts ).toEqual( { count: 1, ownSubject: true, loss: null } );
 		}
 		expect( await page.locator( '[data-blocks-engine-capture-native-profile="missing"]' ).getAttribute( 'data-blocks-engine-capture-native-runtime-loss' ) ).toBe( 'subject or source binding missing or ambiguous' );
-	} finally {  }
+	} finally { await browser.close(); }
 } );

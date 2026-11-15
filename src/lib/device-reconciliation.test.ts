@@ -1,7 +1,6 @@
 import * as cheerio from 'cheerio';
-import { devices } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it } from '../../test/browser.js';
+import { chromium, devices } from 'playwright';
+import { describe, expect, it } from 'vitest';
 import { reconcileDeviceDocuments } from './device-reconciliation.js';
 import type { DeviceDocumentSelection } from './document-selection.js';
 import { VIEWPORT_ENTRANCE_ATTRIBUTE as ENTRANCE, withViewportEntrances } from './viewport-entrances.js';
@@ -145,14 +144,14 @@ describe( 'device entrance reconciliation', () => {
 		expect( result.evidence.devices.phone.outcome ).toBe( 'dual-structural' );
 	} );
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'replays the collapsed entrance at both captured device identities and sizes without loss', async ({ newContext }) => {
-
-		{
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'replays the collapsed entrance at both captured device identities and sizes without loss', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
 			const profiles = [ { viewport: { width: 1440, height: 900 } }, { ...devices[ 'iPad (gen 7)' ], viewport: { width: 768, height: 900 } } ];
 			const contexts = [];
 			const captures: Record<string, string> = {};
 			for ( const [ index, profile ] of profiles.entries() ) {
-				const context = await newContext( profile );
+				const context = await browser.newContext( profile );
 				contexts.push( context );
 				const page = await context.newPage();
 				await page.setContent( `<!doctype html><html><head>${ styles }</head><body><section id="entrance">Entrance</section></body></html>` );
@@ -174,6 +173,6 @@ describe( 'device entrance reconciliation', () => {
 				await page.waitForFunction( () => document.getElementById( 'entrance' )?.getAttribute( 'data-active' ) === 'true' );
 				expect( await page.locator( '#entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ).toBeNull();
 			}
-		}
+		} finally { await browser.close(); }
 	}, 15_000 );
 } );

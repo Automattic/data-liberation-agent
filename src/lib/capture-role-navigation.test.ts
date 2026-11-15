@@ -2,9 +2,8 @@ import { resolveInteractionComponents, type ComponentPage } from './captured-int
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-
-import { expect } from 'vitest';
-import { it } from '../../test/browser.js';
+import { chromium } from 'playwright';
+import { expect, it } from 'vitest';
 import { captureWebsite } from '../index.js';
 import { readResolvedPage } from './site-includes.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
@@ -29,7 +28,7 @@ region.onclick=()=>{regionPopper.hidden=!regionPopper.hidden;region.setAttribute
 addEventListener('keydown',event=>{if(event.key==='Escape'){close();regionPopper.hidden=true;region.setAttribute('aria-expanded','false');}});
 </script></body></html>`;
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semantics and observed header router destinations through the public capture API', async ({ newPage }) => {
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semantics and observed header router destinations through the public capture API', async () => {
 	const parent = join(process.cwd(), '.tmp-test');
 	mkdirSync(parent, { recursive: true });
 	const root = mkdtempSync(join(parent, 'role-navigation-'));
@@ -43,7 +42,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-
+	const browser = await chromium.launch();
 	try {
 		const result = await captureWebsite({ url, outputDir: root, captureImages: false, trustedOrigins: [url], learnFluid: false }, {
 			findAdapter: () => ({ id: 'neutral-surfaces', detect: () => true, discover: async () => ({ urls: [url, `${url}about`, `${url}contact`].map(url => ({ url })) }) }),
@@ -62,7 +61,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 		const html = readResolvedPage(copyRoot, join(copyRoot, 'index.html'));
 		expect(html).toContain('data-blocks-engine-capture-listbox-trigger');
 		expect(html).not.toContain('data-blocks-engine-capture-dialog-trigger');
-		const page = await newPage();
+		const page = await browser.newPage();
 		await page.goto(`${url}copy/`);
 		expect(await page.locator('#about').evaluate(el => el.tagName)).toBe('A');
 		expect(new URL((await page.locator('#about').getAttribute('href'))!, url).pathname).toBe('/about/index.html');
@@ -86,7 +85,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 		expect(await page.locator('[role="option"]').count()).toBe(4);
 		expect(await page.locator('#region-popper').count()).toBe(1);
 	} finally {
-
+		await browser.close();
 		await new Promise<void>(resolve => server.close(() => resolve()));
 		rmSync(root, { recursive: true, force: true });
 	}

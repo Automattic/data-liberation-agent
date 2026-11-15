@@ -1,7 +1,6 @@
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
-
+import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
 import { observePage } from './check.js';
 import { checkImageGeometry } from './rendered-contract-checks.js';
@@ -264,7 +263,7 @@ describe( 'scoreViewport', () => {
 		expect( matchRenderedImages( source, candidate ) ).toHaveLength( 2 );
 	} );
 
-	it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'observes stable resource digests and detects relocated colliding images in a browser', async ({ newPage }) => {
+	it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'observes stable resource digests and detects relocated colliding images in a browser', async () => {
 		const black = new PNG( { width: 1, height: 1 } );
 		black.data.set( [ 0, 0, 0, 255 ] );
 		const white = new PNG( { width: 1, height: 1 } );
@@ -282,9 +281,9 @@ describe( 'scoreViewport', () => {
 		} );
 		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-
+		const browser = await chromium.launch();
 		try {
-			const page = await newPage( { viewport: { width: 768, height: 900 } } );
+			const page = await browser.newPage( { viewport: { width: 768, height: 900 } } );
 			const source = await observePage( page, origin, 768, 0, null );
 			expect( source.images[ 0 ].contentHash ).toBe( source.images[ 1 ].contentHash );
 			expect( source.images[ 0 ].assetHash ).toMatch( /^[a-f0-9]{64}$/ );
@@ -293,7 +292,7 @@ describe( 'scoreViewport', () => {
 			expect( matchRenderedImages( source.images, candidate.images ) ).toHaveLength( 2 );
 			expect( checkImageGeometry( source, candidate ).failures?.[ 0 ] ).toContain( 'geometry differs' );
 		} finally {
-
+			await browser.close();
 			await new Promise<void>( resolve => server.close( () => resolve() ) );
 		}
 	}, 30_000 );

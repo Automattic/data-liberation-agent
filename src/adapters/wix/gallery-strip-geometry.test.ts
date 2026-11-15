@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
-import { describe, expect } from 'vitest';
-import { it, type BrowserFixtures } from '../../../test/browser.js';
-import { chromium } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from '../../lib/screenshot/fluid-capture.js';
 import { capture } from './capture.js';
 import { wixGalleryStripGeometry, type WixGalleryStripReading } from './gallery-strip-geometry.js';
@@ -73,10 +72,13 @@ const boxes = () => {
 };
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'wix beforeSerialize gallery strips', () => {
+	let browser: Browser;
+	beforeAll( async () => { browser = await chromium.launch(); } );
+	afterAll( async () => { await browser.close(); } );
 
 	/** Learn fluid geometry and run the hook at 1440 as capture does, then render the frozen document (no runtime) at each width. */
-	const frozenAt = async ( { newPage }: Pick<BrowserFixtures, 'newPage'>, markup: string, widths: number[] ) => {
-		const tab = await newPage( { viewport: { width: 1440, height: 900 } } );
+	const frozenAt = async ( markup: string, widths: number[] ) => {
+		const tab = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await tab.setContent( markup );
 			const learned = await learnAndApplyFluidGeometry( tab, { settleMs: 10 } );
@@ -85,7 +87,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'wix beforeSeriali
 				document.getElementById( 'runtime' )!.remove();
 				return document.documentElement.outerHTML;
 			} );
-			const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
+			const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			try {
 				await copy.setContent( frozen );
 				const reference = await copy.evaluate( boxes );
@@ -103,8 +105,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'wix beforeSeriali
 		}
 	};
 
-	it( 'carries a horizontal strip as host-relative widths, so the copy follows its host with item boxes unchanged', async ({ newPage }) => {
-		const { reference, results } = await frozenAt({ newPage },  strip( 'one-row slider', 10 ), [ 390, 768, 1440, 1920 ] );
+	it( 'carries a horizontal strip as host-relative widths, so the copy follows its host with item boxes unchanged', async () => {
+		const { reference, results } = await frozenAt( strip( 'one-row slider', 10 ), [ 390, 768, 1440, 1920 ] );
 		expect( reference.container ).toBe( 1450 );
 		for ( const result of results ) {
 			expect( result.container ).toBe( result.host + 10 );
@@ -113,8 +115,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'wix beforeSeriali
 		expect( results.map( result => result.container ) ).toEqual( [ 990, 990, 1450, 1930 ] );
 	}, 30_000 );
 
-	it( 'leaves a gallery that is not a horizontal strip as the runtime wrote it', async ({ newPage }) => {
-		const { styles } = await frozenAt({ newPage },  strip( 'one-row', 10 ), [] );
+	it( 'leaves a gallery that is not a horizontal strip as the runtime wrote it', async () => {
+		const { styles } = await frozenAt( strip( 'one-row', 10 ), [] );
 		expect( styles ).toEqual( [ 'width: 1440px; height: 200px;', 'display: flex; width: 1450px; height: 205px;', 'width: 1450px; height: 205px;' ] );
 	}, 30_000 );
 } );

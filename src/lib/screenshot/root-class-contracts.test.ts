@@ -1,6 +1,5 @@
-import { describe, expect, vi } from 'vitest';
-import { it } from '../../../test/browser.js';
-
+import { describe, expect, it, vi } from 'vitest';
+import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { assembleResponsiveCapture } from '../responsive-assembly.js';
@@ -122,10 +121,10 @@ describe( 'root class width contracts', () => {
 	} );
 
 	// Local browser fixture: about five seconds, no network or platform knowledge.
-	it( 'proves width contracts through recurring main-thread long tasks', async ({ newPage }) => {
-
+	it( 'proves width contracts through recurring main-thread long tasks', async () => {
+		const browser = await chromium.launch();
 		try {
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			await page.setContent( `<div>Local width contract fixture</div><script>
 				function measure(){document.body.classList.toggle('measured-wrap',innerWidth<1280)}
 				addEventListener('resize',measure);measure();
@@ -144,14 +143,14 @@ describe( 'root class width contracts', () => {
 			expect( unproven ).toEqual( [] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( '' );
-		} finally {  }
+		} finally { await browser.close(); }
 	}, 15_000 );
 
 	// One browser pass: about ten seconds including unstable-width coverage.
-	it( 'exports measurement-gated author CSS that survives responsive document scoping', async ({ newPage }) => {
-
+	it( 'exports measurement-gated author CSS that survives responsive document scoping', async () => {
+		const browser = await chromium.launch();
 		try {
-			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 			await page.setContent( `<style>
 				.layout{display:flex;flex-direction:row}
 				@supports(display:flex){body.measured-wrap .layout{flex-direction:column}}
@@ -207,6 +206,6 @@ describe( 'root class width contracts', () => {
 			expect( await sampleRootClasses( page, undefined, reason => unproven.push( reason ) ) ).toEqual( [] );
 			expect( unproven ).toEqual( [ expect.stringContaining( 'unproven at 1024px' ) ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
-		} finally {  }
+		} finally { await browser.close(); }
 	}, 20_000 );
 } );

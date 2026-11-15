@@ -2,18 +2,17 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { describe, expect, it } from 'vitest';
 import { observePage } from './check.js';
 import { createReferenceCollector } from './reference.js';
 import { checkImageGeometry } from './rendered-contract-checks.js';
 import { triggerLazyLoad, settleDocument } from '../screenshot/page-helpers.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'settled motion evidence', () => {
-	it( 'settles chained in-flight effects without spending the budget on paused entrances', async ({ newPage }) => {
-
-		{
-			const page = await newPage();
+	it( 'settles chained in-flight effects without spending the budget on paused entrances', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
 			await page.setContent( `<style>@keyframes fade{from{opacity:0}to{opacity:1}}
 				#paused{animation:fade 1s both paused}#first{animation:fade 300ms both}#second.go{animation:fade 300ms both}</style>
 				<div id="paused">Waiting for viewport</div><div id="first">First</div><div id="second">Second</div>
@@ -24,13 +23,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( await page.locator( '#second' ).evaluate( element => element.getAnimations().map( animation => animation.playState ) ) ).toEqual( [ 'finished' ] );
 			expect( await page.locator( '#paused' ).evaluate( element => element.getAnimations()[ 0 ]!.playState ) ).toBe( 'paused' );
 			expect( elapsed ).toBeLessThan( 2_500 );
-		}
+		} finally { await browser.close(); }
 	}, 20_000 );
 
-	it( 'measures resting image geometry across clock and view phases without masking real differences', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 800, height: 400 } } );
+	it( 'measures resting image geometry across clock and view phases without masking real differences', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 800, height: 400 } } );
 			const html = `<style>body{margin:0;height:2400px}
 				@keyframes drift{from{transform:scale(1.04)}to{transform:scale(1.5)}}
 				@keyframes enter{from{transform:scale(0)}to{transform:scale(1)}}
@@ -67,13 +66,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( await page.locator( '#clock' ).evaluate( element => ( element.getAnimations()[ 0 ].effect as KeyframeEffect ).getKeyframes().length ) ).toBe( 2 );
 			const changed = await sample( 12_000, true );
 			expect( checkImageGeometry( source, changed ).failures?.join( ' ' ) ).toContain( 'image geometry differs' );
-		}
+		} finally { await browser.close(); }
 	}, 60_000 );
 
-	it( 'measures scroll entrances at rest against a settled copy without erasing authored offsets', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 390, height: 900 } } );
+	it( 'measures scroll entrances at rest against a settled copy without erasing authored offsets', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
 			const html = readFileSync( join( process.cwd(), 'test/fixtures/scroll-reveal-geometry.html' ), 'utf8' );
 			for ( const width of [ 390, 768, 1440 ] ) {
 				await page.setViewportSize( { width, height: 900 } );
@@ -94,26 +93,26 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				const changed = await observePage( page, 'about:blank', width, 0, null, undefined, undefined, true, true );
 				expect( checkImageGeometry( source, changed ).failures?.join( ' ' ) ).toContain( 'image geometry differs' );
 			}
-		}
+		} finally { await browser.close(); }
 	}, 60_000 );
 
-	it( 'brings every region into a layout viewport shorter than the sweep step', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 400, height: 200 } } );
+	it( 'brings every region into a layout viewport shorter than the sweep step', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 400, height: 200 } } );
 			await page.setContent( `<style>body{margin:0}.item{height:40px;margin-bottom:60px}</style>
 				${ Array.from( { length: 30 }, ( _, index ) => `<div class="item" data-index="${ index }"></div>` ).join( '' ) }
 				<script>const observer=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting&&entry.intersectionRatio>=.5)entry.target.dataset.seen='1';},{threshold:.5});
 				document.querySelectorAll('.item').forEach(item=>observer.observe(item));</script>` );
 			await triggerLazyLoad( page );
 			expect( await page.locator( '.item:not([data-seen])' ).count() ).toBe( 0 );
-		}
+		} finally { await browser.close(); }
 	}, 60_000 );
 
-	it( 'counts started effects, not clock progress of effects already in flight, as scroll responses', async ({ newPage }) => {
-
-		{
-			const page = await newPage( { viewport: { width: 800, height: 400 } } );
+	it( 'counts started effects, not clock progress of effects already in flight, as scroll responses', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 800, height: 400 } } );
 			const html = `<style>body{margin:0;height:3000px}@keyframes clock{to{opacity:.5}}@keyframes reveal{from{opacity:0}to{opacity:1}}
 				#entrance{position:absolute;top:500px;height:100px;animation:reveal 2s both paused}</style><div id="clock">Clock</div><div id="entrance">Entrance</div>`;
 			const observation = await observePage( page, `data:text/html,${ encodeURIComponent( html ) }`, 800, 0, null, undefined, async () => {
@@ -126,10 +125,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			} );
 			expect( observation.animations ).toEqual( [ 'clock', 'reveal' ] );
 			expect( observation.responsiveAnimations ).toEqual( [ 'reveal' ] );
-		}
+		} finally { await browser.close(); }
 	}, 60_000 );
 
-	it( 'freezes a source observation coherent with the document after its startup splash is dismantled', async ({ newContext }) => {
+	it( 'freezes a source observation coherent with the document after its startup splash is dismantled', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'settled-startup-' ) );
 		// A builder welcome screen: a fixed, textless, viewport-spanning cover with
@@ -143,10 +142,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const source = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( html ); } );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-
+		const browser = await chromium.launch();
 		try {
 			// Capture's own context: the collector observes from a fresh sibling page.
-			const page = await ( await newContext() ).newPage();
+			const page = await ( await browser.newContext() ).newPage();
 			const collector = createReferenceCollector( directory, url, [ url ] );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
 			const receipt = join( directory, 'capture-receipt.json' );
@@ -158,7 +157,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( readFileSync( join( directory, entry.document.path ), 'utf8' ) ).not.toContain( 'id="splash"' );
 			expect( observation.animations ).toEqual( [] );
 		} finally {
-			 source.closeAllConnections(); source.close(); rmSync( directory, { recursive: true, force: true } );
+			await browser.close(); source.closeAllConnections(); source.close(); rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 90_000 );
 } );

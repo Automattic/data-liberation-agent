@@ -1,15 +1,23 @@
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
-
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 
 describe( 'viewport-sized inline geometry', () => {
+	let browser: Browser;
 
-	it( 'serializes a section the page pinned to the viewport height relative to the viewport', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 402, height: 681 } } );
-		const copy = await newPage( { viewport: { width: 390, height: 900 } } );
+	beforeAll( async () => {
+		browser = await chromium.launch();
+	} );
+
+	afterAll( async () => {
+		await browser.close();
+	} );
+
+	it( 'serializes a section the page pinned to the viewport height relative to the viewport', async () => {
+		const page = await browser.newPage( { viewport: { width: 402, height: 681 } } );
+		const copy = await browser.newPage( { viewport: { width: 390, height: 900 } } );
 		try {
 			// A pin-style runtime: the section takes the live viewport height inside
 			// a spacer, and refreshes its height on resize; its max-height is set to
@@ -56,9 +64,9 @@ describe( 'viewport-sized inline geometry', () => {
 		}
 	}, 60_000 );
 
-	it( 'exports nested runtime height fractions and affine heights without pinning their follower', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 390, height: 700 } } );
-		const copy = await newPage();
+	it( 'exports nested runtime height fractions and affine heights without pinning their follower', async () => {
+		const page = await browser.newPage( { viewport: { width: 390, height: 700 } } );
+		const copy = await browser.newPage();
 		try {
 			await page.evaluate( observeRuntimeStyleWrites );
 			await page.setContent( `<style>body{margin:0}h2{margin:0}</style>
@@ -103,8 +111,8 @@ describe( 'viewport-sized inline geometry', () => {
 		}
 	}, 60_000 );
 
-	it( 'keeps a pixel height that only coincides with the capture viewport height', async ({ newPage }) => {
-		const page = await newPage( { viewport: { width: 402, height: 681 } } );
+	it( 'keeps a pixel height that only coincides with the capture viewport height', async () => {
+		const page = await browser.newPage( { viewport: { width: 402, height: 681 } } );
 		try {
 			await page.setContent( `<section id="fixed">Fixed</section>
 				<script>document.querySelector('#fixed').style.height='681px';addEventListener('resize',()=>{});</script>` );

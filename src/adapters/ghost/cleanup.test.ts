@@ -1,6 +1,5 @@
-
-import { describe, expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { chromium, type Browser } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { ghostAdapter } from './index.js';
 
@@ -29,9 +28,12 @@ const FOOTERS: Array<[string, string, string]> = [
 ];
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Ghost footer credit cleanup', () => {
+	let browser: Browser;
+	beforeAll(async () => { browser = await chromium.launch(); });
+	afterAll(async () => { await browser.close(); });
 
-	it.for(FOOTERS)('removes the Ghost credit and keeps owner text: %s', async ([ _label, footer, kept ], { newPage }) => {
-		const page = await newPage();
+	it.each(FOOTERS)('removes the Ghost credit and keeps owner text: %s', async (_label, footer, kept) => {
+		const page = await browser.newPage();
 		try {
 			// The body sentence is real (demo.ghost.io/design/): "Ghost" is an ordinary
 			// word, so credit phrasing in prose must survive.

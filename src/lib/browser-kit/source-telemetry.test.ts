@@ -1,8 +1,7 @@
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { expect, it } from 'vitest';
 import type { PlatformAdapter } from '../../types.js';
 import { SourceRequestGovernors } from '../source-request-governor.js';
 import { createSourceContext } from './source-identity.js';
@@ -10,7 +9,7 @@ import { attributeSourcePhase } from './source-traffic.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
 
-it.skipIf(skipBrowser)('blocks adapter-declared telemetry without source admission or rendering loss', async ({ browser }) => {
+it.skipIf(skipBrowser)('blocks adapter-declared telemetry without source admission or rendering loss', async () => {
   const received: string[] = [];
   const server = createServer((req, res) => {
     received.push(req.url!);
@@ -35,7 +34,7 @@ it.skipIf(skipBrowser)('blocks adapter-declared telemetry without source admissi
     sourceTelemetry: ['/metrics/', /^\/events\/collect$/g],
   };
   const governors = new SourceRequestGovernors();
-
+  const browser = await chromium.launch();
   try {
     const context = await createSourceContext(browser, { userAgent: 'Mozilla/5.0 Chrome/130.0.0.0' }, {
       governors, sourceUrl: origin, sourceTelemetry: adapter.sourceTelemetry,
@@ -52,7 +51,7 @@ it.skipIf(skipBrowser)('blocks adapter-declared telemetry without source admissi
     await expect.poll(() => governors.forOrigin(origin).stats().requests).toBe(3);
     expect(governors.attribution().origins[0].totals['desktop/baseline blocked:telemetry']).toBe(4);
   } finally {
-
+    await browser.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 }, 30_000);

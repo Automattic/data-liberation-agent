@@ -3,8 +3,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { load } from 'cheerio';
-import { expect } from 'vitest';
-import { it } from '../../../test/browser.js';
+import { expect, it } from 'vitest';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { captureScreenshots } from './screenshotter.js';
@@ -13,9 +12,9 @@ import { componentReplayStates } from './component-states.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
 
-it.skipIf(skipBrowser)('keeps chooser recommendations and pose in the baseline, then observes the chooser after serialization', async ({ newPage }) => {
-
-  const page = await newPage();
+it.skipIf(skipBrowser)('keeps chooser recommendations and pose in the baseline, then observes the chooser after serialization', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
@@ -55,12 +54,12 @@ it.skipIf(skipBrowser)('keeps chooser recommendations and pose in the baseline, 
       expect(serialized).toContain('id="recommendation"');
       expect(errors).toEqual([]);
     }
-  } finally {  }
+  } finally { await browser.close(); }
 }, 30000);
 
-it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead of returning a serializable baseline', async ({ newPage }) => {
-
-  const page = await newPage();
+it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead of returning a serializable baseline', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
@@ -85,7 +84,7 @@ it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead
     const inert = await hydrateDisclosureContent(page);
     expect(inert).toEqual([expect.objectContaining({ status: 'no-dialog', error: 'No unique locally mounted panel; baseline restoration verified.' })]);
     expect(await page.content()).toBe(baseline);
-  } finally {  }
+  } finally { await browser.close(); }
 }, 10000);
 
 it.skipIf(skipBrowser)('keeps the already saved initial document when a later disclosure probe is destructive', async () => {
