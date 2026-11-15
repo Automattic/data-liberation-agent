@@ -7,6 +7,25 @@ import { RUNTIME_SHEET_PRUNED_ATTRIBUTE } from './fluid-runtime-sheets.js';
 import { WIDTH_CLASSES_ATTRIBUTE, projectViewportClassRules } from './viewport-class-states.js';
 
 const NODE = 'data-blocks-engine-capture-initial-node';
+export const INITIAL_SCROLL_CLASS_ATTRIBUTE = 'data-blocks-engine-capture-initial-scroll-class';
+
+/** Record before any scrolling; subsequent initial-document marking must not overwrite it. */
+export async function markInitialScrollClasses(page: Page): Promise<void> {
+	await page.evaluate(attribute => {
+		// The baseline and fluid passes both mark the document. Scan once per
+		// body, even when no positioned elements exist; later scroll poses are
+		// not initial evidence. Keeping this sentinel off-DOM also leaves
+		// disclosure restoration's markup comparisons untouched.
+		const state = window as unknown as { __dlaInitialScrollBody?: HTMLElement };
+		if (state.__dlaInitialScrollBody === document.body) return;
+		state.__dlaInitialScrollBody = document.body;
+		for (const node of document.querySelectorAll('body,body *')) {
+			if (node.hasAttribute(attribute)) continue;
+			const position = getComputedStyle(node).position;
+			if (position === 'fixed' || position === 'sticky') node.setAttribute(attribute, JSON.stringify(node.getAttribute('class')));
+		}
+	}, INITIAL_SCROLL_CLASS_ATTRIBUTE);
+}
 // Every property capture rewrites in the live DOM must be listed: an unlisted
 // one keeps its initial value, e.g. a max-height lifted to 100vh alongside its
 // height would serialize back as the capture viewport's pixels and clamp it.
@@ -26,6 +45,7 @@ function learnedStyle(initial: string, learned: string): string {
 
 /** Stable correspondence for applying learned geometry without replacing initial content/state. */
 export async function markInitialDocument(page: Page): Promise<void> {
+	await markInitialScrollClasses(page);
 	await page.evaluate(attribute => {
 		let index = 0;
 		for (const node of document.querySelectorAll('body,body *')) node.setAttribute(attribute, String(index++));
@@ -68,7 +88,7 @@ export function projectInitialDocument(initial: string, learned: string, linkedS
 			// A width sweep may have caused a framework render. Geometry is only
 			// transferable to the same element, not its replacement or new content.
 			for (const [name, value] of Object.entries(source.attr() ?? {})) {
-				if (name.startsWith('data-blocks-engine-capture-') && name !== NODE) target.attr(name, value);
+				if (name.startsWith('data-blocks-engine-capture-') && name !== NODE && name !== INITIAL_SCROLL_CLASS_ATTRIBUTE) target.attr(name, value);
 			}
 			applyWidthClasses(target);
 			if (source.attr('style') !== undefined || source.attr('data-blocks-engine-capture-fluid-segment')) {
@@ -80,6 +100,7 @@ export function projectInitialDocument(initial: string, learned: string, linkedS
 			}
 		}
 		target.removeAttr(NODE);
+		target.removeAttr(INITIAL_SCROLL_CLASS_ATTRIBUTE);
 	});
 	for (const node of later('style[data-blocks-engine-capture-fluid-rules],style[data-blocks-engine-capture-fluid-sheet-rules]').toArray()) $('head').append(later(node).toString());
 	// A runtime sheet whose fitted declarations the authored cascade reproduces
