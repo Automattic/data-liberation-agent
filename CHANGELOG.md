@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.21] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+- extract route collection, media candidates and route links
+
+### Fixed
+- resolve Base44 image renditions and scope export failures
+- ship a capture refused after its entrypoint as a partial site
+- avoid freezing attribute-mapped image aspect ratios
+
 ## [0.35.20] - 2026-11-15
 
 ### Changed
