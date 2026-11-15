@@ -1,23 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { capturePageHtml } from './screenshotter.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { load } from 'cheerio';
 
 describe('capturePageHtml stylesheet serialization', () => {
-  let browser: Browser;
-
-  beforeAll(async () => {
-    browser = await chromium.launch();
-  });
-
-  afterAll(async () => {
-    await browser.close();
-  });
 
   // One browser pass, two serializations; expected wall time is a few seconds.
-  it('keeps unchanged font sheets intact and settles runtime measurements after CSSOM rewrites', async () => {
-    const page = await browser.newPage();
+  it('keeps unchanged font sheets intact and settles runtime measurements after CSSOM rewrites', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.route('https://fonts.example.test/fixture.woff2', route => route.fulfill({
         path: 'test/fixtures/resource-assets/roboto-latin-400-normal.woff2',
@@ -68,8 +60,8 @@ describe('capturePageHtml stylesheet serialization', () => {
     } finally { await page.close(); }
   });
 
-  it('omits runtime styles with no matching selectors and records byte and rule evidence', async () => {
-    const page = await browser.newPage();
+  it('omits runtime styles with no matching selectors and records byte and rule evidence', async ({ newPage }) => {
+    const page = await newPage();
     try {
       const server = '<!doctype html><html><head></head><body><main><p>Body</p></main></body></html>';
       await page.setContent(server);
@@ -93,9 +85,9 @@ describe('capturePageHtml stylesheet serialization', () => {
     } finally { await page.close(); }
   });
 
-  it('preserves adjacent runtime text-node shaping through HTML and frozen serialization without mutating the source', async () => {
-    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  it('preserves adjacent runtime text-node shaping through HTML and frozen serialization without mutating the source', async ({ newPage }) => {
+    const source = await newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await newPage({ viewport: { width: 1440, height: 900 } });
     try {
       await source.setContent(`<!doctype html><style>
         p { font: 12px/16px ui-sans-serif, system-ui, sans-serif; margin: 0; }
@@ -128,8 +120,8 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
-  it('records a quirks-mode source on the captured root', async () => {
-    const page = await browser.newPage();
+  it('records a quirks-mode source on the captured root', async ({ newPage }) => {
+    const page = await newPage();
     try {
       for (const [doctype, expected] of [['<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">', 'BackCompat'], ['', 'BackCompat'], ['<!DOCTYPE html>', null]] as const) {
         await page.setContent(`${doctype}<html><body><p><font size="-2">Line</font></p></body></html>`);
@@ -141,9 +133,9 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
-  it('keeps script-built paragraph letters parser-stable and restores the live elements', async () => {
-    const source = await browser.newPage();
-    const copy = await browser.newPage({ javaScriptEnabled: false });
+  it('keeps script-built paragraph letters parser-stable and restores the live elements', async ({ newPage }) => {
+    const source = await newPage();
+    const copy = await newPage({ javaScriptEnabled: false });
     try {
       await source.setContent(`<!doctype html><style>
         .lead { font: 700 64px/1 serif; }
@@ -187,9 +179,9 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
-  it('preserves rendered image geometry when localization changes intrinsic dimensions', async () => {
-    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  it('preserves rendered image geometry when localization changes intrinsic dimensions', async ({ newPage }) => {
+    const source = await newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await newPage({ viewport: { width: 1440, height: 900 } });
     const svg = (width: number, height: number) =>
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="red"/></svg>`;
     await source.route('https://source.example.test/**', (route) =>
@@ -219,9 +211,9 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
-  it('keeps an authored fixed image ratio responsive when its owner grows beyond capture width', async () => {
-    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  it('keeps an authored fixed image ratio responsive when its owner grows beyond capture width', async ({ newPage }) => {
+    const source = await newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await newPage({ viewport: { width: 1440, height: 900 } });
     const image = '<svg xmlns="http://www.w3.org/2000/svg" width="542" height="104"><rect width="542" height="104" fill="red"/></svg>';
     for (const page of [source, copy]) {
       await page.route('https://cdn.example.test/logo.svg', (route) =>
@@ -251,9 +243,9 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
-  it('keeps a var() animation shorthand whose re-spaced selector collapsed to empty longhands', async () => {
-    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  it('keeps a var() animation shorthand whose re-spaced selector collapsed to empty longhands', async ({ newPage }) => {
+    const source = await newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await newPage({ viewport: { width: 1440, height: 900 } });
     try {
       // Chromium serializes this selector as `.a :is(#x, [id^="x__"])` and the shorthand,
       // followed by its own animation-composition / animation-timeline longhands, as empty longhands.
@@ -273,8 +265,8 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
-  it('preserves linked stylesheet source text and responsive layout', async () => {
-    const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
+  it('preserves linked stylesheet source text and responsive layout', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 390, height: 900 } });
     await page.setContent(`
       <style data-href="https://cdn.example.test/forms.css">.grid{display:grid;grid-template-columns:repeat(12,1fr)}@media(max-width:500px){.field{grid-column:1 / span 12;width:100%}}</style>
       <form class="grid"><input class="field"></form>
@@ -287,8 +279,8 @@ describe('capturePageHtml stylesheet serialization', () => {
     await page.close();
   });
 
-  it('omits empty custom elements that neither paint nor shape layout, and keeps the live page intact', async () => {
-    const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
+  it('omits empty custom elements that neither paint nor shape layout, and keeps the live page intact', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 390, height: 900 } });
     await page.setContent(`
       <style>cookie-manager{display:block;width:100px;height:100px}.slot{display:flex;width:100px;height:100px}</style>
       <main><p>a</p><cookie-manager ready="1"></cookie-manager><p>b</p>
@@ -320,8 +312,8 @@ describe('capturePageHtml stylesheet serialization', () => {
     await page.close();
   });
 
-  it('writes the loaded image onto a placeholder or density-list src after hydration', async () => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+  it('writes the loaded image onto a placeholder or density-list src after hydration', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 400 } });
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
       'base64'
@@ -366,8 +358,8 @@ describe('capturePageHtml stylesheet serialization', () => {
     await page.close();
   });
 
-  it('reveals restored lazy backgrounds using loaded peer state without changing the live DOM', async () => {
-    const page = await browser.newPage();
+  it('reveals restored lazy backgrounds using loaded peer state without changing the live DOM', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><base href="https://site.example.test/">
       <style>.lazy{opacity:0;transition:opacity 1000ms}.lazy.load{opacity:1}.banner{position:absolute;width:300px}</style></head><body>
       <div id="loaded" class="banner lazy entered loaded load" data-ll-status="loaded" data-bg="/media/banner.jpg" style="background-image:url(/media/banner.jpg)"></div>
@@ -389,8 +381,8 @@ describe('capturePageHtml stylesheet serialization', () => {
     await page.close();
   });
 
-  it('paints the data-bg image of a lazy background the source never loaded', async () => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+  it('paints the data-bg image of a lazy background the source never loaded', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 400 } });
     const gif = 'data:image/gif;id=1;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
     await page.setContent(`<!doctype html><html><head><base href="https://site.example.test/"></head><body>
       <div id="placeholder" class="lazy" data-bg="/media/card.jpg" style="background-image:url(&quot;${gif}&quot;);background-size:cover"></div>

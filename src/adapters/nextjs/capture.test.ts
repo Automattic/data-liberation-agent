@@ -2,14 +2,15 @@ import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { load } from 'cheerio';
-import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { detectFromHttp, resolvePlatform } from '../../index.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Next.js capture/export (real Chromium)', () => {
-	it('removes only framework announcers before observations and both responsive documents', async () => {
+	it('removes only framework announcers before observations and both responsive documents', async ({ newPage }) => {
 		const server = createServer((req, res) => {
 			if (req.url !== '/') { res.writeHead(404); res.end(); return; }
 			res.writeHead(200, { 'Content-Type': 'text/html', 'X-Powered-By': 'Next.js' });
@@ -80,10 +81,10 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Next.js capture/export (real Ch
 			expect(portable).toContain('Mobile document');
 			expect(portable).toContain('Owner status');
 			expect(portable).toContain('Owner custom element');
-			const browser = await chromium.launch();
-			try {
+
+			{
 				for (const [width, device] of [[1440, 'Desktop'], [390, 'Mobile']] as const) {
-					const page = await browser.newPage({ viewport: { width, height: 900 } });
+					const page = await newPage({ viewport: { width, height: 900 } });
 					await page.setContent(portable);
 					expect(await page.locator('next-route-announcer, #__next-route-announcer__').count()).toBe(0);
 					expect(await page.locator('h1:visible').innerText()).toBe('Owner heading');
@@ -96,8 +97,6 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Next.js capture/export (real Ch
 					expect(await details.evaluate((node) => node.hasAttribute('open'))).toBe(!open);
 					await page.close();
 				}
-			} finally {
-				await browser.close();
 			}
 		} finally {
 			await new Promise<void>((r) => server.close(() => r()));

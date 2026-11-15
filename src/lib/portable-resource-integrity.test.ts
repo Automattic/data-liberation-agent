@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { it, expect } from 'vitest';
-import { chromium } from 'playwright';
+import { expect } from 'vitest';
+import { it } from '../../test/browser.js';
+
 import { exportWebsiteCapture } from './capture-export.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
 
-it( 'loads rebased CSS offline without stale integrity and retains unchanged integrity', async () => {
+it( 'loads rebased CSS offline without stale integrity and retains unchanged integrity', async ({ newPage }) => {
 	mkdirSync( '.tmp-test', { recursive: true } );
 	const directory = mkdtempSync( '.tmp-test/resource-integrity-' );
 	const source = 'https://source.example/';
@@ -22,13 +23,13 @@ it( 'loads rebased CSS offline without stale integrity and retains unchanged int
 		return [ source + name, { path: `resources/${ name }`, contentType } ];
 	} ) );
 	writeFileSync( join( directory, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources } ) );
-	let browser;
+
 	let preview;
 	try {
 		exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
 		preview = await startStaticServer( join( directory, 'website' ) );
-		browser = await chromium.launch();
-		const page = await browser.newPage();
+
+		const page = await newPage();
 		await page.route( '**/*', route => route.request().url().startsWith( preview!.url ) ? route.continue() : route.abort() );
 		await page.goto( preview.url );
 		expect( await page.locator( '#unchanged' ).getAttribute( 'integrity' ) ).toBe( integrity( unchanged ) );
@@ -37,7 +38,7 @@ it( 'loads rebased CSS offline without stale integrity and retains unchanged int
 		expect( await page.locator( 'body' ).evaluate( element => getComputedStyle( element ).paddingTop ) ).toBe( '7px' );
 		expect( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) ).not.toContain( integrity( css ) );
 	} finally {
-		await browser?.close();
+
 		await preview?.close();
 		rmSync( directory, { recursive: true, force: true } );
 	}

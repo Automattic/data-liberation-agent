@@ -6,7 +6,8 @@ import { chromium, type Page } from 'playwright';
 import { PNG } from 'pngjs';
 import { imageSize } from 'image-size';
 import * as cheerio from 'cheerio';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
+import { it, type BrowserFixtures } from '../../test/browser.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
@@ -221,10 +222,10 @@ describe( 'selected same-path srcset export', () => {
 } );
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'srcset browser/export contract', () => {
-	it( 'keeps selected lazy auto-sized width renditions byte-identical through capture and export', async () => {
+	it( 'keeps selected lazy auto-sized width renditions byte-identical through capture and export', async ({ newContext }) => {
 		// One browser pass; normally under five seconds.
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-selected-srcset-' ) );
-		const browser = await chromium.launch();
+
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
 			const source = 'https://selected.test/';
@@ -235,7 +236,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				images.set( `/photo-${ width }.png`, PNG.sync.write( png ) );
 			}
 			const html = `<meta name="viewport" content="width=device-width"><style>body{margin:0}img{width:50vw;height:auto}</style><img sizes="auto, 50vw" loading="lazy" src="/photo-1600.png" srcset="${ [ ...images.keys() ].map( path => `${ path } ${ path.match( /\d+/ )![ 0 ] }w` ).join( ', ' ) }">`;
-			const context = await browser.newContext( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 } );
+			const context = await newContext( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 } );
 			const store = new CapturedResourceStore( directory, source, async url => ( {
 				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: images.get( new URL( url ).pathname )!,
 			} ) );
@@ -280,7 +281,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				for ( const width of [ 390, 1440 ] ) {
 					const selected: Buffer[] = [];
 					for ( const address of [ url, server.url ] ) {
-						const fresh = await browser.newContext( { viewport: { width, height: 900 }, deviceScaleFactor: 1 } );
+						const fresh = await newContext( { viewport: { width, height: 900 }, deviceScaleFactor: 1 } );
 						try {
 							const sample = await fresh.newPage();
 							await sample.goto( address );
@@ -293,13 +294,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					expect( selected[ 0 ] ).toEqual( images.get( `/photo-${ width === 390 ? 200 : 800 }.png` ) );
 				}
 			} finally { origin.closeAllConnections(); await new Promise<void>( resolve => origin.close( () => resolve() ) ); }
-		} finally { await server?.close(); await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+		} finally { await server?.close();  rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'exports selected small-slot renditions from a below-the-fold lazy gallery', async () => {
+	it( 'exports selected small-slot renditions from a below-the-fold lazy gallery', async ({ newContext }) => {
 		// One Chromium pass, normally under five seconds. Attribute dimensions
 		// and auto sizes match the gallery that exposed #1221.
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-gallery-srcset-' ) );
-		const browser = await chromium.launch();
+
 		const { createServer } = await import( 'node:http' );
 		const widths = [ 96, 147, 226, 347, 532, 816, 1252, 1920 ];
 		const images = new Map( widths.map( width => {
@@ -317,7 +318,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		await new Promise<void>( resolve => origin.listen( 0, '127.0.0.1', resolve ) );
 		const url = `http://127.0.0.1:${ ( origin.address() as { port: number } ).port }/`;
 		try {
-			const context = await browser.newContext( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 } );
+			const context = await newContext( { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 } );
 			const page = await context.newPage();
 			const store = new CapturedResourceStore( directory, url );
 			store.observe( page );
@@ -347,13 +348,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally {
 			origin.closeAllConnections();
 			await new Promise<void>( resolve => origin.close( () => resolve() ) );
-			await browser.close();
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 30_000 );
-	it( 'localizes padded single URL attributes without replacing registered source pixels with placeholders', async () => {
+	it( 'localizes padded single URL attributes without replacing registered source pixels with placeholders', async ({ newContext }) => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-padded-url-contract-' ) );
-		const browser = await chromium.launch();
+
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
 			for ( const folder of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( directory, folder ) );
@@ -402,7 +403,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				} );
 			};
 			for ( const width of [ 390, 768, 1440 ] ) {
-				const context = await browser.newContext( { viewport: { width, height: 900 }, deviceScaleFactor: 1 } );
+				const context = await newContext( { viewport: { width, height: 900 }, deviceScaleFactor: 1 } );
 				try {
 					await context.route( `${ source }**`, route => {
 						const path = new URL( route.request().url() ).pathname;
@@ -430,9 +431,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				} finally { await context.close(); }
 			}
 			expect( requests.some( url => url.startsWith( source ) ) ).toBe( false );
-		} finally { await server?.close(); await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+		} finally { await server?.close();  rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'retains descriptorless comma paths, density/width selection and inline pixels through export', async () => {
+	it( 'retains descriptorless comma paths, density/width selection and inline pixels through export', async ({ newContext }) => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-srcset-contract-' ) );
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
@@ -488,19 +489,19 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			// including a candidate decoded by an earlier page or context in the same
 			// browser. Each page load gets a fresh browser so selection reflects only
 			// its own profile, matching an independent visitor.
-			const isolatedPage = async <T>( width: number, density: number, use: ( page: Page ) => Promise<T> ): Promise<T> => {
-				const browser = await chromium.launch();
+			const isolatedPage = async <T>( { newContext }: Pick<BrowserFixtures, 'newContext'>, width: number, density: number, use: ( page: Page ) => Promise<T> ): Promise<T> => {
+
 				try {
-					const context = await browser.newContext( { viewport: { width, height: 900 }, deviceScaleFactor: density } );
+					const context = await newContext( { viewport: { width, height: 900 }, deviceScaleFactor: density } );
 					await context.route( `${ source }**`, route => {
 						const path = new URL( route.request().url() ).pathname;
 						return path === '/' ? route.fulfill( { contentType: 'text/html', body: html } ) : images.has( path ) ? route.fulfill( { contentType: 'image/png', body: images.get( path )! } ) : route.fulfill( { status: 404 } );
 					} );
 					return await use( await context.newPage() );
-				} finally { await browser.close(); }
+				} finally {  }
 			};
 			for ( const [ width, density ] of [ [ 390, 3 ], [ 768, 1 ], [ 1440, 2 ] ] ) {
-				const before = await isolatedPage( width, density, async page => {
+				const before = await isolatedPage({ newContext },  width, density, async page => {
 					await page.goto( source, { waitUntil: 'domcontentloaded' } );
 					return sample( page );
 				} );
@@ -515,7 +516,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					server = await startStaticServer( join( directory, 'website' ) );
 				}
 				const portableUrl = server.url;
-				await isolatedPage( width, density, async page => {
+				await isolatedPage({ newContext },  width, density, async page => {
 					page.on( 'response', response => { if ( ! response.ok() ) failures.push( response.url() ); } );
 					await page.goto( portableUrl, { waitUntil: 'domcontentloaded' } );
 					const after = await sample( page );

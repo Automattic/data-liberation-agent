@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { expandCollapsedContent, hydrateDisclosureContent } from './dynamic-content.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
@@ -29,9 +30,9 @@ const fixture = `<!doctype html><html><head><style>
 </script></body></html>`;
 
 for (const viewport of [{width:390,height:844},{width:402,height:681},{width:1440,height:900}]) {
-  it.skipIf(skipBrowser)(`preserves navigation through baseline, probe and offline export at ${viewport.width}x${viewport.height}`, async () => {
-    const browser = await chromium.launch({headless:true});
-    const page = await browser.newPage({viewport});
+  it.skipIf(skipBrowser)(`preserves navigation through baseline, probe and offline export at ${viewport.width}x${viewport.height}`, async ({ newPage }) => {
+
+    const page = await newPage({viewport});
     try {
       await page.setContent(fixture);
       const top = await page.locator('#content').evaluate(el=>el.getBoundingClientRect().top);
@@ -80,13 +81,13 @@ for (const viewport of [{width:390,height:844},{width:402,height:681},{width:144
         expect(await uniqueIds()).toBe(true);
         expect(await page.locator('#content').evaluate(el=>el.getBoundingClientRect().top)).toBe(top);
       } else expect(await page.locator('#links').isVisible()).toBe(true);
-    } finally { await browser.close(); }
+    } finally {  }
   },30000);
 }
 
-it.skipIf(skipBrowser)('probes an opening transition and restores an initially expanded navigation', async () => {
-  const browser = await chromium.launch({headless:true});
-  const page = await browser.newPage({viewport:{width:390,height:844}});
+it.skipIf(skipBrowser)('probes an opening transition and restores an initially expanded navigation', async ({ newPage }) => {
+
+  const page = await newPage({viewport:{width:390,height:844}});
   try {
     await page.setContent(fixture);
     await page.locator('#menu').click();
@@ -98,13 +99,13 @@ it.skipIf(skipBrowser)('probes an opening transition and restores an initially e
     expect(state?.dialog?.html).not.toContain('id="content"');
     expect(await page.locator('#menu').getAttribute('aria-expanded')).toBe('true');
     expect(await page.locator('#content').evaluate(el=>el.getBoundingClientRect().top)).toBe(top);
-  } finally { await browser.close(); }
+  } finally {  }
 },30000);
 
 for (const breakpoint of [650,1100]) {
-  it.skipIf(skipBrowser)(`replays phone evidence on one responsive export using authored visibility at ${breakpoint}px`, async () => {
-    const browser = await chromium.launch({headless:true});
-    const page = await browser.newPage({viewport:{width:390,height:844}});
+  it.skipIf(skipBrowser)(`replays phone evidence on one responsive export using authored visibility at ${breakpoint}px`, async ({ newPage }) => {
+
+    const page = await newPage({viewport:{width:390,height:844}});
     mkdirSync('.tmp-test',{recursive:true});
     const outputDir=mkdtempSync(join('.tmp-test','nav-responsive-'));
     let server: StaticServer | undefined;
@@ -176,16 +177,16 @@ for (const breakpoint of [650,1100]) {
         return new Set(ids).size===ids.length;
       })).toBe(true);
     } finally {
-      await browser.close();
+
       await server?.close();
       rmSync(outputDir,{recursive:true,force:true});
     }
   },30000);
 }
 
-it.skipIf(skipBrowser)('does not mistake unowned flow displacement for a movement-only popup', async () => {
-  const browser = await chromium.launch({headless:true});
-  const page = await browser.newPage({viewport:{width:402,height:681}});
+it.skipIf(skipBrowser)('does not mistake unowned flow displacement for a movement-only popup', async ({ newPage }) => {
+
+  const page = await newPage({viewport:{width:402,height:681}});
   try {
     await page.setContent(`<!doctype html><body style="margin:0"><header><button id="menu">Menu</button></header>
       <div id="spacer" style="height:900px"></div><div><main id="content" style="height:600px">Body</main><footer><a href="#content">Footer link</a></footer></div>
@@ -193,5 +194,5 @@ it.skipIf(skipBrowser)('does not mistake unowned flow displacement for a movemen
     const report = await captureTriggeredDialogs(page,'https://navigation.test/');
     expect(report.states.find(state=>state.trigger.id==='menu')?.status).toBe('no-dialog');
     expect(report.states.some(state=>state.dialog?.html.includes('id="content"'))).toBe(false);
-  } finally { await browser.close(); }
+  } finally {  }
 },30000);

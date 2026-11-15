@@ -1,15 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { lovableAdapter } from './index.js';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { inspectSourceInteractivity } from '../../lib/source-interactivity.js';
 
 describe( 'Lovable provider-script ownership', () => {
-	let browser: Browser;
-	beforeAll( async () => { browser = await chromium.launch(); } );
-	afterAll( async () => { await browser.close(); } );
-	it( 'removes badge behavior without hiding retained application motion', async () => {
-		const page = await browser.newPage();
+
+	it( 'removes badge behavior without hiding retained application motion', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			await page.setContent( `<main><button id="feature">Feature</button><p id="result">Ready</p></main><aside id="lovable-badge"><button id="lovable-badge-close">Close badge</button></aside>
 <script>(()=>{const close=document.querySelector('#lovable-badge-close');if(close)close.addEventListener('click',()=>{const badge=document.querySelector('#lovable-badge');if(badge){badge.classList.add('closing');setTimeout(()=>badge.style.display='none',10);}});})();</script>

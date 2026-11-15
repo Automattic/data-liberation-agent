@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { mergeConsentLayouts } from '../consent-banner-layout.js';
@@ -48,11 +49,11 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
 
 // A consent platform (Usercentrics) renders its banner in the shadow tree of
 // an empty host placed after the page content: nothing is parked off-screen.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without waiting for an entrance', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without waiting for an entrance', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<main style="min-height:1200px"><h1>Page title</h1></main><aside id="usercentrics-cmp-ui"></aside><script>document.querySelector('aside').attachShadow({ mode: 'open' }).innerHTML = '<div style="position:fixed;left:0;right:0;bottom:0;height:240px;padding:24px;background:#fff"><p>This site uses cookies to analyse traffic.</p><button onclick="this.getRootNode().host.remove()">Accept All</button></div>'</script>`);
     // Count entrance-loop checks in the browser instead of timing protocol
     // round trips, which also include unrelated worker/Chromium scheduling.
@@ -67,19 +68,17 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without 
     expect(dismissed.map(item => [item.kind, item.selector])).toEqual([['consent', 'aside#usercentrics-cmp-ui']]);
     // A zero-area host must not enter the requestAnimationFrame settle loop.
     expect(await page.evaluate(() => (window as typeof window & { entranceChecks: number }).entranceChecks)).toBe(1);
-  } finally {
-    await browser.close();
   }
 });
 
 // Regression for builder card banners (GoDaddy): a heading title above block-flow
 // prose, a stretched control, and a card that slides in by transform to rest at
 // one edge on desktop but spans the viewport on mobile.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its resting edge, width and stretched control', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its resting edge, width and stretched control', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<style>.banner{position:fixed;right:0;bottom:-500px;width:400px;margin:24px;box-sizing:border-box;padding:24px;background:#898989;border-radius:7px;box-shadow:0 2px 6px rgba(0,0,0,.3);color:#000;transition:transform .3s}.banner.in{transform:translateY(-500px)}.banner h4{margin:0;padding-bottom:8px;font-size:22px;line-height:27.5px}.banner p{margin:0 0 16px;font-size:16px}.banner button{display:block;width:100%;min-height:40px;margin:24px 0 4px;font-weight:700;letter-spacing:1px}@media (max-width:767px){.banner{left:0;width:auto;margin:0;border-radius:0}}</style><main style="min-height:1200px"><h1>Page title</h1></main><div class="banner" id="cookie-banner"><h4>This website uses cookies.</h4><p>We use cookies to analyze website traffic.</p><button onclick="this.parentNode.remove()">ACCEPT</button></div><script>requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector('.banner').classList.add('in')))</script>`);
     const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 390, height: 844 }] });
     const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
@@ -91,8 +90,6 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its r
       expect.objectContaining({ direction: 'column', button_align: 'stretch', span: 'full', edge_offset: '0px' }),
       expect.objectContaining({ direction: 'column', button_align: 'stretch', span: 'inset', inline: 'end', width: 400, inline_offset: 24, edge_offset: '24px', border_radius: '7px' }),
     ]);
-  } finally {
-    await browser.close();
   }
 });
 
@@ -100,11 +97,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its r
 // body copy, a screen-reader legend, category toggles, a logo link and several
 // opt-in buttons. The message is the heading and body, set in the body's type;
 // "Accept all" is the accept control and the logo is not a policy link.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as its message and accept-all control', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as its message and accept-all control', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<style>#CookieDialog{position:fixed;top:200px;left:220px;width:1000px;z-index:1000;background:#fff;font:15px Arial,sans-serif;border-radius:16px}
       h2{font:23px Georgia,serif;margin:0}.body{font-size:14px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}</style>
       <main><h1>Page title</h1><p>${'Ordinary page copy. '.repeat(60)}</p></main>
@@ -121,18 +118,16 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as
     expect(banner?.accept_label).toBe('Accept all');
     expect(banner?.reject_label).toBe('Decline');
     expect(banner?.policy_link).toBeUndefined();
-  } finally {
-    await browser.close();
   }
 });
 
 // One Chromium session (~1 second): a transparent full-viewport wrapper must not
 // obscure the painted panel, and inline links must remain part of the prose.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transparent wrapper and preserves inline link labels', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transparent wrapper and preserves inline link labels', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     const fixture = readFileSync(new URL('./fixtures/consent-panel.html', import.meta.url), 'utf8');
     await page.setContent(fixture.replace('</style>', '#cs-banner .cs-panel{background:rgb(3,26,78)}#cs-banner .cs-text{color:#f8f8f8}</style>'));
     const dismissed = await dismissOverlays(page);
@@ -146,17 +141,15 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
     expect(banner?.colors?.text).toBe('rgb(248, 248, 248)');
     expect(banner?.accept_label).toBe('Accept');
     expect(banner?.reject_label).toBe('Reject');
-  } finally {
-    await browser.close();
   }
 });
 
 // One Chromium session (~1 second), through the real readConsentBanner path.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently of their language and anchor fragments', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently of their language and anchor fragments', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     // A real document URL matters: on about:blank, fragment anchors do not
     // resolve to HTTP(S), so the original misclassification would go unnoticed.
     await page.route('https://example.com/page', route => route.fulfill({ body: '<main>Page title</main>', contentType: 'text/html' }));
@@ -186,17 +179,15 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently 
       expect(banner?.accept_label).toBe(fixture.accept);
       expect(banner?.policy_link).toEqual(fixture.policy);
     }
-  } finally {
-    await browser.close();
   }
 });
 
 // One Chromium session (~1 second) covers border omission, gaps and margin-only bisection.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 768, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 768, height: 900 } });
     const fixture = readFileSync(new URL('./fixtures/consent-banner.html', import.meta.url), 'utf8');
     for (const [border, gap, expectedGap] of [
       ['none', 'normal', '0px'],
@@ -223,8 +214,6 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects m
         { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px', edge_offset: '0px', span: 'full' },
       ]);
     }
-  } finally {
-    await browser.close();
   }
 });
 

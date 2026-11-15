@@ -9,6 +9,7 @@ vi.mock('../browser-kit/browser-kit.js', async importOriginal => {
 	const original = await importOriginal<typeof import('../browser-kit/browser-kit.js')>();
 	return { ...original, connectBrowser: async () => {
 		const { chromium } = await import('playwright');
+		// Own launch: disable LocalNetworkAccessChecks for third-party-origin widget attribution.
 		return chromium.launch({ headless: true, args: ['--disable-features=LocalNetworkAccessChecks'] });
 	} };
 });

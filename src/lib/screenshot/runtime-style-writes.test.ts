@@ -1,12 +1,13 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it, type BrowserFixtures } from '../../../test/browser.js';
+import { type Browser, type Page } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 
 const ORIGIN = 'https://runtime-style.test';
 
-async function served( browser: Browser, body: string ): Promise< Page > {
-	const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+async function served( { newPage }: Pick<BrowserFixtures, 'newPage'>, browser: Browser, body: string ): Promise< Page > {
+	const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 	await page.addInitScript( observeRuntimeStyleWrites );
 	await page.route( `${ ORIGIN }/**`, route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">${ body }
 		</body></html>` } ) );
@@ -25,12 +26,9 @@ function countResizes( page: Page ): () => number {
 }
 
 describe( 'runtime style writes gate the responsive sweep', () => {
-	let browser: Browser;
-	beforeAll( async () => { browser = await chromium.launch( { headless: true } ); } );
-	afterAll( async () => { await browser.close(); } );
 
-	it( 'skips the sweep when every inline pixel declaration was served in the markup', async () => {
-		const page = await served( browser, '<div id="box" style="padding-top:18px;width:720px;height:40px">Neutral text</div>' );
+	it( 'skips the sweep when every inline pixel declaration was served in the markup', async ({ browser, newPage }) => {
+		const page = await served({ newPage },  browser, '<div id="box" style="padding-top:18px;width:720px;height:40px">Neutral text</div>' );
 		try {
 			const resizes = countResizes( page );
 			const result = await learnAndApplyFluidGeometry( page, sweep );
@@ -41,10 +39,10 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'learns a served declaration that a resize handler rewrites', async () => {
+	it( 'learns a served declaration that a resize handler rewrites', async ({ browser, newPage }) => {
 		// Hydration writes the served value again, which is no mutation; only the
 		// registered resize handler shows the declaration is width-dependent.
-		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+		const page = await served({ newPage },  browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
 			<script>const box = document.querySelector('#box'); function resize() { box.style.width = innerWidth / 2 + 'px'; } addEventListener('resize', resize); resize();</script>` );
 		try {
 			const resizes = countResizes( page );
@@ -54,8 +52,8 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'learns geometry on elements script inserted after parsing', async () => {
-		const page = await served( browser, `<main></main>
+	it( 'learns geometry on elements script inserted after parsing', async ({ browser, newPage }) => {
+		const page = await served({ newPage },  browser, `<main></main>
 			<script>addEventListener('DOMContentLoaded', () => { const box = document.createElement('div'); box.id = 'box'; box.style.cssText = 'width:' + innerWidth / 2 + 'px;height:40px'; document.querySelector('main').append(box);
 				addEventListener('resize', () => { box.style.width = innerWidth / 2 + 'px'; }); });</script>` );
 		try {
@@ -66,20 +64,20 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 			expect( resizes() ).toBeGreaterThan( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
-	it.each( [
+	it.for( [
 		[ 'ResizeObserver', 'new ResizeObserver(() => { box.style.width = box.parentElement.clientWidth / 2 + "px"; }).observe(document.body);' ],
 		[ 'media query listener', 'matchMedia("(max-width: 800px)").addEventListener("change", event => { box.style.width = event.matches ? "200px" : "720px"; });' ],
 		[ 'onresize handler', 'window.onresize = () => { box.style.width = innerWidth / 2 + "px"; };' ],
-	] )( 'keeps the sweep when a %s can react to viewport changes', async ( _, script ) => {
-		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div><script>const box = document.querySelector('#box'); ${ script }</script>` );
+	] )( 'keeps the sweep when a %s can react to viewport changes', { timeout: 30_000 }, async ( [ _, script ], { browser, newPage } ) => {
+		const page = await served({ newPage },  browser, `<div id="box" style="width:720px;height:40px">Neutral text</div><script>const box = document.querySelector('#box'); ${ script }</script>` );
 		try {
 			const resizes = countResizes( page );
 			await learnAndApplyFluidGeometry( page, sweep );
 			expect( resizes() ).toBeGreaterThan( 0 );
 		} finally { await page.close(); }
-	}, 30_000 );
-	it( 'probes the width extremes and skips the rest when viewport listeners never write geometry', async () => {
-		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+	} );
+	it( 'probes the width extremes and skips the rest when viewport listeners never write geometry', async ({ browser, newPage }) => {
+		const page = await served({ newPage },  browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
 			<script>window.seen = 0; addEventListener('resize', () => { window.seen = innerWidth; });</script>` );
 		try {
 			const resizes = countResizes( page );
@@ -91,8 +89,8 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 			expect( await page.locator( '[data-blocks-engine-capture-fluid-id]' ).count() ).toBe( 0 );
 		} finally { await page.close(); }
 	}, 30_000 );
-	it( 'keeps the sweep when a debounced resize handler writes geometry late', async () => {
-		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+	it( 'keeps the sweep when a debounced resize handler writes geometry late', async ({ browser, newPage }) => {
+		const page = await served({ newPage },  browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
 			<script>const box = document.querySelector('#box'); let timer; addEventListener('resize', () => { clearTimeout(timer); timer = setTimeout(() => { box.style.width = innerWidth / 2 + 'px'; }, 400); });</script>` );
 		try {
 			const result = await learnAndApplyFluidGeometry( page, sweep );
@@ -100,8 +98,8 @@ describe( 'runtime style writes gate the responsive sweep', () => {
 		} finally { await page.close(); }
 	}, 60_000 );
 
-	it( 'probes without the sampling sweep readiness', async () => {
-		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+	it( 'probes without the sampling sweep readiness', async ({ browser, newPage }) => {
+		const page = await served({ newPage },  browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
 			<script>addEventListener('resize', () => {});</script>` );
 		try {
 			const started = performance.now();

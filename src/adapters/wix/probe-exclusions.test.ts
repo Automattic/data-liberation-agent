@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Browser, Page } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it, type BrowserFixtures } from '../../../test/browser.js';
+import type { Page } from 'playwright';
 import { wixAdapter } from './index.js';
 import { captureTriggeredDialogs } from '../../lib/screenshot/interaction-capture.js';
 import { captureSelectableSetStates } from '../../lib/screenshot/selectable-set-capture.js';
@@ -43,12 +44,9 @@ describe( 'Wix probe exclusions', () => {
 	} );
 
 	describe.skipIf( skipBrowserTests )( 'in a browser', () => {
-		let browser: Browser;
-		beforeAll( async () => { browser = await chromium.launch( { headless: true } ); } );
-		afterAll( async () => { await browser?.close(); } );
 
-		const fresh = async (): Promise< Page > => {
-			const page = await browser.newPage( { viewport: { width: 1280, height: 900 } } );
+		const fresh = async ({ newPage }: Pick<BrowserFixtures, 'newPage'>): Promise< Page > => {
+			const page = await newPage( { viewport: { width: 1280, height: 900 } } );
 			await page.setContent( FIXTURE );
 			return page;
 		};
@@ -58,15 +56,15 @@ describe( 'Wix probe exclusions', () => {
 			selectors
 		);
 
-		it( 'keeps every probe out of the widget and records the skipped regions', async () => {
+		it( 'keeps every probe out of the widget and records the skipped regions', async ({ newPage }) => {
 			// Without the declaration, probing drives the widget's controls.
-			const unskipped = await fresh();
+			const unskipped = await fresh({ newPage });
 			const dialogsBefore = await captureTriggeredDialogs( unskipped, 'https://example.com/post/a' );
 			const selectableBefore = await captureSelectableSetStates( unskipped, { settleMs: 50 } );
 			expect( await insideWidget( unskipped, [ ...dialogsBefore.states, ...selectableBefore ].map( ( state ) => state.trigger.selector ) ) ).not.toEqual( [] );
 			await unskipped.close();
 
-			const page = await fresh();
+			const page = await fresh({ newPage });
 			const before = await page.content();
 			const { skip, diagnostics } = await resolveProbeExclusions( page, exclusions );
 			expect( diagnostics.map( ( diagnostic ) => diagnostic.code ) ).toEqual( [ PROBE_REGION_EXCLUDED, PROBE_REGION_EXCLUDED ] );
@@ -87,8 +85,8 @@ describe( 'Wix probe exclusions', () => {
 		// Two full probe passes include bounded waits for controls that do not open.
 		}, 60_000 );
 
-		it( 'records nothing on a route without the widget', async () => {
-			const page = await browser.newPage();
+		it( 'records nothing on a route without the widget', async ({ newPage }) => {
+			const page = await newPage();
 			await page.setContent( '<main><button>Plain</button></main>' );
 			expect( await resolveProbeExclusions( page, exclusions ) ).toEqual( { diagnostics: [] } );
 			await page.close();

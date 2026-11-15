@@ -1,15 +1,16 @@
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { checkFidelity } from '../fidelity/check.js';
 import { createReferenceCollector } from '../fidelity/reference.js';
 
 // One pipeline pass, expected wall time approximately 20 seconds.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports static open shadow rendering without its defining runtime', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports static open shadow rendering without its defining runtime', async ({ newPage }) => {
   const fixture = `<!doctype html><html><head><title>Shadow icon</title><style>
     body{margin:0} a{display:block;width:32px;height:32px;background:#123456}
   </style></head><body><main><h1>Static shadow content</h1>
@@ -22,7 +23,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports static open shadow rendering 
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test/shadow-'));
-  const browser = await chromium.launch();
+
   try {
     const collector = createReferenceCollector(outputDir, url, [url]);
     const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'reflow-only', observeSource: collector.observe });
@@ -35,8 +36,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports static open shadow rendering 
     const html = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
     expect(html).not.toContain('customElements.define');
     expect(html).not.toContain(':host');
-    const source = await browser.newPage();
-    const copy = await browser.newPage({ javaScriptEnabled: false });
+    const source = await newPage();
+    const copy = await newPage({ javaScriptEnabled: false });
     await source.goto(url);
     await copy.setContent(html);
     const iconStyles = await copy.locator('icon-component').evaluate(node =>
@@ -74,7 +75,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports static open shadow rendering 
     expect(await copy.locator('closed-static b').count()).toBe(0);
     expect(await source.locator('outer-static').evaluate(node => !!node.shadowRoot && node.children.length === 2)).toBe(true);
   } finally {
-    await browser.close();
+
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(outputDir, { recursive: true, force: true });
   }

@@ -1,8 +1,9 @@
 import { createServer, type Server } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it, test } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 
@@ -10,9 +11,9 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rec
 const listen = ( server: Server ) => new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 const close = ( server: Server ) => new Promise<void>( resolve => server.close( () => resolve() ) );
 
-it.skipIf( !!process.env.SKIP_BROWSER_TESTS ).each( [ false, true ] )(
+it.skipIf( !!process.env.SKIP_BROWSER_TESTS ).for( [ false, true ] )(
 	'exports redirected documents using their browser base (authored base: %s)',
-	async authoredBase => {
+	{ timeout: 120_000 }, async (authoredBase, { newPage }) => {
 		const root = join( process.cwd(), '.tmp-test' );
 		mkdirSync( root, { recursive: true } );
 		const outputDir = mkdtempSync( join( root, 'rendered-base-' ) );
@@ -46,7 +47,7 @@ it.skipIf( !!process.env.SKIP_BROWSER_TESTS ).each( [ false, true ] )(
 		await listen( server );
 		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
 		const requestedUrl = `${ origin }/albums`;
-		let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+		let browser: import('playwright').Browser | undefined;
 		let portable: Server | undefined;
 		try {
 			await captureScreenshots( { urls: [ requestedUrl ], primaryUrl: `${ origin }/`, outputDir, settleMs: 0, learnFluid: false } );
@@ -79,8 +80,8 @@ it.skipIf( !!process.env.SKIP_BROWSER_TESTS ).each( [ false, true ] )(
 				} catch { res.writeHead( 404 ); res.end(); }
 			} );
 			await listen( portable );
-			browser = await chromium.launch( { headless: true } );
-			const page = await browser.newPage();
+
+			const page = await newPage();
 			for ( const width of [ 390, 768, 1440 ] ) {
 				await page.setViewportSize( { width, height: 900 } );
 				await page.goto( `http://127.0.0.1:${ ( portable.address() as { port: number } ).port }/` );
@@ -102,10 +103,10 @@ it.skipIf( !!process.env.SKIP_BROWSER_TESTS ).each( [ false, true ] )(
 					: '#heading' );
 			}
 		} finally {
-			await browser?.close();
+
 			if ( portable ) await close( portable );
 			if ( server.listening ) await close( server );
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
-	}, 120_000
+	}
 );

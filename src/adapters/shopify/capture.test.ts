@@ -1,5 +1,6 @@
-import { chromium, type Browser } from 'playwright';
-import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { capture } from './capture.js';
 import { shopifyAdapter } from './index.js';
@@ -16,12 +17,9 @@ describe('shopify capture', () => {
 });
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Shopify provider-service cleanup', () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await chromium.launch(); });
-  afterAll(async () => { await browser.close(); });
 
-  it('removes the shipping estimator and its dedicated disclosure, keeping owner content', async () => {
-    const page = await browser.newPage();
+  it('removes the shipping estimator and its dedicated disclosure, keeping owner content', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.setContent(`<!doctype html><html><body>
         <main><h1>Owner product</h1><p>Owner product description</p></main>
@@ -55,8 +53,8 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Shopify provider-service cleanu
     }
   });
 
-  it('keeps mixed disclosures while removing their shipping estimators', async () => {
-    const page = await browser.newPage();
+  it('keeps mixed disclosures while removing their shipping estimators', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.setContent(`<!doctype html><html><body>
         <details id="mixed"><summary>Shipping information</summary>
@@ -80,8 +78,8 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Shopify provider-service cleanu
     }
   });
 
-  it('removes Inbox chat and Shop Pay cart-sync with shadow roots, keeping owner content', async () => {
-    const page = await browser.newPage();
+  it('removes Inbox chat and Shop Pay cart-sync with shadow roots, keeping owner content', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.setContent(`<!doctype html><html><body>
         <main><h1>Owner storefront</h1><p>Owner product description</p></main>

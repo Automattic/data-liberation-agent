@@ -1,8 +1,9 @@
 import { createServer, type Server } from 'node:http';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { type Page } from 'playwright';
+import { describe, expect, afterEach } from 'vitest';
+import { it, test } from '../../test/browser.js';
 import { cleanupPolicy, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
 import { registerHost, unregisterHost } from '../platform/host.js';
 import { capture as wixCapture } from '../adapters/wix/capture.js';
@@ -62,12 +63,12 @@ afterEach(async () => {
   if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
-it('removes source credits and late ads, reclaims space, and preserves owner content at both viewports', async () => {
+it('removes source credits and late ads, reclaims space, and preserves owner content at both viewports', async ({ newPage }) => {
   const url = await source();
-  const browser = await chromium.launch();
+
   try {
     for (const width of [1440, 390]) {
-      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      const page = await newPage({ viewport: { width, height: 900 } });
       await page.goto(url);
       await applySourceCleanup(page, policy);
       await page.waitForTimeout(150);
@@ -81,7 +82,7 @@ it('removes source credits and late ads, reclaims space, and preserves owner con
       expect(report.records.some((record) => record.reclaimedBodyPadding)).toBe(true);
       await page.close();
     }
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
 it('captures clean artifacts and compares intentional removals while rejecting deleted owner content', async () => {
@@ -121,11 +122,11 @@ it('captures clean artifacts and compares intentional removals while rejecting d
   expect(JSON.parse(readFileSync(join(directory, 'compare', 'cleanup-evidence.json'), 'utf8')).completed).toBe(false);
 }, 90_000);
 
-it('keeps hidden data and blob placeholders while removing a hidden network tracking image', async () => {
+it('keeps hidden data and blob placeholders while removing a hidden network tracking image', async ({ newPage }) => {
   const image = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
-  const browser = await chromium.launch();
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.route('https://images.example/pixel.gif', route => route.fulfill({
       contentType: 'image/gif', body: Buffer.from(image.split(',')[1], 'base64'),
     }));
@@ -146,7 +147,7 @@ it('keeps hidden data and blob placeholders while removing a hidden network trac
       .toEqual(['#network-beacon']);
     expect(report.failures).toEqual([]);
     expect(report.residual).toBe(0);
-  } finally { await browser.close(); }
+  } finally {  }
 });
 
 it('keeps script-injected inert image placeholders in processed and exported HTML without cleanup removals', async () => {
@@ -244,13 +245,13 @@ async function reinitSource() {
   return `http://localtest.me:${(server.address() as { port: number }).port}/`;
 }
 
-it('reinstalls cleanup when the source re-initializes its document after install', async () => {
+it('reinstalls cleanup when the source re-initializes its document after install', async ({ newPage }) => {
   const url = await reinitSource();
-  const browser = await chromium.launch();
+
   try {
     // The disappearance itself: install, let the source reload, and the
     // evidence is gone — a policy-less read still reports it missing.
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(url);
     await applySourceCleanup(page, policy);
     await page.waitForTimeout(700);
@@ -265,7 +266,7 @@ it('reinstalls cleanup when the source re-initializes its document after install
 
     // Same for the pre-serialization sweep: without a policy it leaves the
     // fresh document dirty; with the policy it re-cleans what got serialized.
-    const swept = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const swept = await newPage({ viewport: { width: 1440, height: 900 } });
     await swept.goto(url);
     await applySourceCleanup(swept, policy);
     await swept.waitForTimeout(700);
@@ -275,19 +276,19 @@ it('reinstalls cleanup when the source re-initializes its document after install
     expect(await swept.locator('#WIX_ADS').count()).toBe(0);
     expect((await readSourceCleanup(swept)).recovered).toBe(true);
     await swept.close();
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
-it('installs cleanup on the document that a same-document reload commits during install', async () => {
+it('installs cleanup on the document that a same-document reload commits during install', async ({ newPage }) => {
   let served = 0;
   server = createServer((_req, res) => {
     res.setHeader('content-type', 'text/html');
     res.end(`<!doctype html><title>Owner site</title><div id="WIX_ADS">Free website by Wix</div><main><h1>Owner document ${++served}</h1></main>`);
   });
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
-  const browser = await chromium.launch();
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.goto(`http://localtest.me:${(server.address() as { port: number }).port}/`);
     // The source reloads itself and keeps its main thread busy, so the reloaded
     // document commits while the install evaluate is still queued behind it.
@@ -298,7 +299,7 @@ it('installs cleanup on the document that a same-document reload commits during 
     expect(await page.locator('h1').innerText()).toBe('Owner document 2');
     expect(await page.locator('#WIX_ADS').count()).toBe(0);
     expect((await readSourceCleanup(page)).recovered).toBeUndefined();
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
 it('keeps a route whose source re-initializes mid-capture, recording the recovery in the evidence', async () => {
@@ -443,30 +444,30 @@ it('keeps a credit the page re-renders after the observer budget is spent out of
   expect(comparison.cleanup!.source.length).toBeGreaterThan(0);
 }, 90_000);
 
-it('still reports genuine residual distinctly from budget exhaustion', async () => {
+it('still reports genuine residual distinctly from budget exhaustion', async ({ newPage }) => {
   // Crosses the 1000-removal safety cap on a single rule, so the sweep's own guard
   // (not the observer budget) leaves matches unremoved and reports them as residual.
   const adHtml = `<!doctype html><html><head><meta charset="utf-8"></head><body>
 <main><h1>Owner business</h1></main>
 ${'<div class="ad-slot">ad</div>'.repeat(1001)}
 </body></html>`;
-  const browser = await chromium.launch();
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setContent(adHtml);
     await applySourceCleanup(page, policy);
     const report = await readSourceCleanup(page);
     expect(report.failures).toEqual([]);
     expect(report.residual).toBeGreaterThan(0);
-  } finally { await browser.close(); }
+  } finally {  }
 });
 
-it('removes the Lovable attribution badge with its orphaned stylesheet rules, keeping owner CSS', async () => {
+it('removes the Lovable attribution badge with its orphaned stylesheet rules, keeping owner CSS', async ({ newPage }) => {
   const { lovableAdapter } = await import('../adapters/lovable/index.js');
   const lovablePolicy = cleanupPolicy(lovableAdapter.liberation?.cleanupRules);
-  const browser = await chromium.launch();
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><style>
       body{margin:0;font:16px Arial}
       #lovable-badge{position:fixed;height:24px}
@@ -497,7 +498,7 @@ it('removes the Lovable attribution badge with its orphaned stylesheet rules, ke
     expect(report.strippedCssRules).toBeGreaterThanOrEqual(3);
     expect(report.failures).toEqual([]);
     expect(report.records.some((record) => record.rule === 'lovable-badge')).toBe(true);
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
 // A builder badge from a platform this repo has never heard of, beside the
@@ -531,14 +532,14 @@ main{padding:20px}
 <div id="owner-partner">Built with Base44 <img src="https://media.base44.com/mark.png" alt="Base44"></div>
 </body></html>`;
 
-it('removes an unknown builder badge from its authoring offer and vendor provenance, keeping authored floating chrome', async () => {
+it('removes an unknown builder badge from its authoring offer and vendor provenance, keeping authored floating chrome', async ({ newPage }) => {
   server = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(builderChromeHtml); });
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
-  const browser = await chromium.launch();
+
   try {
     for (const width of [1440, 390]) {
-      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      const page = await newPage({ viewport: { width, height: 900 } });
       await page.goto(url);
       const report = await applySourceCleanup(page, cleanupPolicy());
       expect(await page.locator('#platform-badge').count()).toBe(0);
@@ -554,7 +555,7 @@ it('removes an unknown builder badge from its authoring offer and vendor provena
       expect(record!.text).toContain('Edit with');
       await page.close();
     }
-  } finally { await browser.close(); }
+  } finally {  }
 }, 30_000);
 
 // The wordmark CDN is unrelated to the brand; the promotional link proves provenance.
@@ -591,14 +592,14 @@ main{padding:20px}
 <div id="owner-partner">Built with Framecraft <img src="https://cdn.example/partner-mark.png" alt="Framecraft"></div>
 </body></html>`;
 
-it('removes the split-wordmark acquisition bar at every viewport, keeping owner sections and authored chrome', async () => {
+it('removes the split-wordmark acquisition bar at every viewport, keeping owner sections and authored chrome', async ({ newPage }) => {
   server = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(builderBarHtml); });
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
-  const browser = await chromium.launch();
+
   try {
     for (const width of [390, 768, 1440]) {
-      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      const page = await newPage({ viewport: { width, height: 900 } });
       await page.goto(url);
       const report = await applySourceCleanup(page, cleanupPolicy());
       expect(await page.locator('#platform-bar').count()).toBe(0);
@@ -619,13 +620,13 @@ it('removes the split-wordmark acquisition bar at every viewport, keeping owner 
       expect(record!.text).toContain('I BUILT MY APP FOR FREE USING');
       await page.close();
     }
-  } finally { await browser.close(); }
+  } finally {  }
 }, 30_000);
 
-it('removes a fixed trial badge and provider credit text without removing owner content', async () => {
-  const browser = await chromium.launch();
+it('removes a fixed trial badge and provider credit text without removing owner content', async ({ newPage }) => {
+
   try {
-    const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
+    const page = await newPage({ viewport: { width: 390, height: 900 } });
     await page.setContent(`<!doctype html><html><head><style>
       #trial{position:fixed;right:0;bottom:0;width:220px;height:52px}
     </style></head><body>
@@ -642,13 +643,13 @@ it('removes a fixed trial badge and provider credit text without removing owner 
     expect(report.failures).toEqual([]);
     expect(report.records.some((record) => record.rule === 'builder-chrome')).toBe(true);
     expect(report.records.some((record) => record.rule === 'squarespace-credit-text')).toBe(true);
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
-it('keeps credit-like phrasing in article prose while removing footer credit text', async () => {
-  const browser = await chromium.launch();
+it('keeps credit-like phrasing in article prose while removing footer credit text', async ({ newPage }) => {
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     // The article sentence is real (demo.ghost.io/design/). Before the fix the
     // body-scoped rule turned it into "new sites are 's friendly publication theme".
     await page.setContent(`<!doctype html><html><body>
@@ -667,13 +668,13 @@ it('keeps credit-like phrasing in article prose while removing footer credit tex
     expect(await page.locator('#site-footer').innerText()).toBe('© 2026 Owner.');
     expect(await page.locator('#post-footer').innerText()).toBe('');
     expect(report.failures).toEqual([]);
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
-it('reclaims a custom-element host a removed service widget left empty, keeping mixed hosts', async () => {
-  const browser = await chromium.launch();
+it('reclaims a custom-element host a removed service widget left empty, keeping mixed hosts', async ({ newPage }) => {
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setContent(`<main><section id="info">
 <x-row id="vacated" class="accordion"><details><summary>Estimate delivery</summary><x-estimator></x-estimator></details></x-row>
 <x-row id="mixed" class="accordion"><details><summary>Estimate delivery</summary><x-estimator></x-estimator></details><p>Care instructions</p></x-row>
@@ -684,20 +685,20 @@ it('reclaims a custom-element host a removed service widget left empty, keeping 
     expect(await page.locator('#mixed').count()).toBe(1);
     expect(await page.locator('#mixed p').innerText()).toBe('Care instructions');
     expect(await page.locator('#info').count()).toBe(1);
-  } finally { await browser.close(); }
+  } finally {  }
 });
 
-it('reports invalid rules rather than silently certifying cleanup', async () => {
-  const browser = await chromium.launch();
+it('reports invalid rules rather than silently certifying cleanup', async ({ newPage }) => {
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setContent('<p>Owner</p>');
     const report = await applySourceCleanup(page, cleanupPolicy([{ id: 'invalid', category: 'advertisement', selector: '[' }]));
     expect(report.failures).toContain('invalid');
-  } finally { await browser.close(); }
+  } finally {  }
 });
 
-it('reclaims the space a removed provider bar reserved in custom properties, at every viewport', async () => {
+it('reclaims the space a removed provider bar reserved in custom properties, at every viewport', async ({ newPage }) => {
   // The provider's own runtime measures its bar and publishes the height as
   // custom properties the site's layout reads. Removing the bar leaves that
   // reservation behind at whatever the live session measured, and one stale
@@ -716,10 +717,10 @@ main{padding-top:var(--owner-gap)}
 <div id="site-root"><header id="SITE_HEADER">Logo</header><div class="pinned-layer">Menu</div>
 <main><h1>Owner business</h1></main></div>
 </body></html>`;
-  const browser = await chromium.launch();
+
   try {
     for (const [width, height] of [[1440, '50px'], [390, '38px']] as const) {
-      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      const page = await newPage({ viewport: { width, height: 900 } });
       await page.setContent(wixHtml(height));
       await applySourceCleanup(page, policy);
       const report = await readSourceCleanup(page);
@@ -746,7 +747,7 @@ main{padding-top:var(--owner-gap)}
     }
     // A bar that publishes nothing reserves nothing through a property: declaring
     // one on its behalf would override the fallback its readers were relying on.
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head><style>
 #WIX_ADS{position:fixed;top:0;height:50px}main{padding-top:var(--wix-ads-height,12px)}
 </style></head><body><div id="WIX_ADS">Wix</div><main>Owner business</main></body></html>`);
@@ -756,13 +757,13 @@ main{padding-top:var(--owner-gap)}
     expect(report.records.some((record) => record.reclaimedVariables)).toBe(false);
     expect(await page.evaluate(() => getComputedStyle(document.querySelector('main')!).paddingTop)).toBe('12px');
     await page.close();
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
-it('removes Wix account identifiers mirrored into http-equiv meta tags, keeping owner metadata', async () => {
-  const browser = await chromium.launch();
+it('removes Wix account identifiers mirrored into http-equiv meta tags, keeping owner metadata', async ({ newPage }) => {
+
   try {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><head>
 <meta charset="utf-8">
 <meta http-equiv="X-Wix-Meta-Site-Id" content="83afeb95-b781-4368-b098-cdba2c774dd5">
@@ -781,7 +782,7 @@ it('removes Wix account identifiers mirrored into http-equiv meta tags, keeping 
     expect(await page.locator('meta[name="description"]').count()).toBe(1);
     expect(report.records.filter((record) => record.rule === 'wix-site-identifiers')).toHaveLength(3);
     expect(report.failures).toEqual([]);
-  } finally { await browser.close(); }
+  } finally {  }
 }, 20_000);
 
 // Captcha providers render a status widget into the page's own forms at
@@ -790,9 +791,6 @@ it('removes Wix account identifiers mirrored into http-equiv meta tags, keeping 
 // removes each provider's widget root only; the sibling fields and the submit
 // control must come through byte-identical.
 describe('captcha widget cleanup', () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await chromium.launch(); });
-  afterAll(async () => { await browser.close(); });
 
   const contactFormHtml = (widget: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Owner contact</title></head><body>
 <form id="contact" method="post" action="/send">
@@ -822,8 +820,8 @@ describe('captcha widget cleanup', () => {
   ];
 
   for (const [label, widget] of widgets) {
-    it(`removes the ${label} root and keeps fields and submit byte-identical`, async () => {
-      const page = await browser.newPage();
+    it(`removes the ${label} root and keeps fields and submit byte-identical`, async ({ newPage }) => {
+      const page = await newPage();
       try {
         await page.setContent(contactFormHtml(widget));
         const before = await keptFormHtml(page);
@@ -836,8 +834,8 @@ describe('captcha widget cleanup', () => {
     }, 20_000);
   }
 
-  it('removes Blogger hosted runtime elements with provider-service evidence, retaining content and other frames', async () => {
-    const page = await browser.newPage();
+  it('removes Blogger hosted runtime elements with provider-service evidence, retaining content and other frames', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.route('**/*', (route) => route.abort());
       await page.setContent(`<!doctype html><html><body>
@@ -860,8 +858,8 @@ describe('captcha widget cleanup', () => {
     } finally { await page.close(); }
   }, 20_000);
 
-  it('leaves a page without captcha byte-identical', async () => {
-    const page = await browser.newPage();
+  it('leaves a page without captcha byte-identical', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.setContent(contactFormHtml(''));
       const before = await page.evaluate(() => document.body.innerHTML);
