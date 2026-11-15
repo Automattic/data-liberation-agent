@@ -10,7 +10,7 @@ import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { cssIdentifier, parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { documentElementTags } from './screenshot/document-integrity.js';
-import { VIEWPORT_CLASS_PREFIX } from './screenshot/viewport-class-states.js';
+import { VIEWPORT_CLASS_PREFIX, VIEWPORT_CLASS_RULES_ATTRIBUTE } from './screenshot/viewport-class-states.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 import { CONSENT_OVERLAY_DIALOG_SELECTOR, CONSENT_VENDOR_RE, isConsentOverlayRoot } from './consent-overlay.js';
 import {
@@ -2418,13 +2418,17 @@ function resolveResponsivePair(
 
 /**
  * Stylesheet content visible to the responsive assembly. Style blocks the
- * capture generated itself (fluid learning rules) are not source styles: the
+ * capture generated itself (fluid and viewport-class rules) are not source styles: the
  * collapse compares what the source served to each viewport, and viewport
  * scoping must never narrow a rule that carries its own media conditions.
  */
+function isWidthConditionedCaptureStyle( attributes: string ): boolean {
+	return FLUID_RULES_STYLE_ATTRIBUTE.test( attributes ) || attributes.includes( VIEWPORT_CLASS_RULES_ATTRIBUTE );
+}
+
 function styleBlocks( html: string ): string[] {
 	return [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
-		.filter( ( match ) => ! FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ) )
+		.filter( ( match ) => ! isWidthConditionedCaptureStyle( match[ 1 ] ) )
 		.map( ( match ) => match[ 2 ].trim() );
 }
 
@@ -2534,11 +2538,11 @@ function responsiveMobileStyles(
 		.filter( Boolean );
 	// Learned rules already carry their width conditions and document-specific
 	// identities. Keep them intact alongside the scoped source styles.
-	const fluidRules = [ ...mobileHtml.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
-		.filter( match => FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) )
+	const learnedRules = [ ...mobileHtml.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
+		.filter( match => isWidthConditionedCaptureStyle( match[ 1 ] ?? '' ) )
 		.map( match => match[ 0 ] )
 		.join( '' );
-	return fluidRules + styleBlocks( mobileHtml )
+	return learnedRules + styleBlocks( mobileHtml )
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {
@@ -2595,7 +2599,7 @@ function scopedStyles(
 			// Capture-generated rules carry their own media conditions and are
 			// width-independent by construction; narrowing them to one side of
 			// the switch would strand the other regime's rule.
-			if ( FLUID_RULES_STYLE_ATTRIBUTE.test( attributes ) ) return match;
+			if ( isWidthConditionedCaptureStyle( attributes ) ) return match;
 			const runs = skip instanceof SharedStyles ? skip.desktop.get( css.trim() ) : undefined;
 			if ( runs ) {
 				return runs.map( run =>

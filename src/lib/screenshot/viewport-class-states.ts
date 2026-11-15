@@ -24,6 +24,9 @@ import { orElse } from '../failure-class.js';
  */
 export const VIEWPORT_CLASS_PREFIX = 'data-blocks-engine-capture-width-class-';
 
+/** Projected sheets already encode the sweep's width conditions. */
+export const VIEWPORT_CLASS_RULES_ATTRIBUTE = 'data-blocks-engine-capture-width-class-rules';
+
 const STATE_KEY = 'data-liberation.viewport-class-states';
 
 /**
@@ -166,12 +169,18 @@ export function projectViewportClassRules( html: string, linkedSheet: ( href: st
 		}
 		return root.toString();
 	};
-	$( 'style' ).each( ( _, element ) => { $( element ).text( project( $( element ).text() ) ); } );
+	$( 'style' ).each( ( _, element ) => {
+		const style = $( element );
+		const original = style.text();
+		const projected = project( original );
+		if ( projected !== original ) style.attr( VIEWPORT_CLASS_RULES_ATTRIBUTE, '' );
+		style.text( projected );
+	} );
 	$( 'link[rel~="stylesheet"]:not([rel~="alternate"]):not([disabled])' ).each( ( _, element ) => {
 		const link = $( element );
 		const sheet = linkedSheet( link.attr( 'href' ) ?? '' );
 		if ( ! sheet || ! aliases.some( alias => sheet.css.includes( alias.token ) ) ) return;
-		const style = $( '<style>' ).text( project( sheet.css ) );
+		const style = $( '<style>' ).attr( VIEWPORT_CLASS_RULES_ATTRIBUTE, '' ).text( project( sheet.css ) );
 		const media = link.attr( 'media' );
 		if ( media !== undefined ) style.attr( 'media', media );
 		const resolved = cheerio.load( resolveDocumentReferences( style.toString(), sheet.url, sheet.url ) );
