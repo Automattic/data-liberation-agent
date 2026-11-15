@@ -32,8 +32,8 @@ export async function markInitialDocument(page: Page): Promise<void> {
 	}, NODE);
 }
 
-/** The element wears each width-dependent token as its width-scoped alias. */
-function applyWidthClasses(target: cheerio.Cheerio<Element>): void {
+/** Apply sweep aliases only where this state's capture-width classes agree. */
+export function applyWidthClasses(target: cheerio.Cheerio<Element>): void {
 	const marked = target.attr(WIDTH_CLASSES_ATTRIBUTE);
 	if (marked === undefined) return;
 	target.removeAttr(WIDTH_CLASSES_ATTRIBUTE);
@@ -46,6 +46,9 @@ function applyWidthClasses(target: cheerio.Cheerio<Element>): void {
 	if (!Array.isArray(pairs)) return;
 	for (const pair of pairs) {
 		if (!Array.isArray(pair) || typeof pair[0] !== 'string' || typeof pair[1] !== 'string') continue;
+		// The sweep describes the initial component state, not every state
+		// that later reuses this DOM node. Missing evidence is not agreement.
+		if (typeof pair[2] !== 'boolean' || target.hasClass(pair[0]) !== pair[2]) continue;
 		target.removeClass(pair[0]).addClass(pair[1]);
 	}
 }
