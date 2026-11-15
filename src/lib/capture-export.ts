@@ -1,3 +1,4 @@
+import type { ExportContext } from './export-context.js';
 import { WebsiteInventory } from './website-inventory.js';
 import { createHash } from 'node:crypto';
 import { structuredContentIndex } from './content-index.js';
@@ -145,7 +146,7 @@ interface CaptureManifestEntry {
 	};
 }
 
-interface ScreenshotManifest {
+export interface ScreenshotManifest {
 	version: 1;
 	entries: Record< string, CaptureManifestEntry >;
 }
@@ -174,7 +175,7 @@ interface ExportBuild {
 	assets: DroppableAsset[];
 }
 
-interface ExportCaptureOptions {
+export interface ExportCaptureOptions {
 	/** Adapter structured content (#1701): entry slugs, term archives, content index and redirects. */
 	structuredContent?: { source: import('../platform/types.js').StructuredContentSource; entries: import('../platform/types.js').StructuredContentEntry[] };
 	routeScope?: SiteRouteScope;
@@ -203,7 +204,7 @@ interface ExportCaptureOptions {
 
 type MediaCandidate = PortableMediaCandidate;
 
-interface CaptureEntry {
+export interface CaptureEntry {
 	slug: string;
 	url: string;
 	htmlPath: string;
@@ -1413,50 +1414,32 @@ function buildExportCapture(
 	budget: ExportTotalBudget,
 	exclusions: ExportBudgetExclusions,
 ): ExportBuild {
-	// An explicit run budget (`--max-total-bytes`) is the single budget: media
-	// may spend all of it, and the export total budget still bounds the site.
-	const portableMediaTotalBytesLimit = Math.max(
-		0,
-		Math.floor( options.limits?.portableMediaTotalBytes ?? (
-			options.limits?.maxTotalBytes !== undefined ? budget.maxTotalBytes - budget.reservedBytes : MAX_PORTABLE_MEDIA_TOTAL_BYTES
-		) )
-	);
-	validateMaxFileBytes( options.limits?.maxFileBytes );
-	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-	const switchWidths: number[] = [];
-	const deviceSelections: Array<{ url: string; id: string; documents: string[]; missing: string[]; evidence: string }> = [];
-	const widthSelections: Array<{ url: string; kind: 'width'; switchWidth: number; evidence: string }> = [];
-	const fluidReports: CaptureFluidEvidence[] = [];
-	const websiteDir = join( stageDir, 'website' );
-	const stagedHtmlDir = join( stageDir, '.capture-export-html' );
-	mkdirSync( websiteDir, { recursive: true } );
-	mkdirSync( stagedHtmlDir, { recursive: true } );
+	// Later fields are initialized by their owning stage before any consumer runs.
+	const context = { options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, phoneSwitchWidth, stageDir, budget, exclusions } as ExportContext;
+	prepareExport( context );
+	planExport( context );
+	linkExport( context );
+	renderExport( context );
+	return finalizeExport( context );
+}
 
-	const capturedEntries: CaptureEntry[] = [];
-	const resourceManifest = capturedResources( outputDir );
-	if ( embedded ) Object.assign( resourceManifest.resources, embedded.resources );
-	const interactionPages: InteractionStatesReport[] = [];
-	const scrollStatesPages: ScrollStatesReport[] = [];
-	const excludedRoutes: string[] = [];
-	// A route that was discovered and attempted must never disappear from the
-	// receipt without a reason. Every screenshot-stage failure (goto timeouts,
-	// nested-document rejections, etc.) is grouped by URL here so that a route
-	// which never produced HTML gets its own named diagnostic below, extending
-	// the same {code,url,reason} shape sitemap discovery already reports
-	// rejected leaves through, rather than a parallel reporting mechanism.
-	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
-	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
-	const redirectAliases: Array< { url: string; target: string } > = [];
-	let canonicalHost: string | undefined;
-	const homepage = Object.entries( capture.entries ).find( ( [ url ] ) => isSourceCaptureUrl( url, options.sourceUrl ) )?.[ 1 ];
-	if ( homepage?.html ) {
-		const path = resolve( outputDir, homepage.html );
-		if ( pathWithin( outputDir, path ) && existsSync( path ) ) {
-			canonicalHost = entrypointCanonicalHost( options.sourceUrl, readFileSync( path, 'utf8' ), homepage.metadata?.openGraph?.[ 'og:url' ] );
-		}
-	}
-	const responsiveBodyClassProjections = new Map<string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] }>();
-	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
+/** Prepare-only route inputs: these never become shared state between stages. */
+type CapturedRoutesContext = Pick<ExportContext,
+	'capture' | 'options' | 'outputDir' | 'httpInput' | 'embedded' | 'embeddedSources' |
+	'siteSwitchWidth' | 'phoneSwitchWidth' | 'exclusions' | 'budget' | 'maxFileBytes' |
+	'switchWidths' | 'deviceSelections' | 'widthSelections' | 'fluidReports' |
+	'capturedEntries' | 'resourceManifest' | 'interactionPages' | 'scrollStatesPages' |
+	'excludedRoutes' | 'routeCaptureDiagnostics' | 'responsiveBodyClassProjections' |
+	'collapsedBodyClassProjections'
+> & {
+	routeFailureReasons: ReturnType< typeof groupFailureReasonsByUrl >;
+	redirectAliases: Array< { url: string; target: string } >;
+	canonicalHost: string | undefined;
+	stagedHtmlDir: string;
+};
+
+function collectCapturedRoutes( context: CapturedRoutesContext ): void {
+	const { capture, options, outputDir, httpInput, embedded, embeddedSources, siteSwitchWidth, phoneSwitchWidth, exclusions, budget, maxFileBytes, switchWidths, deviceSelections, widthSelections, fluidReports, capturedEntries, resourceManifest, interactionPages, scrollStatesPages, excludedRoutes, routeFailureReasons, routeCaptureDiagnostics, redirectAliases, canonicalHost, responsiveBodyClassProjections, collapsedBodyClassProjections, stagedHtmlDir } = context;
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
 		// One route's non-integrity failure drops that route, not the capture. Integrity
 		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
@@ -1756,6 +1739,55 @@ function buildExportCapture(
 			routeCaptureDiagnostics.push( { code: 'route_export_failed', url, reason: ( error as Error ).message, unit: 'route', severity: 'error' } );
 		}
 	}
+}
+
+function prepareExport( context: ExportContext ): void {
+	const { options, budget, stageDir, outputDir, embedded, capture, exclusions, httpInput, phoneSwitchWidth, siteSwitchWidth, embeddedSources } = context;
+	// An explicit run budget (`--max-total-bytes`) is the single budget: media
+	// may spend all of it, and the export total budget still bounds the site.
+	const portableMediaTotalBytesLimit = Math.max(
+		0,
+		Math.floor( options.limits?.portableMediaTotalBytes ?? (
+			options.limits?.maxTotalBytes !== undefined ? budget.maxTotalBytes - budget.reservedBytes : MAX_PORTABLE_MEDIA_TOTAL_BYTES
+		) )
+	);
+	validateMaxFileBytes( options.limits?.maxFileBytes );
+	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+	const switchWidths: number[] = [];
+	const deviceSelections: Array<{ url: string; id: string; documents: string[]; missing: string[]; evidence: string }> = [];
+	const widthSelections: Array<{ url: string; kind: 'width'; switchWidth: number; evidence: string }> = [];
+	const fluidReports: CaptureFluidEvidence[] = [];
+	const websiteDir = join( stageDir, 'website' );
+	const stagedHtmlDir = join( stageDir, '.capture-export-html' );
+	mkdirSync( websiteDir, { recursive: true } );
+	mkdirSync( stagedHtmlDir, { recursive: true } );
+
+	const capturedEntries: CaptureEntry[] = [];
+	const resourceManifest = capturedResources( outputDir );
+	if ( embedded ) Object.assign( resourceManifest.resources, embedded.resources );
+	const interactionPages: InteractionStatesReport[] = [];
+	const scrollStatesPages: ScrollStatesReport[] = [];
+	const excludedRoutes: string[] = [];
+	// A route that was discovered and attempted must never disappear from the
+	// receipt without a reason. Every screenshot-stage failure (goto timeouts,
+	// nested-document rejections, etc.) is grouped by URL here so that a route
+	// which never produced HTML gets its own named diagnostic below, extending
+	// the same {code,url,reason} shape sitemap discovery already reports
+	// rejected leaves through, rather than a parallel reporting mechanism.
+	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
+	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
+	const redirectAliases: Array< { url: string; target: string } > = [];
+	let canonicalHost: string | undefined;
+	const homepage = Object.entries( capture.entries ).find( ( [ url ] ) => isSourceCaptureUrl( url, options.sourceUrl ) )?.[ 1 ];
+	if ( homepage?.html ) {
+		const path = resolve( outputDir, homepage.html );
+		if ( pathWithin( outputDir, path ) && existsSync( path ) ) {
+			canonicalHost = entrypointCanonicalHost( options.sourceUrl, readFileSync( path, 'utf8' ), homepage.metadata?.openGraph?.[ 'og:url' ] );
+		}
+	}
+	const responsiveBodyClassProjections = new Map<string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] }>();
+	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
+	collectCapturedRoutes( { capture, options, outputDir, httpInput, embedded, embeddedSources, siteSwitchWidth, phoneSwitchWidth, exclusions, budget, maxFileBytes, switchWidths, deviceSelections, widthSelections, fluidReports, capturedEntries, resourceManifest, interactionPages, scrollStatesPages, excludedRoutes, routeFailureReasons, routeCaptureDiagnostics, redirectAliases, canonicalHost, responsiveBodyClassProjections, collapsedBodyClassProjections, stagedHtmlDir } );
 
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
@@ -1813,6 +1845,11 @@ function buildExportCapture(
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
+	Object.assign( context, { portableMediaTotalBytesLimit, maxFileBytes, switchWidths, deviceSelections, widthSelections, fluidReports, websiteDir, capturedEntries, resourceManifest, interactionPages, scrollStatesPages, excludedRoutes, routeCaptureDiagnostics, responsiveBodyClassProjections, collapsedBodyClassProjections, entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, semanticEvidence, mediaStubs, assetReferenceLocations } );
+}
+
+function planExport( context: ExportContext ): void {
+	const { outputDir, retainedEntries, resourceManifest, options, exclusions, maxFileBytes, routeCaptureDiagnostics, portableMediaTotalBytesLimit, entrypointEntry, websiteDir, embeddedSources, budget, mediaStubs } = context;
 	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies, dimensions: renderedMediaDimensions } =
 		retainedMediaReferenceInventory( retainedEntries );
 	const imageAssets = readAssets( outputDir );
@@ -2032,6 +2069,11 @@ function buildExportCapture(
 		mediaReplacements, resourceReplacements, rejectedReplacementKeys,
 	} );
 	assets.push( ...stylesheetStage.assets );
+	Object.assign( context, { mixedSrcsetReferences, mediaStage, mediaReplacements, portablePathsBySource, mediaAssetPaths, portableUrlByFamily, assets, unresolvedMedia, portableMedia, resourceStage, resourceReplacements, unresolvedDependencies, rejectedReplacementKeys, stylesheetStage } );
+}
+
+function linkExport( context: ExportContext ): void {
+	const { retainedEntries, routePathOf, options, canonicalRouteAliases, mediaReplacements, resourceReplacements, stylesheetStage, capture, routeCaptureDiagnostics, outputDir, unresolvedDependencies, portableUrlByFamily, rejectedReplacementKeys } = context;
 	const replaceMedia = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys );
 	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
@@ -2162,6 +2204,12 @@ function buildExportCapture(
 	for ( const [ family, { portable } ] of largestResourceByFamily ) {
 		if ( ! portableUrlByFamily.has( family ) ) portableUrlByFamily.set( family, portable );
 	}
+	Object.assign( context, { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations, responsiveIdentities, replaceMedia, replaceResources, portableMediaReplacements } );
+
+}
+
+function renderExport( context: ExportContext ): void {
+	const { mixedSrcsetReferences, portableMediaReplacements, websiteDir, replaceResources, replaceMedia, portableUrlByFamily, retainedEntries, mediaStage, portablePathsBySource, routePathOf, unresolvedAnchors, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, options, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths, responsiveIdentities, routeCaptureDiagnostics } = context;
 	// Interaction states are written to interaction-states.json and replayed into
 	// the portable pages, so clean their embedded HTML before replay wiring encodes
 	// it in JSON attributes/scripts. Keep runtime contract attributes intact.
@@ -2268,6 +2316,10 @@ function buildExportCapture(
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
+}
+
+function finalizeExport( context: ExportContext ): ExportBuild {
+	const { websiteDir, responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, routeCaptureDiagnostics, options, stageDir, resourceStage, retainedEntries, routePathOf, interactionPages, scrollStatesPages, routes, portableRedirects, outputDir, capture, absentRoutes, capturedEntries, httpInput, embedded, sourceRouteLinks, excludedRoutes, duplicateRoutes, fluidReports, switchWidths, deviceSelections, widthSelections, assetReferenceLocations, mediaStubs, resourceManifest, portablePathsBySource, assets, portableMedia, semanticEvidence, unresolvedDependencies, unresolvedMedia, unresolvedAnchors, rejectedReplacementKeys, stylesheetStage, mediaAssetPaths, entrypointUrl } = context;
 	const inventory = new WebsiteInventory( websiteDir );
 	selfContainWebsite( websiteDir, inventory );
 	// Author identity selectors can live in linked/imported stylesheets, not
@@ -2384,4 +2436,5 @@ function buildExportCapture(
 		routes: routes.map( route => ( { url: route.url, path: websiteRelative( route.path ) } ) ),
 		assets: [ ...droppable ].map( ( [ path, sourceUrls ] ) => ( { path: websiteRelative( path ), sourceUrls: sourceUrls.sort() } ) ).sort( ( a, b ) => ( a.path < b.path ? -1 : a.path > b.path ? 1 : 0 ) ),
 	};
+
 }
