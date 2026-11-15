@@ -37,6 +37,14 @@ it('fails verification when a runtime-painted background differs from the real c
 	expect(compare('/media/member.webp', '/media/member.webp')).toBe(true);
 });
 
+it('scores text alike when only a capture-time clock differs, not when the words do', () => {
+	const page = (footer: string) => `<html><head></head><body><h1>Paint colors</h1><footer>Last refreshed at: ${footer}</footer></body></html>`;
+	const text = (derived: string, real: string) => compareDerivedWithCapture({ baseUrl: 'https://fixture.example/blog/paint', derivedHtml: page(derived), realHtml: page(real) }).checks.text;
+	expect(text('Sat Nov 14 2026 19:08:08 GMT-0500 (Eastern Standard Time)', 'Sat Nov 14 2026 18:53:04 GMT-0500 (Eastern Standard Time)')).toBe(true);
+	expect(text('2026-11-14T19:08:08.120Z', '2026-11-14T18:53:04.004Z')).toBe(true);
+	expect(text('yesterday', 'today')).toBe(false);
+});
+
 it('derives the member\'s own images where a runtime or the server painted them into styles (#1813)', () => {
 	const cdn = 'https://images.example/content/v1';
 	const thumb = (image: string) => `<a href="/blog/next"><div class="pagination-img" style="background-image:url(${cdn}/${image}?format=150w);"></div>Next</a>`;

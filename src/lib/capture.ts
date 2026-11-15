@@ -1062,10 +1062,10 @@ export interface TemplateClusterDerivation {
  * One cluster's failure degrades only that cluster (#761); a terminated
  * stage leaves the pre-derivation state (members stay budget-omitted).
  *
- * Derived routes are phase-1 desktop documents: the transplant copies the
- * representative's desktop profile and fluid evidence, and a dual-site
- * member without a derived phone document ships desktop-only. The mobile
- * transplant (§3.1 step 4) is remaining phase-1 work.
+ * A member derives every document the representative ships: desktop, phone
+ * and any middle width range, each from its representative counterpart, so
+ * export assembles members exactly as it assembles the representative. A
+ * failed derivation of any of them escalates the member.
  */
 export async function deriveTemplateClusterMembers( input: {
 	contentEntries?: import('../platform/types.js').StructuredContentEntry[];
@@ -1228,6 +1228,14 @@ export async function deriveTemplateClusterMembers( input: {
 				// the two, so each member is derived from both.
 				const repMobilePath = repEntry.mobileHtml ? resolve( input.outputDir, repEntry.mobileHtml ) : undefined;
 				const repProcessedMobileHtml = repMobilePath && pathWithin( input.outputDir, repMobilePath ) && existsSync( repMobilePath ) ? readFileSync( repMobilePath, 'utf8' ) : undefined;
+				// Further width-range documents (a middle layout, #1379) assemble
+				// with the other two at export; members derive them the same way, or
+				// the member's chrome assembles differently from the representative's.
+				const repWidthDocuments = repProcessedMobileHtml === undefined ? [] : Object.entries( repEntry.profiles ?? {} ).flatMap( ( [ key, profile ] ) => {
+					if ( key === 'desktop' || key === 'mobile' || ! profile.html ) return [];
+					const path = resolve( input.outputDir, profile.html );
+					return pathWithin( input.outputDir, path ) && existsSync( path ) ? [ { key, profile, html: readFileSync( path, 'utf8' ) } ] : [];
+				} );
 				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
 				let derivedInCluster = record.derived.length;
 				let clusterFailure = { code: 'cluster_verification_missing', reason: 'cluster has no captured verification member' };
@@ -1338,7 +1346,10 @@ export async function deriveTemplateClusterMembers( input: {
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
 						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
 						: undefined;
-					const derivation = mobileDerivation && ! mobileDerivation.ok ? mobileDerivation : desktopDerivation;
+					const widthDerivations = mobileDerivation?.ok
+						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { repServerHtml, repProcessedHtml: document.html, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
+						: [];
+					const derivation = [ mobileDerivation, ...widthDerivations.map( width => width.derivation ) ].find( candidate => candidate && ! candidate.ok ) ?? desktopDerivation;
 					lap( 'derive' );
 					if ( ! derivation.ok ) {
 						// A gate failure is an escalation, not a loss: the member falls
@@ -1363,6 +1374,14 @@ export async function deriveTemplateClusterMembers( input: {
 						memberMobilePath = `screenshots/derived/${ slugify( url ) }.mobile.html`;
 						writeFileSync( resolve( input.outputDir, memberMobilePath ), mobileDerivation.html );
 					}
+					const widthProfiles: NonNullable< import('./screenshot/manifest-queue.js').ManifestEntry[ 'profiles' ] > = {};
+					for ( const { key, profile, derivation: widthDerivation } of widthDerivations ) {
+						if ( ! widthDerivation.ok ) continue;
+						await store.captureDomDependencies( widthDerivation.html, url, { deferMedia } );
+						const widthPath = `screenshots/derived/${ slugify( url ) }.${ key }.html`;
+						writeFileSync( resolve( input.outputDir, widthPath ), widthDerivation.html );
+						widthProfiles[ key ] = { ...profile, html: widthPath };
+					}
 					lap( 'dependencies' );
 					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
@@ -1373,7 +1392,7 @@ export async function deriveTemplateClusterMembers( input: {
 						html: memberPath,
 						...( memberMobilePath ? { mobileHtml: memberMobilePath } : {} ),
 						capturedAt: capturedAtNow,
-						...( repProfile ? { profiles: { desktop: { ...repProfile, html: memberPath }, ...( repMobileProfile ? { mobile: { ...repMobileProfile, html: memberMobilePath } } : {} ) } } : {} ),
+						...( repProfile ? { profiles: { desktop: { ...repProfile, html: memberPath }, ...( repMobileProfile ? { mobile: { ...repMobileProfile, html: memberMobilePath } } : {} ), ...widthProfiles } } : {} ),
 						...( memberMobilePath && repEntry.deviceMode ? { deviceMode: repEntry.deviceMode } : {} ),
 						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),

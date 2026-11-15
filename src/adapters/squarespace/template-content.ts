@@ -65,8 +65,9 @@ export function squarespaceMemberDocument(html: string, representative: Structur
 			else time.text(adjacent.shortDate);
 		});
 		const repId = details.get(representative)?.id;
-		if (repId && adjacent.id) $(`[id="article-${repId}"], [data-item-id="${repId}"]`).each((_, node) => {
+		if (repId && adjacent.id) $(`[id="article-${repId}"], [id="item-${repId}"], [data-item-id="${repId}"]`).each((_, node) => {
 			if ($(node).attr('id') === `article-${repId}`) $(node).attr('id', `article-${adjacent.id}`);
+			if ($(node).attr('id') === `item-${repId}`) $(node).attr('id', `item-${adjacent.id}`);
 			if ($(node).attr('data-item-id') === repId) $(node).attr('data-item-id', adjacent.id!);
 		});
 	}

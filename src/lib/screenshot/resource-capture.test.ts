@@ -60,6 +60,22 @@ describe( 'CapturedResourceStore', () => {
 			expect( readFileSync( join( outputDir, resource.path ), 'utf8' ) ).toBe( `${ origin }${ name }.svg` );
 		}
 	});
+	it( 'queues inline-style images with other deferred media instead of fetching them (#1814)', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-deferred-style-' ) );
+		dirs.push( outputDir );
+		const origin = 'https://example.com/';
+		const fetched: string[] = [];
+		const store = new CapturedResourceStore( outputDir, origin, async url => {
+			fetched.push( url );
+			return { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ), body: Buffer.from( 'p{}' ) };
+		} );
+		const deferred: string[] = [];
+		await store.captureDomDependencies( `<link rel="stylesheet" href="/site.css"><img src="/body.jpg">
+			<div style="background-image: url(&quot;https://cdn.example/hero.jpg?format=1500w&quot;)"></div><div style="background:url(/thumb.jpg)"></div>`, origin, { deferMedia: url => deferred.push( url ) } );
+		await store.flush();
+		expect( deferred.sort() ).toEqual( [ 'https://cdn.example/hero.jpg?format=1500w', `${ origin }body.jpg`, `${ origin }thumb.jpg` ] );
+		expect( fetched ).toEqual( [ `${ origin }site.css` ] );
+	} );
 	it( 'retries a referenced image once when its first fetch is transiently unavailable', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-transient-' ) );
 		dirs.push( outputDir );

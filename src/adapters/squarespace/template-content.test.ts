@@ -87,10 +87,11 @@ describe('Squarespace structured blog content', () => {
 		const rep = entries[0]!, member = entries[2]!;
 		const nav = '<nav class="pagination"><div class="pagination-direction"><div class="newer">Newer Post</div><div class="older">Older Post</div></div><div class="pagination-content"><a class="newer" rel="prev" href="/stale"><div class="pagination-img"></div><span>Stale</span></a><a class="older" rel="next" href="/stale"><span>Stale</span></a></div><a class="pagination-home" href="/journal">Back to Blog Home</a></nav>';
 		const meta = '<article id="article-id-old" data-item-id="id-old"><div class="blog-list-article-content-categories"><span>Stale</span><span>Stale</span></div><div class="blog-list-article-content-date">Stale</div></article>';
-		const html = document(rep).replace('</body>', meta + nav + '</body>');
+		const html = document(rep).replace('<body>', '<body id="item-id-old">').replace('</body>', meta + nav + '</body>');
 		const $ = cheerio.load((await source.memberDocument(html, rep, member))!);
 		expect($('article').attr('id')).toBe('article-id-middle');
 		expect($('article').attr('data-item-id')).toBe('id-middle');
+		expect($('body').attr('id')).toBe('item-id-middle');
 		expect($('.blog-list-article-content-categories').html()).toBe('<span>Real Estate</span>');
 		expect($('.blog-list-article-content-date').text()).toBe('January 2, 2024');
 		expect($('.pagination a.newer').attr('href')).toBe('/journal/new');
