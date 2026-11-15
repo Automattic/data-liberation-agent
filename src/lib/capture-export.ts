@@ -1926,9 +1926,9 @@ function buildExportCapture(
 		if ( imageAsset && ( ! imageAsset.kind || imageAsset.kind === 'image' ) && imageAsset.original ) {
 			for ( const url of imageAsset.source_urls ) {
 				if ( url === candidate.sourceUrl || exclusions.renditions.has( url ) || exclusions.assets.has( url ) ) continue;
-				const resource = resourceManifest.resources[ url ];
-				if ( ! resource || ! resource.contentType.startsWith( 'image/' ) ) continue;
-				const path = resolve( outputDir, resource.path );
+				const rendition = imageAsset.renditions?.find( record => record.original?.source_url === url );
+				if ( ! rendition?.original || ! rendition.local_path ) continue;
+				const path = resolve( outputDir, rendition.local_path );
 				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) continue;
 				const renditionContent = readFileSync( path );
 				const hash = createHash( 'sha256' ).update( renditionContent ).digest( 'hex' );
@@ -1956,7 +1956,7 @@ function buildExportCapture(
 				candidate.exactReferences = candidate.exactReferences.filter( reference => ! renditionReferences.includes( reference ) );
 				for ( const reference of renditionReferences ) selectedReferences.add( reference );
 				capturedRenditions.push( {
-					sourceUrl: url, localPath: path, references: renditionReferences, exactReferences: exact,
+					sourceUrl: url, localPath: path, imageAsset: rendition, references: renditionReferences, exactReferences: exact,
 					bytes: renditionBytes, dimension: imageAsset.rendition_widths?.[ url ] ?? mediaDimension( url ),
 					renderedDimension: candidate.renderedDimension,
 				} );

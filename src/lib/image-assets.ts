@@ -373,10 +373,21 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	try {
 		if ( images.length ) {
 			let page: import('playwright').Page | undefined;
-			// Rendition jobs carry their parent and the smaller fallbacks to try
-			// only if this one fails: one extra verified download per family.
+			// Captured aliases must pass the original's signature/decode/extension
+			// checks too. Uncaptured alternatives retain bounded fallback acquisition.
 			const jobs: Array<{ record: ImageAssetRecord; rendition: boolean; parent?: ImageAssetRecord; rest?: ImageAssetRecord[] }> =
 				images.map( record => ( { record, rendition: false } ) );
+			for ( const parent of images ) {
+				if ( parent.kind !== 'image' ) continue;
+				for ( const url of parent.source_urls ) {
+					if ( url === parent.resolved_original || ! resources[ url ] ) continue;
+					jobs.push( { record: {
+						kind: 'image', destination_owner: parent.destination_owner,
+						source_urls: [ url ], references: parent.references.filter( reference => reference.source_url === url ),
+						resolved_original: url, original: null,
+					}, rendition: true, parent } );
+				}
+			}
 			for ( const { record, rendition, parent, rest } of jobs ) {
 				const source = record.resolved_original;
 				try {
@@ -428,7 +439,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					else ( parent!.renditions ??= [] ).push( record );
 					if ( ! rendition && record.kind === 'image' ) {
 						const widths = Object.entries( record.rendition_widths ?? {} )
-							.filter( ( [ url, width ] ) => url !== source && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
+							.filter( ( [ url, width ] ) => url !== source && ! resources[ url ] && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
 							.sort( ( a, b ) => a[ 1 ] - b[ 1 ] || a[ 0 ].localeCompare( b[ 0 ] ) );
 						const adequate = widths.findIndex( ( [ , width ] ) => width >= ( record.rendered_width ?? 0 ) );
 						// Try the nearest adequate rendition, then smaller fallbacks. Each
