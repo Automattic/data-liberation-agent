@@ -53,6 +53,8 @@ export interface SlotStats {
 export interface MemberGate {
 	code: GateCode;
 	reason: string;
+	/** The runtime region that a bounded member render must observe. */
+	runtimeAnchor?: SlotAnchor;
 }
 
 export type MemberDerivation =
@@ -138,7 +140,7 @@ interface Slot {
  * captured document; the identity does. A slot with no identified ancestor is
  * anchored on `<body>` itself.
  */
-interface SlotAnchor {
+export interface SlotAnchor {
 	attribute: 'id' | 'data-testid' | 'body';
 	value: string;
 	/** Element path below the anchor, over slot-eligible children. */
@@ -149,6 +151,32 @@ interface SlotAnchor {
 
 /** Anchor attributes, most stable first. */
 const ANCHOR_ATTRIBUTES = [ 'id', 'data-testid' ] as const;
+
+/** Resolve the gate's anchor with the same mapping used by derivation. */
+export function runtimeMountSelector( html: string, anchor: SlotAnchor ): string | undefined {
+	const $ = cheerio.load( html );
+	const body = $( 'body' )[ 0 ];
+	if ( ! body ) return undefined;
+	let node = resolveAnchor( body, anchor, () => true );
+	if ( ! node ) return undefined;
+	const path: string[] = [];
+	while ( node !== body ) {
+		path.unshift( `:nth-child(${ $( node ).index() + 1 })` );
+		node = node.parent && isElement( node.parent ) ? node.parent : undefined;
+		if ( ! node ) return undefined;
+	}
+	return [ 'body', ...path ].join( ' > ' );
+}
+
+/** A script tag alone is not a filled mount; text, images and other markup are. */
+export function runtimeMountObserved( html: string, anchor: SlotAnchor ): boolean {
+	const selector = runtimeMountSelector( html, anchor );
+	if ( ! selector ) return false;
+	const $ = cheerio.load( html );
+	const mount = $( selector ).clone();
+	mount.find( 'script, style, template' ).remove();
+	return normalizedWhitespace( mount.text() ) !== '' || mount.children().length > 0;
+}
 
 const describeAnchor = ( anchor: SlotAnchor ): string =>
 	`${ anchor.attribute === 'body' ? 'body' : `[${ anchor.attribute }="${ anchor.value }"]` }${ anchor.path.map( index => `/${ index }` ).join( '' ) }`;
@@ -382,10 +410,10 @@ function runtimeMountGate( serverBody: Element, memberBody: Element, processedBo
 			if ( captured && matches( captured ) && hasContent( captured ) ) {
 				const attributes = new Set( [ ...Object.keys( representative.attribs ), ...Object.keys( member.attribs ) ] );
 				if ( [ ...attributes ].some( attribute => representative.attribs[ attribute ] !== member.attribs[ attribute ] ) ) {
-					return { code: 'runtime_mount_member_keyed', reason: `runtime-filled mount at ${ describeAnchor( anchor ) } has different member attributes` };
+					return { code: 'runtime_mount_member_keyed', runtimeAnchor: anchor, reason: `runtime-filled mount at ${ describeAnchor( anchor ) } has different member attributes` };
 				}
 				if ( hasContent( member ) ) {
-					return { code: 'runtime_slot_content', reason: `member content at ${ describeAnchor( anchor ) } replaces a runtime-filled mount capture never observed for this member` };
+					return { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member content at ${ describeAnchor( anchor ) } replaces a runtime-filled mount capture never observed for this member` };
 				}
 			}
 		}
@@ -559,11 +587,11 @@ export function deriveMemberDocument( input: {
 		const parsed = html$( `<body>${ slot.replacement as string }</body>` )( 'body' ).children().toArray() as Element[];
 		for ( const element of parsed ) {
 			if ( element.name === 'script' ) {
-				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries a script element capture never observed` } };
+				return { ok: false, gate: { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member slot at ${ describeAnchor( anchor ) } carries a script element capture never observed` } };
 			}
 			const runtime = slotRuntimeObservation( element, slot.repNode );
 			if ( runtime.runtime ) {
-				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
+				return { ok: false, gate: { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 			}
 		}
 	}
@@ -589,7 +617,7 @@ export function deriveMemberDocument( input: {
 			for ( const element of parsed ) {
 				const runtime = slotRuntimeObservation( element, slot.repNode );
 				if ( runtime.runtime ) {
-					return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
+					return { ok: false, gate: { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 				}
 				if ( runtime.unobserved ) unobservedSlots++;
 			}

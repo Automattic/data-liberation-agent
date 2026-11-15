@@ -1109,7 +1109,7 @@ export async function deriveTemplateClusterMembers( input: {
 	const derivedUrls: string[] = [];
 	let escalated = 0;
 	let unavailableCount = 0;
-	const escalations: Array< { url: string; gate: string; reason: string; slug?: string; clusterSize: number; record: import('./template-clusters.js').TemplateClusterRecord } > = [];
+	const escalations: Array< { url: string; gate: string; reason: string; runtimeAnchor?: import('./template-clusters.js').SlotAnchor; slug?: string; clusterSize: number; record: import('./template-clusters.js').TemplateClusterRecord } > = [];
 
 	// The capture released the manifest queue, so this stage is its single
 	// writer; a fresh queue loads the flushed file.
@@ -1305,7 +1305,7 @@ export async function deriveTemplateClusterMembers( input: {
 					for ( const url of members ) {
 						const { code: gate, reason } = clusterFailure;
 						record.escalated.push( { url, gate, reason } );
-						escalations.push( { url, gate, reason, slug: feedEntries.get( normalizedUrl( url ) )?.slug, clusterSize: group.size, record } );
+						escalations.push( { url, gate, reason, runtimeAnchor: 'runtimeAnchor' in clusterFailure ? clusterFailure.runtimeAnchor as import('./template-clusters.js').SlotAnchor : undefined, slug: feedEntries.get( normalizedUrl( url ) )?.slug, clusterSize: group.size, record } );
 						escalated++;
 					}
 					continue;
@@ -1363,7 +1363,7 @@ export async function deriveTemplateClusterMembers( input: {
 						// back to HTTP acquisition after derivation, or keeps its
 						// budget-omission row with the gate named for the next run.
 						record.escalated.push( { url, gate: derivation.gate.code, reason: derivation.gate.reason } );
-						escalations.push( { url, gate: derivation.gate.code, reason: derivation.gate.reason, slug: memberFeed?.slug, clusterSize: group.size, record } );
+						escalations.push( { url, gate: derivation.gate.code, reason: derivation.gate.reason, runtimeAnchor: derivation.gate.runtimeAnchor, slug: memberFeed?.slug, clusterSize: group.size, record } );
 						escalated++;
 						continue;
 					}
@@ -1446,6 +1446,7 @@ export async function deriveTemplateClusterMembers( input: {
 	// and ship as HTTP-captured routes; only a failed fallback stays omitted.
 	const httpAcquiredUrls: string[] = [];
 	const fallbackFailures = new Map< string, string >();
+	const runtimeResults = new Map< string, { observed: boolean; reason?: string } >();
 	if ( escalations.length && input.acquisition && ! input.governors.forOrigin( input.sourceUrl ).blockedClient ) {
 		const { acquireEscalatedMembers } = await import( './template-cluster-fallback.js' );
 		const fallbackQueue = new ManifestQueue( manifestPath );
@@ -1453,9 +1454,10 @@ export async function deriveTemplateClusterMembers( input: {
 		try {
 			const fallback = await acquireEscalatedMembers( {
 				outputDir: input.outputDir, sourceUrl: input.sourceUrl, routeScope: input.routeScope, profile: input.acquisition,
-				governors: input.governors, members: escalations, queue: fallbackQueue, maxTotalBytes: input.maxTotalBytes,
+				governors: input.governors, members: escalations, queue: fallbackQueue, maxTotalBytes: input.maxTotalBytes, deadline: lateDeadline,
 			} );
 			httpAcquiredUrls.push( ...fallback.acquired );
+			for ( const [ url, result ] of fallback.runtime ) runtimeResults.set( url, result );
 			for ( const [ url, reason ] of fallback.failed ) fallbackFailures.set( url, reason );
 			diagnostics.push( ...fallback.diagnostics );
 		} catch ( error ) {
@@ -1466,15 +1468,17 @@ export async function deriveTemplateClusterMembers( input: {
 	}
 	const acquiredSet = new Set( httpAcquiredUrls );
 	for ( const member of escalations ) {
-		const gate = `failed the ${ member.gate } gate: ${ member.reason }`;
+		const isRuntimeGate = member.gate === 'runtime_mount_member_keyed' || member.gate === 'runtime_slot_content';
+		const runtime = runtimeResults.get( member.url ) ?? ( isRuntimeGate ? { observed: false, reason: `unobserved runtime mount: ${ member.reason }; runtime render unavailable` } : undefined );
+		const gate = `failed the ${ member.gate } gate: ${ member.reason }${ runtime && ! runtime.observed ? `; ${ runtime.reason }` : '' }`;
 		const entry = member.record.escalated.find( row => row.url === member.url );
 		if ( acquiredSet.has( member.url ) ) {
-			if ( entry ) entry.fallback = { acquired: true };
-			diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: member.url, reason: `${ gate }; captured through governed HTTP acquisition (${ input.acquisition!.id })`, unit: 'route', severity: 'warning', metrics: { clusterSize: member.clusterSize } } );
+			if ( entry ) entry.fallback = { acquired: true, ...( runtime ? { reason: runtime.observed ? 'runtime mount observed through bounded browser render' : runtime.reason } : {} ) };
+			diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: member.url, reason: `${ gate }; ${ runtime ? runtime.observed ? 'runtime mount observed through bounded browser render' : runtime.reason : `captured through governed HTTP acquisition (${ input.acquisition!.id })` }`, unit: 'route', severity: 'warning', metrics: { clusterSize: member.clusterSize } } );
 			continue;
 		}
 		const failure = input.acquisition ? fallbackFailures.get( member.url ) ?? 'source client blocked' : undefined;
-		if ( entry && failure ) entry.fallback = { acquired: false, reason: failure };
+		if ( entry && ( failure || runtime ) ) entry.fallback = { acquired: false, reason: [ failure, runtime?.reason ].filter( Boolean ).join( '; ' ) };
 		diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: member.url, reason: failure ? `${ gate }; HTTP fallback failed: ${ failure }` : gate, metrics: { clusterSize: member.clusterSize } } );
 	}
 

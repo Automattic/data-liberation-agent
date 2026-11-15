@@ -1,5 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { connectBrowser, createSourceContext } from './browser-kit/index.js';
 import { describe, expect, it, vi } from 'vitest';
 import { deriveTemplateClusterMembers } from './capture.js';
 import * as fetching from './media-fetch/safe-fetch.js';
@@ -7,6 +9,77 @@ import { SourceRequestGovernors } from './source-request-governor.js';
 import { templateFingerprint, TEMPLATE_GROUPING_LIMITS, TEMPLATE_GROUPS_SCHEMA } from './template-groups.js';
 
 describe( 'failed template cluster HTTP fallback', () => {
+	// One Chromium pass, no full route capture/fluid sweep (~3s).
+	it( 'renders runtime-gated members with their own fill, but acquires structural failures over HTTP', async () => {
+		const parent = join( process.cwd(), '.tmp-test' );
+		mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'runtime-escalation-' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const requests: string[] = [];
+		const page = ( id: string ) => `<!doctype html><html><head><title>Product</title><script>
+		addEventListener('DOMContentLoaded', async () => {
+		 const mount = document.querySelector('x-recs');
+		 mount.innerHTML = await (await fetch('/recs?id=' + mount.dataset.productId)).text();
+		});</script></head><body><article id="product"><h1>${ id }</h1><x-recs data-product-id="${ id === 'verification' ? 'representative' : id }"></x-recs></article></body></html>`;
+		const server = createServer( ( req, res ) => {
+			requests.push( req.url! );
+			const url = new URL( req.url!, 'http://localhost' );
+			res.setHeader( 'content-type', url.pathname === '/recs' ? 'text/plain' : 'text/html' );
+			res.end( url.pathname === '/recs' ? `<p>Recommendations for ${ url.searchParams.get( 'id' ) }</p>` : url.pathname === '/structural' ? '<html><body><aside>Structural HTTP content</aside></body></html>' : page( url.pathname.slice( 1 ) ) );
+		} );
+		await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
+		const origin = `http://localtest.me:${ ( server.address() as import('node:net').AddressInfo ).port }`;
+		const urls = [ 'representative', 'verification', 'member-a', 'member-b', 'structural' ].map( id => `${ origin }/${ id }` );
+		const browser = await connectBrowser( {} );
+		try {
+			const governors = new SourceRequestGovernors();
+			const context = await createSourceContext( browser, {}, { governors, sourceUrl: origin } );
+			const tab = await context.newPage();
+			const entries: Record< string, unknown > = {};
+			for ( const [ i, url ] of urls.slice( 0, 2 ).entries() ) {
+				await tab.goto( url );
+				await tab.waitForSelector( 'x-recs p' );
+				writeFileSync( join( outputDir, `screenshots/${ i }.html` ), await tab.content() );
+				entries[ url ] = { slug: `product-${ i }`, html: `screenshots/${ i }.html`, capturedAt: new Date().toISOString() };
+			}
+			await context.close();
+			writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+			const input: Parameters< typeof deriveTemplateClusterMembers >[ 0 ] = {
+				sourceUrl: urls[ 0 ]!, outputDir, frontierUrls: [], governors,
+				acquisition: { id: 'neutral-server', variants: [ { id: 'desktop' } ], prepare: ( html: string ) => ( { html } ) },
+				report: {
+					schema: TEMPLATE_GROUPS_SCHEMA, sourceUrl: urls[ 0 ]!, fingerprint: { version: 1, maxSkeletonDepth: 8 },
+					limits: { ...TEMPLATE_GROUPING_LIMITS }, throttle: { events: 0 }, unfingerprinted: [],
+					coverage: { routes: 5, fingerprinted: 5, unfingerprinted: 0, groups: 1, singletons: 0 },
+					groups: [ { id: 't1', ...templateFingerprint( page( 'representative' ), urls[ 0 ]! ), representative: urls[ 0 ]!, size: 5, members: urls } ],
+				},
+			};
+			const result = await deriveTemplateClusterMembers( input );
+			expect( result.summary.httpAcquired ).toBe( 3 );
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots/manifest.json' ), 'utf8' ) );
+			for ( const url of urls.slice( 2, 4 ) ) {
+				const id = new URL( url ).pathname.slice( 1 );
+				expect( readFileSync( join( outputDir, manifest.entries[ url ].html ), 'utf8' ) ).toContain( `<p>Recommendations for ${ id }</p>` );
+				expect( requests ).toContain( `/recs?id=${ id }` );
+				expect( result.receipt.clusters[ 0 ]!.escalated ).toContainEqual( expect.objectContaining( { url, gate: 'runtime_mount_member_keyed', fallback: { acquired: true, reason: 'runtime mount observed through bounded browser render' } } ) );
+			}
+			expect( readFileSync( join( outputDir, manifest.entries[ urls[ 4 ]! ].html ), 'utf8' ) ).toContain( 'Structural HTTP content' );
+			expect( requests ).not.toContain( '/recs?id=structural' );
+			expect( result.receipt.clusters[ 0 ]!.escalated ).toContainEqual( expect.objectContaining( { url: urls[ 4 ], gate: 'cluster_key_mismatch', fallback: { acquired: true } } ) );
+
+			// A spent budget preserves HTTP, but explicitly names the unobserved mount.
+			writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+			const exhausted = await deriveTemplateClusterMembers( { ...input, timeBudgetMs: 1 } );
+			const row = exhausted.receipt.clusters[ 0 ]!.escalated.find( member => member.url === urls[ 2 ] )!;
+			expect( row.fallback?.reason ).toContain( 'unobserved runtime mount: runtime-filled mount at' );
+			expect( exhausted.diagnostics ).toContainEqual( expect.objectContaining( { url: urls[ 2 ], reason: expect.stringContaining( row.fallback!.reason! ) } ) );
+		} finally {
+			await browser.close();
+			await new Promise< void >( done => server.close( () => done() ) );
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 30_000 );
+
 	it.each( [ 'gate', 'comparison', 'missing', 'representative' ] )( 'acquires every uncaptured member after %s verification failure', async failure => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );

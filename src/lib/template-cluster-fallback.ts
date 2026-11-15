@@ -1,5 +1,6 @@
-import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { withTimeout } from './concurrency.js';
 import type { HttpAcquisitionProfile } from '../platform/acquisition.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
@@ -13,21 +14,24 @@ export interface EscalatedMember {
 	url: string;
 	gate: string;
 	reason: string;
+	runtimeAnchor?: import('./template-clusters.js').SlotAnchor;
 	/** Export slug, when the platform publishes one (structured content). */
 	slug?: string;
 }
 
 export interface EscalationFallback {
-	/** Members that shipped as HTTP-captured manifest entries. */
+	/** Members acquired as ordinary manifest entries (rendered for runtime gates). */
 	acquired: string[];
 	/** Why each remaining member's fallback failed, keyed by URL. */
 	failed: Map< string, string >;
 	diagnostics: RouteDiagnostic[];
+	runtime: Map< string, { observed: boolean; reason?: string } >;
 }
 
 /**
  * Acquire escalated template-cluster members through the adapter's HTTP
- * acquisition profile, one desktop document per member, every request paced
+ * acquisition profile, then render runtime-gated members without the expensive
+ * full capture probes. One desktop document per member, every request paced
  * by the source request governor. An acquired document becomes an ordinary
  * manifest entry, so export, the content index and redirects see it like any
  * captured route. A member whose acquisition fails is returned in `failed`.
@@ -41,11 +45,13 @@ export async function acquireEscalatedMembers( input: {
 	members: readonly EscalatedMember[];
 	queue: ManifestQueue;
 	maxTotalBytes?: number;
+	/** Shared deadline for the post-capture stage. */
+	deadline?: number;
 } ): Promise< EscalationFallback > {
 	const { acquireHttpDocuments } = await import( './http-acquisition.js' );
 	const { CapturedResourceStore } = await import( './screenshot/resource-capture.js' );
 	const { slugify } = await import( './url/index.js' );
-	const result: EscalationFallback = { acquired: [], failed: new Map(), diagnostics: [] };
+	const result: EscalationFallback = { acquired: [], failed: new Map(), diagnostics: [], runtime: new Map() };
 	const failAll = ( reason: string ) => {
 		for ( const member of input.members ) result.failed.set( member.url, reason );
 		return result;
@@ -64,6 +70,7 @@ export async function acquireEscalatedMembers( input: {
 	} catch ( error ) {
 		return failAll( error instanceof Error ? error.message : String( error ) );
 	}
+	let browser: import('playwright').Browser | undefined;
 	const byUrl = new Map( documents.map( document => [ document.url, document ] ) );
 	const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
 	try {
@@ -79,13 +86,48 @@ export async function acquireEscalatedMembers( input: {
 			}
 			try {
 				const source = resolve( fallbackDir, document.documentPath );
-				const html = readFileSync( source, 'utf8' );
+				let html = readFileSync( source, 'utf8' );
+				if ( member.gate === 'runtime_mount_member_keyed' || member.gate === 'runtime_slot_content' ) {
+					let context: import('playwright').BrowserContext | undefined;
+					let timer: ReturnType< typeof setTimeout > | undefined;
+					try {
+						const remaining = Math.min( 15_000, ( input.deadline ?? Date.now() + 15_000 ) - Date.now() );
+						if ( remaining <= 0 ) throw new Error( 'runtime render budget exhausted' ); // failure-class: operational
+						const { connectBrowser, createSourceContext, sourceContextOptions } = await import( './browser-kit/index.js' );
+						const { runtimeMountObserved, runtimeMountSelector } = await import( './template-clusters.js' );
+						const deadline = Date.now() + remaining;
+						browser ??= await withTimeout( connectBrowser( {} ), Math.max( 1, deadline - Date.now() ), 'runtime render browser startup', late => late.close() );
+						if ( Date.now() >= deadline ) throw new Error( 'runtime render budget exhausted during browser startup' ); // failure-class: operational
+						const options = await withTimeout( sourceContextOptions( browser, input.sourceUrl, { governors: input.governors } ), Math.max( 1, deadline - Date.now() ), 'runtime render source identity' );
+						context = await withTimeout( createSourceContext( browser, { ...options, viewport: { width: 1440, height: 900 } }, { governors: input.governors, sourceUrl: input.sourceUrl } ), Math.max( 1, deadline - Date.now() ), 'runtime render context', late => late.close() );
+						timer = setTimeout( () => { void context?.close().catch( () => {} ); }, Math.max( 1, deadline - Date.now() ) );
+						const page = await context.newPage();
+						await page.goto( member.url, { waitUntil: 'domcontentloaded', timeout: Math.max( 1, deadline - Date.now() ) } );
+						// Lazy recommendations often start only when their mount enters view.
+						const selector = member.runtimeAnchor ? runtimeMountSelector( html, member.runtimeAnchor ) : undefined;
+						if ( selector ) await page.locator( selector ).scrollIntoViewIfNeeded( { timeout: Math.max( 1, deadline - Date.now() ) } );
+						await page.waitForLoadState( 'networkidle', { timeout: Math.max( 1, Math.min( 1000, deadline - Date.now() ) ) } ).catch( () => {} );
+						let rendered = await page.content();
+						while ( member.runtimeAnchor && ! runtimeMountObserved( rendered, member.runtimeAnchor ) && Date.now() < deadline ) {
+							await page.waitForTimeout( Math.min( 100, deadline - Date.now() ) );
+							rendered = await page.content();
+						}
+						if ( member.runtimeAnchor && ! runtimeMountObserved( rendered, member.runtimeAnchor ) ) throw new Error( 'runtime mount remained empty' ); // failure-class: operational
+						html = rendered;
+						result.runtime.set( member.url, { observed: true } );
+					} catch ( error ) {
+						result.runtime.set( member.url, { observed: false, reason: `unobserved runtime mount: ${ member.reason }; ${ error instanceof Error ? error.message : String( error ) }` } );
+					} finally {
+						clearTimeout( timer );
+						await context?.close().catch( () => {} );
+					}
+				}
 				await store.captureDomDependencies( html, document.finalUrl ?? member.url );
 				const slug = await input.queue.claimSlug( member.slug ?? slugify( member.url ) );
 				const htmlPath = `screenshots/http/${ slug }.html`;
 				const target = resolve( input.outputDir, htmlPath );
 				mkdirSync( dirname( target ), { recursive: true } );
-				copyFileSync( source, target );
+				writeFileSync( target, html );
 				await input.queue.updateEntry( member.url, { slug, html: htmlPath, capturedAt: new Date().toISOString() } as ManifestEntry );
 				result.acquired.push( member.url );
 				for ( const region of document.browserRegions ?? [] ) {
@@ -96,6 +138,7 @@ export async function acquireEscalatedMembers( input: {
 			}
 		}
 	} finally {
+		await browser?.close().catch( () => {} );
 		await store.flush();
 	}
 	return result;
