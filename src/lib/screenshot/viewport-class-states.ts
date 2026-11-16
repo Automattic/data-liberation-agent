@@ -94,6 +94,126 @@ async function stylesheetTexts( page: Page ): Promise< string[] | null > {
 type WidthClassAlias = { token: string; alias: string; media: string };
 const CONTRACTS_ATTRIBUTE = 'data-blocks-engine-capture-width-class-contracts';
 
+/**
+ * Alternatives of one token belong to different elements, not independent
+ * boolean states of the whole selector. Scope each alternative to its wearer;
+ * the ordinary-element arm excludes all wearers, including under :not().
+ */
+function projectAliasGroup( root: postcss.Root, token: string, group: readonly WidthClassAlias[] ): postcss.Root {
+	const result = postcss.root();
+	let repeated = false;
+	root.walkRules( rule => {
+		selectorParser( selectors => selectors.each( selector => {
+			let count = 0;
+			selector.walkClasses( node => {
+				if ( node.value !== token ) return;
+				count++;
+				for ( let parent = node.parent; parent && parent.type !== 'root'; parent = parent.parent ) {
+					// A selector-list/relational pseudo can match through a branch
+					// that does not name this token; a wearer guard would hide it.
+					if ( parent.type === 'pseudo' && parent.value !== ':not' ) repeated = true;
+					if ( parent.type === 'selector' && parent.nodes.some( child => child.type === 'combinator' ) && parent.parent?.type === 'pseudo' ) repeated = true;
+				}
+			} );
+			if ( count > 1 ) repeated = true;
+		} ) ).processSync( rule.selector );
+	} );
+	// Multiple subjects (e.g. .tok > .tok or a complex pseudo) cannot be
+	// scoped to one wearer. Partition widths rather than doubling states.
+	if ( repeated ) {
+		const boundaries = [ ...new Set( [ 0, ...group.flatMap( item => [ ...item.media.matchAll( /(min|max)-width:\s*(\d+)px/g ) ].map( match => Number( match[ 2 ] ) + ( match[ 1 ] === 'max' ? 1 : 0 ) ) ) ] ) ].sort( ( a, b ) => a - b );
+		for ( let i = 0; i < boundaries.length; i++ ) {
+			const min = boundaries[ i ]!;
+			const max = boundaries[ i + 1 ];
+			const active = group.filter( item => widthMediaMatches( item.media, min ) );
+			const copy = root.clone();
+			copy.walkRules( rule => {
+				rule.selector = selectorParser( selectors => selectors.walkClasses( node => {
+					if ( node.value === token && active.length ) node.replaceWith( selectorParser().astSync( `:is(${ node.toString() },${ active.map( item => `.${ item.alias }` ).join( ',' ) })` ).first.first! );
+				} ) ).processSync( rule.selector );
+			} );
+			const media = [ min ? `(min-width:${ min }px)` : '', max === undefined ? '' : `(max-width:${ max - 1 }px)` ].filter( Boolean ).join( ' and ' ) || 'all';
+			result.append( postcss.atRule( { name: 'media', params: media } ).append( copy.nodes ) );
+		}
+		return result;
+	}
+	const variants = [
+		{ alias: '', media: '', active: false },
+		...group.flatMap( contract => [
+			{ ...contract, active: true },
+			{ ...contract, media: `not (${ contract.media.split( ',' ).map( query => `(${ query })` ).join( ' or ' ) })`, active: false },
+		] ),
+	];
+	for ( const variant of variants ) {
+		const copy = root.clone();
+		copy.walkRules( rule => {
+			rule.selector = selectorParser( selectors => {
+				const nodes: selectorParser.ClassName[] = [];
+				selectors.walkClasses( node => { if ( node.value === token ) nodes.push( node ); } );
+				for ( const node of nodes ) {
+					// A token under :not() still constrains that pseudo's subject.
+					// :has() starts a new relative selector with its own subject.
+					let subject: selectorParser.Node = node;
+					while ( subject.parent?.type !== 'root' ) {
+						const parent = subject.parent;
+						if ( ! parent || parent.type === 'selector' && parent.parent?.type !== 'pseudo' ) break;
+						if ( parent.type === 'selector' && parent.parent?.value === ':has' ) break;
+						subject = parent as selectorParser.Node;
+					}
+					const guard = variant.alias ? `.${ variant.alias }` : `:not(${ group.map( item => `.${ item.alias }` ).join( ',' ) })`;
+					subject.parent!.insertAfter( subject, selectorParser().astSync( `:where(${ guard })` ).first.first! );
+					if ( variant.active ) node.replaceWith( selectorParser().astSync( `:is(${ node.toString() },.${ variant.alias })` ).first.first! );
+				}
+			} ).processSync( rule.selector );
+		} );
+		if ( variant.media ) result.append( postcss.atRule( { name: 'media', params: variant.media } ).append( copy.nodes ) );
+		else result.append( copy.nodes );
+	}
+	return result;
+}
+
+/** Evaluate the width-only grammar produced by presenceMedia (unknowns stay possible). */
+function widthMediaMatches( media: string, width: number ): boolean {
+	let text = media.trim();
+	if ( text === 'all' ) return true;
+	const feature = /^\((min|max)-width:\s*(\d+)px\)$/.exec( text );
+	if ( feature ) return feature[ 1 ] === 'min' ? width >= Number( feature[ 2 ] ) : width <= Number( feature[ 2 ] );
+	// Split only at this nesting level, before removing enclosing parentheses.
+	for ( const operator of [ ',', ' or ', ' and ' ] ) {
+		let depth = 0;
+		for ( let i = 0; i < text.length; i++ ) {
+			if ( depth === 0 && text.startsWith( operator, i ) ) {
+				const left = widthMediaMatches( text.slice( 0, i ), width );
+				const right = widthMediaMatches( text.slice( i + operator.length ), width );
+				return operator === ' and ' ? left && right : left || right;
+			}
+			if ( text[ i ] === '(' ) depth++;
+			if ( text[ i ] === ')' ) depth--;
+		}
+	}
+	if ( text.startsWith( 'not ' ) ) return ! widthMediaMatches( text.slice( 4 ), width );
+	if ( text.startsWith( '(' ) && text.endsWith( ')' ) ) {
+		text = text.slice( 1, -1 );
+		return widthMediaMatches( text, width );
+	}
+	return true;
+}
+
+/** Drop impossible generated arms rather than shipping contradictory width states. */
+function pruneWidthArms( root: postcss.Root, enclosing: readonly string[] = [] ): void {
+	const media: string[] = [ ...enclosing ];
+	root.walkAtRules( 'media', node => { media.push( node.params ); } );
+	const widths = [ 0, ...media.flatMap( query => [ ...query.matchAll( /(?:min|max)-width:\s*(\d+)px/g ) ].flatMap( match => [ Number( match[ 1 ] ), Number( match[ 1 ] ) + 0.5 ] ) ) ];
+	root.walkAtRules( 'media', node => {
+		const conditions = [ ...enclosing, node.params ];
+		for ( let parent = node.parent; parent?.type === 'atrule'; parent = parent.parent ) {
+			if ( parent.name === 'media' ) conditions.push( parent.params );
+		}
+		const known = conditions.filter( query => ! query.replace( /\((?:min|max)-width:\s*\d+px\)|\b(?:not|and|or|all)\b|[(),\s]/g, '' ) );
+		if ( ! widths.some( width => known.every( query => widthMediaMatches( query, width ) ) ) ) node.remove();
+	} );
+}
+
 /** Project each affected rule into both states, retaining specificity and context. */
 export function aliasRules( sheets: readonly string[], aliases: readonly WidthClassAlias[], canMatch: ( selector: string, contract: WidthClassAlias ) => boolean = () => true ): string[] {
 	const copies: string[] = [];
@@ -108,23 +228,33 @@ export function aliasRules( sheets: readonly string[], aliases: readonly WidthCl
 		}
 		root.walkRules( rule => {
 			if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( ( rule.parent as postcss.AtRule ).name ) ) return;
-			let projected = postcss.root().append( rule.clone() );
-			let affected = false;
-			for ( const contract of contracts ) {
-				const { token, alias, media } = contract;
+			const relevant = contracts.filter( contract => {
 				let named = false;
 				try {
 					selectorParser( selectors => selectors.walkClasses( node => {
-						if ( node.value === token ) named = true;
+						if ( node.value === contract.token ) named = true;
 					} ) ).processSync( rule.selector );
-				} catch {
+				} catch { return false; }
+				return named && canMatch( rule.selector, contract );
+			} );
+			if ( relevant.length === 0 ) return;
+			const groups = new Map<string, WidthClassAlias[]>();
+			for ( const contract of relevant ) {
+				const group = groups.get( contract.token ) ?? [];
+				group.push( contract );
+				groups.set( contract.token, group );
+			}
+			let projected = postcss.root().append( rule.clone() );
+			for ( const [ token, group ] of groups ) {
+				if ( group.length > 1 ) {
+					projected = projectAliasGroup( projected, token, group );
 					continue;
 				}
-				if ( ! named || ! canMatch( rule.selector, contract ) ) continue;
+				const contract = group[ 0 ]!;
+				const { alias, media } = contract;
 				const active = postcss.atRule( { name: 'media', params: media } );
 				const inactive = postcss.atRule( { name: 'media', params: `not (${ media.split( ',' ).map( query => `(${ query })` ).join( ' or ' ) })` } );
-				// Compose contracts, so a selector naming several toggled tokens
-				// tests all their states rather than emitting competing copies.
+				// Compose different tokens, never the alternative wearers of one token.
 				const before = projected.toString();
 				// :is() keeps the class specificity, including under nested
 				// negation; ordinary elements still test their original token.
@@ -136,16 +266,17 @@ export function aliasRules( sheets: readonly string[], aliases: readonly WidthCl
 				active.append( present.nodes );
 				inactive.append( postcss.parse( before ).nodes );
 				projected = postcss.root().append( active, inactive );
-				affected = true;
 			}
-			if ( ! affected ) return;
+			pruneWidthArms( projected );
 			let copy = projected.toString();
 			for ( let parent = rule.parent; parent && parent.type === 'atrule'; parent = parent.parent ) {
 				const group = parent as postcss.AtRule;
 				if ( ! /^(media|supports|container|layer)$/i.test( group.name ) ) break;
 				copy = `@${ group.name } ${ group.params }{${ copy }}`;
 			}
-			copies.push( copy );
+			const wrapped = postcss.parse( copy );
+			pruneWidthArms( wrapped );
+			copies.push( wrapped.toString() );
 		} );
 	}
 	return copies;
@@ -196,13 +327,27 @@ export function projectViewportClassRules( html: string, linkedSheet: ( href: st
 			if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( rule.parent.name ) ) continue;
 			const copies = aliasRules( [ rule.toString() ], aliases, ( selector, contract ) => {
 				try {
-					return aliasCanMatch( selector, contract, path => $( path ).length > 0 );
+					return aliasCanMatch( selector, contract, path => {
+						const possible = selectorParser( selectors => selectors.walkClasses( node => {
+							const alternatives = aliases.filter( item => item.token === node.value );
+							if ( alternatives.length ) node.replaceWith( selectorParser().astSync( `:is(${ node.toString() },${ alternatives.map( item => `.${ item.alias }` ).join( ',' ) })` ).first.first! );
+						} ) ).processSync( path );
+						return $( possible ).length > 0;
+					} );
 				} catch {
 					// Unsupported selectors must not lose their width contract.
 					return true;
 				}
 			} );
-			if ( copies.length ) rule.replaceWith( ...postcss.parse( copies.join( '\n' ) ).nodes );
+			if ( copies.length ) {
+				const projected = postcss.parse( copies.join( '\n' ) );
+				const enclosing: string[] = [];
+				for ( let parent = rule.parent; parent?.type === 'atrule'; parent = parent.parent ) {
+					if ( parent.name === 'media' ) enclosing.push( parent.params );
+				}
+				pruneWidthArms( projected, enclosing );
+				rule.replaceWith( ...projected.nodes );
+			}
 		}
 		return root.toString();
 	};
