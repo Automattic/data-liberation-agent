@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { mergeConsentLayouts } from './consent-banner-layout.js';
 import { normalizedUrl } from './url/route-key.js';
 import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
@@ -391,7 +391,10 @@ export function importerReports( stageDir: string, captureRoot: string ): string
 		.filter( item => item.kind === 'file' && ( item.required || existsSync( join( stageDir, item.path ) ) ) )
 		.map( item => item.path as string );
 	const analysis = SITE_ANALYSIS_FILES.filter( file => existsSync( join( captureRoot, file ) ) );
-	return [ ...owned, ...analysis ].sort();
+	const boxes = existsSync( join( captureRoot, 'box-tree' ) )
+		? readdirSync( join( captureRoot, 'box-tree' ), { recursive: true, encoding: 'utf8' } ).filter( path => path.endsWith( '.json' ) ).map( path => `box-tree/${ path.split( '\\' ).join( '/' ) }` )
+		: [];
+	return [ ...owned, ...analysis, ...boxes ].sort();
 }
 
 export const UNCAPTURED_ROUTE_REASON = 'target route was not captured';

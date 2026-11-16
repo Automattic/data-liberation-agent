@@ -4,7 +4,7 @@ import type { AnyNode } from 'domhandler';
 import { parseLocatedStructure } from '../site-includes.js';
 
 export const LAYOUT_GEOMETRY_PROOF_SCHEMA =
-	'blocks-engine-capture/layout-geometry-proof/v1';
+	'blocks-engine/layout-geometry-proof/v1';
 
 const MAX_CANDIDATES = 64;
 const MAX_VIEWPORTS = 8;

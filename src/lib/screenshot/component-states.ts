@@ -90,7 +90,7 @@ const siblingPanel = ({ selector, panel, before, initial, state, index }: { sele
 	const markup = (element: Element) => {
 		const clone = element.cloneNode(true) as Element;
 		for (const node of [clone, ...Array.from(clone.querySelectorAll('*'))]) {
-			for (const name of node.getAttributeNames()) if (name.startsWith('data-blocks-engine-capture-')) node.removeAttribute(name);
+			for (const name of node.getAttributeNames()) if (name === 'data-blocks-engine-node-id' || name.startsWith('data-blocks-engine-capture-')) node.removeAttribute(name);
 		}
 		return clone.outerHTML;
 	};

@@ -1,3 +1,4 @@
+import { stripNodeIds } from '../test-helpers/strip-node-ids.js';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,7 +32,7 @@ it( 'contains a page-error storm without discarding baseline artifacts (#1022)',
 		expect( entries[ url + 'healthy' ].html ).toBeTruthy();
 		expect( entries[ url + 'healthy' ].profiles.desktop.diagnostics ).toBeUndefined();
 		expect( entry.profiles.desktop.diagnostics ).toContainEqual( { code: 'page_error_storm', reason: expect.stringContaining( 'more than 5 in one second' ) } );
-		expect( readFileSync( join( outputDir, entry.html ), 'utf8' ) ).toContain( '<h1>Baseline</h1>' );
+		expect( stripNodeIds( readFileSync( join( outputDir, entry.html ), 'utf8' ) ) ).toContain( '<h1>Baseline</h1>' );
 		expect( entry.profiles.desktop.phases.map( ( row: { phase: string } ) => row.phase ) ).not.toContain( 'selectable' );
 		expect( entry.profiles.desktop.phases.map( ( row: { phase: string } ) => row.phase ) ).not.toContain( 'scroll-states' );
 		expect( stormPage?.isClosed() ).toBe( true );

@@ -1,3 +1,4 @@
+import { stripNodeIds } from '../test-helpers/strip-node-ids.js';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -283,7 +284,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(receipt.summary.complete).toBe(mode === 'cap');
 			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual(expected.sort());
 			expect(receipt.duplicateRoutes).toEqual([{url: `${origin}/alias`, canonicalUrl: `${origin}/target`, path: receipt.routes.find((route: {url: string}) => route.url === `${origin}/target`).path}]);
-			for (const route of receipt.routes) expect(readFileSync(join(directory, route.path), 'utf8')).toContain('<h1>');
+			for (const route of receipt.routes) expect(stripNodeIds(readFileSync(join(directory, route.path), 'utf8'))).toContain('<h1>');
 			collector.requireUrls(capture.linkedPageCoverage!.requiredUrls);
 			const frozen = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));
 			expect(frozen.scope.sourceUrls.sort()).toEqual([...capture.linkedPageCoverage!.requiredUrls].sort());
@@ -365,11 +366,11 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const without = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article`);
 			const withSlash = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article/`);
 			expect(withSlash).toBeUndefined();
-			expect(readFileSync(join(directory, without.path), 'utf8')).toContain('<h1>Article without slash</h1>');
+			expect(stripNodeIds(readFileSync(join(directory, without.path), 'utf8'))).toContain('<h1>Article without slash</h1>');
 			const home = readFileSync(join(directory, 'website/index.html'), 'utf8');
-			expect(home).toContain(`href="/${without.path.slice('website/'.length)}">Article address`);
-			expect(home).toContain(`href="/${without.path.slice('website/'.length)}">Directory address`);
-			expect(readFileSync(join(directory, without.path), 'utf8')).toContain(`href="/${without.path.slice('website/'.length)}"`);
+			expect(stripNodeIds(home)).toContain(`href="/${without.path.slice('website/'.length)}">Article address`);
+			expect(stripNodeIds(home)).toContain(`href="/${without.path.slice('website/'.length)}">Directory address`);
+			expect(stripNodeIds(readFileSync(join(directory, without.path), 'utf8'))).toContain(`href="/${without.path.slice('website/'.length)}"`);
 			expect(receipt.duplicateRoutes).toEqual([]);
 			collector.finalize(receiptPath);
 			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); closed = true;

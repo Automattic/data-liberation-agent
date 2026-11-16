@@ -1,3 +1,4 @@
+import { finalizeBoxTreeHashes } from './box-tree.js';
 import { baselineSteps, createBaselineState, type CapturePerViewportArgs } from './baseline-steps.js';
 import { INITIAL_SCROLL_CLASS_ATTRIBUTE } from './initial-document.js';
 import { orElse, isIntegrityError } from '../failure-class.js';
@@ -2094,6 +2095,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	} finally {
 		// Settle glyphs deferred on earlier routes with colours learned later.
 		glyphColors.resolveDeferred();
+		finalizeBoxTreeHashes( opts.outputDir );
 		await resourceStore.flush();
 		await Promise.allSettled( partialCommitWrites );
 		await manifest.flush();
