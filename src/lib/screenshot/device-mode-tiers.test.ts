@@ -43,7 +43,8 @@ it( 'inherits only rendered script proofs, preserves identity differences, and r
 		expect( known.inheritedFrom ).toBe( `${ base }/first` );
 		expect( known.serverHtml ).toBe( 'identical-after-normalization' );
 		expect( scriptLoads ).toBe( loaded );
-		expect( ( await checkRouteDeviceMode( { ...args, url: `${ base }/client` } ) ).mode ).toBe( 'dual' );
+		// A confirmed identity difference is final: no second pair of source loads.
+		expect( await checkRouteDeviceMode( { ...args, url: `${ base }/client` } ) ).toMatchObject( { mode: 'dual', attempts: 1, identityConfirmed: true } );
 		expect( ( await checkRouteDeviceMode( { ...args, url: `${ base }/server` } ) ).mode ).toBe( 'dual' );
 		const retry = await checkRouteDeviceMode( { ...args, url: `${ base }/retry` } );
 		expect( retry.mode ).toBe( 'reflow-only' );
