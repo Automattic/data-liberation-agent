@@ -61,6 +61,7 @@ import {
 	publishExportGeneration,
 } from './export-publication.js';
 import { extractSharedChrome } from './shared-chrome.js';
+import { namespaceExportBoxTreeIds, writeExportBoxTrees } from './export-box-trees.js';
 import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
 
 /** Strip correspondence used only during capture, before HTML is encoded as replay state. */
@@ -1104,7 +1105,7 @@ function buildExportCapture(
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) ) );
+		writeFileSync( destination, namespaceExportBoxTreeIds( wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
@@ -1210,6 +1211,16 @@ function buildExportCapture(
 	} );
 	// Evidence describes expanded bytes. Compact afterwards in the same publication.
 	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ), inventory );
+	const boxReports = writeExportBoxTrees( outputDir, websiteDir, retainedEntries.flatMap( entry => {
+		const sourcePath = capture.entries[ entry.url ]?.html;
+		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, middleSourcePath: capture.entries[ entry.url ]?.profiles?.middle?.html, path: routePathOf( entry.url ) } ] : [];
+	} ), inventory );
+	if ( boxReports.length ) {
+		const receiptPath = join( stageDir, 'capture-receipt.json' );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		receipt.reports = [ ...receipt.reports, ...boxReports ].sort();
+		writeFileSync( receiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
+	}
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets and sidecars only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();
