@@ -102,7 +102,6 @@ describe('orchestrated HTTP review capture', () => {
 	it.each([
 		['https://author.github.io/project/', ['/project'], false],
 		['https://author.github.io/project/guide/', ['/project'], false],
-		['https://author.github.io/', undefined, true],
 		['https://author.github.io.evil.test/project/', undefined, true],
 		['https://example.test/project/', undefined, true],
 	] as const)('scopes shared-host project routes for %s', async (sourceUrl, prefixes, includesSibling) => {

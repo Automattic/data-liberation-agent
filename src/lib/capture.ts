@@ -487,7 +487,8 @@ async function runCaptureWebsite(
 		source: options.templateClusters !== undefined ? 'explicit' : templateClusters ? 'adapter-structured-content' : 'default',
 	};
 	if ( options.templateClusters === true && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
-	const routeScope = githubPagesRouteScope( sourceUrl ) ?? adapter.routeScope?.( sourceUrl );
+	const scopeDiagnostics: NonNullable<CaptureInventory['diagnostics']> = [];
+	const routeScope = await githubPagesRouteScope( sourceUrl, scopeDiagnostics ) ?? adapter.routeScope?.( sourceUrl );
 	if ( routeScope ) {
 		validateRouteScope( routeScope );
 		if ( !routeInScope( sourceUrl, routeScope ) ) throw new Error( 'Source URL is outside its adapter route scope' );
@@ -507,7 +508,7 @@ async function runCaptureWebsite(
 	const structuredContent = contentSource ? await contentSource.enumerate( sourceUrl, { governors: sourceGovernors } ) : undefined;
 	const contentEntries = structuredContent?.entries ?? [];
 	if ( structuredContent ) process.stderr.write( `[timing] structured content ${ adapter.id }: ${ contentEntries.length } entries, ${ structuredContent.diagnostics.length } diagnostics, ${ Date.now() - phaseStartedAt }ms\n` );
-	inventory.diagnostics = [ ...( inventory.diagnostics ?? [] ), ...( structuredContent?.diagnostics ?? [] ) ];
+	inventory.diagnostics = [ ...scopeDiagnostics, ...( inventory.diagnostics ?? [] ), ...( structuredContent?.diagnostics ?? [] ) ];
 	const sourceRoute = documentRequestUrl( sourceUrl );
 	// Action URLs and declared runtime paths leave before the budget sees them, so they never
 	// spend, and never appear as omitted, failed or missing routes.
