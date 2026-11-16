@@ -86,7 +86,34 @@ const SHRINKING_STICKY_HEADER_FIXTURE = `<!doctype html><html><head><style>
 	</script>
 </body></html>`;
 
+// Scroll-progress chrome (a builder's "while page is scrolling" interaction):
+// the header darkens in step with the first 50px of scroll.
+const SCROLL_PROGRESS_HEADER_FIXTURE = `<!doctype html><html><head><style>
+	body { margin: 0; height: 3000px; }
+	header { position: fixed; top: 0; left: 0; right: 0; height: 80px; }
+</style></head>
+<body>
+	<header style="background-color: rgba(20, 20, 20, 0)">Header</header>
+	<script>
+		window.addEventListener('scroll', () => {
+			document.querySelector('header').style.backgroundColor = 'rgba(20, 20, 20, ' + Math.min(1, window.scrollY / 50) + ')';
+		});
+	</script>
+</body></html>`;
+
 describe( 'captureScrollStates', () => {
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'records the settled scrolled value of scroll-progress chrome, not the value at its threshold',
+		async ({ newPage }) => {
+			const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+			await page.setContent( SCROLL_PROGRESS_HEADER_FIXTURE );
+			const [ toggle ] = ( await captureScrollStates( page, 'https://example.test/' ) ).toggles;
+			expect( toggle?.thresholdPx ).toBe( 2 );
+			expect( toggle?.styleTargets.flatMap( ( target ) => Object.values( target.properties ).map( ( value ) => value.scrolled ) ) ).toContain( 'rgb(20, 20, 20)' );
+		},
+		30_000
+	);
+
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'holds each probe offset while a toggle resizes in-flow chrome',
 		async ({ newPage }) => {

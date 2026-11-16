@@ -47,6 +47,7 @@ function makePage() {
 		route: vi.fn().mockResolvedValue(undefined),
 		unroute: vi.fn().mockResolvedValue(undefined),
 		exposeBinding: vi.fn().mockResolvedValue(undefined),
+		addStyleTag: vi.fn().mockResolvedValue(null),
 		once: vi.fn(),
 		on: vi.fn(),
 		off: vi.fn(),
