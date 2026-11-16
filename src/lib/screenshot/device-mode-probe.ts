@@ -353,7 +353,8 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, runtimeStyles, bodyClasses: differs() ? bodyClasses : undefined } );
 		checkTimings.equivalence += Date.now() - finalEquivalenceStartedAt;
 		if ( decided.mode === 'dual' && compared.serverHtml !== 'different' ) onSwitchCandidates?.( { widths: await withEvaluateTimeout( stylesheetSwitchBoundaries( compared.desktop.page ), 10_000 ).catch( orElse( [] ) ), desktop: desktopRendered, phone: phoneRendered } );
-		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt, checkTimings };
+		const identityConfirmed = rechecked && decided.mode === 'dual' && ( bodyClasses.desktopOnly.length > 0 || bodyClasses.phoneOnly.length > 0 );
+		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), ...( identityConfirmed ? { identityConfirmed } : {} ), checkMs: Date.now() - startedAt, checkTimings };
 	} catch ( error ) {
 		// Both identities failed alike (an absent route, an off-site redirect):
 		// there is no phone document to keep, and capture records the outcome once.
