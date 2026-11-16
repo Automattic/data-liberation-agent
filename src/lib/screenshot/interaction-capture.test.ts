@@ -154,6 +154,41 @@ describe( 'captureTriggeredDialogs', () => {
 			await browser.close();
 		}
 	} );
+	it.skipIf( skipBrowserTests )( 'does not attribute carousel slides that advance after scroll-in, but captures a modal that inerts its siblings', async () => {
+		const carousel = ( region: string ) => `<div style="height:1600px"></div><div ${ region } id="reviews">${ [ 0, 1, 2, 3 ].map( i =>
+			`<div class="card" ${ i ? 'aria-hidden="true" inert style="display:none"' : 'style="display:block;height:240px"' }><p>Review ${ i }</p><a href="/p/${ i }">Product ${ i }</a></div>` ).join( '' ) }</div>`;
+		const page = ( region: string ) => `<!doctype html><body>
+			<div id="app">${ carousel( region ) }
+				${ [ 1, 2, 3 ].map( i => `<form><button type="submit" aria-haspopup="dialog">Add to cart ${ i }</button></form>` ).join( '' ) }
+				<button id="signup" aria-haspopup="dialog">Sign up</button></div>
+			<div id="modal" role="dialog" aria-modal="true" aria-label="Join" hidden style="position:fixed;inset:10%;background:#fff"><input aria-label="Email"><button id="close">Close</button></div>
+			<script>
+				for (const form of document.forms) form.addEventListener('submit', e => e.preventDefault());
+				const app = document.getElementById('app'), modal = document.getElementById('modal');
+				document.getElementById('signup').onclick = () => { modal.hidden = false; app.inert = true; app.setAttribute('aria-hidden', 'true'); };
+				document.getElementById('close').onclick = () => { modal.hidden = true; app.inert = false; app.removeAttribute('aria-hidden'); };
+				// Autoplay starts only once the carousel scrolls into view, after any idle window at the top.
+				const cards = [...document.querySelectorAll('.card')]; let i = 0, timer;
+				new IntersectionObserver(([entry]) => { if (entry.isIntersecting && !timer) timer = setInterval(() => {
+					const show = (card, on) => { card.style.display = on ? 'block' : 'none'; card.style.height = '240px'; card.inert = !on; card.setAttribute('aria-hidden', String(!on)); };
+					show(cards[i], false); i = (i + 1) % cards.length; show(cards[i], true);
+				}, 250); }).observe(document.getElementById('reviews'));
+			</script></body>`;
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			for ( const region of [ 'role="region" aria-roledescription="carousel" aria-label="Reviews"', '' ] ) {
+				const tab = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+				await tab.setContent( page( region ) );
+				const report = await captureTriggeredDialogs( tab, 'https://example.test/' );
+				const status = ( label: string ) => report.states.find( state => state.trigger?.label === label )?.status;
+				expect( [ 1, 2, 3 ].map( i => status( `Add to cart ${ i }` ) ), region || 'unlabelled swap' ).toEqual( [ 'no-dialog', 'no-dialog', 'no-dialog' ] );
+				expect( status( 'Sign up' ), region || 'unlabelled swap' ).toBe( 'captured' );
+				await tab.close();
+			}
+		} finally {
+			await browser.close();
+		}
+	}, 60_000 );
 	it.skipIf( skipBrowserTests )(
 		'restores a language toggle that a probe click switched so later states stay in the source language',
 		async () => {

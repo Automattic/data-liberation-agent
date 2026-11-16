@@ -1143,6 +1143,21 @@ async function firstNewVisibleDialog(
 			}
 			return false;
 		};
+		// A slide is revealed by its carousel, whenever autoplay advances, not by
+		// an unrelated trigger. Evidence is ARIA carousel ancestry or a peer swap:
+		// the item became visible while a like sibling visible before is now hidden.
+		// Sibling inert/aria-hidden alone is not evidence: modals set it on open.
+		const inSlideSet = ( element: Element ): boolean => {
+			for ( let node: Element | null = element; node && node !== document.body; node = node.parentElement ) {
+				if ( node.matches( '[aria-roledescription="carousel" i],[aria-roledescription="slide" i]' ) ) return true;
+				if ( ! marked || node.hasAttribute( 'data-lib-visible-before' ) ) continue;
+				const swapped = Array.from( node.parentElement?.children ?? [] ).some( sibling => sibling !== node &&
+					sibling.tagName === node!.tagName && sibling.hasAttribute( 'data-lib-visible-before' ) && ! visible( sibling ) );
+				if ( swapped ) return true;
+			}
+			return false;
+		};
+		const independentReveal = ( element: Element ): boolean => changesWithoutActivation( element ) || inSlideSet( element );
 		const candidates = Array.from( document.querySelectorAll( surfaceSelector ) );
 		const trigger = document.querySelector( triggerSelector );
 		if ( trigger?.getAttribute( 'aria-expanded' ) === 'false' ) return undefined;
@@ -1165,8 +1180,8 @@ async function firstNewVisibleDialog(
 		while ( ! controlledDisclosure && owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) && visible( owned.parentElement ) ) owned = owned.parentElement;
 		const surface = owned ?? candidates.find( ( element, index ) => {
 			if ( ! visible( element ) || wasVisible( element, index ) ) return false;
-			if ( element.matches( semanticSelector ) ) return true;
-			if ( changesWithoutActivation( element ) ) return false;
+			if ( element.matches( semanticSelector ) && ! element.closest( '[aria-roledescription="carousel" i]' ) ) return true;
+			if ( independentReveal( element ) ) return false;
 			const rect = element.getBoundingClientRect();
 			return rect.width * rect.height > 40_000;
 		} );
@@ -1174,7 +1189,7 @@ async function firstNewVisibleDialog(
 		// interactive content: an in-flow menu panel is often a plain <div>.
 		const revealed = surface ?? ( marked ? Array.from( document.body.querySelectorAll( '*' ) ).find( ( element ) =>
 			! element.hasAttribute( 'data-lib-visible-before' ) &&
-			! changesWithoutActivation( element ) &&
+			! independentReveal( element ) &&
 			visible( element ) &&
 			( element.parentElement === null || element.parentElement.hasAttribute( 'data-lib-visible-before' ) ) &&
 			element.querySelector( 'a[href],button' ) !== null
@@ -1185,7 +1200,7 @@ async function firstNewVisibleDialog(
 			return Math.max( 0, width ) * Math.max( 0, height );
 		};
 		const slidIntoView = ( element: Element ): boolean => {
-			if ( ! controlled.includes( element as HTMLElement ) && ! element.matches( semanticSelector ) && changesWithoutActivation( element ) ) return false;
+			if ( ! controlled.includes( element as HTMLElement ) && ! element.matches( semanticSelector ) && independentReveal( element ) ) return false;
 			const pos = element.getAttribute( 'data-lib-offscreen-pos' );
 			if ( ! pos || element.hasAttribute( 'data-lib-interaction-trigger' ) || element.closest( '[data-lib-interaction-trigger]' ) ) return false;
 			if ( ! visible( element ) ) return false;
