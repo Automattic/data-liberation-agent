@@ -48,8 +48,8 @@ describe('capturePageHtml stylesheet serialization', () => {
   });
 
   // Two routes in one browser pass; expected wall time is about a second.
-  it('restores top after media settling before serializing each route', async () => {
-    const page = await browser.newPage();
+  it('restores top after media settling before serializing each route', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.route('https://media-scroll.test/**', route => route.fulfill({
         contentType: 'text/html',
