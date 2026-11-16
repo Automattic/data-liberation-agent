@@ -136,7 +136,7 @@ export function observeViewportEntrances(): void {
 	addEventListener( 'resize', () => { if ( outerWidth !== initialOuter.width || outerHeight !== initialOuter.height ) navigationalPose = false; } );
 	const attributes = ( element: Element ) => Object.fromEntries(
 		Array.from( element.attributes ).filter( attribute =>
-			/^(class|style|data-.+)$/.test( attribute.name ) && ! attribute.name.startsWith( 'data-blocks-engine-capture-' )
+			/^(class|style|data-.+)$/.test( attribute.name ) && ! attribute.name.startsWith( 'data-blocks-engine-capture-' ) && attribute.name !== 'data-blocks-engine-node-id'
 		).map( attribute => [ attribute.name, attribute.value ] )
 	);
 	window.IntersectionObserver = class extends native {
