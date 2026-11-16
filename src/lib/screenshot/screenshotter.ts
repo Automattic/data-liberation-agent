@@ -1095,7 +1095,15 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// Contexts a route leaves open: the deadline closes them so its in-flight
 	// waits fail instead of running on unwitnessed.
 	const routeContexts = new Map< string, Set< BrowserContext > >();
+	let closing = false;
+	// Capture returned, the run budget is abandoning, or this route lost its deadline.
+	const routeRetired = ( url: string ): boolean => closing || Boolean( routeBudget?.abandoning ) || ! routeDeadlines.commit( url );
 	const trackRouteContext = ( url: string, context: BrowserContext ): void => {
+		// Context acquisition can settle after the route lost its slot.
+		if ( routeRetired( url ) ) {
+			void context.close().catch( orElse( undefined ) );
+			return;
+		}
 		let contexts = routeContexts.get( url );
 		if ( ! contexts ) routeContexts.set( url, contexts = new Set() );
 		contexts.add( context );
@@ -1211,7 +1219,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const replaceCrashedBrowser = ( crashed: Browser ): Promise< boolean > => {
 		if ( browser !== crashed ) return Promise.resolve( true );
 		// The time budget closed this browser on purpose.
-		if ( routeBudget?.abandoning ) return Promise.resolve( false );
+		if ( closing || routeBudget?.abandoning ) return Promise.resolve( false );
 		if ( ! crashRelaunch ) {
 			if ( crashRelaunches >= MAX_CRASH_RELAUNCHES ) return Promise.resolve( false );
 			crashRelaunches++;
@@ -1219,7 +1227,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			void crashed.close().catch( orElse( undefined ) );
 			crashRelaunch = connectBrowser( {} )
 				.then(
-					( next ) => {
+					async ( next ) => {
+						if ( closing || routeBudget?.abandoning ) {
+							await next.close().catch( orElse( undefined ) );
+							return false;
+						}
 						browser = next as unknown as Browser;
 						browserRestarts++;
 						return true;
@@ -1580,7 +1592,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		};
 		const captureProfile = async ( viewport: Viewport, recovery = false ): Promise< { profileEntry: ManifestEntry; failures: FailureEntry[]; additional: boolean } | undefined > => {
 			// A route abandoned at its deadline captures no further profiles.
-			if ( ! routeDeadlines.commit( url ) ) return undefined;
+			if ( routeRetired( url ) ) return undefined;
 			const vpPlan = recovery
 				? planArtifacts( { outputDir: opts.outputDir, slug, force: true, captureImages: opts.captureImages } )[ viewport.id as 'desktop' | 'mobile' ]
 				: profilePlan( viewport );
@@ -1595,6 +1607,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			// error shell, in a fresh context once. A disconnected browser also needs
 			// the shared relaunch before the retry.
 			for ( let crashRetry = false; ; crashRetry = true ) {
+				if ( routeRetired( url ) ) return undefined;
 				if (crashRetry) forgetSourceDocument(opts.governors, url);
 				const attemptBrowser = browser;
 				const failuresBefore = profileFailures.length;
@@ -1783,6 +1796,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				for ( const failure of profileFailures.slice( failuresBefore ) ) {
 					failure.attempt = crashRetry ? 2 : failure.attempt;
 				}
+				// Deadline/teardown disconnects are intentional, not crashes. A late
+				// observer must never resurrect the browser after capture returned.
+				if ( routeRetired( url ) ) return undefined;
 				const failed = profileFailures.length > failuresBefore;
 				if ( ! failed || crashRetry || errorGuard?.stopped() ) break;
 				if ( attemptBrowser.isConnected() ) {
@@ -2098,6 +2114,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 		}
 	} finally {
+		closing = true;
 		// Settle glyphs deferred on earlier routes with colours learned later.
 		glyphColors.resolveDeferred();
 		finalizeBoxTreeHashes( opts.outputDir );
