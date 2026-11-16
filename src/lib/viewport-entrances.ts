@@ -38,6 +38,7 @@ export function observeViewportEntrances(): void {
 	named.__name ??= fn => fn;
 	const scope = window as typeof window & { __dlaEntrances?: {
 		stamp(): void;
+		classTokens( element: Element ): Set<string>;
 		transitions: string[];
 		startup: Array<{ id: string; started: boolean }>;
 		losses: Array<{ id: string; reason: string }>;
@@ -316,6 +317,13 @@ export function observeViewportEntrances(): void {
 			.map( ([ element, target ]) => ( { id: element.id, started: target.cssStarted && target.startup } ) ); },
 		get losses() { return Array.from( targets ).filter( ([ element, target ]) => element.isConnected && ( target.loss || target.cssStarted && ! target.cssComplete ) )
 			.map( ([ element, target ]) => ( { id: element.id, reason: target.loss ?? 'CSS entrance has no observed terminal attribute switch' } ) ); },
+		classTokens( element ) {
+			const target = targets.get( element );
+			const poses = target?.confirmed ? target.state.attributes.class : undefined;
+			const before = new Set( ( poses?.before ?? '' ).split( /\s+/ ).filter( Boolean ) );
+			const after = new Set( ( poses?.after ?? '' ).split( /\s+/ ).filter( Boolean ) );
+			return new Set( [ ...before, ...after ].filter( token => before.has( token ) !== after.has( token ) ) );
+		},
 		stamp() {
 			// Only content below the fold at serialization: what is in view at the top
 			// pose (headers, hero) is already what a visitor sees first.

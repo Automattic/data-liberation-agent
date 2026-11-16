@@ -9,6 +9,8 @@ import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { captureViewportClassStates, projectViewportClassRules, type ViewportClassMemo } from './viewport-class-states.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { observeViewportEntrances } from '../viewport-entrances.js';
+import { triggerLazyLoad } from './page-helpers.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
 // with it (the Google Sites pattern); narrower widths show the closed icon.
@@ -54,6 +56,45 @@ it( 'serves script-toggled class state at the widths the source applied it', asy
 		await browser.close();
 	}
 }, 60_000 );
+
+// One browser pass (~3s): scroll proves the entrance before the width sweep.
+it( 'excludes entrance pose tokens per element but keeps genuine width tokens', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.addInitScript( observeViewportEntrances );
+		await page.goto( `data:text/html,${ encodeURIComponent( `<!doctype html><style>
+			body{margin:0}.hero{height:1200px}@media(max-width:767px){.hero{height:200px}}
+			.reveal{width:200px;height:120px;opacity:0;transition:opacity .3s}
+			.shown{opacity:1}.spacer{height:1600px}.compact{color:red}
+		</style><nav id="nav">Menu</nav><div class="hero"></div>
+		<div id="reveal" class="reveal hidden">Reveal</div><div class="spacer"></div><script>
+		const reveal=document.getElementById('reveal');
+		function update(){
+			const r=reveal.getBoundingClientRect();
+			if(r.top<innerHeight && r.bottom>0){reveal.classList.add('shown');reveal.classList.remove('hidden');}
+			else if(r.top>=innerHeight){reveal.classList.remove('shown');reveal.classList.add('hidden');}
+		}
+		function width(){
+			for(const el of [reveal,document.getElementById('nav')]) el.classList.toggle('compact',innerWidth<768);
+			update();
+		}
+		addEventListener('scroll',update,{passive:true});addEventListener('resize',width);width();
+		</script>` ) }` );
+		await triggerLazyLoad( page );
+		await page.evaluate( () => scrollTo( 0, 0 ) );
+		await page.waitForTimeout( 350 );
+		const result = await captureViewportClassStates( page, { widths: [ 390, 768, 1440 ], settleMs: 0 } );
+		expect( result.aliased ).toBe( 2 );
+		const carried = await page.locator( '[data-blocks-engine-capture-width-classes]' ).evaluateAll( elements => elements.map( element => ( {
+			id: element.id,
+			tokens: ( JSON.parse( element.getAttribute( 'data-blocks-engine-capture-width-classes' )! ) as Array<[string, string, boolean]> ).map( pair => pair[ 0 ] ),
+		} ) ) );
+		expect( carried ).toEqual( [ { id: 'nav', tokens: [ 'compact' ] }, { id: 'reveal', tokens: [ 'compact' ] } ] );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
 
 // Two routes (~2s) load the same CSS; only the first has resize-driven dots.
 it( 'serializes shared header rules identically when only one route has width-toggled dots', async () => {
