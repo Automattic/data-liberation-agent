@@ -1,8 +1,8 @@
-import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it, test } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 
@@ -16,18 +16,18 @@ function fixture( phone: boolean ) {
 	${ phone ? '<section><h1>Phone document</h1><p>Compact identity</p></section>' : '<h1>Desktop document</h1><nav>Wide identity</nav>' }</main><aside>Unrelated breakpoint</aside></body></html>`;
 }
 
-it( 'keeps a fixed server-selected phone document out of tablet widths', async () => {
+it( 'keeps a fixed server-selected phone document out of tablet widths', async ({ serve, newPage }) => {
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'fixed-phone-' ) );
 	let portable: string | undefined;
-	const server = createServer( ( request, response ) => {
+	const { server } = await serve(( request, response ) => {
 		response.setHeader( 'Content-Type', 'text/html' );
 		response.end( request.url === '/copy/' ? portable : fixture( /iPhone|Android/.test( request.headers[ 'user-agent' ] ?? '' ) ) );
-	} );
-	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	});
+
 	const sourceUrl = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
-	const browser = await chromium.launch();
+
 	try {
 		const capture = await captureScreenshots( {
 			urls: [ sourceUrl ], outputDir, concurrency: 1, settleMs: 0, deviceMode: 'auto',
@@ -40,7 +40,7 @@ it( 'keeps a fixed server-selected phone document out of tablet widths', async (
 		expect( manifest.entries[ sourceUrl ].deviceMode?.switchWidth ).toBeUndefined();
 		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
 		portable = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const copy = await browser.newPage();
+		const copy = await newPage();
 		await copy.goto( `${ sourceUrl }copy/` );
 		for ( const width of [ 390, 768, 1024 ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -48,8 +48,7 @@ it( 'keeps a fixed server-selected phone document out of tablet widths', async (
 			expect( ( await copy.locator( 'main:visible' ).boundingBox() )!.width ).toBe( width );
 		}
 	} finally {
-		await browser.close();
-		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
+
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 90_000 );

@@ -1,16 +1,14 @@
 import { readFile } from 'node:fs/promises';
-import { chromium, type Browser } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { weeblyAdapter } from './index.js';
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Square Online provider-service cleanup', () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await chromium.launch(); });
-  afterAll(async () => { await browser.close(); });
 
-  it('removes checkout and chat with evidence while retaining content and a working navigation drawer', async () => {
-    const page = await browser.newPage();
+  it('removes checkout and chat with evidence while retaining content and a working navigation drawer', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.setContent(await readFile('test/fixtures/closed-commerce-drawer.html', 'utf8'));
       const main = await page.locator('main').innerHTML();

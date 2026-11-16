@@ -1,14 +1,14 @@
-import { it, expect } from 'vitest';
-import { createServer } from 'node:http';
-import { chromium, devices } from 'playwright';
+import { expect } from 'vitest';
+import { it, test, type BrowserFixtures } from '../../../test/browser.js';
+import { devices } from 'playwright';
 import { checkRouteDeviceMode } from './device-mode-probe.js';
 import { retryRouteDeviceCheck, RouteDeviceEvidence } from './device-mode.js';
 import { documentsDiffer } from '../responsive-assembly.js';
 
-it( 'inherits only rendered script proofs, preserves identity differences, and retries failed requests', async () => {
+it( 'inherits only rendered script proofs, preserves identity differences, and retries failed requests', async ({ serve, browser }) => {
 	let failed = false;
 	let scriptLoads = 0;
-	const server = createServer( ( req, res ) => {
+	const { server } = await serve(( req, res ) => {
 		if ( req.url === '/retry' && ! failed ) { failed = true; req.socket.destroy(); return; }
 		if ( req.url?.endsWith( '.js' ) ) {
 			scriptLoads++;
@@ -22,11 +22,11 @@ it( 'inherits only rendered script proofs, preserves identity differences, and r
 			return;
 		}
 		res.end( `<body><script nonce="${ req.headers[ 'user-agent' ] === 'Desktop' ? 'a' : 'b' }"></script><p>${ req.url === '/server' && /iPhone/.test( req.headers[ 'user-agent' ] ?? '' ) ? 'phone' : 'same' }</p><script src="${ req.url === '/client' ? '/new.js' : '/known.js' }"></script></body>` );
-	} );
-	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	});
+
 	const port = ( server.address() as { port: number } ).port;
-	const browser = await chromium.launch();
-	try {
+
+	{
 		const base = `http://127.0.0.1:${ port }`;
 		const args = {
 			browser, desktop: { userAgent: 'Desktop' }, phone: devices[ 'iPhone 13' ]!, publicUrlsOnly: false,
@@ -49,9 +49,6 @@ it( 'inherits only rendered script proofs, preserves identity differences, and r
 		const retry = await checkRouteDeviceMode( { ...args, url: `${ base }/retry` } );
 		expect( retry.mode ).toBe( 'reflow-only' );
 		expect( retry.attempts ).toBe( 2 );
-	} finally {
-		await browser.close();
-		await new Promise<void>( resolve => server.close( () => resolve() ) );
 	}
 }, 60_000 );
 
@@ -80,32 +77,29 @@ for (const label of labels) {
 ${ content }
 </script></body></html>`;
 
-it.each( [
+it.for( [
 	{ name: 'consent dialog reordered by width', route: '/consent', mode: 'reflow-only', differ: false },
 	{ name: 'main content differs by width', route: '/content', mode: 'dual', differ: true },
-] )( 'compares structure without consent overlays: $name', async ( { route, mode, differ } ) => {
-	const server = createServer( ( req, res ) => {
+] )( 'compares structure without consent overlays: $name', { timeout: 60_000 }, async ( { route, mode, differ }, { serve, browser, newContext } ) => {
+	const { server } = await serve(( req, res ) => {
 		res.setHeader( 'content-type', 'text/html' );
 		res.end( consentFixture( req.url === '/content' ? "if (innerWidth < 600) document.querySelector('main').append(document.createElement('aside'), document.createElement('nav'));" : '' ) );
-	} );
-	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	});
+
 	const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }${ route }`;
-	const browser = await chromium.launch();
-	try {
+
+	{
 		const phone = devices[ 'iPhone 13' ]!;
 		const decision = await checkRouteDeviceMode( { browser, url, desktop: { userAgent: 'Desktop' }, phone, publicUrlsOnly: false, deviceEvidence: new RouteDeviceEvidence() } );
 		expect( decision.mode, decision.reason ).toBe( mode );
-		const render = async ( options: typeof phone | { userAgent: string } ) => {
-			const context = await browser.newContext( options );
+		const render = async ( { newContext }: Pick<BrowserFixtures, 'newContext'>, options: typeof phone | { userAgent: string } ) => {
+			const context = await newContext( options );
 			const page = await context.newPage();
 			await page.goto( url );
 			const html = await page.content();
 			await context.close();
 			return html;
 		};
-		expect( documentsDiffer( await render( { userAgent: 'Desktop' } ), await render( phone ) ) ).toBe( differ );
-	} finally {
-		await browser.close();
-		await new Promise<void>( resolve => server.close( () => resolve() ) );
+		expect( documentsDiffer( await render({ newContext },  { userAgent: 'Desktop' } ), await render({ newContext },  phone ) ) ).toBe( differ );
 	}
-}, 60_000 );
+} );

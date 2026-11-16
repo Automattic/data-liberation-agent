@@ -1,8 +1,9 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { afterEach, describe, expect, it } from 'vitest';
+
+import { describe, expect, afterEach } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
 import { godaddyWmAdapter } from './index.js';
 
@@ -13,16 +14,16 @@ afterEach(() => {
 });
 
 describe('GoDaddy W+M publication evidence', () => {
-  it('carries a blog post published date into portable HTML, but not ordinary pages', async () => {
-    const browser = await chromium.launch({ headless: true });
-    try {
-      const postPage = await browser.newPage();
+  it('carries a blog post published date into portable HTML, but not ordinary pages', async ({ newPage }) => {
+
+    {
+      const postPage = await newPage();
       await postPage.setContent('<html><head></head><body><article>Post</article><script>window._BLOG_DATA = { post: { publishedDate: "2025-02-03T04:05:06.000Z" } };</script></body></html>');
       await godaddyWmAdapter.liberation?.beforeSerialize?.(postPage, { url: 'https://example.test/news,-updates-and-reviews/f/post', viewport: 'desktop' });
       const postHtml = await postPage.content();
       expect(postHtml).toContain('property="article:published_time" content="2025-02-03T04:05:06.000Z"');
 
-      const page = await browser.newPage();
+      const page = await newPage();
       await page.setContent('<html><head></head><body><main>Page</main></body></html>');
       await godaddyWmAdapter.liberation?.beforeSerialize?.(page, { url: 'https://example.test/about', viewport: 'desktop' });
       expect(await page.content()).not.toContain('article:published_time');
@@ -46,8 +47,6 @@ describe('GoDaddy W+M publication evidence', () => {
 
       expect(readFileSync(join(outputDir, 'website', 'news,-updates-and-reviews', 'f', 'post', 'index.html'), 'utf8')).toContain('article:published_time');
       expect(readFileSync(join(outputDir, 'website', 'about', 'index.html'), 'utf8')).not.toContain('article:published_time');
-    } finally {
-      await browser.close();
     }
   });
 });

@@ -1,9 +1,9 @@
-import { createServer } from 'node:http';
 import { readFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
+
 import { load } from 'cheerio';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
 import { loadFramerDocument, settleFramerEntranceStyle } from './capture.js';
@@ -22,16 +22,16 @@ it('settles only hinted inline entrance poses', () => {
 });
 
 // One browser capture (~20s), using the same document loader as liberation.
-it('keeps width-selected SSR variants as one portable tree', async () => {
+it('keeps width-selected SSR variants as one portable tree', async ({ serve, newPage }) => {
 	const fixture = readFileSync(new URL('../../../test/fixtures/width-selected-variants.html', import.meta.url), 'utf8');
-	const server = createServer((_request, response) => { response.setHeader('content-type', 'text/html'); response.end(fixture); });
-	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const { server } = await serve((_request, response) => { response.setHeader('content-type', 'text/html'); response.end(fixture); });
+
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
 	mkdirSync('.tmp-test', { recursive: true });
 	const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'ssr-variants-'));
-	const browser = await chromium.launch();
+
 	try {
-		const page = await browser.newPage();
+		const page = await newPage();
 		const before: number[] = [];
 		const sourceTops: number[] = [];
 		for (const width of [390, 1024, 1440]) {
@@ -73,8 +73,7 @@ it('keeps width-selected SSR variants as one portable tree', async () => {
 		expect(after).toEqual(['Phone layout', 'Tablet layout', 'Desktop layout']);
 		console.info('SSR variant evidence', { before, after, headers: $('header').length, forms: $('form').length });
 	} finally {
-		await browser.close();
-		await new Promise<void>(resolve => server.close(() => resolve()));
+
 		rmSync(outputDir, { recursive: true, force: true });
 	}
 }, 120000);

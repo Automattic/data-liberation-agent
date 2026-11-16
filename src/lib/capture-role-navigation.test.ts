@@ -1,9 +1,9 @@
 import { resolveInteractionComponents, type ComponentPage } from './captured-interactions.js';
-import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import { captureWebsite } from '../index.js';
 import { readResolvedPage } from './site-includes.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
@@ -28,21 +28,21 @@ region.onclick=()=>{regionPopper.hidden=!regionPopper.hidden;region.setAttribute
 addEventListener('keydown',event=>{if(event.key==='Escape'){close();regionPopper.hidden=true;region.setAttribute('aria-expanded','false');}});
 </script></body></html>`;
 
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semantics and observed header router destinations through the public capture API', async () => {
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semantics and observed header router destinations through the public capture API', async ({ serve, newPage }) => {
 	const parent = join(process.cwd(), '.tmp-test');
 	mkdirSync(parent, { recursive: true });
 	const root = mkdtempSync(join(parent, 'role-navigation-'));
 	let copyRoot: string | undefined;
-	const server = createServer((request, response) => {
+	const { server } = await serve((request, response) => {
 		if (request.url?.includes('liberation-absent-')) {response.writeHead(404); response.end(); return;}
 		if (request.url === '/robots.txt') { response.end(''); return; }
 		if (request.url?.includes('sitemap')) { response.statusCode = 404; response.end(); return; }
 		response.setHeader('Content-Type', 'text/html');
 		response.end(request.url === '/copy/' && copyRoot ? readResolvedPage(copyRoot, join(copyRoot, 'index.html')) : source);
 	});
-	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-	const browser = await chromium.launch();
+
 	try {
 		const result = await captureWebsite({ url, outputDir: root, captureImages: false, trustedOrigins: [url], learnFluid: false }, {
 			findAdapter: () => ({ id: 'neutral-surfaces', detect: () => true, discover: async () => ({ urls: [url, `${url}about`, `${url}contact`].map(url => ({ url })) }) }),
@@ -61,7 +61,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 		const html = readResolvedPage(copyRoot, join(copyRoot, 'index.html'));
 		expect(html).toContain('data-blocks-engine-capture-listbox-trigger');
 		expect(html).not.toContain('data-blocks-engine-capture-dialog-trigger');
-		const page = await browser.newPage();
+		const page = await newPage();
 		await page.goto(`${url}copy/`);
 		expect(await page.locator('#about').evaluate(el => el.tagName)).toBe('A');
 		expect(new URL((await page.locator('#about').getAttribute('href'))!, url).pathname).toBe('/about/index.html');
@@ -85,8 +85,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('exports owned listbox semant
 		expect(await page.locator('[role="option"]').count()).toBe(4);
 		expect(await page.locator('#region-popper').count()).toBe(1);
 	} finally {
-		await browser.close();
-		await new Promise<void>(resolve => server.close(() => resolve()));
+
 		rmSync(root, { recursive: true, force: true });
 	}
 }, 180_000);

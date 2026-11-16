@@ -9,12 +9,12 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, vi } from 'vitest';
+import { it, test } from '../../../test/browser.js';
 import { BROWSER_IMAGE_ACCEPT, createSourceContext } from '../browser-kit/source-identity.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import {
@@ -1749,12 +1749,12 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
-		it( 'probes each responsive image once per capture and keeps every rendition', async () => {
+		it( 'probes each responsive image once per capture and keeps every rendition', async ({ serve, newPage, browser }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );
 			const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64' );
 			const imageHeaders: { userAgent?: string; accept?: string }[] = [];
-			const server = createServer( ( req, res ) => {
+			const { server } = await serve(( req, res ) => {
 				if ( req.url?.endsWith( '.png' ) ) {
 					imageHeaders.push( { userAgent: req.headers['user-agent'], accept: req.headers.accept } );
 					res.setHeader( 'content-type', 'image/png' );
@@ -1766,17 +1766,17 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				const second = req.url === '/second';
 				res.setHeader( 'content-type', 'text/html' );
 				res.end( `<!doctype html><meta name="viewport" content="width=device-width"><img style="width:400px" src="../small.png" srcset="../small.png 400w,../large.png 1200w" sizes="100vw" data-node="${ second ? 2 : 1 }"><div style="height:3000px"></div><picture><img style="width:200px" src="/blur.png" data-node="${ second ? 4 : 3 }"></picture><img style="width:10px" src="" srcset="" alt="unset"><script>new IntersectionObserver( entries => { for ( const entry of entries ) if ( entry.isIntersecting ) entry.target.src = '/full.png'; } ).observe( document.querySelector( 'picture img' ) );</script>` );
-			} );
-			await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
+			});
+
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-			const browser = await chromium.launch();
+
+			const contextOptions = { userAgent: 'Mozilla/5.0 Chrome/130.0.0.0 srcset-probe-test', viewport: { width: 1440, height: 900 } };
+			const traffic = { sourceUrl: `${ origin }/` };
+			const context = await createSourceContext( browser, contextOptions, traffic );
+			const page = await context.newPage();
+			const newContext = vi.spyOn( browser, 'newContext' );
 			try {
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
-				const contextOptions = { userAgent: 'Mozilla/5.0 Chrome/130.0.0.0 srcset-probe-test', viewport: { width: 1440, height: 900 } };
-				const traffic = { sourceUrl: `${ origin }/` };
-				const context = await createSourceContext( browser, contextOptions, traffic );
-				const page = await context.newPage();
-				const newContext = vi.spyOn( browser, 'newContext' );
 				const probes = [];
 				for ( const route of [ '/', '/second' ] ) {
 					await page.goto( `${ origin }${ route }` );
@@ -1801,12 +1801,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( Object.keys( manifest.resources ).filter( url => /\/(?:small|large|full)\.png$/.test( url ) ).sort() )
 					.toEqual( [ `${ origin }/full.png`, `${ origin }/large.png`, `${ origin }/small.png` ].sort() );
 			} finally {
-				await browser.close();
-				await new Promise( done => server.close( done ) );
+				newContext.mockRestore();
+				await context.close();
 			}
 		}, 30_000 );
 
-		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async () => {
+		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async ({ newPage }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-browser-' ) );
 			dirs.push( outputDir );
 			const sourceUrl = 'https://mixed-content.example/';
@@ -1818,9 +1818,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ),
 				body: Buffer.from( url === imported ? `@font-face{font-family:Mixed;src:url(${ font })}` : css ),
 			} ) );
-			const browser = await chromium.launch();
-			try {
-				const page = await browser.newPage();
+
+			{
+				const page = await newPage();
 				const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
 				store.observe( page );
 				const insecureRequests: string[] = [];
@@ -1852,14 +1852,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await page.goto( 'http://portable.example/', { waitUntil: 'networkidle' } );
 				expect( await advance() ).toBe( liveAdvance );
 				expect( await page.evaluate( () => document.fonts.size ) ).toBe( 0 );
-			} finally {
-				await browser.close();
 			}
 		}, 30_000 );
-		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async () => {
+		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async ({ serve, newPage }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-beacon-' ) );
 			dirs.push( outputDir );
-			const server = createServer( ( req, res ) => {
+			const { server } = await serve(( req, res ) => {
 				if ( req.url === '/' ) {
 					res.setHeader( 'content-type', 'text/html' );
 					res.end(
@@ -1877,12 +1875,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					res.setHeader( 'content-type', 'application/json' );
 					res.end( '{"accepted":true}' );
 				}
-			} );
-			await new Promise< void >( ( done ) => server.listen( 0, '127.0.0.1', done ) );
+			});
+
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-			const browser = await chromium.launch();
-			try {
-				const page = await browser.newPage();
+
+			{
+				const page = await newPage();
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
 				store.observe( page );
 				await page.goto( `${ origin }/`, { waitUntil: 'networkidle' } );
@@ -1896,9 +1894,6 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( manifest.failures ).toEqual( [] );
 				expect( existsSync( join( outputDir, 'resources', '__beacon' ) ) ).toBe( false );
 				expect( existsSync( join( outputDir, 'resources', 'analytics' ) ) ).toBe( false );
-			} finally {
-				await browser.close();
-				await new Promise( ( done ) => server.close( done ) );
 			}
 		}, 30_000 );
 	}

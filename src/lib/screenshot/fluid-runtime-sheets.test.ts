@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it, type BrowserFixtures } from '../../../test/browser.js';
+
 import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { RUNTIME_SHEET_RULES_ATTRIBUTE } from './fluid-runtime-sheets.js';
 import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
@@ -27,14 +28,11 @@ const runtimeSheetSource = ( authored = '' ) => `<style>body{margin:0}#canvas{mi
 const WIDTHS = [ 390, 768, 980, 1024, 1280, 1440, 1920 ];
 
 describe( 'runtime-written stylesheet offsets', () => {
-	let browser: Browser;
-	beforeAll( async () => { browser = await chromium.launch(); } );
-	afterAll( async () => { await browser.close(); } );
 
-	it( 'keeps canvas offsets below the capture width instead of freezing the capture width sheet', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const reference = await browser.newPage();
-		const copy = await browser.newPage();
+	it( 'keeps canvas offsets below the capture width instead of freezing the capture width sheet', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const reference = await newPage();
+		const copy = await newPage();
 		try {
 			await page.setContent( runtimeSheetSource() );
 			await reference.setContent( runtimeSheetSource() );
@@ -79,17 +77,17 @@ describe( 'runtime-written stylesheet offsets', () => {
 		const update=()=>{ sheet??=document.head.appendChild(document.createElement('style')); last=Math.min(last,${ authored }); sheet.textContent='#t { font-size: '+last+'px !important; }'; };
 		addEventListener('resize',update);${ atLoad ? 'update();' : '' }`;
 	const scaled = [ [ 390, '40px' ], [ 1440, '62px' ], [ 1600, '64px' ] ] as const;
-	it.each( [
+	it.for( [
 		[ 'drops a fitted size the authored cascade reproduces', eager( authored ), false, 1, scaled ],
 		[ 'drops a shrink-only fitted size after probe resizes', shrinking( true ), true, 1, scaled ],
 		[ 'empties a shrink-only sheet first created at a probe width', shrinking( false ), true, undefined, scaled ],
 		[ 'keeps a fitted size that shrank the text', eager( 'innerWidth>=1536?34:30' ), false, undefined, [ [ 390, '30px' ], [ 1440, '30px' ], [ 1600, '30px' ] ] ],
-	] as const )( '%s', async ( _label, fitter, probed, pruned, expected ) => {
+	] as const )( '%s', { timeout: 60_000 }, async ( [ _label, fitter, probed, pruned, expected ], { newPage } ) => {
 		const source = `<style>body{margin:0}#t{font-size:40px}@media (min-width:1280px){#t{font-size:62px}}@media (min-width:1536px){#t{font-size:64px}}</style>
 			<h1 id="t">Estrategia</h1>
 			<script>${ fitter }</script>`;
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		try {
 			// Capture installs the runtime-write tracker before any source script
 			// and navigates; setContent's document.open() would drop its listeners.
@@ -116,9 +114,9 @@ describe( 'runtime-written stylesheet offsets', () => {
 				expect( await copy.locator( '#t' ).evaluate( node => getComputedStyle( node ).fontSize ), `at ${ width }` ).toBe( size );
 			}
 		} finally { await page.close(); await copy.close(); }
-	}, 60_000 );
+	} );
 
-	it( 'refines an adaptive sweep where only a runtime sheet changes and learns the full ladder\'s rules', async () => {
+	it( 'refines an adaptive sweep where only a runtime sheet changes and learns the full ladder\'s rules', async ({ newPage }) => {
 		// Inline geometry is one line at every width; only the sheet switches,
 		// inside the tablet band. Its offset series must drive refinement.
 		const source = `<style>body{margin:0}#wrap{position:relative;height:200px}.item{width:40px;height:40px}</style>
@@ -131,8 +129,8 @@ describe( 'runtime-written stylesheet offsets', () => {
 			};
 			addEventListener('resize',update);update();
 			</script>`;
-		const learn = async ( widths?: number[] ) => {
-			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const learn = async ( { newPage }: Pick<BrowserFixtures, 'newPage'>, widths?: number[] ) => {
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			try {
 				await page.setContent( source );
 				const result = await learnAndApplyFluidGeometry( page, { settleMs: 30, ...( widths ? { widths } : {} ) } );
@@ -140,16 +138,16 @@ describe( 'runtime-written stylesheet offsets', () => {
 				return { result, rules };
 			} finally { await page.close(); }
 		};
-		const full = await learn( DEFAULT_SWEEP_WIDTHS );
-		const adaptive = await learn();
+		const full = await learn({ newPage },  DEFAULT_SWEEP_WIDTHS );
+		const adaptive = await learn({ newPage });
 		expect( full.rules.join( '\n' ) ).toContain( '(min-width:783px)' );
 		expect( adaptive.rules ).toEqual( full.rules );
 		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
 		expect( adaptive.result.sampledWidths ).toEqual( [ 320, 360, 390, 414, 600, 768, 775, 783, 801, 900, 1024, 1440, 1920 ] );
 	}, 60_000 );
 
-	it( 'stops after the probes when inline geometry and observed runtime sheets are constant', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'stops after the probes when inline geometry and observed runtime sheets are constant', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<div id="wrap" style="width:720px;height:100px"><div id="item"></div></div>
 				<script>const sheet=document.createElement('style');document.head.appendChild(sheet);
@@ -161,8 +159,8 @@ describe( 'runtime-written stylesheet offsets', () => {
 		} finally { await page.close(); }
 	}, 20_000 );
 
-	it( 'leaves authored stylesheets and width-independent runtime rules untouched', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'leaves authored stylesheets and width-independent runtime rules untouched', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( runtimeSheetSource( '#still{outline:1px solid red}@media (max-width:800px){#first{outline-offset:2px}}' ) );
 			const authored = await page.evaluate( () => document.querySelector( 'style' )?.textContent );

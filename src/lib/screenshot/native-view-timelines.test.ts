@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync, readFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { createServer } from 'node:http';
-import { chromium, type Page } from 'playwright';
-import { expect, it } from 'vitest';
+import { type Page } from 'playwright';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureNativeViewTimelines, observedRange } from './native-view-timelines.js';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -47,14 +47,14 @@ it( 'keeps fixed and percent ranges fixed and rejects an unproven changing range
 	expect( observedRange( [ { rangeName: 'cover', offset: '700.005px' }, { rangeName: 'cover', offset: '700.005px' } ], [ 900, 964 ] ) ).toEqual( { value: 'cover 700.005px' } );
 } );
 
-it( 'exports native motion with real scroll/resize parity and authored CSS, retaining source traces', async () => {
-	const browser = await chromium.launch();
-	const source = await browser.newPage( { viewport: { width: 1000, height: 900 } } );
-	const copy = await browser.newPage( { viewport: { width: 1000, height: 900 } } );
+it( 'exports native motion with real scroll/resize parity and authored CSS, retaining source traces', async ({ newPage }) => {
+
+	const source = await newPage( { viewport: { width: 1000, height: 900 } } );
+	const copy = await newPage( { viewport: { width: 1000, height: 900 } } );
 	const artifact = join( process.cwd(), '.tmp-test', 'native-view-timelines-551' );
 	mkdirSync( join( artifact, 'html' ), { recursive: true } );
 	mkdirSync( join( artifact, 'screenshots' ), { recursive: true } );
-	try {
+	{
 		await source.setContent( FIXTURE );
 		await source.waitForTimeout( 200 );
 		const report = await captureNativeViewTimelines( source, 'neutral-desktop' );
@@ -118,18 +118,16 @@ it( 'exports native motion with real scroll/resize parity and authored CSS, reta
 			expect( translation.x ).toBeCloseTo( sourceTranslation, 2 );
 			expect( await copy.locator( `${ scope } [id="translate"]` ).evaluate( node => node.getAnimations().length ) ).toBe( 1 );
 		}
-	} finally {
-		await browser.close();
 	}
 }, 45_000 );
 
-it( 'routes public-API motion capture through the owning browser pipeline and receipt', async () => {
-	const server = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( FIXTURE ); } );
-	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+it( 'routes public-API motion capture through the owning browser pipeline and receipt', async ({ serve }) => {
+	const { server } = await serve(( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( FIXTURE ); });
+
 	const address = server.address() as { port: number };
 	const url = `http://127.0.0.1:${ address.port }/`;
 	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'native-view-timelines-pipeline-551-' ) );
-	try {
+	{
 		const result = await captureScreenshots( {
 			urls: [ url ], outputDir, concurrency: 1, force: true, settleMs: 0, viewports: [ { id: 'desktop', width: 1000, height: 900 } ],
 			prepareCapture: async page => { await page.evaluate( () => scrollTo( 0, 1600 ) ); },
@@ -146,17 +144,15 @@ it( 'routes public-API motion capture through the owning browser pipeline and re
 		expect( receipt.nativeViewTimelines.pages ).toEqual( [ { url, profiles: manifest.entries[ url ].nativeViewTimelines } ] );
 		expect( receipt.nativeViewTimelines.binding.documentScopeAttribute ).toBe( 'data-blocks-engine-capture-document-scope' );
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'data-blocks-engine-capture-native-view-timeline-runtime' );
-	} finally {
-		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
 	}
 }, 60_000 );
 
-it.each( [ 'resize', 'snapshot', 'baseline' ] as const )( 'bounds a nonresponding native %s source and retains failure evidence through cleanup', async boundary => {
-	const server = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( FIXTURE ); } );
-	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+it.for( [ 'resize', 'snapshot', 'baseline' ] as const )( 'bounds a nonresponding native %s source and retains failure evidence through cleanup', { timeout: 60_000 }, async (boundary, { serve }) => {
+	const { server } = await serve(( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( FIXTURE ); });
+
 	const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
 	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', `native-${ boundary }-stall-551-` ) );
-	try {
+	{
 		const started = Date.now();
 		const result = await captureScreenshots( {
 			urls: [ url ], outputDir, concurrency: 1, settleMs: 0, evaluateTimeoutMs: 500, viewports: [ { id: 'desktop', width: 1000, height: 900 } ],
@@ -194,15 +190,15 @@ it.each( [ 'resize', 'snapshot', 'baseline' ] as const )( 'bounds a nonrespondin
 			expect( trace.losses.length ).toBeGreaterThan( 0 );
 			if ( boundary === 'resize' ) expect( trace.failures.join( '\n' ) ).toMatch( /restore scroll.*evaluate timeout/ );
 		}
-	} finally { await new Promise<void>( resolve => server.close( () => resolve() ) ); }
-}, 60_000 );
+	}
+} );
 
-it( 'keeps the page when native timeline restoration is unproven on a page that still responds', async () => {
-	const server = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( FIXTURE ); } );
-	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+it( 'keeps the page when native timeline restoration is unproven on a page that still responds', async ({ serve }) => {
+	const { server } = await serve(( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( FIXTURE ); });
+
 	const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
 	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'native-unproven-block-' ) );
-	try {
+	{
 		const result = await captureScreenshots( {
 			urls: [ url ], outputDir, concurrency: 1, settleMs: 0, evaluateTimeoutMs: 2_000, viewports: [ { id: 'desktop', width: 1000, height: 900 } ],
 			// The probe's scroll restore is refused once; the page itself keeps answering.
@@ -230,13 +226,13 @@ it( 'keeps the page when native timeline restoration is unproven on a page that 
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( { ...entry.blockLosses[ 0 ], url } );
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ url ] );
-	} finally { await new Promise<void>( resolve => server.close( () => resolve() ) ); }
+	}
 }, 60_000 );
 
-it( 'binds duplicate node tokens within generic device document scopes and reports missing local subjects', async () => {
-	const browser = await chromium.launch();
-	try {
-		const page = await browser.newPage( { viewport: { width: 1000, height: 900 } } );
+it( 'binds duplicate node tokens within generic device document scopes and reports missing local subjects', async ({ newPage }) => {
+
+	{
+		const page = await newPage( { viewport: { width: 1000, height: 900 } } );
 		const config = ( subject: string ) => JSON.stringify( [ { subject, source: 'root', axis: 'block', inset: 'auto', frames: [ { transform: 'translateX(0px)' }, { transform: 'translateX(80px)' } ], timing: { duration: 'auto', fill: 'both' }, composite: 'replace', rangeStart: { value: 'cover 0%' }, rangeEnd: { value: 'cover 100%' } } ] ).replace( /"/g, '&quot;' );
 		const device = ( profile: string, subject = 'n1' ) => `<div data-blocks-engine-capture-device-document="${ profile }" data-blocks-engine-capture-document-scope><section data-blocks-engine-capture-native-node="n1" style="height:400px"><div data-blocks-engine-capture-native-node="n2" data-blocks-engine-capture-native-profile="${ profile }" data-blocks-engine-capture-native-effects="${ config( subject ) }" style="height:30px;width:200px"></div></section></div>`;
 		const desktop = device( 'desktop' ).replace( '</section>', '<span data-blocks-engine-capture-native-node="foreign" hidden></span></section>' );
@@ -250,5 +246,5 @@ it( 'binds duplicate node tokens within generic device document scopes and repor
 			expect( facts ).toEqual( { count: 1, ownSubject: true, loss: null } );
 		}
 		expect( await page.locator( '[data-blocks-engine-capture-native-profile="missing"]' ).getAttribute( 'data-blocks-engine-capture-native-runtime-loss' ) ).toBe( 'subject or source binding missing or ambiguous' );
-	} finally { await browser.close(); }
+	}
 } );

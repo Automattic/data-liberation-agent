@@ -1,10 +1,10 @@
 import { stripNodeIds } from '../test-helpers/strip-node-ids.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { load } from 'cheerio';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { captureScreenshots } from './screenshotter.js';
@@ -13,12 +13,12 @@ import { componentReplayStates } from './component-states.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
 
-it.skipIf(skipBrowser)('keeps chooser recommendations and pose in the baseline, then observes the chooser after serialization', async () => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+it.skipIf(skipBrowser)('keeps chooser recommendations and pose in the baseline, then observes the chooser after serialization', async ({ newPage }) => {
+
+  const page = await newPage();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  try {
+  {
     for (const role of ['listbox', 'combobox']) {
       await page.setContent(`<!doctype html><style>body{margin:0}#spacer{height:1000px}#recommendation{height:60px}</style>
         <div id="spacer"></div><div><button id="chooser" type="button" role="${role}" aria-expanded="false">Choose unit</button></div>
@@ -55,15 +55,15 @@ it.skipIf(skipBrowser)('keeps chooser recommendations and pose in the baseline, 
       expect(serialized).toContain('id="recommendation"');
       expect(errors).toEqual([]);
     }
-  } finally { await browser.close(); }
+  }
 }, 30000);
 
-it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead of returning a serializable baseline', async () => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead of returning a serializable baseline', async ({ newPage }) => {
+
+  const page = await newPage();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  try {
+  {
     for (const local of [false, true]) {
       await page.setContent(`<!doctype html><body><div><button id="opener" type="button" aria-expanded="false">Open choices</button></div>
         <aside id="recommendation">Use suggested unit Keep current unit</aside>
@@ -85,11 +85,11 @@ it.skipIf(skipBrowser)('leaves a destructive unassociated mount unproven instead
     const inert = await hydrateDisclosureContent(page);
     expect(inert).toEqual([expect.objectContaining({ status: 'no-dialog', error: 'No unique locally mounted panel; baseline restoration verified.' })]);
     expect(await page.content()).toBe(baseline);
-  } finally { await browser.close(); }
+  }
 }, 10000);
 
-it.skipIf(skipBrowser)('keeps the already saved initial document when a later disclosure probe is destructive', async () => {
-  const server = createServer((_request, response) => {
+it.skipIf(skipBrowser)('keeps the already saved initial document when a later disclosure probe is destructive', async ({ serve }) => {
+  const { server } = await serve((_request, response) => {
     response.setHeader('content-type', 'text/html');
     response.end(`<!doctype html><body><div><button id="opener" type="button" aria-expanded="false">Open choices</button></div>
       <aside id="recommendation">Use suggested unit Keep current unit</aside><main><h1>Editorial content</h1></main>
@@ -100,7 +100,7 @@ it.skipIf(skipBrowser)('keeps the already saved initial document when a later di
         if(open)document.body.insertAdjacentHTML('beforeend','<div id="options" role="menu"><button role="menuitem">First unit</button></div>');
       }</script>`);
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'disclosure-baseline-'));
@@ -119,7 +119,7 @@ it.skipIf(skipBrowser)('keeps the already saved initial document when a later di
     expect(load(html)('#options').length).toBe(0);
     expect(html).not.toContain('data-blocks-engine-capture-hydrated-disclosure');
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()));
+
     rmSync(outputDir, { recursive: true, force: true });
   }
 }, 30000);
@@ -127,8 +127,8 @@ it.skipIf(skipBrowser)('keeps the already saved initial document when a later di
 // #1295: display:contents leaves the header's controls visible without a header
 // box, so the old visibility marker incorrectly promoted its panel to the header.
 // One public browser capture (~5 seconds), with no fabricated interaction states.
-it.skipIf(skipBrowser)('keeps the header visible and its disclosure panel hidden at rest after capture and dialog wiring', async () => {
-  const server = createServer((_request, response) => {
+it.skipIf(skipBrowser)('keeps the header visible and its disclosure panel hidden at rest after capture and dialog wiring', async ({ serve }) => {
+  const { server } = await serve((_request, response) => {
     response.setHeader('content-type', 'text/html');
     response.end(`<!doctype html><html><head><style>header{display:contents}#site-nav{position:absolute;top:40px;background:white}</style></head><body>
       <header id="site-header"><button id="toggle" aria-controls="site-nav" aria-expanded="false">Show sidebar</button>
@@ -137,7 +137,7 @@ it.skipIf(skipBrowser)('keeps the header visible and its disclosure panel hidden
       <script>document.getElementById('toggle').onclick=function(){const open=this.getAttribute('aria-expanded')!=='true';this.setAttribute('aria-expanded',String(open));document.getElementById('site-nav').hidden=!open;};</script>
       </body></html>`);
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'disclosure-header-'));
@@ -163,7 +163,7 @@ it.skipIf(skipBrowser)('keeps the header visible and its disclosure panel hidden
     expect(panel).toHaveLength(1);
     expect(panel.attr('hidden')).toBeDefined();
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()));
+
     rmSync(outputDir, { recursive: true, force: true });
   }
 }, 30000);
@@ -181,12 +181,12 @@ document.querySelector('.menu-toggle').addEventListener('click',()=>{document.ge
 document.addEventListener('keyup',e=>{if(e.keyCode===27){document.getElementById('drawer').classList.remove('active');document.documentElement.classList.remove('drawer-active');}});
 </script></body></html>`;
 
-it.skipIf(skipBrowser)('saves the resting phone document after a real Escape restores an unassociated drawer', async () => {
-  const server = createServer((_request, response) => {
+it.skipIf(skipBrowser)('saves the resting phone document after a real Escape restores an unassociated drawer', async ({ serve }) => {
+  const { server } = await serve((_request, response) => {
     response.setHeader('content-type', 'text/html');
     response.end(drawerFixture);
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'disclosure-drawer-'));
@@ -201,7 +201,7 @@ it.skipIf(skipBrowser)('saves the resting phone document after a real Escape res
     expect(html).not.toMatch(/<div[^>]*id="drawer"[^>]*class="[^"]*active/);
     expect(html).toContain('Page title');
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()));
+
     rmSync(outputDir, { recursive: true, force: true });
   }
 }, 30000);
