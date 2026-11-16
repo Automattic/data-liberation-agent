@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.23] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- do not bind carousel slides to unrelated dialog triggers
+- observe runtime fills for escalated template members
+
 ## [0.35.22] - 2026-11-15
 
 ### Changed
