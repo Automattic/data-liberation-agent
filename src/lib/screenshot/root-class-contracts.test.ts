@@ -122,24 +122,21 @@ describe( 'root class width contracts', () => {
 	} );
 
 	// One local browser pass: about five seconds, with only CDP latency simulated.
-	it( 'leaves a slow-resize ladder unproven only after restoring the viewport', async () => {
-		const browser = await chromium.launch();
-		try {
-			const original = { width: 1440, height: 900 };
-			const page = await browser.newPage( { viewport: original } );
-			await page.setContent( '<main>Slow resize fixture</main>' );
-			const setViewportSize = page.setViewportSize.bind( page );
-			const resize = vi.spyOn( page, 'setViewportSize' ).mockImplementation( async size => {
-				await new Promise( resolve => setTimeout( resolve, 1700 ) );
-				await setViewportSize( size );
-			} );
-			const unproven: string[] = [];
-			await expect( sampleRootClassLadder( page, [ 768 ], reason => unproven.push( reason ) ) ).resolves.toBeUndefined();
-			expect( unproven ).toEqual( expect.arrayContaining( [ expect.stringContaining( 'root class source probe unproven' ) ] ) );
-			expect( resize.mock.calls ).toEqual( [ [ { ...original, width: 768 } ], [ original ] ] );
-			expect( page.viewportSize() ).toEqual( original );
-			expect( await page.evaluate( () => innerWidth ) ).toBe( original.width );
-		} finally { await browser.close(); }
+	it( 'leaves a slow-resize ladder unproven only after restoring the viewport', async ({ newPage }) => {
+		const original = { width: 1440, height: 900 };
+		const page = await newPage( { viewport: original } );
+		await page.setContent( '<main>Slow resize fixture</main>' );
+		const setViewportSize = page.setViewportSize.bind( page );
+		const resize = vi.spyOn( page, 'setViewportSize' ).mockImplementation( async size => {
+			await new Promise( resolve => setTimeout( resolve, 1700 ) );
+			await setViewportSize( size );
+		} );
+		const unproven: string[] = [];
+		await expect( sampleRootClassLadder( page, [ 768 ], reason => unproven.push( reason ) ) ).resolves.toBeUndefined();
+		expect( unproven ).toEqual( expect.arrayContaining( [ expect.stringContaining( 'root class source probe unproven' ) ] ) );
+		expect( resize.mock.calls ).toEqual( [ [ { ...original, width: 768 } ], [ original ] ] );
+		expect( page.viewportSize() ).toEqual( original );
+		expect( await page.evaluate( () => innerWidth ) ).toBe( original.width );
 	}, 15_000 );
 
 	// Local browser fixture: about five seconds, no network or platform knowledge.
