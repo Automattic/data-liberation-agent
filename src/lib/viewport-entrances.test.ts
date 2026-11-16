@@ -40,9 +40,13 @@ describe( 'source-observed viewport transition entrances', () => {
 			await source.addInitScript( observeViewportEntrances );
 			const htmlFixture = scroll ? fixture( repeat )
 				.replace( '.entrance[data-active="true"]', '.entrance.arrived' )
+				.replace( '</style>', `.rest{height:120px;transition:transform .4s}
+					.flip{transform:perspective(2500px) rotateY(-100deg)}.flip.arrived{transform:perspective(2500px) rotateY(0)}
+					.slide{transform:translate3d(-100px,0,0) perspective(800px)}.slide.arrived{transform:translate3d(0,0,0) perspective(800px)}</style>` )
+				.replace( '<section class="entrance"', '<div class="rest flip">Flip</div><div class="rest slide">Slide</div><section class="entrance"' )
 				.replace( '<button>Hover</button>', '<h1 class="entrance arrived" id="hero">Visible at load</h1><button>Hover</button>' )
 				.replace( /setTimeout\(\(\)=>\{const observer=[\s\S]*?\},100\);/, `setTimeout(()=>{
-					function update(){for(const element of document.querySelectorAll('.entrance')){
+					function update(){for(const element of document.querySelectorAll('.entrance,.rest')){
 						const r=element.getBoundingClientRect();element.classList.toggle('arrived',r.top<innerHeight-60&&r.bottom>0);
 					}}
 					addEventListener('scroll',update,{passive:true});update();window.fixtureReady=true;
@@ -61,6 +65,10 @@ describe( 'source-observed viewport transition entrances', () => {
 			expect( Object.keys( JSON.parse( evidence! ).attributes ) ).not.toContain( 'data-blocks-engine-node-id' );
 			expect( JSON.parse( evidence! ).threshold[ 0 ] ).toBeCloseTo( scroll ? 0 : 0.2 );
 			if ( scroll ) {
+				for ( const name of [ 'flip', 'slide' ] ) {
+					const restEvidence = await source.locator( `.${ name }` ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
+					expect( JSON.parse( restEvidence! ).attributes.class ).toEqual( { before: `rest ${ name }`, after: `rest ${ name } arrived` } );
+				}
 				expect( await source.locator( '#hero' ).getAttribute( 'class' ) ).toBe( 'entrance arrived' );
 				const heroEvidence = await source.locator( '#hero' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
 				if ( heroEvidence ) expect( JSON.parse( heroEvidence ).attributes.class ).toEqual( { before: 'entrance', after: 'entrance arrived' } );
