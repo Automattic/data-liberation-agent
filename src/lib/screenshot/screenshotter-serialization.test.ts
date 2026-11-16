@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { capturePageHtml } from './screenshotter.js';
+import { INITIAL_SCROLL_CLASS_ATTRIBUTE, markInitialScrollClasses, markInitialDocument } from './initial-document.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { load } from 'cheerio';
 
@@ -13,6 +14,74 @@ describe('capturePageHtml stylesheet serialization', () => {
 
   afterAll(async () => {
     await browser.close();
+  });
+
+  // Two routes in one browser pass; expected wall time is about a second.
+  it('serializes the same initial classes for fixed chrome after a route was scrolled', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('https://scroll.test/**', route => route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><style>
+          body { min-height: 3000px }
+          .totop { position: fixed; right: 10px; bottom: 10px }
+          .totop.hide { right: -100px !important }
+        </style><a class="totop hide" href="#">Top</a><script>
+          let timer;
+          addEventListener('scroll', () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => { if (scrollY > 0) document.querySelector('.totop').classList.remove('hide'); }, 80);
+          });
+        </script>`,
+      }));
+      const classes: string[] = [];
+      for (const route of ['initial', 'scrolled']) {
+        await page.goto(`https://scroll.test/${route}`);
+        await markInitialDocument(page);
+        if (route === 'scrolled') {
+          await page.evaluate(() => window.scrollTo({ top: 600, behavior: 'instant' }));
+          await page.waitForFunction(() => !document.querySelector('.totop')!.classList.contains('hide'));
+          await page.screenshot();
+        }
+        const html = load(await capturePageHtml(page));
+        classes.push(html('.totop').attr('class')!);
+      }
+      expect(classes).toEqual(['totop hide', 'totop hide']);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+      // Serialization restores only the clone, not the theme's one-way live state.
+      expect(await page.locator('.totop').getAttribute('class')).toBe('totop');
+    } finally {
+      await page.close();
+    }
+  });
+
+  // One browser pass, no settling waits; expected wall time is under a second.
+  it('marks scroll classes once per document without mutating unpositioned markup', async () => {
+    const page = await browser.newPage();
+    try {
+      for (const positioned of [false, true]) {
+        await page.setContent(`<body><div style="position:${positioned ? 'fixed' : 'static'}" class="initial">Content</div></body>`);
+        const before = await page.content();
+        await page.evaluate(() => {
+          const original = window.getComputedStyle;
+          (window as unknown as { styleReads: number }).styleReads = 0;
+          window.getComputedStyle = (...args) => {
+            (window as unknown as { styleReads: number }).styleReads++;
+            return original(...args);
+          };
+        });
+        await markInitialScrollClasses(page);
+        const reads = await page.evaluate(() => (window as unknown as { styleReads: number }).styleReads);
+        expect(reads).toBeGreaterThan(0);
+        if (!positioned) expect(await page.content()).toBe(before);
+        await page.locator('div').evaluate(node => node.setAttribute('class', 'scrolled'));
+        await markInitialDocument(page);
+        expect(await page.evaluate(() => (window as unknown as { styleReads: number }).styleReads)).toBe(reads);
+        expect(await page.locator('div').getAttribute(INITIAL_SCROLL_CLASS_ATTRIBUTE)).toBe(positioned ? '"initial"' : null);
+      }
+    } finally {
+      await page.close();
+    }
   });
 
   // One browser pass, two serializations; expected wall time is a few seconds.

@@ -17,6 +17,7 @@ import { waitForHiddenEmbeds } from './embed-readiness.js';
 import { nonHtmlDocumentError } from './absent-document.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout } from './page-helpers.js';
+import { markInitialScrollClasses } from './initial-document.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { ROUTE_ALIAS_CANONICAL, queryOnlyCanonicalTarget } from '../route-aliases.js';
 import { orElse } from '../failure-class.js';
@@ -263,6 +264,8 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 			return stoppedResponding( error, 'access-gate shell' );
 		}
 	}
+	// Preserve one-way scroll-driven classes before overlays, probes or lazy-load scroll.
+	await withEvaluateTimeout( markInitialScrollClasses( page ), evaluateTimeoutMs );
 	// Dismiss takeover modals / consent banners BEFORE lazy-load (a modal's
 	// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
 	// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.

@@ -1,4 +1,5 @@
 import { baselineSteps, createBaselineState, type CapturePerViewportArgs } from './baseline-steps.js';
+import { INITIAL_SCROLL_CLASS_ATTRIBUTE } from './initial-document.js';
 import { orElse, isIntegrityError } from '../failure-class.js';
 import { loadSourceBaseline, renderedQueryAlias } from './load-baseline.js';
 import { runSteps } from './capture-steps.js';
@@ -43,7 +44,7 @@ import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagn
 import { createPhaseLedger, routePhaseBreakdown } from './phase-ledger.js';
 import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
 import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
-import { waitForStable, dismissOverlays, reportReadiness, settleDocument, waitForFonts } from './page-helpers.js';
+import { waitForStable, dismissOverlays, reportReadiness, restoreTopScrollState, settleDocument, waitForFonts } from './page-helpers.js';
 import { CapturedResourceStore, installResourceReplay } from './resource-capture.js';
 import { enforceSameOrigin, offOriginUrls } from './same-origin.js';
 import type { RouteDiagnostic } from '../capture-export-routes.js';
@@ -142,6 +143,9 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
 
 export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string ): Promise< string > {
+	// Screenshots and probes can leave scroll-driven chrome in its scrolled pose.
+	// Return to the top; one-way class changes are restored on the snapshot below.
+	await restoreTopScrollState( page );
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',
@@ -310,7 +314,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource } ) => {
+		const result = await page.evaluate( ( { observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
@@ -528,6 +532,12 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				const findings = clean( document, snapshot );
 				portMaps( document, snapshot, iframeEvidenceAttributes, new Function( 'return (' + mapHostSource + ')' )() as typeof isGoogleMapHost );
 				flattenShadow();
+				for ( const node of snapshot.querySelectorAll( `[${ initialScrollClassAttribute }]` ) ) {
+					const classes = JSON.parse( node.getAttribute( initialScrollClassAttribute )! ) as string | null;
+					if ( classes === null ) node.removeAttribute( 'class' );
+					else node.setAttribute( 'class', classes );
+					node.removeAttribute( initialScrollClassAttribute );
+				}
 				// The copy is always serialized as a standards-mode document. A quirks-mode
 				// source laid out lines and tables under different rules, so record the
 				// mode the source rendered in for the transform to honor.
@@ -559,7 +569,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
+		}, { initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
 		diagnostics?.push( ...result.findings );
 		for ( const omitted of result.omittedStyles ?? [] ) diagnostics?.push( { code: 'runtime_stylesheet_omitted', reason: `Omitted unmatched runtime stylesheet (${ omitted.bytes } bytes, ${ omitted.rules } rules)` } );
 		return wireNativeControlState( result.html );
