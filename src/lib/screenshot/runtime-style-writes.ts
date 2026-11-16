@@ -29,6 +29,8 @@ export interface RuntimeStyleWrites {
 	written( element: Element ): boolean;
 	/** Script registered something that can react to a viewport change. */
 	viewportReactive(): boolean;
+	/** Distinct inline transforms written without an intervening viewport resize. */
+	movingTransform( element: Element ): boolean;
 	/** Drain and begin/end style-mutation evidence for a height-only probe. */
 	heightProbe( active: boolean ): Element[];
 	/**
@@ -43,6 +45,11 @@ export function observeRuntimeStyleWrites(): void {
 	if ( key in window ) return;
 	const styled = new WeakSet< Node >();
 	const inserted = new WeakSet< Node >();
+	const movingTransforms = new WeakSet< Element >();
+	let transforms = new WeakMap< Element, string >();
+	let transformWidth = innerWidth;
+	let transformHeight = innerHeight;
+	const declaration = document.createElement( 'div' ).style;
 	let heightProbe: Set< Element > | null = null;
 	let reactive = false;
 	let ready = document.readyState !== 'loading';
@@ -54,19 +61,39 @@ export function observeRuntimeStyleWrites(): void {
 		loadSheets ??= [ ...document.querySelectorAll( 'style' ) ].map( style => [ style, style.textContent ?? '' ] );
 	}, { once: true } );
 	const record = ( mutations: MutationRecord[] ) => {
-		for ( const mutation of mutations ) {
+		// Start a new observation window on resize, before its delayed handlers
+		// write geometry. The first write is layout; another distinct transform
+		// at this same viewport is motion, not a width sample.
+		if ( innerWidth !== transformWidth || innerHeight !== transformHeight ) {
+			transforms = new WeakMap();
+			transformWidth = innerWidth;
+			transformHeight = innerHeight;
+		}
+		for ( const [ index, mutation ] of mutations.entries() ) {
 			if ( innerWidth !== loadWidth ) {
 				mutation.addedNodes.forEach( node => { if ( node instanceof HTMLStyleElement ) bornElsewhere.add( node ); } );
 			}
 			if ( mutation.type === 'attributes' ) {
 				styled.add( mutation.target );
+				if ( mutation.target instanceof HTMLElement ) {
+					// A batch can contain several writes to one style attribute.
+					const next = mutations.slice( index + 1 ).find( entry => entry.type === 'attributes' && entry.target === mutation.target );
+					declaration.cssText = next ? next.oldValue ?? '' : mutation.target.getAttribute( 'style' ) ?? '';
+					const value = declaration.transform;
+					declaration.cssText = mutation.oldValue ?? '';
+					if ( declaration.transform !== value ) {
+						const previous = transforms.get( mutation.target );
+						if ( previous !== undefined && previous !== value ) movingTransforms.add( mutation.target );
+						transforms.set( mutation.target, value );
+					}
+				}
 				if ( mutation.target instanceof Element ) heightProbe?.add( mutation.target );
 			}
 			else if ( ready ) mutation.addedNodes.forEach( node => inserted.add( node ) );
 		}
 	};
 	const observer = new MutationObserver( record );
-	observer.observe( document, { subtree: true, childList: true, attributes: true, attributeFilter: [ 'style' ] } );
+	observer.observe( document, { subtree: true, childList: true, attributes: true, attributeFilter: [ 'style' ], attributeOldValue: true } );
 	document.addEventListener( 'DOMContentLoaded', () => { record( observer.takeRecords() ); ready = true; }, { once: true } );
 
 	const watchListeners = ( target: EventTarget | null | undefined, types: RegExp ) => {
@@ -105,6 +132,10 @@ export function observeRuntimeStyleWrites(): void {
 			if ( styled.has( element ) ) return true;
 			for ( let node: Node | null = element; node; node = node.parentNode ) if ( inserted.has( node ) ) return true;
 			return false;
+		},
+		movingTransform( element ) {
+			record( observer.takeRecords() );
+			return movingTransforms.has( element );
 		},
 		viewportReactive() {
 			// Handler properties read as null (or undefined where unsupported) until set.
