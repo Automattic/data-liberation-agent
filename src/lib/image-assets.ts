@@ -4,6 +4,7 @@ import { copyExclusive, moveExclusive } from './media-fetch/exclusive-file.js';
 import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
+import { imageSize } from 'image-size';
 import { rewriteCssUrlReferences, srcsetCandidates } from './srcset.js';
 import { metadataImageReferences } from './identity-resources.js';
 import { MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
@@ -26,8 +27,11 @@ export interface AssetRecord {
 	original: {
 		source_url: string;
 		content_type: string;
+		/** Stored pixel dimensions, before EXIF orientation is applied. */
 		width?: number;
 		height?: number;
+		/** EXIF orientation of the unchanged original bytes, when present. */
+		orientation?: number;
 		/** At least one non-opaque decoded pixel; not inferred from a file extension. */
 		alpha?: boolean;
 		sha256: string;
@@ -423,6 +427,12 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					}
 					const metadata = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : {};
 					if ( contentType === 'image/svg+xml' ) Object.assign( metadata, svgDeclaredSize( bytes ) );
+					// Browser decoding verifies pixels but applies EXIF rotation. The
+					// original describes the stored JPEG frame, not its display geometry.
+					if ( contentType === 'image/jpeg' ) {
+						const { width, height, orientation } = imageSize( bytes );
+						Object.assign( metadata, { width, height }, orientation === undefined ? {} : { orientation } );
+					}
 					// Even a lying response header's extension follows the verified bytes.
 					const extension = contentType === 'text/plain' && extname( new URL( source ).pathname ).toLowerCase() === '.csv'
 			? '.csv' : extensionFromContentType( contentType );
