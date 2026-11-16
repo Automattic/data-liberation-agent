@@ -4,10 +4,10 @@ import { dirname, join, relative } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Page } from 'playwright';
 
-export const BOX_TREE_SCHEMA = 'blocks-engine/box-tree/v1';
+export const BOX_TREE_SCHEMA = 'blocks-engine/box-tree/v2';
 export const NODE_ID_ATTRIBUTE = 'data-blocks-engine-node-id';
 
-/** The v1 physical used-style vocabulary, including optional motion evidence. */
+/** The v2 used-style vocabulary, including paint, typography and placement. */
 export const BOX_TREE_STYLES = [
 	'display', 'position', 'box-sizing', 'overflow-x', 'overflow-y',
 	'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
@@ -20,9 +20,20 @@ export const BOX_TREE_STYLES = [
 	'border-left', 'border-radius', 'outline', 'box-shadow', 'mask-image', 'mask-mode', 'filter', 'opacity',
 	'mix-blend-mode', 'transform', 'z-index', 'width', 'height', 'min-width', 'max-width',
 	'min-height', 'max-height', 'animation-name', 'transition-property', 'transition-duration',
+	'color', 'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
+	'letter-spacing', 'word-spacing', 'text-align', 'text-transform', 'text-indent',
+	'text-decoration-line', 'text-decoration-color', 'text-decoration-style', 'text-shadow',
+	'white-space', 'word-break', 'overflow-wrap', 'text-overflow', 'vertical-align',
+	'list-style-type', 'list-style-position',
+	'top', 'right', 'bottom', 'left', 'float', 'clear', 'visibility', 'aspect-ratio',
+	'object-fit', 'object-position', 'transform-origin', 'clip-path', 'isolation',
+	'backdrop-filter', 'pointer-events', 'cursor',
+	'background-position-x', 'background-position-y', 'background-size', 'background-repeat',
+	'background-clip', 'background-origin', 'background-attachment', 'background-blend-mode',
 ] as const;
 
-type Observation = { border_box: { x: number; y: number; width: number; height: number }; used_styles: Record<string, string> };
+type BoxObservation = { border_box: { x: number; y: number; width: number; height: number }; used_styles: Record<string, string> };
+type Observation = BoxObservation & { pseudo?: { before?: BoxObservation & { content: string }; after?: BoxObservation & { content: string } } };
 export type BoxTree = {
 	schema: typeof BOX_TREE_SCHEMA;
 	source_path: string;
@@ -48,7 +59,25 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		if (Object.values(used_styles).some(value => !value || new TextEncoder().encode(value).length > 4096)) return;
 		const border_box = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 		if (Object.values(border_box).some(value => !Number.isFinite(value) || Math.abs(value) > 100_000_000)) return;
-		nodes[id] = { children, viewports: { capture: { border_box, used_styles } } };
+		const observation: Observation = { border_box, used_styles };
+		for (const name of ['before', 'after'] as const) {
+			const pseudoStyle = getComputedStyle(element, `::${name}`);
+			const content = pseudoStyle.content;
+			if (content === 'none' || content === 'normal' || pseudoStyle.display === 'none') continue;
+			const pseudoStyles = Object.fromEntries(properties.map(property => [property, pseudoStyle.getPropertyValue(property)]));
+			if (Object.values(pseudoStyles).some(value => !value || new TextEncoder().encode(value).length > 4096)
+				|| new TextEncoder().encode(content).length > 4096) return;
+			// Pseudos have no DOM rect API. Record their computed border-box geometry,
+			// with computed left/top offsets, not host viewport coordinates. Unresolved
+			// auto dimensions/offsets use zero; the original keywords stay in used_styles.
+			const px = (property: string) => Number.parseFloat(pseudoStyle.getPropertyValue(property)) || 0;
+			const width = px('width') + (pseudoStyle.boxSizing === 'border-box' ? 0 : px('padding-left') + px('padding-right') + px('border-left-width') + px('border-right-width'));
+			const height = px('height') + (pseudoStyle.boxSizing === 'border-box' ? 0 : px('padding-top') + px('padding-bottom') + px('border-top-width') + px('border-bottom-width'));
+			const pseudoBox = { x: px('left'), y: px('top'), width, height };
+			if (Object.values(pseudoBox).some(value => !Number.isFinite(value) || Math.abs(value) > 100_000_000)) return;
+			(observation.pseudo ??= {})[name] = { content, used_styles: pseudoStyles, border_box: pseudoBox };
+		}
+		nodes[id] = { children, viewports: { capture: observation } };
 	}
 	return nodes;
 }
@@ -96,25 +125,21 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 			if (name === initial?.name) continue;
 			await page.setViewportSize(size);
 			await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-			const observations = await page.evaluate(({ attribute, properties, topology }) => {
+			const observations = await page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
 				const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
-				const result: Record<string, Observation> = {};
 				for (const [id, expected] of Object.entries(topology)) {
 					const element = live.get(id);
 					if (!element) return;
 					// Ignore source-only nodes removed by serialization, but never accept a changed retained tree.
 					const children = Array.from(element.children, child => child.getAttribute(attribute)).filter(child => child && topology[child]);
 					if (JSON.stringify(children) !== JSON.stringify(expected.children)) return;
-					const rect = element.getBoundingClientRect();
-					const style = getComputedStyle(element);
-					const used_styles = Object.fromEntries(properties.map(property => [property, style.getPropertyValue(property)]));
-					if (Object.values(used_styles).some(value => !value || new TextEncoder().encode(value).length > 4096)) return;
-					const border_box = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-					if (Object.values(border_box).some(value => !Number.isFinite(value) || Math.abs(value) > 100_000_000)) return;
-					result[id] = { border_box, used_styles };
 				}
-				return result;
-			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes });
+				// The protected constructor binds saved probe intrinsics; indirect eval
+				// would resolve built-ins from the source page's mutable globals.
+				const observe = new Function(`return (${observerSource})`)() as typeof observeBoxTree;
+				const observed = observe(new DOMParser().parseFromString(html, 'text/html').documentElement, properties, attribute);
+				return observed && Object.fromEntries(Object.entries(observed).map(([id, node]) => [id, node.viewports.capture]));
+			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString() });
 			if (!observations) {
 				if (!initial && size.width === original?.width && size.height === original?.height) return;
 				continue;
