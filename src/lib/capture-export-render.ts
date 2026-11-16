@@ -21,6 +21,7 @@ import { wireNativeControlState } from './native-control-state.js';
 import { indexRuntimeIdReferences } from './runtime-id-references.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import { withViewportEntrances } from './viewport-entrances.js';
+import { namespaceExportBoxTreeIds } from './export-box-trees.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { isSrcsetShaped, srcsetCandidates } from './srcset.js';
 import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
@@ -671,7 +672,7 @@ export function renderRoutePages( { retainedEntries, websiteDir, resourceReplace
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) ) );
+		writeFileSync( destination, namespaceExportBoxTreeIds( wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
