@@ -121,8 +121,10 @@ async function probeScrollStates(
 
 	// Refine the threshold: try smaller offsets in ascending order and keep the
 	// smallest one that still reproduces the same set of changed containers.
+	// The threshold only says where the change starts: a scroll-linked value
+	// (a header darkening with scroll progress) is still partway there, so the
+	// scrolled values come from the generous probe.
 	let thresholdPx = PROBE_OFFSET_PX;
-	let atThreshold = probed;
 	for ( const offset of REFINEMENT_OFFSETS_PX ) {
 		let sample: ContainerSnapshot[];
 		try {
@@ -135,7 +137,6 @@ async function probeScrollStates(
 		const stillReproduces = [ ...changedKeys ].every( ( key ) => sampleChanged.has( key ) );
 		if ( stillReproduces ) {
 			thresholdPx = offset;
-			atThreshold = sample;
 			break;
 		}
 	}
@@ -153,11 +154,11 @@ async function probeScrollStates(
 
 	const toggles: ScrollToggle[] = [];
 	const byKeyBaseline = new Map( baseline.map( ( entry ) => [ entry.key, entry ] ) );
-	const byKeyAtThreshold = new Map( atThreshold.map( ( entry ) => [ entry.key, entry ] ) );
+	const byKeyScrolled = new Map( probed.map( ( entry ) => [ entry.key, entry ] ) );
 	for ( const key of changedKeys ) {
 		if ( stillChangedAtTop.has( key ) ) continue; // irreversible; not scroll-linked
 		const before = byKeyBaseline.get( key );
-		const after = byKeyAtThreshold.get( key );
+		const after = byKeyScrolled.get( key );
 		if ( ! before || ! after ) continue;
 
 		const beforeSet = new Set( before.classList );
