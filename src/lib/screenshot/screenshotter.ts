@@ -146,9 +146,6 @@ import { observeBoxTree, BOX_TREE_STYLES } from './box-tree.js';
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
 
 export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (nodes: import('./box-tree.js').BoxTree['nodes'] | undefined) => void ): Promise< string > {
-	// Screenshots and probes can leave scroll-driven chrome in its scrolled pose.
-	// Return to the top; one-way class changes are restored on the snapshot below.
-	await restoreTopScrollState( page );
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',
@@ -303,6 +300,10 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// Font events can schedule runtime geometry writes after fonts.ready.
 		await settleDocument( page, 'stable', { quietMs: 500, timeoutMs: 5_000 } );
 	}
+	// Screenshots, probes and the media/style settling above can leave the source
+	// scrolled. Restore the initial pose immediately before taking the snapshot;
+	// one-way class changes are restored on the snapshot below.
+	await restoreTopScrollState( page );
 	try {
 		// Serialize in the renderer's current task. page.content() round-trips through
 		// DevTools and can race framework hydration, pairing a newer class namespace
