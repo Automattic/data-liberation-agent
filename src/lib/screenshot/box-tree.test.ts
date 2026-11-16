@@ -10,10 +10,13 @@ import { BOX_TREE_SCHEMA, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } from './box-tree.
 
 // One public capture (~20 seconds). Optional consumer checkout enables the actual PHP intake assertion.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box trees for builder routes', async () => {
-	const fixture = `<!doctype html><html><head><title>Builder</title><style>
+	const fixture = `<!doctype html><html><head><meta charset="utf-8"><title>Builder</title><style>
 		.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;position:relative}
 		img{width:100px;height:80px;mask:linear-gradient(black,transparent)}
-		.overlay{position:absolute;top:10px;right:4px;background:red}
+		h1{color:rgb(12,34,56);font-family:serif;font-size:32px;font-weight:700;letter-spacing:2px}
+		h1::before{content:"★";display:inline-block;width:16px;height:18px;padding:2px;border:1px solid black;color:rgb(90,80,70)}
+		h1::after{content:none}
+		.overlay{position:absolute;top:10px;right:4px;background:red;background-position:20% 30%;background-size:12px 14px}
 		@media(max-width:600px){.grid{grid-template-columns:1fr}}
 	</style></head><body><main><div><div><div class="grid"><div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div><div><h1>Builder</h1></div><span class="overlay">Overlay</span></div></div></div></main><a href="/other">Other</a></body></html>`;
 	const server = createServer((req, res) => {
@@ -34,6 +37,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 			const sidecar = entry.html.replace(/^html\//, 'box-tree/').replace(/\.html$/, '.json');
 			expect(existsSync(join(outputDir, sidecar)), entry.html).toBe(true);
 			const tree = JSON.parse(readFileSync(join(outputDir, sidecar), 'utf8'));
+			expect(tree.schema).toBe('blocks-engine/box-tree/v2');
 			expect(tree.schema).toBe(BOX_TREE_SCHEMA);
 			expect(tree.source_path).toBe(entry.html);
 			expect(tree.source_hash).toBe(createHash('sha256').update(html).digest('hex'));
@@ -51,6 +55,18 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 					expect(node.viewports[viewport].border_box.width).toBeGreaterThanOrEqual(0);
 				}
 			});
+			for (const viewport of ['desktop', 'mobile']) {
+				const heading = tree.nodes[$('h1').attr(NODE_ID_ATTRIBUTE)!].viewports[viewport];
+				expect(heading.used_styles).toMatchObject({ color: 'rgb(12, 34, 56)', 'font-size': '32px', 'font-weight': '700', 'letter-spacing': '2px' });
+				expect(heading.pseudo.before.content).toBe('"★"');
+				expect(heading.pseudo.before.used_styles.color).toBe('rgb(90, 80, 70)');
+				expect(Object.keys(heading.pseudo.before.used_styles).sort()).toEqual([...BOX_TREE_STYLES].sort());
+				expect(heading.pseudo.before.border_box).toEqual({ x: 0, y: 0, width: 22, height: 24 });
+				expect(heading.pseudo.after).toBeUndefined();
+				const badge = tree.nodes[$('.overlay').attr(NODE_ID_ATTRIBUTE)!].viewports[viewport];
+				expect(badge.used_styles).toMatchObject({ position: 'absolute', top: '10px', right: '4px', 'background-position-x': '20%', 'background-position-y': '30%', 'background-size': '12px 14px' });
+				expect(badge.pseudo).toBeUndefined();
+			}
 			files[entry.html] = html;
 			files[sidecar] = JSON.stringify(tree);
 		}

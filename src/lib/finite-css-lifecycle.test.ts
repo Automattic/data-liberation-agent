@@ -146,11 +146,22 @@ it( 'retains a real phone startup witness across transient viewport reflow and d
 		await collectViewportEntranceStartup( source,source );
 		const portable = await exportSource( source,directory );
 		const copyContext = await browser.newContext( { ...devices['iPhone 17'],viewport:{width:1440,height:900} } );
-		const copy = await copyContext.newPage(); await copy.goto( `data:text/html,${ encodeURIComponent( portable ) }` );
-		await copy.waitForTimeout( 100 );
-		expect( ( await pose( copy ) ).effects.every( effect => effect.state === 'running' ) ).toBe( true );
-		expect( ( await pose( copy ) ).effects ).toHaveLength( 2 );
-		await copy.waitForTimeout( 1000 ); expect( await pose( copy ) ).toMatchObject( {state:'complete',opacity:'1',effects:[]} );
+		const copy = await copyContext.newPage();
+		// Keep both unequal-duration effects alive while the runner inspects startup.
+		// A wall-clock sleep can outlast the shorter effect under browser/CI load.
+		await copy.addInitScript( () => {
+			const play = Animation.prototype.play;
+			Animation.prototype.play = function () {
+				if ( this instanceof CSSAnimation && [ 'neutralFade', 'neutralClip' ].includes( this.animationName ) ) this.playbackRate = 0.001;
+				return play.call( this );
+			};
+		} );
+		await copy.goto( `data:text/html,${ encodeURIComponent( portable ) }` );
+		await expect.poll( async () => ( await pose( copy ) ).effects.map( effect => ( { name: effect.name, state: effect.state } ) ) ).toEqual( [
+			{ name: 'neutralFade', state: 'running' }, { name: 'neutralClip', state: 'running' },
+		] );
+		await copy.locator( '#entrance' ).evaluate( element => element.getAnimations().forEach( animation => animation.finish() ) );
+		await expect.poll( () => pose( copy ) ).toMatchObject( {state:'complete',opacity:'1',effects:[]} );
 		expect( await copy.locator( '#entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ).toBeNull();
 		const unknown = await browser.newPage( { ...devices['iPhone 17'],viewport:{width:1200,height:900} } );
 		await unknown.goto( `data:text/html,${ encodeURIComponent( portable ) }` );
