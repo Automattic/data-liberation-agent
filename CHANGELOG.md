@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.27] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- accept Node timeout variants in connection-budget test
+- keep box-tree node ids out of viewport entrance attribute diffs
+
 ## [0.35.26] - 2026-11-16
 
 ### Changed
