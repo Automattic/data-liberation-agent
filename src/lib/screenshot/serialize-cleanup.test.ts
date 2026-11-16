@@ -1,5 +1,6 @@
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { capturePageHtml } from './screenshotter.js';
 import { applySourceCleanup, cleanupPolicy, sweepSourceCleanup } from '../source-cleanup.js';
 
@@ -7,10 +8,10 @@ import { applySourceCleanup, cleanupPolicy, sweepSourceCleanup } from '../source
 // still waits on the document (here a pending video source). Once the cleanup
 // observer has spent its budget, only a sweep inside the serializing task
 // keeps the widget out of the saved document.
-it( 'serializes without a cleanup match that mounted after the last sweep', async () => {
-	const browser = await chromium.launch();
-	try {
-		const page = await browser.newPage();
+it( 'serializes without a cleanup match that mounted after the last sweep', async ({ newPage }) => {
+
+	{
+		const page = await newPage();
 		await page.setContent( '<main><p>Content</p><video></video></main>' );
 		await applySourceCleanup( page, cleanupPolicy( [ { id: 'chat', category: 'provider-service', selector: '.chat-widget' } ] ) );
 		await page.evaluate( () => ( window as unknown as { __dlaCleanup: { observer: MutationObserver } } ).__dlaCleanup.observer.disconnect() );
@@ -19,17 +20,17 @@ it( 'serializes without a cleanup match that mounted after the last sweep', asyn
 		const html = await capturePageHtml( page );
 		expect( html ).toContain( 'Content' );
 		expect( html ).not.toContain( 'chat-widget' );
-	} finally { await browser.close(); }
+	}
 }, 30_000 );
 
 // A framework component re-mounts its banner when cleanup removes it. Removing
 // the re-mounted copy again fights the runtime (a free Wix site's React locked
 // up this way and every route stopped responding). Cleanup removes each match
 // once, hides what the runtime puts back, and serialization still omits it.
-it( 'hides a match the source runtime re-renders instead of removing it again', async () => {
-	const browser = await chromium.launch();
-	try {
-		const page = await browser.newPage();
+it( 'hides a match the source runtime re-renders instead of removing it again', async ({ newPage }) => {
+
+	{
+		const page = await newPage();
 		await page.setContent( `<main><p>Owner content</p></main>
 			<aside class="promo-bar">Static promo one</aside><aside class="promo-bar">Static promo two</aside>
 			<div id="banner-host"></div>
@@ -61,5 +62,5 @@ it( 'hides a match the source runtime re-renders instead of removing it again', 
 		expect( html ).toContain( 'Owner content' );
 		expect( html ).not.toContain( 'class="promo-bar"' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-cleanup-hidden' );
-	} finally { await browser.close(); }
+	}
 }, 30_000 );

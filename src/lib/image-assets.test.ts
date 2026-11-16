@@ -1,13 +1,12 @@
-import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import { captureWebsite } from '../index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
-import { getPlaywright } from './browser-kit/index.js';
 import { captureAssets, collectAssets as collectImageAssets, imageContentType, resourceContentType, resolvedImageOriginal, svgDeclaredSize } from './image-assets.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
@@ -123,15 +122,15 @@ it('joins overlapping srcsets without losing the largest original when another d
 });
 
 describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public capture fixture (~15s)', () => {
- it('verifies a redirected Base44-shaped API original (~1s)', async () => {
+ it('verifies a redirected Base44-shaped API original (~1s)', async ({ serve }) => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10"/></svg>';
   const hits: string[] = [];
-  const server = createServer((request, response) => {
+  const { server } = await serve((request, response) => {
    hits.push(request.url!);
    if (request.url!.startsWith('/api/')) { response.writeHead(302, { location: '/original.svg' }); response.end(); }
    else { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); }
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'redirected-original-'));
@@ -142,7 +141,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    expect(readFileSync(records[0].local_path!, 'utf8')).toBe(svg);
    expect(hits).toEqual(['/api/apps/app/files/mp/public/app/photo.svg', '/original.svg']);
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
@@ -177,17 +176,17 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
   }
  });
 
- it.each([
+ it.for([
   ['while routes can still start', 60_000, 2],
   ['once route admission has closed', -1, 6],
- ])('limits concurrent asset downloads %s', async (_name, closesIn, expected) => {
+ ] as const)('limits concurrent asset downloads %s', async ([_name, closesIn, expected], { serve }) => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2"/></svg>';
   let inFlight = 0, most = 0;
-  const server = createServer((_request, response) => {
+  const { server } = await serve((_request, response) => {
    most = Math.max(most, ++inFlight);
    setTimeout(() => { inFlight--; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); }, 100);
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'asset-queue-'));
@@ -201,16 +200,16 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    });
    expect(most).toBe(expected);
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('fetches a captured route\'s lightbox original before the deadline so assets admit it afterwards', async () => {
+ it('fetches a captured route\'s lightbox original before the deadline so assets admit it afterwards', async ({ serve }) => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20"/></svg>';
   let hits = 0;
-  const server = createServer((request, response) => { hits++; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { server } = await serve((request, response) => { hits++; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); });
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'asset-queue-'));
@@ -230,17 +229,17 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    });
    expect(hits).toBe(1);
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('acquires and verifies a real srcset rendition rather than reusing original stub aliases', async () => {
+ it('acquires and verifies a real srcset rendition rather than reusing original stub aliases', async ({ serve }) => {
   const hits: string[] = [];
   const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/>${width > 300 ? '<!--' + 'x'.repeat(1000) + '-->' : ''}</svg>`;
   let failAdequate = false;
-  const server = createServer((request, response) => { hits.push(request.url!); if (failAdequate && request.url!.includes('300')) { response.writeHead(500); response.end(); return; } response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(Number(/w=(\d+)/.exec(request.url!)?.[1] ?? 1800))); });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { server } = await serve((request, response) => { hits.push(request.url!); if (failAdequate && request.url!.includes('300')) { response.writeHead(500); response.end(); return; } response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(Number(/w=(\d+)/.exec(request.url!)?.[1] ?? 1800))); });
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'responsive-bytes-'));
@@ -277,21 +276,21 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     expect(fallback.renditions!.map(child => child.original?.width)).toEqual([100]);
    });
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('preserves verified hashes across independent writers and a lying-header rendition rename (~1s)', async () => {
+ it('preserves verified hashes across independent writers and a lying-header rendition rename (~1s)', async ({ serve }) => {
   const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/></svg>`;
   let duringRendition: (() => Promise<void>) | undefined;
-  const server = createServer(async (request, response) => {
+  const { server } = await serve(async (request, response) => {
    // Keep the URL/header as JPEG so captureAssets must correct it from decoded bytes.
    if (request.url!.includes('500w')) await duringRendition!();
    response.writeHead(200, { 'content-type': request.url!.includes('500w') ? 'image/jpeg' : 'image/svg+xml' });
    response.end(svg(request.url!.includes('500w') ? 500 : 1500));
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'media-writers-'));
@@ -322,15 +321,15 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     }
    });
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('keeps a verified original when later section media shares its filename', async () => {
+ it('keeps a verified original when later section media shares its filename', async ({ serve }) => {
   const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/></svg>`;
-  const server = createServer((request, response) => { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(request.url!.startsWith('/large/') ? 40 : 20)); });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { server } = await serve((request, response) => { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(request.url!.startsWith('/large/') ? 40 : 20)); });
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'media-names-'));
@@ -343,23 +342,22 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     expect(readFileSync(record.local_path!, 'utf8')).toBe(svg(20));
    });
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('exports one alpha-preserving original with every srcset/proxy/CSS URL and flags unresolved images', async () => {
-  const pw = await getPlaywright(), browser = await pw.chromium.launch({ headless: true });
-  const page = await browser.newPage();
+ it('exports one alpha-preserving original with every srcset/proxy/CSS URL and flags unresolved images', async ({ serve, newPage }) => {
+  const page = await newPage();
   const data = await page.evaluate(() => {
    const c = document.createElement('canvas'); c.width = 203; c.height = 90;
    c.getContext('2d')!.fillRect(0, 0, 100, 90);
    return { webp: c.toDataURL('image/webp').split(',')[1], jpeg: c.toDataURL('image/jpeg').split(',')[1] };
   });
-  await browser.close();
+  await page.context().close();
   const webp = Buffer.from(data.webp, 'base64'), jpeg = Buffer.from(data.jpeg, 'base64');
   const proxy = (w: number) => `/_next/image?url=%2Fpreview.webp&w=${w}&q=75`;
-  const server = createServer((request, response) => {
+  const { server } = await serve((request, response) => {
    const path = new URL(request.url!, 'http://example.com').pathname;
    // Deliberately lie about the format: metadata and filename must follow bytes.
    if (path === '/logo.webp') { response.writeHead(200, { 'content-type': 'image/jpeg' }); response.end(webp); }
@@ -368,7 +366,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    else if (path === '/missing.webp') { response.writeHead(200, { 'content-type': 'image/webp' }); response.end('<html>placeholder</html>'); }
    else { response.writeHead(200, { 'content-type': 'text/html' }); response.end(`<!doctype html><title>Next image fixture</title><link rel="stylesheet" href="/hero.css"><link rel="icon" href="${proxy(67)}"><link rel="apple-touch-icon" href="/logo.webp"><h1>Transparent logo</h1><nav><a href="/logo.webp"><img alt="Logo" src="${proxy(67)}" srcset="${proxy(203)} 203w, ${proxy(67)} 67w"></a></nav><img alt="Content logo" src="${proxy(67)}"><div class="hero" style="width:203px;height:90px;background-image:url('${proxy(67)}')"></div><img alt="Missing" src="/missing.webp">`); }
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'next-image-'));
@@ -406,7 +404,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    const findings = JSON.parse(readFileSync(join(root, 'website/source-findings.json'), 'utf8')).findings;
    expect(findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'image_resource_unresolved', unit: 'asset', loss_class: 'omitted_unit', location: { url: `${url}missing.webp` } })]));
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  }, 120_000);

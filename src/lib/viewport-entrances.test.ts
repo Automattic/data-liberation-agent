@@ -1,8 +1,9 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chromium, type Page } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { type Page } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import { observeViewportEntrances, stampViewportEntrances } from './viewport-entrances.js';
 import { stampNodeIds } from './screenshot/box-tree.js';
 import { exportWebsiteCapture } from './capture-export.js';
@@ -31,12 +32,11 @@ async function pose( page: Page ) {
 
 describe( 'source-observed viewport transition entrances', () => {
 	for ( const { repeat, scroll } of [ { repeat: false, scroll: false }, { repeat: true, scroll: false }, { repeat: true, scroll: true } ] ) it.skipIf( process.env.SKIP_BROWSER_TESTS )(
-		`captures and exports real timed viewport transitions (${ scroll ? 'scroll listener' : 'IO' }, ${ repeat ? 'repeating' : 'one-shot' })`, async () => {
-		const browser = await chromium.launch( { headless: true } );
+		`captures and exports real timed viewport transitions (${ scroll ? 'scroll listener' : 'IO' }, ${ repeat ? 'repeating' : 'one-shot' })`, async ({ newPage }) => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-viewport-entrances-' ) );
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
-			const source = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
+			const source = await newPage( { viewport: { width: 1024, height: 700 } } );
 			await source.addInitScript( observeViewportEntrances );
 			const htmlFixture = scroll ? fixture( repeat )
 				.replace( '.entrance[data-active="true"]', '.entrance.arrived' )
@@ -81,7 +81,7 @@ describe( 'source-observed viewport transition entrances', () => {
 			expect( html ).not.toContain( 'window.fixtureReady' );
 			expect( html ).toContain( 'data-blocks-engine-capture-viewport-entrances' );
 			server = await startStaticServer( join( directory, 'website' ) );
-			const candidate = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
+			const candidate = await newPage( { viewport: { width: 1024, height: 700 } } );
 			await candidate.goto( server.url );
 			expect( await pose( candidate ) ).toMatchObject( { opacity: '0', active: 'false' } );
 			if ( scroll ) await expect.poll( () => candidate.locator( '#hero' ).evaluate( element => ( { opacity: getComputedStyle( element ).opacity, transform: getComputedStyle( element ).transform } ) ), { timeout: 3_000 } ).toEqual( { opacity: '1', transform: 'none' } );
@@ -99,21 +99,21 @@ describe( 'source-observed viewport transition entrances', () => {
 			expect( await candidate.locator( 'button' ).evaluate( element => element.getAnimations().some( effect => effect instanceof CSSTransition ) ) ).toBe( true );
 			if ( repeat ) await candidate.waitForFunction( scroll => scroll ? ! document.querySelector( 'section.entrance' )?.classList.contains( 'arrived' ) : document.querySelector( 'section.entrance' )?.getAttribute( 'data-active' ) === 'false', scroll );
 			else expect( ( await pose( candidate ) ).active ).toBe( 'true' );
-			const reduced = await browser.newPage( { reducedMotion: 'reduce' } );
+			const reduced = await newPage( { reducedMotion: 'reduce' } );
 			await reduced.goto( server.url );
 			expect( await pose( reduced ) ).toMatchObject( { opacity: '1', transform: 'none' } );
-			const noScript = await browser.newPage( { javaScriptEnabled: false } );
+			const noScript = await newPage( { javaScriptEnabled: false } );
 			await noScript.goto( server.url );
 			expect( ( await pose( noScript ) ).opacity ).toBe( '1' );
-		} finally { await server?.close(); await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+		} finally { await server?.close();  rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'serializes scroll-scrubbed inline styles below the fold in their in-view pose (#1158)', async () => {
-		const browser = await chromium.launch( { headless: true } );
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'serializes scroll-scrubbed inline styles below the fold in their in-view pose (#1158)', async ({ newContext }) => {
+
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-scroll-scrubbed-' ) );
 		try {
 			const sourceUrl = 'https://fixture.test/';
-			const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
+			const context = await newContext( { viewport: { width: 1440, height: 900 } } );
 			await context.addInitScript( observeViewportEntrances );
 			await context.route( 'https://fixture.test/**', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><head>
 <style>.spacer{height:120vh}.card{width:400px;height:300px;margin:40px auto;background:#ff5400}.word{font-size:48px}</style></head><body>
@@ -143,39 +143,39 @@ addEventListener('scroll', update, { passive: true }); update();
 			expect( card ).toContain( 'inset(0%)' );
 			expect( card ).toContain( 'scale(1)' );
 			expect( word ).toContain( 'color: rgb(0, 0, 0)' );
-		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+		} finally {  rmSync( directory, { recursive: true, force: true } ); }
 	}, 60_000 );
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'fidelity observes lost entrances even without named finite CSS animations', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'fidelity observes lost entrances even without named finite CSS animations', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 1024, height: 700 } } );
 			const source = await observePage( page, `data:text/html,${ encodeURIComponent( fixture( false ) ) }`, 1024, 300, null );
 			const frozen = await observePage( page, `data:text/html,${ encodeURIComponent( fixture( false ).replace( /<script>[\s\S]*?<\/script>/, '' ).replace( 'data-active="false"', 'data-active="true"' ) ) }`, 1024, 300, null );
 			expect( source.animations ).toEqual( [] );
 			expect( source.entranceTransitions ).toHaveLength( 2 );
 			expect( checkMotion( source, frozen ).failures?.[ 0 ] ).toContain( 'viewport entrance transition coverage 0 of 2' );
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'matches an entrance whose copy drops the whitespace between its elements', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 1024, height: 700 } } );
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'matches an entrance whose copy drops the whitespace between its elements', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 1024, height: 700 } } );
 			const formatted = fixture( false ).replace( 'Viewport entrance</section>', '\n  <h2>Viewport</h2>\n  <p>entrance</p>\n</section>' );
 			const source = await observePage( page, `data:text/html,${ encodeURIComponent( formatted ) }`, 1024, 300, null );
 			const copy = await observePage( page, `data:text/html,${ encodeURIComponent( formatted.replace( /\n\s*/g, '' ) ) }`, 1024, 300, null );
 			expect( source.entranceTransitions ).toHaveLength( 2 );
 			expect( checkMotion( source, copy ) ).toEqual( {} );
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'frozen capture comparison independently executes the portable entrances', async () => {
-		const browser = await chromium.launch( { headless: true } );
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'frozen capture comparison independently executes the portable entrances', async ({ newContext }) => {
+
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-entrance-reference-' ) );
 		try {
 			const sourceUrl = 'https://fixture.test/';
-			const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
+			const context = await newContext( { viewport: { width: 1440, height: 900 } } );
 			await context.addInitScript( observeViewportEntrances );
 			await context.route( 'https://fixture.test/**', route => route.fulfill( { contentType: 'text/html', body: fixture( false ) } ) );
 			const source = await context.newPage();
@@ -194,6 +194,6 @@ addEventListener('scroll', update, { passive: true }); update();
 			expect( report.pending ).toEqual( [] );
 			expect( report.scores.flatMap( score => score.failures ) ).toEqual( [] );
 			expect( report.pass ).toBe( true );
-		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+		} finally {  rmSync( directory, { recursive: true, force: true } ); }
 	}, 60_000 );
 } );

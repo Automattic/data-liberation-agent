@@ -1,8 +1,9 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { load } from 'cheerio';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { capturePageHtml } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -10,10 +11,10 @@ import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { isGoogleMapHost } from './rendered-google-maps.js';
 
-it('keeps map runtime dialogs out of page panels while retaining a real site dialog', async () => {
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
+it('keeps map runtime dialogs out of page panels while retaining a real site dialog', async ({ newPage }) => {
+
+  {
+    const page = await newPage();
     await page.setContent(`<!doctype html><style>
       .gm-style { position:relative; width:640px; height:320px }
     </style><main><div class="page-map"><div>
@@ -50,15 +51,13 @@ it('keeps map runtime dialogs out of page panels while retaining a real site dia
     const portable = load(wireCapturedDialogs(captured, report.states));
     expect(portable('.data-blocks-engine-capture-dialog[aria-label="Keyboard shortcuts"]')).toHaveLength(0);
     expect(portable('.data-blocks-engine-capture-dialog[aria-label="Newsletter"]')).toHaveLength(1);
-  } finally {
-    await browser.close();
   }
 });
 
-it('preserves five GoDaddy maps, page content and site dialogs without claiming their root as a host', async () => {
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
+it('preserves five GoDaddy maps, page content and site dialogs without claiming their root as a host', async ({ newPage }) => {
+
+  {
+    const page = await newPage();
     await page.setContent(`<!doctype html><style>.gm-style {width:280px;height:160px}</style>
       <p id="content">Keep the page</p>
       ${Array.from({length:5}, (_, index) => `<div id="map-${index}"><div class="gm-style">
@@ -93,15 +92,13 @@ it('preserves five GoDaddy maps, page content and site dialogs without claiming 
       });
     }, isGoogleMapHost.toString());
     expect(hostResults).toEqual([true, false, false, false, false, false, false]);
-  } finally {
-    await browser.close();
   }
 });
 
-it('ports a rendered Google map through portable export without freezing its tiles or changing the live map', async () => {
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
+it('ports a rendered Google map through portable export without freezing its tiles or changing the live map', async ({ newPage }) => {
+
+  {
+    const page = await newPage();
     // The provider view link belongs to this rendered map. Business copy and
     // unrelated links outside it must never be used to invent its location.
     await page.setContent(`<!doctype html><style>
@@ -143,7 +140,7 @@ it('ports a rendered Google map through portable export without freezing its til
     expect(portable('.tiles')).toHaveLength(0);
     expect(portable('.map button, .map table, .map gmp-internal-dialog, .map [aria-label="Map"]')).toHaveLength(0);
     expect(portable('main > p').text()).toBe('Example workshop');
-    const copy = await browser.newPage();
+    const copy = await newPage();
     await copy.route('https://maps.google.com/**', route => route.fulfill({contentType:'text/html',body:'<p>Map service</p>'}));
     await copy.setContent(portable.html());
     for (const width of [390,768,1440]) {
@@ -153,15 +150,13 @@ it('ports a rendered Google map through portable export without freezing its til
       );
       expect(await copy.locator('iframe').evaluate(frame => frame.getBoundingClientRect().height)).toBe(320);
     }
-  } finally {
-    await browser.close();
   }
 });
 
-it('uses each map own observed view and leaves hidden, conflicting and unlocated maps alone', async () => {
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
+it('uses each map own observed view and leaves hidden, conflicting and unlocated maps alone', async ({ newPage }) => {
+
+  {
+    const page = await newPage();
     const link = (href:string) => `<a href="${href}">Open map</a>`;
     const map = (id:string, contents:string, style='') => `<div id="${id}" class="gm-style" style="width:280px;height:160px;${style}">${contents}</div>`;
     await page.setContent(`<!doctype html>
@@ -184,7 +179,5 @@ it('uses each map own observed view and leaves hidden, conflicting and unlocated
       expect(captured(`#${id} iframe`)).toHaveLength(0);
       expect(captured(`#${id}`).html()).toBe(await page.locator(`#${id}`).innerHTML());
     }
-  } finally {
-    await browser.close();
   }
 });

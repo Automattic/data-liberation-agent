@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { observePage } from './check.js';
 
 // Image and text geometry are viewport-relative. An observation that ran the
@@ -13,20 +14,20 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		<script>${ pin ? `let armed = false;
 			addEventListener( 'scroll', () => { if ( scrollY > 0 ) armed = true; else if ( armed ) scrollTo( { top: 700, behavior: 'instant' } ); } );` : '' }</script>`;
 
-	it( 'measures the swept document at the top pose', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
+	it( 'measures the swept document at the top pose', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 800, height: 600 } } );
 			await page.setContent( fixture( false ) );
 			const observation = await observePage( page, 'about:blank', 800, 0, null, undefined, undefined, true, false );
 			expect( observation.images.map( image => [ image.x, image.y ] ) ).toEqual( [ [ 0, 0 ] ] );
-		} finally { await browser.close(); }
+		}
 	}, 60_000 );
 
-	it( 'restores the baseline after a post-sweep fragment probe before measuring geometry', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
+	it( 'restores the baseline after a post-sweep fragment probe before measuring geometry', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 800, height: 600 } } );
 			await page.setContent( fixture( false ) + '<a href="#target">Jump</a><div id="target">Target</div>' );
 			const observation = await observePage( page, 'about:blank', 800, 0, null, undefined, async () => {
 				expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
@@ -35,16 +36,16 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			}, true, false );
 			expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
 			expect( observation.images.map( image => [ image.x, image.y ] ) ).toEqual( [ [ 0, 0 ] ] );
-		} finally { await browser.close(); }
+		}
 	}, 60_000 );
 
-	it( 'refuses to report geometry from a page that will not return to the top', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
+	it( 'refuses to report geometry from a page that will not return to the top', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 800, height: 600 } } );
 			await page.setContent( fixture( true ) );
 			await expect( observePage( page, 'about:blank', 800, 0, null, undefined, undefined, true, false ) )
 				.rejects.toThrow( /Observation pose unproven: .* \(0, 700\)/ );
-		} finally { await browser.close(); }
+		}
 	}, 60_000 );
 } );

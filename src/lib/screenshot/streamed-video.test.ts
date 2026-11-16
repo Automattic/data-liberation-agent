@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright';
+import { describe, expect, beforeAll, afterAll } from 'vitest';
+import { it, type BrowserFixtures } from '../../../test/browser.js';
+import { type Browser, type Page } from 'playwright';
 import { CapturedResourceStore } from './resource-capture.js';
 import { capturePageHtml } from './screenshotter.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -14,10 +15,10 @@ const PAGE_URL = 'https://streamed-video.test/';
 // appends it, so the element has a decoded frame; without it the MediaSource is
 // attached but never fed.
 async function streamedVideoPage(
-	browser: Browser,
+	{ newPage }: Pick<BrowserFixtures, 'newPage'>, browser: Browser,
 	{ frames, attributes = '', sourceChild = false }: { frames: boolean; attributes?: string; sourceChild?: boolean }
 ): Promise< Page > {
-	const page = await browser.newPage( { viewport: { width: 800, height: 600 } } );
+	const page = await newPage( { viewport: { width: 800, height: 600 } } );
 	await page.route( PAGE_URL, ( route ) =>
 		route.fulfill( {
 			contentType: 'text/html',
@@ -77,23 +78,23 @@ function videoTag( html: string ): string {
 }
 
 describe( 'stream-backed (MSE) video capture', () => {
-	let browser: Browser;
+
 	let outputDir: string;
 
 	beforeAll( async () => {
-		browser = await chromium.launch();
+
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );
 		outputDir = mkdtempSync( join( parent, 'streamed-video-' ) );
 	} );
 
 	afterAll( async () => {
-		await browser.close();
+
 		rmSync( outputDir, { recursive: true, force: true } );
 	} );
 
-	it( 'never serializes a session-only blob: media URL', async () => {
-		const page = await streamedVideoPage( browser, { frames: false } );
+	it( 'never serializes a session-only blob: media URL', async ({ browser, newPage }) => {
+		const page = await streamedVideoPage({ newPage },  browser, { frames: false } );
 		expect( await page.evaluate( () => document.querySelector( 'video' )!.currentSrc ) ).toMatch( /^blob:/ );
 
 		const html = await capturePageHtml( page );
@@ -106,8 +107,8 @@ describe( 'stream-backed (MSE) video capture', () => {
 		await page.close();
 	} );
 
-	it( 'drops a blob: <source> child too', async () => {
-		const page = await streamedVideoPage( browser, { frames: false, sourceChild: true } );
+	it( 'drops a blob: <source> child too', async ({ browser, newPage }) => {
+		const page = await streamedVideoPage({ newPage },  browser, { frames: false, sourceChild: true } );
 
 		const html = await capturePageHtml( page );
 
@@ -116,8 +117,8 @@ describe( 'stream-backed (MSE) video capture', () => {
 		await page.close();
 	} );
 
-	it( 'promotes a declared data-poster to the poster the copy shows', async () => {
-		const page = await streamedVideoPage( browser, {
+	it( 'promotes a declared data-poster to the poster the copy shows', async ({ browser, newPage }) => {
+		const page = await streamedVideoPage({ newPage },  browser, {
 			frames: false,
 			attributes: 'data-poster="/media/still.jpg"',
 		} );
@@ -131,8 +132,8 @@ describe( 'stream-backed (MSE) video capture', () => {
 		await page.close();
 	} );
 
-	it( 'keeps an authored poster as-is', async () => {
-		const page = await streamedVideoPage( browser, {
+	it( 'keeps an authored poster as-is', async ({ browser, newPage }) => {
+		const page = await streamedVideoPage({ newPage },  browser, {
 			frames: true,
 			attributes: 'poster="https://cdn.streamed-video.test/authored.jpg"',
 		} );
@@ -146,8 +147,8 @@ describe( 'stream-backed (MSE) video capture', () => {
 		await page.close();
 	} );
 
-	it( 'captures a still frame of the playing video as a poster image asset', async () => {
-		const page = await streamedVideoPage( browser, { frames: true } );
+	it( 'captures a still frame of the playing video as a poster image asset', async ({ browser, newPage }) => {
+		const page = await streamedVideoPage({ newPage },  browser, { frames: true } );
 		expect( await page.evaluate( () => document.querySelector( 'video' )!.readyState ) ).toBeGreaterThanOrEqual( 2 );
 		const store = new CapturedResourceStore( outputDir, PAGE_URL );
 

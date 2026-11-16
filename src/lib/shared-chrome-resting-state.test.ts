@@ -57,6 +57,7 @@ it.skipIf( skipBrowser )( 'shared header parts keep the resting state and dropdo
 	} );
 	await new Promise< void >( resolve => server.listen( 0, resolve ) );
 	const url = `http://localtest.me:${ ( server.address() as { port: number } ).port }/`;
+	// Own launch: host resolver maps localtest.me to the loopback fixture.
 	const browser = await chromium.launch( { args: [ '--host-resolver-rules=MAP localtest.me 127.0.0.1' ] } );
 	try {
 		const outputDir = join( root, 'capture' );

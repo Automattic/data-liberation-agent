@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it, type BrowserFixtures } from '../../../test/browser.js';
+import { type Browser, type Page } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
@@ -7,8 +8,8 @@ import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './vie
 const ORIGIN = 'https://viewport-work.test';
 
 /** Served like a capture: both trackers are installed before the source runs. */
-async function served( browser: Browser, body: string ): Promise< Page > {
-	const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+async function served( { newPage }: Pick<BrowserFixtures, 'newPage'>, browser: Browser, body: string ): Promise< Page > {
+	const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 	await page.addInitScript( observeRuntimeStyleWrites );
 	await page.addInitScript( observeViewportWork );
 	await page.route( `${ ORIGIN }/**`, route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">${ body }
@@ -20,12 +21,9 @@ async function served( browser: Browser, body: string ): Promise< Page > {
 const widths = [ 390, 600, 768, 1024, 1440 ];
 
 describe( 'fluid rest ends on viewport work evidence', () => {
-	let browser: Browser;
-	beforeAll( async () => { browser = await chromium.launch( { headless: true } ); } );
-	afterAll( async () => { await browser.close(); } );
 
-	it( 'tracks viewport-created intervals until either cancellation API clears them', async () => {
-		const page = await browser.newPage();
+	it( 'tracks viewport-created intervals until either cancellation API clears them', async ({ newPage }) => {
+		const page = await newPage();
 		await page.evaluate( observeViewportWork );
 		expect( await page.evaluate( async key => {
 			const work = ( window as unknown as Record<symbol, ViewportWork> )[ Symbol.for( key ) ]!;
@@ -45,9 +43,9 @@ describe( 'fluid rest ends on viewport work evidence', () => {
 		await page.close();
 	} );
 
-	it( 'waits for a 400 ms debounced resize handler before sampling', async () => {
+	it( 'waits for a 400 ms debounced resize handler before sampling', async ({ browser, newPage }) => {
 		// Like a bundled debounce utility, the source keeps its own timer reference.
-		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+		const page = await served({ newPage },  browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
 			<script>
 			const later = window.setTimeout, cancel = window.clearTimeout;
 			const box = document.querySelector('#box');
@@ -66,9 +64,9 @@ describe( 'fluid rest ends on viewport work evidence', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'rests a width whose geometry settled at once without a fixed window or long runtime timeouts', async () => {
+	it( 'rests a width whose geometry settled at once without a fixed window or long runtime timeouts', async ({ browser, newPage }) => {
 		// The two-second timeouts touch no geometry (like a gallery's "load more" guard).
-		const page = await served( browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
+		const page = await served({ newPage },  browser, `<div id="box" style="width:720px;height:40px">Neutral text</div>
 			<script>const box = document.querySelector('#box'); const fit = () => { box.style.width = innerWidth / 2 + 'px'; };
 			addEventListener('resize', () => { fit(); setTimeout(() => {}, 2000); }); addEventListener('scroll', () => setTimeout(() => {}, 2000)); fit();</script>` );
 		try {
