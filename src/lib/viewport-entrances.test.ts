@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { chromium, type Page } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import { observeViewportEntrances, stampViewportEntrances } from './viewport-entrances.js';
+import { stampNodeIds } from './screenshot/box-tree.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { triggerLazyLoad } from './screenshot/page-helpers.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
@@ -51,10 +52,13 @@ describe( 'source-observed viewport transition entrances', () => {
 			if ( scroll ) await source.locator( '#hero' ).evaluate( async element => { await Promise.all( element.getAnimations().map( effect => effect.finished ) ); } );
 			await source.waitForFunction( () => ( window as typeof window & { fixtureReady?: boolean } ).fixtureReady );
 			expect( ( await pose( source ) ).opacity ).toBe( '0' );
+			// Box-tree identity is stamped mid-observation; it is capture evidence, not an entrance change.
+			await stampNodeIds( source );
 			await triggerLazyLoad( source );
 			await stampViewportEntrances( source );
 			const evidence = await source.locator( 'section.entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
 			expect( JSON.parse( evidence! ) ).toMatchObject( { repeat, rootMargin: scroll ? '0px' : '0px 0px -10% 0px', attributes: scroll ? { class: { before: 'entrance', after: 'entrance arrived' } } : { 'data-active': { before: 'false', after: 'true' } } } );
+			expect( Object.keys( JSON.parse( evidence! ).attributes ) ).not.toContain( 'data-blocks-engine-node-id' );
 			expect( JSON.parse( evidence! ).threshold[ 0 ] ).toBeCloseTo( scroll ? 0 : 0.2 );
 			if ( scroll ) {
 				expect( await source.locator( '#hero' ).getAttribute( 'class' ) ).toBe( 'entrance arrived' );
