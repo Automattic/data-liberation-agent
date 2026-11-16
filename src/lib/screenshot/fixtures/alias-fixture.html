@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Width toggled class</title>
+<style>body{font-family:sans-serif;margin:0;padding:24px} .tok{color:#a00;font-weight:700}</style></head>
+<body><main><h1>Width toggled class</h1><ul><li data-bp="400">Item 400</li><li data-bp="500">Item 500</li><li data-bp="600">Item 600</li><li data-bp="700">Item 700</li><li data-bp="800">Item 800</li><li data-bp="900">Item 900</li><li data-bp="1000">Item 1000</li><li data-bp="1100">Item 1100</li><li data-bp="1200">Item 1200</li><li data-bp="1300">Item 1300</li></ul></main>
+<script>function s(){document.querySelectorAll('[data-bp]').forEach(e=>e.classList.toggle('tok',innerWidth>=+e.dataset.bp))}s();addEventListener('resize',s);</script>
+</body></html>
