@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { probeExclusionSkip } from './probe-exclusions.js';
 import { captureCollections, collectionRegions } from './collection-capture.js';
 import { captureWebsite } from '../../index.js';
@@ -146,10 +146,13 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('preserves distinct columns s
 	} finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 }, 90_000);
 
-// ~3 seconds, one browser. Reverting the untouched-document path reloads the probe once per hidden control.
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('does not reload the probe document for hidden controls it never acted on', async () => {
-	const hidden = Array.from({ length: 4 }, (_, index) => `<button style="display:none">Menu ${index}</button>`).join('');
-	const source = `<!doctype html><html><body><main><section>${hidden}<div id="cards"><article><a href="/a">A</a></article><article><a href="/b">B</a></article></div></section></main></body></html>`;
+// ~5 seconds per case: one browser, injected Playwright failure and a genuinely hidden control.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)).each([1, 2])('isolates control failures after a fresh-document retry (%s failures)', async failures => {
+	const source = `<!doctype html><html><body><main><section>
+<button id="broken">Submit</button><button id="hidden" hidden>Menu</button>
+<select id="filter" onchange="document.querySelector('#b').hidden=this.value==='a'"><option value="all">All</option><option value="a">A</option></select>
+<div id="cards"><article><a href="/a">A</a></article><article id="b"><a href="/b">B</a></article></div>
+</section></main></body></html>`;
 	let documents = 0;
 	const server = createServer((request, response) => { if (request.url === '/') documents++; response.setHeader('Content-Type', 'text/html'); response.end(source); });
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -158,11 +161,33 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('does not reload the probe do
 	try {
 		const page = await (await browser.newContext()).newPage();
 		await page.goto(url);
-		const started = Date.now();
-		expect(await captureCollections(page)).toEqual([]);
-		// The capture's own load plus one probe document; one shared 1 s visibility grace.
-		expect(documents).toBe(2);
-		expect(Date.now() - started).toBeLessThan(3_000);
+		const context = page.context();
+		const newPage = context.newPage.bind(context);
+		let clicks = 0;
+		const clickDocuments: number[] = [];
+		vi.spyOn(context, 'newPage').mockImplementation(async () => {
+			const probe = await newPage();
+			const locator = probe.locator.bind(probe);
+			vi.spyOn(probe, 'locator').mockImplementation((selector, options) => {
+				const target = locator(selector, options);
+				if (selector === '#broken') vi.spyOn(target, 'click').mockImplementation(async () => {
+					clickDocuments.push(documents);
+					if (++clicks <= failures) throw new Error('fixture click failed');
+				});
+				return target;
+			});
+			return probe;
+		});
+		const [component] = await captureCollections(page);
+		const evidence = component.collection!;
+		expect(clicks).toBe(2);
+		expect(clickDocuments[1]).toBe(clickDocuments[0] + 1);
+		expect(evidence.coverage).toBe('complete');
+		expect(component.status).toBe('captured');
+		expect(evidence.members).toHaveLength(2);
+		expect(evidence.failedControls).toEqual(failures === 2 ? ['#broken', '#hidden'] : ['#hidden']);
+		expect(evidence.states.filter(state => state.trigger?.selector === '#broken')).toHaveLength(failures === 2 ? 0 : 1);
+		expect(evidence.states.filter(state => state.trigger?.selector === '#filter').map(state => [state.trigger?.value, state.members.length])).toEqual([['all', 2], ['a', 1]]);
 	} finally {
 		await browser.close();
 		await new Promise<void>(resolve => server.close(() => resolve()));
