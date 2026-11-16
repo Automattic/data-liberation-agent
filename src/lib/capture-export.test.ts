@@ -16,11 +16,11 @@ import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
-	canonicalizeUnreferencedRuntimeIds,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
 } from './capture-export.js';
+import { canonicalizeUnreferencedRuntimeIds } from './capture-export-render.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';

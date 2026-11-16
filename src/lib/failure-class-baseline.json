@@ -43,9 +43,11 @@
 			"throw new Error( 'Runtime attachment has no corresponding acquired variant' )": 1,
 			"throw new Error( 'Runtime attachments require explicit HTTP input' )": 1,
 			"throw new Error( 'Source URL is outside its adapter route scope' )": 1,
-			"throw new Error( `Captured route escapes the website directory: ${ url }` )": 1,
 			"throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` )": 1,
 			"throw new Error( `Screenshot manifest not found: ${ screenshotManifestPath }` )": 1
+		},
+		"src/lib/capture-export-render.ts": {
+			"throw new Error( `Captured route escapes the website directory: ${ url }` )": 1
 		},
 		"src/lib/capture-http.ts": {
 			"throw new Error( 'HTTP orchestration requires explicit export roles for all profile variants' )": 1,
