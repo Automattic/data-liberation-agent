@@ -391,7 +391,8 @@ describe('captureScreenshots', () => {
 		};
 
 		await expect(capturePageHtml(page as never)).resolves.toContain('<video autoplay muted>');
-		const mediaCalls = page.evaluate.mock.calls.slice(-4);
+		const mediaCalls = page.evaluate.mock.calls.filter(([fn]) =>
+			/source\.setAttribute\(property|adoptedStyleSheets|snapshot\.outerHTML|frame\.removeAttribute\(attribute\)/.test(String(fn)));
 		expect(String(mediaCalls[0][0])).toContain('source.setAttribute(property');
 		expect(String(mediaCalls[0][0])).toContain('source.currentSrc || source.src');
 		expect(String(mediaCalls[0][0])).toContain('frame.getBoundingClientRect()');

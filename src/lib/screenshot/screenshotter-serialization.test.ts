@@ -55,6 +55,49 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
+  // Two routes in one browser pass; expected wall time is about a second.
+  it('restores top after media settling before serializing each route', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('https://media-scroll.test/**', route => route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><style>
+          html { scroll-behavior: smooth }
+          body { min-height: 3000px }
+          .totop { position: fixed; right: 10px; bottom: 10px }
+          .totop.hide { right: -100px !important }
+        </style><a class="totop hide" href="#">Top</a><video></video><script>
+          addEventListener('scroll', () => {
+            document.querySelector('.totop').classList.toggle('hide', scrollY === 0);
+          });
+          // A player settling during serialization can move the source after
+          // capturePageHtml starts, just as earlier screenshot/lazy-load work can.
+          Object.defineProperty(document.querySelector('video'), 'currentSrc', {
+            get() {
+              if (location.pathname === '/scrolled') {
+                window.scrollTo({ top: 600, behavior: 'instant' });
+                dispatchEvent(new Event('scroll'));
+              }
+              return 'https://media-scroll.test/movie.mp4';
+            }
+          });
+        </script>`,
+      }));
+      const classes: string[] = [];
+      for (const route of ['initial', 'scrolled']) {
+        await page.goto(`https://media-scroll.test/${route}`);
+        // Do not mark initial classes: this checks the actual serialized pose,
+        // not the independent clone-only restoration of one-way class changes.
+        const html = load(await capturePageHtml(page));
+        classes.push(html('.totop').attr('class')!);
+        expect(await page.evaluate(() => scrollY)).toBe(0);
+      }
+      expect(classes).toEqual(['totop hide', 'totop hide']);
+    } finally {
+      await page.close();
+    }
+  });
+
   // One browser pass, no settling waits; expected wall time is under a second.
   it('marks scroll classes once per document without mutating unpositioned markup', async () => {
     const page = await browser.newPage();
