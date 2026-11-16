@@ -1523,8 +1523,13 @@ async function snapshotDialog(
 			for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 				unsafe.remove();
 			for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
+				// Replay content is not a box-tree node map. Baseline serialization
+				// may have stamped this DOM, unlike the entry chrome probe. Empty
+				// presentation attributes can also be left behind by capture probes.
+				element.removeAttribute( 'data-blocks-engine-node-id' );
 				for ( const attribute of Array.from( element.attributes ) ) {
-					if ( /^on/i.test( attribute.name ) ) element.removeAttribute( attribute.name );
+					if ( /^on/i.test( attribute.name ) ||
+						[ 'style', 'class' ].includes( attribute.name ) && !attribute.value.trim() ) element.removeAttribute( attribute.name );
 				}
 			}
 			return {
