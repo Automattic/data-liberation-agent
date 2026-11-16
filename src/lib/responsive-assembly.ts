@@ -364,7 +364,8 @@ function discoverIdentityAttributes( desktop: cheerio.CheerioAPI, mobile: cheeri
 		const attributes = new Map< string, { values: Map< string, number >; count: number } >();
 		for ( const element of $( 'body *' ).toArray().filter( isElementNode ) ) {
 			for ( const [ name, value ] of Object.entries( element.attribs ) ) {
-				if ( name === 'id' || name === 'class' || name === 'style' || ! value.trim() ) continue;
+				// Capture IDs bind one document's evidence, not authored identity across documents.
+				if ( name === 'data-blocks-engine-node-id' || name === 'id' || name === 'class' || name === 'style' || ! value.trim() ) continue;
 				const entry = attributes.get( name ) ?? { values: new Map< string, number >(), count: 0 };
 				entry.values.set( value, ( entry.values.get( value ) ?? 0 ) + 1 );
 				entry.count++;

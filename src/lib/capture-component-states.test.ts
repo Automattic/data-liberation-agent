@@ -1,3 +1,4 @@
+import { stripNodeIds } from './test-helpers/strip-node-ids.js';
 import { resolveInteractionComponents, type ComponentPage } from './captured-interactions.js';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -62,7 +63,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('captures the initial route b
 			clone.querySelector('[data-blocks-engine-capture-tabs]')?.removeAttribute('data-blocks-engine-capture-tabs');
 			return clone.innerHTML;
 		});
-		expect(exportedInitialDom).toBe(initialDom);
+		expect(stripNodeIds(exportedInitialDom)).toBe(initialDom);
 		expect(evidence.pages[0]).not.toHaveProperty('states');
 		expect(evidence.pages[0]).not.toHaveProperty('initialDialogs');
 		expect(await page.locator('#panel-first').textContent()).toBe('Initially mounted');

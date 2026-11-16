@@ -6,7 +6,7 @@ import * as cheerio from 'cheerio';
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportWebsiteCapture } from './capture-export.js';
 import {
-	CAPTURE_EVIDENCE_FAMILIES, CAPTURE_EVIDENCE_NAMES, CAPTURE_EVIDENCE_PREFIX, CAPTURE_RUNTIME_SHA256, CAPTURE_SCHEMA_NAMESPACE, CAPTURE_SCHEMAS,
+	CAPTURE_EVIDENCE_FAMILIES, CAPTURE_EVIDENCE_NAMES, CAPTURE_EVIDENCE_PREFIX, CAPTURE_RUNTIME_SHA256, CAPTURE_SCHEMA_NAMESPACE, CAPTURE_SCHEMAS, SHARED_CAPTURE_SCHEMAS,
 } from './capture-vocabulary.js';
 
 const ROOT = join( import.meta.dirname, '..', '..' );
@@ -73,6 +73,8 @@ describe( 'capture evidence vocabulary', () => {
 		const writers = [ ...sourceFiles, ...files( join( ROOT, 'scripts' ), path => path.endsWith( '.mjs' ) ) ];
 		const spelled = new Set( writers.flatMap( file => [ ...readFileSync( file, 'utf8' ).matchAll( pattern ) ].map( match => match[ 1 ] ) ) );
 		expect( [ ...spelled ].sort() ).toEqual( [ ...CAPTURE_SCHEMAS ].sort() );
+		const shared = new Set( writers.flatMap( file => [ ...readFileSync( file, 'utf8' ).matchAll( /blocks-engine\/([\w.-]+\/v\d+)/g ) ].map( match => match[ 0 ] ) ) );
+		expect( [ ...shared ].sort() ).toEqual( [ ...SHARED_CAPTURE_SCHEMAS ].sort() );
 	} );
 
 	it( 'covers every name Blocks Engine publishes in its capture-evidence contract', () => {

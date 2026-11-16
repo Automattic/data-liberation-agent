@@ -1,3 +1,4 @@
+import { stripNodeIds } from '../test-helpers/strip-node-ids.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -113,7 +114,7 @@ it.skipIf(skipBrowser)('keeps the already saved initial document when a later di
     expect(entry.blockLosses ?? []).toEqual([]);
     const html = readFileSync(join(outputDir, entry.html), 'utf8');
     expect(html).toContain('Editorial content');
-    expect(html).toContain('<aside id="recommendation">Use suggested unit Keep current unit</aside>');
+    expect(stripNodeIds(html)).toContain('<aside id="recommendation">Use suggested unit Keep current unit</aside>');
     expect(html).toContain('aria-expanded="false"');
     expect(load(html)('#options').length).toBe(0);
     expect(html).not.toContain('data-blocks-engine-capture-hydrated-disclosure');

@@ -1,3 +1,4 @@
+import { stripNodeIds } from './test-helpers/strip-node-ids.js';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,7 +44,7 @@ const pages: Record< string, string > = {
 };
 
 // The fixture's own runtime script spells the dialog out; assert on the document.
-const markup = ( html: string ) => html.replace( /<script[\s\S]*?<\/script>/gi, '' );
+const markup = ( html: string ) => stripNodeIds( html ).replace( /<script[\s\S]*?<\/script>/gi, '' );
 
 async function source( routes: Record< string, string > = pages ): Promise< string > {
 	server = createServer( ( req, res ) => {

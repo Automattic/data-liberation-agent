@@ -41,7 +41,10 @@ export function withDocumentTitle( html: string, documentTitle: string ): string
 	let result = html;
 	for ( let index = inHead.length - 1; index >= 0; index-- ) {
 		const { start, end } = inHead[ index ]!;
-		result = result.slice( 0, start ) + ( index === 0 ? element : '' ) + result.slice( end );
+		// Keep the source element's identity and authored attributes.
+		const opening = html.slice( start, html.indexOf( '>', start ) + 1 );
+		const replacement = `${ opening }${ escapeTitle( documentTitle ) }</title>`;
+		result = result.slice( 0, start ) + ( index === 0 ? replacement : '' ) + result.slice( end );
 	}
 	return result;
 }

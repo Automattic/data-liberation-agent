@@ -1,3 +1,4 @@
+import { captureBoxTree, stampNodeIds, writeBoxTree } from './box-tree.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
@@ -333,6 +334,11 @@ export function baselineSteps(
 ): CaptureStep<{ page: Page }>[] {
 	const { page, viewport, plan, url, slug, evaluateTimeoutMs, screenshotTimeoutMs, outputDir, entry, responsiveImages, resourceStore, mobileHeights, shouldAnalyze, aggregator } = args;
 	const { serverHtml, navigationUrl, sourcePolicy } = sourceLoad;
+	const boxViewports = () => Object.fromEntries( [
+		{ id: 'desktop', width: 1440, height: 900 },
+		{ id: 'mobile', width: 390, height: 844 },
+		...( args.consentViewports ?? [] ), viewport,
+	].filter( item => item.id === 'desktop' || item.id === 'mobile' ).map( item => [ item.id!, { width: item.width, height: item.height } ] ) );
 	const isDesktop = viewport.id === 'desktop';
 	const isMobile = viewport.id === 'mobile';
 	const canonicalize = ( html: string ) => args.canonicalizeHtml ? args.canonicalizeHtml( html ) : html;
@@ -347,6 +353,7 @@ export function baselineSteps(
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch ( orElse( undefined ) );
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
+		await stampNodeIds( page );
 		const learned = await capturePageHtml( page, args.diagnostics );
 		const baseUrl = await page.evaluate( () => document.baseURI );
 		const linkedSheet = ( href: string ) => {
@@ -433,6 +440,7 @@ export function baselineSteps(
 				await markInitialDocument( page );
 				// Probes above resized the page; serialize source sheets as loaded at this width.
 				await restoreLoadTimeSheets( page ).catch ( orElse( 0 ) );
+				await stampNodeIds( page );
 				state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml );
 				if ( await args.absentDocument?.( state.initialDocument ) ) {
 					fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
@@ -596,7 +604,10 @@ export function baselineSteps(
 					fail( 'content', `${ CLIENT_ERROR_SHELL_FAILURE }: the page's client runtime replaced the document with its framework error shell (matched ${ shellSelector }); HTML not persisted` );
 				} else {
 					mkdirSync( dirname( plan.paths.html ), { recursive: true } );
+					const tree = isDesktop || isMobile ? await captureBoxTree( page, html, boxViewports() ) : undefined;
+					if ( ( isDesktop || isMobile ) && ! tree ) args.diagnostics?.push( { code: 'box_tree_unproven', reason: 'Saved document could not be bound to a stable live tree at both viewports.' } );
 					writeFileSync( plan.paths.html, html );
+					writeBoxTree( outputDir, plan.paths.html, tree );
 					args.glyphColors?.defer( plan.paths.html, html );
 					entry.html = relative( outputDir, plan.paths.html );
 					entry.documents = { ...entry.documents, [viewport.id]: documentUrl };
@@ -612,7 +623,10 @@ export function baselineSteps(
 				// recording a failure of its own.
 				if ( !sourceLoad.externalNavigation && !isRouteDrift( page.url(), navigationUrl ) && !isStackingArtifact( mhtml ) && matchClientErrorShell( mhtml, args.clientErrorShellSelectors ) === undefined ) {
 					mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
+					const tree = await captureBoxTree( page, mhtml, boxViewports() );
+					if ( ! tree ) args.diagnostics?.push( { code: 'box_tree_unproven', reason: 'Saved mobile document could not be bound to a stable live tree at both viewports.' } );
 					writeFileSync( plan.paths.htmlMobile, mhtml );
+					writeBoxTree( outputDir, plan.paths.htmlMobile, tree );
 					args.glyphColors?.defer( plan.paths.htmlMobile, mhtml );
 					entry.mobileHtml = relative( outputDir, plan.paths.htmlMobile );
 					entry.documents = { ...entry.documents, mobile: documentUrl };

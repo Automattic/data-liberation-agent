@@ -504,7 +504,7 @@ describe( 'exportWebsiteCapture', () => {
 		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
 		expect( proof ).toMatchObject( {
-			schema: 'blocks-engine-capture/layout-geometry-proof/v1',
+			schema: 'blocks-engine/layout-geometry-proof/v1',
 			nodes: [
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1)' },
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1) > section:nth-of-type(1)' },
@@ -2336,7 +2336,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' ) )
 		).toMatchObject( {
-			schema: 'blocks-engine-capture/layout-geometry-proof/v1',
+			schema: 'blocks-engine/layout-geometry-proof/v1',
 			capture_omissions: { capture_missing: 4 },
 		} );
 		expect( receipt ).toMatchObject( {
