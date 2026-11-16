@@ -265,12 +265,20 @@ export function observeViewportEntrances(): void {
 			// The source's own keyframes, not class names or the scroll alone,
 			// must prove a hidden-to-visible transition. In particular, never
 			// promote a visible-at-load element's scroll-out exit into an entrance.
+			// `none` is too narrow: perspective and z-only terms can also leave
+			// every point in the element's z=0 plane unchanged.
+			const planeUnchanged = ( transform: string ) => {
+				const m = new DOMMatrixReadOnly( transform );
+				return [ m.m11 - 1, m.m12, m.m14, m.m21, m.m22 - 1, m.m24, m.m41, m.m42, m.m44 - 1 ]
+					.every( term => Math.abs( term ) < 1e-6 );
+			};
 			const reveal = element.getAnimations().some( effect => {
 				if ( ! ( effect instanceof CSSTransition ) || ! ( effect.effect instanceof KeyframeEffect ) ) return false;
 				const frames = effect.effect.getKeyframes();
 				const first = frames[ 0 ], last = frames[ frames.length - 1 ];
 				return effect.transitionProperty === 'opacity' && Number( first?.opacity ) === 0 && Number( last?.opacity ) === 1 ||
-					effect.transitionProperty === 'transform' && typeof first?.transform === 'string' && first.transform !== 'none' && last?.transform === 'none';
+					effect.transitionProperty === 'transform' && typeof first?.transform === 'string' && typeof last?.transform === 'string' &&
+					! planeUnchanged( first.transform ) && planeUnchanged( last.transform );
 			} );
 			if ( ! reveal ) { scrollCandidates.delete( element ); return; }
 			const box = element.getBoundingClientRect();

@@ -77,7 +77,9 @@ ${ slowConnect }
 
 	it( 'the delayed-connect fixture fails with the unmodified Node default', async () => {
 		await expect( child( `const request = fetch;\n${ slowConnect }` ) ).rejects.toMatchObject( {
-			stderr: expect.stringContaining( 'ETIMEDOUT' ),
+			// Node versions can surface either the connection timeout or the
+			// request's abort deadline when the native connect shim is cancelled.
+			stderr: expect.stringMatching( /ETIMEDOUT|TimeoutError.*operation was aborted due to timeout/ ),
 		} );
 	} );
 
