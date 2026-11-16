@@ -272,8 +272,11 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 				elements.forEach( ( element, index ) => {
 					if ( ! element.isConnected ) return;
 					const now = new Set( tokens( element ) );
-					const added = [ ...now ].filter( token => ! base[ index ]!.has( token ) );
-					const removed = [ ...base[ index ]! ].filter( token => ! now.has( token ) );
+					// Reflow can bring a scroll entrance into view; its pose is not
+					// width state, even when other tokens on this element are.
+					const entrance = ( window as typeof window & { __dlaEntrances?: { classTokens( element: Element ): Set<string> } } ).__dlaEntrances?.classTokens( element );
+					const added = [ ...now ].filter( token => ! base[ index ]!.has( token ) && ! entrance?.has( token ) );
+					const removed = [ ...base[ index ]! ].filter( token => ! now.has( token ) && ! entrance?.has( token ) );
 					if ( added.length || removed.length ) changes[ index ] = { added, removed };
 				} );
 				return changes;
