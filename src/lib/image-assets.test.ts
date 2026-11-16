@@ -36,6 +36,27 @@ it.each([
  expect(resourceContentType(bytes, 'document', path)).toBe(expected);
 });
 
+it('records stored JPEG dimensions and EXIF orientation through capture asset export', async () => {
+ mkdirSync('.tmp-test', { recursive: true });
+ const root = mkdtempSync('.tmp-test/image-orientation-');
+ try {
+  const jpeg = readFileSync('test/fixtures/resource-assets/tall-1920x2880.jpg');
+  // APP1 Exif: little-endian TIFF, one SHORT Orientation entry (6 = 90° CW).
+  const exif = Buffer.from('ffe1002245786966000049492a0008000000010012010300010000000600000000000000', 'hex');
+  const bytes = Buffer.concat([jpeg.subarray(0, 2), exif, jpeg.subarray(2)]);
+  mkdirSync(join(root, 'resources'));
+  writeFileSync(join(root, 'resources/rotated.jpg'), bytes);
+  writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({ resources: {
+   'https://example.com/rotated.jpg': { path: 'resources/rotated.jpg', contentType: 'image/jpeg' },
+  } }));
+  const [record] = await captureAssets(root, [{ url: 'https://example.com/', html: '<img src="/rotated.jpg">' }], Date.now() - 1);
+  expect(record.error).toBeUndefined();
+  expect(record.original).toMatchObject({ content_type: 'image/jpeg', width: 1920, height: 2880, orientation: 6, sha256: createHash('sha256').update(bytes).digest('hex') });
+  expect(readFileSync(record.local_path!)).toEqual(bytes);
+  expect(JSON.parse(readFileSync(join(root, 'image-assets.json'), 'utf8')).images[0].original).toEqual(record.original);
+ } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30000);
+
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
  expect(records).toHaveLength(1);
