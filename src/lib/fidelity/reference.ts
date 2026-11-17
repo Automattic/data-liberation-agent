@@ -12,7 +12,7 @@ import { isRouteDrift, navigationDocumentUrl, matchClientErrorShell } from '../s
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import { installImageReachability, observePageTraffic, settleDocument, waitForImages, type TelemetryRequest } from '../screenshot/page-helpers.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
-import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
 import { lockMainFrameNavigation } from '../screenshot/probe-guards.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
@@ -63,6 +63,7 @@ export interface ReferenceEntry {
 	readiness: { ready: boolean; reasons: string[]; diagnostics?: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean; sourceBrokenImages?: Array<{ url: string; status: number }> };
 	observation?: ReferenceArtifact;
 	screenshot?: ReferenceArtifact;
+	fullPageScreenshot?: ReferenceArtifact;
 	document?: ReferenceArtifact;
 }
 export interface FidelityReference {
@@ -315,7 +316,11 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( isRouteDrift( referencePage.url(), navigationUrl ) && ! entry.readiness.reasons.includes( 'source route drift' ) ) entry.readiness.reasons.push( 'source route drift' );
 						entry.document = store( `${ stem }.html`, html );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
+						// CDP's beyond-viewport capture can temporarily change the mobile
+						// layout viewport. Bind startup evidence to the measured baseline,
+						// not the screenshot compositor's transient canvas.
 						await collectViewportEntranceStartup( referencePage, page );
+						entry.fullPageScreenshot = store( `${ stem }-full.png`, await captureFullPageScreenshot( referencePage, stability.excludedMotion ) );
 						recordRuntimeErrors();
 						entry.readiness.ready = entry.readiness.reasons.length === 0;
 					} catch ( error ) {
@@ -373,7 +378,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	};
 }
 
-export function readFrozenObservation( directory: string, entry: ReferenceEntry ): { observation: LayoutObservation; png: Buffer } {
+export function readFrozenObservation( directory: string, entry: ReferenceEntry ): { observation: LayoutObservation; png: Buffer; fullPagePng?: Buffer } {
 	const readiness = entry.readiness;
 	if ( ! readiness.ready || readiness.reasons.length || ! readiness.mediaReady || ! readiness.fontsReady || ! readiness.cleanup || readiness.cleanup.failures.length || readiness.cleanup.residual || ! entry.observation || ! entry.screenshot || ! entry.document ) throw new Error( `Source evidence unready: ${ readiness.reasons.join( ', ' ) }` );
 	readReferenceArtifact( directory, entry.document );
@@ -382,5 +387,7 @@ export function readFrozenObservation( directory: string, entry: ReferenceEntry 
 	const png = readReferenceArtifact( directory, entry.screenshot );
 	const dimensions = PNG.sync.read( png );
 	if ( entry.viewportHeight !== 900 || dimensions.width !== entry.viewport || dimensions.height !== entry.viewportHeight ) throw new Error( 'Source screenshot viewport mismatch' );
-	return { observation, png };
+	const fullPagePng = entry.fullPageScreenshot ? readReferenceArtifact( directory, entry.fullPageScreenshot ) : undefined;
+	if ( fullPagePng && PNG.sync.read( fullPagePng ).width !== entry.viewport ) throw new Error( 'Source full-page screenshot viewport mismatch' );
+	return { observation, png, fullPagePng };
 }

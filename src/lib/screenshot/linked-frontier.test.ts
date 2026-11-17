@@ -238,7 +238,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
 			if (request.url === '/alias') {response.writeHead(302, {location: '/target'}); response.end(); return;}
-			const send = () => {response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'}); response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);};
+			const send = () => {response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'}); response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);};
 			// Real HTTP time, not a mocked clock: expire discovery during an admitted
 			// document's navigation, leaving further inventory/wave work queued.
 			if (mode !== 'wave' && request.url === '/') setTimeout(send, timeoutMs + 100);
@@ -313,7 +313,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
 			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
-			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
+			response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
@@ -349,7 +349,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		};
 		const source = createServer((request, response) => {
 			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
-			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
+			response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
@@ -445,7 +445,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			if (request.url === '/catalog?tag=Research') {response.writeHead(302, {location: externalUrl}); response.end(); return;}
 			if (request.url === '/alias/') {response.writeHead(301, {location: '/third/'}); response.end(); return;}
 			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
-			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);
+			response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;

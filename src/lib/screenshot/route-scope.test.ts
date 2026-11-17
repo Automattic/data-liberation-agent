@@ -17,7 +17,7 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 			if ( request.url === '/tenant/leave' ) { response.writeHead( 302, { location: '/other/private?ref=tenant' } ); response.end(); return; }
 			if ( request.url === '/shared/theme.css' ) { response.writeHead( 200, { 'content-type': 'text/css' } ); response.end( 'body{font:16px Arial}' ); return; }
 			response.setHeader( 'content-type', 'text/html' );
-			response.end( '<meta name="viewport" content="width=device-width,initial-scale=1">' + ( request.url === '/tenant' ?
+			response.end( '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' + ( request.url === '/tenant' ?
 				'<link rel="stylesheet" href="/shared/theme.css"><link rel="canonical" href="/tenant"><h1>Customer gallery</h1><nav><a href="/tenant/">Home alias</a><a href="/">Platform</a></nav><a href="/tenant/leave">Other destination via redirect</a><footer><a href="/?utm_content=badge">Builder badge</a></footer><script>document.body.insertAdjacentHTML("beforeend",\'<footer><a href="/other/">Rendered other tenant</a></footer>\')</script>' : '<h1>Unrelated platform content</h1>' ) );
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
@@ -84,7 +84,7 @@ describe.skipIf( !!process.env.SKIP_BROWSER_TESTS || !existsSync( chromium.execu
 		const source = createServer( ( request, response ) => {
 			if ( request.url === '/tenant/' ) { response.writeHead( 301, { location: '/tenant' } ); response.end(); return; }
 			response.writeHead( request.url === '/tenant' ? 200 : 404, { 'content-type': 'text/html' } );
-			response.end( '<meta name="viewport" content="width=device-width,initial-scale=1">' + ( request.url === '/tenant' ? '<h1>Start page</h1><a href="/tenant">Home</a><p class="card">First item</p>' : 'Absent' ) );
+			response.end( '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' + ( request.url === '/tenant' ? '<h1>Start page</h1><a href="/tenant">Home</a><p class="card">First item</p>' : 'Absent' ) );
 		} );
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;

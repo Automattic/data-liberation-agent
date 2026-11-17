@@ -19,7 +19,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const source = createServer((request, response) => {
 			response.setHeader('content-type', 'text/html');
 			if (request.url === '/outbound?link=authored') response.end(`<meta http-equiv="refresh" content="0;URL=${target}"><a href="${target}">Forward</a>`);
-			else response.end('<meta name="viewport" content="width=device-width,initial-scale=1"><h1>Local editorial document</h1><a href="/outbound?link=authored#meaning">Strategic directions</a>');
+			else response.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><h1>Local editorial document</h1><a href="/outbound?link=authored#meaning">Strategic directions</a>');
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port:number}).port}`;
