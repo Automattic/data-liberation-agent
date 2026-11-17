@@ -274,10 +274,12 @@ export async function captureSelectableSetStates(
 					// A passive pointer wrapper around one link is navigation, just like
 					// a pointer descendant inside that link. Explicit selectable semantics
 					// above still win; mixed controls/content remain probe candidates.
+					// The link's own focus attributes are the link's, not another control's.
 					const links = Array.from( element.querySelectorAll( 'a[href]' ) );
 					if ( links.length === 1 && isNavigable( links[ 0 ]! ) &&
 						textOf( element ) === textOf( links[ 0 ]! ) &&
-						! element.querySelector( 'button,input,select,textarea,[role],[tabindex],[aria-selected],[aria-pressed],[onclick]' ) &&
+						! Array.from( element.querySelectorAll( 'button,input,select,textarea,[role],[tabindex],[aria-selected],[aria-pressed],[onclick]' ) )
+							.some( ( control ) => control !== links[ 0 ] ) &&
 						! element.hasAttribute( 'onclick' ) ) return false;
 					return true;
 				};
