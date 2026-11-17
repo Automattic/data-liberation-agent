@@ -21,11 +21,14 @@ export function authoredEmbedDocument(source: string, url: string): string | und
   return $document.html();
 }
 
+const NAVIGATION_SETTLE_STYLE_ID = 'data-liberation-google-sites-navigation-settle';
+
 /** Closure identifiers are needed while Google's runtime drives capture probes.
  * Strip only from frozen artifacts, including serialized interaction panels. */
 export function canonicalizeGoogleSitesHtml(html: string): string {
   // Documents keep their doctype (standards mode); serialized panels stay fragments.
-  const $ = load(html, { xml: false }, /<(?:!doctype|html|head|body)\b/i.test(html));
+  const document = /<(?:!doctype|html|head|body)\b/i.test(html);
+  const $ = load(html, { xml: false }, document);
   // URL tiles need Google's postMessage runtime to populate the intermediate
   // frame. Frozen HTML embeds the declared destination directly, without
   // replacing the tile's wrappers or its measured sizing. Keep the attested
@@ -42,6 +45,39 @@ export function canonicalizeGoogleSitesHtml(html: string): string {
       }
     });
   });
+  // Selection has one portable spelling. Google's runtime keeps its classes
+  // while probes run; frozen styling follows aria-current instead.
+  $('.PsKE7e').removeClass('M9vuGd lhZOrc');
+  $('style').each((_index, element) => {
+    const style = $(element);
+    const text = style.text();
+    if (/\.(?:M9vuGd|lhZOrc)\b/.test(text)) style.text(text.replace(/\.(?:M9vuGd|lhZOrc)\b/g, '[aria-current="true"]'));
+  });
+  $(`#${NAVIGATION_SETTLE_STYLE_ID}`).remove();
+  // Overflow writes aria-hidden as a snapshot of the last resize; learned
+  // width classes own the items' visibility in the frozen copy.
+  $('nav li[data-nav-level]').removeAttr('aria-hidden');
+  $('nav [style=""]').removeAttr('style');
+  // A serialized panel is shared navigation, not the page it was probed on.
+  if (!document) $('[aria-current], [aria-selected]').removeAttr('aria-current').removeAttr('aria-selected');
+  const rewriteState = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(rewriteState);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
+      if (key !== 'html' || typeof entry !== 'string') return [key, rewriteState(entry)];
+      const panel = load(canonicalizeGoogleSitesHtml(entry), { xml: false }, false);
+      panel('[data-blocks-engine-node-id]').removeAttr('data-blocks-engine-node-id');
+      return [key, panel.html()];
+    }));
+  };
+  $('[data-blocks-engine-capture-dialog-panel-state], [data-blocks-engine-capture-existing-panel]').each((_index, element) => {
+    for (const attribute of ['data-blocks-engine-capture-dialog-panel-state', 'data-blocks-engine-capture-existing-panel']) {
+      const value = $(element).attr(attribute);
+      if (!value) continue;
+      try { $(element).attr(attribute, JSON.stringify(rewriteState(JSON.parse(value)))); }
+      catch { /* Malformed evidence is left for its owning validator. */ }
+    }
+  });
   $('*').each((_index, element) => {
     for (const attribute of ['jscontroller', 'jsaction', 'jsname', 'jsmodel', 'jsshadow', 'jsslot', 'jsowner', 'data-idom-class']) {
       $(element).removeAttr(attribute);
@@ -55,6 +91,13 @@ export const googleSitesAdapter: PlatformAdapter = {
   detection,
   discover: discoverDefault,
   liberation: {
+    async prepare(page) {
+      // Top-navigation overflow subtracts the header's padding while it is
+      // still transitioning, so the same width yields route-dependent "More"
+      // membership. Settle that padding for the probe; canonicalization drops it.
+      await page.addStyleTag({ content: '.VLoccc { transition-property: opacity !important; }' })
+        .then(style => style.evaluate((node, id) => { (node as HTMLElement).id = id; }, NAVIGATION_SETTLE_STYLE_ID));
+    },
     async loadDocument(page, url, timeout) {
       const response = await getSourceResponse(page.context(), url, { timeout, maxRedirects: 0 });
       try {
