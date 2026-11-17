@@ -82,6 +82,8 @@ interface ExportCaptureOptions {
 	outputDir: string;
 	sourceUrl: string;
 	platform: string;
+	/** Idempotent platform projection, also applied after interaction wiring. */
+	canonicalizeHtml?: ( html: string ) => string;
 	title?: string;
 	summary: Record< string, unknown >;
 	failures: Array< { url: unknown; error: unknown } >;
@@ -452,7 +454,7 @@ function buildExportCapture(
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 
 	const { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations } = collectRouteLinks( { retainedEntries, routePathOf, structuredContent: options.structuredContent, sourceUrl: options.sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, stylesheetServedPaths: stylesheetStage.servedPaths, entries: capture.entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics: options.discoveryDiagnostics, unresolvedDependencies } );
-	const rendered = renderRoutePages( { retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
+	const rendered = renderRoutePages( { canonicalizeHtml: options.canonicalizeHtml, retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
 	unresolvedAnchors.push( ...rendered.unresolvedAnchors );
 	routeCaptureDiagnostics.push( ...rendered.diagnostics );
 	const { inventory, diagnostics: projectionDiagnostics } = projectPortableWebsite( { websiteDir, stageDir, sourceUrl: options.sourceUrl, responsiveIdentities: rendered.responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath: resourceStage.sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent: options.structuredContent, routes, portableRedirects } );
