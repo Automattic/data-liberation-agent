@@ -334,11 +334,38 @@ export async function learnAndApplyFluidGeometry(
 	}
 }
 
+interface FluidWidthTiming {
+	width: number;
+	resizeMs: number;
+	restMs: number;
+	rest: { sweep: 'sweep' | 'reused' | 'none'; ended: 'quiet' | 'deadline' };
+	measureMs: number;
+	runtimeSheetsMs: number;
+}
+
 async function learnFluidGeometry(
 	page: Page,
 	options: FluidSweepOptions,
 	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>
 ): Promise<FluidLearningResult> {
+	const startedAt = Date.now();
+	// Only time the existing sampling awaits. Probes, preparation, fitting and
+	// capture-width restoration remain in otherMs; no extra browser work.
+	const widthTimings: FluidWidthTiming[] = [];
+	let memoReusedKeys = 0;
+	const emitTiming = ( tagged: number ) => {
+		const totalMs = Date.now() - startedAt;
+		const totals = { resizeMs: 0, restMs: 0, measureMs: 0, runtimeSheetsMs: 0 };
+		for ( const width of widthTimings ) {
+			for ( const key of Object.keys( totals ) as Array< keyof typeof totals > ) totals[ key ] += width[ key ];
+		}
+		const sampledMs = Object.values( totals ).reduce( ( sum, ms ) => sum + ms, 0 );
+		process.stderr.write( `[timing] fluid ${ JSON.stringify( {
+			url: page.url(), document: options.document ?? 'desktop', viewport: page.viewportSize(), taggedElements: tagged,
+			sampledWidths: widthTimings.map( timing => timing.width ), memoReusedKeys, widths: widthTimings,
+			totals: { ...totals, sampledMs, otherMs: totalMs - sampledMs, totalMs },
+		} ) }\n` );
+	};
 	// An explicit ladder is sampled as given; the default samples its coarse
 	// widths and refines the ladder only on evidence (see refinementWidths).
 	const adaptive = options.widths === undefined;
@@ -400,6 +427,7 @@ async function learnFluidGeometry(
 		await baseline.evaluate( ( state, attribute ) => {
 			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
+		emitTiming( tagged );
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] };
 	}
 	await restoreLoadTimeSheets( page );
@@ -443,12 +471,19 @@ async function learnFluidGeometry(
 	const sampledWidths: number[] = [];
 	const sample = async ( width: number ) => {
 		sampledWidths.push( width );
+		let started = Date.now();
 		await resizeViewport( page, { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, baseline, settleMs, true, properties, true );
+		const resizeMs = Date.now() - started;
+		started = Date.now();
+		const rest = await waitForRestGeometry( page, baseline, settleMs, true, properties, true );
+		const restMs = Date.now() - started;
 		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
+		started = Date.now();
 		await observeRuntimeSheets( page );
+		const runtimeSheetsMs = Date.now() - started;
 
+		started = Date.now();
 		const measured = await baseline.evaluate(
 			( state, { attribute, properties } ) =>
 				state.elements().map( ( element ) => {
@@ -534,6 +569,7 @@ async function learnFluidGeometry(
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties }
 		);
+		widthTimings.push( { width, resizeMs, restMs, rest, measureMs: Date.now() - started, runtimeSheetsMs } );
 		for ( const entry of measured ) {
 			if ( ! redundantMinHeight.has( entry.id ) ) redundantMinHeight.set( entry.id, entry.redundantMinHeight );
 			else if ( ! entry.redundantMinHeight ) redundantMinHeight.set( entry.id, false );
@@ -587,6 +623,7 @@ async function learnFluidGeometry(
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
 		const reused = memo ? reuseSweptSeries( observations, memoKey, memo ) : new Map< string, GeometrySample[] >();
+		memoReusedKeys = reused.size;
 		const unexplained = () => new Map( [ ...observations ].filter( ( [ key ] ) => ! reused.has( key ) ) );
 		const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
 		const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
@@ -1132,6 +1169,7 @@ async function learnFluidGeometry(
 		byKind.segmented = ( byKind.segmented ?? 0 ) + sampled.length;
 	}
 
+	emitTiming( tagged );
 	return {
 		applied: learned.length - frozen - frozenWidths.length + runtimeSheets.applied,
 		unmodelled: unmodelled + frozen + frozenWidths.length + runtimeSheets.unmodelled,
@@ -1320,10 +1358,10 @@ async function resizeViewport( page: Page, size: { width: number; height: number
  * of paying a full scroll-through at every width. Entrance replay still
  * sweeps for its own sake: its scroll-through is the point.
  */
-async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES, reuseSweep = false ): Promise< void > {
+async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES, reuseSweep = false ): Promise< FluidWidthTiming['rest'] > {
 	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
 	const reachabilityKey = await installImageReachability( page );
-	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reuseSweep, reachabilityKey, workKey } ) => {
+	return await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reuseSweep, reachabilityKey, workKey } ) => {
 		const started = Date.now();
 		const work = ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( workKey ) ]!;
 		const sleep = work.sleep;
@@ -1411,7 +1449,10 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		let sweptHeight = Math.max( document.documentElement.scrollHeight, priorSweep?.height ?? 0 );
 		let visitedHeight = priorSweep?.height ?? 0;
 		let sweptContent = content();
+		let didSweep = false;
+		let ended: 'quiet' | 'deadline' = 'deadline';
 		const sweep = async () => {
+			didSweep = true;
 			// Timeouts the sweep's scroll events schedule are viewport work too.
 			work.arm();
 			// This body runs only when this width has new work: the first width,
@@ -1487,7 +1528,10 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// Pending timeouts cover debounces. A missing tagged role can also
 			// be between an unwrap and an rAF-driven refit: allow a second quiet
 			// window for its replacement, without charging intact documents that wait.
-			if ( Date.now() - quietSince >= QUIET_MS * ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) break;
+			if ( Date.now() - quietSince >= QUIET_MS * ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) {
+				ended = 'quiet';
+				break;
+			}
 		}
 		// Later widths reuse this wait's visited extent and content (see `reuse`),
 		// so what the last sweep actually observed is what they compare against.
@@ -1495,6 +1539,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			( state as unknown as { swept?: { height: number; content: ReturnType< typeof content > | null } } ).swept =
 				{ height: visitedHeight, content: sweptContent };
 		}
+		return { sweep: didSweep ? 'sweep' as const : reuse ? 'reused' as const : 'none' as const, ended };
 	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reuseSweep, reachabilityKey, workKey: VIEWPORT_WORK_KEY } ), 25_000 + settleMs );
 }
 
