@@ -322,6 +322,32 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
+	it( 'spends one rest deadline, not one per width, on an image the source never finishes', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			// The request is held open for the whole learning run.
+			await page.route( 'https://neutral.test/stuck.jpg', () => new Promise( () => {} ) );
+			await page.setContent( `<style>body{margin:0}</style>
+				<img id="poster" src="https://neutral.test/stuck.jpg" style="width:320px;height:180px">
+				<div id="box" style="width:720px;height:40px">Neutral text</div>
+				<script>
+				const box = document.querySelector('#box');
+				function resize() { box.style.width = innerWidth / 2 + 'px'; }
+				addEventListener('resize', resize); resize();
+				</script>`, { waitUntil: 'domcontentloaded' } );
+			const settleMs = 200;
+			const start = performance.now();
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1024, 1440 ], settleMs } );
+			const elapsed = performance.now() - start;
+			console.info( JSON.stringify( { fixture: 'stuck-image', elapsedMs: Math.round( elapsed ), result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( 720, 0 );
+			expect( await page.locator( '#poster' ).evaluate( image => ( image as HTMLImageElement ).complete ) ).toBe( false );
+			// Only the first width waits out its deadline (settleMs + 3.5s); main paid it at all four.
+			expect( elapsed ).toBeLessThan( 2 * ( settleMs + 3500 ) );
+		} finally { await page.close(); }
+	}, 60_000 );
+
 	it( 'still waits for a reachable pending native-lazy image', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
