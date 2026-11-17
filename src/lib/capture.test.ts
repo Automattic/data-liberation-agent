@@ -17,7 +17,7 @@ const { captureScreenshotsMock } = vi.hoisted( () => ( {
 
 vi.mock( './media-fetch/safe-fetch.js', async ( importOriginal ) => ( {
 	...await importOriginal< typeof import('./media-fetch/safe-fetch.js') >(),
-	safeFetch: vi.fn( async ( url: string ) => ( { finalUrl: url } ) ),
+	safeFetch: vi.fn( async ( url: string ) => ( { finalUrl: url, status: 200 } ) ),
 } ) );
 
 const { buildTemplateGroupsMock } = vi.hoisted( () => ( { buildTemplateGroupsMock: vi.fn() } ) );
@@ -171,6 +171,49 @@ describe( 'downloadCaptureSectionMedia', () => {
 } );
 
 describe( 'captureWebsite fluid learning', () => {
+	it( 'detects Blogger and enumerates structured content after a throttled entry retries', async () => {
+		const { createServer } = await import( 'node:http' );
+		const actualFetch = await vi.importActual< typeof import('./media-fetch/safe-fetch.js') >( './media-fetch/safe-fetch.js' );
+		const actualDetection = await vi.importActual< typeof import('./detect-platform/index.js') >( './detect-platform/index.js' );
+		const { detect } = await import( './detect-platform/index.js' );
+		const { bloggerAdapter } = await import( '../adapters/blogger/index.js' );
+		let requests = 0;
+		const server = createServer( ( _request, response ) => {
+			requests++;
+			if ( requests === 1 ) {
+				response.writeHead( 429, { 'Retry-After': '1' } );
+				response.end( 'Throttled' );
+			} else {
+				response.writeHead( 200, { 'Content-Type': 'text/html' } );
+				response.end( '<html><head><meta name="generator" content="Blogger"></head><body>Blog</body></html>' );
+			}
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( server.address() as import('node:net').AddressInfo ).port }/`;
+		const outputDir = join( process.cwd(), '.tmp-test', 'capture-throttled-entry' );
+		const enumerate = vi.fn( async () => ( { entries: [], diagnostics: [] } ) );
+		vi.mocked( safeFetch ).mockImplementationOnce( actualFetch.safeFetch );
+		vi.mocked( detect ).mockImplementationOnce( actualDetection.detect );
+		try {
+			const result = await captureWebsite( { url, outputDir, trustedOrigins: [ url ], templateClusters: true }, {
+				findAdapter: platform => platform === 'blogger' ? {
+					...bloggerAdapter,
+					discover: async () => ( { urls: [] } ),
+					structuredContent: { ...bloggerAdapter.structuredContent!, enumerate },
+				} : null,
+			} );
+			expect( requests ).toBe( 2 );
+			expect( enumerate ).toHaveBeenCalledOnce();
+			expect( result.provenance.platform ).toBe( 'blogger' );
+			expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).source.detection ).toMatchObject( {
+				platform: 'blogger', signals: expect.arrayContaining( [ expect.stringMatching( /Blogger/i ) ] ),
+			} );
+		} finally {
+			await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
+			rmSync( outputDir, { recursive: true, force: true } );
+			buildTemplateGroupsMock.mockClear();
+		}
+	} );
 	it( 'admits client-rendered entry navigation before deep inventory routes under the time budget', async () => {
 		const root = join( process.cwd(), '.tmp-test', 'capture-rendered-navigation' );
 		const menu = [ 'https://example.com/about-us', 'https://example.com/contact' ];
@@ -832,7 +875,7 @@ describe( 'captureWebsite route selection', () => {
 	afterEach( () => {
 		captureScreenshotsMock.mockClear();
 		vi.mocked( safeFetch ).mockReset();
-		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( { finalUrl: url } ) as Awaited< ReturnType< typeof safeFetch > > );
+		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( { finalUrl: url, status: 200 } ) as Awaited< ReturnType< typeof safeFetch > > );
 		buildTemplateGroupsMock.mockClear();
 		rmSync( root, { recursive: true, force: true } );
 	} );

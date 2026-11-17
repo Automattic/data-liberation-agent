@@ -26,7 +26,7 @@ import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetRea
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
-import { sourceRequestContext, SourceRequestGovernors } from './source-request-governor.js';
+import { sourceRequestContext, SourceRequestGovernors, THROTTLE_STATUSES } from './source-request-governor.js';
 import { completeSourceTlsChain } from './tls-aia.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
@@ -470,12 +470,18 @@ async function runCaptureWebsite(
 
 	if ( options.acquisition !== 'http' ) await ( await import( './browser-kit/ensure-capture-browser.js' ) ).ensureCaptureBrowser();
 	const response = await fetchEntryDocument( await resolveEntryUrl( options.url ), sourceGovernors, { session: options.acquisition !== 'http' } );
+	// The governor already waited out Retry-After; a still-throttled entry would
+	// detect from a throttle page. Other statuses keep their browser capture.
+	if ( THROTTLE_STATUSES.has( response.status ) ) {
+		throw new Error( `entry_document_throttled: Entry document ${ response.finalUrl } is still throttled (HTTP ${ response.status }) after Retry-After` ); // failure-class: operational
+	}
 	let sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
 		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )
 		: '';
 	const outputDir = options.outputDir;
 	const detection = await detect( sourceUrl, { headers: response.headers, html: entryHtml } );
+	process.stderr.write( `[capture] platform detection ${ JSON.stringify( { status: response.status, ...detection } ) }\n` );
 	const adapter = dependencies.findAdapter( detection.platform );
 	if ( ! adapter )
 		throw new UnsupportedCapturePlatformError(
@@ -582,7 +588,7 @@ async function runCaptureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, templateClustersDecision, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, detection, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, templateClustersDecision, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
 		assertEntrypointHasContent( outputDir, options.url, sourceUrl );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
@@ -838,6 +844,7 @@ async function runCaptureWebsite(
 		preview = { status: 'failed', reason: error instanceof Error ? error.message : String( error ) };
 	}
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
+	receipt.source.detection = detection;
 	receipt.preview = preview;
 	receipt.templateClustersDecision = templateClustersDecision;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
