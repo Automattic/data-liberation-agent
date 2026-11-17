@@ -1521,8 +1521,6 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reuseSweep, reachabilityKey, workKey: VIEWPORT_WORK_KEY } ), 25_000 + settleMs );
 }
 
-/** Quiet window for untracked callers; retained for compatibility. */
-export const PROBE_QUIET_MS = 600;
 
 /** Probes retain mutation/animation evidence and wait for attributed debounces. */
 async function settleFluidProbe( page: Page, settleMs: number ): Promise< void > {
