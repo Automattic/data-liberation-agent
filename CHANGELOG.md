@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.40] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- export URL embeds using their declared destination
+
 ## [0.35.39] - 2026-11-17
 
 ### Changed
