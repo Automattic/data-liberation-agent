@@ -29,14 +29,42 @@ describe( 'fluid sweep sharing', () => {
 		expect( [ ...reuseSweptSeries( new Map( [ [ '1:height', probes( varying, 300 ) ] ] ), id => keys[ id ] ?? [], memo ).keys() ] ).toEqual( [ '1:height' ] );
 	} );
 
+	it( 'waits on a sweep that covers every element it needs, then reuses its series', async () => {
+		const memo: FluidSeriesMemo = new Map();
+		const holder = await reserveSweep( memo, () => [ [ 'a' ], [ 'b' ] ] );
+		expect( holder.waitedMs ).toBe( 0 );
+		const waiting = reserveSweep( memo, () => memo.has( 'b' ) ? [] : [ [ 'b' ] ] );
+		await new Promise( resolve => setTimeout( resolve, 20 ) );
+		memo.set( 'b', new Map() );
+		holder.release();
+		expect( ( await waiting ).waitedMs ).toBeGreaterThanOrEqual( 15 );
+	} );
+
 	it( 'sweeps independently once another route has held the reservation past the bound', async () => {
 		const memo: FluidSeriesMemo = new Map();
-		const holder = await reserveSweep( memo, [ 'a', 'b' ] );
-		expect( holder.waitedMs ).toBe( 0 );
-		const waiter = await reserveSweep( memo, [ 'b' ], 20 );
+		const holder = await reserveSweep( memo, () => [ [ 'a' ], [ 'b' ] ] );
+		const waiter = await reserveSweep( memo, () => [ [ 'b' ] ], 20 );
 		expect( waiter.waitedMs ).toBeGreaterThanOrEqual( 15 );
 		// The stalled holder's keys stay its own; a released holder frees them.
 		holder.release();
-		expect( ( await reserveSweep( memo, [ 'a', 'b' ], 20 ) ).waitedMs ).toBeLessThan( 15 );
+		expect( ( await reserveSweep( memo, () => [ [ 'a' ], [ 'b' ] ], 20 ) ).waitedMs ).toBeLessThan( 15 );
+	} );
+
+	it( 'sweeps at once on a partial overlap and claims only the signatures nobody holds', async () => {
+		const memo: FluidSeriesMemo = new Map();
+		const first = await reserveSweep( memo, () => [ [ 'a' ], [ 'b' ] ] );
+		// 'c' is swept by no one, so waiting on 'b' could not spare the sweep.
+		const second = await reserveSweep( memo, () => [ [ 'b' ], [ 'c' ] ], 1_000 );
+		expect( second.waitedMs ).toBeLessThan( 15 );
+		// 'b' still belongs to the first route alone: releasing it frees a waiter
+		// even though the second route is still sweeping.
+		const onB = reserveSweep( memo, () => memo.has( 'b' ) ? [] : [ [ 'b' ] ], 1_000 );
+		memo.set( 'b', new Map() );
+		first.release();
+		expect( ( await onB ).waitedMs ).toBeLessThan( 500 );
+		// 'c' is the second route's claim.
+		const onC = await reserveSweep( memo, () => [ [ 'c' ] ], 20 );
+		expect( onC.waitedMs ).toBeGreaterThanOrEqual( 15 );
+		second.release();
 	} );
 } );

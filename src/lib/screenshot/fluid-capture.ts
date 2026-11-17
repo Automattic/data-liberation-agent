@@ -170,38 +170,59 @@ const PROBE_WIDTHS = [ 390, 768, 1920 ];
  */
 export type FluidSeriesMemo = Map< string, ReadonlyMap< string, readonly GeometrySample[] > >;
 
-// Keep pending work private: consumers still see only completed series. Acquire
-// the whole set atomically, never holding one signature while waiting on another.
-// A holder that stalls (a hung page) must not stall its siblings: past the
-// bound a waiter sweeps on its own, exactly as it would with no memo.
+// Keep pending work private: consumers still see only completed series.
+//
+// Waiting pays only when it removes the route's sweep entirely: a route waits
+// when every element it still needs to explain has a signature another route
+// is sweeping, then re-checks against the grown memo. Any element nobody is
+// sweeping forces a sweep anyway, so the route sweeps at once, reusing only
+// completed series. It then claims just the signatures no one holds: a
+// partial overlap never makes others wait on it for work already pending
+// elsewhere. Claims are taken synchronously and only after waiting is over,
+// so no route holds a reservation while it waits on another. A holder that
+// stalls (a hung page) must not stall its siblings: past the bound a waiter
+// sweeps on its own, exactly as it would with no memo.
 const pendingSweeps = new WeakMap< FluidSeriesMemo, Map< string, Promise< void > > >();
 export const SWEEP_WAIT_MS = 45_000;
-export async function reserveSweep( memo: FluidSeriesMemo, keys: readonly string[], waitMs = SWEEP_WAIT_MS ): Promise< { release: () => void; waitedMs: number } > {
+/**
+ * @param needed Memo signatures of each element the route cannot yet explain
+ *               from completed series; called again after every wait.
+ */
+export async function reserveSweep(
+	memo: FluidSeriesMemo,
+	needed: () => ReadonlyArray< readonly string[] >,
+	waitMs = SWEEP_WAIT_MS
+): Promise< { release: () => void; waitedMs: number } > {
 	let pending = pendingSweeps.get( memo );
 	if ( ! pending ) pendingSweeps.set( memo, pending = new Map() );
 	const started = Date.now();
+	const waited = () => Date.now() - started;
 	for ( ;; ) {
-		const waiting = keys.flatMap( key => pending.get( key ) ?? [] );
-		if ( waiting.length === 0 ) break;
-		const remaining = waitMs - ( Date.now() - started );
-		let timer: NodeJS.Timeout | undefined;
-		const expired = remaining <= 0 || await Promise.race( [
-			Promise.all( waiting ).then( () => false ),
-			new Promise< boolean >( resolve => { timer = setTimeout( () => resolve( true ), remaining ); } ),
-		] );
-		clearTimeout( timer );
-		if ( expired ) return { release: () => {}, waitedMs: Date.now() - started };
+		const elements = needed();
+		if ( elements.length === 0 ) return { release: () => {}, waitedMs: waited() };
+		const covering = elements.map( keys => keys.map( key => pending.get( key ) ).find( Boolean ) );
+		const remaining = waitMs - waited();
+		if ( remaining > 0 && covering.every( Boolean ) ) {
+			let timer: NodeJS.Timeout | undefined;
+			const expired = await Promise.race( [
+				Promise.all( new Set( covering ) ).then( () => false ),
+				new Promise< boolean >( resolve => { timer = setTimeout( () => resolve( true ), remaining ); } ),
+			] );
+			clearTimeout( timer );
+			if ( ! expired ) continue;
+		}
+		const keys = [ ...new Set( elements.flat() ) ].filter( key => ! pending.has( key ) );
+		let release!: () => void;
+		const done = new Promise< void >( resolve => { release = resolve; } );
+		for ( const key of keys ) pending.set( key, done );
+		return {
+			waitedMs: waited(),
+			release: () => {
+				for ( const key of keys ) if ( pending.get( key ) === done ) pending.delete( key );
+				release();
+			},
+		};
 	}
-	let release!: () => void;
-	const done = new Promise< void >( resolve => { release = resolve; } );
-	for ( const key of keys ) pending.set( key, done );
-	return {
-		waitedMs: Date.now() - started,
-		release: () => {
-			for ( const key of keys ) if ( pending.get( key ) === done ) pending.delete( key );
-			release();
-		},
-	};
 }
 
 /**
@@ -673,7 +694,9 @@ async function learnFluidGeometry(
 		const sheets = await runtimeSheetsObserved( page );
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
-		const reservation = memo ? await reserveSweep( memo, [ ...new Set( Object.keys( signatures! ).flatMap( memoKeys ) ) ] ) : null;
+		const unexplainedIds = ( explained: ReadonlyMap< string, unknown > ) =>
+			[ ...new Set( [ ...observations.keys() ].filter( key => ! explained.has( key ) ).map( key => key.slice( 0, key.indexOf( ':' ) ) ) ) ];
+		const reservation = memo ? await reserveSweep( memo, () => unexplainedIds( reuseSweptSeries( observations, memoKeys, memo ) ).map( memoKeys ) ) : null;
 		waitedMs = reservation?.waitedMs ?? 0;
 		try {
 			const reused = memo ? reuseSweptSeries( observations, memoKeys, memo ) : new Map< string, GeometrySample[] >();
