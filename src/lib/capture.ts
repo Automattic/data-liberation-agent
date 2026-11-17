@@ -26,7 +26,7 @@ import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetRea
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
-import { sourceRequestContext, SourceRequestGovernors } from './source-request-governor.js';
+import { sourceRequestContext, SourceRequestGovernors, THROTTLE_STATUSES } from './source-request-governor.js';
 import { completeSourceTlsChain } from './tls-aia.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
@@ -470,8 +470,10 @@ async function runCaptureWebsite(
 
 	if ( options.acquisition !== 'http' ) await ( await import( './browser-kit/ensure-capture-browser.js' ) ).ensureCaptureBrowser();
 	const response = await fetchEntryDocument( await resolveEntryUrl( options.url ), sourceGovernors, { session: options.acquisition !== 'http' } );
-	if ( response.status < 200 || response.status >= 300 ) {
-		throw new Error( `entry_document_http_status: Entry document ${ response.finalUrl } returned HTTP ${ response.status }` ); // failure-class: operational
+	// The governor already waited out Retry-After; a still-throttled entry would
+	// detect from a throttle page. Other statuses keep their browser capture.
+	if ( THROTTLE_STATUSES.has( response.status ) ) {
+		throw new Error( `entry_document_throttled: Entry document ${ response.finalUrl } is still throttled (HTTP ${ response.status }) after Retry-After` ); // failure-class: operational
 	}
 	let sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
@@ -479,7 +481,7 @@ async function runCaptureWebsite(
 		: '';
 	const outputDir = options.outputDir;
 	const detection = await detect( sourceUrl, { headers: response.headers, html: entryHtml } );
-	process.stderr.write( `[capture] platform detection ${ JSON.stringify( detection ) }\n` );
+	process.stderr.write( `[capture] platform detection ${ JSON.stringify( { status: response.status, ...detection } ) }\n` );
 	const adapter = dependencies.findAdapter( detection.platform );
 	if ( ! adapter )
 		throw new UnsupportedCapturePlatformError(
