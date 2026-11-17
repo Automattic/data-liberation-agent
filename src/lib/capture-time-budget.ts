@@ -284,6 +284,9 @@ export class RouteTimeBudget {
 	}
 }
 
+/** Consecutive non-entry routes abandoned while navigating that prove the source stopped answering. */
+const STALLED_NAVIGATIONS = 3;
+
 /** What a route abandoned at its per-route deadline was doing when it stalled. */
 export interface RouteDeadlineAbandonment {
 	phase: string;
@@ -310,7 +313,25 @@ export class RouteDeadlines {
 	private readonly abandoned = new Map< string, RouteDeadlineAbandonment >();
 	private readonly expiryResolvers = new Map< string, () => void >();
 
-	constructor( readonly deadlineMs: number, private readonly abandon: ( url: string, abandonment: RouteDeadlineAbandonment ) => void ) {}
+	private readonly started = new Set< string >();
+	private navigationAbandonments = 0;
+	private stall = false;
+
+	constructor( readonly deadlineMs: number, private readonly abandon: ( url: string, abandonment: RouteDeadlineAbandonment ) => void, private readonly entrypoint?: string ) {}
+
+	/** Admission stays closed once repeated navigation abandonments prove a stall. */
+	get stalled(): boolean {
+		return this.stall;
+	}
+
+	/** Missing routes that never started because the source stopped answering. */
+	diagnostics( urls: readonly string[] ): RouteDiagnostic[] {
+		if ( ! this.stall ) return [];
+		return [ ...new Set( urls ) ].filter( url => ! this.started.has( url ) ).map( url => ( {
+			code: 'route_capture_failed', url, unit: 'route', severity: 'error',
+			reason: `source stalled: skipped before starting after ${ STALLED_NAVIGATIONS } consecutive non-entry routes were abandoned during navigation`,
+		} ) );
+	}
 
 	/** Whether the deadline applies at all (zero disables it). */
 	get enabled(): boolean {
@@ -323,6 +344,7 @@ export class RouteDeadlines {
 	 * caller's slot frees at the deadline even if abandonment unwinds slowly.
 	 */
 	start( url: string ): Promise< void > {
+		this.started.add( url );
 		const expiry = new Promise< void >( resolve => this.expiryResolvers.set( url, resolve ) );
 		// Disabled, the promise settles only when the route finishes: the caller
 		// races it against the route to free the slot, so it must never settle first.
@@ -336,6 +358,10 @@ export class RouteDeadlines {
 	/** Record the phase a still-running route entered last, and its profile. */
 	note( url: string, phase: string, profile?: string ): void {
 		if ( ! this.timers.has( url ) ) return;
+		// Entering settle proves navigation completed; context-close after a
+		// failed navigation does not. Successful profiles break the streak even
+		// while other routes run.
+		if ( phase === 'settle' ) this.navigationAbandonments = 0;
 		this.current.set( url, { phase, profile } );
 		if ( profile ) this.profilePhases.set( url, { ...this.profilePhases.get( url ), [ profile ]: phase } );
 	}
@@ -347,6 +373,7 @@ export class RouteDeadlines {
 		this.profilePhases.delete( url );
 		this.timers.delete( url );
 		this.abandoned.set( url, abandonment );
+		if ( url !== this.entrypoint && abandonment.phase === 'navigate' && ++this.navigationAbandonments >= STALLED_NAVIGATIONS ) this.stall = true;
 		this.abandon( url, abandonment );
 		this.expiryResolvers.get( url )?.();
 	}
