@@ -161,6 +161,35 @@ describe('orchestrated HTTP review capture', () => {
 			vi.mocked(safeFetch).mockImplementation(originalFetch);
 		}
 	});
+	it('keeps distinct pages whose canonical link names the homepage (#1958)', async () => {
+		const { captureWebsite: capture } = await import('../index.js');
+		const outputDir = directory();
+		const about = `${url}about`;
+		const menu = `${url}menu`;
+		const documents = new Map([
+			[url, `<link rel="canonical" href="/"><h1>Home</h1><a href="${about}">About</a><a href="${menu}">Menu</a>`],
+			[about, `<link rel="canonical" href="/"><h1>About us</h1><a href="${url}">Home</a>`],
+			[menu, `<link rel="canonical" href="/"><h1>Our menu</h1><a href="${url}">Home</a>`],
+		]);
+		const originalFetch = vi.mocked(safeFetch).getMockImplementation()!;
+		vi.mocked(safeFetch).mockImplementation(async (target) => ({
+			finalUrl: target, status: 200,
+			headers: new Headers({ 'content-type': 'text/html' }),
+			body: Buffer.from(`<html><head><title>Fixture</title></head><body>${documents.get(target)}</body></html>`),
+		}));
+		const platform = adapter();
+		platform.discover = async () => ({ urls: [...documents.keys()].map(url => ({ url })) });
+		try {
+			const result = await capture({ url, outputDir, acquisition: 'http' }, { findAdapter: () => platform });
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.routes.map((route: { url: string }) => route.url)).toEqual([url, about, menu]);
+			expect(receipt.duplicateRoutes ?? []).toEqual([]);
+			expect(readFileSync(join(outputDir, 'website/about/index.html'), 'utf8')).toContain('About us');
+			expect(readFileSync(join(outputDir, 'website/menu/index.html'), 'utf8')).toContain('Our menu');
+		} finally {
+			vi.mocked(safeFetch).mockImplementation(originalFetch);
+		}
+	});
 	it.each([
 		['an empty body', '\n\t<script>track()</script>\n', false],
 		['a lone image', '<img src="https://example.com/sign.png" alt="">', true],

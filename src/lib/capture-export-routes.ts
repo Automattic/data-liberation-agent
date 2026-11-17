@@ -6,6 +6,7 @@ import { sameHttpSite } from './screenshot/same-origin.js';
 import type { CanonicalRouteAlias } from './route-aliases.js';
 import type { SourceDataScript } from './source-data.js';
 import { IntegrityError } from './failure-class.js';
+import { readDocument } from './parsed-documents.js';
 
 export interface RouteEntry {
 	url: string;
@@ -59,6 +60,16 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string,
 	// the same path shape every other document route uses.
 	if ( /\.html?$/i.test( cleanPath ) ) return cleanPath;
 	return join( cleanPath, 'index.html' );
+}
+
+/**
+ * The text a reader sees in a captured document: what decides whether two
+ * routes are one page. Markup, scripts and styles are not content.
+ */
+function renderedText( htmlPath: string ): string {
+	const $ = readDocument( readFileSync( htmlPath, 'utf8' ) );
+	$( 'script, style, noscript, template' ).remove();
+	return $.root().text().replace( /\s+/g, ' ' ).trim();
 }
 
 function publicPathname( url: string ): string {
@@ -347,12 +358,23 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	// Different paths do not compete for an output filename. Collapse explicit
 	// canonical links only onto a retained same-origin document; never infer
 	// aliases from social metadata, or drop cycles/chains with no final target.
+	// A canonical link is a claim, not proof: sites that stamp one canonical
+	// (often the homepage) on every page would fold distinct pages away. Both
+	// captured documents must render the same text before the route collapses.
 	const canonicalTargets = new Map< T, T >();
+	const texts = new Map< T, string >();
+	const textOf = ( entry: T ) => {
+		let text = texts.get( entry );
+		if ( text === undefined ) texts.set( entry, text = renderedText( entry.htmlPath ) );
+		return text;
+	};
 	for ( const entry of retained ) {
 		if ( entry.url === entrypointUrl || ! entry.canonicalLinkUrl ) continue;
 		if ( new URL( entry.canonicalLinkUrl ).origin !== new URL( entry.url ).origin ) continue;
 		const target = entryForAddress( entry.canonicalLinkUrl );
-		if ( target && target !== entry && retained.has( target ) ) canonicalTargets.set( entry, target );
+		if ( ! target || target === entry || ! retained.has( target ) ) continue;
+		if ( textOf( entry ) !== textOf( target ) ) continue;
+		canonicalTargets.set( entry, target );
 	}
 	for ( const [ entry, target ] of canonicalTargets ) {
 		if ( canonicalTargets.has( target ) ) continue;
