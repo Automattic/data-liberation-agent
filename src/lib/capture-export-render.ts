@@ -33,6 +33,7 @@ import { normalizedUrl, documentRequestUrl } from './url/route-key.js';
 import { OMITTED_ROUTE_REASON } from './route-budget.js';
 import { routeInScope, scopedRouteKey } from './url/route-scope.js';
 import { pathWithin } from './portable-assets.js';
+import { IntegrityError } from './failure-class.js';
 import { localizeMetadataImageReferences } from './portable-references.js';
 import { projectPortableResourceIntegrity } from './portable-resources.js';
 import { UNCAPTURED_ROUTE_REASON } from './capture-export-evidence.js';
@@ -630,7 +631,8 @@ export function renderRoutePages( { retainedEntries, websiteDir, resourceReplace
 		const routePath = routePathOf( url );
 		const destination = join( websiteDir, routePath );
 		if ( ! pathWithin( websiteDir, destination ) ) {
-			throw new Error( `Captured route escapes the website directory: ${ url }` );
+			// Allocation guarantees confinement; fail closed if that contract regresses.
+			throw new IntegrityError( `Captured route escapes the website directory: ${ url }` );
 		}
 		mkdirSync( dirname( destination ), { recursive: true } );
 		const originalHtml = readFileSync( htmlPath, 'utf8' );
