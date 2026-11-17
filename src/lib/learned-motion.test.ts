@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
-import { chromium, type Browser } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { describe, expect, afterAll } from 'vitest';
+import { it } from '../../test/browser.js';
 import { captureSourceBehavior, type SourceBehavior } from './screenshot/behavior-capture.js';
 import { learnMotion, type LearnedMotion } from './learned-motion.js';
 import { learnedMotionContract } from './learned-motion-promotion.js';
@@ -30,7 +31,7 @@ $('clock-box').addEventListener('click',clock);
 </script></body></html>`;
 
 describe( 'learned editable motion', () => {
-	let browser: Browser;
+
 	let origin: string;
 	let candidateHtml = '';
 	const server = createServer( ( request, response ) => {
@@ -39,10 +40,10 @@ describe( 'learned editable motion', () => {
 	} );
 	let first: SourceBehavior;
 	let learned: LearnedMotion;
-	beforeAll( async () => {
+	it.beforeAll( async ({ browser }) => {
 		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
 		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-		browser = await chromium.launch();
+
 		const a = await browser.newPage( { timezoneId: 'UTC' } );
 		const b = await browser.newPage( { timezoneId: 'Europe/Berlin' } );
 		first = await captureSourceBehavior( a, `${ origin }/`, { startupMs: 12000, quietMs: 1500, replayMs: 2500, fixedTime: '2031-02-03T04:17:00Z' } );
@@ -50,11 +51,11 @@ describe( 'learned editable motion', () => {
 		learned = learnMotion( first, second );
 		// The capture's saved DOM: settled, script-free.
 		const settled = ( await a.content() ).replace( /<script[\s\S]*?<\/script>/g, '' );
-		await Promise.all( [ a.close(), b.close() ] );
+		await Promise.all( [ a.context().close(), b.context().close() ] );
 		candidateHtml = settled.replace( '</body>', `<span hidden data-blocks-engine-motion-steps="${ JSON.stringify( learned.steps ).replace( /"/g, '&quot;' ) }"></span><span hidden data-blocks-engine-live-clock="${ JSON.stringify( learned.clock ).replace( /"/g, '&quot;' ) }"></span><script defer src="/runtime.js"></script></body>` );
 	}, 90_000 );
 	afterAll( async () => {
-		await browser.close(); server.closeAllConnections();
+		 server.closeAllConnections();
 		await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
 	} );
 
@@ -78,13 +79,13 @@ describe( 'learned editable motion', () => {
 		expect( JSON.stringify( learned ) ).not.toMatch( /Harbor|Ready now|Online since/ );
 	} );
 
-	it( 'reproduces the learned behavior from the saved DOM against the live source', async () => {
+	it( 'reproduces the learned behavior from the saved DOM against the live source', async ({ browser }) => {
 		const evidence = await verifyCandidateMotion( browser, '/', 768, `${ origin }/`, `${ origin }/copy`, learnedMotionContract( learned ), [ 'timed-dom-update', 'click-input' ] );
 		expect( evidence.failures ).toEqual( [] );
 	}, 90_000 );
 
-	it( 'replays edited copy rather than captured source text', async () => {
-		const page = await browser.newPage();
+	it( 'replays edited copy rather than captured source text', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			const saved = candidateHtml;
 			candidateHtml = saved.replace( 'Harbor lights', 'Edited headline' );
@@ -94,8 +95,8 @@ describe( 'learned editable motion', () => {
 		} finally { await page.close(); }
 	} );
 
-	it( 'reports canvas drawing as untranslated', async () => {
-		const page = await browser.newPage();
+	it( 'reports canvas drawing as untranslated', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			await page.route( `${ origin }/canvas`, ( route ) => route.fulfill( { contentType: 'text/html', body: '<canvas id="surface" width="200" height="100"></canvas><script>addEventListener("mousemove",()=>{const c=document.getElementById("surface").getContext("2d");c.beginPath();c.arc(20,20,9,0,7);c.fill()})</script>' } ) );
 			const observed = await captureSourceBehavior( page, `${ origin }/canvas`, { startupMs: 200, maxClicks: 0 } );

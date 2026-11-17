@@ -1,13 +1,14 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
 import { serveCapture } from './serve-capture.js';
 
-it( 'reconciles a single-document named alias while preserving linked author CSS and independent anchors', async () => {
+it( 'reconciles a single-document named alias while preserving linked author CSS and independent anchors', async ({ newPage }) => {
 	const root = join( process.cwd(), '.tmp-test' ); mkdirSync( root, { recursive: true } );
 	const outputDir = mkdtempSync( join( root, 'single-alias-' ) );
 	try {
@@ -23,10 +24,10 @@ it( 'reconciles a single-document named alias while preserving linked author CSS
 		expect( $( 'a[name="standalone"]' ) ).toHaveLength( 1 );
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( [ [ '/', 'index.html' ] ] ) ).findings.filter( finding => finding.kind === 'anchor-ambiguous' ) ).toEqual( [] );
 		const server = await serveCapture( outputDir );
-		const browser = await chromium.launch();
+
 		try {
-			const page = await browser.newPage(); await page.goto( server.url, { waitUntil: 'load' } );
+			const page = await newPage(); await page.goto( server.url, { waitUntil: 'load' } );
 			expect( await page.locator( 'a[data-blocks-engine-capture-anchor-alias="comments"]' ).evaluate( element => getComputedStyle( element ).color ) ).toBe( 'rgb(255, 0, 0)' );
-		} finally { await browser.close(); await server.close(); }
+		} finally {  await server.close(); }
 	} finally { rmSync( outputDir, { recursive: true, force: true } ); }
 } );

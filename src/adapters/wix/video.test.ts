@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { capture } from './capture.js';
 import { selectWixVideoRendition, wixVideoRecord } from './video.js';
 
@@ -151,10 +152,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix video player 
 		await new Promise( ( resolve ) => server.close( resolve ) );
 	} );
 
-	it( 'leaves a standard video with a portable rendition, poster, controls and the source size', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'leaves a standard video with a portable rendition, poster, controls and the source size', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			await page.goto( `${ origin }/` );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
 
@@ -186,8 +187,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix video player 
 			// A video outside the player component is not this contract.
 			expect( await page.locator( '#background wow-video' ).count() ).toBe( 1 );
 			expect( await page.content() ).not.toContain( 'data-blocks-engine-capture-wix-video' );
-		} finally {
-			await browser.close();
 		}
 	}, 30_000 );
 } );
@@ -230,10 +229,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix background vi
 		} );
 	}
 
-	it( 're-points a background video at a portable rendition and keeps its background semantics', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 're-points a background video at a portable rendition and keeps its background semantics', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			const info = backgroundVideoInfo().replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' );
 			await page.setContent( `<!doctype html><body style="margin:0">
 				<section style="position:relative;width:1440px;height:810px">
@@ -257,8 +256,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix background vi
 			// Background semantics are untouched: no controls appear.
 			expect( attributes ).toMatchObject( { muted: '', loop: '', autoplay: '', playsinline: '' } );
 			expect( attributes ).not.toHaveProperty( 'controls' );
-		} finally {
-			await browser.close();
 		}
 	}, 30_000 );
 } );

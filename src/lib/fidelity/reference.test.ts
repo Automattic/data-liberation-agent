@@ -1,9 +1,10 @@
+import { it } from '../../../test/browser.js';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices, type BrowserContext, type Page } from 'playwright';
 import { PNG } from 'pngjs';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { applySourceCleanup, cleanupPolicy } from '../source-cleanup.js';
@@ -15,21 +16,19 @@ import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
-	let sharedBrowser: Awaited< ReturnType< typeof chromium.launch > >;
-	beforeAll( async () => { sharedBrowser = await chromium.launch(); } );
-	afterAll( async () => { await sharedBrowser?.close(); }, 30_000 );
+
 	// About 5 seconds: one reference cell and one offline replay.
-	it( 'proves a settled HTTP-broken source image and reports its URL and status', async () => {
+	it( 'proves a settled HTTP-broken source image and reports its URL and status', async ({ serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-source-broken-' ) );
 		const html = '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><main><h1>Community notice</h1><p>Normal content alongside an unavailable photograph.</p><img src="/missing.png" style="display:block;width:200px;height:200px" alt="Unavailable photograph"></main>';
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			if ( request.url === '/missing.png' ) { response.writeHead( 404 ); response.end(); return; }
 			response.writeHead( 200, { 'content-type': 'text/html' } ); response.end( html );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const context = await sharedBrowser.newContext();
+		const context = await newContext();
 		try {
 			mkdirSync( join( directory, 'website' ) );
 			writeFileSync( join( directory, 'website', 'index.html' ), html );
@@ -43,12 +42,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( report.status ).toBe( 'proven' );
 			expect( report ).toHaveProperty( 'sourceBrokenImages', [ { sourceUrl: url, profile: 'desktop', viewport: 1440, state: 'baseline', url: `${ url }missing.png`, status: 404 } ] );
 		} finally {
-			await context.close(); source.closeAllConnections();
-			await new Promise<void>( resolve => source.close( () => resolve() ) );
+			await context.close();
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 45_000 );
-	it( 'ignores unreachable lazy marquee images and src-less tiles but rejects and names a visible broken image', async () => {
+	it( 'ignores unreachable lazy marquee images and src-less tiles but rejects and names a visible broken image', async ({ serve, newPage }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-clipped-images-' ) );
 		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
@@ -58,13 +57,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			${ Array.from( { length: 14 }, ( _, i ) => `<img src="/image-${ i }.png" ${ i >= 4 ? 'loading="lazy"' : '' } alt="">` ).join( '' ) }
 			</div></div><img alt="Category without an image" style="display:block;width:230px;height:153px">
 			<img src="/outside.png" loading="lazy" style="position:absolute;left:-10000px;top:0;width:500px;height:500px" alt=""></main>`;
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			response.setHeader( 'content-type', request.url?.endsWith( '.png' ) ? 'image/png' : 'text/html' );
 			response.end( request.url?.endsWith( '.png' ) ? image : html );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const page = await sharedBrowser.newPage();
+		const page = await newPage();
 		try {
 			const collect = async ( broken: boolean ) => {
 				const collector = createReferenceCollector( directory, url, [ url ], { prepareCapture: async cell => {
@@ -85,13 +84,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( broken.readiness.reasons ).toContain( 'source images pending or failed' );
 			expect( broken.readiness.diagnostics ).toContain( 'source image pending or failed: data:image/png,broken' );
 		} finally {
-			await page.close(); source.closeAllConnections();
-			await new Promise<void>( resolve => source.close( () => resolve() ) );
+			await page.close();
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 60_000 );
 	// About 50 seconds: quick/slow swaps settle; network, retryable and stalled cells reach the readiness bound.
-	it( 'settles scripted image rendition swaps, including ones slower than the capture wait, without accepting failed or stalled images', async () => {
+	it( 'settles scripted image rendition swaps, including ones slower than the capture wait, without accepting failed or stalled images', async ({ serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-image-swap-' ) );
 		const image = PNG.sync.write( new PNG( { width: 100, height: 100 } ) );
@@ -100,7 +99,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			<img width="200" height="200" src="${ initial }">
 			<script>window.swapRendition = path => { document.images[0].src = path; };</script>`;
 		const served: string[] = [];
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			if ( request.url === '/stalled.png' ) return;
 			if ( request.url === '/failed.png' ) { request.socket.destroy(); return; }
 			if ( request.url === '/retry.png' ) { response.writeHead( 429 ); response.end(); return; }
@@ -111,10 +110,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				return;
 			}
 			response.writeHead( 200, { 'content-type': 'text/html' } ); response.end( html );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const context = await sharedBrowser.newContext();
+		const context = await newContext();
 		const page = await context.newPage();
 		try {
 			for ( const rendition of [ 'rendition', 'slow', 'failed', 'retry', 'stalled' ] ) {
@@ -138,41 +137,41 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				}
 			}
 		} finally {
-			await context.close(); source.closeAllConnections();
-			await new Promise<void>( resolve => source.close( () => resolve() ) );
+			await context.close();
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 90_000 );
-	it.each( [ 'inline rejection', 'cross-origin classic script' ] )( 'records a cross-origin subframe runtime error (%s) as a diagnostic but blocks on a top-level one', async mode => {
+	it.for( [ 'inline rejection', 'cross-origin classic script' ] )( 'records a cross-origin subframe runtime error (%s) as a diagnostic but blocks on a top-level one', { timeout: 60_000 }, async (mode, { serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-subframe-error-' ) );
-		const script = createServer( ( _request, response ) => {
+		const { server: script } = await serve(( _request, response ) => {
 			response.setHeader( 'content-type', 'text/javascript' );
 			response.end( "throw new Error('cross-origin script failure')" );
-		} );
+		});
 		// Use the portable loopback address; localhost in the frame below is
 		// still a different site, without requiring a 127.0.0.2 OS alias.
-		await new Promise<void>( resolve => script.listen( 0, '127.0.0.1', resolve ) );
+
 		const scriptUrl = `http://127.0.0.1:${ ( script.address() as { port: number } ).port }/x.js`;
-		const frame = createServer( ( _request, response ) => {
+		const { server: frame } = await serve(( _request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( mode === 'cross-origin classic script' ? `<script src="${ scriptUrl }"></script>`
 				: '<!DOCTYPE html><html><body style="margin:0;background:#333"><script>navigator.keyboard && navigator.keyboard.getLayoutMap();</script></body></html>' );
-		} );
-		await new Promise<void>( resolve => frame.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		// `localhost` is a different site from `127.0.0.1`, so the frame is cross-origin.
 		const frameUrl = `http://localhost:${ ( frame.address() as { port: number } ).port }/frame.html`;
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( request.url === '/control'
 				? '<!DOCTYPE html><html><body><p>Top-level control</p><script>navigator.keyboard && navigator.keyboard.getLayoutMap(); Promise.reject(new Error(\'top-level own rejection\'));</script></body></html>'
 				: `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Embed</title>
 					<style>body{margin:0;font:16px/1.5 sans-serif}main{padding:24px}iframe{display:block;width:480px;height:270px;border:0;background:#ccc}</style></head>
 					<body><main><h1>Video</h1><p>An embedded third-party player.</p><iframe src="${ frameUrl }" title="Player"></iframe></main></body></html>` );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const context = await sharedBrowser.newContext();
+		const context = await newContext();
 		const page = await context.newPage();
 		try {
 			const collect = async ( target: string ) => {
@@ -202,24 +201,25 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( () => readFrozenObservation( directory, control ) ).toThrow( 'Source evidence unready: source runtime error: top-level own rejection' );
 		} finally {
 			await context.close();
-			for ( const server of [ source, frame, script ] ) { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); }
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
-	}, 60_000 );
-	it.each( [ 'profile', 'sibling', 'borrowed', 'persistent' ] as const )( 'releases only owned %s resources on success and navigation failure', async mode => {
+	} );
+	it.for( [ 'profile', 'sibling', 'borrowed', 'persistent' ] as const )( 'releases only owned %s resources on success and navigation failure', { timeout: 60_000 }, async (mode, { serve }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, `reference-lifetime-${ mode }-` ) );
 		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font:20px monospace}</style><h1>Neutral reference lifetime</h1>';
 		let activeRequests = 0; let peakRequests = 0;
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			activeRequests++; peakRequests = Math.max( peakRequests, activeRequests );
 			setTimeout( () => {
 				response.writeHead( request.url === '/failed' ? 500 : 200, { 'content-type': 'text/html' } );
 				response.end( html ); activeRequests--;
 			}, 100 );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		// Own launch: spies on context acquisition and verifies borrowed/persistent resource ownership.
 		const browser = await chromium.launch();
 		const identity = { screen: { width: 1920, height: 1080 }, userAgent: 'NeutralReference/1', deviceScaleFactor: 1 };
 		const persistent = mode === 'persistent' ? await chromium.launchPersistentContext( join( directory, 'browser' ), { headless: true } ) : undefined;
@@ -291,33 +291,33 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				contextAcquisitions: mode === 'profile' ? 4 : 0, pageCloses: 0, contextCloses: mode === 'profile' ? 4 : 0 } );
 		} finally {
 			vi.restoreAllMocks(); await persistent?.close(); await browser.close();
-			source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) );
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
-	}, 60_000 );
-	it( 'accepts candidate-local canonical redirects using frozen evidence with the source stopped', async () => {
+	} );
+	it( 'accepts candidate-local canonical redirects using frozen evidence with the source stopped', async ({ serve, newPage }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'frozen-canonical-redirects-' ) );
 		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Canonical navigation</title><h1>Canonical navigation</h1><a href="/category">Category</a>';
 		let sourceRequests = 0;
-		const source = createServer( ( _request, response ) => { sourceRequests++; response.setHeader( 'content-type', 'text/html' ); response.end( html ); } );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const { server: source } = await serve(( _request, response ) => { sourceRequests++; response.setHeader( 'content-type', 'text/html' ); response.end( html ); });
+
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
 		let terminalStatus = 200;
 		let terminalLocation: string | undefined;
-		const candidate = createServer( ( request, response ) => {
+		const { server: candidate } = await serve(( request, response ) => {
 			if ( request.url === '/category' ) { response.writeHead( 301, { location: '/category/' } ); response.end(); return; }
 			if ( request.url === '/category/' && terminalLocation ) { response.writeHead( 302, { location: terminalLocation } ); response.end(); return; }
 			response.writeHead( request.url === '/category/' ? terminalStatus : 200, { 'content-type': 'text/html' } ); response.end( html );
-		} );
-		await new Promise<void>( resolve => candidate.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const candidateUrl = `http://127.0.0.1:${ ( candidate.address() as { port: number } ).port }`;
-		const browser = sharedBrowser;
+
 		try {
 			mkdirSync( join( directory, 'website', 'category' ), { recursive: true } );
 			writeFileSync( join( directory, 'website', 'index.html' ), html );
 			writeFileSync( join( directory, 'website', 'category', 'index.html' ), html );
-			const page = await browser.newPage();
+			const page = await newPage();
 			const collector = createReferenceCollector( directory, url, [ url ] );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );
 			await collector.observe( page, url, 'mobile', [], { isMobile: false, hasTouch: false } );
@@ -335,7 +335,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			// it must fail without a single API request bypassing the browser guard.
 			source.removeAllListeners( 'request' );
 			source.on( 'request', ( _request, response ) => { sourceRequests++; response.end( '<h1>Changed source</h1>' ); } );
-			await new Promise<void>( resolve => source.listen( Number( new URL( url ).port ), '127.0.0.1', resolve ) );
+
 			const before = sourceRequests;
 			terminalLocation = url;
 			const blocked = await checkFidelity( { directory, candidateUrl, settleMs: 0, widths: [ 390 ] } );
@@ -356,14 +356,14 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( score.failures.join( ' ' ) ).not.toContain( '404' );
 			}
 		} finally {
-			source.closeAllConnections(); source.close(); candidate.closeAllConnections();
-			await new Promise<void>( resolve => candidate.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } );
+
+			 rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 90_000 );
-	it( 'counts painted text through boxless wrappers while honoring real ancestor clipping', async () => {
-		const browser = sharedBrowser;
-		try {
-			const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+	it( 'counts painted text through boxless wrappers while honoring real ancestor clipping', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 390, height: 900 } } );
 			const text = 'Painted editorial text survives a boxless wrapper.';
 			await page.setContent( `<div style="display:contents;overflow:hidden"><h1>${ text }</h1></div>` );
 			const painted = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
@@ -371,9 +371,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await page.setContent( `<div style="position:relative;width:100px;height:100px;overflow:hidden"><div style="display:contents;overflow:hidden"><p style="position:absolute;left:200px;width:200px">${ text }</p></div></div>` );
 			const clipped = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
 			expect( clipped.textChars ).toBe( 0 );
-		} finally { /* shared browser is closed after the suite */ }
+		}
 	}, 30_000 );
-	it( 'replays fixed-width mobile emulation and complete compositor frames', async () => {
+	it( 'replays fixed-width mobile emulation and complete compositor frames', async ({ newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-mobile-profile-' ) );
 		const html = '<meta name="viewport" content="width=320,user-scalable=yes"><style>body{margin:0}h1{font:20px Arial}@media(pointer:coarse){h1{font-size:30px}}</style><h1>Mobile viewport heading</h1><div style="height:2000px"></div><img loading="lazy" src="/media.png" width="120" height="120">';
@@ -381,10 +381,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		writeFileSync( join( directory, 'website', 'index.html' ), html );
 		const media = PNG.sync.write( new PNG( { width: 120, height: 120 } ) );
 		writeFileSync( join( directory, 'website', 'media.png' ), media );
-		const browser = sharedBrowser;
+
 		try {
 			const { defaultBrowserType: _browserType, ...iphone } = devices[ 'iPhone 17' ];
-			const context = await browser.newContext( iphone );
+			const context = await newContext( iphone );
 			const page = await context.newPage();
 			const url = 'http://fixture.invalid/';
 			await context.route( url, route => route.fulfill( { contentType: 'text/html', body: html } ) );
@@ -406,14 +406,14 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( legacy.pending?.[ 0 ]!.reason ).toMatch( /browser profile unproven/ );
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'replays source pixel density when measuring resolution-dependent content', async () => {
+	it( 'replays source pixel density when measuring resolution-dependent content', async ({ newPage }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-pixel-density-' ) );
 		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><style>h1{font-size:20px}@media(min-resolution:2dppx){h1{font-size:30px}}</style><h1>Density-dependent heading</h1>';
 		mkdirSync( join( directory, 'website' ) );
 		writeFileSync( join( directory, 'website', 'index.html' ), html );
-		const browser = sharedBrowser;
-		const page = await browser.newPage( { viewport: { width: 390, height: 900 }, deviceScaleFactor: 3 } );
+
+		const page = await newPage( { viewport: { width: 390, height: 900 }, deviceScaleFactor: 3 } );
 		const url = 'http://fixture.invalid/';
 		try {
 			await page.route( url, route => route.fulfill( { contentType: 'text/html', body: html } ) );
@@ -429,11 +429,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( report.pass ).toBe( true );
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'uses capture route identity for query/hash renditions while refusing path drift', async () => {
+	it( 'uses capture route identity for query/hash renditions while refusing path drift', async ({ newPage }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-route-identity-' ) );
-		const browser = sharedBrowser;
-		const page = await browser.newPage();
+
+		const page = await newPage();
 		const url = 'http://fixture.invalid/article/';
 		try {
 			for ( const [ destination, drift ] of [ [ '/article/?view=phone#content', false ], [ '/different/', true ] ] as const ) {
@@ -451,18 +451,18 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			}
 		} finally { rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
-	it( 'freezes a protocol-changing server redirect while rejecting subsequent client drift', async () => {
+	it( 'freezes a protocol-changing server redirect while rejecting subsequent client drift', async ({ serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-protocol-redirect-' ) );
-		const browser = sharedBrowser;
-		const context = await browser.newContext();
+
+		const context = await newContext();
 		const page = await context.newPage();
 		let drift = false;
-		const server = createServer( ( _request, response ) => {
+		const { server } = await serve(( _request, response ) => {
 			response.writeHead( 200, { 'Content-Type': 'text/html' } );
 			response.end( `<main><h1>Article</h1></main>${ drift ? '<script>history.replaceState(null,"","/different/")</script>' : '' }` );
-		} );
-		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const host = `127.0.0.1:${ ( server.address() as { port: number } ).port }`;
 		const url = `https://${ host }/article`;
 		const destination = `http://${ host }/article/`;
@@ -484,14 +484,14 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally {
 			// Chromium may preconnect a socket it never sends a request on; Node
 			// treats it as active, so close() alone would wait for it to time out.
-			await context.close(); server.closeAllConnections();
-			await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } );
+			await context.close();
+			 rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 30_000 );
-	it( 'settles unused local fallback stacks at each frozen viewport', async () => {
+	it( 'settles unused local fallback stacks at each frozen viewport', async ({ newPage }) => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 		const directory = mkdtempSync(join(parent, 'reference-fonts-'));
-		const browser = sharedBrowser; const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+		 const page = await newPage({ viewport: { width: 1440, height: 900 } });
 		const url = 'http://fixture.invalid/';
 		try {
 			await page.route(url, route => route.fulfill({ contentType: 'text/html', body: `<style>
@@ -523,8 +523,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { rmSync(directory, { recursive: true, force: true }); }
 	}, 60_000);
 
-	it( 'records primary-face readiness from each document independently of fallbacks', async () => {
-		const page = await sharedBrowser.newPage();
+	it( 'records primary-face readiness from each document independently of fallbacks', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			await page.route('http://fixture.invalid/primary.ttf', route => route.fulfill({ contentType: 'font/ttf', body: squareFont }));
 			await page.route('http://fixture.invalid/failed.ttf', route => route.fulfill({ status: 404, body: '' }));
@@ -550,10 +550,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { await page.close(); }
 	}, 30_000);
 
-	it( 'waits for a delayed declared stack before baseline screenshot and measurement', async () => {
-		const browser = sharedBrowser; const page = await browser.newPage();
+	it( 'waits for a delayed declared stack before baseline screenshot and measurement', async ({ newPage }) => {
+		 const page = await newPage();
 		let requests = 0;
-		try {
+		{
 			await page.route('http://fixture.invalid/delayed.ttf', async route => {
 				requests++; await new Promise(resolve => setTimeout(resolve, 200));
 				await route.fulfill({ contentType: 'font/ttf', body: squareFont });
@@ -572,12 +572,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await page.setViewportSize({ width: 390, height: 900 });
 			const mobile = await observePage(page, 'about:blank', 390, 0, null, undefined, undefined, true);
 			expect(mobile.typography![0]).toMatchObject({ loaded: true, advance: 160 });
-		} finally { /* shared browser is closed after the suite */ }
+		}
 	}, 30_000);
 
-	it( 'settles a stack introduced by scroll restoration before baseline screenshot', async () => {
-		const browser = sharedBrowser; const page = await browser.newPage();
-		try {
+	it( 'settles a stack introduced by scroll restoration before baseline screenshot', async ({ newPage }) => {
+		 const page = await newPage();
+		{
 			await page.setContent(`<style>@font-face{font-family:Restored;src:local("Arial"),local("Liberation Sans"),local("DejaVu Sans")}p{font:20px sans-serif}</style>
 				<p>Restored painted text</p><script>addEventListener('scroll',()=>{document.querySelector('p').style.fontFamily='sans-serif,Restored';},{once:true});</script>`);
 			const observation = await observePage(page, 'about:blank', 1280, 0, null, undefined, async () => {
@@ -585,11 +585,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await page.screenshot();
 			}, true);
 			expect(observation.typography![0]).toMatchObject({ fontFamily: 'sans-serif, Restored', loaded: true });
-		} finally { /* shared browser is closed after the suite */ }
+		}
 	}, 30_000);
-	it( 'keeps frozen baseline pose untouched while retaining the explicit scroll probe for drift', async () => {
-		const browser = sharedBrowser; const page = await browser.newPage( { viewport: { width: 768, height: 700 } } );
-		try {
+	it( 'keeps frozen baseline pose untouched while retaining the explicit scroll probe for drift', async ({ newPage }) => {
+		 const page = await newPage( { viewport: { width: 768, height: 700 } } );
+		{
 			await page.setContent( `<style>header{height:100px}header.compact{height:60px}</style><header>Header</header><main style="height:2400px">Baseline content</main>
 				<script>addEventListener('scroll',()=>document.querySelector('header').classList.add('compact'),{once:true})</script>` );
 			await observePage( page, 'about:blank', 768, 0, 'http://fixture.invalid', undefined, undefined, true, true );
@@ -597,13 +597,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await observePage( page, 'about:blank', 768, 0, 'http://fixture.invalid', undefined, undefined, true );
 			expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
 			expect( await page.locator( 'header' ).evaluate( element => getComputedStyle( element ).height ) ).toBe( '60px' );
-		} finally { /* shared browser is closed after the suite */ }
+		}
 	}, 30_000 );
 
-	it( 'keeps failed and unavailable fonts unready and bounds a pending font', async () => {
+	it( 'keeps failed and unavailable fonts unready and bounds a pending font', async ({ newPage }) => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 		const directory = mkdtempSync(join(parent, 'reference-failed-fonts-'));
-		const browser = sharedBrowser; const page = await browser.newPage();
+		 const page = await newPage();
 		try {
 			await page.route('http://fixture.invalid/failed.ttf', route => route.fulfill({ status: 404, body: '' }));
 			await page.setContent('<style>@font-face{font-family:Failed;src:url("http://fixture.invalid/failed.ttf")}@font-face{font-family:Unavailable;src:local("No Such Neutral Font 505")}p{font:20px Failed,Unavailable,sans-serif}</style><p>Still painted with fallback</p>');
@@ -624,25 +624,25 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect(await page.evaluate(() => document.fonts.check('20px sans-serif,Pending'))).toBe(false);
 		} finally { rmSync(directory, { recursive: true, force: true }); }
 	}, 30_000);
-	it( 'measures the declared resting disclosure state without expanding it during frozen observation', async () => {
-		const browser = sharedBrowser;
-		const page = await browser.newPage();
-		try {
+	it( 'measures the declared resting disclosure state without expanding it during frozen observation', async ({ newPage }) => {
+
+		const page = await newPage();
+		{
 			await page.setContent('<button aria-expanded="false" aria-controls="answer">Neutral baseline question</button><div id="answer" hidden>Only visible after activation</div><script>const button=document.querySelector("button");button.onclick=()=>{const open=button.getAttribute("aria-expanded")==="false";button.setAttribute("aria-expanded",String(open));document.getElementById("answer").hidden=!open;};</script>');
 			const observation = await observePage(page, 'http://fixture.invalid/', 390, 0, null, undefined, undefined, true);
 			expect(await page.locator('button').getAttribute('aria-expanded')).toBe('false');
 			expect(observation.textChars).toBe('Neutral baseline question'.length);
-		} finally { /* shared browser is closed after the suite */ }
+		}
 	}, 30_000);
-	it( 'counts painted labels without a zero-font decorative glyph, retaining visible plus signs', async () => {
-		const browser = await chromium.launch(); const page = await browser.newPage();
+	it( 'counts painted labels without a zero-font decorative glyph, retaining visible plus signs', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			await page.setContent('<p>Visible + sum</p><button>Neutral + question<span aria-hidden="true" style="font-size:0;display:inline-block;width:18px;height:18px;background:blue">+</span></button>');
 			const observation = await observePage(page, 'http://fixture.invalid/', 390, 0, null, undefined, undefined, true);
 			expect(observation.textChars).toBe('Visible + sum Neutral + question'.length);
-		} finally { await browser.close(); }
+		} finally { await Promise.resolve(); }
 	}, 30_000);
-	it( 'freezes a mutating neutral source, attributes geometry to each stage, and refuses incomplete evidence', async () => {
+	it( 'freezes a mutating neutral source, attributes geometry to each stage, and refuses incomplete evidence', async ({ serve }) => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'frozen-reference-' ) );
@@ -651,13 +651,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const png = new PNG( { width: 80, height: 80 } );
 		for ( let i = 0; i < png.data.length; i += 4 ) { png.data[i] = ( i / 4 ) % 80 * 3; png.data[i+1] = 70; png.data[i+2] = 180; png.data[i+3] = 255; }
 		const image = PNG.sync.write( png );
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			requests++;
 			if ( request.url?.endsWith( '.png' ) ) { response.setHeader( 'content-type', 'image/png' ); response.end( image ); return; }
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Observed recommendations</title><style>body{margin:0;font:16px Arial}img{display:block;width:60vw;max-width:400px;height:auto}</style></head><body><main><h1>Recommendations</h1><p>${ mutated ? 'Beta then Alpha' : 'Alpha then Beta' }</p><img alt="normal product" src="/product.png"><nav><a href="#details">Details</a></nav><section id="details">Product details</section></main><footer class="credit">Powered by fixture</footer></body></html>` );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
 		const url = `${ origin }/shop/product/`;
 		const sourcePolicy = cleanupPolicy( [ { id: 'fixture-credit', category: 'source-attribution', selector: '.credit' } ] );
@@ -737,18 +737,18 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally {
 			candidate?.closeAllConnections();
 			if ( candidate ) await new Promise<void>( resolve => candidate!.close( () => resolve() ) );
-			source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) );
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 300_000 );
 
-	it( 'bounds frozen reference evidence to the sampled route and reports unsampled routes as uncompared scope', async () => {
+	it( 'bounds frozen reference evidence to the sampled route and reports unsampled routes as uncompared scope', async ({ serve }) => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-sample-' ) );
 		const documentRequests = new Map<string, number>();
 		const page = ( path: string, heading: string ): string => `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sampled route fixture</title><style>body{margin:0;font:16px Arial}h1{margin:0;font:24px Arial}</style></head><body><main><h1>${ heading }</h1><p>Baseline content.</p></main></body></html>`;
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			const path = request.url?.split( '?' )[ 0 ] ?? '';
 			if ( path.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 			// Document navigations carry a text/html accept header; favicon and
@@ -758,8 +758,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			}
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( page( path, path === '/' ? 'Home route copy' : path === '/about' ? 'About route copy' : 'Contact route copy' ) );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
 		const home = `${ origin }/`;
 		const routes = [ home, `${ origin }/about`, `${ origin }/contact` ];
@@ -797,15 +797,15 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( explicit.status ).toBe( 'unproven' );
 			expect( explicit.pending?.every( item => item.route === '/about/' && /no frozen reference evidence/.test( item.reason ) ) ).toBe( true );
 		} finally {
-			source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) );
+
 			rmSync( directory, { recursive: true, force: true } );
 		}
 	}, 300_000 );
 
-	it( 'observes normal/zoom roles and scores document-order partners after roles are lost', async () => {
-		const browser = sharedBrowser;
-		const page = await browser.newPage();
-		try {
+	it( 'observes normal/zoom roles and scores document-order partners after roles are lost', async ({ newPage }) => {
+
+		const page = await newPage();
+		{
 			const src = 'data:image/svg+xml,' + encodeURIComponent( '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="blue"/></svg>' );
 			const normal = `<figure aria-label="normal"><img alt="product" src="${ src }" width="200" height="200"></figure>`;
 			const zoom = `<section role="region" aria-label="zoom"><img alt="product" src="${ src }" width="400" height="400"></section>`;
@@ -820,11 +820,11 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const ambiguous = await observePage( page, 'about:blank', 1280, 0, null, undefined, undefined, true );
 			expect( matchRenderedImages( source.images, ambiguous.images ).map( pair => pair.candidate ) ).toEqual( ambiguous.images );
 			expect( checkImageGeometry( source, ambiguous ).failures?.[ 0 ] ).toContain( 'image geometry differs' );
-		} finally { /* shared browser is closed after the suite */ }
+		}
 	}, 30_000 );
-	it( 'excludes overflow-clipped offstage copy while retaining repeated and below-fold text', async () => {
-		const browser = sharedBrowser; const page = await browser.newPage( { viewport: { width: 390, height: 700 } } );
-		try {
+	it( 'excludes overflow-clipped offstage copy while retaining repeated and below-fold text', async ({ newPage }) => {
+		 const page = await newPage( { viewport: { width: 390, height: 700 } } );
+		{
 			const quote = 'The migration from Google Workspace to Microsoft 365 and Exchange Online went very well. Shaun did a wonderful job making it happen. We also moved from an on-prem phone system to Teams Phone and it is working out quite well.';
 			const attribution = 'Luke Ervin - IT Director';
 			const shared = '<p>Shared visible label</p><p>Shared visible label</p><div style="margin-top:1200px">Lower-page editorial content</div>';
@@ -852,19 +852,19 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await page.setContent( `<style>article{width:220px;height:40px;overflow-x:hidden;overflow-y:auto}p{margin:0}</style><article><p>Article introduction.</p><p style="margin-top:90px">${ scrollCopy }</p></article>` );
 			const scrollText = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
 			expect( scrollText.textChars ).toBe( 'Article introduction.'.length + 1 + scrollCopy.length );
-		} finally { /* shared browser is closed after the suite */ }
+		}
 	}, 30_000 );
 
-	it( 'keeps a source ready when its own media playback interrupts play()', async () => {
+	it( 'keeps a source ready when its own media playback interrupts play()', async ({ serve }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-media-abort-' ) );
 		// Unhandled play() rejections from the page's own pause() and load(): Chromium reports both as AbortError page errors.
 		const html = '<h1>Autoplay hero</h1><video id="hero" muted playsinline src="/hero.mp4"></video><script>const v = document.getElementById("hero"); v.play(); v.pause(); v.play(); v.load();</script>';
-		const server = createServer( ( request, response ) => {
+		const { server } = await serve(( request, response ) => {
 			if ( request.url?.startsWith( '/hero.mp4' ) ) { response.statusCode = 204; response.end(); return; }
 			response.setHeader( 'content-type', 'text/html' ); response.end( html );
-		} );
-		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
 		try {
 			const collector = createReferenceCollector( directory, url, [ url ] );
@@ -873,21 +873,21 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const manifest = JSON.parse( readFileSync( collector.finalize( receiptPath ), 'utf8' ) ) as FidelityReference;
 			expect( manifest.entries.length ).toBeGreaterThan( 0 );
 			expect( manifest.entries.flatMap( entry => entry.readiness.reasons ).filter( reason => reason.startsWith( 'source runtime error' ) ) ).toEqual( [] );
-		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+		} finally {   rmSync( directory, { recursive: true, force: true } ); }
 	}, 90_000 );
-	it( 'freezes each width from a fresh navigation instead of resize-history state', async () => {
+	it( 'freezes each width from a fresh navigation instead of resize-history state', async ({ serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-fresh-viewport-' ) );
-		const server = createServer( ( _request, response ) => {
+		const { server } = await serve(( _request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>h1{font-size:33px}</style><h1>Neutral viewport pose</h1><script>
 				if ( innerWidth === 768 ) document.documentElement.dataset.pose = 'fresh';
 				addEventListener('resize', () => { if ( innerWidth === 768 ) { document.documentElement.dataset.pose = 'resized'; document.querySelector('h1').style.fontSize = '29px'; } });
 			</script>` );
-		} );
-		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
-		const browser = sharedBrowser; const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
+		 const context = await newContext( { viewport: { width: 1440, height: 900 } } );
 		try {
 			const page = await context.newPage(); await page.goto( url ); await page.setViewportSize( { width: 768, height: 900 } );
 			await page.waitForFunction( () => document.documentElement.dataset.pose === 'resized' );
@@ -902,26 +902,25 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( observation.typography ).toContainEqual( expect.objectContaining( { key: 'Neutral viewport pose', fontSize: 33 } ) );
 			// The original capture page is not resized or otherwise changed by reference collection.
 			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
-		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+		} finally {   rmSync( directory, { recursive: true, force: true } ); }
 	}, 60_000 );
-	it( 'observes declared reference widths concurrently and preserves ordered artifacts', async () => {
+	it( 'observes declared reference widths concurrently and preserves ordered artifacts', async ({ serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-concurrent-widths-' ) );
 		let arrivals = 0;
 		const arrivalTimes: number[] = [];
-		const source = createServer( ( request, response ) => {
+		const { server: source } = await serve(( request, response ) => {
 			if ( request.url !== '/' ) { response.writeHead( 404 ); response.end(); return; }
 			arrivals++;
 			arrivalTimes.push( Date.now() );
 			const respond = () => { response.setHeader( 'content-type', 'text/html' ); response.end( '<meta name="viewport" content="width=device-width,initial-scale=1"><h1>Concurrent reference</h1>' ); };
 			if ( arrivals >= 2 ) respond();
 			else setTimeout( respond, 2_000 );
-		} );
-		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
-		const browser = await chromium.launch();
 		try {
-			const context = await browser.newContext();
+			const context = await newContext();
 			const page = await context.newPage();
 			const collector = createReferenceCollector( directory, url, [ url ] );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 768, 1440 ] } );
@@ -936,7 +935,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( entry.document?.path ).toMatch( new RegExp( `-${ entry.viewport }\\.html$` ) );
 				expect( PNG.sync.read( readFileSync( join( directory, entry.screenshot!.path ) ) ).width ).toBe( entry.viewport );
 			}
-		} finally { await browser.close(); source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+		} finally { await Promise.resolve();   rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
 } );
 

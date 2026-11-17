@@ -1,17 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { lockMainFrameNavigation } from './probe-guards.js';
 
 // A probe can trigger a script-driven navigation (a swatch assigning
 // `location`) that no click handler can cancel. While locked, the document and
 // its in-page capture evidence must survive; once released, navigation works.
 describe('lockMainFrameNavigation', () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await chromium.launch(); });
-  afterAll(async () => { await browser?.close(); });
 
-  it('keeps the current document when a script navigates away', async () => {
-    const page = await browser.newPage();
+  it('keeps the current document when a script navigates away', async ({ newPage }) => {
+    const page = await newPage();
     await page.route('https://shop.test/**', (route) =>
       route.fulfill({ contentType: 'text/html', body: '<p>Product page</p>' }));
     await page.goto('https://shop.test/');

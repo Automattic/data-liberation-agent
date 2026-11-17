@@ -6,7 +6,7 @@ import selectorParser from 'postcss-selector-parser';
 import { parseSelectorList, projectStylesheet } from '../replicate/css-scope.js';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { DEFAULT_SWEEP_WIDTHS } from './fluid-capture.js';
-import { withEvaluateTimeout, withRootClassesRestored } from './page-helpers.js';
+import { withRootClassesRestored } from './page-helpers.js';
 import { externalScriptSources, inlineRuntimeHash } from './device-mode.js';
 
 // Reuse the fluid ladder's tablet/desktop probes; never pay for its dense
@@ -105,8 +105,8 @@ export class RootClassEvidence {
  */
 async function stableRootClasses( page: Page ): Promise<RootClassSample | undefined> {
 	// Allow resize work and recurring ~200ms long tasks to leave a 500ms
-	// quiet window. At most five observations (including restoration) and
-	// four bounded resizes keep the entire probe below 21 seconds.
+	// quiet window. Each observation is bounded; resizes must finish before
+	// continuing and remain subject to the route's existing deadline.
 	const deadline = Date.now() + 3000;
 	let previous = '';
 	let quietSince = Date.now();
@@ -154,6 +154,17 @@ async function sampleLadder( page: Page, widths: readonly number[], onUnproven?:
 	}
 	const samples: RootClassSample[] = [];
 	let proven = true;
+	const resize = async ( width: number ) => {
+		const started = Date.now();
+		// Never race a viewport mutation: a late completion could otherwise
+		// resize the page underneath restoration or a later capture step.
+		// Real failures still propagate; only a slow successful resize degrades.
+		await page.setViewportSize( { ...original, width } );
+		if ( Date.now() - started >= 1500 ) {
+			proven = false;
+			onUnproven?.( `root class source probe unproven at ${ width }px: viewport resize exceeded 1500ms` );
+		}
+	};
 	const sample = async () => {
 		const observation = await stableRootClasses( page );
 		if ( observation ) samples.push( observation );
@@ -166,11 +177,11 @@ async function sampleLadder( page: Page, widths: readonly number[], onUnproven?:
 		await sample();
 		for ( const width of [ ...new Set( widths ) ].filter( width => width >= 768 && width < original.width ).sort( ( a, b ) => a - b ).slice( 0, 3 ) ) {
 			if ( ! proven ) break;
-			await withEvaluateTimeout( page.setViewportSize( { ...original, width } ), 1500 );
-			await sample();
+			await resize( width );
+			if ( proven ) await sample();
 		}
 	} finally {
-		await withEvaluateTimeout( page.setViewportSize( original ), 1500 );
+		await resize( original.width );
 		const restored = await stableRootClasses( page );
 		if ( ! restored ) {
 			proven = false;

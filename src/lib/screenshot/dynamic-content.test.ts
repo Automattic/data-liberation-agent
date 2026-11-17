@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, expect, beforeAll, afterAll } from 'vitest';
+import { it, it as browserTest } from '../../../test/browser.js';
 import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chromium, type Browser } from 'playwright';
+
 import { assessBody, expandCollapsedContent, hydrateDisclosureContent, waitForAppWidgets, readPngHeight, classifyEmptyBodies, KNOWN_WIDGETS, type PageStat } from './dynamic-content.js';
 import { extractFaqsFromHtml } from '../replicate/faq-extract.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
@@ -148,12 +149,9 @@ describe('KNOWN_WIDGETS registry', () => {
 });
 
 describe('interaction + wait helpers (Phase 1/2, browser)', () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await chromium.launch(); });
-  afterAll(async () => { await browser?.close(); });
 
-  it('preserves the selected tab when tab labels have pointer cursors', async () => {
-    const page = await browser.newPage();
+  it('preserves the selected tab when tab labels have pointer cursors', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <style>.label{cursor:pointer}.panel[hidden]{display:none}</style>
       <div role="tablist">
@@ -181,8 +179,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('preserves native disclosure state while loading its lazy content', async () => {
-    const page = await browser.newPage();
+  it('preserves native disclosure state while loading its lazy content', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<details id="closed"><summary>Question</summary><p>Hidden answer</p><img loading="lazy" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='2' height='2'%3E%3Crect width='2' height='2' fill='blue'/%3E%3C/svg%3E"></details><details id="open" open><summary>Open question</summary><p>Visible answer</p></details>`);
     await expandCollapsedContent(page);
     expect(await page.evaluate(() => [...document.querySelectorAll('details')].map(el => el.open))).toEqual([false, true]);
@@ -201,8 +199,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
   // fixed panel and flips the toggle the interactivity probe later measures —
   // a working menu reported as dead. A collapsed dialog is interactive state,
   // not hidden page content.
-  it('leaves dialog-bearing disclosures closed for interactivity probing', async () => {
-    const page = await browser.newPage();
+  it('leaves dialog-bearing disclosures closed for interactivity probing', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <details class="data-blocks-engine-capture-disclosure">
         <summary data-blocks-engine-capture-disclosure-label="Open Menu">Menu</summary>
@@ -225,8 +223,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('skips dialog-controlling triggers while hydrating empty editorial regions', async () => {
-    const page = await browser.newPage();
+  it('skips dialog-controlling triggers while hydrating empty editorial regions', async ({ newPage }) => {
+    const page = await newPage();
     const surfaces = ['<dialog></dialog>', '<div role="dialog">Dialog</div>', '<div role="alertdialog">Alert</div>', '<div aria-modal="true">Modal</div>'];
     await page.setContent(`
       ${surfaces.map((surface, index) => `
@@ -261,8 +259,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('keeps populated disclosures resting without activating navigation menus or links', async () => {
-    const page = await browser.newPage();
+  it('keeps populated disclosures resting without activating navigation menus or links', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <a href="https://destination.test/menu" aria-expanded="false" aria-controls="menu" aria-haspopup="true">Menu</a>
       <nav id="menu"></nav>
@@ -296,8 +294,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
 
   // Issue #899: site chrome is shared by every route; its toggles keep their
   // resting state. A header inside a sectioning element is local content.
-  it('leaves site header and footer toggles closed while expanding local disclosures', async () => {
-    const page = await browser.newPage();
+  it('leaves site header and footer toggles closed while expanding local disclosures', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <header><button id="menu" aria-expanded="false" aria-controls="dropdown">Menu</button>
         <div id="dropdown" class="hidden"><a href="#a">A</a></div></header>
@@ -322,8 +320,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('keeps a show-more disclosure collapsed in the serialized document and records the opened form', async () => {
-    const page = await browser.newPage();
+  it('keeps a show-more disclosure collapsed in the serialized document and records the opened form', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <style>.clamp { max-height: 2.4em; overflow: hidden; }</style>
       <section id="about">
@@ -355,8 +353,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('never activates a control that would submit a form', async () => {
-    const page = await browser.newPage();
+  it('never activates a control that would submit a form', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <form action="/search" method="get" role="search">
         <input type="search" name="q">
@@ -384,8 +382,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('hydrates locally mounted disclosure answers without IDs or panel associations', async () => {
-    const page = await browser.newPage();
+  it('hydrates locally mounted disclosure answers without IDs or panel associations', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <section>${['First', 'Second', 'Third'].map(label => `<article><button type="button" aria-expanded="false">${label} question</button></article>`).join('')}</section>
       <button type="button" aria-expanded="false" aria-haspopup="dialog">Open dialog</button>
@@ -431,8 +429,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('hydrates every lazy single-open disclosure while restoring closed state', async () => {
-    const page = await browser.newPage();
+  it('hydrates every lazy single-open disclosure while restoring closed state', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <style>[role="region"][aria-hidden="true"]{display:none}</style>
       <button aria-expanded="false" aria-controls="answer-1">Question one?</button>
@@ -484,8 +482,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('leaves popup controls and already populated regions untouched', async () => {
-    const page = await browser.newPage();
+  it('leaves popup controls and already populated regions untouched', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <button aria-expanded="false" aria-controls="menu" aria-haspopup="menu">Menu</button>
       <div id="menu" role="region">Navigation</div>
@@ -497,8 +495,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('normalizes a populated disclosure concealed by a reversing ancestor onto the local hidden contract', async () => {
-    const page = await browser.newPage();
+  it('normalizes a populated disclosure concealed by a reversing ancestor onto the local hidden contract', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <header id="site-header" style="height:64px;overflow:hidden">Site header</header>
       <div id="tablet-frame" style="height:480px">
@@ -632,8 +630,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('keeps an initially open exclusive item open through expand then hydration', async () => {
-    const page = await browser.newPage();
+  it('keeps an initially open exclusive item open through expand then hydration', async ({ newPage }) => {
+    const page = await newPage();
     const group = (id: string, openAnswer: string, closedAnswer: string) => `<section id="${id}">
       <div class="item"><button type="button" id="q1" aria-expanded="true" aria-controls="a1">Open question</button><div class="clip" style="height:auto;overflow:visible"><div class="inner" style="display:block;opacity:1"><div id="a1" role="region" aria-hidden="false">${openAnswer}</div></div></div></div>
       <div class="item"><button type="button" id="q2" aria-expanded="false" aria-controls="a2">Closed question</button><div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="a2" role="region" aria-hidden="true">${closedAnswer}</div></div></div></div>
@@ -706,8 +704,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('hydrates a Radix-style accordion with no aria-controls, via the reverse aria-labelledby relationship, resilient to single-open auto-collapse', async () => {
-    const page = await browser.newPage();
+  it('hydrates a Radix-style accordion with no aria-controls, via the reverse aria-labelledby relationship, resilient to single-open auto-collapse', async ({ newPage }) => {
+    const page = await newPage();
     // Mirrors the real shadcn/ui Radix accordion markup: the trigger carries
     // aria-expanded but NO aria-controls; only the panel names its trigger,
     // via aria-labelledby. A collapsed panel is truly empty (unmounted), not
@@ -781,8 +779,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('keeps the LAST panel\'s content when the runtime unmounts closed panels after an exit animation', async () => {
-    const page = await browser.newPage();
+  it('keeps the LAST panel\'s content when the runtime unmounts closed panels after an exit animation', async ({ newPage }) => {
+    const page = await newPage();
     // Regression for the single-open accordion whose LAST item shipped empty.
     // Real Radix runtimes do not unmount a closed panel's children immediately:
     // Presence keeps them mounted through the ~200ms close animation, and only
@@ -864,8 +862,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('rescans for disclosures that become eligible during hydration', async () => {
-    const page = await browser.newPage();
+  it('rescans for disclosures that become eligible during hydration', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`
       <button aria-expanded="false" aria-controls="answer-1">Question one?</button>
       <div id="answer-1" role="region"></div>
@@ -896,8 +894,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('waitForAppWidgets waits until a known widget populates', async () => {
-    const page = await browser.newPage();
+  it('waitForAppWidgets waits until a known widget populates', async ({ newPage }) => {
+    const page = await newPage();
     // Loox-like container that fills in after 300ms.
     await page.setContent(
       '<div id="looxReviews"></div><script>setTimeout(()=>{document.getElementById("looxReviews").innerHTML="<div>a review here that is long enough</div>"},300)</script>',
@@ -908,8 +906,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
-  it('waitForAppWidgets is a no-op (returns fast) when no known widget is present', async () => {
-    const page = await browser.newPage();
+  it('waitForAppWidgets is a no-op (returns fast) when no known widget is present', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent('<main>just normal content</main>');
     const t0 = Date.now();
     await waitForAppWidgets(page, 5000);
@@ -923,19 +921,17 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
 // over a throwaway localhost origin — the same shape of origin every real
 // SPA capture runs against.
 describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression)', () => {
-  let browser: Browser;
+const it = browserTest.extend<{ sourceServer: void }>({ sourceServer: [async ({ serve }, use) => {
+
+    ({ server } = await serve((req, res) => res.end(req.url === '/details' ? fullNavigationFixture : '<!doctype html><html><body></body></html>')));
+
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+{ await use(); }
+}, { auto: true }] });
+
   let server: Server;
   let baseUrl: string;
-  beforeAll(async () => {
-    browser = await chromium.launch();
-    server = createServer((req, res) => res.end(req.url === '/details' ? fullNavigationFixture : '<!doctype html><html><body></body></html>'));
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  });
-  afterAll(async () => {
-    await browser?.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
 
   // Mirrors how a real client router (e.g. the `history` package underlying
   // React Router) wires itself up: it patches `history.pushState` so ANY
@@ -983,8 +979,8 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
     </script>
   `;
 
-  it('reverts a button whose click turns out to be client-side navigation, restoring the route\'s real content', async () => {
-    const page = await browser.newPage();
+  it('reverts a button whose click turns out to be client-side navigation, restoring the route\'s real content', async ({ newPage }) => {
+    const page = await newPage();
     await page.goto(`${baseUrl}/Home`);
     await page.setContent(spaFixture);
 
@@ -999,8 +995,8 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
     await page.close();
   });
 
-  it('keeps a "See all" button that loads another document from taking the capture off its route', async () => {
-    const page = await browser.newPage();
+  it('keeps a "See all" button that loads another document from taking the capture off its route', async ({ newPage }) => {
+    const page = await newPage();
     const navigations: string[] = [];
     page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
     await page.goto(`${baseUrl}/details`);
@@ -1020,8 +1016,8 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
     await page.close();
   });
 
-  it('keeps a populated in-page disclosure resting before the navigating control', async () => {
-    const page = await browser.newPage();
+  it('keeps a populated in-page disclosure resting before the navigating control', async ({ newPage }) => {
+    const page = await newPage();
     await page.goto(`${baseUrl}/Home`);
     await page.setContent(spaFixture);
 
@@ -1034,8 +1030,8 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
     await page.close();
   });
 
-  it('still expands a genuine "load more" label control that does not navigate', async () => {
-    const page = await browser.newPage();
+  it('still expands a genuine "load more" label control that does not navigate', async ({ newPage }) => {
+    const page = await newPage();
     await page.goto(`${baseUrl}/products`);
     await page.setContent(`
       <ul id="list"><li>One</li></ul>

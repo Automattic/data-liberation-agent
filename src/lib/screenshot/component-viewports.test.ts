@@ -1,17 +1,18 @@
-import { expect, it } from 'vitest';
-import { chromium } from 'playwright';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { exploreComponents, snapshotComponents } from './component-states.js';
 import { withReadOnlyProbes } from './probe-guards.js';
 import { wireCapturedComponents } from '../static-components.js';
 
 // One browser pass, approximately three seconds. Uses the screenshotter's
 // snapshot -> read-only exploration path, without a second capture pipeline.
-it('explores responsive disclosures where they render and restores the capture viewport', async () => {
-	const browser = await chromium.launch({ headless: true });
+it('explores responsive disclosures where they render and restores the capture viewport', async ({ newPage }) => {
+
 	const desktop = { id: 'desktop', width: 1440, height: 900 };
 	const mobile = { id: 'mobile', width: 390, height: 900 };
-	const page = await browser.newPage({ viewport: desktop });
-	try {
+	const page = await newPage({ viewport: desktop });
+	{
 		await page.setContent(`<style>
 			#mobile, #never { display:none }
 			@media(max-width:767px) { #mobile { display:block } #desktop { display:none } }
@@ -78,7 +79,5 @@ it('explores responsive disclosures where they render and restores the capture v
 		await page.locator('#search-toggle').click();
 		await page.locator('.search-form__lightbox-close span').click();
 		expect(await page.locator('#search-toggle').getAttribute('aria-expanded')).toBe('false');
-	} finally {
-		await browser.close();
 	}
 });

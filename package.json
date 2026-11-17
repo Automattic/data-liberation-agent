@@ -1,6 +1,6 @@
 {
   "name": "data-liberation",
-  "version": "0.35.28",
+  "version": "0.35.31",
   "description": "Liberate any website into a complete, portable HTML site",
   "type": "module",
   "main": "./dist/capture-engine.bundle.mjs",
@@ -36,7 +36,7 @@
   "scripts": {
     "prepack": "node scripts/pack-provenance.mjs",
     "postpack": "node scripts/pack-provenance.mjs clean",
-    "build": "tsc && node scripts/copy-runtime-assets.mjs && node scripts/build-mcp-bundle.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-runtime-assets.mjs && node scripts/build-mcp-bundle.mjs",
     "build:mcp-bundle": "node scripts/build-mcp-bundle.mjs",
     "copy-runtime-assets": "node scripts/copy-runtime-assets.mjs",
     "test": "vitest run",
