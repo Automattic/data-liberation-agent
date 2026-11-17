@@ -28,14 +28,15 @@ it('exports hash-bound evidence after script removal and export wrapping', () =>
 	const bytes = readFileSync(join(outputDir, 'website/index.html'));
 	const tree = JSON.parse(readFileSync(join(outputDir, 'website/box-tree/index.json'), 'utf8'));
 	expect(bytes.toString()).not.toContain('window.foo');
-	expect(tree.source_path).toBe('index.html');
+	expect(tree.source_path).toBe('website/index.html');
 	expect(tree.source_hash).toBe(createHash('sha256').update(bytes).digest('hex'));
 	expect(tree.schema).toBe(source.schema);
 	expect(tree.viewports).toEqual(source.viewports);
 	expect(Object.keys(tree.nodes).sort()).toEqual(['body', 'main', 'root', 'text']);
 	expect(tree.nodes.main.children).toEqual(['text']);
 	expect(tree.nodes.text.viewports).toEqual(source.nodes.text.viewports);
-	expect(receipt.reports).toContain('website/box-tree/index.json');
+	// Sidecars are website files; listing them as reports too delivers them twice.
+	expect(receipt.reports.filter((path: string) => path.startsWith('website/'))).toEqual([]);
 	expect(receipt.exportBudget.files).toBeGreaterThanOrEqual(2);
 });
 
@@ -89,12 +90,14 @@ it('binds included shared parts and leaves duplicated identities unobserved', ()
 	const part = include![1];
 	const home = JSON.parse(readFileSync(join(outputDir, 'website/box-tree/index.json'), 'utf8'));
 	expect(home.source_hash).toBe(createHash('sha256').update(page).digest('hex'));
-	expect(home.includes).toEqual({ [part]: createHash('sha256').update(readFileSync(join(outputDir, 'website', part))).digest('hex') });
+	expect(home.source_path).toBe('website/index.html');
+	expect(home.includes).toEqual({ [`website/${part}`]: createHash('sha256').update(readFileSync(join(outputDir, 'website', part))).digest('hex') });
 	expect(home.nodes.dup).toBeUndefined();
 	expect(home.nodes.main.children).toEqual(['home']);
 	expect(home.nodes.header.children).toEqual(['nav']);
 	expect(home.nodes.body.children).toEqual(['header', 'main']);
 	const about = JSON.parse(readFileSync(join(outputDir, 'website/box-tree/about/index.json'), 'utf8'));
+	expect(about.source_path).toBe('website/about/index.html');
 	expect(about.includes).toEqual(home.includes);
 	expect(about.nodes.list.children).toEqual(navIds);
 });

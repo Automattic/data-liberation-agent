@@ -60,7 +60,14 @@ export function projectExportBoxTree(html: string, source: BoxTree, sourcePath: 
 		source_hash: sha256(bytes), ...(Object.keys(includes).length ? { includes } : {}), nodes };
 }
 
-/** Called after all HTML rewrites, including shared-part extraction, inside publication. */
+/**
+ * Called after all HTML rewrites, including shared-part extraction, inside publication.
+ * Sidecars are website files (`website/box-tree/<route>.json`), not receipt reports:
+ * importers recognize them by path, and listing them as reports too would deliver each
+ * file twice. `source_path` and `includes` keys use capture-root paths
+ * (`website/about/index.html`), the virtual root importers address artifact files by.
+ * Returns the capture-root paths written.
+ */
 export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; middleSourcePath?: string; path: string }>, inventory: WebsiteInventory): string[] {
 	const directory = join(captureRoot, 'box-tree');
 	if (!existsSync(directory)) return [];
@@ -70,7 +77,7 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		const tree = JSON.parse(readFileSync(path, 'utf8')) as BoxTree;
 		if (tree.schema === BOX_TREE_SCHEMA) sources.set(tree.source_path, path);
 	}
-	const reports: string[] = [];
+	const written: string[] = [];
 	for (const page of pages) {
 		const source = sources.get(page.sourcePath);
 		if (!source) continue;
@@ -96,15 +103,15 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		}
 		const includes: Record<string, string> = {};
 		for (const part of resolved.files.filter(path => path !== resolve(file)).map(path => relative(resolve(websiteDir), path).split('\\').join('/')).sort())
-			includes[part] = sha256(readFileSync(join(websiteDir, part)));
-		const tree = projectExportBoxTree(resolved.html, captured, page.path, bytes, includes);
+			includes[`website/${part}`] = sha256(readFileSync(join(websiteDir, part)));
+		const tree = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
 		const path = `box-tree/${page.path.replace(/\.html$/, '.json')}`;
 		// A captured resource must never be overwritten by generated evidence.
 		if (existsSync(join(websiteDir, path))) continue;
 		mkdirSync(dirname(join(websiteDir, path)), { recursive: true });
 		writeFileSync(join(websiteDir, path), JSON.stringify(tree) + '\n');
 		inventory.add(path);
-		reports.push(`website/${path}`);
+		written.push(`website/${path}`);
 	}
-	return reports;
+	return written;
 }

@@ -489,16 +489,11 @@ function buildExportCapture(
 	// Evidence describes expanded bytes. Compact afterwards in the same publication.
 	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ), inventory );
 	// Box-tree evidence binds the final page bytes and the shared parts they include.
-	const boxReports = writeExportBoxTrees( outputDir, websiteDir, retainedEntries.flatMap( entry => {
+	// The sidecars are website files only; they are deliberately not receipt reports.
+	writeExportBoxTrees( outputDir, websiteDir, retainedEntries.flatMap( entry => {
 		const sourcePath = capture.entries[ entry.url ]?.html;
 		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, middleSourcePath: capture.entries[ entry.url ]?.profiles?.middle?.html, path: routePathOf( entry.url ) } ] : [];
 	} ), inventory );
-	if ( boxReports.length ) {
-		const receiptPath = join( stageDir, 'capture-receipt.json' );
-		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
-		receipt.reports = [ ...receipt.reports, ...boxReports ].sort();
-		writeFileSync( receiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
-	}
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets and sidecars only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();
