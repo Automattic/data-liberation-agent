@@ -452,6 +452,29 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		const ladder = [ ...new Set( [ ...( options.widths ?? COARSE_SWEEP_WIDTHS ), original.width ] ) ].sort( ( a, b ) => a - b );
 		const toggles = new Map< string, Toggle >();
 		const presence = new Map< string, Array< { width: number; present: boolean } > >();
+		// Chrome identity must not contain measured widths: current-link weight
+		// can shift overflow breakpoints without changing the shared navigation.
+		// Keep the measured media contract route-local, but name its wearer by
+		// the landmark's structure and the element's relative position.
+		const chromeKeys = await page.evaluate( key => {
+			const elements = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!.elements;
+			const roots = new Map<Element, { signature: string; elements: Element[] }>();
+			return elements.map( element => {
+				const root = element.closest( 'header,nav,footer,[role="banner"],[role="navigation"],[role="contentinfo"]' );
+				if ( ! root ) return null;
+				let chrome = roots.get( root );
+				if ( ! chrome ) {
+					const descendants = [ root, ...root.querySelectorAll( '*' ) ].filter( node => ! [ 'SCRIPT', 'STYLE', 'TEMPLATE' ].includes( node.tagName ) );
+					chrome = { elements: descendants, signature: JSON.stringify( descendants.map( node => [
+						node.tagName, descendants.indexOf( node.parentElement! ), node.id,
+						node.getAttribute( 'href' ), node.getAttribute( 'role' ),
+						[ ...node.childNodes ].filter( child => child.nodeType === Node.TEXT_NODE ).map( child => child.textContent?.replace( /\s+/g, ' ' ).trim() ).join( ' ' ),
+					] ) ) };
+					roots.set( root, chrome );
+				}
+				return `${ chrome.signature }\n${ chrome.elements.indexOf( element ) }`;
+			} );
+		}, STATE_KEY );
 		const signatures = await page.evaluate( key => {
 			const elements = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!.elements;
 			return elements.map( element => {
@@ -570,7 +593,7 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 			for ( let i = 1; i < ordered.length; i++ ) {
 				if ( ordered[ i ]!.present !== ordered[ i - 1 ]!.present ) options.breakpoints?.add( ordered[ i ]!.width );
 			}
-			const alias = `${ VIEWPORT_CLASS_PREFIX }${ createHash( 'sha256' ).update( `${ toggle.token }\n${ media }` ).digest( 'hex' ).slice( 0, 12 ) }`;
+			const alias = `${ VIEWPORT_CLASS_PREFIX }${ createHash( 'sha256' ).update( `${ toggle.token }\n${ chromeKeys[ toggle.index ] ?? media }` ).digest( 'hex' ).slice( 0, 12 ) }`;
 			aliases.push( { ...toggle, alias, media } );
 		}
 		if ( aliases.length === 0 ) return { ...none, sampledWidths };
