@@ -36,7 +36,6 @@
 			"throw new Error( `Semantic evidence page \"${ page.path }\" exceeds sidecar file limit: ${ Buffer.byteLength( single ) } bytes.` )": 1
 		},
 		"src/lib/capture-export-routes.ts": {
-			"throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` )": 1,
 			"throw new Error( absence ?? `Capture does not identify one rendered homepage for the source URL: ${ sourceUrl }` )": 1
 		},
 		"src/lib/capture-export.ts": {
@@ -45,9 +44,6 @@
 			"throw new Error( 'Source URL is outside its adapter route scope' )": 1,
 			"throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` )": 1,
 			"throw new Error( `Screenshot manifest not found: ${ screenshotManifestPath }` )": 1
-		},
-		"src/lib/capture-export-render.ts": {
-			"throw new Error( `Captured route escapes the website directory: ${ url }` )": 1
 		},
 		"src/lib/capture-http.ts": {
 			"throw new Error( 'HTTP orchestration requires explicit export roles for all profile variants' )": 1,

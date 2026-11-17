@@ -111,7 +111,7 @@ describe( 'capture export route stage', () => {
 		expect( allocated ).toEqual( table.map( ( { url } ) => reverse.routePathOf( url ) ) );
 		expect( allocated.every( ( path ) => /\.html$/.test( path ) ) ).toBe( true );
 		expect( new Set( allocated ).size ).toBe( table.length );
-		expect( first.pathCollisions ).toEqual( [] );
+		expect( first.pathDiagnostics ).toEqual( [] );
 		expect( first.retainedEntries.map( ( { url } ) => url ) ).toEqual( table.map( ( { url } ) => url ) );
 	} );
 
@@ -150,7 +150,7 @@ describe( 'capture export route stage', () => {
 				const routes = allocateCaptureRoutes( entries, home.url, [ { url: 'https://example.com/old', target: tracked.url } ] );
 				expect( routes.retainedEntries ).toEqual( [ home ] );
 				expect( routes.duplicateRoutes.map( ( { url } ) => url ) ).toEqual( [ defaultDocument.url ] );
-				expect( routes.pathCollisions ).toEqual( [ {
+				expect( routes.pathDiagnostics ).toEqual( [ {
 					code: 'route_path_collision', url: tracked.url, reason: `website/index.html is already claimed by ${ home.url }`,
 					unit: 'route', severity: 'error', path: 'website/index.html',
 				} ] );
@@ -168,7 +168,7 @@ describe( 'capture export route stage', () => {
 			expect( routes.entrypointEntry ).toBe( tracked );
 			expect( routes.retainedEntries ).toEqual( [ tracked ] );
 			expect( routes.routePathOf( tracked.url ) ).toBe( 'index.html' );
-			expect( routes.pathCollisions.map( ( { url, path } ) => [ url, path ] ) ).toEqual( [ [ home.url, 'website/index.html' ] ] );
+			expect( routes.pathDiagnostics.map( ( { url, path } ) => [ url, path ] ) ).toEqual( [ [ home.url, 'website/index.html' ] ] );
 		} );
 
 		it( 'drops routes that need a directory another route holds as a file', () => {
@@ -180,7 +180,7 @@ describe( 'capture export route stage', () => {
 			const guideDefault = entry( dir, 'guide-default.html', 'https://example.com/docs.html/guide/index.html', '<h1>Guide default</h1>' );
 			const routes = allocateCaptureRoutes( [ guideDefault, guide, file, home ], home.url, [] );
 			expect( routes.retainedEntries ).toEqual( [ home, file ] );
-			expect( routes.pathCollisions.map( ( { url, path, reason } ) => [ url, path, reason ] ) ).toEqual( [
+			expect( routes.pathDiagnostics.map( ( { url, path, reason } ) => [ url, path, reason ] ) ).toEqual( [
 				[ guide.url, 'website/docs.html/guide/index.html', `website/docs.html/guide/index.html needs website/docs.html as a directory, which is the page of ${ file.url }` ],
 				[ guideDefault.url, 'website/docs.html/guide/index.html', `website/docs.html/guide/index.html needs website/docs.html as a directory, which is the page of ${ file.url }` ],
 			] );
