@@ -53,3 +53,24 @@ and image mismatches in four of six homepage identity/width cells. Both 1440px
 cells passed. The default reference sample freezes only the homepage, leaving
 four routes without frozen fidelity evidence. These results do not establish
 full-site visual fidelity; the sidecar schema/hash acceptance above passed.
+
+## Export sidecars carry every served width (#1943)
+
+`website/box-tree/<route>/index.json` describes `website/<route>/index.html`, the one
+document served at every width. When the route has a phone capture
+(`box-tree/<slug>.mobile.json`), the sidecar declares both `desktop` and `mobile`, and
+every node it keeps has an observation for each declared viewport.
+
+- Phone and desktop captures number nodes independently, in document order, so an
+  equal ID is not the same element (on sdnunca's homepage, 392 of the 536 shared IDs
+  name different tags or parents). Counterparts are matched structurally: from the
+  roots, matched parents align their children by tag and authored `id`.
+- A desktop observation of this document at phone width, when the desktop capture has
+  one, wins over the phone capture's. The phone capture's own `desktop` observation
+  describes the phone document and is never merged.
+- Nodes without an observation in every declared viewport are dropped, and `children`
+  point to the nearest kept descendants.
+- Assembled pages (`mobile:`/`middle:` identities in width-selected wrappers) declare
+  `mobile` too, but no node there has a phone observation of that page, so they are
+  left unobserved.
+- Routes without a phone capture keep their declared viewports.

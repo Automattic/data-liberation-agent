@@ -492,7 +492,7 @@ function buildExportCapture(
 	// The sidecars are website files only; they are deliberately not receipt reports.
 	writeExportBoxTrees( outputDir, websiteDir, retainedEntries.flatMap( entry => {
 		const sourcePath = capture.entries[ entry.url ]?.html;
-		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, middleSourcePath: capture.entries[ entry.url ]?.profiles?.middle?.html, path: routePathOf( entry.url ) } ] : [];
+		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, path: routePathOf( entry.url ) } ] : [];
 	} ), inventory );
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets and sidecars only shrink with the routes that need them.
