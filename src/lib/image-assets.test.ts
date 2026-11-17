@@ -64,6 +64,34 @@ it('chooses the largest srcset candidate and delegates optimizer resolution to t
  expect(resolvedImageOriginal('https://example.com/_next/image?url=%2Flogo.webp&w=640&q=75', nextjsAdapter.resolveImageOriginal)).toBe('https://example.com/logo.webp');
 });
 
+it.each([
+ ['shared lazy placeholder', '/w1/default_thumb.png', '/w1/default_thumb.png', true, false],
+ ['picture lazy placeholder', '/w1/default_thumb.png', '/w1/default_thumb.png', true, true],
+ ['ordinary src renditions', '/first-small.jpg', '/second-small.jpg', false, false],
+] as const)('keeps srcset identities across documents: %s', (_name, firstSrc, secondSrc, placeholder, picture) => {
+ const sets = [
+  ['/first-small.jpg', '/first-large.jpg'],
+  ['/second-small.jpg', '/second-large.jpg'],
+ ];
+ const records = collectImageAssets([firstSrc, secondSrc].map((src, index) => ({
+  url: `https://example.com/page-${index}`,
+  html: `${picture ? '<picture>' : ''}<img src="${src}" srcset="${sets[index][0]} 225w, ${sets[index][1]} 510w">${picture ? '</picture>' : ''}<style>.card{background:url(${src})}</style>`,
+ })));
+ expect(records).toHaveLength(placeholder ? 3 : 2);
+ for (const urls of sets) {
+  const record = records.find(record => record.source_urls.includes(`https://example.com${urls[0]}`))!;
+  expect(record.source_urls).toEqual(urls.map(url => `https://example.com${url}`));
+  expect(record.resolved_original).toBe(`https://example.com${urls[1]}`);
+  expect(record.references.every(ref => record.source_urls.includes(ref.source_url))).toBe(true);
+ }
+ if (placeholder) {
+  const fallback = records.find(record => record.source_urls.includes(`https://example.com${firstSrc}`))!;
+  expect(fallback.source_urls).toEqual([`https://example.com${firstSrc}`]);
+  expect(fallback.resolved_original).toBe(`https://example.com${firstSrc}`);
+  expect(fallback.references.map(ref => ref.kind).sort()).toEqual(['CSS', 'CSS', 'content', 'content']);
+ }
+});
+
 it('maps Base44 public renditions to originals without changing unrelated hosts or API originals', () => {
  const original = 'https://media.base44.com/images/public/app/photo.jpeg';
  const rendition = `${original}/v1/fill/w_379,h_237,enc_webp/photo.webp`;
