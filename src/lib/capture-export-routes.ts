@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import * as cheerio from 'cheerio';
 import { extname, join } from 'node:path';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { isSecurityServiceRejection } from './screenshot/navigation-rejection.js';
@@ -344,15 +346,28 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( documentRequestUrl( entry.url ), routePath );
 	}
-	// Different paths do not compete for an output filename. Collapse explicit
-	// canonical links only onto a retained same-origin document; never infer
-	// aliases from social metadata, or drop cycles/chains with no final target.
+	// Different paths do not compete for an output filename. A canonical link
+	// can be stale SPA shell metadata, so require matching rendered content too.
+	// Keep DOM structure, attributes and media (not just text) as identity proof;
+	// metadata and executable/style payloads are not page content. Cache only
+	// digests, rather than holding every parsed document in memory.
+	const contentDigests = new Map< T, string >();
+	const contentDigest = ( entry: T ): string => {
+		const cached = contentDigests.get( entry );
+		if ( cached !== undefined ) return cached;
+		const $ = cheerio.load( readFileSync( entry.htmlPath, 'utf8' ) );
+		$( 'script,style,link,meta,title' ).remove();
+		const digest = createHash( 'sha256' ).update( $( 'body' ).html()?.trim() ?? '' ).digest( 'hex' );
+		contentDigests.set( entry, digest );
+		return digest;
+	};
+	// Never infer aliases from social metadata, or drop cycles/chains with no final target.
 	const canonicalTargets = new Map< T, T >();
 	for ( const entry of retained ) {
 		if ( entry.url === entrypointUrl || ! entry.canonicalLinkUrl ) continue;
 		if ( new URL( entry.canonicalLinkUrl ).origin !== new URL( entry.url ).origin ) continue;
 		const target = entryForAddress( entry.canonicalLinkUrl );
-		if ( target && target !== entry && retained.has( target ) ) canonicalTargets.set( entry, target );
+		if ( target && target !== entry && retained.has( target ) && contentDigest( entry ) === contentDigest( target ) ) canonicalTargets.set( entry, target );
 	}
 	for ( const [ entry, target ] of canonicalTargets ) {
 		if ( canonicalTargets.has( target ) ) continue;
