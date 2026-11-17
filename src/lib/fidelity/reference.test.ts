@@ -49,6 +49,47 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		} finally { await context.close(); rmSync( directory, { recursive: true, force: true } ); }
 	}, 60_000 );
 
+	// One reference cell (~20s): a non-visible image never finishes its response,
+	// so load cannot fire, but settled baseline evidence must still be admitted.
+	it( 'freezes a ready DOM without waiting for load from non-critical media', async ({ serve, newContext }) => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const directory = mkdtempSync( join( process.cwd(), '.tmp-test/reference-slow-load-' ) );
+		let imageRequested = false;
+		const { origin } = await serve( ( request, response ) => {
+			if ( request.url === '/slow.png' ) {
+				imageRequested = true;
+				response.writeHead( 200, { 'content-type': 'image/png' } );
+				response.flushHeaders();
+				return; // Deliberately never finish the body; fixture teardown closes it.
+			}
+			response.writeHead( 200, { 'content-type': 'text/html' } );
+			response.end( '<!doctype html><h1>Ready content</h1><img src="/slow.png" style="display:none"><script>window.loaded = false; addEventListener("load", () => { window.loaded = true; });</script>' );
+		} );
+		const url = `${ origin }/`;
+		const context = await newContext();
+		try {
+			// No scope or initializer: exercise the direct navigation fallback.
+			const collector = createReferenceCollector( directory, url, [ url ], {
+				prepareCapture: async page => {
+					expect( await page.evaluate( () => document.readyState ) ).toBe( 'interactive' );
+					expect( await page.evaluate( () => ( window as unknown as { loaded: boolean } ).loaded ) ).toBe( false );
+				},
+			} );
+			await collector.observe( await context.newPage(), url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
+			const receipt = join( directory, 'receipt.json' );
+			writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+			const entry = ( JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference ).entries[ 0 ];
+			expect( imageRequested ).toBe( true );
+			expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
+			expect( entry.readiness.mediaReady ).toBe( true );
+			expect( entry.readiness.fontsReady ).toBe( true );
+			expect( () => readFrozenObservation( directory, entry ) ).not.toThrow();
+		} finally {
+			await context.close();
+			rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 30_000 );
+
 	// About 5 seconds: one reference cell and one offline replay.
 	it( 'proves a settled HTTP-broken source image and reports its URL and status', async ({ serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );

@@ -248,7 +248,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( url !== 'about:blank' ) {
 							const navigation = options.routeScope || options.initializePage ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
 							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
-							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
+							// Match capture navigation: bounded layout, media and font checks
+							// below own readiness, not the load event of every resource.
+							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
 							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
 						}
