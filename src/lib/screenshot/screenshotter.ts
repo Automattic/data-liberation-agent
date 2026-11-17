@@ -1139,7 +1139,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 ` );
 		for ( const context of routeContexts.get( url ) ?? [] ) void context.close().catch( orElse( undefined ) );
 		routeContexts.delete( url );
-	} );
+	}, urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] );
 	// The phase a still-running route entered last, from the per-profile phase
 	// observers, so a deadline abandonment names it.
 	const routeDeadlinesNote = ( url: string, profile: string, phase: string ): void => routeDeadlines.note( url, phase, profile );
@@ -1984,9 +1984,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// browser is restarted only between segments to bound memory, preserving the
 		// restart-every-N invariant while keeping each worker on a stable browser.
 		let segStart = 0;
-		while (segStart < urls.length && ! routeBudget?.closed()) {
+		while (segStart < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled) {
 			const waveEnd = urls.length;
-			while ( segStart < waveEnd && ! routeBudget?.closed() ) {
+			while ( segStart < waveEnd && ! routeBudget?.closed() && ! routeDeadlines.stalled ) {
 				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
 					await browser.close().catch( orElse( undefined ) );
@@ -2010,7 +2010,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
 				const budgetAdmits = (): boolean => {
 					while ( cursor < segEnd && reusedRoutes.has( urls[ cursor ]! ) ) cursor++;
-					return cursor < segEnd && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
+					return cursor < segEnd && ! routeDeadlines.stalled && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
 				};
 				try {
 					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
@@ -2049,6 +2049,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			}
 			// Deadline-kept profiles are in the manifest before links are read from it.
 			await Promise.allSettled( partialCommitWrites );
+			// Do not spend more source requests on link inspection after a stall.
+			if ( routeDeadlines.stalled ) break;
 			// Even after the budget closes, offer this wave's links to the
 			// frontier so rejected targets receive budget diagnostics.
 			// Expand a breadth-first wave from actual rendered artifacts. The normal
@@ -2178,17 +2180,19 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 
 	// Routes the time budget left uncaptured are missing routes: counted as failed.
-	const budgetDiagnostics = routeBudget?.diagnostics( urls ) ?? [];
+	const stallDiagnostics = routeDeadlines.diagnostics( urls.filter( url => ! reusedRoutes.has( url ) ) );
+	const stalledUrls = new Set( stallDiagnostics.map( row => row.url ) );
+	const budgetDiagnostics = routeBudget?.diagnostics( urls.filter( url => ! stalledUrls.has( url ) ) ) ?? [];
 	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
 	for (const origin of new Set(urls.map(url => new URL(url).origin))) {
 		const blocked = opts.governors?.forOrigin(origin).blockedClient;
 		if (blocked) routeDiagnostics.push({ code: blocked.code, url: origin, reason: blocked.message, ...blocked.evidence });
 	}
-	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows, ...profileDeadlineRows );
+	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows, ...profileDeadlineRows, ...stallDiagnostics );
 	return {
 		captured,
 		skipped,
-		failed: failedRoutes.size + budgetDiagnostics.filter( row => row.code !== 'route_omitted_by_budget' ).length + deadlineRows.length,
+		failed: failedRoutes.size + budgetDiagnostics.filter( row => row.code !== 'route_omitted_by_budget' ).length + deadlineRows.length + stallDiagnostics.length,
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,
