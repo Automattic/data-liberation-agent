@@ -21,7 +21,7 @@ export function authoredEmbedDocument(source: string, url: string): string | und
   return $document.html();
 }
 
-const NAVIGATION_SETTLE_STYLE_ID = 'data-liberation-google-sites-navigation-settle';
+const NAVIGATION_SETTLE_STYLE_ID = 'google-sites-navigation-settle';
 
 /** Closure identifiers are needed while Google's runtime drives capture probes.
  * Strip only from frozen artifacts, including serialized interaction panels. */
