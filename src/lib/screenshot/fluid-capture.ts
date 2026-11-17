@@ -93,7 +93,24 @@ export interface FluidSweepOptions {
 	 * Applies to the default adaptive ladder only.
 	 */
 	memo?: FluidSeriesMemo;
+	/** Reports how the adaptive sweep shared work through `memo`, once per call. */
+	onSweep?: ( stats: FluidSweepStats ) => void;
 	onProgress?: ( ( width: number, elements: number ) => void ) | undefined;
+}
+
+export interface FluidSweepStats {
+	/** Widths this call resized to and sampled. */
+	sampled: number;
+	/** Elements whose swept series came from an earlier route's sweep. */
+	reused: number;
+	/** Milliseconds spent waiting on another route's in-flight sweep of the same elements. */
+	waitedMs: number;
+}
+
+/** One capture-log line per learned document: `[fluid] <url> sampled=<n> reused=<n> waited=<ms>`. */
+export function fluidSweepLogLine( url: string, document: string, stats: FluidSweepStats | undefined ): string {
+	const line = `[fluid] ${ url } sampled=${ stats?.sampled ?? 0 } reused=${ stats?.reused ?? 0 } waited=${ stats?.waitedMs ?? 0 }`;
+	return document === 'desktop' ? line : `${ line } document=${ document }`;
 }
 
 export interface FluidLearningResult {
@@ -155,54 +172,126 @@ export type FluidSeriesMemo = Map< string, ReadonlyMap< string, readonly Geometr
 
 // Keep pending work private: consumers still see only completed series. Acquire
 // the whole set atomically, never holding one signature while waiting on another.
+// A holder that stalls (a hung page) must not stall its siblings: past the
+// bound a waiter sweeps on its own, exactly as it would with no memo.
 const pendingSweeps = new WeakMap< FluidSeriesMemo, Map< string, Promise< void > > >();
-async function reserveSweep( memo: FluidSeriesMemo, keys: string[] ): Promise< () => void > {
+export const SWEEP_WAIT_MS = 45_000;
+export async function reserveSweep( memo: FluidSeriesMemo, keys: readonly string[], waitMs = SWEEP_WAIT_MS ): Promise< { release: () => void; waitedMs: number } > {
 	let pending = pendingSweeps.get( memo );
 	if ( ! pending ) pendingSweeps.set( memo, pending = new Map() );
+	const started = Date.now();
 	for ( ;; ) {
 		const waiting = keys.flatMap( key => pending.get( key ) ?? [] );
 		if ( waiting.length === 0 ) break;
-		await Promise.all( waiting );
+		const remaining = waitMs - ( Date.now() - started );
+		let timer: NodeJS.Timeout | undefined;
+		const expired = remaining <= 0 || await Promise.race( [
+			Promise.all( waiting ).then( () => false ),
+			new Promise< boolean >( resolve => { timer = setTimeout( () => resolve( true ), remaining ); } ),
+		] );
+		clearTimeout( timer );
+		if ( expired ) return { release: () => {}, waitedMs: Date.now() - started };
 	}
 	let release!: () => void;
 	const done = new Promise< void >( resolve => { release = resolve; } );
 	for ( const key of keys ) pending.set( key, done );
-	return () => {
-		for ( const key of keys ) pending.delete( key );
-		release();
+	return {
+		waitedMs: Date.now() - started,
+		release: () => {
+			for ( const key of keys ) if ( pending.get( key ) === done ) pending.delete( key );
+			release();
+		},
 	};
 }
 
-function reuseSweptSeries(
+/**
+ * Memo signatures per tagged element, most specific first. Runs in the page.
+ *
+ * Anchored: the element path up to its nearest identified ancestor, with
+ * sibling position. Structural: the path to the root by tag, classes and
+ * sibling position, without ids. Template pages give the same element a
+ * route-specific id (a collection item's `pgi<hash>`) while its place in the
+ * template is the same, so the structural form is what sibling routes share.
+ * Text, URLs and attributes other than classes never take part. Root classes
+ * commonly encode per-route runtime state and are left out; the geometry
+ * probes still validate every reuse. A signature two tagged elements share
+ * (repeated components) cannot key a reuse: only that form is dropped.
+ */
+export function templateSignatures( state: { elements(): HTMLElement[] }, attribute: string ): Record< string, string[] > {
+	const step = ( node: Element, withId: boolean ) => {
+		const position = node.parentElement ? [ ...node.parentElement.children ].filter( sibling => sibling.tagName === node.tagName ).indexOf( node ) : 0;
+		const classes = node === document.body || node === document.documentElement ? [] : [ ...node.classList ];
+		return `${ node.tagName }${ withId && node.id ? `#${ node.id }` : '' }${ classes.sort().map( name => `.${ name }` ).join( '' ) }:${ position }`;
+	};
+	const forms: Array< Record< string, string > > = [ {}, {} ];
+	for ( const element of state.elements() ) {
+		const id = element.getAttribute( attribute )!;
+		const anchored: string[] = [];
+		for ( let node: Element | null = element; node; node = node.parentElement ) {
+			anchored.push( step( node, true ) );
+			if ( node !== element && node.id ) break;
+		}
+		const structural: string[] = [];
+		for ( let node: Element | null = element; node; node = node.parentElement ) structural.push( step( node, false ) );
+		forms[ 0 ]![ id ] = `a|${ anchored.join( '<' ) }`;
+		forms[ 1 ]![ id ] = `s|${ structural.join( '<' ) }`;
+	}
+	const byId: Record< string, string[] > = {};
+	for ( const form of forms ) {
+		const counts = new Map< string, number >();
+		for ( const signature of Object.values( form ) ) counts.set( signature, ( counts.get( signature ) ?? 0 ) + 1 );
+		for ( const [ id, signature ] of Object.entries( form ) ) if ( counts.get( signature ) === 1 ) ( byId[ id ] ??= [] ).push( signature );
+	}
+	return byId;
+}
+
+/** A stored ladder that holds one finite value never consults its containers. */
+function strictlyConstant( series: readonly GeometrySample[] ): boolean {
+	return series.length > 0 && Number.isFinite( series[ 0 ]!.value ) && series.every( sample => sample.value === series[ 0 ]!.value );
+}
+
+/**
+ * Stored ladders for the elements whose probes answer exactly as an earlier
+ * route's did. An element tries each of its signatures in order; the first
+ * stored entry with the same property set and matching probes for every
+ * property explains the whole element. A container is compared only when the
+ * stored ladder varies: a constant ladder never consults it, and a parent
+ * sized by route content (different text) answers differently on every route.
+ */
+export function reuseSweptSeries(
 	observations: ReadonlyMap< string, readonly GeometrySample[] >,
-	keyOf: ( id: string ) => string | null,
+	keysOf: ( id: string ) => readonly string[],
 	memo: FluidSeriesMemo
 ): Map< string, GeometrySample[] > {
-	const properties = new Map< string, number >();
-	for ( const key of observations.keys() ) {
-		const id = key.slice( 0, key.indexOf( ':' ) );
-		properties.set( id, ( properties.get( id ) ?? 0 ) + 1 );
-	}
-	const reused = new Map< string, GeometrySample[] >();
-	const unexplained = new Set< string >();
+	const byElement = new Map< string, Array< [ string, readonly GeometrySample[] ] > >();
 	for ( const [ key, probed ] of observations ) {
 		const id = key.slice( 0, key.indexOf( ':' ) );
-		const signature = keyOf( id );
-		const stored = signature === null ? undefined : memo.get( signature );
-		const series = stored?.get( key.slice( id.length + 1 ) );
-		if ( ! stored || ! series || stored.size !== properties.get( id ) ) {
-			unexplained.add( id );
-			continue;
-		}
-		for ( const sample of probed ) {
-			const match = series.find( candidate => candidate.viewport === sample.viewport );
-			if ( ! match || ! Object.is( match.value, sample.value ) || ( match.container ?? null ) !== ( sample.container ?? null ) ||
-				( !( match.value === 1000 && sample.value === 1000 ) && match.transformOrigin !== sample.transformOrigin ) ) unexplained.add( id );
-		}
-		reused.set( key, series.map( sample => ( { ...sample } ) ) );
+		const list = byElement.get( id ) ?? [];
+		list.push( [ key.slice( id.length + 1 ), probed ] );
+		byElement.set( id, list );
 	}
-	// One mismatched property invalidates reuse for the whole element.
-	for ( const key of reused.keys() ) if ( unexplained.has( key.slice( 0, key.indexOf( ':' ) ) ) ) reused.delete( key );
+	const matches = ( series: readonly GeometrySample[], probed: readonly GeometrySample[] ) => {
+		const constant = strictlyConstant( series );
+		return probed.every( sample => {
+			const match = series.find( candidate => candidate.viewport === sample.viewport );
+			return match !== undefined && Object.is( match.value, sample.value ) &&
+				( constant || ( match.container ?? null ) === ( sample.container ?? null ) ) &&
+				( ( match.value === 1000 && sample.value === 1000 ) || match.transformOrigin === sample.transformOrigin );
+		} );
+	};
+	const reused = new Map< string, GeometrySample[] >();
+	for ( const [ id, properties ] of byElement ) {
+		for ( const signature of keysOf( id ) ) {
+			const stored = memo.get( signature );
+			if ( ! stored || stored.size !== properties.length ) continue;
+			if ( ! properties.every( ( [ property, probed ] ) => {
+				const series = stored.get( property );
+				return series !== undefined && matches( series, probed );
+			} ) ) continue;
+			for ( const [ property ] of properties ) reused.set( `${ id }:${ property }`, stored.get( property )!.map( sample => ( { ...sample } ) ) );
+			break;
+		}
+	}
 	return reused;
 }
 const COLLINEAR_TOLERANCE_PX = 0.5;
@@ -424,32 +513,10 @@ async function learnFluidGeometry(
 	}
 	await restoreLoadTimeSheets( page );
 	await bindRuntimeSheets( page );
-	// The element path up to its nearest identified ancestor, with sibling
-	// position. A signature two tagged elements share (repeated components
-	// reusing one id) cannot key a reuse: only those elements are left out.
-	const signatures = adaptive && options.memo ? await baseline.evaluate( ( state, attribute ) => {
-		const step = ( node: Element ) => {
-			const position = node.parentElement ? [ ...node.parentElement.children ].filter( sibling => sibling.tagName === node.tagName ).indexOf( node ) : 0;
-			// Root classes commonly encode per-route runtime state. Keep classes
-			// on every other element; the geometry probes still validate reuse.
-			const classes = node === document.body || node === document.documentElement ? [] : [ ...node.classList ];
-			return `${ node.tagName }${ node.id ? `#${ node.id }` : '' }${ classes.sort().map( name => `.${ name }` ).join( '' ) }:${ position }`;
-		};
-		const byId: Record< string, string > = {};
-		for ( const element of state.elements() ) {
-			const path: string[] = [];
-			for ( let node: Element | null = element; node; node = node.parentElement ) {
-				path.push( step( node ) );
-				if ( node !== element && node.id ) break;
-			}
-			byId[ element.getAttribute( attribute )! ] = path.join( '<' );
-		}
-		const counts = new Map< string, number >();
-		for ( const signature of Object.values( byId ) ) counts.set( signature, ( counts.get( signature ) ?? 0 ) + 1 );
-		for ( const [ id, signature ] of Object.entries( byId ) ) if ( counts.get( signature )! > 1 ) delete byId[ id ];
-		return byId;
-	}, ID_ATTRIBUTE ) : null;
-	const memoKey = ( id: string ) => signatures?.[ id ] === undefined ? null : `${ options.document ?? '' }|${ signatures[ id ] }`;
+	const signatures = adaptive && options.memo ? await baseline.evaluate( templateSignatures, ID_ATTRIBUTE ) : null;
+	const memoKeys = ( id: string ) => ( signatures?.[ id ] ?? [] ).map( signature => `${ options.document ?? '' }|${ signature }` );
+	let reusedElements = 0;
+	let waitedMs = 0;
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
@@ -606,9 +673,17 @@ async function learnFluidGeometry(
 		const sheets = await runtimeSheetsObserved( page );
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
-		const release = memo ? await reserveSweep( memo, [ ...new Set( Object.keys( signatures! ).flatMap( id => memoKey( id ) ?? [] ) ) ] ) : () => {};
+		const reservation = memo ? await reserveSweep( memo, [ ...new Set( Object.keys( signatures! ).flatMap( memoKeys ) ) ] ) : null;
+		waitedMs = reservation?.waitedMs ?? 0;
 		try {
-			const reused = memo ? reuseSweptSeries( observations, memoKey, memo ) : new Map< string, GeometrySample[] >();
+			const reused = memo ? reuseSweptSeries( observations, memoKeys, memo ) : new Map< string, GeometrySample[] >();
+			reusedElements = new Set( [ ...reused.keys() ].map( key => key.slice( 0, key.indexOf( ':' ) ) ) ).size;
+			if ( process.env.FLUID_DEBUG ) {
+				const ids = [ ...new Set( [ ...observations.keys() ].map( key => key.slice( 0, key.indexOf( ':' ) ) ) ) ].filter( id => ! reused.has( [ ...observations.keys() ].find( key => key.startsWith( id + ':' ) )! ) );
+				const rows = ids.map( id => { const keys = memoKeys( id ); const stored = keys.map( k => memo!.get( k ) ).find( Boolean ); const props = [ ...observations ].filter( ( [ k ] ) => k.startsWith( id + ':' ) );
+					return { id, keys: keys.map( k => k.slice( 0, 160 ) ), stored: stored ? [ ...stored.keys() ] : null, props: props.map( ( [ k, v ] ) => [ k.slice( id.length + 1 ), v.map( x => [ x.viewport, x.value, x.container, x.transformOrigin ] ), stored?.get( k.slice( id.length + 1 ) )?.filter( x => [ 390, 768, 1920 ].includes( x.viewport ) ).map( x => [ x.viewport, x.value, x.container, x.transformOrigin ] ) ] ) }; } );
+				process.stderr.write( `[fluiddbg] ${ page.url() } doc=${ options.document } reused=${ reusedElements } unexplained=${ ids.length } memo=${ memo?.size } ${ JSON.stringify( rows.slice( 0, 8 ) ) }\n` );
+			}
 			const unexplained = () => new Map( [ ...observations ].filter( ( [ key ] ) => ! reused.has( key ) ) );
 			const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
 			const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
@@ -649,18 +724,19 @@ async function learnFluidGeometry(
 				const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
 				for ( const [ key, samples ] of observations ) {
 					const id = key.slice( 0, key.indexOf( ':' ) );
-					const signature = memoKey( id );
-					if ( signature === null ) continue;
-					const series = byElement.get( signature ) ?? new Map();
-					series.set( key.slice( id.length + 1 ), samples.map( sample => ( { ...sample } ) ) );
-					byElement.set( signature, series );
+					for ( const signature of memoKeys( id ) ) {
+						const series = byElement.get( signature ) ?? new Map();
+						series.set( key.slice( id.length + 1 ), samples.map( sample => ( { ...sample } ) ) );
+						byElement.set( signature, series );
+					}
 				}
 				for ( const [ key, series ] of byElement ) memo.set( key, series );
 			}
 		} finally {
-			release();
+			reservation?.release();
 		}
 	}
+	options.onSweep?.( { sampled: sampledWidths.length, reused: reusedElements, waitedMs } );
 	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
 
 	// Sibling translations share regime boundaries: a wrap observed on one
@@ -1315,7 +1391,8 @@ async function liftViewportHeights( page: Page, settleMs: number ): Promise< num
  * schedules are pending until `waitForRestGeometry` observes them run.
  */
 async function resizeViewport( page: Page, size: { width: number; height: number } ): Promise< void > {
-	await page.evaluate( key => ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( key ) ]!.arm(), VIEWPORT_WORK_KEY );
+	// A document without the tracker still resizes; its probe settle falls back.
+	await page.evaluate( key => ( window as unknown as Record< symbol, ViewportWork | undefined > )[ Symbol.for( key ) ]?.arm(), VIEWPORT_WORK_KEY );
 	await page.setViewportSize( size );
 }
 
@@ -1522,16 +1599,30 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 }
 
 
-/** Probes retain mutation/animation evidence and wait for attributed debounces. */
-async function settleFluidProbe( page: Page, settleMs: number ): Promise< void > {
+/** Quiet window of the previous probe settle; outlasts common 250–500 ms resize debounces. */
+export const PROBE_QUIET_MS = 600;
+
+/**
+ * Probes retain mutation/animation evidence and wait for attributed debounces.
+ *
+ * When that readiness cannot be proven (the tracked work never drains, the
+ * evaluate times out, or animation never quiets) the probe falls back to the
+ * previous settle: a quiet window that outlasts common resize debounces. A
+ * probe that cannot settle its own way is never a reason to drop the model.
+ */
+export async function settleFluidProbe( page: Page, settleMs: number ): Promise< 'tracked' | 'fallback' > {
 	const { settleDocument, withEvaluateTimeout } = await import( './page-helpers.js' );
-	await withEvaluateTimeout( page.evaluate( async key => {
-		const work = ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( key ) ]!;
+	const drained = await withEvaluateTimeout( page.evaluate( async key => {
+		const work = ( window as unknown as Record< symbol, ViewportWork | undefined > )[ Symbol.for( key ) ];
+		if ( ! work ) return false;
 		await work.release();
 		const deadline = Date.now() + 3500;
 		while ( work.pending() > 0 && Date.now() < deadline ) await work.sleep( 16 );
-	}, VIEWPORT_WORK_KEY ), 8000 );
-	await settleDocument( page, 'fluid-probe', { quietMs: 200, timeoutMs: settleMs + 3500, animations: true } );
+		return work.pending() === 0;
+	}, VIEWPORT_WORK_KEY ), 8000 ).catch( orElse( false ) );
+	if ( drained && ( await settleDocument( page, 'fluid-probe', { quietMs: 200, timeoutMs: settleMs + 3500, animations: true } ) ).reason === 'quiet' ) return 'tracked';
+	await settleDocument( page, 'fluid-probe', { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 } );
+	return 'fallback';
 }
 
 /**

@@ -1,12 +1,30 @@
 import { describe, expect } from 'vitest';
 import { it, type BrowserFixtures } from '../../../test/browser.js';
 
-import { COARSE_SWEEP_WIDTHS, DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { COARSE_SWEEP_WIDTHS, DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry, settleFluidProbe } from './fluid-capture.js';
 import { waitForImages } from './page-helpers.js';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 
 describe( 'responsive readiness contract', () => {
+
+	// One local page (~2s): unproven tracked readiness settles the previous way instead of throwing.
+	it( 'falls back to the previous probe settle when tracked work cannot be proven', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( '<div>No tracker</div>' );
+			expect( await settleFluidProbe( page, 10 ) ).toBe( 'fallback' );
+			await page.evaluate( observeViewportWork );
+			expect( await settleFluidProbe( page, 10 ) ).toBe( 'tracked' );
+			// Resize work still pending past the drain bound (four chained 1s timeouts) is not proof of rest.
+			await page.evaluate( key => {
+				( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( key ) ]!.arm();
+				const again = () => { setTimeout( again, 1000 ); };
+				again();
+			}, VIEWPORT_WORK_KEY );
+			expect( await settleFluidProbe( page, 10 ) ).toBe( 'fallback' );
+		} finally { await page.close(); }
+	}, 30_000 );
 
 	// Two short local pages (~3s): constant proof and a trailing sheet rewrite.
 	it( 'ends constant probes on quiescence but still observes delayed sheet writes', async ({ newPage }) => {
