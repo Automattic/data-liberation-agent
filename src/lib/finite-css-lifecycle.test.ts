@@ -62,6 +62,14 @@ it( 'retains each device document’s observed CSS entrance startup contexts thr
 			for ( const width of [ 390, 768, 1440 ] ) {
 				await copy.setViewportSize( { width, height: 900 } );
 				await copy.goto( `data:text/html,${ encodeURIComponent( portable ) }` );
+				// Full-page reference screenshots must not replace the mobile
+				// layout-viewport startup witnesses with their compositor canvas.
+				const startup = await copy.locator( '#entrance:visible' ).evaluate( element => {
+					const binding = JSON.parse( element.getAttribute( 'data-blocks-engine-capture-viewport-entrance' )! );
+					return binding.startupContexts.some( ( pose: { width: number; height: number } ) =>
+						pose.width === document.documentElement.clientWidth && pose.height === document.documentElement.clientHeight );
+				} );
+				expect( startup, `${ key } at ${ width } startup witness` ).toBe( true );
 				await copy.waitForTimeout( 100 );
 				expect( await copy.locator( '[data-blocks-engine-capture-viewport-entrance-loss]' ).evaluateAll( elements => elements.map( element => element.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) ) ), `${ key } at ${ width }` ).toEqual( [] );
 				await copy.evaluate( () => scrollTo( 0, 1100 ) );

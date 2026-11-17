@@ -17,6 +17,38 @@ import { squareFont } from './font-fixture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
 
+	// One reference cell, two offline comparisons (~20s).
+	it( 'gates below-fold pixel regions against cleaned frozen full-page evidence', async ({ serve, newContext }) => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const directory = mkdtempSync( join( process.cwd(), '.tmp-test/pixel-regions-' ) );
+		const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+			<style>body{margin:0}.icon{position:absolute;left:96px;width:96px;height:96px;background:black}.one{top:1200px}.two{top:2400px}</style>
+			<main style="height:3000px"><div class="icon one"></div><div class="icon two"></div></main><aside id="badge" style="position:fixed;bottom:0;background:black;width:300px;height:100px"></aside>`;
+		const { server } = await serve( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( html ); } );
+		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
+		const context = await newContext();
+		try {
+			mkdirSync( join( directory, 'website' ) );
+			const portable = html.replace( /<aside.*<\/aside>/, '' );
+			const file = join( directory, 'website/index.html' ); writeFileSync( file, portable );
+			const collector = createReferenceCollector( directory, url, [ url ], { removeSelectors: [ '#badge' ] } );
+			await collector.observe( await context.newPage(), url, 'desktop', [], { isMobile: false, hasTouch: false }, { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 1440 ] } );
+			const receipt = join( directory, 'capture-receipt.json' );
+			writeFileSync( receipt, JSON.stringify( { source: { url }, websiteRoot: 'website', routes: [ { url, path: 'website/index.html' } ] } ) );
+			collector.finalize( receipt );
+			server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) );
+			expect( ( await checkFidelity( { directory, settleMs: 0 } ) ).pass ).toBe( true );
+			writeFileSync( file, portable + '<style>.icon{background:white}</style>' );
+			collector.finalize( receipt );
+			const report = await checkFidelity( { directory, settleMs: 0 } );
+			expect( report.pending ).toEqual( [] );
+			expect( report.pass ).toBe( false );
+			expect( report.scores[ 0 ]!.failures ).toEqual( [ 'pixel region 96,1200 96x96 (4 tiles)', 'pixel region 96,2400 96x96 (4 tiles)' ] );
+			const evidence = join( directory, 'compare/capture/index/desktop/1440/baseline' );
+			for ( const name of [ 'source.png', 'liberated.png', 'diff.png' ] ) expect( PNG.sync.read( readFileSync( join( evidence, name ) ) ).height ).toBe( 3000 );
+		} finally { await context.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 60_000 );
+
 	// About 5 seconds: one reference cell and one offline replay.
 	it( 'proves a settled HTTP-broken source image and reports its URL and status', async ({ serve, newContext }) => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );

@@ -94,8 +94,16 @@ Playwright API requests bypass the browser route guard. Source observations carr
 an empty route-outcome list.
 
 Reports are written to `compare/<stage>/report.json`. `screenshots: true` adds
-source/copy/diff PNGs per stage/route/width/state. Pixel scores remain human
-evidence, never a pass/fail threshold. A materialization pass proves only that
+source/copy/diff PNGs per stage/route/width/state; failing cells always write them.
+Fresh captures also freeze `fullPageScreenshot` after the lazy-media sweep, cleanup,
+readiness and motion normalization. Both frozen stages compare candidate pixels to
+that cleaned full-page reference, never a live source. Four-connected 48px tiles
+with more than 10% of pixels exceeding luminance delta 40 form separate blockers:
+`pixel region x,y WIDTHxHEIGHT (N tiles)`. Height differences retain the existing
+`page height` check and pixel comparison covers the overlap; the diff covers that
+overlap while source/copy PNGs retain their original dimensions. Aggregate pixel
+scores remain human evidence, never a pass/fail threshold. Older references without
+`fullPageScreenshot` retain structural checks and optional viewport evidence. A materialization pass proves only that
 relationship; callers compose both stage results for their acceptance policy.
 
 The exported `FidelityReference`, `ReferenceEntry`, `ReferenceArtifact`, and
@@ -105,7 +113,7 @@ SHA-256s, declared source-route/width/state scope, unknowns and entries. Each en
 contains portable route, source URL, device/user agent, viewport dimensions,
 pixel density, mobile/touch emulation options recorded at context construction,
 readiness (cleanup, media and fonts), and SHA-256-bound observation JSON, cleaned source document
-and viewport PNG references. All paths are run-relative. Receipt/source identity
+and viewport/full-page PNG references. All paths are run-relative. Receipt/source identity
 and every required source artifact are verified before scoring. Missing files,
 changed digests, duplicate entries, absent routes/widths/states, incomplete cleanup,
 source runtime errors, and pending/failed visible images or fonts are unproven.

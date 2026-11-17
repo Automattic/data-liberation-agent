@@ -37,8 +37,8 @@ import { observeViewportEntrances } from '../viewport-entrances.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
 import { checkInternalRoute, type InternalRouteOutcome } from './internal-route.js';
-import { writePixelEvidence } from './evidence.js';
-import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { pixelRegionFailures, writePixelEvidence } from './evidence.js';
+import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
 import { REFERENCE_WIDTHS, readFrozenObservation, readReferenceArtifact, type FidelityReference, type FidelityStage } from './reference.js';
 import {
@@ -1782,7 +1782,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						else await request.abort();
 					} );
 					let source = frozen.observation;
-					let sourcePng = frozen.png;
+					const sourcePng = frozen.fullPagePng ?? frozen.png;
 					const deviceSelected = receipt.routes?.some( row => row.url === sources.get( route ) && row.documentSelection?.kind === 'device' );
 					const sourceDocument = cheerio.load( readReferenceArtifact( directory, entry.document! ).toString() );
 					// The captured website owns runtime authorization (the importer reads
@@ -1795,6 +1795,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const runtimeEmoji = capturedDocument( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress';
 					let sourceViewport = entry.viewportMeta ?? sourceDocument?.( 'meta[name="viewport"]' ).attr( 'content' );
 					const readViewport = () => page.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
+					const excludedMotion = ( entry.readiness.diagnostics ?? [] ).filter( diagnostic => diagnostic.startsWith( 'source perpetual motion excluded: ' ) ).map( diagnostic => diagnostic.slice( 'source perpetual motion excluded: '.length ) );
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
 						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, false, { runtimeEmoji, navigate: true } );
 					};
@@ -1803,12 +1804,13 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						// The frozen replay is the source here. If it left an entrance in its
 						// pending pose, the copy would be scored against content no visitor sees.
 						if ( source.entranceUnrevealed?.length ) throw new Error( `Source evidence unready: frozen viewport entrance never played: ${ source.entranceUnrevealed.join( '; ' ) }` );
-						sourcePng = await captureViewportScreenshot( page ); sourceViewport = await readViewport();
+						sourceViewport = await readViewport();
 					}
 					const liberated = await measure( candidate );
 					if ( ambiguousRenderedImages( source.images, liberated.images ).length ) throw new Error( 'Repeated image correspondence ambiguous: structural role/state does not uniquely identify occurrences' );
 					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), ...( profile ? [ evidenceSlug( profile ) ] : [] ), String( viewport ), state );
-					const candidatePng = options.screenshots ? await captureViewportScreenshot( page ) : undefined;
+					const regionEvidence = !! frozen.fullPagePng;
+					const candidatePng = regionEvidence ? await captureFullPageScreenshot( page, excludedMotion ) : options.screenshots ? await captureViewportScreenshot( page ) : undefined;
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
 					// The foreign document is outside scope, but authored links to the
 					// requested source route must retain their query/hash meaning in both stages.
@@ -1833,7 +1835,8 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						const retained = await applySourceCleanup( page, receipt.cleanup.policy );
 						if ( retained.removed || retained.residual || retained.failures.length ) checked.failures.push( 'Rendered artifact retains source attribution/advertising or cleanup audit failed' );
 					}
-					if ( candidatePng ) {
+					if ( candidatePng && regionEvidence ) checked.failures.push( ...pixelRegionFailures( sourcePng, candidatePng ) );
+					if ( candidatePng && ( options.screenshots || checked.failures.length ) ) {
 						const pixels = writePixelEvidence( evidenceDir, sourcePng, candidatePng );
 						checked.notes.push( 'score' in pixels ? `pixel evidence → ${ pixels.diffPath }` : pixels.error );
 					}
