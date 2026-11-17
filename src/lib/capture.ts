@@ -470,12 +470,16 @@ async function runCaptureWebsite(
 
 	if ( options.acquisition !== 'http' ) await ( await import( './browser-kit/ensure-capture-browser.js' ) ).ensureCaptureBrowser();
 	const response = await fetchEntryDocument( await resolveEntryUrl( options.url ), sourceGovernors, { session: options.acquisition !== 'http' } );
+	if ( response.status < 200 || response.status >= 300 ) {
+		throw new Error( `entry_document_http_status: Entry document ${ response.finalUrl } returned HTTP ${ response.status }` ); // failure-class: operational
+	}
 	let sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
 		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )
 		: '';
 	const outputDir = options.outputDir;
 	const detection = await detect( sourceUrl, { headers: response.headers, html: entryHtml } );
+	process.stderr.write( `[capture] platform detection ${ JSON.stringify( detection ) }\n` );
 	const adapter = dependencies.findAdapter( detection.platform );
 	if ( ! adapter )
 		throw new UnsupportedCapturePlatformError(
@@ -581,7 +585,7 @@ async function runCaptureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, templateClustersDecision, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, detection, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, templateClustersDecision, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
 		assertEntrypointHasContent( outputDir, options.url, sourceUrl );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
@@ -837,6 +841,7 @@ async function runCaptureWebsite(
 		preview = { status: 'failed', reason: error instanceof Error ? error.message : String( error ) };
 	}
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
+	receipt.source.detection = detection;
 	receipt.preview = preview;
 	receipt.templateClustersDecision = templateClustersDecision;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;

@@ -23,6 +23,7 @@ export function validateHttpCaptureOptions( options: CaptureOptions ): void {
 
 export async function captureHttpWebsite( input: {
 	options: CaptureOptions; sourceUrl: string; platform: Platform; startedAt: number;
+	detection: import('./detect-platform/index.js').DetectionResult;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	progress: ( progress: CaptureProgress ) => void; title?: string;
 	/** Routes the shared route budget kept, entrypoint first. */
@@ -62,6 +63,7 @@ export async function captureHttpWebsite( input: {
 	const diagnostics: RouteDiagnostic[] = [ ...input.discoveryDiagnostics, ...( receipt.discoveryDiagnostics ?? [] ) ];
 	const failedRoutes = new Set( acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => document.url ) );
 	const summary = { routesDiscovered: urls.length, routesCaptured: receipt.routes.length, routesSkipped: 0, routesFailed: failedRoutes.size, routesOmitted: budgetOmittedRoutes( diagnostics ).length, durationMs: Date.now() - input.startedAt, complete: false, entrypointCaptured: true };
+	receipt.source.detection = input.detection;
 	receipt.summary = summary;
 	receipt.discoveryDiagnostics = diagnostics;
 	receipt.failures = failures;
