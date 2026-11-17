@@ -495,7 +495,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 						const path = new URL( route.request().url() ).pathname;
 						return path === '/' ? route.fulfill( { contentType: 'text/html', body: html } ) : images.has( path ) ? route.fulfill( { contentType: 'image/png', body: images.get( path )! } ) : route.fulfill( { status: 404 } );
 					} );
-					return await use( await context.newPage() );
+					// Close before the next load and before the static server closes:
+					// a live context's keep-alive sockets hold server.close() open.
+					try { return await use( await context.newPage() ); } finally { await context.close(); }
 				}
 			};
 			for ( const [ width, density ] of [ [ 390, 3 ], [ 768, 1 ], [ 1440, 2 ] ] ) {
