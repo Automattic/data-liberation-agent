@@ -1465,6 +1465,12 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		let sweptContent = content();
 		let didSweep = false;
 		let ended: 'quiet' | 'deadline' = 'deadline';
+		// An image that stays pending on the same source through a whole rest
+		// deadline (a poster starved behind the host's video streams, a request
+		// the source never answers) will not finish during learning. Its box is
+		// already what every width measured. It stops gating the later widths of
+		// this learning run, as perpetual movers do. A new source gates again.
+		const stuck = ( state as unknown as { stuckImages?: Map< HTMLImageElement, string > } ).stuckImages ??= new Map();
 		const sweep = async () => {
 			didSweep = true;
 			// Timeouts the sweep's scroll events schedule are viewport work too.
@@ -1538,13 +1544,19 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// visibility is re-read above, so a later reveal invalidates the sweep.
 			// Native-lazy images clipped out of view by an overflow ancestor are
 			// equally unreachable by this vertical sweep.
-			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
+			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) ||
+				stuck.get( image ) === currentContent.sources.get( image ) );
 			// Pending timeouts cover debounces. A missing tagged role can also
 			// be between an unwrap and an rAF-driven refit: allow a second quiet
 			// window for its replacement, without charging intact documents that wait.
 			if ( Date.now() - quietSince >= QUIET_MS * ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) {
 				ended = 'quiet';
 				break;
+			}
+		}
+		if ( lazy && ended === 'deadline' ) {
+			for ( const [ image, source ] of content().sources ) {
+				if ( ! image.complete && image.getClientRects().length > 0 && ! unreachable( image ) ) stuck.set( image, source );
 			}
 		}
 		// Later widths reuse this wait's visited extent and content (see `reuse`),
