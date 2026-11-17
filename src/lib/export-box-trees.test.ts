@@ -40,22 +40,72 @@ it('exports hash-bound evidence after script removal and export wrapping', () =>
 	expect(receipt.exportBudget.files).toBeGreaterThanOrEqual(2);
 });
 
-it('keeps phone identities distinct in assembled documents', () => {
+const observation = (width: number) => ({ border_box: { x: 0, y: 0, width, height: 20 }, used_styles: { display: 'block' } });
+const captured = (sourcePath: string, viewport: string, size: { width: number; height: number }, children: Record<string, string[]>, width: number): BoxTree => ({
+	schema: BOX_TREE_SCHEMA, source_path: sourcePath, source_hash: 'raw', viewports: { [viewport]: size },
+	nodes: Object.fromEntries(Object.entries(children).map(([id, kids]) => [id, { children: kids, viewports: { [viewport]: observation(width) } }])),
+});
+
+it('merges phone observations into the one document served at every width and drops the rest', () => {
+	const fixture = exportFixture();
+	const root = fixture.build();
+	// The phone document has a menu where the desktop one has none, so it numbers the
+	// footer n5 and the desktop footer's n4 names the menu there. The desktop aside has
+	// no phone counterpart even though n5 exists in both captures.
+	const desktopHtml = '<html data-blocks-engine-node-id="n0"><head data-blocks-engine-node-id="n1"></head><body data-blocks-engine-node-id="n2"><main data-blocks-engine-node-id="n3"><p data-blocks-engine-node-id="n6">Hi</p></main><footer data-blocks-engine-node-id="n4"></footer><aside data-blocks-engine-node-id="n5"></aside></body></html>';
+	const mobileHtml = '<html data-blocks-engine-node-id="n0"><head data-blocks-engine-node-id="n1"></head><body data-blocks-engine-node-id="n2"><main data-blocks-engine-node-id="n3"><p data-blocks-engine-node-id="n6">Hi</p></main><nav data-blocks-engine-node-id="n4"></nav><footer data-blocks-engine-node-id="n5"></footer></body></html>';
+	fixture.file('html/home.html', desktopHtml);
+	fixture.file('html-mobile/home.html', mobileHtml);
+	fixture.file('website/index.html', desktopHtml.replace('<p ', '<div><p ').replace('</p>', '</p></div>'));
+	const tree = { n0: ['n1', 'n2'], n1: [], n2: ['n3', 'n4', 'n5'], n3: ['n6'], n4: [], n5: [], n6: [] };
+	const desktop = captured('html/home.html', 'desktop', { width: 1440, height: 900 }, tree, 100);
+	// The desktop capture's own phone-width observation of this document wins.
+	desktop.nodes.n0.viewports.mobile = observation(7);
+	const mobile = captured('html-mobile/home.html', 'mobile', { width: 402, height: 681 }, tree, 40);
+	// The phone document observed at desktop width is not this page's desktop evidence.
+	mobile.nodes.n3.viewports.desktop = observation(999);
+	mobile.nodes.n5.viewports.mobile = observation(55);
+	fixture.json('box-tree/home.json', desktop);
+	fixture.json('box-tree/home.mobile.json', mobile);
+	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
+	const result = JSON.parse(readFileSync(join(root, 'website/box-tree/index.json'), 'utf8'));
+	expect(result.viewports).toEqual({ desktop: { width: 1440, height: 900 }, mobile: { width: 402, height: 681 } });
+	expect(Object.keys(result.nodes).sort()).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n6']);
+	for (const node of Object.values(result.nodes) as BoxTree['nodes'][string][]) expect(Object.keys(node.viewports).sort()).toEqual(['desktop', 'mobile']);
+	expect(result.nodes.n2.children).toEqual(['n3', 'n4']);
+	expect(result.nodes.n4.viewports.mobile.border_box.width).toBe(55);
+	expect(result.nodes.n3.children).toEqual(['n6']);
+	expect(result.nodes.n0.viewports.mobile.border_box.width).toBe(7);
+	expect(result.nodes.n3.viewports).toEqual({ desktop: observation(100), mobile: observation(40) });
+});
+
+it('keeps desktop only when the route has no phone capture', () => {
+	const fixture = exportFixture();
+	const root = fixture.build();
+	fixture.file('website/index.html', '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"></body></html>');
+	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: [] }, 100));
+	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
+	const result = JSON.parse(readFileSync(join(root, 'website/box-tree/index.json'), 'utf8'));
+	expect(result.viewports).toEqual({ desktop: { width: 1440, height: 900 } });
+	expect(Object.keys(result.nodes)).toEqual(['n0', 'n1']);
+});
+
+it('keeps phone identities distinct in assembled documents, leaving width-selected wrappers unobserved', () => {
 	const html = namespaceExportBoxTreeIds('<html><body><div class="data-blocks-engine-capture-desktop-document" data-blocks-engine-node-id="body"><p data-blocks-engine-node-id="text">Desktop</p></div><div class="data-blocks-engine-capture-mobile-document" data-blocks-engine-node-id="body"><p data-blocks-engine-node-id="text">Phone</p></div></body></html>');
+	expect(html).toContain('data-blocks-engine-node-id="mobile:text"');
 	const fixture = exportFixture();
 	fixture.file('website/index.html', html);
-	fixture.json('box-tree/home.json', source);
-	const mobile = structuredClone(source);
-	mobile.source_path = 'html-mobile/home.html';
-	mobile.nodes.text.viewports.desktop.border_box.width = 42;
-	fixture.json('box-tree/home.mobile.json', mobile);
+	fixture.file('html/home.html', '<html><body data-blocks-engine-node-id="body"><p data-blocks-engine-node-id="text">Desktop</p></body></html>');
+	fixture.file('html-mobile/home.html', '<html><body data-blocks-engine-node-id="body"><p data-blocks-engine-node-id="text">Phone</p></body></html>');
+	const desktop = structuredClone(source);
+	desktop.nodes.text.viewports.mobile = observation(5);
+	fixture.json('box-tree/home.json', desktop);
+	fixture.json('box-tree/home.mobile.json', captured('html-mobile/home.html', 'mobile', { width: 390, height: 844 }, { body: ['text'], text: [] }, 42));
 	const inventory = new WebsiteInventory(join(fixture.build(), 'website'));
 	writeExportBoxTrees(fixture.build(), join(fixture.build(), 'website'), [{ sourcePath: source.source_path, path: 'index.html' }], inventory);
 	const tree = JSON.parse(readFileSync(join(fixture.build(), 'website/box-tree/index.json'), 'utf8'));
-	expect(tree.nodes.body.children).toEqual(['text']);
-	expect(tree.nodes['mobile:body'].children).toEqual(['mobile:text']);
-	expect(tree.nodes.text.viewports.desktop.border_box.width).toBe(100);
-	expect(tree.nodes['mobile:text'].viewports.desktop.border_box.width).toBe(42);
+	expect(Object.keys(tree.viewports).sort()).toEqual(['desktop', 'mobile']);
+	expect(tree.nodes).toEqual({});
 });
 
 it('uses nearest observed descendants through new wrappers without inventing observations', () => {
