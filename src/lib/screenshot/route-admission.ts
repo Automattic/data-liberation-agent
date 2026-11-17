@@ -3,6 +3,10 @@ import { availableRuntimeMemory } from './runtime-memory.js';
 
 export type RouteKind = 'reference' | 'plain';
 
+/** Uncalibrated per-route reservation: this share of the memory limit, or the floor when larger. */
+const PROVISIONAL_ROUTE_SHARE = 1 / 8;
+const PROVISIONAL_ROUTE_FLOOR_BYTES = 2 * 1024 ** 3;
+
 /** The memory this process group may use: its cgroup limit, or the machine's when it has none. */
 export function runtimeMemoryLimit(): number {
 	const constrained = process.constrainedMemory();
@@ -14,12 +18,10 @@ export function runtimeMemoryLimit(): number {
 export function createRouteAdmission( {
 	memoryLimit,
 	referenceRoutes,
-	report = () => {},
 	availableMemory = availableRuntimeMemory,
 }: {
 	memoryLimit: number;
 	referenceRoutes?: Set<string>;
-	report?: ( message: string ) => void;
 	availableMemory?: ( limit: number ) => number;
 } ) {
 	const enabled = memoryLimit > 0 && typeof process.availableMemory === 'function';
@@ -40,7 +42,6 @@ export function createRouteAdmission( {
 	const routeWorkingSet: Record< RouteKind, number > = { reference: 0, plain: 0 };
 	const activeRoutes: Record< RouteKind, number > = { reference: 0, plain: 0 };
 	const calibrated: Record< RouteKind, boolean > = { reference: false, plain: false };
-	let reportedUncalibratedAdmission = false;
 	const sampleMemory = (): number => {
 		const available = availableMemory( memoryLimit );
 		if ( ! Number.isFinite( available ) || available < 0 ) throw new Error( 'Capture memory admission: runtime available memory is invalid' );
@@ -54,17 +55,20 @@ export function createRouteAdmission( {
 		}
 		return available;
 	};
-	// The working set to reserve for a route, or undefined before reference
-	// calibration.
-	const routeEstimate = ( kind: RouteKind ): number | undefined => {
-		if ( ! calibrated.reference ) return undefined;
+	// Before a reference route has completed, reserve a provisional
+	// per-route share: the largest growth sampled so far, but never less than
+	// a conservative fraction of the limit. Routes overlap during calibration
+	// when that share fits, instead of every route waiting on the first one.
+	const provisional = Math.max( memoryLimit * PROVISIONAL_ROUTE_SHARE, PROVISIONAL_ROUTE_FLOOR_BYTES );
+	const routeEstimate = ( kind: RouteKind ): number => {
+		if ( ! calibrated.reference ) return Math.max( routeWorkingSet.reference, routeWorkingSet.plain, provisional );
 		return kind === 'plain' && calibrated.plain ? routeWorkingSet.plain : routeWorkingSet.reference;
 	};
 	// Reserve one observed per-route working set of its kind for every
 	// running route whose peak may still be ahead, plus the route being
 	// admitted. Even one unseen route can exceed the budget; this admits
 	// overlap, rather than enforcing a per-source byte cap.
-	const admit = ( kind: RouteKind, runningKinds: Iterable<RouteKind>, completed: number ): boolean => {
+	const admit = ( kind: RouteKind, runningKinds: Iterable<RouteKind> ): boolean => {
 		const kinds = [ ...runningKinds ];
 		if ( ! enabled ) return true;
 		const available = sampleMemory();
@@ -73,26 +77,15 @@ export function createRouteAdmission( {
 			return true;
 		}
 		let reserved = routeEstimate( kind );
-		for ( const runningKind of kinds ) {
-			const estimate = routeEstimate( runningKind );
-			reserved = reserved === undefined || estimate === undefined ? undefined : reserved + estimate;
-		}
-		if ( reserved === undefined && completed > 0 && ! reportedUncalibratedAdmission ) {
-			reportedUncalibratedAdmission = true;
-			const message = '[memory-admission] limited to one route: reference memory calibration unavailable (no fresh non-absent, non-alias capture completed yet)';
-			report( message );
-			process.stderr.write( `${ message }\n` );
-		}
-		return reserved !== undefined && available >= reserved;
+		for ( const runningKind of kinds ) reserved += routeEstimate( runningKind );
+		return available >= reserved;
 	};
-	// A route's built-in profiles run concurrently only once admission has a
-	// calibrated estimate and the memory now available covers every running
-	// route's reservation plus one more route-sized share for the second profile.
+	// A route's built-in profiles run concurrently only when the memory now
+	// available covers every running route's reservation plus one more
+	// route-sized share for the second profile.
 	const roomForParallelProfiles = ( kind: RouteKind ): boolean => {
 		const available = sampleMemory();
-		const reference = routeEstimate( 'reference' ), plain = routeEstimate( 'plain' ), extra = routeEstimate( kind );
-		if ( reference === undefined || plain === undefined || extra === undefined ) return false;
-		return available >= activeRoutes.reference * reference + activeRoutes.plain * plain + extra;
+		return available >= activeRoutes.reference * routeEstimate( 'reference' ) + activeRoutes.plain * routeEstimate( 'plain' ) + routeEstimate( kind );
 	};
 
 	return {
