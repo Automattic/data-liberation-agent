@@ -153,6 +153,26 @@ const PROBE_WIDTHS = [ 390, 768, 1920 ];
  */
 export type FluidSeriesMemo = Map< string, ReadonlyMap< string, readonly GeometrySample[] > >;
 
+// Keep pending work private: consumers still see only completed series. Acquire
+// the whole set atomically, never holding one signature while waiting on another.
+const pendingSweeps = new WeakMap< FluidSeriesMemo, Map< string, Promise< void > > >();
+async function reserveSweep( memo: FluidSeriesMemo, keys: string[] ): Promise< () => void > {
+	let pending = pendingSweeps.get( memo );
+	if ( ! pending ) pendingSweeps.set( memo, pending = new Map() );
+	for ( ;; ) {
+		const waiting = keys.flatMap( key => pending.get( key ) ?? [] );
+		if ( waiting.length === 0 ) break;
+		await Promise.all( waiting );
+	}
+	let release!: () => void;
+	const done = new Promise< void >( resolve => { release = resolve; } );
+	for ( const key of keys ) pending.set( key, done );
+	return () => {
+		for ( const key of keys ) pending.delete( key );
+		release();
+	};
+}
+
 function reuseSweptSeries(
 	observations: ReadonlyMap< string, readonly GeometrySample[] >,
 	keyOf: ( id: string ) => string | null,
@@ -586,54 +606,59 @@ async function learnFluidGeometry(
 		const sheets = await runtimeSheetsObserved( page );
 		// Runtime stylesheets and perpetual movers are learned per route.
 		const memo = signatures && ! sheets && ( await perpetual() ).size === 0 ? options.memo! : null;
-		const reused = memo ? reuseSweptSeries( observations, memoKey, memo ) : new Map< string, GeometrySample[] >();
-		const unexplained = () => new Map( [ ...observations ].filter( ( [ key ] ) => ! reused.has( key ) ) );
-		const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
-		const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
-			series.every( sample => Number.isFinite( sample.value ) && sample.value === series[ 0 ]!.value ) );
-		if ( ! sheetsConstant || ! constantAcross( unexplained(), PROBE_WIDTHS.length, await perpetual() ) ) {
-			for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
-			// Runtime-fitted phone text can have an offset as well as a slope.
-			// Observe below 390 and a third interior phone width: a bounded
-			// quantized affine fit needs three non-clamped observations.
-			const phoneSeries = [ ...refinementSeries( unexplained(), await perpetual() ), ...await runtimeSheetSeries( page, sampledWidths ) ];
-			if ( phoneSeries.some( series => {
-				const phone = series.find( sample => sample.viewport === 390 );
-				const large = series.find( sample => sample.viewport === 600 );
-				return phone && large && phone.value !== large.value;
-			} ) ) {
-				for ( const width of [ 320, 360, 414 ] ) await sample( width );
+		const release = memo ? await reserveSweep( memo, [ ...new Set( Object.keys( signatures! ).flatMap( id => memoKey( id ) ?? [] ) ) ] ) : () => {};
+		try {
+			const reused = memo ? reuseSweptSeries( observations, memoKey, memo ) : new Map< string, GeometrySample[] >();
+			const unexplained = () => new Map( [ ...observations ].filter( ( [ key ] ) => ! reused.has( key ) ) );
+			const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
+			const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
+				series.every( sample => Number.isFinite( sample.value ) && sample.value === series[ 0 ]!.value ) );
+			if ( ! sheetsConstant || ! constantAcross( unexplained(), PROBE_WIDTHS.length, await perpetual() ) ) {
+				for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
+				// Runtime-fitted phone text can have an offset as well as a slope.
+				// Observe below 390 and a third interior phone width: a bounded
+				// quantized affine fit needs three non-clamped observations.
+				const phoneSeries = [ ...refinementSeries( unexplained(), await perpetual() ), ...await runtimeSheetSeries( page, sampledWidths ) ];
+				if ( phoneSeries.some( series => {
+					const phone = series.find( sample => sample.viewport === 390 );
+					const large = series.find( sample => sample.viewport === 600 );
+					return phone && large && phone.value !== large.value;
+				} ) ) {
+					for ( const width of [ 320, 360, 414 ] ) await sample( width );
+				}
+				// Refine only intervals unexplained elements or runtime sheets need.
+				for ( ;; ) {
+					const series = refinementSeries( unexplained(), await perpetual() );
+					const next = refinementWidths( [ ...series, ...await runtimeSheetSeries( page, sampledWidths ) ], sampledWidths, widths );
+					if ( next.length === 0 ) break;
+					for ( const width of next ) await sample( width );
+				}
 			}
-			// Refine only intervals unexplained elements or runtime sheets need.
-			for ( ;; ) {
-				const series = refinementSeries( unexplained(), await perpetual() );
-				const next = refinementWidths( [ ...series, ...await runtimeSheetSeries( page, sampledWidths ) ], sampledWidths, widths );
-				if ( next.length === 0 ) break;
-				for ( const width of next ) await sample( width );
-			}
-		}
-		// Every skipped ladder width now sits inside a straight interval of every
-		// series, so the fitters receive the full ladder's observations.
-		const moving = await perpetual();
-		for ( const [ key, samples ] of observations ) {
-			if ( reused.has( key ) ) observations.set( key, reused.get( key )! );
-			else if ( ! moving.has( key.slice( 0, key.indexOf( ':' ) ) ) ) observations.set( key, interpolateSamples( samples, sampledWidths, widths ) );
-		}
-		// A redundant minimum can be sampled again by another element's sweep;
-		// discard it after the sweep too, so its partial series cannot be fitted.
-		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
-		// A sweep past the probes is what later routes may reuse.
-		if ( memo && sampledWidths.length > PROBE_WIDTHS.length && moving.size === 0 ) {
-			const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
+			// Every skipped ladder width now sits inside a straight interval of every
+			// series, so the fitters receive the full ladder's observations.
+			const moving = await perpetual();
 			for ( const [ key, samples ] of observations ) {
-				const id = key.slice( 0, key.indexOf( ':' ) );
-				const signature = memoKey( id );
-				if ( signature === null ) continue;
-				const series = byElement.get( signature ) ?? new Map();
-				series.set( key.slice( id.length + 1 ), samples.map( sample => ( { ...sample } ) ) );
-				byElement.set( signature, series );
+				if ( reused.has( key ) ) observations.set( key, reused.get( key )! );
+				else if ( ! moving.has( key.slice( 0, key.indexOf( ':' ) ) ) ) observations.set( key, interpolateSamples( samples, sampledWidths, widths ) );
 			}
-			for ( const [ key, series ] of byElement ) memo.set( key, series );
+			// A redundant minimum can be sampled again by another element's sweep;
+			// discard it after the sweep too, so its partial series cannot be fitted.
+			for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
+			// A sweep past the probes is what later routes may reuse.
+			if ( memo && sampledWidths.length > PROBE_WIDTHS.length && moving.size === 0 ) {
+				const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
+				for ( const [ key, samples ] of observations ) {
+					const id = key.slice( 0, key.indexOf( ':' ) );
+					const signature = memoKey( id );
+					if ( signature === null ) continue;
+					const series = byElement.get( signature ) ?? new Map();
+					series.set( key.slice( id.length + 1 ), samples.map( sample => ( { ...sample } ) ) );
+					byElement.set( signature, series );
+				}
+				for ( const [ key, series ] of byElement ) memo.set( key, series );
+			}
+		} finally {
+			release();
 		}
 	}
 	for ( const list of observations.values() ) list.sort( ( a, b ) => a.viewport - b.viewport );
@@ -1186,8 +1211,6 @@ async function liftViewportHeights( page: Page, settleMs: number ): Promise< num
 		return count;
 	}, { attribute: VIEWPORT_HEIGHT_ATTRIBUTE, properties: [ ...VIEWPORT_HEIGHT_PROPERTIES ], key: RUNTIME_STYLE_WRITES_KEY, release: FLUID_RELEASE_ATTRIBUTE } );
 	if ( candidates === 0 ) return 0;
-	const { settleDocument } = await import( './page-helpers.js' );
-	const settle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
 	const marked = { attribute: VIEWPORT_HEIGHT_ATTRIBUTE, release: FLUID_RELEASE_ATTRIBUTE, liftedAttribute: VIEWPORT_HEIGHT_LIFTED_ATTRIBUTE };
 	let proven = false;
 	let lifted = 0;
@@ -1197,8 +1220,8 @@ async function liftViewportHeights( page: Page, settleMs: number ): Promise< num
 		await page.evaluate( key => {
 			( window as unknown as Record< symbol, RuntimeStyleWrites | undefined > )[ Symbol.for( key ) ]?.heightProbe( true );
 		}, RUNTIME_STYLE_WRITES_KEY );
-		await page.setViewportSize( { width: original.width, height: original.height + VIEWPORT_HEIGHT_PROBE_PX } );
-		await settleDocument( page, 'fluid-viewport-height', settle );
+		await resizeViewport( page, { width: original.width, height: original.height + VIEWPORT_HEIGHT_PROBE_PX } );
+		await settleFluidProbe( page, settleMs );
 		// Only style mutations during this height-only resize constitute evidence.
 		const changedCount = await page.evaluate( ( { attribute, key } ) => {
 			let count = 0;
@@ -1221,8 +1244,8 @@ async function liftViewportHeights( page: Page, settleMs: number ): Promise< num
 			return count;
 		}, { attribute: VIEWPORT_HEIGHT_ATTRIBUTE, key: RUNTIME_STYLE_WRITES_KEY } );
 		if ( changedCount > 0 ) {
-			await page.setViewportSize( { width: original.width, height: original.height + 2 * VIEWPORT_HEIGHT_PROBE_PX } );
-			await settleDocument( page, 'fluid-viewport-height', settle );
+			await resizeViewport( page, { width: original.width, height: original.height + 2 * VIEWPORT_HEIGHT_PROBE_PX } );
+			await settleFluidProbe( page, settleMs );
 			await page.evaluate( attribute => {
 				for ( const element of document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ) {
 					const samples: Array<{ property: string; initial: number; height: number; slope: number; probe: number; probeHeight: number; intercept?: number }> = JSON.parse( element.getAttribute( attribute )! );
@@ -1238,8 +1261,8 @@ async function liftViewportHeights( page: Page, settleMs: number ): Promise< num
 		}
 		proven = true;
 	} finally {
-		await page.setViewportSize( original );
-		await settleDocument( page, 'fluid-viewport-height', settle );
+		await resizeViewport( page, original );
+		await settleFluidProbe( page, settleMs );
 		lifted = await page.evaluate( async ( { attribute, release, proven, liftedAttribute } ) => {
 			let count = 0;
 			const elements = [ ...document.querySelectorAll< HTMLElement >( `[${ attribute }]` ) ];
@@ -1498,8 +1521,20 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reuseSweep, reachabilityKey, workKey: VIEWPORT_WORK_KEY } ), 25_000 + settleMs );
 }
 
-/** Quiet window after a probe resize; outlasts common 250–500 ms resize debounces. */
+/** Quiet window for untracked callers; retained for compatibility. */
 export const PROBE_QUIET_MS = 600;
+
+/** Probes retain mutation/animation evidence and wait for attributed debounces. */
+async function settleFluidProbe( page: Page, settleMs: number ): Promise< void > {
+	const { settleDocument, withEvaluateTimeout } = await import( './page-helpers.js' );
+	await withEvaluateTimeout( page.evaluate( async key => {
+		const work = ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( key ) ]!;
+		await work.release();
+		const deadline = Date.now() + 3500;
+		while ( work.pending() > 0 && Date.now() < deadline ) await work.sleep( 16 );
+	}, VIEWPORT_WORK_KEY ), 8000 );
+	await settleDocument( page, 'fluid-probe', { quietMs: 200, timeoutMs: settleMs + 3500, animations: true } );
+}
 
 /**
  * Whether every tagged inline declaration is the same at every width.
@@ -1538,11 +1573,7 @@ async function inlineGeometryIsConstant(
 	} );
 	const before = await observe();
 	if ( minima === null && ( before === null || before.written ) ) return false;
-	// The probe asks only whether script writes the tagged elements, not what
-	// geometry they rest at, so a quiet window that outlasts common resize
-	// debounces replaces the sampling sweep's scroll-and-rest readiness.
-	const { settleDocument } = await import( './page-helpers.js' );
-	const probeSettle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
+	// Probe writes and replacements after tracked resize work has finished.
 	if ( minima === null && ! before!.reactive ) return true;
 	let unchangedMinima = minima !== null;
 	// A runtime-rewritten sheet is learned by the sweep even when the inline
@@ -1550,16 +1581,16 @@ async function inlineGeometryIsConstant(
 	const sheets = await sourceSheetText( page );
 	let sheetsVaried = false;
 	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
-		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await settleDocument( page, 'fluid-probe', probeSettle );
+		await resizeViewport( page, { width, height: original?.height ?? 900 } );
+		await settleFluidProbe( page, settleMs );
 		sheetsVaried ||= await sourceSheetText( page ) !== sheets;
 		if ( minima !== null ) {
 			const current = await baseline.evaluate( state => state.elements().map( element => state.readGeometry( element ).literal ) );
 			unchangedMinima &&= JSON.stringify( current ) === JSON.stringify( minima );
 		}
 	}
-	if ( original ) await page.setViewportSize( original );
-	await settleDocument( page, 'fluid-probe', probeSettle );
+	if ( original ) await resizeViewport( page, original );
+	await settleFluidProbe( page, settleMs );
 	const after = await observe();
 	const constant = ! sheetsVaried && ( minima !== null ? unchangedMinima : after !== null && ! after.written && after.count === before!.count );
 	// A constant document is captured at this viewport without sampling, so it
@@ -1587,16 +1618,14 @@ async function sourceSheetsVary(
 	const reactive = await page.evaluate( key => ( window as unknown as Record< symbol, { viewportReactive(): boolean } | undefined > )[ Symbol.for( key ) ]?.viewportReactive() ?? false, RUNTIME_STYLE_WRITES_KEY );
 	if ( ! reactive ) return false;
 	const baseline = await sourceSheetText( page );
-	const { settleDocument } = await import( './page-helpers.js' );
-	const probeSettle = { quietMs: PROBE_QUIET_MS, timeoutMs: settleMs + 3500 };
 	let varied = false;
 	for ( const width of [ Math.min( ...widths ), Math.max( ...widths ) ] ) {
-		await page.setViewportSize( { width, height: original?.height ?? 900 } );
-		await settleDocument( page, 'fluid-probe', probeSettle );
+		await resizeViewport( page, { width, height: original?.height ?? 900 } );
+		await settleFluidProbe( page, settleMs );
 		if ( await sourceSheetText( page ) !== baseline ) { varied = true; break; }
 	}
-	if ( original ) await page.setViewportSize( original );
-	await settleDocument( page, 'fluid-probe', probeSettle );
+	if ( original ) await resizeViewport( page, original );
+	await settleFluidProbe( page, settleMs );
 	return varied;
 }
 

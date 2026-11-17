@@ -797,6 +797,28 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	} );
 
+	// Three local routes (~5s): overlap two sweeps, then check serial equivalence.
+	it( 'shares an in-flight sweep through the public memo interface', async ({ newPage }) => {
+		const memo: FluidSeriesMemo = new Map();
+		const pages = await Promise.all( Array.from( { length: 3 }, () => newPage( { viewport: { width: 1440, height: 900 } } ) ) );
+		try {
+			await Promise.all( pages.map( page => page.setContent( `
+				<section id="banner" style="font-size:10px">Banner</section>
+				<script>
+					const update = () => document.querySelector('#banner').style.fontSize = innerWidth * 0.02 + 'px';
+					addEventListener('resize', update); update();
+				</script>` ) ) );
+			const results = await Promise.all( pages.slice( 0, 2 ).map( page => learnAndApplyFluidGeometry( page, { memo } ) ) );
+			const serial = await learnAndApplyFluidGeometry( pages[ 2 ]!, { memo } );
+			expect( results.map( result => result.sampledWidths.length ).sort( ( a, b ) => a - b )[ 0 ] ).toBe( 3 );
+			expect( results.filter( result => result.sampledWidths.length > 3 ) ).toHaveLength( 1 );
+			for ( const result of results ) expect( { ...result, sampledWidths: serial.sampledWidths } ).toEqual( serial );
+			const html = await Promise.all( pages.map( page => page.content() ) );
+			expect( html[ 0 ] ).toBe( html[ 2 ] );
+			expect( html[ 1 ] ).toBe( html[ 2 ] );
+		} finally { await Promise.all( pages.map( page => page.close() ) ); }
+	}, 60_000 );
+
 	it( 'reuses a swept series on a later route only when its element answers the probe widths identically', async ({ newPage }) => {
 		// A script-sized banner repeats on every route; the article beside it differs.
 		const route = ( ratio: number, article: string ) => `

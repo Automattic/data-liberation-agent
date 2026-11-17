@@ -8,6 +8,27 @@ import { observeViewportWork, VIEWPORT_WORK_KEY, type ViewportWork } from './vie
 
 describe( 'responsive readiness contract', () => {
 
+	// Two short local pages (~3s): constant proof and a trailing sheet rewrite.
+	it( 'ends constant probes on quiescence but still observes delayed sheet writes', async ({ newPage }) => {
+		for ( const varies of [ false, true ] ) {
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+			try {
+				await page.evaluate( observeRuntimeStyleWrites );
+				await page.setContent( `<style id="runtime">.box { left: 10px; }</style><div class="box" style="position:absolute">Box</div>
+					<script>
+					addEventListener('resize', () => {
+						${ varies ? "setTimeout(() => document.querySelector('#runtime').textContent = '.box { left: ' + innerWidth / 10 + 'px; }', 500);" : '' }
+					});
+					</script>` );
+				const result = await learnAndApplyFluidGeometry( page );
+				if ( varies ) {
+					expect( result.sampledWidths.length ).toBeGreaterThan( 0 );
+					expect( await page.locator( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).count() ).toBeGreaterThan( 0 );
+				} else expect( result.sampledWidths ).toEqual( [] );
+			} finally { await page.close(); }
+		}
+	}, 30_000 );
+
 	// One browser pass per fixture; expected wall time: about two seconds total.
 	it( 'checks still geometry frequently and waits for a 150 ms resize debounce', async ({ newPage }) => {
 		for ( const debounce of [ false, true ] ) {
